@@ -40,7 +40,16 @@ struct ProbeMarker;
 
 #[tokio::test]
 async fn configure_fails_when_processors_exist_without_a_connection() {
-    let container = Container::builder().build();
+    // Name the reachable provider rather than leaving the set unseeded: with no
+    // gating, every `ProcessMethod` linked into this binary is visible, so a
+    // later test adding one could route this boot into a different branch.
+    let container = Container::builder()
+        .provide(nest_rs_core::ReachableProviders(
+            [std::any::TypeId::of::<ProbeMarker>()]
+                .into_iter()
+                .collect(),
+        ))
+        .build();
 
     let err = QueueWorker::new()
         .configure(&container)
@@ -49,6 +58,81 @@ async fn configure_fails_when_processors_exist_without_a_connection() {
     assert!(
         err.to_string().contains("QueueConnection"),
         "the error names the missing connection: {err}",
+    );
+}
+
+// Two more link-time entries draining one queue — the shape a backend used to
+// accept, building one apalis worker per entry so both polled the same stream.
+struct FirstClaimant;
+struct SecondClaimant;
+
+nest_rs_core::inventory::submit! {
+    ProcessMethod {
+        name: "FirstClaimant::drain",
+        queue: "contested-queue",
+        retries: 1,
+        provider_type_id: || std::any::TypeId::of::<FirstClaimant>(),
+        handler: probe_handler,
+    }
+}
+
+nest_rs_core::inventory::submit! {
+    ProcessMethod {
+        name: "SecondClaimant::drain",
+        queue: "contested-queue",
+        retries: 9,
+        provider_type_id: || std::any::TypeId::of::<SecondClaimant>(),
+        handler: probe_handler,
+    }
+}
+
+#[tokio::test]
+async fn two_processors_claiming_one_queue_fail_configure() {
+    // Only the two claimants are reachable: the probe entry above would
+    // otherwise trip the missing-connection branch first and hide this one.
+    let container = Container::builder()
+        .provide(nest_rs_core::ReachableProviders(
+            [
+                std::any::TypeId::of::<FirstClaimant>(),
+                std::any::TypeId::of::<SecondClaimant>(),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+        .build();
+
+    let err = QueueWorker::new()
+        .configure(&container)
+        .await
+        .expect_err("two claimants on one queue abort configure");
+    let msg = err.to_string();
+    assert!(msg.contains("contested-queue"), "names the queue: {msg}");
+    assert!(
+        msg.contains("FirstClaimant::drain") && msg.contains("SecondClaimant::drain"),
+        "names both claimants: {msg}",
+    );
+}
+
+#[tokio::test]
+async fn a_processor_another_app_owns_does_not_contest_this_queue() {
+    // The check runs *after* module-gating, so a second claimant linked into
+    // the binary but outside this app's module tree is not this app's problem —
+    // the whole point of per-app subsets.
+    let container = Container::builder()
+        .provide(nest_rs_core::ReachableProviders(
+            [std::any::TypeId::of::<FirstClaimant>()]
+                .into_iter()
+                .collect(),
+        ))
+        .build();
+
+    let err = QueueWorker::new()
+        .configure(&container)
+        .await
+        .expect_err("one claimant still needs a connection");
+    assert!(
+        err.to_string().contains("QueueConnection"),
+        "it got past the duplicate check to the connection check: {err}",
     );
 }
 

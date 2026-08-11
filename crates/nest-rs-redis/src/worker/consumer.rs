@@ -83,6 +83,12 @@ impl Transport for QueueWorker {
             }
             methods.push(entry);
         }
+        // Aggregating a queue is like aggregating a mount: the one failure mode
+        // it adds is two contributions claiming one addressable name, and that
+        // is a boot error naming both. Checked after module-gating, so a
+        // processor another app owns cannot fail this app's boot.
+        nest_rs_queue::check_duplicate_queue_claims(&methods).map_err(anyhow::Error::msg)?;
+
         self.methods = methods;
 
         // Fail fast at boot if methods exist but no connection is seeded.

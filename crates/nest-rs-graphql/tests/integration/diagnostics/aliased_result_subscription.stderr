@@ -1,0 +1,5 @@
+error: spell a `#[subscription]`'s fallible return as `Result<...>`, not `GqlResult<...>`: async-graphql reads the last path segment of the return type, so an alias is taken for an ordinary value and the stream type becomes the `Result`
+  --> tests/integration/diagnostics/aliased_result_subscription.rs:21:27
+   |
+21 |     async fn ticks(&self) -> GqlResult<impl Stream<Item = i32>> {
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

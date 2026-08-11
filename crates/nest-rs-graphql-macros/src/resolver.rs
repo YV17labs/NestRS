@@ -1,6 +1,6 @@
 //! `#[resolver]`: construction on the struct. `#[operations]`: the
-//! orchestration of the `#[query]` / `#[mutation]` / `#[field_resolver]`
-//! methods on its impl block.
+//! orchestration of the `#[query]` / `#[mutation]` / `#[subscription]` /
+//! `#[field_resolver]` methods on its impl block.
 //!
 //! Two decorators rather than one accepting two item shapes, because an
 //! attribute macro is a single path in the macro namespace: the shape is
@@ -31,7 +31,7 @@ pub(crate) const GRAPHQL_PAIR: DecoratorPair = DecoratorPair {
     host: "#[resolver]",
     subject: "resolver struct",
     operations: "#[operations]",
-    collects: "#[query] / #[mutation] / #[field_resolver]",
+    collects: "#[query] / #[mutation] / #[subscription] / #[field_resolver]",
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -70,7 +70,7 @@ fn reject_args(args: TokenStream, decorator: &str) -> syn::Result<()> {
         &args,
         format!(
             "#[{decorator}] takes no arguments; tag methods with `#[query]` / `#[mutation]` / \
-             `#[field_resolver]`"
+             `#[subscription]` / `#[field_resolver]`"
         ),
     ))
 }
@@ -405,6 +405,21 @@ fn sig_returns_result(sig: &Signature) -> bool {
     }
 }
 
+/// The return type's last path segment when it *reads* as a `Result` but is not
+/// one of the two spellings async-graphql recognises (`Result` / `FieldResult`).
+/// `None` for a literal `Result`, and for a return type that is not
+/// `Result`-shaped at all — a bare stream is a legitimate `#[public]` shape.
+fn aliased_result_ident(sig: &Signature) -> Option<Ident> {
+    let syn::ReturnType::Type(_, ty) = &sig.output else {
+        return None;
+    };
+    let Type::Path(tp) = &**ty else { return None };
+    let last = tp.path.segments.last()?;
+    let name = last.ident.to_string();
+    let recognised = name == "Result" || name == "FieldResult";
+    (!recognised && name.ends_with("Result")).then(|| last.ident.clone())
+}
+
 /// The ident of a method's `&Context<'_>` parameter (matched on the last
 /// path segment), so guard injection reuses it instead of adding a second.
 pub(crate) fn ctx_param_ident(sig: &Signature) -> Option<Ident> {
@@ -547,9 +562,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
     let query_obj = format_ident!("__{}Query", base);
     let mutation_obj = format_ident!("__{}Mutation", base);
+    let subscription_obj = format_ident!("__{}Subscription", base);
 
     let mut query_methods: Vec<TokenStream2> = Vec::new();
     let mut mutation_methods: Vec<TokenStream2> = Vec::new();
+    let mut subscription_methods: Vec<TokenStream2> = Vec::new();
     // async-graphql wants one `#[ComplexObject]` per parent type, so a
     // resolver's `#[field_resolver]` methods for the same parent merge into one impl.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
@@ -568,6 +585,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         let verb_idx = method.attrs.iter().position(|a| {
             a.path().is_ident("query")
                 || a.path().is_ident("mutation")
+                || a.path().is_ident("subscription")
                 || a.path().is_ident("field_resolver")
         });
         let Some(idx) = verb_idx else { continue };
@@ -665,7 +683,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 (None, false) => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
-                        "every `#[query]`/`#[mutation]` declares its access posture: \
+                        "every `#[query]`/`#[mutation]`/`#[subscription]` declares its access posture: \
                          `#[authorize(Action, Entity)]` (class-level gate + automatic response \
                          masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` \
                          (no `#[authorize]` gate and no response mask — `#[use_guards]` \
@@ -674,7 +692,44 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 }
                 _ => {}
             }
-            let is_query = verb_attr.path().is_ident("query");
+            let root_kind = if verb_attr.path().is_ident("query") {
+                RootKind::Query
+            } else if verb_attr.path().is_ident("mutation") {
+                RootKind::Mutation
+            } else {
+                RootKind::Subscription
+            };
+            // async-graphql's `#[Subscription]` awaits the method before it has
+            // a stream to poll, so a synchronous one cannot exist. Caught here
+            // for a span on the method rather than inside the derive's
+            // expansion, where the message names async-graphql's own rule.
+            if root_kind == RootKind::Subscription && sig.asyncness.is_none() {
+                return Err(syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "a `#[subscription]` method must be `async` — it is awaited once to \
+                     produce the stream the client then reads",
+                ));
+            }
+            // async-graphql decides "is this fallible?" by the **spelling** of
+            // the return type's last path segment, so an aliased `Result`
+            // (`use async_graphql::Result as GqlResult`) is read as an ordinary
+            // value and the stream type becomes the `Result` itself. On a query
+            // that is harmless; on a subscription it is a wall of trait errors
+            // pointing at the derive. Same syntactic rule `#[messages]` states
+            // for a masked WS reply — named here rather than discovered.
+            if root_kind == RootKind::Subscription
+                && let Some(alias) = aliased_result_ident(&sig)
+            {
+                return Err(syn::Error::new_spanned(
+                    &method.sig.output,
+                    format!(
+                        "spell a `#[subscription]`'s fallible return as `Result<...>`, not \
+                         `{alias}<...>`: async-graphql reads the last path segment of the \
+                         return type, so an alias is taken for an ordinary value and the \
+                         stream type becomes the `Result`"
+                    ),
+                ));
+            }
             // `bind = Service`: the operation declares its subject as an
             // `Authorized<Action, E>` parameter; the wrapper exposes a by-id
             // GraphQL argument in its place, binds it through `bind_required`
@@ -717,6 +772,19 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // wrapper exposes `T` on the wire, runs the pipe, and forwards the
             // carrier — the resolver body only ever calls the service.
             let piped = piped_args(&sig);
+            // A pipe can reject, and a rejection has to reach the client — so
+            // the wrapper propagates it with `?`, which a bare-return operation
+            // has nowhere to put. Named here rather than surfacing as "cannot
+            // use the `?` operator" pointing at `#[operations]`, which says
+            // nothing about the pipe that caused it.
+            if !piped.is_empty() && !sig_returns_result(&method.sig) {
+                return Err(syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "an operation taking a `Piped<P, T>` / `Valid<T>` argument returns \
+                     `Result<...>`: a pipe rejects invalid input, and the rejection has to \
+                     surface as a GraphQL error rather than being swallowed",
+                ));
+            }
             // The wrapper signature strips both bind and pipe wrappers from the
             // wire: the `Authorized<A, E>` subject becomes the `id` string
             // argument, and each `Piped<P, T>` / `Valid<T>` becomes its wire
@@ -765,11 +833,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // only (bare-return resolvers can't surface a denial). Local
             // `#[use_guards]` chain runs through the same chain helper.
             let needs_global = sig_returns_result(&sig);
-            let route_label = format!(
-                "{} {}",
-                if is_query { "query" } else { "mutation" },
-                method_name,
-            );
+            let route_label = format!("{} {}", root_kind.label(), method_name);
+            // Same label the guard chain logs under, reused as the structured
+            // field on a dropped subscription item so one grep answers "which
+            // operation refused this?" whichever layer refused it.
+            let route_label_lit = LitStr::new(&route_label, proc_macro2::Span::call_site());
             // Always emit the chain: even when the method declares no
             // method-scope guards, the struct may have declared
             // resolver-scope guards (read at runtime through
@@ -827,16 +895,46 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 Some(spec) => {
                     let action = &spec.action;
                     let entity = authz_entity(spec);
-                    quote! {
-                        match #call {
-                            ::core::result::Result::Ok(__out) => ::core::result::Result::Ok(
-                                ::nest_rs_authz::graphql::masked_value_for::<#action, #entity, _>(
-                                    #gctx, __out,
-                                )?,
-                            ),
-                            ::core::result::Result::Err(__err) =>
-                                ::core::result::Result::Err(__err),
-                        }
+                    match root_kind {
+                        // A query or a mutation answers once, so the posture's
+                        // mask runs once, over the value.
+                        RootKind::Query | RootKind::Mutation => quote! {
+                            match #call {
+                                ::core::result::Result::Ok(__out) => ::core::result::Result::Ok(
+                                    ::nest_rs_authz::graphql::masked_value_for::<#action, #entity, _>(
+                                        #gctx, __out,
+                                    )?,
+                                ),
+                                ::core::result::Result::Err(__err) =>
+                                    ::core::result::Result::Err(__err),
+                            }
+                        },
+                        // A subscription answers *many* times, and the gate ran
+                        // once — at subscribe. So the mask moves onto the
+                        // stream: every item is evaluated against **this**
+                        // subscriber's ability before it is pushed, and one the
+                        // ability refuses is dropped rather than nulled. Same
+                        // policy as `mask_many` applies to a row in a list,
+                        // which is what an item over time is.
+                        RootKind::Subscription => quote! {
+                            match #call {
+                                ::core::result::Result::Ok(__stream) => ::core::result::Result::Ok(
+                                    ::nest_rs_graphql::async_graphql::futures_util::StreamExt::filter_map(
+                                        __stream,
+                                        move |__item| ::core::future::ready(
+                                            ::nest_rs_graphql::keep_masked_item(
+                                                #route_label_lit,
+                                                ::nest_rs_authz::graphql::masked_item_for::<
+                                                    #action, #entity, _,
+                                                >(#gctx, __item),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                                ::core::result::Result::Err(__err) =>
+                                    ::core::result::Result::Err(__err),
+                            }
+                        },
                     }
                 }
                 None => call,
@@ -861,10 +959,10 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 #(#deleg_attrs)*
                 #gsig { #checks #gate #bind_prelude #(#pipe_prelude)* #body }
             };
-            if is_query {
-                query_methods.push(delegating);
-            } else {
-                mutation_methods.push(delegating);
+            match root_kind {
+                RootKind::Query => query_methods.push(delegating),
+                RootKind::Mutation => mutation_methods.push(delegating),
+                RootKind::Subscription => subscription_methods.push(delegating),
             }
         }
 
@@ -876,8 +974,19 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         }
     }
 
-    let query_block = root_object(&query_obj, &self_ty, &query_methods, quote!(Query));
-    let mutation_block = root_object(&mutation_obj, &self_ty, &mutation_methods, quote!(Mutation));
+    let query_block = root_object(&query_obj, &self_ty, &query_methods, RootKind::Query);
+    let mutation_block = root_object(
+        &mutation_obj,
+        &self_ty,
+        &mutation_methods,
+        RootKind::Mutation,
+    );
+    let subscription_block = root_object(
+        &subscription_obj,
+        &self_ty,
+        &subscription_methods,
+        RootKind::Subscription,
+    );
     let field_blocks = field_groups.iter().map(|(parent_ty, methods)| {
         let root = async_graphql_root();
         let root_str = async_graphql_root_str();
@@ -916,6 +1025,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
         #query_block
         #mutation_block
+        #subscription_block
         #(#field_blocks)*
 
         impl ::nest_rs_core::Discoverable for #self_ty {
@@ -1112,11 +1222,70 @@ fn async_graphql_root_str() -> String {
         .collect()
 }
 
+/// Which async-graphql root a set of operations becomes.
+///
+/// Everything that differs between the three roots is answered here — the
+/// registry variant, the derive attribute, the registry entry point, the built
+/// member and the log label. A fourth root would be a variant plus five arms,
+/// and the compiler names every one it forgot; the alternative (a bare
+/// `TokenStream2` kind threaded through `root_object`) named none of them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RootKind {
+    Query,
+    Mutation,
+    Subscription,
+}
+
+impl RootKind {
+    /// The `GraphqlResolverKind` variant this root registers under.
+    fn variant(self) -> TokenStream2 {
+        match self {
+            Self::Query => quote!(Query),
+            Self::Mutation => quote!(Mutation),
+            Self::Subscription => quote!(Subscription),
+        }
+    }
+
+    /// The async-graphql derive that builds the generated root type.
+    fn derive(self) -> Ident {
+        match self {
+            Self::Query | Self::Mutation => format_ident!("Object"),
+            Self::Subscription => format_ident!("Subscription"),
+        }
+    }
+
+    /// The registry call that yields the root's `MetaType`. A `#[Subscription]`
+    /// type is not an `OutputType`, so it takes its own entry point.
+    fn fake_type(self) -> Ident {
+        match self {
+            Self::Query | Self::Mutation => format_ident!("create_fake_output_type"),
+            Self::Subscription => format_ident!("create_fake_subscription_type"),
+        }
+    }
+
+    /// The `GraphqlRootMember` variant the built root is handed back as.
+    fn member(self) -> TokenStream2 {
+        match self {
+            Self::Query | Self::Mutation => quote!(Object),
+            Self::Subscription => quote!(Subscription),
+        }
+    }
+
+    /// The spec's word for the operation, used in guard-chain and denial logs.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Mutation => "mutation",
+            Self::Subscription => "subscription",
+        }
+    }
+}
+
 fn root_object(
     obj: &Ident,
     self_ty: &Type,
     methods: &[TokenStream2],
-    kind: TokenStream2,
+    kind: RootKind,
 ) -> TokenStream2 {
     if methods.is_empty() {
         return quote!();
@@ -1128,6 +1297,10 @@ fn root_object(
     let resolver_name = LitStr::new(&resolver_name, proc_macro2::Span::call_site());
     let root = async_graphql_root();
     let root_str = async_graphql_root_str();
+    let derive = kind.derive();
+    let variant = kind.variant();
+    let fake_type = kind.fake_type();
+    let member = kind.member();
     quote! {
         #[allow(non_camel_case_types)]
         pub struct #obj(::std::sync::Arc<#self_ty>);
@@ -1138,20 +1311,22 @@ fn root_object(
         // every app that installed `nest-rs` with the `graphql` feature — the
         // documented line, and the only one — failed to compile inside this
         // attribute. Witnessed by `nest-rs-macro-hygiene`'s `resolver` module.
-        #[#root::Object(crate = #root_str)]
+        #[#root::#derive(crate = #root_str)]
         impl #obj {
             #(#methods)*
         }
 
         ::nest_rs_graphql::inventory::submit! {
             ::nest_rs_graphql::GraphqlResolverRegistration {
-                kind: ::nest_rs_graphql::GraphqlResolverKind::#kind,
+                kind: ::nest_rs_graphql::GraphqlResolverKind::#variant,
                 resolver_name: #resolver_name,
                 resolver_type_id: || ::core::any::TypeId::of::<#self_ty>(),
-                type_info: |__r| __r.create_fake_output_type::<#obj>(),
-                build: |__c| ::std::boxed::Box::new(
-                    #obj(::std::sync::Arc::new(<#self_ty>::from_container(__c)))
-                ) as ::std::boxed::Box<dyn ::nest_rs_graphql::GraphqlResolverObject>,
+                type_info: |__r| __r.#fake_type::<#obj>(),
+                build: |__c| ::nest_rs_graphql::GraphqlRootMember::#member(
+                    ::std::boxed::Box::new(
+                        #obj(::std::sync::Arc::new(<#self_ty>::from_container(__c)))
+                    ),
+                ),
             }
         }
     }

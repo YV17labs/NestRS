@@ -72,11 +72,7 @@ impl GraphqlOperationGuard for NoopOpGuard {
         Box::pin(async move { Ok(()) })
     }
 
-    fn around<'a>(
-        &'a self,
-        _req: &'a Request,
-        inner: BoxFuture<'a, Response>,
-    ) -> BoxFuture<'a, Response> {
+    fn around<'a>(&'a self, _req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
         inner
     }
 }

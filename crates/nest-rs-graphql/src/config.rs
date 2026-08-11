@@ -5,10 +5,15 @@
 //! literal.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigService, Result, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
+
+/// Four hours — the same default ceiling `NESTRS_WS__MAX_CONNECTION_SECS`
+/// carries, because it is the same control on the same kind of socket.
+const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 
 /// GraphQL endpoint options, settable via `NESTRS_GRAPHQL__*` or pinned through
 /// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root). Every field
@@ -52,6 +57,21 @@ pub struct GraphqlConfig {
     /// Default `10`.
     #[validate(range(min = 1))]
     pub max_batch_size: usize,
+    /// Maximum lifetime of one graphql-ws subscription socket. When it elapses
+    /// the server closes the socket, so the peer must re-upgrade — re-running
+    /// the operation guard and re-checking token `exp`.
+    ///
+    /// A **security** control, not a resource knob, and the same one
+    /// [`WsConfig::max_connection`] is: a subscription captures its principal
+    /// once at the upgrade and replays it for every item it pushes. Without a
+    /// ceiling the socket keeps those privileges after expiry, logout or
+    /// revocation, for as long as the peer holds it open.
+    ///
+    /// Read from `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` (whole seconds; `0` ⇒
+    /// unlimited); defaults to 4 hours.
+    ///
+    /// [`WsConfig::max_connection`]: https://docs.rs/nest-rs-ws
+    pub max_connection: Option<Duration>,
 }
 
 impl Default for GraphqlConfig {
@@ -65,6 +85,7 @@ impl Default for GraphqlConfig {
             max_complexity: Some(2000),
             disable_introspection: true,
             max_batch_size: 10,
+            max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
         }
     }
 }
@@ -84,6 +105,14 @@ impl Config for GraphqlConfig {
             max_complexity: env.parse("MAX_COMPLEXITY")?.or(d.max_complexity),
             disable_introspection: env.flag("DISABLE_INTROSPECTION", d.disable_introspection)?,
             max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
+            // `0` is the "unlimited" sentinel; unset keeps the base's ceiling;
+            // a set-but-unparseable value surfaces as a boot error. Same three
+            // cases, same spelling, as `NESTRS_WS__MAX_CONNECTION_SECS`.
+            max_connection: match env.parse::<u64>("MAX_CONNECTION_SECS")? {
+                None => d.max_connection,
+                Some(0) => None,
+                Some(secs) => Some(Duration::from_secs(secs)),
+            },
         })
     }
 }

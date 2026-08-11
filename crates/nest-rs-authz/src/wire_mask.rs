@@ -241,6 +241,51 @@ where
     })
 }
 
+/// One masked row, plus the keys the mask took off it.
+#[cfg(feature = "graphql")]
+pub(crate) struct MaskedRow {
+    /// The masked object, strained against the entity's exposed columns.
+    pub(crate) masked: Value,
+    /// Every key stripped from it, wire-spelled — what the caller needs to
+    /// decide whether the *operation* asked for one of them.
+    pub(crate) removed: BTreeSet<String>,
+}
+
+/// [`mask_wire_json`] for a single row whose model and verdict the caller
+/// **already holds**.
+///
+/// The entry point a per-item path needs. `mask_wire_json` starts from the wire
+/// value, so reaching it means serializing the item, deep-cloning the JSON
+/// object, rebuilding `S::Model` and re-running the whole rule scan — all of
+/// which a caller that has already decided "may this subscriber see this row?"
+/// has just done. On a stream that is per item, per subscriber, so it is worth
+/// an entry point rather than the tidier delegation.
+///
+/// Takes the verdict by value because [`Ability::mask_with`] consumes the field
+/// set; `removed` is collected first, off the same one.
+#[cfg(feature = "graphql")]
+pub(crate) fn mask_row<S>(
+    ability: &Ability,
+    action: Action,
+    model: &S::Model,
+    verdict: crate::ability::Verdict,
+    wire: &Value,
+) -> MaskedRow
+where
+    S: EntityTrait + WireModelDefaults,
+    S::Model: Serialize,
+{
+    let exposed = S::wire_keys();
+    let mut removed = BTreeSet::new();
+    collect_removed(&verdict.fields, exposed, wire, &mut removed);
+    let mut masked = ability.mask_with::<S>(action, model, verdict.fields);
+    match exposed {
+        Some(keys) => retain_static_keys(&mut masked, keys),
+        None => retain_body_keys(&mut masked, wire),
+    }
+    MaskedRow { masked, removed }
+}
+
 /// The keys [`mask_wire_json`] strips from this row, read off the same two
 /// rules instead of performing them: the row's field grant (what
 /// [`Ability::mask`] retains) and the entity's statically exposed columns (what
@@ -277,7 +322,7 @@ fn collect_removed(
 /// so the outcome is identical, while the straight-attempt-first shape used to
 /// burn a whole clone and a doomed parse per row for every entity that hides a
 /// non-`Option` column (`password_hash` — the common case).
-fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
+pub(crate) fn wire_to_model<S>(wire: &Value) -> Result<S::Model, serde_json::Error>
 where
     S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned,

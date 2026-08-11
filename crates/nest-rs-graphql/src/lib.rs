@@ -1,8 +1,9 @@
 //! GraphQL support, mirroring HTTP's `#[controller]`/`#[routes]` model.
 //! `#[resolver]` builds from the container and registers `#[query]` /
-//! `#[mutation]` in a link-time [`inventory`]. The schema composes itself at
-//! boot — there is no central `queries = [...]` list. Import [`GraphqlModule`]
-//! to serve it over HTTP.
+//! `#[mutation]` / `#[subscription]` in a link-time [`inventory`]. The schema
+//! composes itself at boot — there is no central `queries = [...]` list. Import
+//! [`GraphqlModule`] to serve it over HTTP, subscriptions included: the same
+//! path carries `POST` and the graphql-ws socket.
 //!
 //! The roots merge fields from the registry at runtime (not a compile-time
 //! `MergedObject` tuple) — the bridge to async-graphql's static
@@ -37,13 +38,14 @@ mod module;
 mod opaque;
 mod resolver;
 mod scope;
+mod subscription;
 
 pub use config::GraphqlConfig;
-pub use context::GraphqlContextSeed;
 /// Per-operation seam the endpoint runs around every request. Implemented by
 /// `nest_rs_authz::graphql`, bound with
 /// `providers = [MyBridge as dyn GraphqlOperationGuard]`.
 pub use context::{BoxFuture, FallbackOperationGuard, GraphqlOperationGuard, GraphqlVariablePipe};
+pub use context::{GraphqlContextSeed, SeedLifetime};
 pub use error::{FIELD_ERRORS_EXTENSION, pipe_error};
 /// Re-establishes per-request ambient state inside a DataLoader batch (the
 /// batch runs on a spawned task where request task-locals are gone).
@@ -52,11 +54,23 @@ pub use loader::{GraphqlBatchContext, GraphqlBatchFuture, GraphqlBatchSpawner};
 pub use loader::{GraphqlLoaderRegistration, batch_spawner};
 pub use module::{GraphqlModule, GraphqlSetup};
 pub use opaque::Opaque;
-pub use resolver::{GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration};
+pub use resolver::{
+    GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
+    GraphqlSubscriptionObject,
+};
 /// Resolver-side accessor for `#[injectable(scope = request)]` providers — the
 /// GraphQL mirror of `nest_rs_http::Scoped<T>`. Reachable in resolver bodies,
 /// **not** inside `#[dataloader]` batch closures (those run off-task).
 pub use scope::Scoped;
+// Hidden: the per-item posture seam `#[subscription]` expands into. A resolver
+// body never calls it — the posture attribute writes the call, exactly as it
+// writes `masked_value_for` on a query.
+#[doc(hidden)]
+pub use subscription::keep_masked_item;
+// Hidden: the composed schema as an `Executor`, so a test can be the subscriber
+// graphql-ws would otherwise have to be. See the function's doc.
+#[doc(hidden)]
+pub use subscription::compose_schema;
 
 pub use async_graphql;
 pub use async_graphql_poem;

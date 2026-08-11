@@ -45,6 +45,14 @@ impl TestApp {
         &self.client
     }
 
+    /// Open a graphql-ws connection against the app's composed schema — the
+    /// protocol a subscription rides, which the HTTP client cannot speak. See
+    /// [`crate::graphql`] for what it does and does not exercise.
+    #[cfg(feature = "graphql")]
+    pub fn graphql_socket(&self) -> crate::GraphqlSocketBuilder {
+        crate::GraphqlSocketBuilder::new(self.container().clone())
+    }
+
     /// The DI [`Container`], for resolving providers directly in assertions.
     pub fn container(&self) -> &Container {
         self.app.container()

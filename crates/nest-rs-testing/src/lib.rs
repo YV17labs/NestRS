@@ -25,6 +25,12 @@ mod database;
 #[cfg(feature = "orm")]
 pub use database::EphemeralDatabase;
 
+/// Driving a GraphQL subscription over graphql-ws (feature `graphql`).
+#[cfg(feature = "graphql")]
+pub mod graphql;
+#[cfg(feature = "graphql")]
+pub use graphql::{GraphqlSocket, GraphqlSocketBuilder};
+
 pub use app::{TestApp, TestAppBuilder};
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};

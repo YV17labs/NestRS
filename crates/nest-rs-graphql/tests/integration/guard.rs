@@ -3,7 +3,9 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result};
-use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, async_trait, operations, resolver};
+use nest_rs_graphql::{
+    GraphqlContextSeed, GraphqlModule, SeedLifetime, async_trait, operations, resolver,
+};
 use nest_rs_guards::{Denial, GraphqlGuard, Guard, guard};
 use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;
@@ -40,6 +42,7 @@ struct RequireAdmin;
 
 nest_rs_graphql::inventory::submit! {
     GraphqlContextSeed {
+        lifetime: SeedLifetime::Connection,
         owner_type_id: || Some(std::any::TypeId::of::<RequireAdmin>()),
         seed: |req, _container, gql| match req.extensions().get::<Role>() {
             Some(role) => gql.data(role.clone()),

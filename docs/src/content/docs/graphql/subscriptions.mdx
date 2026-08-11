@@ -1,0 +1,188 @@
+---
+title: Subscriptions
+description: A long-lived operation over graphql-ws — declared like a query, gated at subscribe, and filtered per item for the subscriber who is reading.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A subscription is a `#[query]` that answers more than once. You write an
+async method returning a stream, declare the same access posture every
+other operation declares, and the framework serves it over graphql-ws on
+the path it already serves `POST` on. What you get at the end: a socket
+clients can subscribe to, gated at subscribe and filtered on every item
+pushed afterwards.
+
+```rust title="crates/features/src/posts/graphql/resolver.rs (abridged)"
+#[subscription]
+#[authorize(Read, PostEntity)]
+async fn post_published(&self) -> Result<impl Stream<Item = Post>, Error> {
+    Ok(self.feed.subscribe())
+}
+```
+
+That method sits in the same `#[operations]` impl as the queries and
+mutations beside it. There is no second decorator, no subscription root
+to register, and no separate mount.
+
+## Wire it in
+
+Nothing beyond what a query needs. `GraphqlModule` mounts the graphql-ws
+socket on the same path as the POST endpoint the moment a `#[subscription]
+` is discovered:
+
+```rust title="src/module.rs"
+#[module(imports = [GraphqlModule::for_root(None), PostsGraphqlModule])]
+pub struct ApiModule;
+```
+
+A schema with no subscription anywhere carries no `Subscription` type at
+all — the SDL is unchanged until you declare one.
+
+## The posture runs twice
+
+Every operation declares `#[authorize(Action, Entity)]` or `#[public]`,
+and a subscription with neither does not compile. What differs is *when*
+the declaration is enforced, and this is the part worth reading twice.
+
+The **gate** runs once, at subscribe. A caller whose ability carries no
+matching rule is refused before the stream opens, exactly as a query is
+refused before its body runs.
+
+The **mask** runs on every item. Each value the stream yields is evaluated
+against the ability captured at subscribe — the row rules first, then the
+field grants. An item the subscriber may not read is **dropped**, not
+delivered with its fields nulled:
+
+```rust title="src/posts/graphql/resolver.rs"
+// two subscribers, one stream
+#[subscription]
+#[authorize(Read, PostEntity)]
+async fn post_published(&self) -> Result<impl Stream<Item = Post>, Error> {
+    Ok(self.feed.subscribe())
+}
+```
+
+With a policy that scopes posts to the caller's org, an author in org A
+and a reader in org B can hold the same subscription open: the post
+published in org A reaches the first and never reaches the second. The
+resolver body writes no filter — the posture attribute is the whole
+mechanism, the same one `#[authorize]` arms on a query.
+
+## Feeding a subscription
+
+A stream needs a source. The demo publishes one from the event it already
+emits: `PostsService` emits `PostPublishedEvent` on publish, a
+`#[listeners]` host fans the published post into a broadcast channel, and
+the subscription reads that channel.
+
+```rust title="crates/features/src/posts/events/listener.rs"
+#[listeners]
+impl PostsListener {
+    #[on_event]
+    async fn on_post_published(&self, event: PostPublishedEvent) {
+        self.feed.publish(event.post);
+    }
+}
+```
+
+The feed is an ordinary provider — a `tokio::sync::broadcast::Sender` and
+a `subscribe()` that adapts a receiver into a `Stream`. Nothing about it
+is GraphQL-specific, which is why it lives at the feature's port rather
+than in its GraphQL adapter.
+
+Note what the event carries: the **published post**, not its id. A
+subscriber that re-reads the row instead races the publisher — the event
+is emitted inside the mutation's transaction, and the subscription reads
+on the pool, so the re-read can return the pre-commit row. A published
+fact carries the fact.
+
+## On the wire
+
+The socket speaks [graphql-ws](https://github.com/enisdenjo/graphql-ws)
+on the same URL as the POST endpoint, so a client points at one address:
+
+```bash frame="terminal"
+$ curl -i --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+    -H 'Sec-WebSocket-Protocol: graphql-transport-ws' \
+    http://localhost:3002/graphql
+HTTP/1.1 101 Switching Protocols
+connection: upgrade
+upgrade: websocket
+sec-websocket-protocol: graphql-transport-ws
+```
+
+The caller authenticates on the **upgrade** request, with the same
+`Authorization` header a query carries. A plain `GET` on that path still
+serves the playground when it is enabled; the upgrade header is what
+selects the socket.
+
+<Aside type="caution">
+A browser cannot set headers on a WebSocket handshake. Deployments that
+subscribe from a browser terminate the upgrade behind a proxy that adds
+the header, or place the socket behind an authenticated origin. Bearer
+tokens in the `connectionParams` payload are not read.
+</Aside>
+
+## What a socket does and does not inherit
+
+The upgrade establishes the caller; it does not lend the subscription its
+whole request.
+
+| From the upgrade | On the socket |
+|---|---|
+| The principal and its `Ability` | Carried, for the connection's life |
+| A database handle | Carried, always **outside** the upgrade's transaction |
+| `RequestScope` (`Scoped<T>`) | **Not** carried — reported as absent |
+
+The middle row is what makes a `Repo`-backed subscription work at all: the
+`101` is answered before the connection task starts, so the request
+boundary's handle is already gone. The socket takes a pool-bound one
+instead. Carrying the transaction would pin a pooled connection for hours
+and write through something nobody will commit.
+
+The last row is deliberate too. A request-scoped provider built once at
+connect and shared by every operation for four hours is not request-scoped
+— so `Scoped<T>` says the scope is absent rather than handing back
+something that looks right and is not.
+
+## Configuration
+
+A subscription socket captures its principal once, at the upgrade, and
+replays it for every item it pushes. `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`
+bounds how long that may last — the same control, and the same default of
+four hours, that `NESTRS_WS__MAX_CONNECTION_SECS` applies to a gateway
+socket. When it elapses the server closes the socket, so the peer
+re-upgrades, which re-runs the guard chain and re-checks the token's
+`exp`. Set it to `0` to disable the ceiling.
+
+Everything else is the GraphQL module's own configuration — see
+[Configuration](/graphql/configuration/).
+
+## Limits
+
+- **The method must be `async` and its fallible return spelled
+  `Result<…>`.** async-graphql reads the last path segment of the return
+  type, so an aliased `Result` is taken for an ordinary value. Both are
+  compile errors naming the rule.
+- **An item that cannot be masked is dropped, not raised.** A stream
+  field's type is the item's, not a `Result`, so there is no error channel
+  per item: failing closed means the item does not ship. The drop is
+  logged at `warn` on `nest_rs::graphql` with the operation name.
+- **`bind = Service` binds at subscribe, not per item** — it names one
+  subject for the subscription, the way it names one for a mutation.
+- **A request-scoped provider is unreachable** from a subscription — see
+  the table above.
+- **Federation is not supported**, on subscriptions or anywhere else.
+
+## Going further
+
+- [Queries and mutations](/graphql/queries-mutations/) — the operation
+  shape a subscription follows.
+- [Authorization](/security/authorization/) — what `#[authorize]` gates
+  and masks.
+- [Events](/events/) — the bus the demo's subscription is fed from.
+- [WebSockets](/websockets/) — the other realtime surface, for
+  message-shaped protocols rather than schema-shaped ones.

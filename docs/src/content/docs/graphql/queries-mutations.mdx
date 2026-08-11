@@ -8,7 +8,9 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 Every top-level operation is an async method on an `#[operations]` impl
-block, tagged with `#[query]` or `#[mutation]`. The method signature
+block, tagged with `#[query]` or `#[mutation]`. An operation that answers
+more than once is a [`#[subscription]`](/graphql/subscriptions/) and
+follows the same shape. The method signature
 is the wire contract: parameters become GraphQL arguments, the return
 type becomes the response shape, and an error short-circuits with a
 GraphQL error envelope. There is no separate "schema definition" step —

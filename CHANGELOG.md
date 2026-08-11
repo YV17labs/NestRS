@@ -7,6 +7,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - 2026-08-10
 
+### A decorator may not put a line in your manifest, and now something checks
+
+`#[crud]` emitted `::uuid::Uuid` for three HTTP routes and one GraphQL resolver
+argument. A controller file names `std`, `nest_rs` and `crate::` — never `uuid`
+— so a crate that wrote `#[crud]` and nothing else failed with `E0433` blamed on
+the attribute, against the hard "no" that a macro expansion never obliges the
+developer to declare a crate.
+
+It survived two witnesses. `nest-rs-macro-hygiene` cannot reach `#[crud]` (it
+needs a real entity and service, documented and still true), and the generator's
+e2e — the substitute witness — passes for an unrelated reason: `g resource`
+bootstraps `g auth`, whose claims type names `uuid` and drags the dependency in.
+Remove the auth adapter and the generated CRUD stops compiling.
+
+- **Routed through `::nest_rs_resource::uuid`**, whose re-export exists for this
+  and is unconditional — `nest-rs-seaorm`'s own `uuid` is optional behind two
+  features, so routing there would have made resolution depend on which
+  transport the crate enabled.
+- **The rule became a test.** `framework.md` has always stated it as checkable —
+  *"a `*-macros` crate emits only `::std`/`::core` paths or paths routed through
+  its surface crate's re-exports — never a bare third-party path"* — and nobody
+  had run it. `nest-rs-macro-hygiene/tests/integration/emissions.rs` reads every
+  macro source and fails on a path rooted outside the framework. It is an
+  allowlist, not a banned-crate list: a decorator written next year reaching for
+  a crate nobody thought to ban fails on the day it is written.
+
+### Two transports could contradict themselves at boot; both now refuse
+
+**GraphQL — two resolvers claiming one operation name.** The merge folds member
+fields with `IndexMap::extend`, so the *last* registration's metadata reached the
+schema, while `resolve_field` returns from the *first* member that answers. A
+client read one resolver's signature from the SDL and reached another resolver's
+body, with the argument it was told to send dropped. Both orders follow
+`inventory::iter` — link order. The security half is why this is an error rather
+than a `warn`: `#[authorize]` expands *inside* the operation's body, so the
+posture that ran belonged to whichever body won the dispatch, not to the
+operation the schema documented. Now an `HttpBootCheck` naming both resolvers,
+the seam MCP already used. A query and a mutation may still share a name — two
+root objects, not a collision.
+
+**Queue — two `#[process]` methods claiming one queue.** A backend builds one
+worker per registry entry, so both polled the same stream: each job went to
+whichever popped it, and the retry budget forked with it. `nest-rs-queue` owns
+the check (any backend draining the registry owes the same refusal) and
+`QueueWorker::configure` runs it after module-gating, so a processor another app
+owns cannot fail this app's boot.
+
+### Every client-facing transport withholds what a client must not read
+
+A handler's error type is the framework's only source for the message a client
+reads, and `Display` is the wrong default: a `DbErr` carries SQL, column names
+and sometimes row values. MCP had the seam first, because its reader is a
+language model that may repeat what it is told — but a GraphQL error frame, a WS
+error frame and an HTTP error body are read by clients just as untrusted.
+
+- `nest_rs_graphql::Opaque`, `nest_rs_ws::Opaque` and `nest_rs_http::Opaque` join
+  `nest_rs_mcp::Opaque`: `.opaque()?` logs the real error at `error` on the
+  transport's own target and substitutes the shared
+  `nest_rs_core::OPAQUE_CLIENT_MESSAGE`.
+- **Four traits, one constant** — deliberately, and the reason is measured rather
+  than aesthetic. The trait's output *is* the transport's error type, which is
+  what lets `.opaque()?` infer from the enclosing function's return type; one
+  trait generic over the output has four applicable impls, so the receiver stops
+  deciding and every call site needs a turbofish. Sharing stops at the value the
+  four must agree on.
+- GraphQL's opaque error carries the same `INTERNAL` code an internal denial
+  does, so a client cannot tell an unexpected failure from a refusal it was owed
+  no explanation for. HTTP's is a `ProblemDetails` 500 for the same reason: the
+  envelope a client parses must not change because the *reason* is withheld.
+- The three non-request edges get no trait and want none — a job, a tick and an
+  event have no caller to tell anything.
+
+### The diagnostics each pair owed
+
+Eight snapshots existed; seven were missing, all for pairs whose wrong shape
+reported syn's `expected impl` instead of naming the sibling.
+
+- `#[processor]`, `#[scheduled]`, `#[listeners]`, `#[indicators]` and `#[hooks]`
+  each get their wrong-shape case — `schedule`, `events` and `health` had no
+  diagnostics suite at all.
+- MCP gets the two GraphQL and WS already had: the no-posture refusal and the
+  `reject_http_only_layers` one. Both fixtures decorate the impl half only —
+  pairing them with `#[mcp]` cascades a second error about the `ServerHandler`
+  the refused expansion never wrote, pinning rmcp's internals in a snapshot whose
+  job is one sentence of ours.
+- That last snapshot caught a wording bug in the shared helper: the fifth caller
+  passes `"operation"`, and the template said `on a {site}`.
+
+### Every decorator is now witnessed, and the two exclusions are separated
+
+`#[config]`, `#[queue]`, `#[processor]`, `#[indicators]`, `#[interceptor]`,
+`#[redirect]` and `#[dataloader]` gained use sites in `nest-rs-macro-hygiene`,
+which required adding `config`, `health` and `queue` to its single dependency's
+feature list — the assertion being that each capability's feature pulls
+everything its decorators emit. `#[dataloader]` reads as needing a data layer
+because its intended use runs each batch through `Repo`; the macro only reads a
+key type off the argument and a value type off the return, so it belongs where
+the manifest is the assertion. Writing it surfaced a real constraint now
+recorded there: `Loader::Error` is bound `Send + Clone + 'static`, one error
+being handed to every caller waiting on a batch.
+
+`#[crud]` and `#[expose]` stay out, but no longer for one reason. An entity
+cannot live in a zero-dep crate — `DeriveEntityModel` roots its expansion at the
+call site's `sea_orm` and offers no `crate = ` override, checked against
+sea-orm-macros 2.0 rather than assumed. That excuses `#[expose]`, which sits on
+an entity. It does not excuse `#[crud]`, which sits on a controller whose source
+writes nothing but `std`, `nest_rs` and `crate::` — and that conflation is what
+let the `uuid` emission ship.
+
+So `#[crud]` gets the tree that can actually observe it:
+`crud_needs_no_dependency_the_controller_does_not_name` generates a resource,
+drops the auth modules from the module tree, the guards from the controller and
+`uuid` from the manifest, leaving a crate whose only claim on `uuid` is whatever
+the decorator emits. Reintroducing the bug fails it while
+`a_generated_crud_resource_compiles` still passes — which is the measurement of
+what the older test was worth here.
+
 ### A guard bound where it does not run is a compile error
 
 Every `Guard::check_*` defaults to `Ok(())` — right as "this guard does not apply
@@ -39,27 +156,6 @@ needs no plumbing into the four places each transport composes its chain.
   — on a resolver it ran nothing, authentication having always been the bridge's
   job in band. Dropped; the dependency lives on the bridge, which is what runs it.
   All 88 demo e2e tests pass unchanged, which is the proof it was inert.
-
-### `Opaque` is on all three client-facing transports, not just MCP
-
-A handler's error type is the framework's only source for the message a client
-reads, and `Display` is the wrong default: a `DbErr` carries SQL, column names and
-sometimes row values. MCP had the seam because its reader is a language model that
-may repeat what it is told. A GraphQL error frame and a WS error frame are read by
-clients just as untrusted.
-
-- `nest_rs_graphql::Opaque` and `nest_rs_ws::Opaque` join `nest_rs_mcp::Opaque`:
-  `.opaque()?` logs the real error at `error` on the transport's own target and
-  substitutes the shared `nest_rs_core::OPAQUE_CLIENT_MESSAGE`.
-- **Three traits, one constant** — deliberately, and the reason is measured rather
-  than aesthetic. The trait's output *is* the transport's error type, which is what
-  lets `.opaque()?` infer from the enclosing function's return type; one trait
-  generic over the output has three applicable impls, so the receiver stops
-  deciding and every call site needs a turbofish. Sharing stops at the value the
-  three must agree on.
-- GraphQL's opaque error carries the same `INTERNAL` code an internal denial does,
-  so a client cannot tell an unexpected failure from a refusal it was owed no
-  explanation for.
 
 ### WebSocket messages declare a posture, and the mask comes with it
 

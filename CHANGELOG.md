@@ -5,7 +5,49 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0] - 2026-08-10
+## [4.0.0] - Current
+
+### GraphQL subscriptions, and a posture that keeps applying after it is granted
+
+`#[subscription]` joins `#[query]` and `#[mutation]` in the same `#[operations]`
+impl, under the same mandatory posture, served over graphql-ws on the path that
+already serves `POST` — an upgrade takes the socket, a plain `GET` still takes
+the playground. The discovered schema builds with a real subscription root;
+`EmptySubscription` is gone, and a schema that declares none still carries no
+`Subscription` type.
+
+What is new is not the operation kind but *when* the declaration is enforced. A
+query's posture is spent once. A subscription's is not: the guard decides at
+subscribe, and items keep arriving afterwards.
+
+- **The mask moved onto the stream.** Every item is evaluated against the
+  ability captured at subscribe — row rules first, then field grants — and an
+  item outside the grant is **dropped**, never nulled. Two subscribers on one
+  stream therefore read two different sequences, which is the whole guarantee;
+  `an_item_outside_the_grant_never_reaches_that_subscriber` is the witness.
+- **A socket may not outlive the decision that opened it.**
+  `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` is the same control, spelling and
+  four-hour default as a WebSocket gateway's, and it is now asserted rather than
+  configured: a connection that never ends is closed when the deadline elapses.
+- **Three things the upgrade lends, and one it does not.** The principal and its
+  ability travel with the connection. A database handle travels too, but always
+  **outside** the upgrade's transaction — carrying it would pin a pooled
+  connection for hours and write through something the `101` already finalized.
+  The `RequestScope` does not travel at all: a request-scoped provider built once
+  at connect and shared for four hours is not request-scoped, so `Scoped<T>`
+  reports it absent instead of handing back something that looks right.
+- **`GraphqlOperationGuard::around` scopes a `()` future**, so one method covers
+  one operation and one socket. Without it the socket ran with no ambient
+  ability and every subscribe was refused — the guard chain was correct and the
+  state it reads was missing.
+- **Two compile errors that name themselves**: a `#[subscription]` must be
+  `async`, and a fallible one spells its return `Result<…>` literally
+  (async-graphql reads the last path segment, so an aliased `Result` is taken for
+  an ordinary value). A third, wider one landed with them: an operation taking a
+  `Piped<P, T>` argument must return `Result<…>`, because a pipe rejects and the
+  rejection has to reach the client.
+- **`TestApp::graphql_socket()`** drives the graphql-ws protocol in-process, so a
+  suite asserts what a subscriber receives without binding a socket.
 
 ### A decorator may not put a line in your manifest, and now something checks
 

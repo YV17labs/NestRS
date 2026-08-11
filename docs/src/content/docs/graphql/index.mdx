@@ -161,10 +161,13 @@ The GraphQL surface fans out from here. Each page covers one concern:
   free.
 - [Dataloaders](/database/dataloaders/) — `#[dataloader]` on a service
   method for custom batched fetches, beyond what relations give you.
+- [Subscriptions](/graphql/subscriptions/) — `#[subscription]` over
+  graphql-ws, gated at subscribe and filtered per item pushed.
 - [Errors](/graphql/errors/) — `async_graphql::Error`, extensions,
   and mapping `ServiceError` to a GraphQL envelope.
-- [WebSockets](/websockets/) — realtime rides the gateway, not the
-  GraphQL root: typed channels, per-message guards, the same `Ability`.
+- [WebSockets](/websockets/) — the other realtime surface: typed
+  channels and per-message guards, for protocols that are message-shaped
+  rather than schema-shaped.
 - [Configuration](/graphql/configuration/) — `GraphqlConfig`, SDL
   emission, playground toggle, mount path.
 

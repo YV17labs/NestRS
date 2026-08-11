@@ -182,8 +182,8 @@ const UNMAPPED_CRUD_READ = /\.(?:list\(\)|page\(|access\()[^;]*?\.await\s*\?/;
 /// (`nest-rs-seaorm/src/http/bind.rs`, `…/src/graphql/bind.rs`). Written the
 /// other way round the snippet does not compile — `Read: CrudService` and
 /// `UsersService: ActionMarker` both fail — and the prose form `Bind<S, A>`
-/// teaches the wrong rule to every page that repeats it. Filed as a 1.1.1
-/// defect (G5) across ~10 pages, so the shape is gated rather than trusted.
+/// teaches the wrong rule to every page that repeats it. 1.1.1 shipped it
+/// reversed across ~10 pages, so the shape is gated rather than trusted.
 /// Same defect on the proof the binder returns: `Authorized<A, E>`
 /// (`nest-rs-seaorm/src/service.rs`), action first, entity second.
 const BIND_ORDER =
@@ -192,8 +192,8 @@ const BIND_ORDER =
 /// A queue is named by its `QueueName` **type**, never a string: the macro
 /// rejects `#[process(queue = "audio")]` outright, and the producer's
 /// string-taking `push(name, job)` is the runtime-name escape hatch, not the
-/// default. Both spellings shipped across ~10 places on pages that predated
-/// `QueueName` (filed as 1.1.1 Q2), so a reader following the queue section
+/// default. Both spellings shipped in 1.1.1 across ~10 places, on pages that
+/// predated `QueueName`, so a reader following the queue section
 /// wrote a consumer that would not compile and a producer that silently opted
 /// out of the very check the type exists to provide. Gated rather than trusted.
 const QUEUE_STRING_FORM = /#\[process\(\s*queue\s*=\s*"/g;

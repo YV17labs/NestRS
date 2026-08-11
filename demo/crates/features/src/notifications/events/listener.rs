@@ -20,7 +20,7 @@ impl NotificationsListener {
     async fn on_post_published(&self, event: PostPublishedEvent) {
         let command = NotifyCommand {
             org_id: event.org_id,
-            message: format!("Post \"{}\" was published", event.title),
+            message: format!("Post \"{}\" was published", event.post.title),
         };
         match self.queue.push_to::<NotifyQueue>(command).await {
             Ok(()) => tracing::debug!(

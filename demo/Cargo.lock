@@ -194,6 +194,7 @@ version = "4.0.0"
 dependencies = [
  "anyhow",
  "features",
+ "futures-util",
  "migrations",
  "nest-rs",
  "poem",
@@ -201,6 +202,7 @@ dependencies = [
  "sea-orm",
  "serde_json",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "uuid",
 ]
 
@@ -3215,10 +3217,12 @@ name = "nest-rs-testing"
 version = "4.0.0"
 dependencies = [
  "anyhow",
+ "async-graphql",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-exception-filters",
  "nest-rs-filters",
+ "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-interceptors",

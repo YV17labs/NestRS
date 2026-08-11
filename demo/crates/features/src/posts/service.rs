@@ -67,7 +67,6 @@ impl PostsService {
 
         let post_id = model.id;
         let org_id = model.org_id;
-        let title = model.title.clone();
 
         let mut active = model.into_active_model();
         active.status = Set(PostStatus::Published);
@@ -95,13 +94,14 @@ impl PostsService {
             %actor_id,
             "post published",
         );
+        let post = Post::from(&published);
         self.bus
             .emit(PostPublishedEvent {
                 post_id,
                 org_id,
-                title,
+                post: post.clone(),
             })
             .await;
-        Ok(Post::from(&published))
+        Ok(post)
     }
 }

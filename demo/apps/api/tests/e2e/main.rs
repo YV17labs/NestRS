@@ -6,6 +6,7 @@ mod openapi;
 mod orgs;
 mod posts;
 mod scopes;
+mod subscription;
 mod users;
 
 use api::ApiModule;

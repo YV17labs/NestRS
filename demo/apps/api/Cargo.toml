@@ -24,6 +24,11 @@ migrations = { workspace = true }
 # real RustFS directly: `nest-rs-storage` builds the client that ensures the
 # bucket, `reqwest` PUTs to / GETs from the presigned URLs the api mints.
 reqwest = { workspace = true }
+# The subscription e2e drives a real graphql-ws socket against a bound server —
+# the one half `TestClient` cannot reach, since it runs the endpoint in-process
+# with no connection to upgrade.
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
 
 [lints]
 workspace = true

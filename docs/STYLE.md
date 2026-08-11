@@ -5,8 +5,9 @@ corpus was authored across many LLM/human sessions and drifted into dialects. Th
 the repo — enforced by `docs/scripts/lint-docs.mjs` in CI — so a new session cannot ship a new
 dialect unnoticed. When in doubt on any page, apply these rules.
 
-Derived from the content audit (`DOCS_AUDIT.md` §0.2bis + §0.3). On conflict about docs prose,
-this file and the audit win; on conflict about code or naming, `CLAUDE.md` wins.
+On conflict about docs prose, this file wins; on conflict about code or naming, `CLAUDE.md` wins.
+Where a rule is *derived* from the framework's own source (§F), the source wins over both — the
+linter reads it rather than restating it.
 
 ## The goal
 
@@ -113,9 +114,12 @@ have carried it: a pure calculation, a CRUD slice or a migration walkthrough alw
 takes `posts` / `users` / `orgs` and inventing a name there is the violation this rule names. The
 linter greps a ban list and cannot see this — it is a review call.
 
-**Ban list** (the linter greps; must return zero): `items`/`ItemsService`, `products`/
-`ProductEntity`, `artworks`, `file_assets`, `points`/`Ledger`, ad-hoc greetings outside the hello
-scaffold.
+**Ban list** (the linter greps; must return zero): the identifiers `ItemsService`,
+`ProductEntity`, `artworks`, `file_assets`, `Ledger` — plus the *shapes* an off-canon feature
+leaks in as, whatever noun it picks: an `Item`/`Product`/`Order` role type
+(`OrdersController`, `ProductService`), a `path =`/`title =` under `/items`, `/products`,
+`/orders`, and a route attribute on one. Bare `items`/`products`/`points` as English are
+deliberately not greped — too many false positives; they are a review call, like the escape above.
 
 | Docs area | Canonical example |
 |---|---|
@@ -130,7 +134,7 @@ scaffold.
 | Events | `PostPublishedEvent` (notifications listener) |
 | MCP | `weather` (+ `hello` tool) (`demo/apps/assistant`) |
 | OpenAPI, Health, Rate limiting, OTel, Testing | the `api` app over `users`/`posts` |
-| Storage | post cover-image upload (`media` slice) |
+| Storage | the `audio` slice's uploads (`demo/crates/features/src/audio`) |
 
 ## F. Code truth — the checks the prose rules can't see
 
@@ -142,6 +146,19 @@ greps for them:
   `[workspace.package] version` in the repo root `Cargo.toml`, which is also what
   `nestrs g resource` writes. Bump the release, bump the pages — or use `workspace = true`,
   which carries no version at all.
+- **`bind-order`** — the by-id binder takes its **action marker first**, entity second:
+  `Bind<Read, PostEntity>`, and the proof it returns is `Authorized<Read, PostEntity>`. The
+  reversed spelling reads plausibly and does not compile, so a page that repeats it teaches the
+  wrong rule; ~10 pages shipped it reversed in 1.1.1. Gated rather than trusted.
+- **`queue-name`** — a queue is named by its `QueueName` **type** on both sides. The consumer's
+  `#[process(queue = "audio")]` is a compile error the macro raises by name, and the producer's
+  string-taking `push(name, job)` is the runtime-name hatch, not the default — `push_to::<Q>` is.
+  Both spellings shipped in 1.1.1 across ~10 places, on pages that predated `QueueName`.
+- **`architecture-drift`** — `architecture.mdx` restates a file the CLI embeds
+  (`nest-rs-cli/src/templates/architecture.md`, symlinked into `.claude/rules/`), so the page is
+  diffed against it: the role/file table and the reserved-vocabulary list must name the same
+  tokens. A rule the scaffolded project ships and the docs contradict is worse than an undocumented
+  one. Add a page to `MIRRORED_PAGES` when it starts restating a shipped file.
 - **`unauthed-curl`** — a `curl` naming a concrete host and a guarded REST root (`/posts`,
   `/users`, `/orgs`, …) carries an `Authorization` header. The guards run before the pipe and
   before the handler, so a token-free call documents a `401` the page never mentions. A block
@@ -216,6 +233,9 @@ npm run lint:docs              # fails on any violation not in the baseline
 npm run lint:docs -- --update-baseline   # re-snapshot known violations (shrinks toward zero)
 ```
 
-The linter is **baseline-gated**: `docs/scripts/lint-baseline.json` records currently-tolerated
-violations so CI fails only on *new* dialect drift. As pages are brought to conformance the
-baseline shrinks; when it is empty the linter gates the whole corpus.
+The linter is **baseline-gated**: `docs/scripts/lint-baseline.json` records tolerated violations so
+CI fails only on *new* dialect drift. **The baseline is now empty — every rule above gates the
+whole corpus, and any violation fails the build.** It only ever shrinks: a new violation is fixed
+on the page, never re-snapshotted with `--update-baseline`.
+
+CI runs it on every push, before the build, in `.github/workflows/docs-pages.yml`.

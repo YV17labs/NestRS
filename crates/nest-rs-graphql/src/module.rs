@@ -2,13 +2,13 @@
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
-use nest_rs_http::HttpEndpointMeta;
+use nest_rs_http::{HttpBootCheck, HttpEndpointMeta};
 use poem::Route;
 use poem::endpoint::make_sync;
 use poem::web::Html;
 
 use crate::config::GraphqlConfig;
-use crate::resolver::build_schema;
+use crate::resolver::{build_schema, check_duplicate_operations};
 
 /// Mounts `POST <path>` (queries + mutations) and, when enabled, `GET <path>`
 /// (the playground). The schema composes itself from the resolver registry;
@@ -60,6 +60,11 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
     // resolver-membership check (skipped when resolvers link but no schema
     // mounts).
     let builder = builder.provide(nest_rs_core::ResolverSchemaActive);
+    // Merging is what this transport does, so the one failure mode merging adds
+    // — two contributions claiming one addressable name — is a boot error here,
+    // as it already is on HTTP and MCP. It runs at `configure`, before the
+    // mount below composes a schema whose SDL and dispatch would disagree.
+    let builder = builder.provide_meta(HttpBootCheck::new(check_duplicate_operations));
     builder.provide_meta(
         HttpEndpointMeta::new(log_path, "graphql", move |container, route: Route| {
             let schema = build_schema(container.clone(), &options);

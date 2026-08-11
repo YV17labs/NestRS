@@ -14,7 +14,8 @@
 use std::any::TypeId;
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -32,7 +33,7 @@ use crate::config::GraphqlConfig;
 
 /// Which root a resolver's methods contribute to.
 #[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GraphqlResolverKind {
     Query,
     Mutation,
@@ -164,6 +165,76 @@ fn merge_type_info<T: OutputType>(
             requires_scopes: Default::default(),
         }
     })
+}
+
+/// Boot check: two reachable resolvers may not claim one operation name.
+///
+/// Merging is what a transport does — several providers contribute to one
+/// mount — and it introduces exactly one new failure mode: two contributions
+/// claiming the same addressable name. HTTP and MCP already fail the boot
+/// naming both owners; this is GraphQL's, and until it existed the two halves
+/// of the merge did not even agree on a winner.
+///
+/// [`merge_type_info`] folds member fields with `IndexMap::extend`, so the
+/// **last** registration's metadata lands in the schema — while
+/// `DiscoveredQuery::resolve_field` returns from the **first** member that
+/// answers. A client therefore reads one resolver's signature from the SDL and
+/// reaches another resolver's body, with the arguments it was told to send
+/// dropped. Both orders follow `inventory::iter`, which is link order.
+///
+/// That is a security defect, not only a confusing one: `#[authorize]` expands
+/// *inside* the operation's body, so the posture that runs belongs to whichever
+/// body won the dispatch, not to the operation the schema documents.
+///
+/// Field names come from `type_info` — the same source `merge_type_info` reads
+/// — rather than from names the macro could have submitted, because the wire
+/// name is async-graphql's `rename_rule` applied to the method, and a second
+/// implementation of that rule here would be free to drift from the one that
+/// actually builds the schema.
+pub(crate) fn check_duplicate_operations(container: &Container) -> Result<(), String> {
+    let reachable = container.get::<ReachableProviders>().map(|p| p.0.clone());
+    // A scratch registry, never the schema's: `create_fake_output_type`
+    // registers as a side effect, and this pass must leave no trace on the
+    // registry the served schema is built from.
+    let mut scratch = Registry::default();
+    let mut claimed: HashMap<(GraphqlResolverKind, String), &'static str> = HashMap::new();
+    let mut clashes: Vec<String> = Vec::new();
+
+    for reg in inventory::iter::<GraphqlResolverRegistration>() {
+        if let Some(set) = reachable.as_ref()
+            && !set.contains(&(reg.resolver_type_id)())
+        {
+            continue;
+        }
+        let MetaType::Object { fields, .. } = (reg.type_info)(&mut scratch) else {
+            continue;
+        };
+        for field in fields.keys() {
+            match claimed.entry((reg.kind, field.clone())) {
+                Entry::Vacant(slot) => {
+                    slot.insert(reg.resolver_name);
+                }
+                Entry::Occupied(first) => clashes.push(format!(
+                    "{} {:?} ({} and {})",
+                    reg.kind.as_str(),
+                    field,
+                    first.get(),
+                    reg.resolver_name,
+                )),
+            }
+        }
+    }
+
+    if clashes.is_empty() {
+        return Ok(());
+    }
+    clashes.sort();
+    Err(format!(
+        "duplicate GraphQL operation name: {} — an operation is addressed by \
+         bare name within a schema, so the SDL would publish one resolver's \
+         signature while the other resolver's body ran. Rename one of them.",
+        clashes.join(", "),
+    ))
 }
 
 /// Compile-time canary for the pinned async-graphql registry API.

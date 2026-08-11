@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use nest_rs_graphql::GraphqlContextSeed;
 use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
+use nest_rs_graphql::{GraphqlContextSeed, SeedLifetime};
 use nest_rs_guards::Denial;
 
 use crate::Ability;
@@ -17,6 +17,10 @@ use crate::Ability;
 nest_rs_graphql::inventory::submit! {
     GraphqlContextSeed {
         owner_type_id: || None,
+        // The ability is the caller's, so a socket carries it exactly as long
+        // as it carries the caller — bounded by the connection ceiling, not by
+        // one operation.
+        lifetime: SeedLifetime::Connection,
         seed: |req, _container, gql| match req.extensions().get::<Arc<Ability>>() {
             Some(ability) => gql.data(ability.clone()),
             None => gql,

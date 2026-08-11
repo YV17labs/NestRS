@@ -16,6 +16,76 @@ use super::context::forbidden_fields;
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker};
 
+/// Mask **one item of a subscription stream** through the ambient ability, and
+/// report whether it survives — `Ok(None)` meaning this subscriber may not read
+/// this item at all.
+///
+/// The streaming counterpart of [`masked_value_for`], emitted automatically by
+/// `#[operations]` after every `#[authorize(Action, Entity)]`-declared
+/// `#[subscription]`. A resolver never calls it.
+///
+/// # Why it is not just `masked_value_for`
+///
+/// [`masked_value_for`] never drops a lone object: on a query the class gate and
+/// `bind` have already decided instance visibility, so by the time the value is
+/// masked the only open question is which *fields* the caller may read. A
+/// subscription has no such decision per item — the gate ran once, at subscribe,
+/// against the operation's class, and the items arrive afterwards from a stream
+/// the subscriber did not address. So each one is a **row**, and the row-level
+/// verdict applies exactly as `mask_many` applies it to a list: refused ⇒
+/// dropped, never nulled and never masked to an empty shell. Two subscribers on
+/// one stream therefore see two different item sequences, which is the whole
+/// guarantee.
+///
+/// Fails **closed** on every uncertain case, like its sibling: a value that
+/// cannot be reconciled with `E::Model` is an `Err`, and the caller
+/// (`nest_rs_graphql::keep_masked_item`) drops the item rather than pushing it
+/// unmasked.
+pub fn masked_item_for<A, E, O>(ctx: &Context<'_>, item: O) -> Result<Option<O>, Error>
+where
+    A: ActionMarker,
+    E: EntityTrait + WireModelDefaults,
+    E::Model: Serialize + DeserializeOwned,
+    O: Serialize + DeserializeOwned,
+{
+    let ability = ability(ctx)?;
+    let action = A::ACTION;
+    let wire = serde_json::to_value(&item)
+        .map_err(|err| mask_failure::<E>(action, "subscription item did not serialize", &err))?;
+    // A scalar item (a counter, an id) is nothing entity-shaped: there is no row
+    // to evaluate and no field to strip, so it passes exactly as it does on the
+    // query path.
+    if !wire.is_object() {
+        return Ok(Some(item));
+    }
+    let model = crate::wire_mask::wire_to_model::<E>(&wire).map_err(|err| {
+        mask_failure::<E>(
+            action,
+            "subscription item could not be reconciled with the subject model",
+            &err,
+        )
+    })?;
+    // One rule scan answers both halves — whether this subscriber may see the
+    // row, and which of its columns. Delegating to `masked_value_for` here would
+    // re-serialize the item, rebuild the model and re-run this scan, on a path
+    // that runs per item and per subscriber.
+    let verdict = ability.evaluate::<E>(action, &model);
+    if !verdict.allowed {
+        return Ok(None);
+    }
+    let masked = crate::wire_mask::mask_row::<E>(&ability, action, &model, verdict, &wire);
+    match serde_json::from_value(masked.masked) {
+        Ok(masked) => Ok(Some(masked)),
+        // The mask took a key the item's own type requires. Not a failure in
+        // itself — only if the operation asked for that key.
+        Err(_) => match refused_selection(ctx, action, std::any::type_name::<E>(), &masked.removed)
+        {
+            Some(denial) => Err(denial),
+            None => Ok(Some(item)),
+        },
+    }
+}
+
 /// Mask a resolver's already-built wire value through the ambient ability —
 /// the GraphQL analog of the HTTP response shaper, sharing its value-level
 /// round-trip (`crate::wire_mask`): serialize the value, reconstruct each
@@ -102,27 +172,10 @@ where
         )
     })?;
 
-    let selected: Vec<&str> = ctx.field().selection_set().map(|f| f.name()).collect();
-    let refused: Vec<&str> = detail
-        .removed
-        .iter()
-        .filter(|key| selected.iter().any(|name| same_key(name, key)))
-        .map(String::as_str)
-        .collect();
-    if !refused.is_empty() {
-        tracing::warn!(
-            target: "nest_rs::authz",
-            transport = "graphql",
-            entity = std::any::type_name::<E>(),
-            action = ?action,
-            // A tracing field must be a scalar, so the log keeps the joined
-            // form; the wire keeps the list.
-            fields = %refused.join(","),
-            reason = "field_not_granted",
-            "authorization denied",
-        );
-        let refused: Vec<String> = refused.into_iter().map(str::to_owned).collect();
-        return Err(forbidden_fields(&refused));
+    if let Some(denial) =
+        refused_selection(ctx, action, std::any::type_name::<E>(), &detail.removed)
+    {
+        return Err(denial);
     }
 
     // Nothing refused and no row dropped ⇒ the surviving value *is* the one the
@@ -138,6 +191,44 @@ where
             &err,
         )
     })
+}
+
+/// Whether the keys the mask stripped refuse the *operation*.
+///
+/// A stripped key only matters when the caller asked for it: GraphQL never
+/// serializes a field outside the selection set, so one the operation did not
+/// select cannot leak. The two masking paths — one value, one stream item —
+/// answer this identically, and a second copy of "which removed key did the
+/// client select?" is exactly the kind of divergence that turns into a leak on
+/// one path and not the other.
+fn refused_selection(
+    ctx: &Context<'_>,
+    action: Action,
+    entity: &'static str,
+    removed: &std::collections::BTreeSet<String>,
+) -> Option<Error> {
+    let selected: Vec<&str> = ctx.field().selection_set().map(|f| f.name()).collect();
+    let refused: Vec<&str> = removed
+        .iter()
+        .filter(|key| selected.iter().any(|name| same_key(name, key)))
+        .map(String::as_str)
+        .collect();
+    if refused.is_empty() {
+        return None;
+    }
+    tracing::warn!(
+        target: "nest_rs::authz",
+        transport = "graphql",
+        entity,
+        action = ?action,
+        // A tracing field must be a scalar, so the log keeps the joined form;
+        // the wire keeps the list.
+        fields = %refused.join(","),
+        reason = "field_not_granted",
+        "authorization denied",
+    );
+    let refused: Vec<String> = refused.into_iter().map(str::to_owned).collect();
+    Some(forbidden_fields(&refused))
 }
 
 /// One shape for every fail-closed masking exit: the queryable `warn` (so a

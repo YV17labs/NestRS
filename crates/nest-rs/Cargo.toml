@@ -75,6 +75,7 @@ graphql = [
     "dep:nest-rs-graphql",
     "http",
     "nest-rs-guards/graphql",
+    "nest-rs-testing?/graphql",
     "nest-rs-seaorm?/graphql",
     "nest-rs-authz?/graphql",
     "nest-rs-resource?/graphql",

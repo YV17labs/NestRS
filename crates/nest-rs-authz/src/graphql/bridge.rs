@@ -34,11 +34,7 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
         })
     }
 
-    fn around<'a>(
-        &'a self,
-        req: &'a Request,
-        inner: BoxFuture<'a, Response>,
-    ) -> BoxFuture<'a, Response> {
+    fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             // `before` always attaches one: `/graphql` carries the `Public`
             // marker, so an anonymous operation takes `AbilityGuard`'s visitor

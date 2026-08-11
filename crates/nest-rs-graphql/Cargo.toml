@@ -54,7 +54,7 @@ tokio.workspace = true
 [dev-dependencies]
 # Boot the schema in-process and fire GraphQL requests at it (the ContextSeed
 # bridge test). nest-rs-http/nest-rs-core are already runtime deps above.
-nest-rs-testing = { path = "../nest-rs-testing" }
+nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql"] }
 # `#[resolver]` macro emits paths to `::nest_rs_guards::run_global_graphql_guards`,
 # so any test using `#[resolver]` needs the crate in scope. Dev-dep cycle is
 # allowed by Cargo (nest-rs-guards depends on us as a normal dep).
@@ -62,7 +62,10 @@ nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
 # The layer-pool test asserts the transport-edge interceptor pool covers the
 # `/graphql` self-mount. Same allowed dev-dep cycle as nest-rs-guards.
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
-tokio.workspace = true
+# `test-util` (not part of tokio's `full`) pauses time, so the socket-lifetime
+# ceiling is asserted against a four-hour deadline in microseconds instead of
+# being approximated by a wall-clock sleep nobody would keep honest.
+tokio = { workspace = true, features = ["test-util"] }
 serde_json.workspace = true
 # Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
 trybuild.workspace = true

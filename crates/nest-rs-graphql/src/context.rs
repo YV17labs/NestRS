@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_graphql::parser::types::{DocumentOperations, OperationType};
-use async_graphql::{BatchRequest, Executor, Request as GqlRequest};
+use async_graphql::{BatchRequest, Data, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
 use nest_rs_core::{Container, ReachableProviders};
 use poem::http::StatusCode;
@@ -29,9 +29,34 @@ pub struct GraphqlContextSeed {
     /// seed on its owner being reachable, so two apps forward different types
     /// without colliding.
     pub owner_type_id: fn() -> Option<TypeId>,
+    /// How far the forwarded value is allowed to travel — see [`SeedLifetime`].
+    pub lifetime: SeedLifetime,
     /// Reads from the poem request and container and attaches values onto the
     /// outgoing GraphQL request.
     pub seed: fn(&Request, &Container, GqlRequest) -> GqlRequest,
+}
+
+/// How long a forwarded value stays valid, which on a graphql-ws socket is a
+/// real question rather than a formality: the socket is opened by **one**
+/// request and then serves operations for hours.
+///
+/// A value that is the caller's *identity* is the connection's — that is the
+/// whole model of an authenticated socket, and it is why the lifetime ceiling
+/// exists. A value that belongs to the *upgrade request* is not: forwarding it
+/// would hand every operation on that socket the same per-request state, which
+/// is a silent lie rather than a missing feature. So each seed says which it is,
+/// and the socket carries only the first kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeedLifetime {
+    /// The upgrade request's own state — forwarded on the POST path, and
+    /// **dropped** on a socket. `Scoped<T>` then reports the scope as absent,
+    /// which is the truth, instead of resolving a request-scoped provider built
+    /// once at the upgrade and shared for the connection's life.
+    Request,
+    /// The caller's identity, established once at the upgrade and valid for as
+    /// long as the connection is — a principal, an `Ability`. Forwarded on both
+    /// paths.
+    Connection,
 }
 
 inventory::collect!(GraphqlContextSeed);
@@ -50,6 +75,10 @@ inventory::collect!(GraphqlContextSeed);
 inventory::submit! {
     GraphqlContextSeed {
         owner_type_id: || None,
+        // The upgrade's scope is the upgrade's. A subscription reaching
+        // `Scoped<T>` gets "not installed" rather than an instance built once,
+        // hours ago, and shared by every operation on the socket since.
+        lifetime: SeedLifetime::Request,
         seed: |_req, _container, gql| match nest_rs_http::current_request_scope() {
             Some(scope) => gql.data(scope),
             None => gql,
@@ -79,13 +108,17 @@ pub trait GraphqlOperationGuard: Send + Sync + 'static {
     /// Return `Err(Response)` to reject the operation before parsing.
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<(), Response>>;
 
-    /// Wrap the operation's execution to install ambient state for its
-    /// duration (e.g. the caller's `Ability`).
-    fn around<'a>(
-        &'a self,
-        req: &'a Request,
-        inner: BoxFuture<'a, Response>,
-    ) -> BoxFuture<'a, Response>;
+    /// Wrap `inner` to install ambient state for its duration (e.g. the
+    /// caller's `Ability`, which `Guard::check_graphql` and the ability-scoped
+    /// data layer both read from the ambient slot).
+    ///
+    /// The future returns `()` rather than a `Response` because the two things
+    /// that need scoping are not the same shape: one HTTP operation, and one
+    /// graphql-ws **socket**, which lives across many operations and answers
+    /// with frames rather than a response. One method for both is the point —
+    /// a socket that installed different ambient state than the POST path would
+    /// be the same endpoint enforcing two postures.
+    fn around<'a>(&'a self, req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()>;
 }
 
 /// Factory slot for the fallback [`GraphqlOperationGuard`]. `nest-rs-guards`'
@@ -125,19 +158,34 @@ pub struct GraphqlVariablePipe(
 /// The per-request step one [`GraphqlContextSeed`] contributes.
 type ContextSeed = fn(&Request, &Container, GqlRequest) -> GqlRequest;
 
-pub(crate) struct ContextEndpoint<E> {
-    executor: E,
-    container: Container,
-    op_guard: Option<Arc<dyn GraphqlOperationGuard>>,
-    max_batch_size: usize,
-    /// The seeds that fire for this app, resolved **once** at mount. The
-    /// module gate is an access-graph fact frozen at boot, so re-walking
-    /// link-time inventory per request only re-answered it.
+/// What both `/graphql` endpoints — the request/response one and the graphql-ws
+/// one — need from the container, resolved **once** at mount: which guard gates
+/// operations, and which context seeds fire for this app.
+///
+/// Shared rather than resolved twice, and that is the point: a socket and a POST
+/// that disagreed about who is authenticated, or about which principal type is
+/// forwarded, would be the same endpoint enforcing two postures.
+pub(crate) struct OperationBridge {
+    pub(crate) container: Container,
+    pub(crate) op_guard: Option<Arc<dyn GraphqlOperationGuard>>,
+    /// The seeds that fire for this app. The module gate is an access-graph
+    /// fact frozen at boot, so re-walking link-time inventory per request only
+    /// re-answered it.
     seeds: Arc<[ContextSeed]>,
+    /// The subset a graphql-ws connection inherits from its upgrade — see
+    /// [`SeedLifetime`]. Resolved at mount beside the full set rather than
+    /// filtered per connection, for the same reason.
+    connection_seeds: Arc<[ContextSeed]>,
 }
 
-impl<E> ContextEndpoint<E> {
-    pub(crate) fn new(executor: E, container: Container, max_batch_size: usize) -> Self {
+pub(crate) struct ContextEndpoint<E> {
+    executor: E,
+    bridge: Arc<OperationBridge>,
+    max_batch_size: usize,
+}
+
+impl OperationBridge {
+    pub(crate) fn new(container: Container) -> Self {
         let op_guard = match container.get_dyn::<dyn GraphqlOperationGuard>() {
             Some(guard) => {
                 tracing::debug!(
@@ -174,19 +222,59 @@ impl<E> ContextEndpoint<E> {
         // gate (hand-rolled container in a test) skips owner-keyed seeds —
         // fail-closed.
         let reachable = container.get::<ReachableProviders>();
-        let seeds: Arc<[_]> = inventory::iter::<GraphqlContextSeed>()
+        let active: Vec<&GraphqlContextSeed> = inventory::iter::<GraphqlContextSeed>()
             .filter(|reg| match (reg.owner_type_id)() {
                 None => true,
                 Some(owner) => reachable.as_ref().is_some_and(|r| r.0.contains(&owner)),
             })
+            .collect();
+        let seeds: Arc<[_]> = active.iter().map(|reg| reg.seed).collect();
+        let connection_seeds: Arc<[_]> = active
+            .iter()
+            .filter(|reg| reg.lifetime == SeedLifetime::Connection)
             .map(|reg| reg.seed)
             .collect();
         Self {
-            executor,
+            connection_seeds,
             container,
             op_guard,
-            max_batch_size,
             seeds,
+        }
+    }
+
+    fn seed(&self, req: &Request, gql: GqlRequest) -> GqlRequest {
+        self.seeds
+            .iter()
+            .fold(gql, |gql, seed| seed(req, &self.container, gql))
+    }
+
+    /// The connection-level [`Data`] for a graphql-ws socket.
+    ///
+    /// The seeds are written against a `Request` because that is what an
+    /// operation carries on the POST path; a socket has no per-operation HTTP
+    /// request, only the upgrade. So they fold over a scratch request whose
+    /// `data` is then taken — one implementation of "what this app forwards",
+    /// rather than a parallel set of socket seeds that could forward a
+    /// different principal than the POST endpoint does.
+    ///
+    /// Only [`SeedLifetime::Connection`] seeds fold: the identity established at
+    /// the upgrade is the connection's, the upgrade's *request* state is not.
+    pub(crate) fn connection_data(&self, req: &Request) -> Data {
+        self.connection_seeds
+            .iter()
+            .fold(GqlRequest::new(""), |gql, seed| {
+                seed(req, &self.container, gql)
+            })
+            .data
+    }
+}
+
+impl<E> ContextEndpoint<E> {
+    pub(crate) fn new(executor: E, bridge: Arc<OperationBridge>, max_batch_size: usize) -> Self {
+        Self {
+            executor,
+            bridge,
+            max_batch_size,
         }
     }
 
@@ -197,12 +285,13 @@ impl<E> ContextEndpoint<E> {
         &self,
         batch: BatchRequest,
     ) -> std::result::Result<BatchRequest, Box<Response>> {
-        let Some(bridge) = self.container.get::<GraphqlVariablePipe>() else {
+        let container = &self.bridge.container;
+        let Some(bridge) = container.get::<GraphqlVariablePipe>() else {
             return Ok(batch);
         };
         let apply = |mut r: GqlRequest| -> std::result::Result<GqlRequest, Box<Response>> {
             let mut value = serde_json::to_value(&r.variables).unwrap_or(serde_json::Value::Null);
-            if let Err(err) = (bridge.0)(&self.container, &mut value) {
+            if let Err(err) = (bridge.0)(container, &mut value) {
                 return Err(variable_pipe_error_response(&err));
             }
             // A pipe may rewrite the variables into a shape that is no longer a
@@ -232,12 +321,6 @@ impl<E> ContextEndpoint<E> {
                 Ok(BatchRequest::Batch(out))
             }
         }
-    }
-
-    fn seed(&self, req: &Request, gql: GqlRequest) -> GqlRequest {
-        self.seeds
-            .iter()
-            .fold(gql, |gql, seed| seed(req, &self.container, gql))
     }
 }
 
@@ -275,7 +358,7 @@ fn is_read_only(batch: &mut BatchRequest) -> bool {
 /// one out — see [`nest_rs_database::Executor::non_transactional`]. Nothing
 /// installed (no ORM, or already on the pool) ⇒ the future runs untouched on
 /// whatever the request boundary installed.
-async fn without_transaction(fut: BoxFuture<'_, Response>) -> Response {
+async fn without_transaction(fut: BoxFuture<'_, ()>) {
     match nest_rs_database::current_executor().and_then(|executor| executor.non_transactional()) {
         Some(executor) => nest_rs_database::with_request_executor(executor, fut).await,
         None => fut.await,
@@ -307,7 +390,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
         let (mut req, mut body) = req.split();
         // Guard runs *before* parsing/seeding so attached state is on the
         // request when seeds forward it.
-        if let Some(guard) = &self.op_guard
+        if let Some(guard) = &self.bridge.op_guard
             && let Err(resp) = guard.before(&mut req).await
         {
             return Ok(resp);
@@ -328,27 +411,45 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
             Err(resp) => return Ok(*resp),
         };
         let mut batch = match batch {
-            BatchRequest::Single(r) => BatchRequest::Single(self.seed(&req, r)),
+            BatchRequest::Single(r) => BatchRequest::Single(self.bridge.seed(&req, r)),
             BatchRequest::Batch(rs) => {
-                BatchRequest::Batch(rs.into_iter().map(|r| self.seed(&req, r)).collect())
+                BatchRequest::Batch(rs.into_iter().map(|r| self.bridge.seed(&req, r)).collect())
             }
         };
         // Decided before execution and applied around the whole operation
         // (guard included) so nothing under it opens the request transaction.
         let read_only = is_read_only(&mut batch);
-        let inner: BoxFuture<Response> = Box::pin(async {
-            GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response()
+        // The response travels out through a local slot because the guard scopes
+        // a `()` future — see [`GraphqlOperationGuard::around`] for why that is
+        // the shape. A borrow, not a channel: the future ends at the `.await`
+        // below, which is what lets the answer be read straight after.
+        let mut answered: Option<Response> = None;
+        let inner: BoxFuture<()> = Box::pin(async {
+            answered = Some(
+                GraphQLBatchResponse(self.executor.execute_batch(batch).await).into_response(),
+            );
         });
-        let guarded = match &self.op_guard {
+        let guarded = match &self.bridge.op_guard {
             Some(guard) => guard.around(&req, inner),
             None => inner,
         };
-        let response = if read_only {
-            without_transaction(guarded).await
+        if read_only {
+            without_transaction(guarded).await;
         } else {
-            guarded.await
-        };
-        Ok(response)
+            guarded.await;
+        }
+        Ok(answered.unwrap_or_else(|| {
+            // Unreachable unless a panic unwound past the executor: report it
+            // rather than serve an empty 200.
+            tracing::error!(
+                target: "nest_rs::graphql",
+                reason = "no_response",
+                "the guarded operation produced no response",
+            );
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .finish()
+        }))
     }
 }
 
@@ -369,6 +470,10 @@ macro_rules! forward_principal {
         $crate::inventory::submit! {
             $crate::GraphqlContextSeed {
                 owner_type_id: || ::core::option::Option::Some(::core::any::TypeId::of::<$owner>()),
+                // A principal is established once, at the request that carries
+                // it — including the upgrade of a graphql-ws socket, whose
+                // operations are that principal's for as long as it is open.
+                lifetime: $crate::SeedLifetime::Connection,
                 seed: |__req, _container, __gql| match __req.extensions().get::<$ty>() {
                     ::core::option::Option::Some(__v) => __gql.data(::core::clone::Clone::clone(__v)),
                     ::core::option::Option::None => __gql,

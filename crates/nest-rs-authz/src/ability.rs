@@ -280,9 +280,15 @@ impl Ability {
     }
 
     /// [`mask`](Self::mask) with the field verdict already known — the seam
-    /// [`mask_many`](Self::mask_many) uses so a row's rules are evaluated once
-    /// for "may I see it?" and "which columns?" together.
-    fn mask_with<E>(&self, action: Action, model: &E::Model, fields: FieldSet) -> serde_json::Value
+    /// [`mask_many`](Self::mask_many) and the per-item subscription path use so
+    /// a row's rules are evaluated once for "may I see it?" and "which
+    /// columns?" together.
+    pub(crate) fn mask_with<E>(
+        &self,
+        action: Action,
+        model: &E::Model,
+        fields: FieldSet,
+    ) -> serde_json::Value
     where
         E: EntityTrait,
         E::Model: serde::Serialize,

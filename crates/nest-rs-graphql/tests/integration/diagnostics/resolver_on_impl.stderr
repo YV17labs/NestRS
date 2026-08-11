@@ -1,4 +1,4 @@
-error: #[resolver] decorates the resolver struct — its #[query] / #[mutation] / #[field_resolver] methods go under #[operations] on the impl block
+error: #[resolver] decorates the resolver struct — its #[query] / #[mutation] / #[subscription] / #[field_resolver] methods go under #[operations] on the impl block
   --> tests/integration/diagnostics/resolver_on_impl.rs:11:1
    |
 11 | / impl DemoResolver {

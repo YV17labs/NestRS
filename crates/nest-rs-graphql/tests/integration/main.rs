@@ -12,3 +12,4 @@ mod read_only;
 mod resolver;
 mod scope;
 mod sdl_snapshot;
+mod subscription;

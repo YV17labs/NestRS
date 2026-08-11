@@ -3,7 +3,8 @@
 //!
 //! Mirrors the HTTP `#[controller]`/`#[routes]` split: `#[resolver]` on the
 //! struct = construction (DI); `#[operations]` on its impl =
-//! `#[query]`/`#[mutation]`/`#[field_resolver]` orchestration.
+//! `#[query]`/`#[mutation]`/`#[subscription]`/`#[field_resolver]`
+//! orchestration.
 #![warn(missing_docs)]
 
 use proc_macro::TokenStream;
@@ -44,6 +45,7 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Orchestrate a `#[resolver]` struct's operations on its **impl block**:
 /// `#[query]`/`#[mutation]` methods split into generated `#[Object]` roots and
+/// `#[subscription]` methods into a generated `#[Subscription]` root, each
 /// submitted to the link-time registry; `#[field_resolver]` methods become
 /// `#[ComplexObject]` impls on the parent type.
 ///
@@ -51,8 +53,9 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// collects, because the spec calls a query or a mutation an *operation*.
 /// `#[use_guards(...)]` belongs on the struct beside `#[resolver]`, not here.
 ///
-/// **Every `#[query]`/`#[mutation]` declares its access posture** — forgetting
-/// one is a compile error, never a silently ungated operation:
+/// **Every `#[query]`/`#[mutation]`/`#[subscription]` declares its access
+/// posture** — forgetting one is a compile error, never a silently ungated
+/// operation:
 ///
 /// - `#[authorize(Action, Entity)]` — the GraphQL analog of the HTTP
 ///   `Authorize<A, E>` extractor: the macro emits the class-level gate
@@ -69,6 +72,14 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// A `#[field_resolver]` takes neither: it inherits the operation's posture
 /// (bind `#[use_guards]` beside it for an extra per-field gate).
+///
+/// **A `#[subscription]` declares the same posture and it is enforced twice**:
+/// the gate once, at subscribe, and the mask on **every item** the stream
+/// yields — evaluated against the ability captured at subscribe, so an item the
+/// subscriber may not read is dropped rather than nulled
+/// (`nest_rs_authz::graphql::masked_item_for`). The method must be `async` and
+/// return `impl Stream<Item = T>`, optionally behind a literally-spelled
+/// `Result<…>`; both rules are compile errors that name themselves.
 ///
 /// **One `#[ComplexObject]` per wire type.** async-graphql allows at most one
 /// `#[ComplexObject]` impl per output type. A `#[field_resolver]` here and an

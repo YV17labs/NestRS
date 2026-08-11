@@ -1,0 +1,5 @@
+error: an operation taking a `Piped<P, T>` / `Valid<T>` argument returns `Result<...>`: a pipe rejects invalid input, and the rejection has to surface as a GraphQL error rather than being swallowed
+  --> tests/integration/diagnostics/piped_bare_return.rs:17:14
+   |
+17 |     async fn shout(&self, label: Piped<Trim, String>) -> String {
+   |              ^^^^^

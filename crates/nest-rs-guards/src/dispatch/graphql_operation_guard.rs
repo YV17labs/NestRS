@@ -49,11 +49,7 @@ impl GraphqlOperationGuard for GlobalPoolOperationGuard {
         Box::pin(async move { self.pool.check(req).await.map_err(denial_to_http_response) })
     }
 
-    fn around<'a>(
-        &'a self,
-        _req: &'a Request,
-        inner: BoxFuture<'a, Response>,
-    ) -> BoxFuture<'a, Response> {
+    fn around<'a>(&'a self, _req: &'a Request, inner: BoxFuture<'a, ()>) -> BoxFuture<'a, ()> {
         // Nothing ambient to install — that is the authz bridge's job.
         inner
     }

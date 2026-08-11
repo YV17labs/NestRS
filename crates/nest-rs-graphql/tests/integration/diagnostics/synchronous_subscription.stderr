@@ -1,0 +1,5 @@
+error: a `#[subscription]` method must be `async` — it is awaited once to produce the stream the client then reads
+  --> tests/integration/diagnostics/synchronous_subscription.rs:17:8
+   |
+17 |     fn ticks(&self) -> impl Stream<Item = i32> {
+   |        ^^^^^

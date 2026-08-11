@@ -10,7 +10,10 @@ use std::sync::Arc;
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, MaskReplyError, Read, masked_reply, with_ability};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::async_graphql::{Result as GqlResult, SimpleObject};
+use nest_rs_graphql::async_graphql::futures_util::stream::{self, Stream, StreamExt};
+use nest_rs_graphql::async_graphql::{
+    Error as GqlError, Executor, Request as GqlRequest, Result as GqlResult, SimpleObject,
+};
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_http::async_trait;
@@ -18,6 +21,7 @@ use nest_rs_http::poem::Request;
 use nest_rs_resource::WireModelDefaults;
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 
 use super::query;
 
@@ -56,7 +60,7 @@ impl WireModelDefaults for widget::Entity {
 
 /// The wire shape: `name` optional so a field-restricted mask yields `None`
 /// rather than an irreconcilable value.
-#[derive(SimpleObject, Serialize, Deserialize)]
+#[derive(Clone, Debug, SimpleObject, Serialize, Deserialize)]
 struct WidgetDto {
     id: i32,
     name: Option<String>,
@@ -122,7 +126,10 @@ impl Guard for AbilityInjector {
 }
 
 #[resolver]
-struct MaskResolver;
+struct MaskResolver {
+    #[inject]
+    feed: Arc<WidgetFeed>,
+}
 
 #[operations]
 impl MaskResolver {
@@ -179,6 +186,36 @@ impl MaskResolver {
     async fn motd(&self) -> GqlResult<String> {
         Ok("hello".into())
     }
+
+    /// The stream both subscribers read. The resolver writes no masking call
+    /// and no per-subscriber filter — the posture attribute is the whole
+    /// mechanism, exactly as on the queries above.
+    #[subscription]
+    #[authorize(Read, widget::Entity)]
+    async fn widget_feed(&self) -> Result<impl Stream<Item = WidgetDto>, GqlError> {
+        let rx = self.feed.tx.subscribe();
+        Ok(stream::unfold(rx, |mut rx| async move {
+            match rx.recv().await {
+                Ok(widget) => Some((widget, rx)),
+                Err(_) => None,
+            }
+        }))
+    }
+}
+
+/// The one source both subscribers read from, so a difference in what they
+/// receive can only come from the posture.
+#[injectable]
+struct WidgetFeed {
+    tx: broadcast::Sender<WidgetDto>,
+}
+
+impl Default for WidgetFeed {
+    fn default() -> Self {
+        Self {
+            tx: broadcast::channel(8).0,
+        }
+    }
 }
 
 type TestOpGuard = GraphqlAbilityBridge<PassGuard, AbilityInjector>;
@@ -189,6 +226,7 @@ type TestOpGuard = GraphqlAbilityBridge<PassGuard, AbilityInjector>;
         PassGuard,
         AbilityInjector,
         TestOpGuard as dyn GraphqlOperationGuard,
+        WidgetFeed,
         MaskResolver,
     ],
 )]
@@ -312,6 +350,148 @@ async fn zero_grant_caller_is_gated_before_masking() {
     assert!(
         !json["errors"].as_array().unwrap_or(&vec![]).is_empty(),
         "the emitted class gate rejects a caller with no Read rule"
+    );
+}
+
+// ── Posture per item: the gate runs once, the mask runs on every push ───────
+//
+// A query answers once, so its posture is spent once. A subscription's is not:
+// the guard decided at subscribe, and items keep arriving afterwards. These two
+// tests are the guarantee that the decision keeps applying — one stream, two
+// subscribers, two different item sequences.
+
+/// The ability a `role` carries, the same three the `x-role` guard builds — one
+/// table, so the socket path and the POST path cannot come to mean different
+/// things by the same word.
+fn ability_for(role: &str) -> Arc<nest_rs_authz::Ability> {
+    let mut builder = AbilityBuilder::new();
+    match role {
+        "admin" => {
+            builder.can(Action::Read, widget::Entity);
+        }
+        "auditor" => {
+            builder
+                .can(Action::Read, widget::Entity)
+                .when(|p| p.eq(widget::Column::Id, 1))
+                .fields([widget::Column::Id]);
+        }
+        _ => {}
+    }
+    Arc::new(builder.build().expect("valid test ability"))
+}
+
+/// One subscribe as `role`.
+///
+/// The ability rides on the request rather than an `x-role` header because a
+/// socket has no per-operation request: this is the same value the bridge
+/// installs, in the same slot `nest_rs_authz::graphql::ability` reads it from
+/// (the context data), reached directly so one test can be two callers at once.
+fn subscribe(app: &TestApp, role: &str) -> GqlRequest {
+    let _ = app;
+    GqlRequest::new("subscription { widgetFeed { id name } }").data(ability_for(role))
+}
+
+fn payload(response: nest_rs_graphql::async_graphql::Response) -> serde_json::Value {
+    serde_json::to_value(response.data).expect("a subscription payload is JSON")
+}
+
+fn ids(items: &[serde_json::Value]) -> Vec<i64> {
+    items
+        .iter()
+        .filter_map(|item| item["widgetFeed"]["id"].as_i64())
+        .collect()
+}
+
+/// The load-bearing one. Two subscribers, one emitted sequence: the item the
+/// auditor may not read never reaches them — it is **absent**, not delivered
+/// with its fields nulled.
+///
+/// Three items are emitted (`1`, `2`, `1`) and each subscriber takes the number
+/// it is entitled to. That is what makes the assertion sharp: the auditor's two
+/// items are the two `1`s, so `2` was skipped rather than merely arriving last.
+#[tokio::test]
+async fn an_item_outside_the_grant_never_reaches_that_subscriber() {
+    let app = boot().await;
+    let schema = nest_rs_graphql::compose_schema(
+        app.container().clone(),
+        &nest_rs_graphql::GraphqlConfig::default(),
+    );
+    let feed = app
+        .container()
+        .get::<WidgetFeed>()
+        .expect("the feed is a provider of the booted app");
+
+    let admin = schema
+        .execute_stream(subscribe(&app, "admin"), None)
+        .map(payload)
+        .take(3)
+        .collect::<Vec<_>>();
+    let auditor = schema
+        .execute_stream(subscribe(&app, "auditor"), None)
+        .map(payload)
+        .take(2)
+        .collect::<Vec<_>>();
+    let emit = async {
+        // A stream registers its receiver on first poll, so nothing may be
+        // published until both have been polled — otherwise the send lands in a
+        // channel nobody is listening on and the test hangs for the wrong
+        // reason.
+        while feed.tx.receiver_count() < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        for (id, name) in [(1, "ada"), (2, "grace"), (1, "ada")] {
+            feed.tx
+                .send(WidgetDto {
+                    id,
+                    name: Some(name.into()),
+                })
+                .expect("receivers are live");
+        }
+    };
+
+    let (admin, auditor, ()) = tokio::join!(admin, auditor, emit);
+
+    assert_eq!(ids(&admin), vec![1, 2, 1], "admin reads the whole feed");
+    assert_eq!(
+        ids(&auditor),
+        vec![1, 1],
+        "widget 2 is outside the auditor's grant, so it never arrives: {auditor:?}",
+    );
+    assert_eq!(
+        auditor[0]["widgetFeed"]["name"],
+        serde_json::Value::Null,
+        "the item that does arrive is still field-masked: {auditor:?}",
+    );
+    assert_eq!(
+        admin[1]["widgetFeed"]["name"], "grace",
+        "the same emitted item is unmasked for the caller who may read it",
+    );
+}
+
+/// The gate itself, at subscribe: a caller with no `Read` rule is refused before
+/// any item exists — the same refusal a query gets, so the stream carries an
+/// error and ends rather than opening.
+#[tokio::test]
+async fn a_caller_with_no_grant_is_refused_at_subscribe() {
+    let app = boot().await;
+    let schema = nest_rs_graphql::compose_schema(
+        app.container().clone(),
+        &nest_rs_graphql::GraphqlConfig::default(),
+    );
+    let responses: Vec<_> = schema
+        .execute_stream(subscribe(&app, ""), None)
+        .collect()
+        .await;
+    let first = responses.first().expect("the refusal is delivered");
+    assert!(
+        !first.errors.is_empty(),
+        "the class gate refuses a caller with no Read rule: {:?}",
+        first.data,
+    );
+    assert_eq!(
+        serde_json::to_value(&first.data).expect("a payload is JSON")["widgetFeed"],
+        serde_json::Value::Null,
+        "no item ships to a caller the gate refused",
     );
 }
 

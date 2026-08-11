@@ -141,7 +141,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             async fn get(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, #entity>,
-                __id: ::nest_rs_http::poem::web::Path<::uuid::Uuid>,
+                __id: ::nest_rs_http::poem::web::Path<::nest_rs_resource::uuid::Uuid>,
             ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(
@@ -236,7 +236,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             async fn update(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Update, #entity>,
-                __id: ::nest_rs_http::poem::web::Path<::uuid::Uuid>,
+                __id: ::nest_rs_http::poem::web::Path<::nest_rs_resource::uuid::Uuid>,
                 __body: ::nest_rs_http::Valid<::nest_rs_http::poem::web::Json<#update>>,
             ) -> ::nest_rs_http::poem::Result<::nest_rs_http::poem::web::Json<#output>> {
                 #id_v7_check
@@ -282,7 +282,7 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
             async fn delete(
                 &self,
                 _authz: ::nest_rs_authz::http::Authorize<::nest_rs_authz::Delete, #entity>,
-                __id: ::nest_rs_http::poem::web::Path<::uuid::Uuid>,
+                __id: ::nest_rs_http::poem::web::Path<::nest_rs_resource::uuid::Uuid>,
             ) -> ::nest_rs_http::poem::Result<()> {
                 #id_v7_check
                 match ::nest_rs_seaorm::CrudService::access(

@@ -169,6 +169,107 @@ fn a_generated_crud_resource_compiles() {
     scaffold_and_check(&[&["g", "resource", "post"]], "a generated CRUD resource");
 }
 
+/// `crates/features/src/lib.rs` with the auth adapter's modules dropped.
+///
+/// The files stay on disk; Rust compiles the module tree, not the directory, so
+/// undeclaring them is enough to take `identity/claims.rs` — and its `uuid` —
+/// out of the build.
+const RESOURCE_ONLY_LIB: &str = r#"//! Product features — vertical slices shared across apps.
+
+pub mod hello;
+pub mod post;
+
+pub use hello::HelloHttpModule;
+"#;
+
+/// The same controller the generator writes, minus the guards — so its imports
+/// are `std`, `nest_rs` and `crate::post`, and nothing else.
+const UNGUARDED_CRUD_CONTROLLER: &str = r#"use std::sync::Arc;
+
+use nest_rs::http::{controller, crud};
+
+use crate::post::{CreatePost, Entity as PostEntity, Post, PostService, UpdatePost};
+
+#[controller(path = "/post")]
+pub struct PostController {
+    #[inject]
+    svc: Arc<PostService>,
+}
+
+#[crud(
+    service = svc,
+    entity = PostEntity,
+    output = Post,
+    create = CreatePost,
+    update = UpdatePost,
+)]
+impl PostController {}
+"#;
+
+/// The resource's HTTP module without the `AuthzHttpModule` import the guards
+/// brought — the second and last thread tying the generated resource to the
+/// auth adapter.
+const UNGUARDED_CRUD_MODULE: &str = r#"use nest_rs::core::module;
+
+use super::controller::PostController;
+use crate::post::PostModule;
+
+#[module(
+    imports = [PostModule],
+    providers = [PostController],
+)]
+pub struct PostHttpModule;
+"#;
+
+#[test]
+fn crud_needs_no_dependency_the_controller_does_not_name() {
+    // The test the suite above only *looked* like it was running.
+    //
+    // `#[crud]` emitted `::uuid::Uuid` for three routes, so a crate that wrote
+    // the attribute and nothing else failed with `E0433` naming a crate the
+    // developer never wrote — the hard "no" that a macro expansion may not put
+    // a line in a manifest. It shipped anyway, because the witness that should
+    // have caught it cannot reach `#[crud]` and the one above passes for an
+    // unrelated reason: `g resource` bootstraps `g auth`, whose claims type
+    // names `uuid`, so the dependency is there whether the macro needs it or not.
+    //
+    // This case takes that accident away. The auth modules leave the module
+    // tree, the controller drops the guards that were the only thing importing
+    // them, and `uuid` leaves the manifest — leaving a crate whose entire claim
+    // on `uuid` is whatever `#[crud]` emits. `resource_deps()` never listed it,
+    // so the generator always agreed; it is the decorator that has to.
+    scaffold_write_and_check_in(
+        &["new", "acme"],
+        &[&["g", "resource", "post"]],
+        &[],
+        &[
+            ("crates/features/src/lib.rs", RESOURCE_ONLY_LIB),
+            (
+                "crates/features/src/post/http/controller.rs",
+                UNGUARDED_CRUD_CONTROLLER,
+            ),
+            (
+                "crates/features/src/post/http/module.rs",
+                UNGUARDED_CRUD_MODULE,
+            ),
+        ],
+        "a CRUD resource in a crate that does not declare `uuid`",
+        |workspace| {
+            let manifest = workspace.join("crates/features/Cargo.toml");
+            let kept: String = read(workspace, "crates/features/Cargo.toml")
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("uuid"))
+                .map(|line| format!("{line}\n"))
+                .collect();
+            assert!(
+                !kept.contains("uuid"),
+                "the dependency under test is gone from the manifest:\n{kept}",
+            );
+            std::fs::write(&manifest, kept).expect("the generated manifest is writable");
+        },
+    );
+}
+
 /// The `/fundamentals/lifecycle/` snippet, verbatim but for the feature name —
 /// the first thing a reader pastes into a freshly generated port. It reaches for
 /// both crates the docs never tell anyone to add: the `tracing` façade for an

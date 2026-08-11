@@ -45,4 +45,13 @@ impl HygieneController {
     async fn probe(&self, Path(req): Path<String>) -> String {
         req
     }
+
+    /// The third response attribute, and the one whose expansion is not a
+    /// passthrough: `#[routes]` drains the marker and writes the whole handler
+    /// body, so the paths in *that* emission are the ones under test here —
+    /// its two siblings above prove nothing about it.
+    #[get("/moved")]
+    #[public]
+    #[redirect("/probe/moved", 308)]
+    async fn moved(&self) {}
 }

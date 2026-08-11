@@ -2796,6 +2796,7 @@ dependencies = [
  "parking_lot",
  "tokio",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]
@@ -2903,6 +2904,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]
@@ -3159,6 +3161,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]

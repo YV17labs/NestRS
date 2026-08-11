@@ -27,6 +27,9 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# Pins the wording of the `on_provider` wrong-shape diagnostic: the rule is
+# that it names the sibling decorator, and only a snapshot keeps it there.
+trybuild.workspace = true
 tokio.workspace = true
 # A probe's contract has two halves: the body an operator can read off an open
 # port, and the log line carrying what the body deliberately withholds. Path-only

@@ -23,6 +23,9 @@ parking_lot.workspace = true
 futures-util.workspace = true
 
 [dev-dependencies]
+# Pins the wording of the `on_provider` wrong-shape diagnostic: the rule is
+# that it names the sibling decorator, and only a snapshot keeps it there.
+trybuild.workspace = true
 tokio.workspace = true
 # A contained panic that logs nothing would be a silent failure — `LogCapture`
 # covers the event half of the containment contract.

@@ -1,0 +1,5 @@
+error: #[indicators] decorates the impl block holding the #[liveness] / #[readiness] / #[startup] methods — the provider struct itself takes #[injectable]
+ --> tests/integration/diagnostics/indicators_on_struct.rs:8:1
+  |
+8 | struct DemoIndicator;
+  | ^^^^^^^^^^^^^^^^^^^^^

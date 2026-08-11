@@ -1,0 +1,5 @@
+error: #[listeners] decorates the impl block holding the #[on_event] methods — the provider struct itself takes #[injectable]
+ --> tests/integration/diagnostics/listeners_on_struct.rs:8:1
+  |
+8 | struct DemoListener;
+  | ^^^^^^^^^^^^^^^^^^^^

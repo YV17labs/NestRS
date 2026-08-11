@@ -1,0 +1,5 @@
+error: every #[tool] declares its access posture: `#[authorize(Action, Entity)]` (class-level gate + automatic response masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` (no gate and no mask — `#[use_guards]` guards still run, and the endpoint's own operation guard still authenticated the request)
+  --> tests/integration/diagnostics/tool_without_posture.rs:18:14
+   |
+18 |     async fn ping(&self) -> Result<String, nest_rs_mcp::McpError> {
+   |              ^^^^

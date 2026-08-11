@@ -4,4 +4,5 @@
 //! deterministic dispatch-order guarantee.
 
 mod bus;
+mod diagnostics;
 mod order;

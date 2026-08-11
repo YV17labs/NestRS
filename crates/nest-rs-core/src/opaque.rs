@@ -8,10 +8,17 @@
 //! `#[error("database error")]` precisely so this cannot bite — a feature's own
 //! error type has no such discipline imposed on it.
 //!
-//! Each transport therefore exposes an `Opaque` trait beside its error type —
-//! `nest_rs_mcp::Opaque`, `nest_rs_graphql::Opaque`, `nest_rs_ws::Opaque` — whose
-//! `opaque()` logs the real error at `error` on that transport's own target and
-//! substitutes [`OPAQUE_CLIENT_MESSAGE`].
+//! Each client-facing transport therefore exposes an `Opaque` trait beside its
+//! error type — `nest_rs_http::Opaque`, `nest_rs_mcp::Opaque`,
+//! `nest_rs_graphql::Opaque`, `nest_rs_ws::Opaque` — whose `opaque()` logs the
+//! real error at `error` on that transport's own target and substitutes
+//! [`OPAQUE_CLIENT_MESSAGE`].
+//!
+//! HTTP joined last, and its absence had never been argued: the reasoning above
+//! is about what a client may read, and a browser reads an error body exactly as
+//! untrusted as a language model reads a tool result. The three non-request
+//! edges have no trait and want none — a queue job, a scheduled tick and an
+//! event listener have no caller to tell anything.
 //!
 //! **Why the trait is per transport and only the constant is shared.** The trait's
 //! *output* is the transport's error type, and that is what makes `.opaque()?`

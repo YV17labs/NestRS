@@ -3,11 +3,11 @@ use nest_rs::core::module;
 use super::resolver::PostsResolver;
 use crate::authz::graphql::AuthzGraphqlModule;
 use crate::orgs::OrgsModule;
-use crate::posts::PostsModule;
+use crate::posts::{PostsEventsModule, PostsModule};
 use crate::users::UsersModule;
 
 #[module(
-    imports = [PostsModule, OrgsModule, UsersModule, AuthzGraphqlModule],
+    imports = [PostsModule, PostsEventsModule, OrgsModule, UsersModule, AuthzGraphqlModule],
     providers = [PostsResolver],
 )]
 pub struct PostsGraphqlModule;

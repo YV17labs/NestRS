@@ -53,6 +53,10 @@ type Query {
 	users(after: String, first: Int): [User!]!
 }
 
+type Subscription {
+	postPublished: Post!
+}
+
 input UpdateOrg {
 	name: String!
 }
@@ -84,4 +88,5 @@ directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 schema {
 	query: Query
 	mutation: Mutation
+	subscription: Subscription
 }

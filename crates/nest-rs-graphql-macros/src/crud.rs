@@ -116,7 +116,7 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 ) -> ::nest_rs_graphql::async_graphql::Result<::std::vec::Vec<#output>> {
                     let __after = after
                         .as_deref()
-                        .and_then(|__s| ::uuid::Uuid::parse_str(__s).ok());
+                        .and_then(|__s| ::nest_rs_resource::uuid::Uuid::parse_str(__s).ok());
                     let __page = ::nest_rs_seaorm::CrudService::page(
                         &*self.#service,
                         ::core::option::Option::unwrap_or(first, 20),

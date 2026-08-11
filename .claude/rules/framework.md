@@ -66,10 +66,34 @@ in the owning crate's own suite (see *Shipping a new capability* step 5
 in `CLAUDE.md`).
 
 It deliberately does **not** consume `#[crud]`/`#[expose]`: those need a
-real entity and a real service, so their contract is proved by
-`crates/nest-rs-cli/tests/e2e/scaffold.rs` — which scaffolds a workspace,
-generates a resource, repoints `nest-rs` at the working tree through
-`[patch.crates-io]`, and runs a real `cargo check` over the result.
+real entity, and an entity cannot live in a zero-dep crate —
+`DeriveEntityModel` roots its expansion at the call site's `sea_orm` and
+offers no `crate = ` override, which *is* the entity-site exception. Their
+contract is proved by `crates/nest-rs-cli/tests/e2e/scaffold.rs` — which
+scaffolds a workspace, generates a resource, repoints `nest-rs` at the
+working tree through `[patch.crates-io]`, and runs a real `cargo check`.
+
+**The two are excluded for different reasons, and conflating them cost a
+shipped defect.** `#[expose]` sits on an entity, whose own source
+legitimately writes `sea_orm`. `#[crud]` sits on a **controller**, whose
+source writes nothing but `std`, `nest_rs` and `crate::` — it has no excuse,
+and it emitted `::uuid::Uuid` for three routes and one resolver argument.
+`g resource` bootstraps `g auth`, whose claims type names `uuid`, so the
+scaffold e2e had the dependency whether the macro needed it or not, and
+passed throughout. **A generated tree witnesses only what it does not also
+supply by accident**:
+`crud_needs_no_dependency_the_controller_does_not_name` drops the auth
+modules from the module tree, the guards from the controller and `uuid` from
+the manifest, so what remains rests on the decorator alone.
+
+**The path-rooting rule is now executed, not merely stated.**
+`nest-rs-macro-hygiene/tests/integration/emissions.rs` reads every
+`*-macros` source and fails on a path rooted outside the framework — an
+allowlist of the framework's roots, not a list of banned crates, so a
+decorator reaching for something nobody thought to ban fails the day it is
+written. The scan is exhaustive over decorators and blind to feature
+resolution; the compile witness is the reverse. Keep both, or the next
+defect hides in the gap between them.
 
 **That distinction is load-bearing.** The `integration` suite asserts on
 the *text* the generator wrote, which catches a wrong dependency and can

@@ -5,5 +5,6 @@
 //! `HealthModule` (see `apps/api/tests/e2e/main.rs::health_probe_*`);
 //! `src/indicator.rs` is data + an `inventory::collect!` site, exercised
 //! through `service` below.
+mod diagnostics;
 mod module;
 mod service;

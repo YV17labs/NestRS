@@ -1,0 +1,5 @@
+error: #[hooks] decorates the impl block holding the #[on_module_init] / #[on_application_bootstrap] / #[on_module_destroy] methods — the provider struct itself takes #[injectable]
+ --> tests/integration/diagnostics/hooks_on_struct.rs:8:1
+  |
+8 | struct DemoProvider;
+  | ^^^^^^^^^^^^^^^^^^^^

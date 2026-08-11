@@ -62,7 +62,10 @@ pub fn take_path_list(
 /// for those traits, binding one would be a silent no-op, so it is a named
 /// compile error instead. Guards *are* bridged everywhere, so they stay.
 /// `transport` (e.g. `"WebSockets"`, `"GraphQL"`) and `site` (e.g. `"gateway"`,
-/// `"resolver"`) name the rejecting context in the diagnostic.
+/// `"resolver"`) name the rejecting context in the diagnostic. The sentence
+/// says "on this {site}" rather than "on a {site}": the fifth caller passes
+/// `"operation"`, and an article baked into the template cannot be right for
+/// every noun a future edge will pass.
 pub fn reject_http_only_layers(
     attrs: &[Attribute],
     transport: &str,
@@ -75,7 +78,7 @@ pub fn reject_http_only_layers(
                     attr,
                     format!(
                         "`#[{name}]` is not bridged on {transport} yet — it would be a silent \
-                         no-op on a {site}. Remove it, or move the layer onto an HTTP \
+                         no-op on this {site}. Remove it, or move the layer onto an HTTP \
                          `#[controller]` / `#[routes]`, where interceptors and filters run. \
                          Guards work on both.",
                     ),

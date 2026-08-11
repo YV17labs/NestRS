@@ -1,0 +1,5 @@
+error: `#[use_interceptors]` is not bridged on MCP yet — it would be a silent no-op on this operation. Remove it, or move the layer onto an HTTP `#[controller]` / `#[routes]`, where interceptors and filters run. Guards work on both.
+  --> tests/integration/diagnostics/interceptors_on_a_tool.rs:17:5
+   |
+17 |     #[use_interceptors(SomeInterceptor)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

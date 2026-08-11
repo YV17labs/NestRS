@@ -1,0 +1,5 @@
+error: #[scheduled] decorates the impl block holding the #[every] / #[cron] / #[after] methods — the provider struct itself takes #[injectable]
+ --> tests/integration/diagnostics/scheduled_on_struct.rs:8:1
+  |
+8 | struct DemoTasks;
+  | ^^^^^^^^^^^^^^^^^

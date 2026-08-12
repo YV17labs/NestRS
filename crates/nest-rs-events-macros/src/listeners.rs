@@ -17,7 +17,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{ImplItem, ReturnType};
 
-use nest_rs_codegen::{DecoratorPair, impl_self_ident, payload_arg_type, snake_case};
+use nest_rs_codegen::{DecoratorPair, Edge, impl_self_ident, payload_arg_type, snake_case};
 
 /// The listener host keeps its own `#[injectable]`; this names the shape
 /// `#[listeners]` wants rather than reporting syn's `expected impl`.
@@ -25,6 +25,13 @@ const LISTENERS_PAIR: DecoratorPair = DecoratorPair::on_provider("#[listeners]",
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
+    // `version` before the blanket refusal: the developer arriving from
+    // `#[controller(version = "1")]` asked a real question, and "takes no
+    // arguments" answers a different one. The sentence is `nest-rs-codegen`'s,
+    // so this edge's answer is worded where every edge's is.
+    if let Err(err) = Edge::Events.reject_version(&args) {
+        return err.to_compile_error().into();
+    }
     if !args.is_empty() {
         return syn::Error::new_spanned(
             &args,

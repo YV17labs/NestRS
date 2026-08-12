@@ -15,7 +15,7 @@
 //! backend integration (nest-rs-redis, …) is wired in.
 
 use nest_rs_codegen::{
-    DecoratorPair, PipeWrapper, impl_self_ident, payload_arg_type, pipe_wrapper, snake_case,
+    DecoratorPair, Edge, PipeWrapper, impl_self_ident, payload_arg_type, pipe_wrapper, snake_case,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -28,7 +28,11 @@ use syn::{Ident, ImplItem, LitInt, LitStr, Token, Type};
 /// a sentence naming what to write instead of syn's `expected impl`.
 const PROCESSOR_PAIR: DecoratorPair = DecoratorPair::on_provider("#[processor]", "#[process]");
 
-pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
+    if let Err(err) = reject_args(args) {
+        return err.to_compile_error().into();
+    }
+
     let mut item = match PROCESSOR_PAIR.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
@@ -274,6 +278,25 @@ pub(crate) fn processor(_args: TokenStream, input: TokenStream) -> TokenStream {
         #(#emissions)*
     };
     out.into()
+}
+
+/// `#[processor]` takes no arguments — the queues are named by the `#[process]`
+/// methods it collects. It used to *ignore* whatever it was handed, so anything
+/// written here bound nothing and said nothing; `version` is called out first
+/// because it is the one key a developer arrives with from
+/// `#[controller(version = "1")]`, and "takes no arguments" answers a question
+/// they did not ask.
+fn reject_args(args: TokenStream) -> syn::Result<()> {
+    let args = TokenStream2::from(args);
+    Edge::Queue.reject_version(&args)?;
+    if args.is_empty() {
+        return Ok(());
+    }
+    Err(syn::Error::new_spanned(
+        &args,
+        "#[processor] takes no arguments; tag methods with \
+         `#[process(queue = <QueueName type>)]`",
+    ))
 }
 
 /// Split a job argument into (type to deserialize from the wire, expression that

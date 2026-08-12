@@ -19,7 +19,7 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    DecoratorPair, InjectableBody, PipeWrapper, build_injectable_body, force_guard_typeids,
+    DecoratorPair, Edge, InjectableBody, PipeWrapper, build_injectable_body, force_guard_typeids,
     forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
     impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
     injected_names_with_layers, layer_deps, normalize_forwarded_args, pipe_wrapper,
@@ -35,7 +35,17 @@ pub(crate) const GRAPHQL_PAIR: DecoratorPair = DecoratorPair {
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
-    if let Err(err) = reject_args(args, "resolver") {
+    let args = TokenStream2::from(args);
+    // `version = "…"` before the blanket refusal below: the developer arriving
+    // from `#[controller(version = "1")]` asked a real question, and "takes no
+    // arguments" answers a different one. Only the host half carries this — the
+    // sentence names `#[resolver]`, which is where a version would be declared
+    // if the schema had one. The wording is `nest-rs-codegen`'s, so GraphQL's
+    // answer lives where every edge's does.
+    if let Err(err) = Edge::Graphql.reject_version(&args) {
+        return err.to_compile_error().into();
+    }
+    if let Err(err) = reject_args(&args, "resolver") {
         return err.to_compile_error().into();
     }
 
@@ -49,7 +59,7 @@ pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 pub(crate) fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
-    if let Err(err) = reject_args(args, "operations") {
+    if let Err(err) = reject_args(&TokenStream2::from(args), "operations") {
         return err.to_compile_error().into();
     }
 
@@ -61,13 +71,12 @@ pub(crate) fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Neither half takes arguments — the operations are declared by the method
 /// attributes, not by the decorator.
-fn reject_args(args: TokenStream, decorator: &str) -> syn::Result<()> {
-    let args = TokenStream2::from(args);
+fn reject_args(args: &TokenStream2, decorator: &str) -> syn::Result<()> {
     if args.is_empty() {
         return Ok(());
     }
     Err(syn::Error::new_spanned(
-        &args,
+        args,
         format!(
             "#[{decorator}] takes no arguments; tag methods with `#[query]` / `#[mutation]` / \
              `#[subscription]` / `#[field_resolver]`"

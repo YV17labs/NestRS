@@ -1,0 +1,5 @@
+error: #[processor] declares no client-selectable version: a queue is addressed by its name, and versioning that name splits the consumer group — a deployment decision rather than a declaration. Name the queue for the version if that is what you mean — `#[queue(name = "transcode-v2", job = TranscodeCommand)] struct TranscodeV2Queue;` and `#[process(queue = TranscodeV2Queue)]`. What a job usually needs instead is payload evolution: a tolerant `Command` shape, not a second address
+  --> tests/integration/diagnostics/version_on_a_processor.rs:13:13
+   |
+13 | #[processor(version = "1")]
+   |             ^^^^^^^

@@ -284,6 +284,58 @@ async fn audio_multipart_upload_and_streamed_download_round_trip() {
         body.contains("event: transcode") && body.contains("\"state\":\"ready\""),
         "the SSE feed emits a ready transcode event: {body:?}",
     );
+    assert!(
+        body.contains("id: 0"),
+        "each event carries its poll attempt as the SSE id — what a browser \
+         echoes back as Last-Event-ID: {body:?}",
+    );
+
+    let resumed = app
+        .http()
+        .get(format!("/audio/events?file={key}"))
+        .header(header::AUTHORIZATION, &bearer)
+        .header("Last-Event-ID", "9")
+        .send()
+        .await;
+    resumed.assert_status_is_ok();
+    let resumed = resumed.0.into_body().into_bytes().await.expect("sse body");
+    let resumed = String::from_utf8(resumed.to_vec()).expect("sse is utf-8");
+    assert!(
+        resumed.contains("\"state\":\"ready\""),
+        "a resumed stream still delivers the terminal state, whatever the \
+         reconnecting client last saw: {resumed:?}",
+    );
+
+    let never = format!("absent-{}-{}.mp3", std::process::id(), nonce);
+    let skipped = app
+        .http()
+        .get(format!("/audio/events?file={never}"))
+        .header(header::AUTHORIZATION, &bearer)
+        .header("Last-Event-ID", "5")
+        .send()
+        .await;
+    skipped.assert_status_is_ok();
+    let skipped = skipped.0.into_body().into_bytes().await.expect("sse body");
+    let skipped = String::from_utf8(skipped.to_vec()).expect("sse is utf-8");
+    assert!(
+        !skipped.contains("id: 0") && skipped.contains("id: 6"),
+        "the progress ticks the client already has are not replayed: {skipped:?}",
+    );
+
+    let malformed = app
+        .http()
+        .get(format!("/audio/events?file={key}"))
+        .header(header::AUTHORIZATION, &bearer)
+        .header("Last-Event-ID", "soon")
+        .send()
+        .await;
+    malformed.assert_status(StatusCode::BAD_REQUEST);
+    let malformed = malformed.0.into_body().into_bytes().await.expect("body");
+    let malformed = String::from_utf8(malformed.to_vec()).expect("utf-8");
+    assert!(
+        malformed.contains("Last-Event-ID") && !malformed.contains("soon"),
+        "a header rejection names the header and never echoes its value: {malformed:?}",
+    );
 
     worker_queue
         .shutdown()

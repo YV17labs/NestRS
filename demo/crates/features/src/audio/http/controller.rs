@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use std::time::Duration;
 
+use std::future::ready;
+
 use futures_util::StreamExt;
-use nest_rs::http::{Valid, controller, routes};
+use nest_rs::http::{Header, PartExt, Valid, controller, routes};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 use poem::http::StatusCode;
 use poem::web::sse::{Event, SSE};
@@ -12,7 +14,10 @@ use poem::{Body, Error, Response, Result};
 
 use super::extract::UploadedAudio;
 use crate::audio::TranscodeGuard;
-use crate::audio::{AudioService, PresignedUrlDto, TranscodeDto, UploadRequestDto};
+use crate::audio::{
+    AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,
+    UploadRequestDto,
+};
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 
@@ -68,16 +73,18 @@ impl AudioController {
     #[api(
         summary = "Upload an audio file directly as multipart/form-data",
         description = "The single-round-trip alternative to the presigned flow: the client posts a \
-                       `multipart/form-data` body with a `file` part; the server buffers the part \
-                       and stores it, then returns the object key plus a presigned GET URL. The \
-                       part's filename is validated against the same anti-traversal allowlist as \
-                       the presigned path. Requires a bearer JWT and the admin capability.",
+                       `multipart/form-data` body with a `file` part, which streams straight into \
+                       the object store — the file never sits whole in server memory — and the \
+                       response carries the object key plus a presigned GET URL. The part's \
+                       filename is validated against the same anti-traversal allowlist as the \
+                       presigned path. Requires a bearer JWT and the admin capability.",
+        multipart = DirectUploadDto,
         tags("Audio")
     )]
     async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> {
         Ok(Json(
             self.svc
-                .store_upload(&upload.filename, upload.bytes)
+                .store_upload(&upload.filename, upload.part.into_byte_stream())
                 .await?,
         ))
     }
@@ -92,6 +99,7 @@ impl AudioController {
                        yet. The presigned `GET /audio/results` URL is the zero-proxy alternative; \
                        this endpoint is the streamed proxy. Requires a bearer JWT and the admin \
                        capability.",
+        response_content_type = "audio/mpeg",
         tags("Audio")
     )]
     async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
@@ -110,23 +118,41 @@ impl AudioController {
         summary = "Stream transcode progress as Server-Sent Events",
         description = "Opens a `text/event-stream` that polls the derived object and emits a \
                        `transcode` event (`{state: pending|ready}`) until it is produced, then \
-                       ends — a live progress feed the browser reads with `EventSource`. Requires \
-                       a bearer JWT and the admin capability.",
+                       ends — a live progress feed the browser reads with `EventSource`. Each \
+                       event carries the poll attempt as its SSE id, so a browser reconnecting \
+                       sends it back as `Last-Event-ID` and is not re-sent the progress ticks it \
+                       already displayed; the terminal state is always sent. Requires a bearer \
+                       JWT and the admin capability.",
         tags("Audio")
     )]
-    async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SSE {
+    async fn events(
+        &self,
+        query: Valid<Query<TranscodeDto>>,
+        resume: Header<StreamResumeDto>,
+    ) -> SSE {
         let file = query.into_inner().file;
-        let events = self.svc.clone().transcode_events(file).map(|payload| {
-            let body = serde_json::to_string(&payload).unwrap_or_else(|e| {
-                tracing::error!(
-                    target: "features::audio",
-                    error = %e,
-                    "failed to serialize transcode event",
-                );
-                r#"{"state":"error"}"#.to_string()
+        let seen = resume.into_inner().last_event_id;
+        let events = self
+            .svc
+            .clone()
+            .transcode_events(file)
+            .filter(move |payload| {
+                let replayed = matches!(payload.state, TranscodeState::Pending)
+                    && seen.is_some_and(|last| payload.attempt <= last);
+                ready(!replayed)
+            })
+            .map(|payload| {
+                let id = payload.attempt.to_string();
+                let body = serde_json::to_string(&payload).unwrap_or_else(|e| {
+                    tracing::error!(
+                        target: "features::audio",
+                        error = %e,
+                        "failed to serialize transcode event",
+                    );
+                    r#"{"state":"error"}"#.to_string()
+                });
+                Event::message(body).event_type("transcode").id(id)
             });
-            Event::message(body).event_type("transcode")
-        });
         SSE::new(events).keep_alive(Duration::from_secs(15))
     }
 

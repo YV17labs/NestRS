@@ -2926,11 +2926,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
+ "futures-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-http-macros",
  "nest-rs-pipes",
  "poem",
+ "rustls",
  "schemars",
  "serde",
  "serde_json",
@@ -3209,6 +3211,8 @@ dependencies = [
  "nest-rs-core",
  "object_store",
  "thiserror 2.0.19",
+ "tokio",
+ "tracing",
  "validator",
 ]
 

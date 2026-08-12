@@ -101,6 +101,61 @@ async fn openapi_document_describes_the_routes() {
         "the 204 response carries no body",
     );
 
+    let upload = &doc["paths"]["/audio/uploads/direct"]["post"];
+    assert_eq!(
+        upload["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"],
+        "#/components/schemas/DirectUploadDto",
+        "the direct upload documents the form it accepts: {upload}",
+    );
+    assert_eq!(
+        doc["components"]["schemas"]["DirectUploadDto"]["properties"]["file"]["format"], "binary",
+        "and its file part is typed as a file",
+    );
+
+    let download = &doc["paths"]["/audio/download"]["get"]["responses"]["200"];
+    assert_eq!(
+        download["content"]["audio/mpeg"]["schema"]["format"], "binary",
+        "the streamed download declares what it streams: {download}",
+    );
+
+    let events = &doc["paths"]["/audio/events"]["get"];
+    assert_eq!(
+        events["responses"]["200"]["content"]["text/event-stream"]["schema"]["type"], "string",
+        "the SSE route's media type comes off its return type: {events}",
+    );
+    let resume = events["parameters"]
+        .as_array()
+        .expect("the events op has parameters")
+        .iter()
+        .find(|p| p["in"] == "header")
+        .expect("the resume header is documented");
+    assert_eq!(resume["name"], "Last-Event-ID");
+    assert_eq!(
+        resume["required"], false,
+        "a browser only sends it on reconnect: {resume}",
+    );
+
+    let results = &doc["paths"]["/audio/results"]["get"];
+    assert_eq!(
+        results["parameters"][0]["required"], true,
+        "the transcode query names a file the caller must send: {results}",
+    );
+    assert_eq!(
+        results["responses"]["400"]["content"]["application/problem+json"]["schema"]["$ref"],
+        "#/components/schemas/ProblemDetails",
+        "a required query property is a 400 the operation advertises: {results}",
+    );
+
+    let list = &doc["paths"]["/orgs"]["get"];
+    assert_eq!(
+        list["parameters"][0]["required"], false,
+        "pagination is optional: {list}",
+    );
+    assert!(
+        list["responses"].get("400").is_none(),
+        "and an operation whose parameters are all optional advertises none: {list}",
+    );
+
     let throttled = &doc["paths"]["/audio/uploads"]["post"]["responses"]["429"];
     assert_eq!(
         throttled["content"]["application/problem+json"]["schema"]["$ref"],

@@ -14,7 +14,10 @@ pub mod schedule;
 
 pub use command::{AUDIO_QUEUE, AudioQueue, TranscodeCommand};
 pub use config::AudioConfig;
-pub use dtos::{PresignedUrlDto, TranscodeDto, TranscodeProgressDto, UploadRequestDto};
+pub use dtos::{
+    DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeProgressDto,
+    UploadRequestDto,
+};
 pub use guard::TranscodeGuard;
 pub use module::AudioModule;
 pub use service::AudioService;

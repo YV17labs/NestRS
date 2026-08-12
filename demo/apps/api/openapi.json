@@ -8,7 +8,7 @@
   "paths": {
     "/health/live": {
       "get": {
-        "operationId": "live",
+        "operationId": "health_live",
         "tags": [
           "HealthController"
         ],
@@ -21,7 +21,7 @@
     },
     "/health/ready": {
       "get": {
-        "operationId": "ready",
+        "operationId": "health_ready",
         "tags": [
           "HealthController"
         ],
@@ -34,7 +34,7 @@
     },
     "/health/startup": {
       "get": {
-        "operationId": "startup",
+        "operationId": "health_startup",
         "tags": [
           "HealthController"
         ],
@@ -47,7 +47,7 @@
     },
     "/orgs": {
       "get": {
-        "operationId": "list",
+        "operationId": "orgs_list",
         "tags": [
           "Org"
         ],
@@ -122,7 +122,7 @@
         }
       },
       "post": {
-        "operationId": "create",
+        "operationId": "orgs_create",
         "tags": [
           "Org"
         ],
@@ -207,7 +207,7 @@
     },
     "/orgs/{id}": {
       "get": {
-        "operationId": "get",
+        "operationId": "orgs_get",
         "tags": [
           "Org"
         ],
@@ -272,7 +272,7 @@
         }
       },
       "patch": {
-        "operationId": "update",
+        "operationId": "orgs_update",
         "tags": [
           "Org"
         ],
@@ -367,7 +367,7 @@
         }
       },
       "delete": {
-        "operationId": "delete",
+        "operationId": "orgs_delete",
         "tags": [
           "Org"
         ],
@@ -437,7 +437,7 @@
     },
     "/users": {
       "get": {
-        "operationId": "list",
+        "operationId": "users_list",
         "tags": [
           "User"
         ],
@@ -512,7 +512,7 @@
         }
       },
       "post": {
-        "operationId": "create",
+        "operationId": "users_create",
         "tags": [
           "User"
         ],
@@ -579,7 +579,7 @@
     },
     "/users/{id}": {
       "patch": {
-        "operationId": "update",
+        "operationId": "users_update",
         "tags": [
           "User"
         ],
@@ -674,7 +674,7 @@
         }
       },
       "delete": {
-        "operationId": "delete",
+        "operationId": "users_delete",
         "tags": [
           "User"
         ],
@@ -742,7 +742,7 @@
         }
       },
       "get": {
-        "operationId": "get",
+        "operationId": "users_get",
         "tags": [
           "User"
         ],
@@ -810,7 +810,7 @@
     },
     "/posts": {
       "get": {
-        "operationId": "list",
+        "operationId": "posts_list",
         "tags": [
           "Post"
         ],
@@ -885,7 +885,7 @@
         }
       },
       "post": {
-        "operationId": "create",
+        "operationId": "posts_create",
         "tags": [
           "Post"
         ],
@@ -952,7 +952,7 @@
     },
     "/posts/{id}": {
       "get": {
-        "operationId": "get",
+        "operationId": "posts_get",
         "tags": [
           "Post"
         ],
@@ -1017,7 +1017,7 @@
         }
       },
       "patch": {
-        "operationId": "update",
+        "operationId": "posts_update",
         "tags": [
           "Post"
         ],
@@ -1112,7 +1112,7 @@
         }
       },
       "delete": {
-        "operationId": "delete",
+        "operationId": "posts_delete",
         "tags": [
           "Post"
         ],
@@ -1182,7 +1182,7 @@
     },
     "/posts/{id}/publish": {
       "post": {
-        "operationId": "publish",
+        "operationId": "posts_publish",
         "tags": [
           "Post"
         ],
@@ -1250,7 +1250,7 @@
     },
     "/notifications": {
       "get": {
-        "operationId": "list",
+        "operationId": "notifications_list",
         "tags": [
           "Notification"
         ],
@@ -1327,7 +1327,7 @@
     },
     "/notifications/{id}": {
       "get": {
-        "operationId": "get",
+        "operationId": "notifications_get",
         "tags": [
           "Notification"
         ],
@@ -1394,7 +1394,7 @@
     },
     "/audio/uploads": {
       "post": {
-        "operationId": "create_upload",
+        "operationId": "audio_create_upload",
         "tags": [
           "Audio"
         ],
@@ -1481,7 +1481,7 @@
     },
     "/audio/results": {
       "get": {
-        "operationId": "result",
+        "operationId": "audio_result",
         "tags": [
           "Audio"
         ],
@@ -1511,6 +1511,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PresignedUrlDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }
@@ -1560,12 +1570,22 @@
     },
     "/audio/uploads/direct": {
       "post": {
-        "operationId": "upload_direct",
+        "operationId": "audio_upload_direct",
         "tags": [
           "Audio"
         ],
         "summary": "Upload an audio file directly as multipart/form-data",
-        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part; the server buffers the part and stores it, then returns the object key plus a presigned GET URL. The part's filename is validated against the same anti-traversal allowlist as the presigned path. Requires a bearer JWT and the admin capability.",
+        "description": "The single-round-trip alternative to the presigned flow: the client posts a `multipart/form-data` body with a `file` part, which streams straight into the object store — the file never sits whole in server memory — and the response carries the object key plus a presigned GET URL. The part's filename is validated against the same anti-traversal allowlist as the presigned path. Requires a bearer JWT and the admin capability.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectUploadDto"
+              }
+            }
+          }
+        },
         "security": [
           {
             "bearerAuth": []
@@ -1578,6 +1598,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PresignedUrlDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             }
@@ -1627,7 +1657,7 @@
     },
     "/audio/download": {
       "get": {
-        "operationId": "download",
+        "operationId": "audio_download",
         "tags": [
           "Audio"
         ],
@@ -1652,7 +1682,25 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized",
@@ -1699,12 +1747,12 @@
     },
     "/audio/events": {
       "get": {
-        "operationId": "events",
+        "operationId": "audio_events",
         "tags": [
           "Audio"
         ],
         "summary": "Stream transcode progress as Server-Sent Events",
-        "description": "Opens a `text/event-stream` that polls the derived object and emits a `transcode` event (`{state: pending|ready}`) until it is produced, then ends — a live progress feed the browser reads with `EventSource`. Requires a bearer JWT and the admin capability.",
+        "description": "Opens a `text/event-stream` that polls the derived object and emits a `transcode` event (`{state: pending|ready}`) until it is produced, then ends — a live progress feed the browser reads with `EventSource`. Each event carries the poll attempt as its SSE id, so a browser reconnecting sends it back as `Last-Event-ID` and is not re-sent the progress ticks it already displayed; the terminal state is always sent. Requires a bearer JWT and the admin capability.",
         "parameters": [
           {
             "name": "file",
@@ -1715,6 +1763,19 @@
               "minLength": 1,
               "maxLength": 255
             }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            }
           }
         ],
         "security": [
@@ -1724,7 +1785,24 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized",
@@ -1771,7 +1849,7 @@
     },
     "/audio/transcode": {
       "post": {
-        "operationId": "transcode",
+        "operationId": "audio_transcode",
         "tags": [
           "Audio"
         ],
@@ -2138,6 +2216,31 @@
         "required": [
           "file"
         ]
+      },
+      "DirectUploadDto": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          }
+        },
+        "required": [
+          "file"
+        ]
+      },
+      "StreamResumeDto": {
+        "type": "object",
+        "properties": {
+          "Last-Event-ID": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
       },
       "ProblemDetails": {
         "type": "object",

@@ -76,11 +76,11 @@ impl AudioService {
     pub async fn store_upload(
         &self,
         filename: &str,
-        bytes: Vec<u8>,
+        part: impl Stream<Item = std::io::Result<Bytes>> + Send,
     ) -> Result<PresignedUrlDto, AudioError> {
         let key = format!("{}-{filename}", Uuid::now_v7());
         self.storage
-            .put_bytes(&key, bytes, AUDIO_CONTENT_TYPE)
+            .put_stream(&key, AUDIO_CONTENT_TYPE, part)
             .await?;
         let url = self.storage.presign_get(&key, PRESIGN_TTL).await?;
         tracing::debug!(target: "features::audio", key, "stored direct multipart upload");

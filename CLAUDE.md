@@ -22,6 +22,11 @@ framework defect.
 The leverage is **procedural macros** — decorators, as declarative in
 Rust as in TS. Reach for one first.
 
+A framework has **no local change**. Every name, default, error sentence
+and declaration is met by every feature that will ever use it, so the
+unit of design is the whole surface, never the corner that motivated the
+work — see *No declaration designed for one site*.
+
 ## Rule priority — Rust first, conventions second
 
 Both, in order. When they conflict, **Rust wins** — adapt the
@@ -81,6 +86,13 @@ to require it, **stop and ask**.
 - **No umbrella module re-exporting every edge of a feature.**
 - **No transport-level discovery without module-gating.**
 - **No two decorators for the same concern** — deprecate first.
+- **No declaration designed for one site.** Anything the framework
+  interprets is designed against every site the underlying standard
+  permits — one grammar wherever it is possible, a compile error naming
+  the standard's limit wherever it is not. Silence at a site is the
+  defect, and an ignored argument, a bare "unknown key" and an
+  unmentioned gap are all silence. See *One declaration, every site the
+  standard permits*.
 - **No decorator on two item shapes.** An attribute macro is one path in the
   macro namespace: the shape is discriminated *after* `syn::parse`, so a name
   worn by both a struct and its `impl` gives one rustdoc page for two argument
@@ -231,6 +243,56 @@ command, so `cargo install --locked nest-rs-cli` is correct and there is no
 The compile-time witness is `nest-rs-macro-hygiene`: one dependency,
 `nest-rs`, all features. If its manifest needs a second line, the rule
 is broken.
+
+## One declaration, every site the standard permits
+
+You are working on a framework, so a declaration is never local. Anything
+the framework itself interprets — every key, attribute, seam and default
+whose meaning the framework assigns rather than the developer — is designed
+against **every site it can reach**, and it reaches every site the
+underlying standard permits. A **site** is any member of a family the
+framework holds several interchangeable implementations of; transports are
+the loudest such family and never the only one.
+
+Where the standard permits it, it is declared **one way**: same key, same
+grammar, one shared parser in `nest_rs_codegen`, so learning it once is
+learning it everywhere. Where the standard does not, that key is a
+**compile error naming the fact that makes it impossible** — never an
+ignored argument, never a bare "unknown key". The refusal is what makes the
+unification affordable: what an unsupported site owes is a *sentence*, not
+an implementation, so the rule can bind everywhere without stalling on the
+site that cannot follow.
+
+**The site that cannot is never the ceiling for the sites that can.** A
+standard missing the thing at one site subtracts that site, not the
+capability. Build it wherever the standard has it and refuse it at the
+rest — never level every site down to the poorest, never emulate the thing
+where its standard has none so the table looks square, never drop it
+because one site cannot follow. Four of five is four, and the fifth owes a
+sentence, not a stub.
+
+Three clauses keep the refusal honest, each load-bearing:
+
+- **Cannot is not the same as not yet.** A refusal asserts a property of
+  the standard. A site where the thing is possible but unbuilt is a
+  `ROADMAP.md` entry; writing its refusal instead ships a false statement
+  inside the compiler, where no reader is positioned to contradict it.
+  Invoking the standard is not naming it — the sentence carries the fact a
+  reader can check, or it is not a refusal.
+- **Refusals are shared, not per key.** One helper, one sentence, every key
+  it covers, one trybuild snapshot per site — `reject_http_only_layers` is
+  that shape already built. Per-key refusals multiply with the matrix, and
+  what multiplies is what gets skipped.
+- **The rule demands that the answer be stated, not that it be identical.**
+  An asymmetry argued and recorded in `.claude/rules/` satisfies it;
+  silence never does, at any site.
+
+What unifies is the **grammar and the sentence**, not the implementation: a
+shared abstraction still waits for its second real user, so nothing here
+licenses a generic layer built for one. Testable form — the grammar is
+worded once in `nest_rs_codegen` and nowhere else, and every refusing site
+ships a trybuild snapshot. A capability shipped at one site is shipped
+**half**: the others owe either the declaration or the sentence.
 
 ## Naming — strict
 
@@ -388,6 +450,15 @@ State the plan in one or two sentences before tools. Batch independent
 calls in parallel. Run the *Definition of done* sequence for every
 workspace you touched. Report what changed and what was verified — no
 paragraph-long summary.
+
+**Green tests are not evidence, and `/audit` is how that gets checked.**
+A suite written alongside a change is blind exactly where the change is:
+it finds what its author thought of. Run `/audit` before calling a
+non-trivial change done, and **again after fixing what it found** — the
+fix is new code nobody has read. It fans narrow lanes out to agents whose
+mandate is to *prove and not fix*, ranks silence above noise, and
+separates "clean" from "not looked at". The classes it hunts are the ones
+that have actually shipped here; the skill carries them.
 
 ## Reading order
 

@@ -1,0 +1,5 @@
+error: duplicate `#[wire_default]`
+  --> tests/integration/diagnostics/duplicate_wire_default.rs:16:5
+   |
+16 |     #[wire_default(String::from("redacted"))]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

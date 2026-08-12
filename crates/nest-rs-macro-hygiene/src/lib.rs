@@ -28,6 +28,12 @@
 //! prelude and a controller crate needs no `poem` line — the exclusion this
 //! paragraph used to record no longer describes the macro.
 //!
+//! `#[wire_enum]` **is** witnessed ([`wire_enum`]) even though its sibling
+//! `#[expose]` is not: an enum is a plain Rust item, so nothing in its
+//! expansion needs an entity, and the four derives it routes (`Serialize`,
+//! `Deserialize`, `JsonSchema`, `async_graphql::Enum`) are exactly the class a
+//! zero-dep manifest can decide.
+//!
 //! **Not witnessed here:** `#[expose]` and `#[crud]` (`nest-rs-resource`).
 //! Exercising them needs a real entity, and an entity cannot live in a zero-dep
 //! crate: `DeriveEntityModel` roots its own expansion at the call site's
@@ -68,3 +74,4 @@ pub mod processor;
 pub mod resolver;
 pub mod tasks;
 pub mod tool;
+pub mod wire_enum;

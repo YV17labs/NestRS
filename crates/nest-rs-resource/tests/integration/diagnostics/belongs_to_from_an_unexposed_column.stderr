@@ -1,0 +1,5 @@
+error: `belongs_to` declares `from = "org_id"`, but that column carries no `#[expose]` — this relation resolves by reading the key off the wire object, so the foreign key has to cross the wire too. Expose the column, or leave the relation unexposed
+  --> tests/integration/diagnostics/belongs_to_from_an_unexposed_column.rs:19:9
+   |
+19 |     pub org: HasOne<crate::orgs::Entity>,
+   |         ^^^

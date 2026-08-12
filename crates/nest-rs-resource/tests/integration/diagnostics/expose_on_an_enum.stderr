@@ -1,0 +1,8 @@
+error: `#[expose(name = "…")]` decorates the entity `Model` struct — the row. A column's enum type takes `#[wire_enum]` instead, which is what carries the wire derives for an enum.
+  --> tests/integration/diagnostics/expose_on_an_enum.rs:9:1
+   |
+ 9 | / pub enum Tier {
+10 | |     Free,
+11 | |     Pro,
+12 | | }
+   | |_^

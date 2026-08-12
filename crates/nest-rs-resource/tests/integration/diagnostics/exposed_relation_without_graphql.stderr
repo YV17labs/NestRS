@@ -1,0 +1,5 @@
+error: an exposed SeaORM relation requires `#[expose(..., graphql)]` on the entity — use scalar FK columns for HTTP-only entities, or leave the relation unexposed (no `#[expose]`)
+  --> tests/integration/diagnostics/exposed_relation_without_graphql.rs:11:12
+   |
+11 | pub struct Model {
+   |            ^^^^^

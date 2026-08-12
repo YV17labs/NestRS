@@ -1,0 +1,5 @@
+error: `HasMany<T>` field is missing its `#[sea_orm(has_many)]` marker
+  --> tests/integration/diagnostics/has_many_without_its_sea_orm_marker.rs:16:9
+   |
+16 |     pub posts: HasMany<crate::posts::Entity>,
+   |         ^^^^^

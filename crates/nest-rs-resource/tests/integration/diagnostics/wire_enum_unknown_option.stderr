@@ -1,0 +1,5 @@
+error: unknown #[wire_enum(...)] option (expected `graphql`)
+ --> tests/integration/diagnostics/wire_enum_unknown_option.rs:6:13
+  |
+6 | #[wire_enum(gql)]
+  |             ^^^

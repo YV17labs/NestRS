@@ -1,0 +1,5 @@
+error: #[expose] requires a struct with named fields (a SeaORM entity `Model`)
+ --> tests/integration/diagnostics/expose_on_a_tuple_struct.rs:8:17
+  |
+8 | pub struct Model(pub sea_orm::prelude::Uuid);
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

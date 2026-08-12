@@ -12,9 +12,10 @@
 //! `HasOne` plus the PK loader on the service.
 //!
 //! Phase 2 — `has_many`: emits one `#[ComplexObject]` field per exposed
-//! `HasMany`. The FK-side dataloader (`by_<fk_col>`) and the matching
-//! `RelatedTo<Parent>` impl are emitted by the **FK-owning** entity (the side
-//! that declares `belongs_to`), keeping every emission local to one module.
+//! `HasMany`, returning a Relay `Connection`. The FK-side dataloader
+//! (`by_<fk_col>`) and the matching `RelatedTo<Parent, Via>` impl are emitted by
+//! the **FK-owning** entity (the side that declares `belongs_to`), keeping every
+//! emission local to one module.
 
 use nest_rs_codegen::{last_segment_ident, pascal_case};
 use proc_macro2::TokenStream as TokenStream2;
@@ -27,23 +28,44 @@ use crate::attr::{
 };
 
 /// Default complexity expression for an auto-emitted `HasMany` field resolver.
-/// The loader caps each parent's children at
-/// [`RELATION_LOAD_CAP`](nest_rs_seaorm::RELATION_LOAD_CAP), so fanout is
-/// bounded — but the query-cost estimate still multiplies the cost of selected
-/// sub-fields by `10` per level to keep deep chains expensive. A
-/// 3-deep chain `{ users { posts { comments { id } } } }` scores
-/// `10 + 10*10 + 10*100 = 1000` (only the outermost level enters the document
-/// total, so the result is exactly `10^3`). async-graphql checks
-/// `complexity > limit` strictly, so a `max_complexity = 1000` admits this
-/// canonical chain — pin `999` to reject it, or accept it as the chosen
-/// upper bound. The factor is hard-wired across the framework; override per
-/// relation with `#[expose(complexity = "…")]` when the realistic fanout
-/// differs. The override expression may reference `child_complexity` and
-/// pure literals only — it lands on a method with no GraphQL arguments, so
-/// names like `first` would resolve as unbound identifiers in the generated
-/// closure. Paginated relations are left unexposed (no `#[expose]`) and given a
-/// hand-rolled `#[field_resolver]` carrying its own `#[graphql(complexity = …)]`.
-pub(crate) const DEFAULT_HAS_MANY_COMPLEXITY: &str = "10 * child_complexity";
+///
+/// The field now *takes* its page size, so the estimate is no longer a guessed
+/// constant: it is the number of children the client asked for, times the cost
+/// of each. A query asking `first: 5` pays a twentieth of one asking `first:
+/// 100`, which is the whole point of a complexity ceiling and was not
+/// expressible while the field returned an unparameterised list. A 3-deep chain
+/// at the default page size scores `20^3`; at `first: 3` it scores `27`.
+///
+/// The `20` mirrors [`DEFAULT_PAGE_SIZE`](nest_rs_seaorm::DEFAULT_PAGE_SIZE),
+/// which the emitted body reaches by path. It is spelled again here because
+/// async-graphql takes a complexity expression as a **string**, which no
+/// re-rooting pass rewrites. The duplication is bounded on purpose: this literal
+/// only estimates a cost, so a drift shifts a score and can never change a
+/// result.
+///
+/// **The clamp is the part that is not merely an estimate.** `first` reaches
+/// this expression exactly as the client sent it: async-graphql's `u64` scalar
+/// advertises `Int` in the SDL but parses the whole `u64` range, and
+/// `clamp_page_size`'s `1..=100` window lives inside the resolver *body*, which
+/// the estimate never enters. So `first: 18446744073709551615` multiplied
+/// straight through — a `multiply with overflow` panic in a debug build (and
+/// there is no `CatchPanic` on the HTTP transport), and in release a wrap to a
+/// tiny score that slips the field under `max_complexity` entirely.
+///
+/// It is spelled as arithmetic rather than as a call for the same reason the
+/// `20` is a literal: this is a **string**, so no path in it is re-rooted, and
+/// `nest-rs-resource`'s own tests compile the expansion without the umbrella in
+/// scope. The window mirrors
+/// [`clamp_page_size`](nest_rs_seaorm::clamp_page_size) and is bounded
+/// duplication of the same kind — with the overflow gone, a drift here shifts a
+/// score and cannot change a result.
+///
+/// async-graphql checks `complexity > limit` strictly. Override per relation
+/// with `#[expose(complexity = "…")]`; the expression may reference
+/// `child_complexity`, pure literals, **and the field's own `first` argument**
+/// (`Option<u64>`), which the previous unparameterised resolver could not offer.
+pub(crate) const DEFAULT_HAS_MANY_COMPLEXITY: &str =
+    "first.unwrap_or(20).clamp(1, 100) as usize * child_complexity";
 
 pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     let Some(service) = model.service.clone() else {
@@ -76,7 +98,7 @@ pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     let pk_loader_ident = format_ident!("{}ById", last_segment_ident(&service));
     let pk_loader_block = emit_pk_loader(model, &service, pk);
     let pk_trait_impl = emit_pk_loadable_impl(model, &pk_loader_ident);
-    let fk_loaders = emit_fk_loaders(model, &service)?;
+    let fk_loaders = emit_fk_loaders(model, &service, pk)?;
     let field_resolvers = emit_field_resolvers(model, pk)?;
 
     Ok(quote! {
@@ -92,6 +114,16 @@ fn live_rows_filter(model: &ResourceModel) -> TokenStream2 {
         quote! { .filter(::nest_rs_seaorm::live_condition::<Entity>()) }
     } else {
         quote! {}
+    }
+}
+
+/// The same live-row predicate as a `Condition` value, for the `Repo` methods
+/// that take one rather than being chained onto.
+fn live_rows_condition(model: &ResourceModel) -> TokenStream2 {
+    if model.soft_delete {
+        quote! { ::nest_rs_seaorm::live_condition::<Entity>() }
+    } else {
+        quote! { ::nest_rs_resource::sea_orm::Condition::all() }
     }
 }
 
@@ -171,29 +203,92 @@ fn emit_pk_loadable_impl(model: &ResourceModel, loader: &Ident) -> TokenStream2 
     }
 }
 
+/// The scalar column a `belongs_to` names in `from = "…"`, or the refusal both
+/// emission sites raise when the entity has no such column — one lookup, one
+/// sentence, so the two cannot come to word it differently. Spanned at the
+/// relation field, which is where the developer wrote the name.
+///
+/// Exposure is deliberately **not** required here: a loader keys on the
+/// entity's `Column`, which exists whether or not the column crosses the wire.
+fn fk_column<'a>(
+    model: &'a ResourceModel,
+    relation: &Ident,
+    fk: &Ident,
+) -> syn::Result<&'a ResourceField> {
+    model.fields.iter().find(|f| &f.ident == fk).ok_or_else(|| {
+        syn::Error::new_spanned(
+            relation,
+            format!(
+                "`belongs_to` declares `from = \"{fk}\"` but this entity has no column with that name",
+            ),
+        )
+    })
+}
+
+/// The same column, additionally required to carry `#[expose]`.
+///
+/// The `#[ComplexObject]` field resolver reads the key off the **wire object**
+/// (`self.<fk>`), and the wire object holds exposed columns only — so a hidden
+/// foreign key passed the lookup above and then failed as `no field `org_id` on
+/// type `Post``, pointing inside the expansion at a struct the developer never
+/// wrote. Refuse it here, where the two attributes that disagree are both in
+/// view.
+fn exposed_fk_column<'a>(
+    model: &'a ResourceModel,
+    relation: &Ident,
+    fk: &Ident,
+) -> syn::Result<&'a ResourceField> {
+    let column = fk_column(model, relation, fk)?;
+    if !column.read {
+        return Err(syn::Error::new_spanned(
+            relation,
+            format!(
+                "`belongs_to` declares `from = \"{fk}\"`, but that column carries no `#[expose]` — this relation resolves by reading the key off the wire object, so the foreign key has to cross the wire too. Expose the column, or leave the relation unexposed",
+            ),
+        ));
+    }
+    Ok(column)
+}
+
 /// FK-side emission. For each exposed `belongs_to` (the FK-owning side knows
 /// the column name + type), emits a `by_<fk_col>` batched loader on the
 /// service plus an `impl RelatedTo<TargetEntity> for Entity` so the inverse
 /// `has_many` field resolver on the target side can find this loader without
 /// hard-coding the service name.
-fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<TokenStream2> {
+fn emit_fk_loaders(
+    model: &ResourceModel,
+    service: &syn::Path,
+    pk: &ResourceField,
+) -> syn::Result<TokenStream2> {
     let mut blocks = Vec::new();
-    // Two `belongs_to` pointing at the same target would emit two
-    // `impl RelatedTo<#target> for Entity` blocks — coherence error E0119
-    // with a span deep in the macro expansion. The inverse `has_many` lookup
-    // on the target side can only consume one, so the second is ambiguous
-    // even if the FK loaders were both registered. Refuse it at parse time —
-    // keyed by the target's module-qualified path, normalized so a leading
-    // `crate::`/`self::` anchor doesn't split one entity across two spellings
-    // (`orgs::Entity` vs `crate::orgs::Entity` collide here as a clear
-    // diagnostic instead of surfacing later as an opaque duplicate-impl
-    // `E0119`). NOTE: do *not* key by the last path segment — SeaORM entity
-    // types are all named `Entity` (`users::Entity`, `orgs::Entity`), so the
-    // last segment is always `Entity` and keying on it would false-positive
-    // every second `belongs_to`; the *module* path identifies the parent.
-    // Stored as `(key, full_spelling, field)` so an aliased collision can name
-    // both spellings.
-    let mut seen_targets: Vec<(String, String, &Ident)> = Vec::new();
+    // How many exposed `belongs_to` point at each parent. A parent named once
+    // gets the `SoleForeignKey` impl — the default a `HasMany` takes when it
+    // names no column. A parent named twice gets none, because two
+    // `impl RelatedTo<#target> for Entity` blocks are coherence error E0119
+    // with a span deep in the expansion; the inverse side must then say which
+    // key it follows with `#[expose(via = "…")]`, and the `on_unimplemented`
+    // note on `RelatedTo` tells it so.
+    //
+    // Keyed by the target's module-qualified path, normalized so a leading
+    // `crate::`/`self::` anchor doesn't split one entity across two spellings.
+    // NOTE: do *not* key by the last path segment — SeaORM entity types are all
+    // named `Entity` (`users::Entity`, `orgs::Entity`), so the last segment is
+    // always `Entity`; the *module* path identifies the parent.
+    let mut target_counts: Vec<(String, usize)> = Vec::new();
+    for field in &model.fields {
+        if !field.read {
+            continue;
+        }
+        let Some(RelationKind::BelongsTo { target, .. }) = &field.relation else {
+            continue;
+        };
+        let key = target_key(target);
+        match target_counts.iter_mut().find(|(k, _)| k == &key) {
+            Some((_, count)) => *count += 1,
+            None => target_counts.push((key, 1)),
+        }
+    }
+
     for field in &model.fields {
         if !field.read {
             continue;
@@ -201,170 +296,210 @@ fn emit_fk_loaders(model: &ResourceModel, service: &syn::Path) -> syn::Result<To
         let Some(RelationKind::BelongsTo { from, target, .. }) = &field.relation else {
             continue;
         };
-        let target_spelling = target
-            .segments
+        let key = target_key(target);
+        let sole = target_counts
             .iter()
-            .map(|seg| seg.ident.to_string())
-            .collect::<Vec<_>>()
-            .join("::");
-        // Normalize away a redundant leading `crate::`/`self::` anchor so
-        // `crate::orgs::Entity` and `orgs::Entity` key alike, while
-        // `orgs::Entity` and `users::Entity` stay distinct.
-        let target_key = target_spelling
-            .strip_prefix("crate::")
-            .or_else(|| target_spelling.strip_prefix("self::"))
-            .unwrap_or(&target_spelling)
-            .to_owned();
-        if let Some((_, prev_spelling, prev_field)) =
-            seen_targets.iter().find(|(key, _, _)| key == &target_key)
-        {
-            // Same tail via two *different* spellings ⇒ name both, so the
-            // developer sees these are one entity reached by aliased paths.
-            let aliased = if prev_spelling == &target_spelling {
-                String::new()
-            } else {
-                format!(" (`{prev_spelling}` and `{target_spelling}` name the same entity)")
-            };
-            return Err(syn::Error::new_spanned(
-                &field.ident,
-                format!(
-                    "two `belongs_to` relations targeting the same parent are not supported (clashes with `{prev_field}`){aliased}; leave one unexposed (no `#[expose]`) and write a hand-rolled `#[field_resolver]`",
-                ),
-            ));
-        }
-        seen_targets.push((target_key, target_spelling, &field.ident));
+            .find(|(k, _)| k == &key)
+            .is_some_and(|(_, count)| *count == 1);
 
-        let fk_field = model.fields.iter().find(|f| &f.ident == from).ok_or_else(|| {
-            syn::Error::new_spanned(
-                &field.ident,
-                format!(
-                    "`belongs_to` declares `from = \"{}\"` but no column with that name is exposed on this entity",
-                    from,
-                ),
-            )
-        })?;
-        let fk_ty = &fk_field.ty;
+        let fk_ty = &fk_column(model, &field.ident, from)?.ty;
         let fk_col_pascal = pascal_case(from);
         let method_name = format_ident!("by_{}", from);
         let loader_ident = format_ident!("{}By{}", last_segment_ident(service), fk_col_pascal,);
         let wire = &model.output_ident;
-        let target_label = format!("loading {} by {}", wire, from);
-        let live = live_rows_filter(model);
+        let via_ident = via_marker_ident(from);
+        let via_doc = format!(
+            "`#[expose(via = \"{from}\")]` resolved to a type. Emitted beside this entity by \
+             `#[expose]`, one per `belongs_to`, so the *parent* side of a relation can name a \
+             foreign-key column — which is not otherwise a thing Rust can name. Never written \
+             by hand: the developer writes the column string.",
+        );
+        // The `SoleForeignKey` impl exists only while this entity points at
+        // `#target` once. A second `belongs_to` at the same parent removes it,
+        // so the inverse `HasMany` stops compiling until it names a column —
+        // rather than silently resolving through whichever key came first.
+        let sole_impl = sole.then(|| {
+            quote! {
+                impl ::nest_rs_resource::RelatedTo<#target> for Entity {
+                    type Loader = #loader_ident;
+                    type Wire = #wire;
+                }
+            }
+        });
+        let target_label = format!("paging {} by {}", wire, from);
+        let live = live_rows_condition(model);
+        let pk_ident = &pk.ident;
 
         blocks.push(quote! {
             #[::nest_rs_resource::graphql::dataloader]
             impl #service {
                 async fn #method_name(
                     &self,
-                    __keys: &[#fk_ty],
+                    __keys: &[::nest_rs_resource::RelationKey<#fk_ty>],
                 ) -> ::core::result::Result<
-                    ::std::collections::HashMap<#fk_ty, ::std::vec::Vec<#wire>>,
+                    ::std::collections::HashMap<
+                        ::nest_rs_resource::RelationKey<#fk_ty>,
+                        ::nest_rs_resource::RelationPage<#wire>,
+                    >,
                     ::nest_rs_seaorm::ServiceError,
                 > {
+                    let mut __out: ::std::collections::HashMap<
+                        ::nest_rs_resource::RelationKey<#fk_ty>,
+                        ::nest_rs_resource::RelationPage<#wire>,
+                    > = ::std::collections::HashMap::with_capacity(__keys.len());
                     if __keys.is_empty() {
-                        return ::core::result::Result::Ok(::std::collections::HashMap::new());
+                        return ::core::result::Result::Ok(__out);
                     }
                     ::nest_rs_resource::tracing::debug!(
                         target: "nest_rs::loader",
                         count = __keys.len(),
                         #target_label,
                     );
-                    // Bound memory: never load more than `RELATION_LOAD_CAP`
-                    // children per parent. The batch query is capped at
-                    // `cap × keys` and each parent's bucket is truncated, so an
-                    // unbounded relation (millions of children under one parent)
-                    // can never pull an unbounded result set into memory.
-                    use ::nest_rs_resource::sea_orm::{QueryOrder as _, QuerySelect as _};
-                    let __cap = ::nest_rs_seaorm::RELATION_LOAD_CAP;
-                    let __limit = __cap.saturating_mul(__keys.len() as u64);
-                    let __conn = ::nest_rs_seaorm::Repo::<Entity>::conn()?;
-                    let __rows = ::nest_rs_seaorm::Repo::<Entity>::scoped(
-                        ::nest_rs_authz::Action::Read,
-                    )
-                        #live
-                        .filter(
-                            <Column as ::nest_rs_resource::sea_orm::ColumnTrait>::is_in(
-                                &Column::#fk_col_pascal,
-                                __keys.iter().cloned(),
-                            ),
-                        )
-                        // Group children of a parent contiguously so the batch
-                        // cap truncates whole parents, not an arbitrary slice.
-                        .order_by_asc(Column::#fk_col_pascal)
-                        .limit(__limit)
-                        .all(&__conn)
-                        .await?;
-                    // Global-cap saturation ⇒ possible cross-parent STARVATION:
-                    // the `cap × keys` limit ordered by FK asc can be consumed by
-                    // early (low-FK) parents, leaving later parents with empty
-                    // buckets that are returned as `[]` — indistinguishable from
-                    // "no children". That silent wrong answer (DATA-R2) must be
-                    // surfaced loudly; the per-bucket truncation warn below only
-                    // catches a single parent *exceeding* the cap, never starved
-                    // siblings. (The real fix — a per-parent `ROW_NUMBER()` limit —
-                    // rides the roadmapped HasMany `Connection<T>` pagination.)
-                    let __saturated = __rows.len() as u64 == __limit;
-                    let mut __raw: ::std::collections::HashMap<#fk_ty, ::std::vec::Vec<Model>> =
-                        __keys
-                            .iter()
-                            .map(|__k| (::core::clone::Clone::clone(__k), ::std::vec::Vec::new()))
-                            .collect();
-                    for __row in __rows {
-                        if let ::core::option::Option::Some(__bucket) = __raw.get_mut(&__row.#from) {
-                            __bucket.push(__row);
+                    // Siblings of one selection share a window, so this is one
+                    // group in practice — but two aliases of the same relation
+                    // may ask for different pages, and serving one parent's page
+                    // to both is the bug the key's window exists to prevent.
+                    let mut __windows: ::std::vec::Vec<(
+                        u64,
+                        ::core::option::Option<::nest_rs_resource::uuid::Uuid>,
+                        ::std::vec::Vec<#fk_ty>,
+                    )> = ::std::vec::Vec::new();
+                    for __key in __keys {
+                        match __windows
+                            .iter_mut()
+                            .find(|(__first, __after, _)| *__first == __key.first && *__after == __key.after)
+                        {
+                            ::core::option::Option::Some((_, _, __parents)) => {
+                                __parents.push(::core::clone::Clone::clone(&__key.parent));
+                            }
+                            ::core::option::Option::None => __windows.push((
+                                __key.first,
+                                __key.after,
+                                ::std::vec![::core::clone::Clone::clone(&__key.parent)],
+                            )),
                         }
                     }
-                    let mut __truncated = false;
-                    let mut __map: ::std::collections::HashMap<#fk_ty, ::std::vec::Vec<#wire>> =
-                        ::std::collections::HashMap::with_capacity(__raw.len());
-                    for (__k, mut __children) in __raw {
-                        if __children.len() as u64 > __cap {
-                            __children.truncate(__cap as usize);
-                            __truncated = true;
-                        }
-                        let mut __wire = ::std::vec::Vec::with_capacity(__children.len());
-                        for __row in &__children {
-                            // Field-level masking through the ambient ability,
-                            // mirroring `by_id` — `scoped(Read)` only filters
-                            // rows, not columns.
-                            __wire.push(
-                                ::nest_rs_authz::masked_output_ambient::<
+
+                    for (__first, __after, __parents) in __windows {
+                        // One round trip per window, ranked per parent — the
+                        // `WHERE fk IN (…) LIMIT n` shape this replaces could
+                        // starve later parents into an empty list that read as
+                        // "no children" (DATA-R2).
+                        let __pages = ::nest_rs_seaorm::Repo::<Entity>::relation_pages(
+                            Column::#fk_col_pascal,
+                            &__parents,
+                            __first,
+                            __after,
+                            #live,
+                        )
+                        .await?;
+                        for (__parent, __page) in __pages {
+                            let mut __edges = ::std::vec::Vec::with_capacity(__page.items.len());
+                            for __row in &__page.items {
+                                // Field-level masking through the ambient
+                                // ability, mirroring `by_id` — `scoped(Read)`
+                                // only filters rows, not columns.
+                                let __wire = ::nest_rs_authz::masked_output_ambient::<
                                     ::nest_rs_authz::Read,
                                     Entity,
                                     #wire,
                                 >(__row)
                                 .map_err(|__e| ::nest_rs_seaorm::ServiceError::Masking(
                                     ::std::string::ToString::to_string(&__e),
-                                ))?,
+                                ))?;
+                                __edges.push((
+                                    ::std::string::ToString::to_string(&__row.#pk_ident),
+                                    __wire,
+                                ));
+                            }
+                            __out.insert(
+                                ::nest_rs_resource::RelationKey {
+                                    parent: __parent,
+                                    first: __first,
+                                    after: __after,
+                                },
+                                ::nest_rs_resource::RelationPage {
+                                    edges: __edges,
+                                    has_next_page: __page.has_more,
+                                },
                             );
                         }
-                        __map.insert(__k, __wire);
                     }
-                    if __truncated || __saturated {
-                        ::nest_rs_resource::tracing::warn!(
-                            target: "nest_rs::loader",
-                            cap = __cap,
-                            loader = #target_label,
-                            saturated = __saturated,
-                            "relation batch hit RELATION_LOAD_CAP — children were truncated, and \
-                             when `saturated` some parents may be MISSING children entirely \
-                             (starved); narrow the query or paginate this relation",
-                        );
-                    }
-                    ::core::result::Result::Ok(__map)
+                    ::core::result::Result::Ok(__out)
                 }
             }
 
-            impl ::nest_rs_resource::RelatedTo<#target> for Entity {
+            #[doc = #via_doc]
+            #[doc(hidden)]
+            pub struct #via_ident;
+
+            impl ::nest_rs_resource::RelatedTo<#target, #via_ident> for Entity {
                 type Loader = #loader_ident;
                 type Wire = #wire;
             }
+
+            #sole_impl
         });
     }
     if blocks.is_empty() {
         return Ok(TokenStream2::new());
     }
     Ok(quote! { #(#blocks)* })
+}
+
+/// The parent-facing name of a foreign-key column: `author_id` → `ByAuthorId`.
+/// A zero-sized marker emitted beside the child entity, because `RelatedTo`
+/// needs a *type* to distinguish two keys and a column name is a string.
+fn via_marker_ident(column: &Ident) -> Ident {
+    format_ident!("By{}", pascal_case(column), span = column.span())
+}
+
+/// `RelatedTo<Entity, Via>` for one `HasMany`, as the trait-path half of a
+/// `<Child as …>::Loader` projection.
+///
+/// Without `via` the default [`SoleForeignKey`](nest_rs_resource::SoleForeignKey)
+/// applies and the path is written bare.
+///
+/// With it, the marker is reached **beside the child entity the developer
+/// wrote**: `HasMany<crate::posts::Entity>` + `via = "author_id"` resolves to
+/// `crate::posts::ByAuthorId`. That module is the only place both sides of the
+/// relation can name — the child's macro emits the marker there, and the parent
+/// knows the path it typed. So a child module re-exporting its entity must carry
+/// the marker along with it; a `pub use entity::*` (the scaffolded shape) does,
+/// and anything narrower reports as a plain unresolved path naming the marker.
+fn related_to_path(target: &syn::Path, via: Option<&syn::LitStr>) -> syn::Result<TokenStream2> {
+    let Some(via) = via else {
+        return Ok(quote! { ::nest_rs_resource::RelatedTo<Entity> });
+    };
+    let column: Ident = via.parse()?;
+    let mut marker = target.clone();
+    let Some(last) = marker.segments.last_mut() else {
+        return Err(syn::Error::new_spanned(
+            target,
+            "`HasMany<T>` needs a path to the child entity for `via` to resolve against",
+        ));
+    };
+    last.ident = via_marker_ident(&column);
+    last.arguments = syn::PathArguments::None;
+    Ok(quote! { ::nest_rs_resource::RelatedTo<Entity, #marker> })
+}
+
+/// The parent entity path, normalized for counting: a redundant leading
+/// `crate::`/`self::` anchor is stripped so `crate::orgs::Entity` and
+/// `orgs::Entity` count as one parent, while `orgs::Entity` and `users::Entity`
+/// stay distinct.
+fn target_key(target: &syn::Path) -> String {
+    let spelling = target
+        .segments
+        .iter()
+        .map(|seg| seg.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::");
+    spelling
+        .strip_prefix("crate::")
+        .or_else(|| spelling.strip_prefix("self::"))
+        .unwrap_or(&spelling)
+        .to_owned()
 }
 
 /// `#[ComplexObject] impl <Wire> { … }` — one method per exposed relation.
@@ -383,8 +518,8 @@ fn emit_field_resolvers(model: &ResourceModel, pk: &ResourceField) -> syn::Resul
             RelationKind::BelongsTo { from, target, .. } => {
                 methods.push(emit_belongs_to_method(model, field, from, target)?);
             }
-            RelationKind::HasMany { target, .. } => {
-                methods.push(emit_has_many_method(field, target, pk)?);
+            RelationKind::HasMany { target, via } => {
+                methods.push(emit_has_many_method(field, target, via.as_ref(), pk)?);
             }
         }
     }
@@ -416,15 +551,7 @@ fn emit_belongs_to_method(
     target: &syn::Path,
 ) -> syn::Result<TokenStream2> {
     let name = &field.ident;
-    let fk_field = model.fields.iter().find(|f| &f.ident == fk).ok_or_else(|| {
-        syn::Error::new_spanned(
-            name,
-            format!(
-                "`belongs_to` declares `from = \"{}\"` but no column with that name is exposed on this entity",
-                fk,
-            ),
-        )
-    })?;
+    let fk_field = exposed_fk_column(model, name, fk)?;
 
     let key_expr = wire_key_expr(&fk_field.ty, fk);
     let complexity = complexity_attr(&field.complexity, None);
@@ -464,38 +591,46 @@ fn emit_belongs_to_method(
     })
 }
 
-/// One HasMany field resolver: load the children of `self` via the target's
-/// `RelatedTo<Self::Entity>::Loader`, keyed on `self`'s PK. The target's macro
-/// is responsible for declaring the `RelatedTo` impl from its own `belongs_to`.
+/// One HasMany field resolver: one page of the children of `self`, through the
+/// target's `RelatedTo<Self::Entity, Via>::Loader`, keyed on `self`'s PK. The
+/// target's macro is responsible for declaring the `RelatedTo` impl from its own
+/// `belongs_to`.
 ///
-/// The auto-emitted loader returns up to
-/// [`RELATION_LOAD_CAP`](nest_rs_seaorm::RELATION_LOAD_CAP) children per parent
-/// (a hard memory backstop). We **always** emit a `#[graphql(complexity = …)]`
-/// override so the
-/// score scales multiplicatively (`factor * child_complexity`) instead of
-/// additively (`1 + child_complexity`, async-graphql's default for bare
-/// fields). That asymmetry is the whole point: BelongsTo loads one row,
-/// HasMany loads N. Override with `#[expose(complexity = …)]` for a tighter
-/// or looser factor — but only `child_complexity` and pure literals; the
-/// resolver method takes no GraphQL args, so referencing `first` or any
-/// other argument name from the override produces a confusing
-/// "cannot find value `first`" error in the generated closure.
+/// The field is a Relay `Connection`: `first` / `after` in, `edges { cursor node }`
+/// and `pageInfo` out, with the cursor being the child's own primary key — so
+/// the same keyset the rest of the framework pages by. `first` is clamped by
+/// `clamp_page_size`, which is what bounds fanout now that no hard per-parent
+/// cap does; a relation over millions of rows is walked a page at a time
+/// instead of truncated at 100 with a `warn`.
+///
+/// We **always** emit a `#[graphql(complexity = …)]` override so the score
+/// scales with the page asked for rather than additively
+/// (`1 + child_complexity`, async-graphql's default for bare fields). That
+/// asymmetry is the whole point: BelongsTo loads one row, HasMany loads a page.
+/// Override with `#[expose(complexity = …)]`, which may now reference `first`.
 fn emit_has_many_method(
     field: &ResourceField,
     target: &syn::Path,
+    via: Option<&syn::LitStr>,
     pk: &ResourceField,
 ) -> syn::Result<TokenStream2> {
     let name = &field.ident;
     let key_expr = wire_key_expr(&pk.ty, &pk.ident);
     let complexity = complexity_attr(&field.complexity, Some(DEFAULT_HAS_MANY_COMPLEXITY));
+    let related = related_to_path(target, via)?;
 
     Ok(quote! {
         #complexity
         async fn #name(
             &self,
             __ctx: &::nest_rs_resource::graphql::async_graphql::Context<'_>,
+            first: ::core::option::Option<u64>,
+            after: ::core::option::Option<::std::string::String>,
         ) -> ::nest_rs_resource::graphql::async_graphql::Result<
-            ::std::vec::Vec<<#target as ::nest_rs_resource::RelatedTo<Entity>>::Wire>,
+            ::nest_rs_resource::graphql::async_graphql::connection::Connection<
+                ::std::string::String,
+                <#target as #related>::Wire,
+            >,
         > {
             // `data_opt` + error, never `data_unchecked` (which panics): an
             // unseeded loader — its owner service's module is unreachable from
@@ -504,7 +639,7 @@ fn emit_has_many_method(
             let __loader = __ctx
                 .data_opt::<
                     ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
-                        <#target as ::nest_rs_resource::RelatedTo<Entity>>::Loader,
+                        <#target as #related>::Loader,
                     >,
                 >()
                 .ok_or_else(|| {
@@ -513,14 +648,37 @@ fn emit_has_many_method(
                         ::core::stringify!(#name),
                         ::core::any::type_name::<
                             ::nest_rs_resource::graphql::async_graphql::dataloader::DataLoader<
-                                <#target as ::nest_rs_resource::RelatedTo<Entity>>::Loader,
+                                <#target as #related>::Loader,
                             >,
                         >(),
                     ))
                 })?;
-            let __key = #key_expr;
+            // An unparsable cursor pages from the start rather than erroring —
+            // the same contract `nest_rs_seaorm::PageParams::after_uuid` states
+            // for the HTTP twin, so one malformed `after` cannot mean two things
+            // depending on which transport carried it.
+            let __after = ::core::option::Option::and_then(
+                ::core::option::Option::as_deref(&after),
+                |__c| ::core::result::Result::ok(
+                    ::nest_rs_resource::uuid::Uuid::parse_str(__c),
+                ),
+            );
+            let __page = __loader
+                .load_one(::nest_rs_resource::RelationKey {
+                    parent: #key_expr,
+                    first: ::nest_rs_seaorm::clamp_page_size(::core::option::Option::unwrap_or(
+                        first,
+                        ::nest_rs_seaorm::DEFAULT_PAGE_SIZE,
+                    )),
+                    after: __after,
+                })
+                .await?
+                .unwrap_or_default();
             ::core::result::Result::Ok(
-                __loader.load_one(__key).await?.unwrap_or_default(),
+                ::nest_rs_resource::RelationPage::into_connection(
+                    __page,
+                    ::core::option::Option::is_some(&__after),
+                ),
             )
         }
     })

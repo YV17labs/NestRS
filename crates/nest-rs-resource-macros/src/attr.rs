@@ -31,10 +31,16 @@ pub(crate) enum RelationKind {
     },
     /// Inverse side — `#[sea_orm(has_many)]` on a `HasMany<T>`. The target's
     /// own `belongs_to` macro is responsible for emitting the FK loader; this
-    /// side only consumes `RelatedTo<Self::Entity>::Loader`.
+    /// side only consumes `RelatedTo<Self::Entity, Via>::Loader`.
     HasMany {
         /// `crate::users::Entity`.
         target: Path,
+        /// `#[expose(via = "author_id")]` — which of the child's foreign keys
+        /// this relation follows. `None` ⇒ the child's sole key to this parent
+        /// (`SoleForeignKey`), which is a compile error when it has two. Kept
+        /// as the [`LitStr`] the developer wrote so a bad column name reports
+        /// at the string, not at the field.
+        via: Option<LitStr>,
     },
 }
 
@@ -184,6 +190,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut in_update = false;
         let mut validate = Vec::new();
         let mut complexity: Option<Expr> = None;
+        let mut via: Option<LitStr> = None;
 
         // Pull PK + relation column info out of the `#[sea_orm(...)]` attrs in
         // the same pass. The attrs stay on the field so SeaORM still owns them
@@ -255,13 +262,28 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     validate.push(content.parse()?);
                 } else if m.path.is_ident("complexity") {
                     // Accepts a literal int (`complexity = 5`) or an expression
-                    // string async-graphql parses (`complexity = "first *
-                    // child_complexity"`) — both re-emit verbatim into the
-                    // generated `#[graphql(complexity = ...)]`.
+                    // string async-graphql parses (`complexity = "first.unwrap_or(20)
+                    // as usize * child_complexity"`) — both re-emit verbatim
+                    // into the generated `#[graphql(complexity = ...)]`. A
+                    // `HasMany` resolver takes `first`/`after`, so the
+                    // expression may name them; every other field has no
+                    // arguments to name.
                     complexity = Some(m.value()?.parse::<Expr>()?);
+                } else if m.path.is_ident("via") {
+                    // Which of the child's foreign keys a `HasMany` follows.
+                    // A column name, not a path: the marker type the parent
+                    // resolves it to is the framework's business.
+                    let lit = m.value()?.parse::<LitStr>()?;
+                    if syn::parse_str::<Ident>(&lit.value()).is_err() {
+                        return Err(syn::Error::new_spanned(
+                            &lit,
+                            "`via` takes a snake_case column name on the child entity (e.g. `via = \"author_id\"`)",
+                        ));
+                    }
+                    via = Some(lit);
                 } else {
                     return Err(m.error(
-                        "unknown #[expose(...)] field option (expected `input(...)`, `validate(...)`, or `complexity = ...`)",
+                        "unknown #[expose(...)] field option (expected `input(...)`, `validate(...)`, `complexity = ...`, or `via = \"...\"`)",
                     ));
                 }
                 Ok(())
@@ -311,7 +333,10 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     target,
                 })
             }
-            (Some((Cardinality::Many, target)), _, true) => Some(RelationKind::HasMany { target }),
+            (Some((Cardinality::Many, target)), _, true) => Some(RelationKind::HasMany {
+                target,
+                via: via.take(),
+            }),
             (Some((Cardinality::One, _)), false, _) => {
                 return Err(syn::Error::new_spanned(
                     &field.ident,
@@ -326,6 +351,21 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             }
             _ => None,
         };
+
+        // `via` picks between a child's foreign keys, so it is meaningful on
+        // exactly one shape. The `HasMany` arm above consumed it; anything left
+        // is on a `HasOne` — which already names its column in
+        // `#[sea_orm(from = …)]`, and two spellings of one fact is the "one way
+        // to do a thing" rule — or on a plain column, where it means nothing.
+        if let Some(via) = via {
+            let hint = match &relation {
+                Some(RelationKind::BelongsTo { from, .. }) => format!(
+                    "a `HasOne` already names its foreign key: `#[sea_orm(belongs_to, from = \"{from}\", …)]`. `via` belongs on the inverse `HasMany` field, which has nothing else to name the column with",
+                ),
+                _ => "`via` names which of a child's foreign keys a `HasMany` relation follows; this field declares no `HasMany`".to_owned(),
+            };
+            return Err(syn::Error::new_spanned(&via, hint));
+        }
 
         // A relation is materialised by a field resolver, not a column setter —
         // `input(...)` on it would emit `__am.<rel> = Set(self.<rel>)` against a

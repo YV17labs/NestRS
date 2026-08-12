@@ -1,0 +1,5 @@
+error: `HasOne<T>` field is missing its `#[sea_orm(belongs_to, from = "...", to = "...")]` marker
+  --> tests/integration/diagnostics/has_one_without_its_sea_orm_marker.rs:18:9
+   |
+18 |     pub org: HasOne<crate::orgs::Entity>,
+   |         ^^^

@@ -1,0 +1,5 @@
+error: auto-relations need a `#[sea_orm(primary_key)]` column on the entity
+  --> tests/integration/diagnostics/relations_without_a_primary_key.rs:11:12
+   |
+11 | pub struct Model {
+   |            ^^^^^

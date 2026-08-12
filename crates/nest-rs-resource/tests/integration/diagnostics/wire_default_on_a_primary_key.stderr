@@ -1,0 +1,5 @@
+error: `#[wire_default]` cannot be applied to a primary key or relation field
+  --> tests/integration/diagnostics/wire_default_on_a_primary_key.rs:13:9
+   |
+13 |     pub id: Uuid,
+   |         ^^

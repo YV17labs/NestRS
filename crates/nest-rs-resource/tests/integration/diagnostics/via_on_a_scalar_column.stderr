@@ -1,0 +1,5 @@
+error: `via` names which of a child's foreign keys a `HasMany` relation follows; this field declares no `HasMany`
+  --> tests/integration/diagnostics/via_on_a_scalar_column.rs:14:20
+   |
+14 |     #[expose(via = "author_id")]
+   |                    ^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: expected string literal
+  --> tests/integration/diagnostics/malformed_sea_orm_relation_attr.rs:18:34
+   |
+18 |     #[sea_orm(belongs_to, from = org_id, to = "Column::Id")]
+   |                                  ^^^^^^

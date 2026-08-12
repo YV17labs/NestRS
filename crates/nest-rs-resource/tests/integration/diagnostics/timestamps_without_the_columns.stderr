@@ -1,0 +1,5 @@
+error: `#[expose(..., timestamps)]` requires `created_at` on the entity — remove any manual `impl ActiveModelBehavior` when using this flag
+  --> tests/integration/diagnostics/timestamps_without_the_columns.rs:11:12
+   |
+11 | pub struct Model {
+   |            ^^^^^

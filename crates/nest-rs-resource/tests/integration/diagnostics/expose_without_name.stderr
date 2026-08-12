@@ -1,0 +1,5 @@
+error: #[expose(name = "...")] is required (the wire DTO / OpenAPI schema name)
+  --> tests/integration/diagnostics/expose_without_name.rs:10:12
+   |
+10 | pub struct Model {
+   |            ^^^^^

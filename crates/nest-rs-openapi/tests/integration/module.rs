@@ -9,7 +9,10 @@
 
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, guard};
-use nest_rs_http::{async_trait, controller, routes};
+use nest_rs_http::poem::web::Multipart;
+use nest_rs_http::{
+    ApiVersioning, Header, HttpConfig, HttpModule, async_trait, controller, input, routes,
+};
 use nest_rs_openapi::{OpenApiConfig, OpenApiModule, OpenApiSetup};
 use nest_rs_testing::TestApp;
 use poem::Request;
@@ -18,6 +21,11 @@ use serde_json::Value;
 
 /// A route with something to document, so "the document describes the app" is
 /// an observation rather than an assumption about an empty `paths` object.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct TokenForm {
+    grant_type: String,
+}
+
 #[controller(path = "/widgets")]
 struct WidgetsController;
 
@@ -35,6 +43,43 @@ impl WidgetsController {
     #[get("/legacy")]
     #[redirect("/widgets", 301)]
     async fn legacy(&self) {}
+
+    /// The three shapes a document used to say nothing about: the headers a
+    /// handler reads, a `multipart/form-data` body, and a success body that is
+    /// not JSON. All three are decorator-to-document paths, so a unit test on
+    /// the composer proves only half of each.
+    /// A form-encoded body — the shape RFC 6749 requires of an OAuth token
+    /// endpoint, and the one `request_body` recognised neither as a body nor as
+    /// an error: the operation was published with no `requestBody` at all.
+    #[post("/token")]
+    async fn token(&self, body: nest_rs_http::poem::web::Form<TokenForm>) -> String {
+        body.0.grant_type
+    }
+
+    #[post("/import")]
+    #[api(multipart = ImportForm, response_content_type = "text/csv")]
+    async fn import(&self, trace: Header<Trace>, form: Multipart) -> String {
+        let _ = form;
+        trace.into_inner().request_id
+    }
+}
+
+/// A required header and an optional one, so the served document has both
+/// `required` answers to show.
+#[input]
+struct Trace {
+    #[serde(rename = "X-Request-Id")]
+    request_id: String,
+    #[serde(rename = "X-Retry-Count")]
+    retry: Option<u32>,
+}
+
+/// The parts of the `multipart/form-data` body `import` reads — the form's
+/// shape is declared, because no extractor states it.
+#[input]
+struct ImportForm {
+    #[schemars(extend("format" = "binary"))]
+    file: String,
 }
 
 /// The config is **pinned** rather than read from `NESTRS_OPENAPI__*`: the
@@ -107,6 +152,61 @@ async fn the_documented_import_serves_a_document_describing_the_app() {
 }
 
 #[tokio::test]
+async fn the_document_describes_headers_multipart_bodies_and_streamed_responses() {
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+    let resp = app.http().get("/api-json").send().await;
+    let body = resp.0.into_body().into_bytes().await.expect("a body");
+    let doc: Value = serde_json::from_slice(&body).expect("/api-json is JSON");
+    let import = &doc["paths"]["/widgets/import"]["post"];
+
+    // One `in: header` parameter per property of the DTO, `required` read off
+    // the schema — an `Option<_>` field is a header the caller may omit.
+    let headers: Vec<(&str, bool)> = import["parameters"]
+        .as_array()
+        .expect("the operation has parameters")
+        .iter()
+        .filter(|p| p["in"] == "header")
+        .map(|p| {
+            (
+                p["name"].as_str().expect("a name"),
+                p["required"].as_bool().expect("a required flag"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        headers,
+        [("X-Request-Id", true), ("X-Retry-Count", false)],
+        "the headers the handler reads are documented as it reads them: {import}",
+    );
+    assert!(
+        import["responses"]["400"].is_object(),
+        "a required header is a 400 the operation can produce: {import}",
+    );
+
+    // The body arrives as a form, and the form's parts are typed.
+    let form = &import["requestBody"]["content"]["multipart/form-data"]["schema"];
+    assert!(
+        form["$ref"] == "#/components/schemas/ImportForm" || form.is_object(),
+        "the declared parts reach the document: {import}",
+    );
+    assert_eq!(
+        doc["components"]["schemas"]["ImportForm"]["properties"]["file"]["format"], "binary",
+        "and a file part is typed as one",
+    );
+
+    // The success body is not JSON, and the document says what it is.
+    let ok = &import["responses"]["200"]["content"];
+    assert_eq!(
+        ok["text/csv"]["schema"]["type"], "string",
+        "a declared media type carries a body schema: {import}",
+    );
+    assert!(
+        ok.get("application/json").is_none(),
+        "and replaces the JSON default: {import}",
+    );
+}
+
+#[tokio::test]
 async fn the_swagger_ui_and_its_assets_are_served() {
     // The UI is only useful if its bundled assets resolve; they hang off `/api/`
     // *relative* to the docs path, which is why the two must stay siblings.
@@ -141,6 +241,39 @@ async fn disabled_serves_neither_endpoint() {
             "`{path}` must not answer when the documentation is disabled",
         );
     }
+}
+
+#[module(
+    imports = [
+        openapi(true),
+        HttpModule::for_root(HttpConfig {
+            versioning: ApiVersioning::Header,
+            default_version: Some("9".into()),
+            ..HttpConfig::default()
+        }),
+    ],
+    providers = [WidgetsController],
+)]
+struct MisversionedApp;
+
+#[tokio::test]
+async fn a_default_version_nothing_declares_fails_the_boot() {
+    // The default version is what `/api-json` describes under a non-URI
+    // strategy, so one nothing declares publishes an empty document — a wiring
+    // mistake that reads to every client as "this deployment serves nothing".
+    let err = TestApp::for_module::<MisversionedApp>()
+        .await
+        .err()
+        .expect("a default version no controller declares is a boot failure")
+        .to_string();
+    assert!(
+        err.contains(&nest_rs_config::var_name("http", "DEFAULT_VERSION")),
+        "the boot failure names the variable to change: {err}",
+    );
+    assert!(
+        err.contains("#[controller(version"),
+        "and the decorator that would declare it: {err}",
+    );
 }
 
 /// Refuses every caller, registered globally — the strictest posture an app can
@@ -186,4 +319,99 @@ async fn the_documentation_endpoints_ignore_the_global_guard_chain() {
         .send()
         .await
         .assert_status_is_ok();
+}
+
+/// A versioned controller mounted at the root, which is the shape that reaches
+/// every address in the app.
+#[controller(path = "/", version = "1")]
+struct RootCatchAllController;
+
+#[routes]
+impl RootCatchAllController {
+    #[get("/*rest")]
+    async fn anything(&self) -> String {
+        "root-catch-all".into()
+    }
+}
+
+#[module(
+    imports = [
+        openapi(true),
+        HttpModule::for_root(HttpConfig {
+            versioning: ApiVersioning::Header,
+            default_version: Some("1".into()),
+            ..HttpConfig::default()
+        }),
+    ],
+    providers = [RootCatchAllController],
+)]
+struct CatchAllApp;
+
+/// The document's own address is not the module's mount path.
+///
+/// `OpenApiModule` nests at `/api` and serves `/api-json` — a **sibling**, not a
+/// child. The version selector's neutrality list was built as "the endpoint's
+/// path, plus its subtree", so `/api-json` was in neither, and a versioned root
+/// catch-all with a deployment default answered the document's address with its
+/// own body: `200`, wrong payload, nothing logged.
+///
+/// Every path the module registers is now declared, so this asks the module
+/// rather than inferring from one corner of it.
+#[tokio::test]
+async fn a_versioned_root_catch_all_does_not_swallow_the_documents_own_addresses() {
+    let app = TestApp::for_module::<CatchAllApp>()
+        .await
+        .expect("boots with a versioned root controller beside the documentation");
+
+    for path in ["/api", "/api-json", "/api/swagger-ui.css"] {
+        let resp = app.http().get(path).send().await;
+        let status = resp.0.status();
+        let body = resp.0.into_body().into_string().await.unwrap_or_default();
+        assert_eq!(status, StatusCode::OK, "`{path}` still answers");
+        assert!(
+            !body.contains("root-catch-all"),
+            "`{path}` is the documentation's, not the catch-all's: {body}",
+        );
+    }
+
+    // And the catch-all still serves everything that is genuinely its own.
+    let resp = app.http().get("/anything-else").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_text("root-catch-all").await;
+}
+
+/// `Form<T>` is a request body, and the document said the route had none.
+///
+/// `request_body` matched `Json<T>`, `#[api(multipart = T)]` and a bare
+/// `Multipart` parameter; a form-encoded body matched nothing and there was no
+/// refusal either, so the operation reached a generated client as a `POST` with
+/// nothing to send.
+#[tokio::test]
+async fn a_form_encoded_body_is_described_as_one() {
+    let app = TestApp::for_module::<DocumentedApp>().await.expect("boots");
+    let document: Value = app
+        .http()
+        .get("/api-json")
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize();
+
+    let body = &document["paths"]["/widgets/token"]["post"]["requestBody"];
+    assert!(
+        !body.is_null(),
+        "a form-encoded route declares a body: {}",
+        serde_json::to_string_pretty(&document["paths"]["/widgets/token"]).unwrap_or_default(),
+    );
+    let content = &body["content"]["application/x-www-form-urlencoded"];
+    assert!(
+        !content.is_null(),
+        "under the media type the wire actually carries: {body}",
+    );
+    assert!(
+        content["schema"]["$ref"].is_string() || content["schema"]["properties"].is_object(),
+        "and carrying the form's own shape: {content}",
+    );
 }

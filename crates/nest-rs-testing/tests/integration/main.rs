@@ -8,6 +8,7 @@ mod env_cascade;
 mod exception_filters;
 mod fail_secure_boot;
 mod guards;
+mod harness_parity;
 mod http;
 mod interceptors;
 mod keyed_providers;

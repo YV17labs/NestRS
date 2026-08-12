@@ -1,0 +1,5 @@
+error: #[routes] takes no arguments; a controller's `path` and `version` are declared by #[controller], and each operation by #[get] / #[post] / #[put] / #[patch] / #[delete]
+  --> tests/integration/diagnostics/routes_takes_no_arguments.rs:11:10
+   |
+11 | #[routes(version = "2")]
+   |          ^^^^^^^^^^^^^

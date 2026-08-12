@@ -14,9 +14,11 @@ mod controller;
 mod cors;
 mod edge;
 mod endpoint;
+mod header;
 mod interceptor;
 mod location;
 mod module;
+mod multipart;
 mod opaque;
 mod pipe;
 mod problem;
@@ -27,16 +29,19 @@ mod security_headers;
 mod shaper;
 mod tls;
 mod transport;
+mod versioning;
 
 pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::HttpConfig;
 pub use context::{Ctx, RejectedCredential};
-pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb};
+pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, RequestBodyMeta};
 pub use cors::CorsConfig;
 pub use endpoint::{EdgePosture, HttpEndpointMeta};
+pub use header::Header;
 pub use location::{caller_path, set_created_location};
 pub use module::{HttpModule, HttpSetup};
+pub use multipart::{PartExt, PartStream};
 pub use nest_rs_core::input;
 pub use nest_rs_core::{current_body_limit, current_request_scope, with_request_scope};
 pub use opaque::Opaque;
@@ -46,9 +51,14 @@ pub use raw_body::RawBody;
 pub use reflector::Reflector;
 pub use scope::Scoped;
 pub use security_headers::SecurityHeadersConfig;
-pub use shaper::{RouteResponseShaper, ShapedEndpoint};
+pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};
 pub use tls::TlsConfig;
-pub use transport::{HttpTransport, join_path, normalize_mount_path, version_path};
+pub use transport::{
+    HttpTransport, join_path, normalize_mount_path, version_path, versions_declare,
+};
+pub use versioning::{
+    ApiVersioning, DEFAULT_VERSION_HEADER, MEDIA_TYPE_PARAM, VersionSelector, declared_versions,
+};
 
 // Cross-crate wiring seams — `pub` by necessity (sibling framework crates and
 // macro-emitted code name them) but not public API: `#[doc(hidden)]` so they do
@@ -60,7 +70,7 @@ pub use endpoint::SelfMountGuardWrap;
 #[doc(hidden)]
 pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
 #[doc(hidden)]
-pub use shaper::{MaskProbe, MaskProbedEndpoint, mask_probed, shaped};
+pub use shaper::{CaptureFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
 
 pub use poem;
 pub use schemars;

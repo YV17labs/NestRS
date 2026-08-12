@@ -8,7 +8,6 @@ use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule, TransportContribution};
 
 use crate::config::HttpConfig;
-use crate::raw_body::RawBody;
 use crate::transport::HttpTransport;
 
 /// The HTTP activation seam. Import [`HttpModule::for_root`] in an app module's
@@ -42,34 +41,7 @@ impl DynamicModule for HttpSetup {
                 let cfg = c
                     .get::<HttpConfig>()
                     .expect("HttpConfig is resolved by ConfigModule::provide_feature");
-                let mut http = HttpTransport::new().bind(format!("{}:{}", cfg.host, cfg.port));
-                if let Some(tls) = cfg.tls.clone() {
-                    http = http.tls(tls);
-                }
-                if let Some(cors) = cfg.cors.clone() {
-                    http = http.cors(cors.into_middleware()?);
-                }
-                if cfg.server_header {
-                    http = http.server_header(concat!("nestrs/", env!("CARGO_PKG_VERSION")));
-                }
-                if let Some(prefix) = cfg.global_prefix.clone() {
-                    http = http.global_prefix(prefix);
-                }
-                // Install the per-request cap as a request-data entry — the
-                // `RawBody` extractor reads it back from the extensions.
-                let limit = cfg.max_body_bytes.unwrap_or(RawBody::DEFAULT_LIMIT);
-                http = http.max_body_bytes(limit);
-                if let Some(secs) = cfg.request_timeout_secs {
-                    http = http.request_timeout(std::time::Duration::from_secs(secs));
-                }
-                http = http.fail_secure_strict(cfg.fail_secure_strict);
-                http = http.security_headers(cfg.security_headers.clone());
-                http = http.compression(cfg.compression);
-                // `trusted_proxies` is deliberately not handed to the transport:
-                // it is a boot-time constant, so `ClientOrigin` reads it off the
-                // `HttpConfig` in the container rather than through per-request
-                // state (see `ClientOrigin::of`).
-                Ok(Box::new(http))
+                Ok(Box::new(HttpTransport::from_config(&cfg)?))
             },
         })
     }

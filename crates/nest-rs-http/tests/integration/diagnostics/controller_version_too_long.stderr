@@ -1,0 +1,5 @@
+error: #[controller] version "0123456789012345678901234567890123456789" is not a path segment — a version is alphanumerics, `.` and `-` (`1`, `2`, `2024-08-11`), at most 32 characters, because it is mounted as `/v0123456789012345678901234567890123456789`
+ --> tests/integration/diagnostics/controller_version_too_long.rs:7:43
+  |
+7 | #[controller(path = "/reports", version = "0123456789012345678901234567890123456789")]
+  |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

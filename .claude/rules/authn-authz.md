@@ -100,9 +100,12 @@ greppable (the `#[use_guards]` site) and the guard logs its denial at
 
 `Authorize<A, S>` is the extractor `#[authorize]` **desugars to** (the
 same one `#[crud]` emits) — enforcement plumbing, never written by hand
-outside the `#[public]` exception above: `#[routes]` recognises a shaper
-parameter by path-segment name, so a renamed import silently fails to arm
-masking, while the decorator writes the type itself.
+outside the `#[public]` exception above. `#[routes]` arms the shaper **by
+type**: it hands every parameter type to `nest_rs_http::ShaperProbe` and the
+compiler answers, so an alias, a re-export or any qualification arms
+identically. The decorator still matters, because it is what makes the posture
+greppable — the arm being alias-proof is a fail-secure property, not a licence
+to hand-write the parameter.
 
 ## Strategy and principal
 

@@ -26,14 +26,11 @@ pub(crate) const HTTP_PAIR: DecoratorPair = DecoratorPair {
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
-    let (path_lit, version) = match parse_controller_args(args.into()) {
+    let (path_lit, versions) = match parse_controller_args(args.into()) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
-    let version_opt = match &version {
-        Some(v) => quote! { ::core::option::Option::Some(#v) },
-        None => quote! { ::core::option::Option::None },
-    };
+    let versions_slice = quote! { &[#(#versions),*] };
     let mut item = match HTTP_PAIR.parse_host(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
@@ -126,8 +123,9 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         impl #impl_generics #name #ty_generics #where_clause {
             /// The controller's route prefix, from `#[controller(path = "…")]`.
             pub const PATH: &'static str = #path_lit;
-            /// The URI version segment, from `#[controller(version = "…")]`; `None` if unversioned.
-            pub const VERSION: ::core::option::Option<&'static str> = #version_opt;
+            /// The versions this controller serves, from
+            /// `#[controller(version = …)]`. Empty if unversioned.
+            pub const VERSIONS: &'static [&'static str] = #versions_slice;
 
             #from_container
 
@@ -205,21 +203,44 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Parse `#[controller(path = "...", version = "1")]` — `path` required,
-/// `version` optional. Order-independent; unknown keys rejected.
-fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitStr>)> {
+/// `version` optional and either one literal or a list. Order-independent;
+/// unknown keys rejected.
+fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>)> {
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut path = None;
-    let mut version = None;
+    let mut versions = Vec::new();
     for meta in metas {
         match meta {
-            Meta::NameValue(nv) if nv.path.is_ident("path") => path = Some(expr_str(&nv.value)?),
+            // Each key answered once. These were plain assignments, so
+            // `version = "1", version = "2"` silently kept the last and mounted
+            // the controller at an address the developer never wrote — while
+            // `version = ["1", "1"]` was already refused, which is the same
+            // question asked in the other spelling.
+            Meta::NameValue(nv) if nv.path.is_ident("path") => {
+                if path.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &nv,
+                        "#[controller] declares `path` twice — keep one",
+                    ));
+                }
+                path = Some(expr_str(&nv.value)?);
+            }
             Meta::NameValue(nv) if nv.path.is_ident("version") => {
-                version = Some(expr_str(&nv.value)?)
+                if !versions.is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        &nv,
+                        "#[controller] declares `version` twice — to serve several, write one \
+                         `version = [\"1\", \"2\"]`",
+                    ));
+                }
+                versions =
+                    nest_rs_codegen::versioning::parse_version_list(&nv.value, "#[controller]")?;
             }
             other => {
                 return Err(syn::Error::new_spanned(
                     other,
-                    "#[controller] accepts `path = \"...\"` and an optional `version = \"...\"`",
+                    "#[controller] accepts `path = \"...\"` and an optional `version = \"...\"` \
+                     (or `version = [\"1\", \"2\"]` to serve several)",
                 ));
             }
         }
@@ -230,5 +251,5 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Option<LitS
             "#[controller] requires `path = \"...\"`",
         )
     })?;
-    Ok((path, version))
+    Ok((path, versions))
 }

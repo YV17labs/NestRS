@@ -1,0 +1,5 @@
+error: #[controller] version "1/2" is not a path segment — a version is alphanumerics, `.` and `-` (`1`, `2`, `2024-08-11`), at most 32 characters, because it is mounted as `/v1/2`
+ --> tests/integration/diagnostics/controller_version_not_a_path_segment.rs:8:43
+  |
+8 | #[controller(path = "/reports", version = "1/2")]
+  |                                           ^^^^^

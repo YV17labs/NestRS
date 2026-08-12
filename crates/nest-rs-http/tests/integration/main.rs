@@ -8,8 +8,10 @@ mod edge;
 mod exclusive_paths;
 mod fail_secure;
 mod global_prefix;
+mod header;
 mod input;
 mod route_decorators;
+mod tls;
 mod versioning;
 
 use nest_rs_core::{App, Module, Transport};

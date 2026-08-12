@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `#[version]` on `list` names a version its `#[controller]` does not declare — add it to `#[controller(version = [..])]` or fix the spelling
+  --> tests/integration/diagnostics/route_version_not_declared.rs:14:15
+   |
+14 |     #[version("3")]
+   |               ^^^ evaluation of `_` failed here

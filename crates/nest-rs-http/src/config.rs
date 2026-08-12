@@ -1,11 +1,13 @@
 use std::net::IpAddr;
 
 use nest_rs_config::{Config, ConfigService, Result, config};
+use poem::http::HeaderName;
 
 use crate::cors::CorsConfig;
 use crate::raw_body::RawBody;
 use crate::security_headers::SecurityHeadersConfig;
 use crate::tls::TlsConfig;
+use crate::versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, VersionSelector};
 
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 3000;
@@ -30,6 +32,19 @@ pub struct HttpConfig {
     /// CORS policy. `None` ⇒ no CORS layer. Populated when
     /// `NESTRS_HTTP__CORS_ORIGINS` is set (see [`CorsConfig`]).
     pub cors: Option<CorsConfig>,
+    /// How a caller selects an API version. `uri` (the default) reads it from
+    /// the path a `#[controller(version = …)]` mounts at; `header` and
+    /// `media_type` resolve it per request instead. Read from
+    /// `NESTRS_HTTP__VERSIONING`.
+    pub versioning: ApiVersioning,
+    /// The header [`ApiVersioning::Header`] reads. Defaults to
+    /// `X-API-Version`; read from `NESTRS_HTTP__VERSION_HEADER`. Ignored by the
+    /// other two strategies.
+    pub version_header: String,
+    /// The version served to a caller that states none. `None` (the default)
+    /// leaves such a request on the unversioned routes. Read from
+    /// `NESTRS_HTTP__DEFAULT_VERSION`.
+    pub default_version: Option<String>,
     /// `true` ⇒ emit `Server: nestrs/<version>` on every response.
     /// Defaults to `false` (production-safe — no framework fingerprint).
     /// Flip to `true` in `.env.development` to expose the version locally.
@@ -87,6 +102,9 @@ impl Default for HttpConfig {
             port: DEFAULT_PORT,
             tls: None,
             cors: None,
+            versioning: ApiVersioning::default(),
+            version_header: DEFAULT_VERSION_HEADER.to_string(),
+            default_version: None,
             server_header: false,
             global_prefix: None,
             max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
@@ -100,6 +118,18 @@ impl Default for HttpConfig {
 }
 
 impl HttpConfig {
+    /// The version selector this configuration describes, or `None` when the
+    /// URI strategy is in force — routing already resolves that one, so there
+    /// is nothing for the transport to wrap.
+    ///
+    /// The header name is validated at boot ([`Config::from_env`]), so this
+    /// cannot fail here.
+    pub(crate) fn version_selector(&self) -> Option<VersionSelector> {
+        let header = HeaderName::from_bytes(self.version_header.as_bytes()).ok()?;
+        let selector = VersionSelector::new(self.versioning, header, self.default_version.clone());
+        selector.rewrites().then_some(selector)
+    }
+
     /// Pin the global prefix in code. Empty / `"/"` collapse to `None` via the
     /// transport's normalization, so callers can pass user-provided strings
     /// without sanitizing first.
@@ -141,6 +171,14 @@ impl Config for HttpConfig {
             cors: CorsConfig::from_env(env, base.cors).map_err(|e| {
                 nest_rs_config::ConfigError::parse(env.var_name("CORS_*"), e.to_string())
             })?,
+            versioning: match env.get("VERSIONING") {
+                Some(raw) => raw.parse().map_err(|msg: String| {
+                    nest_rs_config::ConfigError::parse(env.var_name("VERSIONING"), msg)
+                })?,
+                None => base.versioning,
+            },
+            version_header: version_header(env, base.version_header)?,
+            default_version: env.get("DEFAULT_VERSION").or(base.default_version),
             server_header: env.flag("SERVER_HEADER", base.server_header)?,
             global_prefix,
             max_body_bytes: env.parse("MAX_BODY_BYTES")?.or(base.max_body_bytes),
@@ -152,6 +190,20 @@ impl Config for HttpConfig {
             compression: env.flag("COMPRESSION", base.compression)?,
             trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
         })
+    }
+}
+
+/// The header the [`ApiVersioning::Header`] strategy reads, validated here so
+/// an unusable name aborts the boot naming the variable rather than silently
+/// disabling version selection at the first request.
+fn version_header(env: &ConfigService, base: String) -> Result<String> {
+    let raw = env.get("VERSION_HEADER").unwrap_or(base);
+    match HeaderName::from_bytes(raw.as_bytes()) {
+        Ok(_) => Ok(raw),
+        Err(_) => Err(nest_rs_config::ConfigError::parse(
+            env.var_name("VERSION_HEADER"),
+            format!("{raw:?} is not a valid HTTP header name"),
+        )),
     }
 }
 

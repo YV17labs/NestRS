@@ -36,6 +36,7 @@ pub enum EdgePosture {
 /// only so the transport can list the mount in its boot-time route log.
 pub struct HttpEndpointMeta {
     path: Cow<'static, str>,
+    also: Vec<Cow<'static, str>>,
     label: Cow<'static, str>,
     owner: Option<Cow<'static, str>>,
     posture: EdgePosture,
@@ -63,12 +64,47 @@ impl HttpEndpointMeta {
             // decorator literal cannot make the collision check blind by
             // spelling the same mount two ways.
             path: crate::normalize_mount_path(&path.into()).into(),
+            also: Vec::new(),
             label: label.into(),
             owner: None,
             posture: EdgePosture::Guarded,
             self_guarded: false,
             mount: Arc::new(mount),
         }
+    }
+
+    /// Every **other** path this surface's mount closure registers.
+    ///
+    /// A self-mount's `path` is where it nests, not the whole of what it
+    /// answers: `OpenApiModule` nests at `/api` and also serves `/api-json`,
+    /// which is outside that subtree entirely. Anything asking "does a
+    /// self-mount own this address?" — the version selector, the mount-path
+    /// exclusivity check — reads the whole list, so a path declared here is one
+    /// nothing can silently take over.
+    ///
+    /// Entries are poem route patterns, so a surface that genuinely owns a
+    /// subtree declares it as one (`/.well-known/thing/*rest`) rather than
+    /// having a subtree assumed for it. The assumption was the defect this
+    /// replaces: every self-mount was treated as owning `<path>/*rest`, which
+    /// silently swallowed a versioned controller mounted anywhere beneath it —
+    /// and still missed `/api-json`, which is not beneath anything.
+    pub fn also_mounts<I, P>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<Cow<'static, str>>,
+    {
+        self.also.extend(
+            paths
+                .into_iter()
+                .map(|path| Cow::Owned(crate::normalize_mount_path(&path.into()))),
+        );
+        self
+    }
+
+    /// Every path this surface answers at: [`path`](Self::path) first, then
+    /// whatever [`also_mounts`](Self::also_mounts) declared.
+    pub fn paths(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.path.as_ref()).chain(self.also.iter().map(Cow::as_ref))
     }
 
     /// Mark this self-mount [`EdgePosture::Exempt`] — the transport skips the

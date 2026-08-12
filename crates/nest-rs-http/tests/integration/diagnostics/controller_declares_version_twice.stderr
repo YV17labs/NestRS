@@ -1,0 +1,5 @@
+error: #[controller] declares `version` twice — to serve several, write one `version = ["1", "2"]`
+ --> tests/integration/diagnostics/controller_declares_version_twice.rs:7:48
+  |
+7 | #[controller(path = "/reports", version = "1", version = "2")]
+  |                                                ^^^^^^^^^^^^^

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use nest_rs_core::{Container, DiscoveryService, Transport};
 use poem::endpoint::BoxEndpoint;
@@ -15,6 +15,7 @@ use crate::controller::HttpControllerMeta;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::interceptor::HttpEndpointWrap;
 use crate::tls::TlsConfig;
+use crate::versioning::VersionedEndpoint;
 
 type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
 /// Imperative mount paired with its path — kept so the fail-secure boot
@@ -47,6 +48,53 @@ pub fn version_path(version: Option<&str>, path: &str) -> String {
     }
 }
 
+/// Does `declared` contain every version in `named`?
+///
+/// `#[routes]` emits this as a `const` assertion per `#[version("…")]` route,
+/// because the alternative is worse than a bad error message: the mount loops
+/// over the controller's versions, so a route naming one the controller never
+/// declared would simply never be reached by the loop — a handler that compiles,
+/// registers, documents itself and answers nothing. Silence on a typo is the one
+/// outcome this framework does not ship.
+///
+/// A `const fn` rather than a boot check so the answer arrives where the mistake
+/// is, at the route.
+pub const fn versions_declare(declared: &[&str], named: &[&str]) -> bool {
+    let mut i = 0;
+    while i < named.len() {
+        let mut found = false;
+        let mut j = 0;
+        while j < declared.len() {
+            if const_str_eq(declared[j], named[i]) {
+                found = true;
+                break;
+            }
+            j += 1;
+        }
+        if !found {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `==` on `&str` is not `const`; this is.
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// HTTP [`Transport`] backed by poem. At [`Transport::configure`] time, runs
 /// every discovered [`HttpBootCheck`], mounts every
 /// `#[module(providers = [...])]`-declared [`HttpControllerMeta`] and
@@ -70,6 +118,7 @@ pub struct HttpTransport {
     fail_secure_strict: bool,
     security_headers: crate::SecurityHeadersConfig,
     compression: bool,
+    version_selector: Option<crate::VersionSelector>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -113,14 +162,30 @@ fn claim_exclusive_path(
     kind: &str,
     path: String,
     owner: String,
+    remedy: &str,
 ) -> anyhow::Result<()> {
     if let Some(first) = owners.insert(path.clone(), owner.clone()) {
         anyhow::bail!(
             "duplicate {kind} {path:?}: {first} and {owner} both mount there — a {kind} is its \
-             exclusive namespace; give each one a distinct path",
+             exclusive namespace; {remedy}",
         );
     }
     Ok(())
+}
+
+/// What to do about two controllers claiming one mount prefix. The remedy is
+/// not the same sentence in both cases, and saying "give each one a distinct
+/// path" to someone running two versions of one resource is advice against the
+/// layout the docs prescribe: their paths are identical *by design*, and the
+/// string in the message (`/v2/posts`) is one neither of them wrote.
+fn prefix_remedy(version: Option<&str>) -> String {
+    match version {
+        Some(version) => format!(
+            "both declare version {version:?} at that path — drop it from one of the two \
+             `#[controller(version = …)]` lists",
+        ),
+        None => "give each one a distinct path".to_owned(),
+    }
 }
 
 impl Default for HttpTransport {
@@ -150,8 +215,59 @@ impl HttpTransport {
             fail_secure_strict: true,
             security_headers: crate::SecurityHeadersConfig::default(),
             compression: false,
+            // `None` is the URI strategy: the version is already in the path a
+            // controller mounts at, so there is nothing to resolve per request.
+            version_selector: None,
             endpoint: None,
         }
+    }
+
+    /// Build the transport an [`HttpConfig`](crate::HttpConfig) describes.
+    ///
+    /// The one place a config becomes a transport. `HttpModule`'s
+    /// `TransportContribution` calls it, and so does `nest_rs_testing::TestApp`
+    /// — which is the point: a harness that built its own bare transport was
+    /// asserting against something the deployment never runs, silently ignoring
+    /// the global prefix, the versioning strategy, the body cap, the timeout,
+    /// CORS and the security headers.
+    pub fn from_config(cfg: &crate::HttpConfig) -> anyhow::Result<Self> {
+        let mut http = Self::new().bind(format!("{}:{}", cfg.host, cfg.port));
+        if let Some(tls) = cfg.tls.clone() {
+            http = http.tls(tls);
+        }
+        if let Some(cors) = cfg.cors.clone() {
+            http = http.cors(cors.into_middleware()?);
+        }
+        if cfg.server_header {
+            http = http.server_header(concat!("nestrs/", env!("CARGO_PKG_VERSION")));
+        }
+        if let Some(prefix) = cfg.global_prefix.clone() {
+            http = http.global_prefix(prefix);
+        }
+        if let Some(selector) = cfg.version_selector() {
+            http = http.api_versioning(selector);
+        }
+        // Install the per-request cap as a request-data entry — the `RawBody`
+        // extractor reads it back from the extensions.
+        http = http.max_body_bytes(cfg.max_body_bytes.unwrap_or(crate::RawBody::DEFAULT_LIMIT));
+        if let Some(secs) = cfg.request_timeout_secs {
+            http = http.request_timeout(std::time::Duration::from_secs(secs));
+        }
+        http = http.fail_secure_strict(cfg.fail_secure_strict);
+        http = http.security_headers(cfg.security_headers.clone());
+        http = http.compression(cfg.compression);
+        // `trusted_proxies` is deliberately not handed to the transport: it is a
+        // boot-time constant, so `ClientOrigin` reads it off the `HttpConfig` in
+        // the container rather than through per-request state.
+        Ok(http)
+    }
+
+    /// Resolve each request's API version through `selector` instead of from
+    /// its path. [`HttpModule`](crate::HttpModule) passes what `HttpConfig`
+    /// describes; the URI strategy passes nothing.
+    pub fn api_versioning(mut self, selector: crate::VersionSelector) -> Self {
+        self.version_selector = Some(selector);
+        self
     }
 
     /// Pin the default security-header policy. [`HttpModule`](crate::HttpModule)
@@ -295,38 +411,104 @@ impl Transport for HttpTransport {
         // (several verbs on one path) are legal and share one entry.
         let mut route_owner: HashMap<String, String> = HashMap::new();
 
+        // Which prefixes carry a version, for the non-URI strategies. Collected
+        // here rather than guessed per request: a rewrite that fired on every
+        // path would send `/graphql`, `/mcp` and `/health` to `/v1/…` the
+        // moment a deployment named a default version.
+        // Routes, not controller prefixes: a prefix of `/` matches nothing
+        // segment-wise and a prefix of `/posts` matches a *different*
+        // controller's `/posts/drafts`. Both were real defects; the question
+        // that was always meant is "does a versioned route answer here".
+        let mut versioned_routes: Vec<String> = Vec::new();
+        // Addresses answered with no version, kept apart because they yield
+        // differently: a self-mount is neutral against anything, an unversioned
+        // controller route only against a *default* version.
+        let mut self_mounts: Vec<String> = Vec::new();
+        let mut unversioned_routes: Vec<String> = Vec::new();
         for d in discovery.meta::<HttpControllerMeta>() {
-            let prefix = d.meta.effective_prefix();
-            claim_exclusive_path(
-                &mut prefix_owner,
-                "controller prefix",
-                prefix.clone(),
-                d.meta.controller.to_owned(),
-            )?;
-            for r in &d.meta.routes {
-                let path = join_path(&prefix, r.path);
-                if let Some(first) = route_owner.insert(path.clone(), d.meta.controller.to_owned())
-                    && first != d.meta.controller
-                {
-                    anyhow::bail!(
-                        "duplicate route path {path:?}: {first} and {} both mount there — give \
-                         each controller route a distinct full path",
-                        d.meta.controller,
+            for version in d.meta.mounted_versions() {
+                let prefix = d.meta.effective_prefix(version);
+                claim_exclusive_path(
+                    &mut prefix_owner,
+                    "controller prefix",
+                    prefix.clone(),
+                    d.meta.controller.to_owned(),
+                    &prefix_remedy(version),
+                )?;
+                for r in &d.meta.routes {
+                    if !HttpControllerMeta::serves(r, version) {
+                        continue;
+                    }
+                    let path = join_path(&prefix, r.path);
+                    match version.is_some() {
+                        true => versioned_routes.push(path.clone()),
+                        false => unversioned_routes.push(path.clone()),
+                    }
+                    if let Some(first) =
+                        route_owner.insert(path.clone(), d.meta.controller.to_owned())
+                        && first != d.meta.controller
+                    {
+                        anyhow::bail!(
+                            "duplicate route path {path:?}: {first} and {} both mount there — \
+                             give each controller route a distinct full path",
+                            d.meta.controller,
+                        );
+                    }
+                    // Log the address a *client* uses. Under a non-URI strategy
+                    // the `/v{n}` prefix is where the route is mounted, not where
+                    // it is called, so the version moves out of the path and into
+                    // its own field rather than teaching the log a URL nobody can
+                    // request.
+                    let (logged, version) = match &self.version_selector {
+                        Some(_) => (join_path(d.meta.path, r.path), version),
+                        None => (path.clone(), None),
+                    };
+                    tracing::info!(
+                        target: "nest_rs::routes",
+                        controller = d.meta.controller,
+                        method = r.verb.as_str(),
+                        path = logged.as_str(),
+                        version = version,
+                        handler = r.handler,
+                        "mounted route",
                     );
-                }
-                tracing::info!(
-                    target: "nest_rs::routes",
-                    controller = d.meta.controller,
-                    method = r.verb.as_str(),
-                    path = path.as_str(),
-                    handler = r.handler,
-                    "mounted route",
-                );
-                if r.access_is_implicit(global_guards) {
-                    unguarded.push(format!("{} {} ({})", r.verb.as_str(), path, r.handler));
+                    if r.access_is_implicit(global_guards) {
+                        unguarded.push(format!("{} {} ({})", r.verb.as_str(), path, r.handler));
+                    }
                 }
             }
             route = d.meta.mount(container, route);
+        }
+
+        // A `DEFAULT_VERSION` naming a version nothing declares is a silent
+        // misconfiguration, and a bad one: every caller that states no version
+        // resolves to a path that does not exist, falls through, and is served
+        // the unversioned route or a 404 — with nothing said. Refuse at boot,
+        // naming the versions that do exist.
+        //
+        // Here rather than in `nest-rs-openapi`, which had this check first: it
+        // is HTTP's config, and an app that publishes no document deserves the
+        // same answer as one that does.
+        if let Some(selector) = &self.version_selector
+            && selector.rewrites()
+            && let Some(default) = selector.default_version()
+        {
+            let declared = crate::declared_versions(container);
+            if !declared.iter().any(|v| v == default) {
+                let var = nest_rs_config::var_name("http", "DEFAULT_VERSION");
+                anyhow::bail!(match declared.is_empty() {
+                    true => format!(
+                        "{var} names API version {default:?}, and no controller declares a \
+                         version at all — declare it with #[controller(version = {default:?})] \
+                         or unset {var}",
+                    ),
+                    false => format!(
+                        "{var} names API version {default:?}, which no controller declares — \
+                         the versions mounted are {}; name one of those or unset {var}",
+                        declared.join(", "),
+                    ),
+                });
+            }
         }
 
         if !unguarded.is_empty() {
@@ -380,12 +562,29 @@ impl Transport for HttpTransport {
                     d.meta.owner(),
                 );
             }
-            claim_exclusive_path(
-                &mut endpoint_owner,
-                "self-mounted endpoint path",
-                d.meta.path().to_owned(),
-                format!("{} endpoint {}", d.meta.label(), d.meta.owner()),
-            )?;
+            // A self-mount owns the paths it declares, and owns them without a
+            // version: `/graphql`, `/mcp`, `/api-json`, a gateway. Recording
+            // them here is what stops a versioned catch-all controller from
+            // swallowing them.
+            //
+            // Every declared path, not the path plus an assumed `/*rest`
+            // subtree: the assumption was wrong in both directions at once. It
+            // missed `/api-json` — which `OpenApiModule` mounts and which is not
+            // under `/api` — so a root catch-all swallowed the document; and it
+            // claimed the whole subtree under every self-mount, so a versioned
+            // controller mounted beneath one was unreachable with no boot error
+            // to say why. A surface that genuinely owns a subtree now says so,
+            // through `also_mounts`.
+            for path in d.meta.paths() {
+                self_mounts.push(path.to_owned());
+                claim_exclusive_path(
+                    &mut endpoint_owner,
+                    "self-mounted endpoint path",
+                    path.to_owned(),
+                    format!("{} endpoint {}", d.meta.label(), d.meta.owner()),
+                    "give each one a distinct path",
+                )?;
+            }
             tracing::info!(
                 target: "nest_rs::routes",
                 kind = d.meta.label(),
@@ -449,6 +648,30 @@ impl Transport for HttpTransport {
         }
         for (_, mount) in self.mounts.drain(..) {
             route = mount(container, route);
+        }
+
+        // Header / media-type versioning is a rewrite in front of routing:
+        // fold it back into a `Route` at the root so the no-layer fast path
+        // below stays monomorphized, and keep it *inside* the global prefix so
+        // the path it rewrites is the one controllers mount at.
+        // `rewrites()` and not merely `Some`: the URI strategy is resolved by
+        // routing, so wrapping it would refuse every `/v{n}/…` path it is
+        // supposed to serve. Unreachable through `HttpModule`, which hands over
+        // `None` for `uri` — the public builder can hit it.
+        if let Some(selector) = self.version_selector.take().filter(|s| s.rewrites()) {
+            let selector = selector.with_routes(
+                versioned_routes,
+                self_mounts,
+                unversioned_routes,
+                crate::declared_versions(container),
+            );
+            // An inert selector — a non-URI strategy with nothing versioned to
+            // select — would pass every request straight through, at the cost of
+            // a whole extra routing layer. Measured at +57% on the hot path, for
+            // an outcome it can never change.
+            if !selector.is_inert() {
+                route = Route::new().nest_no_strip("/", VersionedEndpoint::new(route, selector));
+            }
         }
 
         // Apply the global prefix once around the fully-assembled tree so
@@ -528,6 +751,9 @@ impl Transport for HttpTransport {
                 body_limit,
                 edge_headers,
                 true,
+                // This shape is only mounted when neither CORS nor compression
+                // is configured, so nothing outside can rewrite the body.
+                false,
             )
             .boxed()
         } else {
@@ -565,6 +791,10 @@ impl Transport for HttpTransport {
                 body_limit,
                 edge_headers,
                 fuse_normalize,
+                // Compression wraps outside this endpoint and replaces the
+                // request body without touching `Content-Length`, so a declared
+                // length stops bounding anything.
+                self.compression,
             )
             .boxed();
             // Response compression, negotiated from `Accept-Encoding`. Inside
@@ -608,8 +838,15 @@ impl Transport for HttpTransport {
         let bind = self.bind;
         let listener = match self.tls {
             Some(tls) => {
+                // Built before the listener binds, and fallible on purpose: a
+                // stream of configs takes poem's unchecked blanket impl, so
+                // unusable material would otherwise leave a process that boots,
+                // reports healthy, binds and drops every connection.
+                let stream = tls
+                    .into_rustls_stream()
+                    .context("the configured TLS material cannot serve")?;
                 tracing::debug!(target: "nest_rs::http", addr = %bind, tls = true, "transport listening");
-                TcpListener::bind(bind).rustls(tls.into_rustls()).boxed()
+                TcpListener::bind(bind).rustls(stream).boxed()
             }
             None => {
                 tracing::debug!(target: "nest_rs::http", addr = %bind, tls = false, "transport listening");

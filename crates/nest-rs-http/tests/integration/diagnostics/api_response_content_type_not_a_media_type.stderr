@@ -1,0 +1,5 @@
+error: `response_content_type` takes a media type spelled `type/subtype` — e.g. "application/octet-stream", "text/event-stream" or "audio/mpeg". `octet-stream` is not one
+  --> tests/integration/diagnostics/api_response_content_type_not_a_media_type.rs:14:35
+   |
+14 |     #[api(response_content_type = "octet-stream")]
+   |                                   ^^^^^^^^^^^^^^

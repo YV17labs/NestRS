@@ -225,6 +225,38 @@ greps for them:
   `let _opentelemetry =`, so the reader who tripped the panic was told to write a line the
   example he started from did not contain.
 
+## G. Section tiers — Basics above All options
+
+A section presents **two** lists, not one. **Basics** holds what a reader needs to ship the
+section's common case. **All options** holds everything the section also supports:
+configuration and tuning, opt-in or specialized capabilities, failure and operational
+behaviour, extension seams (writing a driver, an alternative source), and reference tables.
+Basics is the shorter of the two — if it holds most of the section, nothing was tiered.
+
+A page that is both — 80% case on top, reference below — is placed by **why a reader opens
+it**, never by its content mix. `/http/extractors/` reads as a reference and is Basics: it is
+opened to write a handler. `/queue/retries-and-failure/` teaches a contract and is All options:
+it is opened once the jobs already run.
+
+The tier is declared **per page, in frontmatter** — `tier: basics` or `tier: all-options` — on
+every non-index page of a tiered section. The section `index` declares none: it frames the
+split and sits above both groups. Order stays in `sidebar.order`; a tier **partitions** a
+section and never restates its order.
+
+**Under five non-index pages a section stays flat**, and a `tier` there is a violation, not a
+no-op: two headers over three links cost a reader more than they save. One section is exempt at
+any size — `tutorial/` is an ordered path, where a tier boundary mid-sequence would claim
+something false.
+
+`docs/src/sidebar.mjs` owns the vocabulary, the threshold and that exemption; `astro.config.mjs`
+renders it, `src/content.config.ts` validates the key, and the linter's `tier` rule gates it —
+an undeclared page, an unknown tier, or a section that declares only one fails CI. Both sides
+fail closed: an undeclared page would drop out of the sidebar, so the **build** stops too.
+
+This is §D made structural. §D budgets one page against drowning the reader; §G budgets the
+section, so the long tail is one click away instead of one line away. A T-INDEX page's "In this
+section" list (§B) is the same navigation in prose, so it carries the same two tiers.
+
 ## Running the linter
 
 ```

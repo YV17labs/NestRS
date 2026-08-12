@@ -67,10 +67,11 @@ Reference
   decorators.mdx, glossary.mdx
 ```
 
-Each section index follows the same four-tier shape: **Basics**,
-**All options**, **Patterns**, **Internals**. Split into separate
-files once a tier outgrows a single page (and update the section's
-sidebar accordingly).
+Each section past five pages presents two groups — **Basics** then
+**All options** — in the sidebar and in its index's "In this section"
+list. A page declares which one it is in with `tier:` in its
+frontmatter; nothing in `astro.config.mjs` has to be touched to add
+one. STYLE.md §G is the norm, and the linter gates it.
 
 ## Deploying
 

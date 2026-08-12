@@ -2,6 +2,7 @@ use crate::naming::Transport;
 
 pub mod adapter;
 pub mod auth;
+pub mod entity;
 pub mod feature;
 pub mod hello;
 pub mod migration;
@@ -94,6 +95,7 @@ mod tests {
     const SOURCES: &[&str] = &[
         include_str!("adapter.rs"),
         include_str!("auth.rs"),
+        include_str!("entity.rs"),
         include_str!("feature.rs"),
         include_str!("hello.rs"),
         include_str!("migration.rs"),

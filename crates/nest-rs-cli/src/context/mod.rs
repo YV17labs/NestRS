@@ -9,6 +9,6 @@ mod workspace;
 
 pub use detect::Context;
 pub use workspace::{
-    DEFAULT_ENV_PREFIX, ENV_PREFIX_VAR, EnvPrefixSource, NestrsWorkspace, env_prefix,
-    validate_env_prefix, var_name,
+    DEFAULT_ENV_PREFIX, ENV_PREFIX_VAR, EnvPrefixSource, NestrsWorkspace, StandaloneCrate,
+    env_prefix, framework_pin, validate_env_prefix, var_name,
 };

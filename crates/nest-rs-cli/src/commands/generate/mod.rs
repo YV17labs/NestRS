@@ -5,6 +5,7 @@
 mod adapter;
 mod auth;
 mod cargo;
+mod entity;
 mod feature;
 mod migration;
 mod resource;
@@ -16,6 +17,7 @@ pub(crate) use migration::queue_db_crates;
 
 pub use adapter::{AdapterOptions, run as run_adapter};
 pub use auth::{AuthOptions, run as run_auth};
+pub use entity::{EntityOptions, run as run_entity};
 pub use feature::{FeatureOptions, run as run_feature};
 pub use migration::{MigrationOptions, run as run_migration};
 pub use resource::{ResourceOptions, run as run_resource};

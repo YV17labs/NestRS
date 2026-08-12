@@ -223,7 +223,9 @@ fn file_defines(contents: &str, name: &str) -> bool {
     })
 }
 
-fn rustc_version() -> Option<String> {
+/// The `rustc --version` line, or `None` when it is not on `PATH`. Shared with
+/// `nestrs info`, which reports the same toolchain without doctor's verdict.
+pub(super) fn rustc_version() -> Option<String> {
     let output = std::process::Command::new("rustc")
         .arg("--version")
         .output()

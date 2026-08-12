@@ -169,6 +169,22 @@ fn a_generated_crud_resource_compiles() {
     scaffold_and_check(&[&["g", "resource", "post"]], "a generated CRUD resource");
 }
 
+#[test]
+fn a_generated_entity_compiles() {
+    // `g entity` emits an `#[expose]` entity that names **no** service, and the
+    // absence is the part only a compiler can judge: `#[expose(service = …)]`
+    // requires a `CrudService`, a plain `g feature` port's service is not one,
+    // and naming it anyway fails inside the macro expansion — where the
+    // `integration` suite, which reads the text back, sees nothing wrong.
+    //
+    // The port is that plain port on purpose: it is the case that would break
+    // first, and the one `g resource` never exercises.
+    scaffold_and_check(
+        &[&["g", "feature", "blog"], &["g", "entity", "blog/article"]],
+        "a generated entity",
+    );
+}
+
 /// `crates/features/src/lib.rs` with the auth adapter's modules dropped.
 ///
 /// The files stay on disk; Rust compiles the module tree, not the directory, so

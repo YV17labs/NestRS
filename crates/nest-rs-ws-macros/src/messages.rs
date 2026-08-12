@@ -47,7 +47,17 @@ fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
     }
 }
 
-pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
+    // The impl half collects; it declares nothing. `#[gateway]` one line up
+    // declares the `path` and the `version`, which makes this the likeliest
+    // place to reach for either — so an argument list is refused rather than
+    // silently dropped.
+    if let Err(err) = crate::gateway::WS_PAIR.reject_args(
+        &TokenStream2::from(args),
+        "a gateway's `path`, `version` and `namespace` are declared by",
+    ) {
+        return err.to_compile_error().into();
+    }
     let mut item = match crate::gateway::WS_PAIR.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
@@ -375,16 +385,26 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
             ) -> ::nest_rs_core::ContainerBuilder {
                 // Self-mount on HTTP: a WS upgrade is an HTTP `GET`, so a
                 // gateway is just another `HttpEndpointMeta` at boot.
+                //
+                // The *effective* path — `PATH` with `#[gateway(version = …)]`
+                // folded in — is what the meta carries, and that matters beyond
+                // routing: the transport's duplicate-mount check compares
+                // `HttpEndpointMeta::path`, so two gateways declaring one path
+                // under two versions are two mounts that both boot, while two on
+                // the same path *and* version still fail boot naming both.
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
                     ::nest_rs_ws::nest_rs_http::HttpEndpointMeta::new(
-                        <#self_ty>::PATH,
+                        <#self_ty>::__nestrs_mount_path(),
                         "ws",
                         |__container, __route| {
+                            // One string for the log and the mount, so what boot
+                            // prints is the address a client connects to.
+                            let __path = <#self_ty>::__nestrs_mount_path();
                             #(
                                 ::nest_rs_ws::tracing::info!(
                                     target: "nest_rs::routes",
                                     gateway = #gateway_name,
-                                    path = <#self_ty>::PATH,
+                                    path = __path.as_str(),
                                     event = #event_names,
                                     "mounted message",
                                 );
@@ -420,7 +440,7 @@ pub(crate) fn messages(_args: TokenStream, input: TokenStream) -> TokenStream {
                                 __gw, __server, __chains, __ctx, __data_pipe,
                             );
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
-                            __route.at(<#self_ty>::PATH, __ep)
+                            __route.at(__path, __ep)
                         },
                     )
                     .owned_by(#gateway_name)

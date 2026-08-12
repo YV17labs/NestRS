@@ -12,8 +12,14 @@ mod gateway;
 mod messages;
 
 /// `#[gateway(path = "/ws")]` — the `@WebSocketGateway` analog. Generates
-/// `from_container`, `pub const PATH`, and the inherent helpers `#[messages]`
-/// reads back.
+/// `from_container`, `pub const PATH` / `pub const VERSION`, and the inherent
+/// helpers `#[messages]` reads back.
+///
+/// `version = "1"` mounts the gateway at `/v1/ws` instead of `/ws` — the same
+/// declaration `#[controller]` takes, resolved through the same
+/// `nest_rs_http::version_path`, because a gateway's mount is an address a
+/// client selects. Two gateways may share a `path` under different versions;
+/// two on the same path *and* version fail boot naming both.
 ///
 /// `namespace = MarkerType` mounts against `WsServer<MarkerType>` — a
 /// self-provided isolated registry. Omitted, uses `Global` from `WsModule`.
@@ -25,17 +31,20 @@ mod messages;
 ///
 /// # Expands to
 ///
-/// The struct unchanged, plus inherent items: `PATH`, `from_container`,
-/// `__nestrs_injected` (inject keys + connection guards), `__nestrs_registry` /
-/// `__nestrs_provide_registry` (resolve/provide the `WsServer<Ns>`), and
-/// `__nestrs_gateway_layers` (wraps the endpoint with the connection-level
-/// guard chain, deduped against the global chain). No `Discoverable` here —
-/// `#[messages]` emits it.
+/// The struct unchanged, plus inherent items: `PATH`, `VERSION`,
+/// `from_container`, `__nestrs_mount_path` (the two folded through
+/// `version_path`), `__nestrs_injected` (inject keys + connection guards),
+/// `__nestrs_registry` / `__nestrs_provide_registry` (resolve/provide the
+/// `WsServer<Ns>`), and `__nestrs_gateway_layers` (wraps the endpoint with the
+/// connection-level guard chain, deduped against the global chain). No
+/// `Discoverable` here — `#[messages]` emits it.
 ///
 /// ```ignore
 /// pub struct ChatGateway { /* … */ }
 /// impl ChatGateway {
 ///     pub const PATH: &'static str = "/ws";
+///     pub const VERSION: Option<&'static str> = Some("1");
+///     pub fn __nestrs_mount_path() -> String { /* "/v1/ws" */ }
 ///     fn from_container(c: &::nest_rs_core::Container) -> Self { /* … */ }
 ///     pub fn __nestrs_injected() -> Vec<TypeId> { /* … */ }
 ///     pub fn __nestrs_registry(c) -> Arc<::nest_rs_ws::WsServer<Ns>> { /* … */ }
@@ -65,7 +74,7 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Emits `Gateway` (dispatcher + hooks) and `Discoverable` — the latter
 /// attaches an `HttpEndpointMeta` so the gateway self-mounts on the HTTP
-/// transport at `PATH`.
+/// transport at its effective path (`PATH`, with `VERSION` folded in).
 ///
 /// # Expands to
 ///
@@ -73,8 +82,8 @@ pub fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 /// name to the right handler (deserializing `data`, serializing the reply) and
 /// carries the `on_connect`/`on_disconnect` overrides, and an `impl
 /// Discoverable` whose `register` attaches an `HttpEndpointMeta` that
-/// self-mounts at `PATH` and composes the per-event guard chains (global +
-/// per-message, deduped) once at mount.
+/// self-mounts at `__nestrs_mount_path()` and composes the per-event guard
+/// chains (global + per-message, deduped) once at mount.
 ///
 /// ```ignore
 /// #[::nest_rs_ws::async_trait]

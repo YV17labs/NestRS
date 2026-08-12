@@ -1,0 +1,5 @@
+error: #[gateway] accepts `path = "..."`, an optional `version = "..."` and an optional `namespace = MarkerType`
+ --> tests/integration/diagnostics/gateway_unknown_key.rs:9:25
+  |
+9 | #[gateway(path = "/ws", prefix = "/v1")]
+  |                         ^^^^^^^^^^^^^^

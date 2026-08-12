@@ -1,0 +1,5 @@
+error: #[gateway] serves one version: a gateway owns its mount outright, so there is no second path for a second version to answer at — declare one gateway per version
+ --> tests/integration/diagnostics/gateway_serves_one_version.rs:8:35
+  |
+8 | #[gateway(path = "/ws", version = ["1", "2"])]
+  |                                   ^^^^^^^^^^

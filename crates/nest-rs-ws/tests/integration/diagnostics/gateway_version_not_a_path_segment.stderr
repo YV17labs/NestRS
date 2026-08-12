@@ -1,0 +1,5 @@
+error: #[gateway] version "a/b" is not a path segment — a version is alphanumerics, `.` and `-` (`1`, `2`, `2024-08-11`), at most 32 characters, because it is mounted as `/va/b`
+ --> tests/integration/diagnostics/gateway_version_not_a_path_segment.rs:8:35
+  |
+8 | #[gateway(path = "/ws", version = "a/b")]
+  |                                   ^^^^^

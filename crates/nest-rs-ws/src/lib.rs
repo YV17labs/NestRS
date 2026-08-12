@@ -86,6 +86,27 @@
 //! the `OnGatewayConnection` / `OnGatewayDisconnect` analogs; `on_disconnect`
 //! runs while the connection is still registered.
 //!
+//! # Versioning the mount
+//!
+//! `#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`. It is the same
+//! declaration `#[controller]` takes and it resolves through the same
+//! [`nest_rs_http::version_path`], because a gateway's mount *is* an address the
+//! client selects — the edges where it is not (GraphQL, MCP, queues) refuse the
+//! argument at compile time rather than accept a version nothing could apply.
+//!
+//! A gateway owns its mount, so the version is part of the identity the boot
+//! checks: `#[gateway(path = "/ws", version = "1")]` and `version = "2"` are two
+//! mounts that both boot and serve their own message tables, while two gateways
+//! sharing a path *and* a version still fail boot naming both.
+//!
+//! **A gateway is selected by URI only.** `NESTRS_HTTP__VERSIONING` rewrites
+//! *controller* paths in front of routing, and the selector learns its prefixes
+//! from controllers alone — a self-mount is version-neutral to it. So under
+//! `header` or `media_type` a versioned gateway is still served at `/v1/ws`
+//! (rather than refused as a URI form), and `/ws` + a version header reaches
+//! nothing. That is the honest shape for this edge: a browser cannot set headers
+//! on a `WebSocket` handshake anyway.
+//!
 //! # Per-gateway namespacing
 //!
 //! [`WsServer`] is generic over a zero-sized namespace marker (default

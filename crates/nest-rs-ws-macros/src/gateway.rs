@@ -1,5 +1,6 @@
-//! `#[gateway]` — struct decorator (construction + `PATH` + connection-level
-//! guard wrapping). `#[messages]` emits the `Discoverable`/mount + dispatcher.
+//! `#[gateway]` — struct decorator (construction + `PATH`/`VERSION` consts +
+//! connection-level guard wrapping). `#[messages]` emits the `Discoverable`/mount
+//! + dispatcher, and reads the mount address back from here.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -24,11 +25,19 @@ pub(crate) const WS_PAIR: DecoratorPair = DecoratorPair {
 };
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
-    let GatewayArgs { path, namespace } = match parse_gateway_args(args.into()) {
+    let GatewayArgs {
+        path,
+        version,
+        namespace,
+    } = match parse_gateway_args(args.into()) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
     let path_lit = path;
+    let version_opt = match &version {
+        Some(v) => quote! { ::core::option::Option::Some(#v) },
+        None => quote! { ::core::option::Option::None },
+    };
     let mut item = match WS_PAIR.parse_host(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
@@ -130,6 +139,25 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         impl #impl_generics #name #ty_generics #where_clause {
             pub const PATH: &'static str = #path_lit;
 
+            /// The URI version segment from `#[gateway(version = "…")]`; `None`
+            /// when the gateway declares none. Same const `#[controller]` emits,
+            /// because a gateway's mount is an address a client selects.
+            pub const VERSION: ::core::option::Option<&'static str> = #version_opt;
+
+            /// The address a client actually connects to — `PATH` with the
+            /// declared version folded in. Built by `nest_rs_http::version_path`,
+            /// the single place URI versioning lives, so a gateway's served path
+            /// and a controller's cannot drift.
+            ///
+            /// Read by `#[messages]` three times over — the `HttpEndpointMeta`
+            /// path (which is what the duplicate-mount boot check compares), the
+            /// `Route::at` it mounts at, and the boot log — so those three cannot
+            /// disagree either.
+            #[doc(hidden)]
+            pub fn __nestrs_mount_path() -> ::std::string::String {
+                ::nest_rs_ws::nest_rs_http::version_path(Self::VERSION, Self::PATH)
+            }
+
             /// Whether this gateway binds its own guards at the upgrade. The
             /// transport cannot see inside the mount closure, so it reads this
             /// to tell a guarded edge from a bare one instead of warning on both.
@@ -187,23 +215,66 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 
 struct GatewayArgs {
     path: LitStr,
+    version: Option<LitStr>,
     namespace: Option<Path>,
 }
 
+/// Parse `#[gateway(path = "/ws", version = "1", namespace = ChatNs)]` — `path`
+/// required, the other two optional. Order-independent; unknown keys rejected.
+///
+/// `version` is spelled and parsed exactly as `#[controller]`'s, deliberately: a
+/// gateway's mount is a path a client selects, so the declaration a developer
+/// writes for it must not be a second dialect of the one they already know.
 fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut path = None;
+    let mut version = None;
     let mut namespace = None;
     for meta in metas {
         match meta {
-            Meta::NameValue(nv) if nv.path.is_ident("path") => path = Some(expr_str(&nv.value)?),
+            Meta::NameValue(nv) if nv.path.is_ident("path") => {
+                if path.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &nv,
+                        "#[gateway] declares `path` twice — keep one",
+                    ));
+                }
+                path = Some(expr_str(&nv.value)?);
+            }
+            // Through `#[controller]`'s own parser, which is what the doc
+            // comment above already claims. Taking it through a bare
+            // `expr_str` made this a *second* grammar wearing one name: no
+            // character-set check, so `version = "a/b"` compiled and mounted at
+            // `/va/b/ws`, and no list form, so the spelling learned next door
+            // failed here with a bare "expected a string literal".
+            Meta::NameValue(nv) if nv.path.is_ident("version") => {
+                if version.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &nv,
+                        "#[gateway] declares `version` twice — a gateway owns one mount, so it \
+                         carries one version",
+                    ));
+                }
+                let declared =
+                    nest_rs_codegen::versioning::parse_version_list(&nv.value, "#[gateway]")?;
+                if declared.len() > 1 {
+                    return Err(syn::Error::new_spanned(
+                        &nv.value,
+                        "#[gateway] serves one version: a gateway owns its mount outright, so \
+                         there is no second path for a second version to answer at — declare one \
+                         gateway per version",
+                    ));
+                }
+                version = declared.into_iter().next();
+            }
             Meta::NameValue(nv) if nv.path.is_ident("namespace") => {
                 namespace = Some(expr_path(&nv.value)?)
             }
             other => {
                 return Err(syn::Error::new_spanned(
                     other,
-                    "#[gateway] accepts `path = \"...\"` and an optional `namespace = MarkerType`",
+                    "#[gateway] accepts `path = \"...\"`, an optional `version = \"...\"` and an \
+                     optional `namespace = MarkerType`",
                 ));
             }
         }
@@ -214,7 +285,11 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
             "#[gateway] requires `path = \"...\"`",
         )
     })?;
-    Ok(GatewayArgs { path, namespace })
+    Ok(GatewayArgs {
+        path,
+        version,
+        namespace,
+    })
 }
 
 fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
@@ -279,4 +354,76 @@ fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: proc_macro2::TokenStream) -> syn::Result<GatewayArgs> {
+        parse_gateway_args(args)
+    }
+
+    /// `GatewayArgs` holds `syn` types with no `Debug`, so `expect_err` is out;
+    /// the refusal's wording is what these tests are about anyway.
+    fn refusal(args: proc_macro2::TokenStream) -> String {
+        match parse_gateway_args(args) {
+            Ok(args) => panic!(
+                "expected a refusal, parsed `path = {:?}`",
+                args.path.value()
+            ),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    #[test]
+    fn version_is_optional_and_absent_by_default() {
+        let args = parse(quote! { path = "/ws" }).expect("path alone is the minimal form");
+        assert_eq!(args.path.value(), "/ws");
+        assert!(
+            args.version.is_none(),
+            "an undeclared version stays `None`, so `version_path` leaves the mount alone",
+        );
+    }
+
+    #[test]
+    fn all_three_keys_parse_in_any_order() {
+        let args = parse(quote! { version = "1", namespace = ChatNs, path = "/ws" })
+            .expect("the keys are order-independent, like #[controller]'s");
+        assert_eq!(args.path.value(), "/ws");
+        assert_eq!(args.version.map(|v| v.value()).as_deref(), Some("1"));
+        assert!(args.namespace.is_some());
+    }
+
+    /// A version is an opaque token, not a number: `#[controller(version =
+    /// "2024-08-11")]` is legal, so the gateway's half must not narrow it.
+    #[test]
+    fn a_version_is_any_string_token() {
+        let args = parse(quote! { path = "/ws", version = "2024-08-11" }).expect("a date version");
+        assert_eq!(
+            args.version.map(|v| v.value()).as_deref(),
+            Some("2024-08-11"),
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_names_every_accepted_one() {
+        let message = refusal(quote! { path = "/ws", prefix = "/v1" });
+        for key in ["path", "version", "namespace"] {
+            assert!(
+                message.contains(key),
+                "the diagnostic must name `{key}`, so a developer learns the whole grammar from \
+                 one error: {message}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_version_without_a_path_is_still_refused() {
+        let message = refusal(quote! { version = "1" });
+        assert!(
+            message.contains("path"),
+            "a version is an optional refinement of an address, never the address: {message}",
+        );
+    }
 }

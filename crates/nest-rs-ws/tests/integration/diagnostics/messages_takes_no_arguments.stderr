@@ -1,0 +1,5 @@
+error: #[messages] takes no arguments; a gateway's `path`, `version` and `namespace` are declared by #[gateway], and each operation by #[subscribe_message] / #[on_connect] / #[on_disconnect]
+  --> tests/integration/diagnostics/messages_takes_no_arguments.rs:10:12
+   |
+10 | #[messages(version = "1")]
+   |            ^^^^^^^^^^^^^

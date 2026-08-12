@@ -1,9 +1,15 @@
 //! `#[messages]`-generated `Gateway::dispatch` — the return-type shape paths
-//! the macro picks (Unit / Value / `Result<(), E>` / `Result<T, E>`). The macro
+//! the macro picks (Unit / Value / `Result<(), E>` / `Result<T, E>`) — and the
+//! address the generated `Discoverable` mounts that dispatcher at. The macro
 //! itself lives in `nest-rs-ws-macros`; this file pins its observable behaviour.
 
+use nest_rs_core::{Layer, injectable, module};
+use nest_rs_guards::{Denial, Guard};
 use nest_rs_pipes::{Pipe, PipeError, Piped, Trim, Valid};
-use nest_rs_ws::{Gateway, WsClient, WsReply, gateway, messages};
+use nest_rs_testing::TestApp;
+use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
+use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, async_trait, gateway, messages};
+use poem::http::{StatusCode, header};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
@@ -459,4 +465,266 @@ async fn a_malformed_payload_warns_on_the_ws_target() {
     );
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("event").as_deref(), Some("named"));
+}
+
+// ── The mount address: `#[gateway(version = …)]` ────────────────────────────
+//
+// A gateway's mount is a path a client selects, so it declares a version the
+// way a controller does and resolves it through the same
+// `nest_rs_http::version_path`. What follows pins the three things that
+// declaration decides: the effective path, what the router serves, and what the
+// boot does with two gateways that share a path.
+
+#[gateway(path = "/ws", version = "1")]
+pub struct VersionedGateway;
+
+#[messages]
+impl VersionedGateway {
+    #[subscribe_message("ping")]
+    #[public]
+    async fn ping(&self) -> String {
+        "v1".into()
+    }
+}
+
+/// `version_path` prefixes, so a declared version moves the whole mount under
+/// `/v{n}` — the same address shape `#[controller(version = "1")]` produces, and
+/// the reason the argument is spelled identically on both edges.
+#[test]
+fn a_declared_version_moves_the_mount_under_its_segment() {
+    assert_eq!(VersionedGateway::VERSION, Some("1"));
+    assert_eq!(
+        VersionedGateway::PATH,
+        "/ws",
+        "the declaration is untouched"
+    );
+    assert_eq!(VersionedGateway::__nestrs_mount_path(), "/v1/ws");
+}
+
+/// The other half, and the one that guarantees this is additive: a gateway that
+/// declares no version mounts exactly where it always did.
+#[test]
+fn an_undeclared_version_leaves_the_mount_alone() {
+    assert_eq!(TestGateway::VERSION, None);
+    assert_eq!(TestGateway::__nestrs_mount_path(), "/test");
+}
+
+#[module(imports = [WsModule], providers = [VersionedGateway])]
+struct VersionedModule;
+
+/// What a socket-less client can prove about a mount, and it is more than it
+/// looks: `400 invalid protocol` is poem's `WebSocket` extractor refusing a GET
+/// that is not an upgrade, so only a mounted gateway endpoint can answer it.
+/// `500 no upgrade` is that same extractor accepting the *whole* handshake —
+/// method, `Upgrade`, `Connection`, `Sec-WebSocket-Version`, `Sec-WebSocket-Key`
+/// — and finding no hyper upgrade seam, which is exactly as far as an in-process
+/// `TestClient` reaches. The real-socket witness needs a WS client crate and
+/// lives in the demo's `live` app e2e suite.
+async fn upgrade_status(app: &TestApp, path: &str) -> StatusCode {
+    app.http()
+        .get(path)
+        .header(header::UPGRADE, "websocket")
+        .header(header::CONNECTION, "upgrade")
+        .header(header::SEC_WEBSOCKET_VERSION, "13")
+        .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+        .send()
+        .await
+        .0
+        .status()
+}
+
+#[tokio::test]
+async fn a_versioned_gateway_serves_at_its_version_segment_and_nowhere_else() {
+    let app = TestApp::for_module::<VersionedModule>()
+        .await
+        .expect("a versioned gateway boots like any other");
+
+    assert_eq!(
+        upgrade_status(&app, "/v1/ws").await,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "the handshake reached the gateway and passed every header check",
+    );
+    app.http()
+        .get("/v1/ws")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // …and the undeclared address is not a second door. A gateway that declared
+    // a version and stayed reachable unversioned would be the silent-fallback
+    // failure URI versioning exists to avoid.
+    assert_eq!(upgrade_status(&app, "/ws").await, StatusCode::NOT_FOUND);
+    app.http()
+        .get("/ws")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// A boot log naming an address nobody can connect to is worse than none — it is
+/// the first thing read when a socket will not open. Both events the mount emits
+/// carry the effective path: the transport's, and the per-event one `#[messages]`
+/// writes from inside the mount closure.
+#[tokio::test]
+async fn the_boot_log_names_the_address_a_client_connects_to() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let _app = TestApp::for_module::<VersionedModule>()
+        .await
+        .expect("a versioned gateway boots");
+
+    let endpoint = logs.expect_one("nest_rs::routes", "mounted endpoint");
+    assert_eq!(endpoint.field("path").as_deref(), Some("/v1/ws"));
+    assert_eq!(endpoint.field("kind").as_deref(), Some("ws"));
+
+    let message = logs.expect_one("nest_rs::routes", "mounted message");
+    assert_eq!(message.field("path").as_deref(), Some("/v1/ws"));
+    assert_eq!(message.field("event").as_deref(), Some("ping"));
+}
+
+// A gateway owns its mount, so "which gateway is at this address" is a question
+// with a testable answer: give each version a connection guard that denies with
+// its own reason. The reason rides the problem+json `detail`, so the response
+// names the gateway whose upgrade chain actually ran.
+
+#[injectable]
+#[derive(Default)]
+struct V1Guard;
+
+impl Layer for V1Guard {}
+
+#[async_trait]
+impl Guard for V1Guard {
+    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+        Err(Denial::unauthorized("the v1 socket refused you"))
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+struct V2Guard;
+
+impl Layer for V2Guard {}
+
+#[async_trait]
+impl Guard for V2Guard {
+    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+        Err(Denial::unauthorized("the v2 socket refused you"))
+    }
+}
+
+#[gateway(path = "/chat", version = "1")]
+#[use_guards(V1Guard)]
+struct ChatV1Gateway;
+
+#[messages]
+impl ChatV1Gateway {
+    #[subscribe_message("say")]
+    #[public]
+    async fn say(&self) -> String {
+        "v1".into()
+    }
+}
+
+#[gateway(path = "/chat", version = "2")]
+#[use_guards(V2Guard)]
+struct ChatV2Gateway;
+
+#[messages]
+impl ChatV2Gateway {
+    #[subscribe_message("say")]
+    #[public]
+    async fn say(&self) -> String {
+        "v2".into()
+    }
+}
+
+#[module(
+    imports = [WsModule],
+    providers = [ChatV1Gateway, ChatV2Gateway, V1Guard, V2Guard],
+)]
+struct TwoVersionsModule;
+
+/// Two gateways, one declared `path`, two versions. The duplicate-self-mount
+/// boot error compares the **effective** path, so these are two mounts rather
+/// than a collision — and each serves its own upgrade chain, which is what makes
+/// them independent rather than merely distinct.
+#[tokio::test]
+async fn two_versions_of_one_path_both_boot_and_serve_their_own_chain() {
+    let app = TestApp::for_module::<TwoVersionsModule>()
+        .await
+        .expect("one path under two versions is two mounts, not a collision");
+
+    for (path, expected) in [
+        ("/v1/chat", "the v1 socket refused you"),
+        ("/v2/chat", "the v2 socket refused you"),
+    ] {
+        let response = app.http().get(path).send().await;
+        response.assert_status(StatusCode::UNAUTHORIZED);
+        let body = response.0.into_body().into_string().await.expect("a body");
+        assert!(
+            body.contains(expected),
+            "{path} must run its own gateway's guard, got: {body}",
+        );
+    }
+
+    // The bare path belongs to neither.
+    app.http()
+        .get("/chat")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // …and the message tables stayed separate, each answering for itself.
+    assert!(matches!(
+        ChatV1Gateway.dispatch(&WsClient::for_test(), "say", serde_json::Value::Null).await,
+        WsReply::Reply(v) if v.as_str() == Some("v1"),
+    ));
+    assert!(matches!(
+        ChatV2Gateway.dispatch(&WsClient::for_test(), "say", serde_json::Value::Null).await,
+        WsReply::Reply(v) if v.as_str() == Some("v2"),
+    ));
+}
+
+#[gateway(path = "/twin", version = "1")]
+struct TwinAGateway;
+
+#[messages]
+impl TwinAGateway {
+    #[subscribe_message("ping")]
+    #[public]
+    async fn ping(&self) {}
+}
+
+#[gateway(path = "/twin", version = "1")]
+struct TwinBGateway;
+
+#[messages]
+impl TwinBGateway {
+    #[subscribe_message("ping")]
+    #[public]
+    async fn ping(&self) {}
+}
+
+#[module(imports = [WsModule], providers = [TwinAGateway, TwinBGateway])]
+struct TwinModule;
+
+/// The half a version must not weaken: same path *and* same version is still one
+/// address with two owners, and it fails boot naming both rather than letting
+/// poem panic during route assembly.
+#[tokio::test]
+async fn one_path_and_one_version_shared_by_two_gateways_still_fails_boot() {
+    let Err(err) = TestApp::for_module::<TwinModule>().await else {
+        panic!("a gateway owns its mount — two of them cannot own one address");
+    };
+    let message = format!("{err:#}");
+    for owner in ["TwinAGateway", "TwinBGateway"] {
+        assert!(
+            message.contains(owner),
+            "the boot error names both claimants: {message}",
+        );
+    }
+    assert!(
+        message.contains("/v1/twin"),
+        "…at the address they actually collide on: {message}",
+    );
 }

@@ -2,6 +2,7 @@
 
 mod adapter;
 mod auth;
+mod entity;
 mod feature;
 mod migration;
 mod resource;

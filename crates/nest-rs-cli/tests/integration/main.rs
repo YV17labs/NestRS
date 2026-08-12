@@ -8,4 +8,5 @@ mod cli;
 mod doctor;
 mod generate;
 mod harness;
+mod info;
 mod new;

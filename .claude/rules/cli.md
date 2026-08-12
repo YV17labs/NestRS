@@ -6,10 +6,17 @@ paths:
 # nestrs CLI — scaffolds mirror the exemplar
 
 Command surface: `new` (monorepo / workspace app / `--standalone`),
-`generate`/`g` (`feature`, `resource`, `auth`, `migration`, and the
+`generate`/`g` (`feature`, `resource`, `entity`, `auth`, `migration`, and the
 adapters `http` / `graphql` / `ws` / `queue` / `schedule` / `mcp`),
 `run` (forwards to `just` in the product workspace), `doctor`, `update`,
-`version`, `about`.
+`version`, `about`, `info`.
+
+**`about` is the framework; `info` is the project.** `about` prints seven
+static lines identical on every machine; `info` reads the tree it stands in
+(layout, root, apps, features, the pinned framework version, the env prefix,
+the toolchain) and says so plainly when there is no project. A line that would
+be the same everywhere belongs to `about`, and vice versa — that is the whole
+boundary, and it is what keeps the two from becoming one command with a flag.
 
 ## One starter — locked, do not reopen
 

@@ -93,8 +93,20 @@ pub enum Command {
     /// Print the CLI version.
     Version,
 
-    /// Print project metadata (tagline, docs, license, author).
+    /// Print NestRS metadata (tagline, docs, license, author).
     About,
+
+    /// Report the project the current directory sits in.
+    ///
+    /// `about` is the framework; `info` is your tree — layout, root, apps,
+    /// features, the framework version the manifests pin, the env prefix in
+    /// force, and the toolchain. Outside a project it says so rather than
+    /// failing.
+    Info {
+        /// Project directory to inspect (default: current directory).
+        #[arg(long, short = 'p')]
+        path: Option<PathBuf>,
+    },
 
     /// Install the latest nestrs CLI from crates.io when a newer version exists.
     Update {
@@ -148,6 +160,25 @@ pub struct GenTarget {
     pub dry_run: bool,
 }
 
+/// `g entity` takes a two-part target: the feature it joins, and — when the
+/// feature's own singular is not the entity's name — the entity itself. A
+/// struct of its own rather than [`GenTarget`] so `--help` spells that grammar
+/// at the positional, where the reader is looking.
+#[derive(Args, Debug)]
+pub struct EntityTarget {
+    /// Feature the entity joins, optionally with its own name:
+    /// `posts` (⇒ `Post`) or `posts/comment` (⇒ `Comment`).
+    pub target: String,
+
+    /// Workspace root or working directory (default: auto-discover from cwd).
+    #[arg(long, short = 'p')]
+    pub path: Option<PathBuf>,
+
+    /// Print what would be written without touching the filesystem.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 /// `g auth` takes no name — a workspace has exactly one auth adapter.
 #[derive(Args, Debug)]
 pub struct AuthTarget {
@@ -166,6 +197,13 @@ pub enum GenerateCommand {
     Feature(GenTarget),
     /// A DB-backed CRUD slice (entity + CrudService + guarded HTTP adapter).
     Resource(GenTarget),
+    /// One `#[expose]` entity in an existing feature, without the CRUD slice.
+    ///
+    /// Placement follows the feature: its first entity is the lone `entity.rs`,
+    /// and a feature already keeping several in `entities/` gets one more file
+    /// there. The name after the slash is the entity's own — `g entity posts`
+    /// writes `Post`, `g entity posts/comment` writes `Comment`.
+    Entity(EntityTarget),
     /// The app's authn/authz adapter (Claims, AuthnGuard, AppAbility, AuthzGuard).
     Auth(AuthTarget),
     /// A SeaORM migration, registered in both lib.rs and migrator.rs.
@@ -220,6 +258,7 @@ pub fn run(cli: Cli) -> CliResult<()> {
             print_about();
             Ok(())
         }
+        Command::Info { path } => commands::run_info(commands::InfoOptions { path }),
         Command::Update {
             from_path,
             workspace,
@@ -246,6 +285,11 @@ fn run_generate(cmd: GenerateCommand) -> CliResult<()> {
         }),
         Resource(t) => commands::run_resource(commands::ResourceOptions {
             name: t.name,
+            path: t.path,
+            dry_run: t.dry_run,
+        }),
+        Entity(t) => commands::run_entity(commands::EntityOptions {
+            target: t.target,
             path: t.path,
             dry_run: t.dry_run,
         }),

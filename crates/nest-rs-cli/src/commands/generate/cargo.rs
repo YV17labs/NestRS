@@ -122,6 +122,14 @@ pub fn resource_deps() -> Vec<&'static Dep> {
     vec![&SEAORM, &RESOURCE, &AUTHZ, &SEA_ORM, &SERDE]
 }
 
+/// The crates one `#[expose]`d entity needs, and no more — [`resource_deps`]
+/// without `authz`, which belongs to the `#[crud]` controller rather than to the
+/// entity. `seaorm` is the entity's own: `soft_delete` expands to the
+/// `SoftDeletable` impl that crate declares.
+pub fn entity_deps() -> Vec<&'static Dep> {
+    vec![&SEAORM, &RESOURCE, &SEA_ORM, &SERDE]
+}
+
 /// The crates the authn/authz adapter (`g auth`) needs.
 pub fn auth_deps() -> Vec<&'static Dep> {
     vec![&AUTHN, &AUTHZ, &SERDE, &UUID]

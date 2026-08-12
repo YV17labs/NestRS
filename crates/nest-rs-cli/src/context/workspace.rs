@@ -106,16 +106,105 @@ impl NestrsWorkspace {
     }
 }
 
-fn read_workspace(dir: &Path) -> CliResult<Option<NestrsWorkspace>> {
+/// A single-crate nestrs project — what `nestrs new --standalone` writes: a
+/// `[package]` manifest naming the umbrella, with no `apps/` and no shared
+/// feature library.
+///
+/// Only ever asked for once [`NestrsWorkspace::discover`] has answered `None`.
+/// A crate *inside* a workspace is a member, not a project, and reporting it as
+/// one would answer "where am I" with the wrong root.
+#[derive(Debug, Clone)]
+pub struct StandaloneCrate {
+    pub root: PathBuf,
+    /// The manifest's `[package] name` — the project's own name.
+    pub name: String,
+}
+
+impl StandaloneCrate {
+    pub fn discover(start: &Path) -> CliResult<Option<Self>> {
+        let mut dir = start.canonicalize().map_err(CliError::Io)?;
+        loop {
+            if let Some(found) = read_standalone(&dir)? {
+                return Ok(Some(found));
+            }
+            if !dir.pop() {
+                return Ok(None);
+            }
+        }
+    }
+}
+
+fn read_standalone(dir: &Path) -> CliResult<Option<StandaloneCrate>> {
+    let Some(doc) = read_manifest(dir)? else {
+        return Ok(None);
+    };
+    let Some(package) = doc.get("package").and_then(Item::as_table) else {
+        return Ok(None);
+    };
+    // The umbrella is what makes it a *nestrs* crate rather than any Rust crate
+    // the cursor happens to sit in — the same single-dependency install surface
+    // every scaffold writes.
+    if dependency(&doc, &["dependencies"], "nest-rs").is_none() {
+        return Ok(None);
+    }
+    Ok(Some(StandaloneCrate {
+        root: dir.to_path_buf(),
+        name: package
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_owned(),
+    }))
+}
+
+/// The `nest-rs` version requirement a manifest pins — the framework line the
+/// project builds against, which is not necessarily the one this CLI would
+/// scaffold ([`crate::version::framework_req`]).
+///
+/// `None` covers both "no `nest-rs` entry" and an entry carrying no version (a
+/// `path` dependency in a contributor's tree): neither is a requirement to
+/// report, and inventing one would be worse than saying nothing.
+pub fn framework_pin(manifest_dir: &Path) -> CliResult<Option<String>> {
+    let Some(doc) = read_manifest(manifest_dir)? else {
+        return Ok(None);
+    };
+    let entry = dependency(&doc, &["workspace", "dependencies"], "nest-rs")
+        .or_else(|| dependency(&doc, &["dependencies"], "nest-rs"));
+    Ok(entry.and_then(|item| match item.as_str() {
+        Some(literal) => Some(literal.to_owned()),
+        None => item
+            .get("version")
+            .and_then(Item::as_str)
+            .map(str::to_owned),
+    }))
+}
+
+/// One dependency entry, from a table reached by `path`.
+fn dependency(doc: &DocumentMut, path: &[&str], name: &str) -> Option<Item> {
+    let mut table = doc.as_table().get(path.first()?)?;
+    for key in &path[1..] {
+        table = table.get(key)?;
+    }
+    table.get(name).cloned()
+}
+
+/// A directory's `Cargo.toml`, parsed. `None` when there is none.
+fn read_manifest(dir: &Path) -> CliResult<Option<DocumentMut>> {
     let manifest = dir.join("Cargo.toml");
     if !manifest.is_file() {
         return Ok(None);
     }
-
     let source = std::fs::read_to_string(&manifest).map_err(CliError::Io)?;
-    let doc = source
+    source
         .parse::<DocumentMut>()
-        .map_err(|e| CliError::Anyhow(e.into()))?;
+        .map(Some)
+        .map_err(|e| CliError::Anyhow(e.into()))
+}
+
+fn read_workspace(dir: &Path) -> CliResult<Option<NestrsWorkspace>> {
+    let Some(doc) = read_manifest(dir)? else {
+        return Ok(None);
+    };
 
     let Some(workspace) = doc.get("workspace").and_then(Item::as_table) else {
         return Ok(None);

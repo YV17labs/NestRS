@@ -15,7 +15,14 @@ harness.
 
 - **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives
   HTTP/GraphQL/OpenAPI/MCP through poem's `TestClient` (re-exported),
-  no socket. The default e2e entry point.
+  no socket. The default e2e entry point. **It boots the transport the
+  app's own `HttpModule::for_root(cfg)` describes**, through
+  `HttpTransport::from_config` — the same call the module's
+  `TransportContribution` makes. So pin an `HttpConfig` on the module to
+  test a non-default prefix, versioning strategy, body cap or timeout;
+  `TestAppBuilder::http(t)` is for a transport the app does *not*
+  declare. It built a bare transport once, and a suite asserting
+  `/widgets` shipped an app serving `/api/widgets`.
 - **`override_dyn` / `override_value`** on the builder — swap a
   provider for a test double at build time. Never for the DB —
   mocking the database in e2e is a hard no.

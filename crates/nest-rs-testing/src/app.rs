@@ -10,13 +10,26 @@ use nest_rs_core::{App, AppBuilder, Container, Module, Transport};
 use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, ExceptionFilterSpec};
 use nest_rs_filters::{AppBuilderFiltersExt, FilterSpec};
 use nest_rs_guards::{AppBuilderGuardsExt, AppBuilderPipesExt, GuardSpec, PipeSpec};
-use nest_rs_http::HttpTransport;
+use nest_rs_http::{HttpConfig, HttpTransport};
 use nest_rs_interceptors::{AppBuilderInterceptorsExt, InterceptorSpec};
 use poem::Response;
 use poem::endpoint::BoxEndpoint;
 use poem::test::TestClient;
 
 use crate::headless::HeadlessApp;
+
+/// The transport the app's own `HttpModule::for_root(cfg)` would run, built from
+/// the very `HttpConfig` the container resolved.
+///
+/// `Ok(None)` means the app imports no `HttpModule`, which is legitimate — a
+/// suite may drive controllers through a bare transport — and only then does the
+/// harness fall back to a default.
+fn http_from_config(container: &Container) -> Result<Option<HttpTransport>> {
+    match container.get::<HttpConfig>() {
+        Some(cfg) => Ok(Some(HttpTransport::from_config(&cfg)?)),
+        None => Ok(None),
+    }
+}
 
 type TestEndpoint = BoxEndpoint<'static, Response>;
 
@@ -153,8 +166,13 @@ impl TestAppBuilder {
         self
     }
 
-    /// Supply a pre-configured [`HttpTransport`] instead of the default — e.g.
-    /// to set a non-default `HttpConfig` the test asserts against.
+    /// Supply an [`HttpTransport`] instead of the one the app's own
+    /// `HttpModule::for_root(cfg)` contributes.
+    ///
+    /// Reach for it only when the test needs a transport the app does **not**
+    /// declare. To assert against a non-default `HttpConfig`, pin it on the
+    /// module — the harness now boots what that config describes, so the test
+    /// and the deployment cannot diverge.
     pub fn http(mut self, transport: HttpTransport) -> Self {
         self.http = Some(transport);
         self
@@ -211,7 +229,18 @@ impl TestAppBuilder {
     /// registry populate), and hand back a ready [`TestApp`].
     pub async fn build(self) -> Result<TestApp> {
         let app = self.inner.build().await?;
-        let mut transport = self.http.unwrap_or_default();
+        // The transport the app's own `HttpModule::for_root(cfg)` contributed,
+        // exactly as `App::run` resolves it — not a fresh `HttpTransport::new()`.
+        //
+        // A default one ignores every field the module configured: the global
+        // prefix, the versioning strategy, the body cap, the request timeout,
+        // CORS, compression, the security headers. A suite built on it asserted
+        // against a transport the deployment never runs, which is the failure
+        // mode e2e exists to catch — so the harness has to boot what ships.
+        let mut transport = match self.http {
+            Some(explicit) => explicit,
+            None => http_from_config(app.container())?.unwrap_or_default(),
+        };
         transport.configure(app.container()).await?;
         // Drive the same startup the server performs (`App::run` configures the
         // transport, then runs the init phases). Without this, modules whose

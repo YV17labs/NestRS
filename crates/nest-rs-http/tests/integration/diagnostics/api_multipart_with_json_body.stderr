@@ -1,0 +1,5 @@
+error: a route has one request body, and this handler declares two: `#[api(multipart = …)]` and a `Json<…>` extractor — keep one
+  --> tests/integration/diagnostics/api_multipart_with_json_body.rs:25:50
+   |
+25 |     async fn create(&self, body: poem::web::Json<CreatePost>) -> String {
+   |                                                  ^^^^^^^^^^

@@ -4,7 +4,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Expr, FnArg, ImplItem, LitStr, Path, ReturnType, Token, Type, parse_quote};
 
@@ -29,8 +29,15 @@ struct RouteHandler {
     filters: Vec<Path>,
     /// `#[use_interceptors]` paths on the method.
     interceptors: Vec<Path>,
-    /// The `Authorize<_, _>` / `Bind<_, _>` shaper type, if any.
-    shaper: Option<Type>,
+    /// Every declared parameter type, in order — the input the compiler
+    /// answers "is this a response shaper?" for. Arming is type-directed, so
+    /// this list, not a name, is what decides.
+    param_types: Vec<Type>,
+    /// A parameter whose type is *spelled* `Authorize<..>` / `Bind<..>`, kept
+    /// only for the eager HTTP-D1 diagnostic — a type wearing that name and
+    /// not implementing the shaper trait is a spanned compile error rather
+    /// than a route that quietly arms nothing.
+    named_shaper: Option<Type>,
     /// Whether the handler declares any extractor parameter. `false` proves
     /// no masking extractor can ever run — the run-time mask probe is dead
     /// weight and is not emitted.
@@ -47,6 +54,9 @@ struct RouteHandler {
     pipes: Vec<Path>,
     /// `#[use_exception_filters]` paths on the method.
     exception_filters: Vec<Path>,
+    /// `#[version("2")]` on the method — the subset of the controller's
+    /// versions this route serves. Empty means all of them.
+    versions: Vec<LitStr>,
 }
 
 /// Handlers grouped by path in first-seen order. Several verbs may share a
@@ -54,7 +64,17 @@ struct RouteHandler {
 /// same path, so they must collapse into one `RouteMethod` (`get(h1).post(h2)`).
 type RoutesByPath = Vec<(LitStr, Vec<RouteHandler>)>;
 
-pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
+    // The impl half collects; it declares nothing. Taking an argument list and
+    // dropping it is the defect `#[processor]` and `#[scheduled]` were fixed
+    // for, and this is the likeliest place of all to reach for `version` —
+    // `#[controller]`, one line up, does declare one.
+    if let Err(err) = crate::controller::HTTP_PAIR.reject_args(
+        &TokenStream2::from(args),
+        "a controller's `path` and `version` are declared by",
+    ) {
+        return err.to_compile_error().into();
+    }
     let mut item = match crate::controller::HTTP_PAIR.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
@@ -67,6 +87,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let ctrl_tag = LitStr::new(&ctrl_name.to_string(), ctrl_name.span());
+    // The controller half of an OpenAPI `operationId`, computed here because
+    // this is where the type name is: a runtime crate cannot reach
+    // `nest_rs_codegen` without dragging `syn` into every app's dependency
+    // graph, and the document is rebuilt on every `/api-json` request.
+    let ctrl_token = LitStr::new(&controller_token(&ctrl_name.to_string()), ctrl_name.span());
 
     let mut wrappers: Vec<TokenStream2> = Vec::new();
     let mut routes_by_path: RoutesByPath = Vec::new();
@@ -180,6 +205,13 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
+        // `#[version("2")]` narrows this route to a subset of the controller's
+        // versions — the "v2 adds one endpoint" case, which otherwise costs a
+        // whole second controller.
+        let method_versions = match take_version_attr(&mut method.attrs) {
+            Ok(versions) => versions,
+            Err(err) => return err.to_compile_error().into(),
+        };
         // `#[no_pipes]` opts out of every global pipe for this route.
         let no_pipes = take_flag_attr(&mut method.attrs, "no_pipes");
         // Internal marker the `#[crud]` macro stamps on its write ops (create /
@@ -320,8 +352,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
-        // Detected by name so this crate stays free of any dep on the authz crate.
-        let shaper = shaper_type(&inputs);
+        // Which parameter arms the shaper is the compiler's answer, not this
+        // crate's: it collects the types and emits the selection, which keeps
+        // it free of any dep on the authz crate *and* immune to a rename.
+        let param_types = param_types(&inputs);
+        let shaper_selection = shaper_selection(&param_types);
 
         let handler = RouteHandler {
             verb: verb_ident.clone(),
@@ -329,7 +364,8 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             guards,
             filters,
             interceptors,
-            shaper: shaper.clone(),
+            param_types: param_types.clone(),
+            named_shaper: named_shaper_type(&inputs),
             has_extractors: !inputs.is_empty(),
             metas,
             is_public,
@@ -337,6 +373,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             force_guards,
             pipes: method_pipes,
             exception_filters: method_exception_filters,
+            versions: method_versions.clone(),
         };
         match routes_by_path
             .iter_mut()
@@ -393,11 +430,71 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             quote! { &[#(#tags),*] }
         };
 
-        let request_body = match request_payload(&inputs) {
-            Some(ty) => quote! {
-                ::core::option::Option::Some(::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn)
+        // The body, as one value pairing its media type with its schema — a
+        // `Json<T>` extractor, `#[api(multipart = T)]` naming the parts of a
+        // form, or a bare `Multipart` parameter whose parts no type states.
+        let json_body = first_extractor_payload(&inputs, "Json");
+        let form_body = first_extractor_payload(&inputs, "Form");
+        // A route has one request body, so the three ways to declare one are
+        // mutually exclusive. Asked as one table rather than as a check per
+        // pair: the pairs grow quadratically with the ways, and the third way
+        // (`Form<T>`) arrived without the two checks it owed.
+        let declared: Vec<(&str, &dyn ToTokens)> = [
+            api.multipart
+                .as_ref()
+                .map(|ty| ("`#[api(multipart = …)]`", ty as &dyn ToTokens)),
+            json_body
+                .as_ref()
+                .map(|ty| ("a `Json<…>` extractor", ty as &dyn ToTokens)),
+            form_body
+                .as_ref()
+                .map(|ty| ("a `Form<…>` extractor", ty as &dyn ToTokens)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if let [(first, _), (second, tokens)] = declared[..] {
+            return syn::Error::new_spanned(
+                tokens,
+                format!(
+                    "a route has one request body, and this handler declares two: {first} and \
+                     {second} — keep one",
+                ),
+            )
+            .to_compile_error()
+            .into();
+        }
+        let request_body = match (&api.multipart, &json_body) {
+            (Some(ty), _) => quote! {
+                ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Multipart(
+                    ::core::option::Option::Some(
+                        ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
+                    ),
+                ))
             },
-            None => quote! { ::core::option::Option::None },
+            (None, Some(ty)) => quote! {
+                ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Json(
+                    ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
+                ))
+            },
+            // A handler pulling the parts itself still declares the media type
+            // it accepts: silence would document no body at all.
+            (None, None) if takes_multipart(&inputs) => quote! {
+                ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Multipart(
+                    ::core::option::Option::None,
+                ))
+            },
+            // `Form<T>` is a body like the other two, and matching only `Json`
+            // and `Multipart` documented a form-encoded route as taking none —
+            // silently, since nothing refused the shape either.
+            (None, None) => match &form_body {
+                Some(ty) => quote! {
+                    ::core::option::Option::Some(::nest_rs_http::RequestBodyMeta::Form(
+                        ::nest_rs_http::schema_of::<#ty> as ::nest_rs_http::SchemaFn,
+                    ))
+                },
+                None => quote! { ::core::option::Option::None },
+            },
         };
         // The payload the document advertises: `#[api(response = T)]` when the
         // handler states it, else the `Json<T>` the return type carries.
@@ -418,7 +515,23 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             },
             None => quote! { ::core::option::Option::None },
         };
-        let masked = shaper.is_some();
+        // The media type of what comes *back*, when it is not JSON. Declared by
+        // `#[api(response_content_type = "...")]`, else read off an `-> SSE`
+        // return: poem serializes that one type as `text/event-stream` and
+        // nothing else, so inferring it states what the framework emits rather
+        // than guessing — the same reading that already infers `response` from
+        // a `Json<T>` return. A declaration always wins.
+        let response_content_type = match &api.response_content_type {
+            Some(lit) => quote! { ::core::option::Option::Some(#lit) },
+            None if returns_sse(&method.sig.output) => {
+                quote! { ::core::option::Option::Some("text/event-stream") }
+            }
+            None => quote! { ::core::option::Option::None },
+        };
+        // Read off the same type-directed selection the route arms with, so the
+        // document cannot claim an unmasked body for a shaper spelled under an
+        // alias.
+        let masked = quote! { #shaper_selection.is_some() };
 
         // `Path<T>` extractor types (in path order) and `Query<T>` payload
         // types — the OpenAPI doc turns the former into real path-param schemas
@@ -431,12 +544,44 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
         } else {
             quote! { &[#(::nest_rs_http::schema_of::<#path_param_tys> as ::nest_rs_http::SchemaFn),*] }
         };
-        let query_param_tys = query_payloads(&inputs);
+        let query_param_tys = extractor_payloads(&inputs, "Query");
         let query_params = if query_param_tys.is_empty() {
             quote! { &[] }
         } else {
             quote! { &[#(::nest_rs_http::schema_of::<#query_param_tys> as ::nest_rs_http::SchemaFn),*] }
         };
+        // `Header<T>` payloads, expanded by the document exactly as `Query<T>`
+        // is — one parameter per property, `required` off the schema.
+        let header_param_tys = extractor_payloads(&inputs, "Header");
+        let header_params = if header_param_tys.is_empty() {
+            quote! { &[] }
+        } else {
+            quote! { &[#(::nest_rs_http::schema_of::<#header_param_tys> as ::nest_rs_http::SchemaFn),*] }
+        };
+
+        let route_versions = quote! { &[#(#method_versions),*] };
+        // A `#[version]` naming something the controller never declared would
+        // otherwise mount nowhere — the transport loops over the *controller's*
+        // versions — so the route would compile, register, appear in the
+        // document, and answer nothing. Assert the subset at the route, in a
+        // `const`, so a typo is a compile error where it was typed.
+        if let Some(first) = method_versions.first() {
+            let span = first.span();
+            let message = LitStr::new(
+                &format!(
+                    "`#[version]` on `{}` names a version its `#[controller]` does not declare \
+                     — add it to `#[controller(version = [..])]` or fix the spelling",
+                    method_name_lit,
+                ),
+                span,
+            );
+            wrappers.push(quote_spanned! {span=>
+                const _: () = ::core::assert!(
+                    ::nest_rs_http::versions_declare(<#self_ty>::VERSIONS, #route_versions),
+                    #message,
+                );
+            });
+        }
 
         route_metas.push(quote! {
             ::nest_rs_http::HttpRouteMeta {
@@ -448,9 +593,11 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 tags: #tags,
                 request_body: #request_body,
                 response: #response,
+                response_content_type: #response_content_type,
                 masked: #masked,
                 path_params: #path_params,
                 query_params: #query_params,
+                header_params: #header_params,
                 may_conflict: #may_conflict,
                 throttled: #method_throttled
                     || <#self_ty>::__nestrs_controller_has_throttler(),
@@ -459,6 +606,7 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 scoped_guarded: #method_guarded
                     || !<#self_ty>::__nestrs_controller_guard_specs().is_empty(),
                 public: #is_public,
+                versions: #route_versions,
             }
         });
     }
@@ -485,22 +633,53 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let injected_methods = injected_methods_with_layers(&self_ty, &route_layers);
 
+    // One entry per path, built *inside* the per-version loop below: a
+    // controller declaring `version = ["1", "2"]` mounts the same handlers at
+    // two prefixes, and a `#[version]`-narrowed verb drops out of the versions
+    // it does not serve. Each verb is therefore added conditionally, and the
+    // path is claimed only if at least one verb survived — an empty
+    // `RouteMethod` at a path answers `405`, which is a worse lie than `404`.
     let route_entries: Vec<TokenStream2> = routes_by_path
         .iter()
         .map(|(path, handlers)| {
-            let mut iter = handlers.iter();
-            let first = iter.next().expect("each path has at least one verb");
-            let first_label = format!("{} {}", first.verb, path.value());
-            let first_ep = guarded_handler(first, &first_label, &self_ty);
-            let first_verb = &first.verb;
-            let mut method = quote! { ::nest_rs_http::poem::#first_verb(#first_ep) };
-            for handler in iter {
-                let label = format!("{} {}", handler.verb, path.value());
-                let ep = guarded_handler(handler, &label, &self_ty);
-                let verb = &handler.verb;
-                method = quote! { #method.#verb(#ep) };
+            let arms: Vec<TokenStream2> = handlers
+                .iter()
+                .map(|handler| {
+                    let label = format!("{} {}", handler.verb, path.value());
+                    let ep = guarded_handler(handler, &label, &self_ty);
+                    let verb = &handler.verb;
+                    let versions = &handler.versions;
+                    let serves = if versions.is_empty() {
+                        quote! { true }
+                    } else {
+                        quote! {
+                            match __version {
+                                ::core::option::Option::Some(__v) => {
+                                    [#(#versions),*].contains(&__v)
+                                }
+                                ::core::option::Option::None => true,
+                            }
+                        }
+                    };
+                    quote! {
+                        if #serves {
+                            __method = __method.#verb(#ep);
+                            __any = true;
+                        }
+                    }
+                })
+                .collect();
+            quote! {
+                {
+                    let mut __method = ::nest_rs_http::poem::RouteMethod::new();
+                    let mut __any = false;
+                    #(#arms)*
+                    if __any {
+                        __route = __route
+                            .at(::nest_rs_http::join_path(&__prefix, #path), __method);
+                    }
+                }
             }
-            quote! { .at(::nest_rs_http::join_path(&__prefix, #path), #method) }
         })
         .collect();
 
@@ -523,9 +702,24 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
                 route: ::nest_rs_http::poem::Route,
             ) -> ::nest_rs_http::poem::Route {
                 let __ctrl = ::std::sync::Arc::new(<#self_ty>::from_container(container));
-                let __prefix = ::nest_rs_http::version_path(<#self_ty>::VERSION, <#self_ty>::PATH);
-                route
+                let mut __route = route;
+                // `[None]` for an unversioned controller: it still mounts, at
+                // one address. Iterating an empty list would unmount it.
+                let __versions: ::std::vec::Vec<::core::option::Option<&'static str>> =
+                    if <#self_ty>::VERSIONS.is_empty() {
+                        ::std::vec![::core::option::Option::None]
+                    } else {
+                        <#self_ty>::VERSIONS
+                            .iter()
+                            .map(|__v| ::core::option::Option::Some(*__v))
+                            .collect()
+                    };
+                for __version in __versions {
+                    let __prefix =
+                        ::nest_rs_http::version_path(__version, <#self_ty>::PATH);
                     #(#route_entries)*
+                }
+                __route
             }
         }
 
@@ -540,8 +734,9 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
             ) -> ::nest_rs_core::ContainerBuilder {
                 let __meta = ::nest_rs_http::HttpControllerMeta::new(
                     #ctrl_tag,
+                    #ctrl_token,
                     <#self_ty>::PATH,
-                    <#self_ty>::VERSION,
+                    <#self_ty>::VERSIONS,
                     ::std::vec![#(#route_metas),*],
                     |__c, __r| <#self_ty as ::nest_rs_http::Controller>::mount(__c, __r),
                 );
@@ -570,6 +765,27 @@ pub(crate) fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
 struct AuthorizeSpec {
     action: Path,
     entity: Path,
+}
+
+/// Take `#[version("2")]` / `#[version("1", "2")]` off a route method.
+fn take_version_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<LitStr>> {
+    let Some(pos) = attrs.iter().position(|a| a.path().is_ident("version")) else {
+        return Ok(Vec::new());
+    };
+    let attr = attrs.remove(pos);
+    if let Some(second) = attrs.iter().find(|a| a.path().is_ident("version")) {
+        return Err(syn::Error::new_spanned(
+            second,
+            "a route declares its versions in one `#[version(...)]`, listing them together",
+        ));
+    }
+    let listed = attr.parse_args_with(Punctuated::<LitStr, Token![,]>::parse_terminated)?;
+    let elems: Punctuated<Expr, Token![,]> = listed
+        .into_iter()
+        .map(|lit| -> Expr { parse_quote!(#lit) })
+        .collect();
+    let array: Expr = parse_quote!([#elems]);
+    nest_rs_codegen::versioning::parse_version_list(&array, "#[version]")
 }
 
 /// Take `#[authorize(Action, Entity)]` off a route method.
@@ -605,7 +821,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
 
 /// The extractor `#[authorize(Action, Entity)]` desugars to — the same
 /// parameter `#[crud]` emits on its generated ops, so both paths arm the class
-/// gate, the response mask and the `MaskProbe` through one mechanism.
+/// gate and the response mask through one mechanism.
 fn authorize_param(spec: &AuthorizeSpec, inputs: &[FnArg]) -> syn::Result<FnArg> {
     if let Some(param) = inputs.iter().find(|arg| is_authorize_param(arg)) {
         return Err(syn::Error::new_spanned(
@@ -631,15 +847,45 @@ fn is_authorize_param(arg: &FnArg) -> bool {
     tp.path.segments.iter().any(|s| s.ident == "Authorize")
 }
 
-/// Response shaper type: `Authorize<A, S>` or `Bind<S, A>` anywhere in the
-/// handler parameter list, matched by path-segment **name** (any module
-/// qualification works; a *renamed* import does not). `#[authorize(...)]` is
-/// immune — the macro inserts that parameter itself, fully qualified, at
-/// position 0. The residual blind spot (a hand-written, renamed `Bind`) is
-/// closed at run time: unarmed routes carry `nest_rs_http::mask_probed`, which
-/// fails the request closed when a masking extractor runs without an armed
-/// shaper.
-fn shaper_type(inputs: &[FnArg]) -> Option<Type> {
+/// The handler's declared parameter types, in order.
+fn param_types(inputs: &[FnArg]) -> Vec<Type> {
+    inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            FnArg::Typed(pt) => Some((*pt.ty).clone()),
+            FnArg::Receiver(_) => None,
+        })
+        .collect()
+}
+
+/// The route's response shaper, selected **by type**: each parameter type is
+/// handed to `nest_rs_http::ShaperProbe`, whose two arms the compiler picks
+/// between after name resolution. The first parameter that is a
+/// `RouteResponseShaper` arms the route; every other type answers `None`.
+///
+/// This is what makes the arm alias-proof — `use Authorize as Az` changes the
+/// spelling, not the type, and the spelling is no longer part of the question.
+fn shaper_selection(param_types: &[Type]) -> TokenStream2 {
+    if param_types.is_empty() {
+        return quote! { ::core::option::Option::<::nest_rs_http::CaptureFn>::None };
+    }
+    quote! {{
+        let mut __nestrs_shaper: ::core::option::Option<::nest_rs_http::CaptureFn> =
+            ::core::option::Option::None;
+        #(
+            if __nestrs_shaper.is_none() {
+                __nestrs_shaper = ::nest_rs_http::shaper_of!(#param_types);
+            }
+        )*
+        __nestrs_shaper
+    }}
+}
+
+/// A parameter *spelled* `Authorize<..>` / `Bind<..>`, for the HTTP-D1
+/// diagnostic only. Arming no longer depends on it (see [`shaper_selection`]):
+/// this exists so a type wearing the name but not implementing the trait is a
+/// spanned compile error instead of a route that silently arms nothing.
+fn named_shaper_type(inputs: &[FnArg]) -> Option<Type> {
     inputs.iter().find_map(|arg| {
         let FnArg::Typed(pt) = arg else { return None };
         let Type::Path(tp) = pt.ty.as_ref() else {
@@ -682,11 +928,13 @@ fn shaper_param_type(tp: &syn::TypePath) -> bool {
 fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) -> TokenStream2 {
     let RouteHandler {
         verb: _,
+        versions: _,
         wrapper,
         guards,
         filters,
         interceptors,
-        shaper,
+        param_types,
+        named_shaper,
         has_extractors,
         metas,
         is_public,
@@ -700,32 +948,37 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     // is in scope — the wrapper endpoint captures the controller `Arc`
     // directly instead of reading it back through a `Data` extension.
     let wrapper_expr = quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl) } };
-    // An unarmed route carries the run-time mask probe: if a masking extractor
-    // (`Authorize`/`Bind` under a rename the name scan cannot see) runs anyway,
-    // the request fails closed instead of shipping an unmasked body. A handler
-    // with no extractor parameters at all cannot run one — renamed or not —
-    // so the probe (a task-local scope per request) is provably dead and is
-    // not emitted.
-    let mut expr = match shaper {
+    // Arming is the compiler's answer over the parameter *types*, so a renamed
+    // import arms exactly like the canonical spelling. What survives from the
+    // old name scan is the run-time probe, now a backstop rather than the net:
+    // it catches a masking extractor reached indirectly (nested inside another
+    // extractor, or a hand-rolled `FromRequest`), which no type-directed scan
+    // of the signature can see. A handler with no extractor parameters at all
+    // cannot run one, so its probe is provably dead and is not emitted.
+    let shaper_selection = shaper_selection(param_types);
+    // HTTP-D1: a parameter *named* `Authorize`/`Bind` that does not implement
+    // the shaper trait would select nothing and arm nothing. Assert it eagerly
+    // so that is a spanned compile error naming the trait, not a silently
+    // unshaped route.
+    let named_shaper_assert = match named_shaper {
         Some(ty) => quote! {
-            {
-                // HTTP-D1: eagerly assert the armed type is a real response
-                // shaper, so a false-positive arm (a parameter whose type is
-                // *named* `Authorize`/`Bind` but does not implement the shaper
-                // trait) is a spanned compile error here — not a confusing
-                // transitive `Endpoint` bound failure when the route mounts, and
-                // not only the run-time `MaskProbe` net.
-                const _: fn() = || {
-                    fn __nestrs_assert_route_shaper<P: ::nest_rs_http::RouteResponseShaper>() {}
-                    __nestrs_assert_route_shaper::<#ty>();
-                };
-                ::nest_rs_http::shaped(#wrapper_expr, ::core::marker::PhantomData::<#ty>)
-            }
+            const _: fn() = || {
+                fn __nestrs_assert_route_shaper<P: ::nest_rs_http::RouteResponseShaper>() {}
+                __nestrs_assert_route_shaper::<#ty>();
+            };
         },
-        None if *has_extractors => {
-            quote! { ::nest_rs_http::mask_probed(#wrapper_expr, #route_label_lit) }
+        None => quote! {},
+    };
+    let probe = if *has_extractors {
+        quote! { ::core::option::Option::Some(#route_label_lit) }
+    } else {
+        quote! { ::core::option::Option::None }
+    };
+    let mut expr = quote! {
+        {
+            #named_shaper_assert
+            ::nest_rs_http::shaped(#wrapper_expr, #shaper_selection, #probe)
         }
-        None => quote! { #wrapper_expr },
     };
     let method_exception_filter_specs = scoped_specs(
         method_exception_filters,
@@ -823,12 +1076,22 @@ struct ApiMeta {
     /// (the `#[crud]` paginated list, which carries `x-next-cursor`) returns
     /// no `Json<T>` for the macro to read.
     response: Option<Type>,
+    /// `#[api(multipart = T)]` — the type describing the parts of a
+    /// `multipart/form-data` body. No extractor states them: a handler reads
+    /// the parts one at a time (or through its own `FromRequest`), so the form's
+    /// shape is declared rather than inferred.
+    multipart: Option<Type>,
+    /// `#[api(response_content_type = "audio/mpeg")]` — the media type of a
+    /// success body that is not JSON, for a handler that builds its own
+    /// `Response` (a streamed download, a rendered file).
+    response_content_type: Option<LitStr>,
 }
 
 /// What `#[api]` accepts, in the error every rejection quotes. One `const` so
 /// the list cannot be worded two ways.
 const API_KEYS: &str = "#[api] accepts `summary = \"...\"`, `description = \"...\"`, \
-                        `tags(\"a\", \"b\")`, and `response = Type`";
+                        `tags(\"a\", \"b\")`, `response = Type`, `multipart = Type`, \
+                        and `response_content_type = \"type/subtype\"`";
 
 /// Parse `#[api(...)]` straight into [`ApiMeta`].
 ///
@@ -857,6 +1120,16 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                     input.parse::<Token![=]>()?;
                     out.response = Some(input.parse()?);
                 }
+                "multipart" => {
+                    input.parse::<Token![=]>()?;
+                    out.multipart = Some(input.parse()?);
+                }
+                "response_content_type" => {
+                    input.parse::<Token![=]>()?;
+                    let lit = expr_str(&input.parse::<Expr>()?)?;
+                    check_media_type(&lit)?;
+                    out.response_content_type = Some(lit);
+                }
                 "tags" => {
                     let content;
                     syn::parenthesized!(content in input);
@@ -879,41 +1152,44 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
     })
 }
 
-/// The JSON payload type behind an extractor: `Json<T>`, `Valid<Json<T>>`, and
-/// `Piped<_, Json<T>>` all yield `T`. Non-JSON yields `None`.
-fn json_payload(ty: &Type) -> Option<Type> {
-    if let Some(t) = nth_generic_type(ty, "Json", 0) {
-        return Some(t.clone());
+/// The payload type behind an extractor named `name`: `Name<T>`,
+/// `Valid<Name<T>>` and `Piped<_, Name<T>>` all yield `T`; anything else yields
+/// `None`.
+///
+/// One reader for every extractor the document describes. It was five —
+/// `Json`, `Form`, `Path`, `Query`, `Header` — byte-identical apart from the
+/// name, and the cost was not the line count: the two carriers are the
+/// framework's pipe grammar, so a change to them (or a sixth extractor) had to
+/// land in five places or silently miss one. That is exactly how `Form` came to
+/// be absent from the request-body match while every other extractor was read.
+fn extractor_payload(ty: &Type, name: &str) -> Option<Type> {
+    if let Some(payload) = nth_generic_type(ty, name, 0) {
+        return Some(payload.clone());
     }
     if let Some(inner) = nth_generic_type(ty, "Valid", 0) {
-        return json_payload(inner);
+        return extractor_payload(inner, name);
     }
     if let Some(inner) = nth_generic_type(ty, "Piped", 1) {
-        return json_payload(inner);
+        return extractor_payload(inner, name);
     }
     None
 }
 
-fn request_payload(inputs: &[FnArg]) -> Option<Type> {
-    inputs.iter().find_map(|arg| match arg {
-        FnArg::Typed(pt) => json_payload(&pt.ty),
-        _ => None,
-    })
+/// Every `Name<T>` payload in the handler signature, in argument order.
+fn extractor_payloads(inputs: &[FnArg], name: &str) -> Vec<Type> {
+    inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            FnArg::Typed(pt) => extractor_payload(&pt.ty, name),
+            _ => None,
+        })
+        .collect()
 }
 
-/// The type inside a `Path<T>` extractor: `Path<T>`, `Valid<Path<T>>`, and
-/// `Piped<_, Path<T>>` all yield `T`. Non-`Path` yields `None`.
-fn path_payload(ty: &Type) -> Option<Type> {
-    if let Some(t) = nth_generic_type(ty, "Path", 0) {
-        return Some(t.clone());
-    }
-    if let Some(inner) = nth_generic_type(ty, "Valid", 0) {
-        return path_payload(inner);
-    }
-    if let Some(inner) = nth_generic_type(ty, "Piped", 1) {
-        return path_payload(inner);
-    }
-    None
+/// The first `Name<T>` payload in the handler signature — for the extractors a
+/// route may only bind once (a request body).
+fn first_extractor_payload(inputs: &[FnArg], name: &str) -> Option<Type> {
+    extractor_payloads(inputs, name).into_iter().next()
 }
 
 /// The path-parameter types a handler binds, in path order. A single
@@ -922,42 +1198,69 @@ fn path_payload(ty: &Type) -> Option<Type> {
 /// `Path<…>` extractor (it binds its id via `Bind<_, _>` instead) yields an
 /// empty vec — the doc then guesses `format: uuid` for id-like segments.
 fn path_param_types(inputs: &[FnArg]) -> Vec<Type> {
-    for arg in inputs {
-        let FnArg::Typed(pt) = arg else { continue };
-        if let Some(inner) = path_payload(&pt.ty) {
-            return match inner {
-                Type::Tuple(tuple) => tuple.elems.into_iter().collect(),
-                other => vec![other],
-            };
+    match first_extractor_payload(inputs, "Path") {
+        Some(Type::Tuple(tuple)) => tuple.elems.into_iter().collect(),
+        Some(other) => vec![other],
+        None => Vec::new(),
+    }
+}
+
+/// Whether a type's last path segment is `name` — the same lightweight,
+/// resolution-free match `guard_path_is_throttler` and `result_inner` make. It
+/// is what lets a handler binding poem's `Multipart` (or returning its `SSE`)
+/// be recognized without this crate depending on poem's types.
+fn last_segment_is(ty: &Type, name: &str) -> bool {
+    matches!(ty, Type::Path(tp) if tp.path.segments.last().is_some_and(|s| s.ident == name))
+}
+
+/// Whether the handler pulls the parts itself through poem's `Multipart`.
+/// Such a route accepts `multipart/form-data` and nothing types its parts —
+/// which is a media type worth documenting even with no schema to go with it.
+fn takes_multipart(inputs: &[FnArg]) -> bool {
+    inputs.iter().any(|arg| match arg {
+        FnArg::Typed(pt) => last_segment_is(&pt.ty, "Multipart"),
+        FnArg::Receiver(_) => false,
+    })
+}
+
+/// Whether the handler returns poem's `SSE`, possibly behind a `Result`. poem
+/// serializes that one type as `text/event-stream` and nothing else, so this
+/// reports what the framework emits — the same reading that infers a route's
+/// response schema from a `Json<T>` return.
+fn returns_sse(output: &ReturnType) -> bool {
+    let ReturnType::Type(_, ty) = output else {
+        return false;
+    };
+    last_segment_is(result_inner(ty).unwrap_or(ty), "SSE")
+}
+
+/// A media type keys an OpenAPI `content` map, so a malformed one yields a
+/// document no client can match a response against. Checked where it is
+/// written — `#[api]` has the literal in hand — rather than left to a reader of
+/// the generated document.
+fn check_media_type(lit: &LitStr) -> syn::Result<()> {
+    let value = lit.value();
+    // `text/event-stream; charset=utf-8` is a media type with a parameter; the
+    // `type/subtype` shape is the part that must be well formed.
+    let essence = value.split(';').next().unwrap_or_default().trim();
+    let mut halves = essence.split('/');
+    let well_formed = match (halves.next(), halves.next(), halves.next()) {
+        (Some(ty), Some(subtype), None) => {
+            !ty.is_empty() && !subtype.is_empty() && !essence.chars().any(char::is_whitespace)
         }
+        _ => false,
+    };
+    if !well_formed {
+        return Err(syn::Error::new_spanned(
+            lit,
+            format!(
+                "`response_content_type` takes a media type spelled `type/subtype` \
+                 — e.g. \"application/octet-stream\", \"text/event-stream\" or \
+                 \"audio/mpeg\". `{value}` is not one",
+            ),
+        ));
     }
-    Vec::new()
-}
-
-/// The type inside a `Query<T>` extractor: `Query<T>`, `Valid<Query<T>>`, and
-/// `Piped<_, Query<T>>` all yield `T`. Non-`Query` yields `None`.
-fn query_payload(ty: &Type) -> Option<Type> {
-    if let Some(t) = nth_generic_type(ty, "Query", 0) {
-        return Some(t.clone());
-    }
-    if let Some(inner) = nth_generic_type(ty, "Valid", 0) {
-        return query_payload(inner);
-    }
-    if let Some(inner) = nth_generic_type(ty, "Piped", 1) {
-        return query_payload(inner);
-    }
-    None
-}
-
-/// Every `Query<T>` payload type in the handler signature, in argument order.
-fn query_payloads(inputs: &[FnArg]) -> Vec<Type> {
-    inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            FnArg::Typed(pt) => query_payload(&pt.ty),
-            _ => None,
-        })
-        .collect()
+    Ok(())
 }
 
 /// `Some(T)` when `ty` is `Result<T, _>`, `None` otherwise. Detects the
@@ -1040,6 +1343,99 @@ mod tests {
     }
 
     #[test]
+    fn api_multipart_and_response_content_type_parse_beside_the_rest() {
+        let meta = match api_attr(quote! {
+            summary = "Upload",
+            multipart = crate::dtos::UploadDto,
+            response_content_type = "audio/mpeg"
+        }) {
+            Ok(meta) => meta,
+            Err(err) => panic!("the argument list must parse: {err}"),
+        };
+        let ty = meta.multipart.expect("a multipart type");
+        assert_eq!(
+            quote!(#ty).to_string(),
+            quote!(crate::dtos::UploadDto).to_string(),
+        );
+        assert_eq!(
+            meta.response_content_type.map(|l| l.value()).as_deref(),
+            Some("audio/mpeg"),
+        );
+    }
+
+    // A media type keys the document's `content` map. Rejecting a malformed one
+    // where it is written beats emitting a document whose response no client
+    // can match.
+    #[test]
+    fn a_response_content_type_that_is_not_a_media_type_is_rejected() {
+        for bad in ["octet-stream", "audio/", "/mpeg", "audio / mpeg", "a/b/c"] {
+            let msg = match api_attr(quote! { response_content_type = #bad }) {
+                Ok(_) => panic!("`{bad}` must be rejected"),
+                Err(err) => err.to_string(),
+            };
+            assert!(msg.contains("type/subtype"), "{msg}");
+            assert!(
+                msg.contains(bad),
+                "the error quotes what was written: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_media_type_with_a_parameter_is_accepted() {
+        api_attr(quote! { response_content_type = "text/event-stream; charset=utf-8" })
+            .expect("a parameterized media type is still a media type");
+    }
+
+    #[test]
+    fn sse_is_read_off_the_return_type_bare_or_behind_a_result() {
+        let bare: ReturnType = parse_quote!(-> SSE);
+        let qualified: ReturnType = parse_quote!(-> poem::web::sse::SSE);
+        let behind_result: ReturnType = parse_quote!(-> Result<SSE>);
+        assert!(returns_sse(&bare));
+        assert!(returns_sse(&qualified));
+        assert!(returns_sse(&behind_result));
+
+        let json: ReturnType = parse_quote!(-> Json<Post>);
+        let response: ReturnType = parse_quote!(-> Result<Response>);
+        let nothing = ReturnType::Default;
+        assert!(!returns_sse(&json));
+        assert!(!returns_sse(&response));
+        assert!(!returns_sse(&nothing));
+    }
+
+    #[test]
+    fn a_payload_is_unwrapped_through_the_pipe_carriers() {
+        // The two carriers are the framework's pipe grammar, and they are read
+        // once for every extractor — so a validated or piped DTO documents
+        // itself like a bare one, whichever extractor it sits in.
+        for name in ["Header", "Json", "Form", "Query", "Path"] {
+            let name_ident = format_ident!("{name}");
+            let shapes: [Type; 3] = [
+                parse_quote!(#name_ident<Tracing>),
+                parse_quote!(Valid<#name_ident<Tracing>>),
+                parse_quote!(Piped<Trim, #name_ident<Tracing>>),
+            ];
+            for ty in shapes {
+                let inner = extractor_payload(&ty, name).expect("a payload");
+                assert_eq!(quote!(#inner).to_string(), quote!(Tracing).to_string());
+            }
+            // And an extractor of another name is not this one.
+            assert!(extractor_payload(&parse_quote!(Other<PageParams>), name).is_none());
+        }
+    }
+
+    #[test]
+    fn a_bare_multipart_parameter_is_detected_however_it_is_spelled() {
+        let inputs: Vec<FnArg> = vec![
+            parse_quote!(query: Query<TranscodeDto>),
+            parse_quote!(form: poem::web::Multipart),
+        ];
+        assert!(takes_multipart(&inputs));
+        assert!(!takes_multipart(&[parse_quote!(body: Json<Post>)]));
+    }
+
+    #[test]
     fn an_unknown_api_argument_names_itself_and_the_accepted_set() {
         let msg = match api_attr(quote! { returns = Post }) {
             Ok(_) => panic!("an unknown key must be rejected"),
@@ -1047,5 +1443,34 @@ mod tests {
         };
         assert!(msg.contains("returns"), "{msg}");
         assert!(msg.contains("response = Type"), "{msg}");
+    }
+}
+
+/// The suffix every controller carries by convention, and which therefore says
+/// nothing about *which* controller this is.
+const CONTROLLER_SUFFIX: &str = "Controller";
+
+/// `PostsController` → `posts`. A name that is *only* the suffix keeps it,
+/// because `_list` names nothing.
+fn controller_token(controller: &str) -> String {
+    let stem = controller
+        .strip_suffix(CONTROLLER_SUFFIX)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(controller);
+    nest_rs_codegen::snake_case(stem)
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::controller_token;
+
+    #[test]
+    fn a_controller_is_named_by_what_it_serves() {
+        assert_eq!(controller_token("PostsController"), "posts");
+        assert_eq!(controller_token("HTTPProbeController"), "http_probe");
+        // Not every controller type carries the suffix.
+        assert_eq!(controller_token("Posts"), "posts");
+        // And one that is *only* the suffix keeps it.
+        assert_eq!(controller_token("Controller"), "controller");
     }
 }

@@ -15,13 +15,13 @@
 //! Fails **closed**: a successful JSON body that cannot be reconciled with
 //! `S::Model` yields 500 rather than shipping data unmasked.
 
-use std::future::Future;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
-use nest_rs_http::RouteResponseShaper;
+use nest_rs_http::{ResponseShaping, RouteFuture, RouteResponseShaper};
 use nest_rs_resource::WireModelDefaults;
 use poem::http::StatusCode;
-use poem::{Request, Response, Result};
+use poem::{Request, Response};
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -37,31 +37,126 @@ where
     S: EntityTrait + WireModelDefaults,
     S::Model: DeserializeOwned + Serialize,
 {
-    type Captured = Option<Arc<Ability>>;
-
-    fn capture(req: &Request) -> Self::Captured {
-        req.extensions().get::<Arc<Ability>>().cloned()
+    fn capture(req: &Request) -> Option<Box<dyn ResponseShaping>> {
+        // A missing ability means the extractor already rejected with 500, so
+        // there is nothing to shape.
+        let ability = req.extensions().get::<Arc<Ability>>().cloned()?;
+        Some(Box::new(AbilityShaping::<S>::new(ability, A::ACTION)))
     }
+}
 
-    async fn run<F>(captured: Self::Captured, inner: F) -> Result<Response>
-    where
-        F: Future<Output = Result<Response>> + Send,
-    {
-        // A missing ability means the extractor already rejected with 500.
-        match captured {
-            Some(ability) => {
-                let resp = with_ability(ability.clone(), inner).await?;
-                Ok(mask_entity_response::<S>(&ability, A::ACTION, resp).await)
-            }
-            None => inner.await,
+/// The ambient ability plus the entity's mask, captured off the request and
+/// ready to wrap the handler. Shared by `Authorize<A, S>` and `nest-rs-seaorm`'s
+/// `Bind<A, S>`, which differ only in how they name the entity.
+pub struct AbilityShaping<S> {
+    ability: Arc<Ability>,
+    action: Action,
+    subject: PhantomData<fn() -> S>,
+}
+
+impl<S> AbilityShaping<S> {
+    /// The shaping step for `action` on entity `S`, keyed on the ability the
+    /// guard attached.
+    pub fn new(ability: Arc<Ability>, action: Action) -> Self {
+        Self {
+            ability,
+            action,
+            subject: PhantomData,
         }
     }
 }
 
+impl<S> ResponseShaping for AbilityShaping<S>
+where
+    S: EntityTrait + WireModelDefaults,
+    S::Model: DeserializeOwned + Serialize,
+{
+    fn apply<'a>(self: Box<Self>, inner: RouteFuture<'a>) -> RouteFuture<'a> {
+        Box::pin(async move {
+            let resp = with_ability(self.ability.clone(), inner).await?;
+            Ok(mask_entity_response::<S>(&self.ability, self.action, resp).await)
+        })
+    }
+}
+
+/// What a response's declared media type licenses the shaper to do.
+enum BodyKind {
+    /// A JSON media type — mask it.
+    Json,
+    /// Another media type the handler named. Nothing in it to mask.
+    Other,
+    /// No media type at all, so nothing says which of the two it is.
+    Undeclared,
+}
+
+/// The response's media type read as a **type**, not as a spelling.
+///
+/// The arming is type-directed and cannot be renamed out of, but what it arms
+/// used to decide whether to run by comparing the `Content-Type` against the
+/// literal prefix `application/json`. Three responses that are JSON by the
+/// standard failed that test and shipped every unexposed column:
+///
+/// - `Application/JSON` — RFC 9110 §8.3.1 makes type and subtype
+///   case-insensitive, so this is the *same* media type;
+/// - `application/vnd.api+json`, `application/problem+json` — RFC 6839 makes
+///   `+json` a structured syntax suffix, so these are JSON too;
+/// - a media type carrying parameters, which are not part of the type.
+///
+/// Undeclared is deliberately its own answer rather than folded into `Other`:
+/// passing a body through because it *named* a non-JSON type is a decision the
+/// handler made, while passing one through because it named nothing is the
+/// shaper guessing — and guessing in the direction that leaks.
+fn body_kind(resp: &Response) -> BodyKind {
+    let Some(raw) = resp.content_type() else {
+        return BodyKind::Undeclared;
+    };
+    let essence = raw.split(';').next().unwrap_or_default().trim();
+    let Some((_type, subtype)) = essence.split_once('/') else {
+        return BodyKind::Other;
+    };
+    let subtype = subtype.trim();
+    let is_json = subtype.eq_ignore_ascii_case("json")
+        || subtype
+            .rsplit_once('+')
+            .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case("json"));
+    if is_json {
+        BodyKind::Json
+    } else {
+        BodyKind::Other
+    }
+}
+
+/// A success with a body and no declared media type.
+///
+/// Nothing licenses a pass-through: an armed route is one whose posture says the
+/// response carries this entity, and shipping a body the shaper cannot classify
+/// is the silent direction of the only error that matters here. An *empty* body
+/// is not that — there is nothing in it to leak — and emptiness is read off the
+/// body's size hint rather than by collecting it, so a streamed download on a
+/// route that forgot its `Content-Type` is refused without being buffered whole
+/// first.
+fn refuse_unclassifiable<S>(mut resp: Response, action: Action) -> Response {
+    let body = resp.take_body();
+    if body.is_empty() {
+        resp.set_body(body);
+        return resp;
+    }
+    warn_mask_failure(
+        std::any::type_name::<S>(),
+        action,
+        "response carried no content type, so it could not be classified",
+        &"set a content type on the response, or return a typed body",
+    );
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .body("response masking failed: response carried no content type")
+}
+
 /// Mask a successful JSON body: deserialize it into `S::Model`(s), run the typed
-/// masking, and re-serialize. A non-success or non-JSON response, or a scalar
-/// body, passes through; a JSON object/array that does not match `S::Model`
-/// fails closed (see module docs).
+/// masking, and re-serialize. A non-success response, or one whose handler
+/// declared a non-JSON media type, passes through; a JSON object/array that does
+/// not match `S::Model`, and a body with no declared type at all, fail closed
+/// (see module docs).
 pub async fn mask_entity_response<S>(
     ability: &Ability,
     action: Action,
@@ -74,11 +169,12 @@ where
     if !resp.status().is_success() {
         return resp;
     }
-    let is_json = resp
-        .content_type()
-        .is_some_and(|ct| ct.starts_with("application/json"));
-    if !is_json {
-        return resp;
+    match body_kind(&resp) {
+        BodyKind::Json => {}
+        // The handler declared a type, and it is not JSON: a file, a redirect
+        // body, a rendered page. There is no entity in it to mask.
+        BodyKind::Other => return resp,
+        BodyKind::Undeclared => return refuse_unclassifiable::<S>(resp, action),
     }
 
     let bytes = match resp.take_body().into_bytes().await {

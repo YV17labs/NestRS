@@ -42,6 +42,14 @@ serde.workspace = true
 # `RawBody` returns the body as `bytes::Bytes` (zero-copy view) with a size
 # guard.
 bytes.workspace = true
+# TLS material is handed to poem's listener as a *stream* of configs, so a
+# renewed certificate swaps in without rebuilding the listener; `stream::unfold`
+# + `chain` is what turns the watched PEM pair into one.
+futures-util.workspace = true
+# A renewed pair is checked before it is published: poem's own parser is private
+# and its `with_cert_resolver` never verifies that the two halves correspond, so
+# a mismatched or empty pair would install cleanly and fail every handshake.
+rustls.workspace = true
 
 [dev-dependencies]
 # Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
@@ -63,6 +71,21 @@ tokio.workspace = true
 figment = { workspace = true, features = ["test"] }
 # Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
 trybuild.workspace = true
+# Dev-only, and deliberately so: the version grammar is worded once in
+# `nest_rs_codegen`, but that crate pulls `syn`, which must never reach an app's
+# dependency graph. So the runtime half carries its own copy of the predicate and
+# `versioning::the_wire_grammar_matches_the_declared_grammar` pins the two
+# together — the drift is a test failure rather than a version the compiler
+# accepts and the wire refuses.
+nest-rs-codegen = { path = "../nest-rs-codegen" }
+# `tests/integration/tls.rs` needs a *real* TLS client: the certificate swap is
+# only observable through a handshake, which poem's in-process `TestClient`
+# never performs.
+reqwest.workspace = true
+# `tests/integration/body_limit.rs` gzips a request body, so the cap is proved
+# against the composition that defeated it rather than against a hand-set header.
+flate2.workspace = true
+futures-util.workspace = true
 
 [lints]
 workspace = true

@@ -14,7 +14,7 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
              &'a HttpRequest
              &'a LocalAddr
              &'a RemoteAddr
-             &'a Uri
+             &'a poem::http::Uri
              Accept
              Body
              ClientIp
@@ -36,42 +36,11 @@ help: the trait `FromRequest<'_>` is not implemented for `Authorize<u8>`
              &'a HttpRequest
              &'a LocalAddr
              &'a RemoteAddr
-             &'a Uri
+             &'a poem::http::Uri
              Accept
              Body
              ClientIp
            and $N others
-   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: the trait bound `Authorize<u8>: RouteResponseShaper` is not satisfied
-  --> tests/integration/diagnostics/route_shaper_false_arm.rs:16:1
-   |
-16 | #[routes]
-   | ^^^^^^^^^ unsatisfied trait bound
-   |
-help: the trait `RouteResponseShaper` is not implemented for `Authorize<u8>`
-  --> tests/integration/diagnostics/route_shaper_false_arm.rs:11:1
-   |
-11 | struct Authorize<T>(T);
-   | ^^^^^^^^^^^^^^^^^^^
-help: the trait `Endpoint` is implemented for `ShapedEndpoint<P, E>`
-  --> src/shaper.rs
-   |
-   | / impl<P, E> Endpoint for ShapedEndpoint<P, E>
-   | | where
-   | |     P: RouteResponseShaper + Send + Sync + 'static,
-   | |     E: Endpoint + Send + Sync,
-   | |     E::Output: IntoResponse,
-   | |____________________________^
-   = note: required for `ShapedEndpoint<Authorize<u8>, __nestrs_route_OrgsController_list>` to implement `Endpoint`
-note: required by a bound in `wrap_route_response_layers`
-  --> $WORKSPACE/crates/nest-rs-guards/src/dispatch/route_layers.rs
-   |
-   | pub fn wrap_route_response_layers<E>(
-   |        -------------------------- required by a bound in this function
-...
-   |     E: Endpoint<Output = Response> + 'static,
-   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `wrap_route_response_layers`
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `Authorize<u8>: RouteResponseShaper` is not satisfied

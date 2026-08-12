@@ -21,7 +21,7 @@ use poem::web::{Json, Path, Query};
 use poem::{Body, Error, FromRequest, Request, RequestBody, Result};
 use validator::Validate;
 
-use crate::{ProblemDetails, RawBody};
+use crate::{Header, ProblemDetails, RawBody};
 
 /// Owned-unwrap for poem extractors, so a pipe can take the value they carry
 /// without cloning.
@@ -47,6 +47,13 @@ impl<T> IntoInner for Path<T> {
 }
 
 impl<T> IntoInner for Query<T> {
+    type Inner = T;
+    fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> IntoInner for Header<T> {
     type Inner = T;
     fn into_inner(self) -> T {
         self.0
@@ -247,6 +254,26 @@ mod tests {
         }
         let q = Query(Q { first: 7 });
         assert_eq!(q.into_inner(), Q { first: 7 });
+    }
+
+    #[test]
+    fn into_inner_for_header_unwraps_the_payload() {
+        // What makes `Valid<Header<T>>` and `Piped<P, Header<T>>` spellable —
+        // a header DTO validates through the same carrier every other
+        // extractor does.
+        #[derive(Debug, PartialEq)]
+        struct H {
+            request_id: String,
+        }
+        let h = Header(H {
+            request_id: "abc".into(),
+        });
+        assert_eq!(
+            h.into_inner(),
+            H {
+                request_id: "abc".into(),
+            },
+        );
     }
 
     // Piped<P, E> exposes `into_inner` and `Deref<Target = P::Out>`. Build a

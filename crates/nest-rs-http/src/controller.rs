@@ -54,6 +54,58 @@ pub fn schema_of<T: schemars::JsonSchema>(
     generator.subschema_for::<T>()
 }
 
+/// The request body a route accepts: how it arrives on the wire, and the
+/// schema of its content when the framework can name the type.
+///
+/// One value rather than a schema beside a media-type string, so the two can
+/// never disagree — a document generator reads the media type off the variant
+/// it matched instead of inferring one from a schema that may be absent.
+///
+/// The set is closed because the *framework* decides it: a body reaches a
+/// handler through an extractor `#[routes]` recognizes, or through
+/// `#[api(multipart = T)]`. A response's media type is the developer's to
+/// declare, which is why
+/// [`response_content_type`](HttpRouteMeta::response_content_type) is a plain
+/// string and this is not.
+#[derive(Clone, Copy)]
+pub enum RequestBodyMeta {
+    /// A `Json<T>` extractor — `application/json`, carrying `T`'s schema.
+    Json(SchemaFn),
+    /// A `multipart/form-data` body. `Some` when `#[api(multipart = T)]` names
+    /// the type describing the form's parts; `None` for a bare
+    /// [`poem::web::Multipart`] parameter, whose parts the handler pulls one by
+    /// one and no type states — the document then says `multipart/form-data`
+    /// with a free-form object, which is still more than silence.
+    Multipart(Option<SchemaFn>),
+    /// A `Form<T>` extractor — `application/x-www-form-urlencoded`, carrying
+    /// `T`'s schema. Recognised because a route that binds one *has* a body:
+    /// matching only `Json` and `Multipart` documented `POST /token` as taking
+    /// no body at all, which is the shape RFC 6749 requires of an OAuth token
+    /// endpoint.
+    Form(SchemaFn),
+}
+
+impl RequestBodyMeta {
+    /// The `content` key an OpenAPI document files this body under.
+    pub fn media_type(self) -> &'static str {
+        match self {
+            Self::Json(_) => "application/json",
+            Self::Multipart(_) => "multipart/form-data",
+            Self::Form(_) => "application/x-www-form-urlencoded",
+        }
+    }
+
+    /// The schema builder for the body's content, when the body has a named
+    /// type.
+    pub fn schema(self) -> Option<SchemaFn> {
+        match self {
+            Self::Json(schema) => Some(schema),
+            Self::Multipart(schema) => schema,
+            Self::Form(schema) => Some(schema),
+        }
+    }
+}
+
 /// Declarative description of a handler in a controller — verb/path/name plus
 /// the OpenAPI facets `#[routes]` extracts, so a doc generator (nest-rs-openapi)
 /// builds a spec from discovery alone.
@@ -62,9 +114,7 @@ pub fn schema_of<T: schemars::JsonSchema>(
 /// framework's own discovery consumers — its fields are effectively an internal
 /// ABI that versions in lockstep, not a stable hand-written surface. New facets
 /// land here as public fields (`success_status`, `throttled`, …); a later
-/// opaque-struct migration is slated to privatize the set behind accessors and
-/// add the OpenAPI `header_params` slot in one sweep — these additions are part
-/// of what it will carry.
+/// opaque-struct migration is slated to privatize the set behind accessors.
 #[derive(Clone)]
 pub struct HttpRouteMeta {
     /// The method this route answers.
@@ -73,6 +123,16 @@ pub struct HttpRouteMeta {
     pub path: &'static str,
     /// The handler method's name — the `handler` field in the boot route log.
     pub handler: &'static str,
+    /// `#[version("2")]` on the method — the versions this route serves, out of
+    /// the ones its controller declares. **Empty means it serves every one of
+    /// them**, which is what an undecorated route wants: a version is a
+    /// controller-wide statement, and a route only opts *out* of part of it.
+    ///
+    /// The subset is checked at compile time by
+    /// [`versions_declare`](crate::versions_declare), so a `#[version]` naming
+    /// something `#[controller(version = …)]` never declared is an error at the
+    /// route rather than a route that silently never mounts.
+    pub versions: &'static [&'static str],
     /// `#[api(summary = …)]` one-liner for the OpenAPI operation, if given.
     pub summary: Option<&'static str>,
     /// `#[api(description = …)]` long text for the OpenAPI operation, if given.
@@ -80,14 +140,23 @@ pub struct HttpRouteMeta {
     /// `#[api(tags(...))]`, else a single-element slice holding the controller
     /// struct name — so routes group by controller in the docs by default.
     pub tags: &'static [&'static str],
-    /// Schema builder for the `Json<T>` request body, or `None` for a
-    /// non-JSON/absent body.
-    pub request_body: Option<SchemaFn>,
+    /// The request body this route accepts, or `None` when it takes none.
+    pub request_body: Option<RequestBodyMeta>,
     /// Schema builder for the response payload — inferred from a `Json<T>`
     /// return, or declared with `#[api(response = T)]` when the handler builds
     /// its own [`Response`](poem::Response) (the `#[crud]` paginated list does).
     /// `None` only when neither applies.
     pub response: Option<SchemaFn>,
+    /// The media type of the success response body, when it is **not**
+    /// `application/json` — `#[api(response_content_type = "audio/mpeg")]` for
+    /// a hand-built streamed [`Response`](poem::Response), or
+    /// `text/event-stream` inferred from an `-> SSE` return.
+    ///
+    /// A free-form string rather than an enum, unlike
+    /// [`RequestBodyMeta`]: what a handler streams back is the developer's
+    /// contract with their client (`audio/mpeg`, `text/csv`,
+    /// `application/octet-stream`), not a set the framework can close.
+    pub response_content_type: Option<&'static str>,
     /// An ability shaper (`Authorize<_, _>`) masks this route's response, so a
     /// caller may receive a **subset** of [`response`](Self::response)'s
     /// properties — whichever ones its ability grants.
@@ -113,6 +182,11 @@ pub struct HttpRouteMeta {
     /// pagination cursor. Imposes `JsonSchema` on every `Query<T>` type, the
     /// same contract `Json<T>` bodies already carry.
     pub query_params: &'static [SchemaFn],
+    /// Schema builders for the handler's [`Header<T>`](crate::Header) extractor
+    /// payloads, expanded exactly like [`query_params`](Self::query_params) but
+    /// into `in: header` parameters. A property absent from the schema's
+    /// `required` is an optional header.
+    pub header_params: &'static [SchemaFn],
     /// The operation is a write that can fail a uniqueness/constraint check and
     /// surface a `409 Conflict` — the `#[crud]` create/update/delete ops set it
     /// so the document advertises the conflict response their write-error mapper
@@ -171,10 +245,29 @@ pub struct HttpControllerMeta {
     /// back to its source type — surfaced as a field in the boot route log and
     /// the default OpenAPI tag.
     pub controller: &'static str,
+    /// The controller's name as an identifier fragment: the struct name with
+    /// its `Controller` suffix dropped, snake_cased — `PostsController` →
+    /// `posts`. A name that is *only* the suffix keeps it, because `_list`
+    /// names nothing.
+    ///
+    /// The OpenAPI document builds `operationId` from it (`posts_list`), which
+    /// a client generator turns into a method name. Computed by `#[routes]`
+    /// through `nest_rs_codegen::snake_case` — the one casing rule the repo has
+    /// — rather than at document time, for two reasons: the macro is where the
+    /// type name is, and a runtime crate cannot reach `codegen` without dragging
+    /// `syn` into every app's dependency graph. So the alternative is a second
+    /// implementation of the same rule, which is what this replaced.
+    pub token: &'static str,
     /// The controller's shared path prefix (before URI versioning).
     pub path: &'static str,
-    /// `#[controller(version = …)]` for URI versioning, mounting under `/v{n}`.
-    pub version: Option<&'static str>,
+    /// `#[controller(version = …)]` — every version this controller serves, in
+    /// declaration order. Empty means unversioned.
+    ///
+    /// A list rather than an `Option` because the common shape of a second API
+    /// version is *most routes unchanged*: `version = ["1", "2"]` mounts the
+    /// same handlers under both prefixes, and a route that differs opts out
+    /// with its own `#[version]` instead of forcing a duplicate controller.
+    pub versions: &'static [&'static str],
     /// Metadata for each route this controller declares.
     pub routes: Vec<HttpRouteMeta>,
     mount: Arc<MountFn>,
@@ -186,8 +279,9 @@ impl HttpControllerMeta {
     /// wiring.
     pub fn new<F>(
         controller: &'static str,
+        token: &'static str,
         path: &'static str,
-        version: Option<&'static str>,
+        versions: &'static [&'static str],
         routes: Vec<HttpRouteMeta>,
         mount: F,
     ) -> Self
@@ -196,18 +290,47 @@ impl HttpControllerMeta {
     {
         Self {
             controller,
+            token,
             path,
-            version,
+            versions,
             routes,
             mount: Arc::new(mount),
         }
     }
 
-    /// Mount prefix with URI versioning applied (`/v1/users` when versioned).
-    /// Readers composing full route paths (boot log, OpenAPI doc) join each
-    /// route onto this so they match what [`mount`](Self::mount) serves.
-    pub fn effective_prefix(&self) -> String {
-        crate::version_path(self.version, self.path)
+    /// The versions this controller mounts under, as
+    /// [`version_path`](crate::version_path) wants them: one `None` when it is
+    /// unversioned, otherwise one `Some(v)` per declared version.
+    ///
+    /// Every reader that composes a full path — the boot log, the OpenAPI
+    /// document, the transport's own prefix collection — iterates this, so
+    /// "how many addresses does this controller have" has one answer.
+    pub fn mounted_versions(&self) -> impl Iterator<Item = Option<&'static str>> + '_ {
+        // `[None]` rather than an empty iterator: an unversioned controller
+        // still mounts, at one address. Yielding nothing would silently unmount
+        // every controller that declares no version.
+        let unversioned = self.versions.is_empty().then_some(None);
+        unversioned
+            .into_iter()
+            .chain(self.versions.iter().map(|v| Some(*v)))
+    }
+
+    /// Mount prefix for one of [`mounted_versions`](Self::mounted_versions)
+    /// (`/v1/users`, or `/users` for `None`). Readers composing full route
+    /// paths join each route onto this so they match what
+    /// [`mount`](Self::mount) serves.
+    pub fn effective_prefix(&self, version: Option<&str>) -> String {
+        crate::version_path(version, self.path)
+    }
+
+    /// Whether `route` is served under `version`. An undecorated route serves
+    /// every version its controller declares; `#[version("2")]` narrows it.
+    pub fn serves(route: &HttpRouteMeta, version: Option<&str>) -> bool {
+        match (route.versions, version) {
+            ([], _) => true,
+            (_, None) => true,
+            (declared, Some(v)) => declared.contains(&v),
+        }
     }
 
     /// Mount this controller's routes onto `route`, resolving handler
@@ -251,29 +374,96 @@ mod tests {
     }
 
     #[test]
-    fn effective_prefix_returns_path_unchanged_without_a_version() {
-        let meta =
-            HttpControllerMeta::new("UsersController", "/users", None, Vec::new(), |_c, r| r);
-        assert_eq!(meta.effective_prefix(), "/users");
+    fn request_body_meta_pairs_each_media_type_with_its_own_schema() {
+        // The variant *is* the media type, so a document generator never has to
+        // infer one — including for the untyped multipart body, which carries a
+        // media type and no schema.
+        fn schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+            generator.subschema_for::<String>()
+        }
+        let json = RequestBodyMeta::Json(schema);
+        assert_eq!(json.media_type(), "application/json");
+        assert!(json.schema().is_some());
+
+        let typed = RequestBodyMeta::Multipart(Some(schema));
+        assert_eq!(typed.media_type(), "multipart/form-data");
+        assert!(typed.schema().is_some());
+
+        let untyped = RequestBodyMeta::Multipart(None);
+        assert_eq!(untyped.media_type(), "multipart/form-data");
+        assert!(untyped.schema().is_none());
     }
 
     #[test]
-    fn effective_prefix_prepends_the_uri_version_when_present() {
+    fn an_unversioned_controller_still_mounts_at_one_address() {
+        // The `[None]` in `mounted_versions` is load-bearing: yielding nothing
+        // for an empty version list would unmount every controller that
+        // declares no version.
+        let meta = HttpControllerMeta::new(
+            "UsersController",
+            "users",
+            "/users",
+            &[],
+            Vec::new(),
+            |_c, r| r,
+        );
+        let mounted: Vec<_> = meta.mounted_versions().collect();
+        assert_eq!(mounted, vec![None]);
+        assert_eq!(meta.effective_prefix(None), "/users");
+    }
+
+    #[test]
+    fn each_declared_version_is_its_own_mount_prefix() {
         // `version_path` joins `/v<v>` ahead of the controller path — the
         // single place URI versioning lives, so this is the contract.
         let meta = HttpControllerMeta::new(
             "UsersController",
+            "users",
             "/users",
-            Some("1"),
+            &["1", "2"],
             Vec::new(),
             |_c, r| r,
         );
-        assert_eq!(meta.effective_prefix(), "/v1/users");
+        let prefixes: Vec<_> = meta
+            .mounted_versions()
+            .map(|v| meta.effective_prefix(v))
+            .collect();
+        assert_eq!(prefixes, ["/v1/users", "/v2/users"]);
     }
 
     #[test]
-    fn new_stores_the_path_version_and_routes_verbatim() {
-        let routes = vec![HttpRouteMeta {
+    fn a_route_serves_every_controller_version_until_it_narrows_itself() {
+        let mut route = route_meta();
+        assert!(
+            HttpControllerMeta::serves(&route, Some("1")),
+            "an undecorated route serves every version its controller declares",
+        );
+        route.versions = &["2"];
+        assert!(HttpControllerMeta::serves(&route, Some("2")));
+        assert!(
+            !HttpControllerMeta::serves(&route, Some("1")),
+            "`#[version(\"2\")]` narrows the route out of v1",
+        );
+        assert!(
+            HttpControllerMeta::serves(&route, None),
+            "an unversioned mount has one address, so a narrowed route still serves it",
+        );
+    }
+
+    #[test]
+    fn versions_declare_accepts_a_subset_and_refuses_a_stranger() {
+        // The `const fn` behind the `#[version]` compile assertion.
+        assert!(crate::versions_declare(&["1", "2"], &["2"]));
+        assert!(crate::versions_declare(&["1", "2"], &["1", "2"]));
+        assert!(crate::versions_declare(&["1"], &[]));
+        assert!(!crate::versions_declare(&["1", "2"], &["3"]));
+        assert!(!crate::versions_declare(&[], &["1"]));
+        // Length-first comparison must not report a prefix as equal.
+        assert!(!crate::versions_declare(&["1"], &["11"]));
+    }
+
+    fn route_meta() -> HttpRouteMeta {
+        HttpRouteMeta {
             verb: HttpVerb::Get,
             path: "/:id",
             handler: "show",
@@ -282,20 +472,33 @@ mod tests {
             tags: &["Users"],
             request_body: None,
             response: None,
+            response_content_type: None,
             masked: false,
             path_params: &[],
             query_params: &[],
+            header_params: &[],
             may_conflict: false,
             throttled: false,
             sets_location: false,
             success_status: 200,
             scoped_guarded: false,
             public: false,
-        }];
-        let meta =
-            HttpControllerMeta::new("UsersController", "/users", Some("2"), routes, |_c, r| r);
+            versions: &[],
+        }
+    }
+
+    #[test]
+    fn new_stores_the_path_versions_and_routes_verbatim() {
+        let meta = HttpControllerMeta::new(
+            "UsersController",
+            "users",
+            "/users",
+            &["2"],
+            vec![route_meta()],
+            |_c, r| r,
+        );
         assert_eq!(meta.path, "/users");
-        assert_eq!(meta.version, Some("2"));
+        assert_eq!(meta.versions, &["2"]);
         assert_eq!(meta.routes.len(), 1);
         assert_eq!(meta.routes[0].handler, "show");
         assert_eq!(meta.routes[0].tags, &["Users"]);
@@ -306,11 +509,17 @@ mod tests {
         // The mount closure is the seam `#[routes]` emits; assert it's called
         // exactly once per `mount` invocation and receives the same container.
         static CALLS: AtomicUsize = AtomicUsize::new(0);
-        let meta =
-            HttpControllerMeta::new("HealthController", "/health", None, Vec::new(), |_c, r| {
+        let meta = HttpControllerMeta::new(
+            "HealthController",
+            "health",
+            "/health",
+            &[],
+            Vec::new(),
+            |_c, r| {
                 CALLS.fetch_add(1, Ordering::SeqCst);
                 r
-            });
+            },
+        );
         let container = Container::builder().build();
         let route = Route::new();
 
@@ -330,15 +539,18 @@ mod tests {
             tags: &[],
             request_body: None,
             response: None,
+            response_content_type: None,
             masked: false,
             path_params: &[],
             query_params: &[],
+            header_params: &[],
             may_conflict: false,
             throttled: false,
             sets_location: false,
             success_status: 200,
             scoped_guarded,
             public,
+            versions: &[],
         }
     }
 

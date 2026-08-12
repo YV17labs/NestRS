@@ -175,6 +175,52 @@ impl WidgetController {
             },
         ])
     }
+
+    /// RFC 6839: `+json` is a structured syntax suffix, so this **is** JSON.
+    #[get("/vendor")]
+    async fn vendor(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+        raw_widget_response(Some("application/vnd.api+json"))
+    }
+
+    /// RFC 9110 §8.3.1: type and subtype are case-insensitive, so this is the
+    /// *same* media type as `application/json`.
+    #[get("/upper")]
+    async fn upper(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+        raw_widget_response(Some("Application/JSON"))
+    }
+
+    /// Parameters are not part of the media type.
+    #[get("/charset")]
+    async fn charset(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+        raw_widget_response(Some("application/json; charset=utf-8"))
+    }
+
+    /// Nothing declared at all — the shaper cannot classify it, so it must not
+    /// guess in the direction that ships the body.
+    #[get("/untyped")]
+    async fn untyped(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+        raw_widget_response(None)
+    }
+
+    /// A declared non-JSON type still passes through untouched: the handler said
+    /// what it was returning, and there is no entity in it to mask.
+    #[get("/csv")]
+    async fn csv(&self, _authz: Authorize<Read, widget::Entity>) -> poem::Response {
+        poem::Response::builder()
+            .content_type("text/csv")
+            .body("id,name\n1,ada\n")
+    }
+}
+
+/// A hand-built response carrying the unexposed `secret`, under whichever
+/// `Content-Type` spelling the caller asks for — or none at all.
+fn raw_widget_response(content_type: Option<&str>) -> poem::Response {
+    let body = r#"{"id":1,"name":"ada","secret":"s1"}"#;
+    let mut builder = poem::Response::builder();
+    if let Some(content_type) = content_type {
+        builder = builder.content_type(content_type);
+    }
+    builder.body(body)
 }
 
 #[module(providers = [AbilityInjector, ListAbilityInjector, WidgetController])]
@@ -386,16 +432,89 @@ async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked(
         .collect();
     assert!(!routes.is_empty(), "the controller is discovered at all");
 
+    // The media-type probes return a bare `poem::Response` precisely so they can
+    // set (or omit) a `Content-Type` no typed body would let them set. An opaque
+    // return type has no schema to publish, so they answer the `masked` half of
+    // this contract and are exempt from the `response` half — by name, so a route
+    // cannot drift out of the assertion by accident.
+    const OPAQUE_BY_CONSTRUCTION: &[&str] = &["vendor", "upper", "charset", "untyped", "csv"];
+
     for route in routes {
         assert!(
             route.masked,
             "every route here is shaped, so every one is masked: {}",
             route.handler,
         );
+        if OPAQUE_BY_CONSTRUCTION.contains(&route.handler) {
+            continue;
+        }
         assert!(
             route.response.is_some(),
             "a masked route publishes the shape a caller may see a subset of: {}",
             route.handler,
         );
     }
+}
+
+/// The mask is armed by the compiler and cannot be renamed out of — but what
+/// arming installs then decided *whether to run* by comparing the response's
+/// `Content-Type` against the literal prefix `application/json`. Three bodies
+/// that are JSON by the standard failed that test and shipped every unexposed
+/// column, at `200`, with the route armed and nothing logged.
+///
+/// Each case below is one of them, and each is a media type the standard says is
+/// JSON — not a near-miss.
+#[tokio::test]
+async fn a_json_media_type_is_masked_however_it_is_spelled() {
+    let app = boot().await;
+    for path in ["/widgets/vendor", "/widgets/upper", "/widgets/charset"] {
+        let resp = app.http().get(path).header("x-role", "admin").send().await;
+        resp.assert_status_is_ok();
+        let body = resp.0.into_body().into_string().await.expect("body");
+        assert!(
+            !body.contains("secret") && !body.contains("s1"),
+            "{path} is a JSON media type, so the mask must run: {body}",
+        );
+        assert!(
+            body.contains("ada"),
+            "and the exposed columns survive: {body}",
+        );
+    }
+}
+
+/// A response that declares nothing cannot be classified, so the shaper must not
+/// guess. Passing it through is the only guess that leaks, which makes failing
+/// closed the answer here — the same one a body that will not reconcile with the
+/// entity already gets.
+#[tokio::test]
+async fn a_body_with_no_declared_media_type_fails_closed() {
+    let app = boot().await;
+    let resp = app
+        .http()
+        .get("/widgets/untyped")
+        .header("x-role", "admin")
+        .send()
+        .await;
+    resp.assert_status(poem::http::StatusCode::INTERNAL_SERVER_ERROR);
+    let body = resp.0.into_body().into_string().await.expect("body");
+    assert!(
+        !body.contains("secret") && !body.contains("s1"),
+        "and it ships none of the entity on the way out: {body}",
+    );
+}
+
+/// The converse, so the rule above is a classification and not a ban: a handler
+/// that *names* a non-JSON type has said what it is returning, and there is no
+/// entity in it to mask.
+#[tokio::test]
+async fn a_declared_non_json_body_still_passes_through() {
+    let app = boot().await;
+    let resp = app
+        .http()
+        .get("/widgets/csv")
+        .header("x-role", "admin")
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    resp.assert_text("id,name\n1,ada\n").await;
 }

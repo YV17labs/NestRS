@@ -38,21 +38,69 @@ use std::future::{Future, poll_fn};
 use std::pin::pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use nest_rs_core::{Container, RequestScope, with_request_scope};
 use poem::error::ReadBodyError;
 use poem::http::uri::{PathAndQuery, Uri};
 use poem::http::{HeaderName, HeaderValue, StatusCode};
 use poem::web::headers::{ContentLength, HeaderMapExt};
-use poem::{Endpoint, IntoResponse, Request, Response, Result};
+use poem::{Body, Endpoint, IntoResponse, Request, Response, Result};
 
 use crate::location::CallerUri;
 
 /// A bare status-only response — the edge's own rejections (`413`, `504`).
 fn bare(status: StatusCode) -> Response {
     Response::builder().status(status).finish()
+}
+
+/// What a body that outran the cap fails the *stream* with.
+///
+/// Whatever extractor was reading sees this; the caller does not, because the
+/// edge answers the cap itself (see [`CapExceeded`]). Built rather than spelled:
+/// `NESTRS` is the deployment's default prefix, not a fixture.
+fn body_cap_exceeded() -> String {
+    format!(
+        "request body exceeded the configured cap ({})",
+        nest_rs_config::var_name("http", "MAX_BODY_BYTES"),
+    )
+}
+
+/// Set by [`capped`] when the count runs past the cap, read by the edge once the
+/// inner tree has returned.
+///
+/// The cap is one declaration, so it answers with one status. Without this the
+/// stream error surfaced as whatever the reading extractor made of it — a `500`
+/// from one, a framing error from another — while the *declared-length* branch
+/// answered a clean `413`, which made the status a function of the framing the
+/// caller happened to choose.
+type CapExceeded = Arc<AtomicBool>;
+
+/// The cap, enforced on the bytes that actually arrive.
+///
+/// A `Content-Length` within the cap is a *claim*, and one an outer layer can
+/// make false: poem's `Compression` middleware replaces the request body with a
+/// decompressed reader and leaves the header describing the compressed bytes.
+/// Anything downstream that streams the body rather than buffering it — an
+/// upload going to object storage — then has no bound at all.
+///
+/// So the count is what bounds it: the read stops, nothing downstream completes
+/// on a body it was never allowed to receive, and `exceeded` tells the edge to
+/// answer `413` rather than let the failure wear the reader's own error.
+fn capped(body: Body, limit: usize, exceeded: CapExceeded) -> Body {
+    let mut seen: usize = 0;
+    Body::from_bytes_stream(body.into_bytes_stream().map(move |chunk| {
+        let chunk = chunk?;
+        seen = seen.saturating_add(chunk.len());
+        if seen > limit {
+            exceeded.store(true, Ordering::Relaxed);
+            return Err(std::io::Error::other(body_cap_exceeded()));
+        }
+        Ok(chunk)
+    }))
 }
 
 /// The path a trailing slash should have been written as, or `None` when the
@@ -133,6 +181,13 @@ pub(crate) struct EdgeEndpoint<E> {
     /// configured) and runs the transport-edge problem normalizer itself —
     /// the `.around` wrap that used to carry it is not mounted at all.
     normalize: bool,
+    /// When `true` a layer outside this one can replace the request body while
+    /// leaving `Content-Length` describing the old one, so a declared length is
+    /// no longer a bound and the edge counts the bytes instead. Set from the one
+    /// knob that installs such a layer (`HttpConfig.compression`); with it off,
+    /// hyper's length decoder already bounds the body and the count could never
+    /// fire.
+    counts_body: bool,
 }
 
 impl<E> EdgeEndpoint<E> {
@@ -143,6 +198,7 @@ impl<E> EdgeEndpoint<E> {
         body_limit: Option<usize>,
         headers: Vec<(HeaderName, HeaderValue)>,
         normalize: bool,
+        counts_body: bool,
     ) -> Self {
         let shared_scope = (!container.has_dynamic_scopes())
             .then(|| Arc::new(RequestScope::new(container.clone())));
@@ -154,6 +210,7 @@ impl<E> EdgeEndpoint<E> {
             body_limit,
             headers,
             normalize,
+            counts_body,
         }
     }
 
@@ -188,37 +245,54 @@ where
         let caller_uri = req.uri().clone();
         req.extensions_mut().insert(CallerUri(caller_uri));
 
-        // Body cap (B-HTTP-2) — every extractor sits under it. Four cases,
-        // cheapest first:
+        // Body cap (B-HTTP-2) — every extractor sits under it. Three answers,
+        // decided by what the request declares:
         //
-        // 1. `Content-Length` over the cap ⇒ `413` before a byte is read.
-        // 2. Declared length within the cap ⇒ pass the body through
-        //    untouched — the framing already bounds it.
-        // 3. No declared length but a size hint of exactly zero (a bodyless
-        //    GET, an explicit `Body::empty()`) ⇒ pass through: no byte
-        //    exists for a cap to bound. Emptiness is a property of the body
-        //    object, not the wire framing, so `TestApp` and wire traffic
-        //    agree by construction.
-        // 4. No declared length and possibly non-empty (`Transfer-Encoding:
-        //    chunked`, an HTTP/2+ stream) ⇒ buffer up to the cap and reject
-        //    past it.
+        // - `Content-Length` over the cap ⇒ `413` before a byte is read.
+        // - An empty body ⇒ pass through: no byte exists for a cap to bound.
+        //   Emptiness is a property of the body object, not the wire framing,
+        //   so `TestApp` and wire traffic agree by construction.
+        // - A declared length within the cap ⇒ **count what arrives**, but only
+        //   where the declaration can be false. It is a claim about the wire,
+        //   and a layer outside this one can invalidate it: poem's
+        //   `Compression` decompresses the request body and leaves
+        //   `Content-Length` describing the *compressed* bytes, so trusting it
+        //   let a 64 KiB gzip body write a 64 MiB object under a 2 MiB cap.
+        //   With no such layer installed, hyper's length decoder cannot yield
+        //   more than the declared bytes, so the count could never fire and the
+        //   wrap is pure per-request cost — hence `counts_body`, set by the
+        //   transport from the one knob that installs a body-rewriting layer.
+        // - No declared length (`Transfer-Encoding: chunked`, an HTTP/2+
+        //   stream) ⇒ buffer up to the cap and reject past it. Buffering rather
+        //   than counting, because nothing declared a length to answer with:
+        //   reading it is what produces the `413`, and the cap bounds the read.
+        let mut exceeded: Option<CapExceeded> = None;
         if let Some(limit) = self.body_limit {
-            if let Some(ContentLength(declared)) = req.headers().typed_get::<ContentLength>() {
-                if declared as usize > limit {
-                    return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
+            let declared = req
+                .headers()
+                .typed_get::<ContentLength>()
+                .map(|ContentLength(declared)| declared as usize);
+            if declared.is_some_and(|declared| declared > limit) {
+                return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
+            }
+            let body = req.take_body();
+            if body.is_empty() {
+                req.set_body(body);
+            } else if declared.is_some() {
+                if self.counts_body {
+                    let flag = CapExceeded::default();
+                    req.set_body(capped(body, limit, Arc::clone(&flag)));
+                    exceeded = Some(flag);
+                } else {
+                    req.set_body(body);
                 }
             } else {
-                let body = req.take_body();
-                if body.is_empty() {
-                    req.set_body(body);
-                } else {
-                    match body.into_bytes_limit(limit).await {
-                        Ok(bytes) => req.set_body(bytes),
-                        Err(ReadBodyError::PayloadTooLarge) => {
-                            return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
-                        }
-                        Err(err) => return Err(err.into()),
+                match body.into_bytes_limit(limit).await {
+                    Ok(bytes) => req.set_body(bytes),
+                    Err(ReadBodyError::PayloadTooLarge) => {
+                        return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
                     }
+                    Err(err) => return Err(err.into()),
                 }
             }
         }
@@ -260,6 +334,12 @@ where
             }
             None => inner.await,
         };
+        // The cap answers once, here, whatever the reading extractor made of
+        // the stream error — otherwise the caller's status depends on which
+        // extractor happened to be reading when the count ran out.
+        if exceeded.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Ok(self.finish(bare(StatusCode::PAYLOAD_TOO_LARGE)));
+        }
         Ok(self.finish(result?.into_response()))
     }
 }
@@ -310,6 +390,9 @@ mod tests {
             body_limit,
             headers,
             false,
+            // These unit tests drive the edge directly, with nothing wrapped
+            // outside it that could rewrite a body.
+            false,
         )
     }
 
@@ -327,6 +410,7 @@ mod tests {
             body_limit,
             headers,
             true,
+            false,
         )
     }
 

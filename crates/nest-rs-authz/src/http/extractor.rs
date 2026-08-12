@@ -31,16 +31,17 @@ use crate::{Ability, ActionMarker, Subject};
 /// `#[routes]` desugars that to this extractor, fully qualified, as the
 /// handler's first parameter — the same thing `#[crud]` emits for its
 /// generated ops. Writing the parameter by hand still works (it *is* the
-/// mechanism) but it is not a posture declaration: `#[routes]` recognises a
-/// shaper parameter by **path-segment name**, so a renamed import
-/// (`use ... as Az`) silently fails to arm masking. Going through the
-/// decorator removes that hazard entirely, and keeps every authz decision
-/// greppable as an `#[authorize]` / `#[use_guards]` / `#[public]` site.
+/// mechanism) but it is not a posture declaration, and that is the whole
+/// reason to go through the decorator: an `#[authorize]` is greppable as one
+/// of the three sites an authz decision may live at, a parameter is not.
 ///
-/// The residual hand-written path is still fail-closed at run time: this
-/// extractor marks the route's `nest_rs_http::MaskProbe`, and an unarmed route
-/// whose probe was marked fails the request closed (a logged `500`) rather
-/// than shipping an unmasked body.
+/// Arming is **not** a spelling question. `#[routes]` hands each parameter
+/// type to `nest_rs_http::ShaperProbe` and the compiler decides whether it is
+/// a `RouteResponseShaper`, so `use ... as Az` arms exactly like the canonical
+/// name. What no signature scan can see is an extractor reached *indirectly* —
+/// nested in another extractor, or run by a hand-rolled `FromRequest`; that is
+/// what the `nest_rs_http::MaskProbe` this extractor marks still backstops,
+/// failing such a route closed rather than shipping an unmasked body.
 pub struct Authorize<A, S>(PhantomData<fn() -> (A, S)>);
 
 impl<'a, A, S> FromRequest<'a> for Authorize<A, S>

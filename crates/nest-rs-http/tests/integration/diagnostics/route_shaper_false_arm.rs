@@ -1,8 +1,8 @@
-//! HTTP-D1: `#[routes]` arms the response shaper by scanning parameter type
-//! *names* for `Authorize`/`Bind`. A local type that borrows one of those names
-//! without implementing `RouteResponseShaper` would otherwise fail as a
-//! confusing transitive `Endpoint` bound at the mount site — the eager probe
-//! turns it into a spanned error on the parameter itself.
+//! HTTP-D1: `#[routes]` arms the response shaper by *type*, so a local struct
+//! that borrows the name `Authorize`/`Bind` without implementing
+//! `RouteResponseShaper` would simply select nothing and leave the route
+//! unshaped. The eager assertion turns that silence into a spanned error on
+//! the parameter itself, naming the trait.
 
 use nest_rs_http::{controller, routes};
 use poem::web::Json;

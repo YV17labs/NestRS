@@ -136,7 +136,73 @@ response tags it `nest_rs_core::MappedError`; `DbContext` rolls back
 regardless of the mapped status. (Global filters sit outside `DbContext`
 — the rollback already happened.)
 
-## Versioning
+## Versioning — declared on every edge that has an address, refused on the rest
 
-URI versioning: `#[controller(version = "1")]` mounts under `/v1`
-(`version_path` is the single source of truth).
+**Versioning is addressing.** A transport carries `version = "…"` if and only if
+it has an address a *client* selects; the answer is settled and closed:
+
+| Decorator | `version` | Because |
+|---|---|---|
+| `#[controller]` | three strategies, several versions, per route | URL, header, `Accept` |
+| `#[gateway]` | yes — `/v1/ws`, through `version_path` | the socket URL is the mount |
+| `#[resolver]` | **named compile error** | one schema, one introspection — evolve the field, deprecate the old |
+| `#[mcp]` | **named compile error** unless a `name` stands beside it | the endpoint is `#[mcp(path = "/mcp/v1")]`; `version` alone is `serverInfo`'s |
+| `#[processor]` | **named compile error** | the queue name is the address; splitting it splits the consumer group |
+| `#[scheduled]` / `#[listeners]` | **named compile error** | no caller, no wire |
+
+The refusals are the point, not a leftover: a developer must never have to
+discover by experiment whether `version` works on an edge. Same pattern as
+`reject_http_only_layers`, and the five sentences are worded **once** in
+`nest-rs-codegen` with a trybuild snapshot each. Widening this table is an owner
+decision.
+
+`#[controller(version = …)]` / `#[gateway(version = …)]` is the one place a
+version is **declared**; `version_path` is the one place it becomes a path.
+`version = ["1", "2"]` mounts one controller under each, and `#[version("2")]`
+narrows a route out of the others — checked against the controller's list by the
+`const fn` `versions_declare`, so a stranger is a compile error at the route
+rather than a handler that mounts nowhere.
+
+How a caller **selects** one is deployment config (`NESTRS_HTTP__VERSIONING`):
+`uri` (the default — the version is in the path), `header`, or `media_type`. The
+last two are a rewrite in front of routing (`nest-rs-http/src/versioning.rs`),
+inside the global prefix, so one route table serves all three and the served,
+logged and documented paths cannot drift. Under a non-URI strategy the URI form
+is a `404` — one way to ask — and a malformed version token is a `400` before it
+reaches a path.
+
+**Neutral and fallback are different, and the selector computes which it is.**
+The transport hands it three exact lists at boot — the routes that carry a
+version (as mounted), the addresses answered without one, and the paths
+self-mounted endpoints own — and the precedence between them *is* the behaviour:
+
+| Address | A **stated** version | A **default** version |
+|---|---|---|
+| a self-mount (`/graphql`, `/mcp`, a gateway) | served as sent | served as sent |
+| an unversioned controller route | the version wins | served as sent |
+| versioned only | resolves, or `404` if another version serves it | resolves |
+| nothing versioned | passed through — the router answers | passed through |
+
+A self-mount owns its path outright and has no version to be rewritten to. A
+stated version is the strongest signal a caller sends, so it beats an unversioned
+neighbour — otherwise `#[controller(version = …)]` is unreachable at that
+address. A default is the weakest: the caller asked for nothing, so nothing moves
+under them, which is what stops a versioned `#[controller(path = "/")]` with a
+catch-all from swallowing the app.
+
+**Matching is loose on purpose, and only safe because poem decides last.** Every
+outcome ends at the router: a match yields a rewritten path it must still
+recognise, a non-match passes the request on as written. A false match costs a
+`404` the request was heading for anyway; a false non-match once served one
+controller's body to a caller who asked for another's. Loose in the direction the
+router can correct, never in the direction it cannot see. The matcher therefore
+reads every segment form the router parses — `:name`, `<regex>` (one segment, not
+a tail), `*rest` (the rest, including nothing), and a literal sharing a segment
+with a parameter (`/@:handle`). **Matching on controller *prefixes* is the shape
+this replaced**, and it was wrong in both directions at once: `/` matched
+nothing, so a root-mounted versioned controller silently served the wrong
+version; `/posts` matched a different controller's `/posts/drafts`.
+
+**The wrap is skipped when nothing is versioned.** A non-URI strategy with no
+versioned controller can never change an outcome, and the endpoint cost +57% per
+request to prove it.

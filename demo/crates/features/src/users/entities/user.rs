@@ -1,10 +1,9 @@
-use nest_rs::resource::expose;
+use nest_rs::resource::{expose, wire_enum};
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, EnumIter, DeriveActiveEnum,
-)]
+#[wire_enum]
+#[derive(Default, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "lowercase")]
 pub enum UserRole {

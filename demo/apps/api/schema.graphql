@@ -21,9 +21,31 @@ type Org {
 	createdAt: String!
 	id: String!
 	name: String!
-	posts: [Post!]!
+	posts(after: String, first: Int): PostConnection!
 	updatedAt: String!
-	users: [User!]!
+	users(after: String, first: Int): UserConnection!
+}
+
+"""
+Information about pagination in a connection
+"""
+type PageInfo {
+	"""
+	When paginating forwards, the cursor to continue.
+	"""
+	endCursor: String
+	"""
+	When paginating forwards, are there more items?
+	"""
+	hasNextPage: Boolean!
+	"""
+	When paginating backwards, are there more items?
+	"""
+	hasPreviousPage: Boolean!
+	"""
+	When paginating backwards, the cursor to continue.
+	"""
+	startCursor: String
 }
 
 type Post {
@@ -37,6 +59,35 @@ type Post {
 	status: PostStatus!
 	title: String!
 	updatedAt: String!
+}
+
+type PostConnection {
+	"""
+	A list of edges.
+	"""
+	edges: [PostEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [Post!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+}
+
+"""
+An edge in a connection.
+"""
+type PostEdge {
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: Post!
 }
 
 enum PostStatus {
@@ -73,8 +124,37 @@ type User {
 	name: String!
 	org: Org
 	orgId: String!
-	posts: [Post!]!
+	posts(after: String, first: Int): PostConnection!
 	updatedAt: String!
+}
+
+type UserConnection {
+	"""
+	A list of edges.
+	"""
+	edges: [UserEdge!]!
+	"""
+	A list of nodes.
+	"""
+	nodes: [User!]!
+	"""
+	Information to aid in pagination.
+	"""
+	pageInfo: PageInfo!
+}
+
+"""
+An edge in a connection.
+"""
+type UserEdge {
+	"""
+	A cursor for use in pagination
+	"""
+	cursor: String!
+	"""
+	The item at the end of the edge
+	"""
+	node: User!
 }
 
 """

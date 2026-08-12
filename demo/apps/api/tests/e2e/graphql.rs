@@ -194,7 +194,9 @@ async fn graphql_auto_resolved_relations_respect_ability_scope() {
         .http()
         .post("/graphql")
         .header(header::AUTHORIZATION, &token_a)
-        .body_json(&json!({ "query": "{ orgs { id users { email } } }" }))
+        .body_json(&json!({
+            "query": "{ orgs { id users { edges { node { email } } } } }"
+        }))
         .send()
         .await;
     resp.assert_status_is_ok();
@@ -213,8 +215,22 @@ async fn graphql_auto_resolved_relations_respect_ability_scope() {
         .array()
         .iter()
     {
-        for u in org.object().get("users").array().iter() {
-            seen.push(u.object().get("email").string().to_owned());
+        for edge in org
+            .object()
+            .get("users")
+            .object()
+            .get("edges")
+            .array()
+            .iter()
+        {
+            seen.push(
+                edge.object()
+                    .get("node")
+                    .object()
+                    .get("email")
+                    .string()
+                    .to_owned(),
+            );
         }
     }
     assert!(
@@ -228,7 +244,7 @@ async fn graphql_auto_resolved_relations_respect_ability_scope() {
 }
 
 #[tokio::test]
-async fn has_many_relation_load_is_capped_at_relation_load_cap() {
+async fn every_parent_gets_its_own_page_of_an_auto_resolved_has_many() {
     use sea_orm::ConnectionTrait;
 
     let (db, app) = boot().await;
@@ -236,27 +252,23 @@ async fn has_many_relation_load_is_capped_at_relation_load_cap() {
     let org = create_org(&app, &admin, "Fanout").await;
     let token = format!("Bearer {}", token_for(&org, "admin").await);
 
-    let author_resp = app
-        .http()
-        .post("/users")
-        .header(header::AUTHORIZATION, &token)
-        .body_json(&json!({ "name": "Author", "email": "fanout-author@rel.test" }))
-        .send()
-        .await;
-    author_resp.assert_status_is_ok();
-    let author = author_resp
-        .json()
-        .await
-        .value()
-        .object()
-        .get("id")
-        .string()
-        .to_owned();
+    let authors = [
+        create_user(&app, &token, "Ann", "fanout-ann@rel.test").await,
+        create_user(&app, &token, "Bo", "fanout-bo@rel.test").await,
+        create_user(&app, &token, "Cy", "fanout-cy@rel.test").await,
+    ];
+    let per_author = 25_u64;
+    let page = 10_u64;
 
-    let seeded = nest_rs::seaorm::RELATION_LOAD_CAP + 5;
-    let rows: Vec<String> = (0..seeded)
-        .map(|i| format!("('{}','{org}','{author}','t{i}','b{i}')", Uuid::now_v7()))
-        .collect();
+    let mut rows: Vec<String> = Vec::new();
+    for author in &authors {
+        for i in 0..per_author {
+            rows.push(format!(
+                "('{}','{org}','{author}','t{i}','b{i}')",
+                Uuid::now_v7()
+            ));
+        }
+    }
     db.connection()
         .execute_unprepared(&format!(
             "INSERT INTO post (id, org_id, author_id, title, body) VALUES {}",
@@ -265,39 +277,89 @@ async fn has_many_relation_load_is_capped_at_relation_load_cap() {
         .await
         .expect("bulk insert posts");
 
-    let resp = app
-        .http()
-        .post("/graphql")
-        .header(header::AUTHORIZATION, &token)
-        .body_json(&json!({ "query": "{ orgs { id posts { id } } }" }))
-        .send()
-        .await;
-    resp.assert_status_is_ok();
-    let body = resp.json().await;
+    let first_page = graphql(
+        &app,
+        &token,
+        &format!(
+            "{{ users {{ id posts(first: {page}) {{ \
+               edges {{ cursor node {{ id }} }} \
+               pageInfo {{ hasNextPage hasPreviousPage endCursor }} }} }} }}"
+        ),
+    )
+    .await;
     assert!(
-        body.value().object().get_opt("errors").is_none(),
-        "graphql response must not contain errors",
+        first_page.get("errors").is_none(),
+        "a paginated relation must resolve: {first_page}"
     );
-    let loaded = body
-        .value()
-        .object()
-        .get("data")
-        .object()
-        .get("orgs")
-        .array()
-        .iter()
-        .find(|o| o.object().get("id").string() == org.as_str())
-        .expect("the seeded org is present in the response")
-        .object()
-        .get("posts")
-        .array()
-        .iter()
-        .count() as u64;
+
+    let mut walked: Vec<String> = Vec::new();
+    for author in &authors {
+        let connection = connection_of(&first_page, author);
+        let ids = node_ids(connection);
+        assert_eq!(
+            ids.len() as u64,
+            page,
+            "each parent gets its own page, not a share of one global limit: {first_page}",
+        );
+        assert_eq!(connection["pageInfo"]["hasNextPage"], json!(true));
+        assert_eq!(connection["pageInfo"]["hasPreviousPage"], json!(false));
+        walked.extend(ids);
+    }
     assert_eq!(
-        loaded,
-        nest_rs::seaorm::RELATION_LOAD_CAP,
-        "an exposed has_many load is bounded at RELATION_LOAD_CAP, not the {seeded} seeded",
+        walked.len(),
+        walked
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        "no post is served to two parents",
     );
+
+    // The second page of the *middle* author: under the batch shape this
+    // replaces, a per-parent window could not be expressed at all, and the
+    // parents that sorted last read as having no children.
+    let cursor = connection_of(&first_page, &authors[1])["pageInfo"]["endCursor"]
+        .as_str()
+        .expect("a page with more to come carries an endCursor")
+        .to_owned();
+    let second_page = graphql(
+        &app,
+        &token,
+        &format!(
+            "{{ users {{ id posts(first: {page}, after: \"{cursor}\") {{ \
+               edges {{ node {{ id }} }} pageInfo {{ hasPreviousPage }} }} }} }}"
+        ),
+    )
+    .await;
+    let second = connection_of(&second_page, &authors[1]);
+    let second_ids = node_ids(second);
+    assert_eq!(second_ids.len() as u64, page, "{second_page}");
+    assert_eq!(second["pageInfo"]["hasPreviousPage"], json!(true));
+    let firsts = node_ids(connection_of(&first_page, &authors[1]));
+    assert!(
+        second_ids.iter().all(|id| !firsts.contains(id)),
+        "the cursor advances the window rather than replaying it",
+    );
+}
+
+/// The `posts` connection of one user in a `{ users { posts … } }` response.
+fn connection_of<'a>(body: &'a serde_json::Value, user: &str) -> &'a serde_json::Value {
+    body["data"]["users"]
+        .as_array()
+        .unwrap_or_else(|| panic!("users is a list: {body}"))
+        .iter()
+        .find(|u| u["id"] == json!(user))
+        .unwrap_or_else(|| panic!("user {user} is in the response: {body}"))
+        .get("posts")
+        .unwrap_or_else(|| panic!("the user carries its posts connection: {body}"))
+}
+
+fn node_ids(connection: &serde_json::Value) -> Vec<String> {
+    connection["edges"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a connection carries edges: {connection}"))
+        .iter()
+        .map(|e| e["node"]["id"].as_str().expect("a node id").to_owned())
+        .collect()
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@ use syn::punctuated::Punctuated;
 use syn::{Expr, ItemStruct, LitStr, Meta, Token};
 
 use nest_rs_codegen::{
-    DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
+    DecoratorPair, Edge, InjectableBody, build_injectable_body, expr_str, from_container_method,
     guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
     reject_http_only_layers, scoped_specs, take_path_list,
 };
@@ -95,11 +95,8 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     // default endpoint. The decorator keeps no default of its own, so the path
     // a host lands on has one home and cannot drift between the two crates.
     let path = args.path.unwrap_or_else(|| LitStr::new("", name.span()));
-    let (identity_name, identity_version, identity_title) = (
-        opt_str(args.name.as_ref()),
-        opt_str(args.version.as_ref()),
-        opt_str(args.title.as_ref()),
-    );
+    let (identity_name, identity_title) =
+        (opt_str(args.name.as_ref()), opt_str(args.title.as_ref()));
 
     quote! {
         #item
@@ -151,11 +148,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                     builder,
                     #path,
                     #host_name,
-                    ::nest_rs_mcp::McpIdentity::declared(
-                        #identity_name,
-                        #identity_version,
-                        #identity_title,
-                    ),
+                    ::nest_rs_mcp::McpIdentity::declared(#identity_name, #identity_title),
                     |__c| -> ::std::sync::Arc<dyn ::nest_rs_mcp::McpHost> {
                         ::std::sync::Arc::new(<Self>::from_container(__c))
                     },
@@ -181,10 +174,18 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
 /// serves the default endpoint and lets the app's identity speak for it.
 ///
 /// `path` is a literal — it is a route, and the same shape `#[controller]`
-/// takes. The identity arguments stay whole expressions so an app-owned host
-/// can write `version = env!("CARGO_PKG_VERSION")`; each is passed to
-/// `McpIdentity::declared`, whose `Option<&str>` parameters are what reject
-/// anything else, spanned on the offending expression.
+/// takes. The identity arguments stay whole expressions so a host can name
+/// itself from its own build environment (`name = env!("CARGO_PKG_NAME")`);
+/// each is passed to `McpIdentity::declared`, whose `Option<&str>` parameters
+/// are what reject anything else, spanned on the offending expression.
+///
+/// The pair is what a host can honestly say: *which endpoint stands apart*. The
+/// server's own `version` is not on that list — a feature library knows neither
+/// the binary's version nor, on a shared endpoint, the whole surface — so it is
+/// declared once by the app, through `McpModule::for_root`. Nor is any other
+/// field of the identity: [`SERVER_FIELDS`] is the rest of them, each refused by
+/// name and pointed at that same seam, because a key that exists and is
+/// somebody's deserves an answer rather than a list of spellings.
 ///
 /// Unlike a controller's, this path is not a namespace the host owns — nothing
 /// nests under it. It names the one endpoint the host joins, which is why
@@ -193,11 +194,16 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
 struct McpArgs {
     path: Option<LitStr>,
     name: Option<Expr>,
-    version: Option<Expr>,
     title: Option<Expr>,
 }
 
 fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
+    // Before this decorator's own unknown-key arm, because `version` is not a
+    // typo here: it is the word a developer carries over from `#[controller(
+    // version = "1")]`, where it selects an address. MCP's answer to that — the
+    // path is the address, the server's version is the app's one declaration —
+    // is worded once, in `nest-rs-codegen`, for every edge that refuses it.
+    Edge::Mcp.reject_version(&args)?;
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut parsed = McpArgs::default();
     for meta in metas {
@@ -206,44 +212,116 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
                 parsed.path = Some(expr_str(&nv.value)?)
             }
             Meta::NameValue(nv) if nv.path.is_ident("name") => parsed.name = Some(nv.value),
-            Meta::NameValue(nv) if nv.path.is_ident("version") => parsed.version = Some(nv.value),
             Meta::NameValue(nv) if nv.path.is_ident("title") => parsed.title = Some(nv.value),
-            // `instructions` deliberately absent: it describes the *server*, so
-            // it is the app's one declaration
-            // (`McpOptions { server: McpIdentity::new(..).instructions(..) }`).
-            // A host writing it would speak for peers it cannot see.
-            Meta::NameValue(nv) if nv.path.is_ident("instructions") => {
-                return Err(syn::Error::new_spanned(
-                    nv,
-                    "#[mcp] takes no `instructions` — they describe the server, not one \
-                     host, so they are declared once: McpModule::for_root(McpOptions { \
-                     server: Some(McpIdentity::new(name, version).instructions(\"…\")), \
-                     ..Default::default() }). What this host's tools *do* belongs to \
-                     each #[tool(description = \"…\")]",
-                ));
-            }
+            // Two different answers, and telling them apart is the point. A key
+            // naming a field of the server's identity is a key that *exists* —
+            // it is declared by the app, and the sentence says where. Anything
+            // else is nobody's, and gets the list of what remains.
             other => {
-                return Err(syn::Error::new_spanned(
-                    other,
-                    "#[mcp] accepts `path`, `name`, `version` and `title`, all optional",
-                ));
+                return Err(match server_field(&other) {
+                    Some(field) => syn::Error::new_spanned(&other, field.refusal()),
+                    None => syn::Error::new_spanned(&other, UNKNOWN_ARGUMENT),
+                });
             }
         }
-    }
-    // A version names nothing on its own, and inheriting the app's name while
-    // overriding its version would report a server that does not exist.
-    if let (None, Some(version)) = (&parsed.name, &parsed.version) {
-        return Err(syn::Error::new_spanned(
-            version,
-            "#[mcp] `version` needs a `name` beside it — without one the endpoint \
-             reports the app's name at another version. Drop it to inherit the app's \
-             identity whole",
-        ));
     }
     if let Some(path) = &parsed.path {
         check_path(path)?;
     }
     Ok(parsed)
+}
+
+/// The keys that remain once every one this decorator refuses has named its own
+/// owner — so a key reaching this sentence is one nothing in the framework has a
+/// home for, which is the only case a list of spellings actually helps.
+const UNKNOWN_ARGUMENT: &str = "#[mcp] accepts `path`, `name` and `title`, all optional";
+
+/// Where a host's own prose goes, for the fields whose per-operation twin is
+/// what a developer reaching for them usually meant. A server-level field
+/// refused without it answers "not here" and not "there".
+const TOOL_DESCRIPTION: &str =
+    "What this host's tools *do* belongs to each #[tool(description = \"…\")]";
+
+/// A field of the server's identity: real, settable, and the **app's** to set.
+///
+/// One row per `McpIdentity` builder beyond the `name`/`title` pair a host
+/// declares for itself (see `nest-rs-mcp`'s `identity.rs`, which the unit test
+/// below reads so this list cannot fall behind it). Each is a key a host may
+/// plausibly write, and writing it is not a typo — the field exists, it is just
+/// declared at the seam that can honestly state it, since on an endpoint several
+/// features share no single host sees the whole. So each owes the *same shape of
+/// answer* `version` and `instructions` already gave: a sentence naming the seam
+/// that takes it. A bare "unknown key" here is the silence `CLAUDE.md` counts as
+/// a defect — it sends the developer looking for a spelling that does not exist.
+struct ServerField {
+    /// The key as a host writes it, which is the identity field's own name.
+    key: &'static str,
+    /// The `McpIdentity` call that takes it, spelled into the remedy so the
+    /// sentence carries a line the developer can paste.
+    declares: &'static str,
+    /// What they may have meant instead, when the field has a per-operation
+    /// twin. Empty when it has none.
+    instead: &'static str,
+}
+
+/// Every identity field the app owns, refused by name.
+///
+/// `version` is absent because it is refused one step earlier and by a wider
+/// mechanism — `Edge::Mcp` words that answer once for every edge that has no
+/// client-selectable version, and it says more than "the app declares it".
+const SERVER_FIELDS: [ServerField; 4] = [
+    ServerField {
+        key: "description",
+        declares: "description(\"…\")",
+        instead: TOOL_DESCRIPTION,
+    },
+    ServerField {
+        key: "website_url",
+        declares: "website_url(\"…\")",
+        instead: "",
+    },
+    ServerField {
+        key: "icons",
+        declares: "icons([…])",
+        instead: "",
+    },
+    ServerField {
+        key: "instructions",
+        declares: "instructions(\"…\")",
+        instead: TOOL_DESCRIPTION,
+    },
+];
+
+/// The identity field a `#[mcp]` argument names, if it names one. Keyed off the
+/// path alone, so a bare `icons` and an `icons = [..]` get the same answer — a
+/// host that reached for the key learns where it lives either way.
+fn server_field(meta: &Meta) -> Option<&'static ServerField> {
+    SERVER_FIELDS
+        .iter()
+        .find(|field| meta.path().is_ident(field.key))
+}
+
+impl ServerField {
+    /// The refusal as the developer reads it: whose the field is, and the one
+    /// call that takes it. Worded once for every row — three spellings of one
+    /// sentence is how the list fell behind the struct in the first place.
+    fn refusal(&self) -> String {
+        let Self {
+            key,
+            declares,
+            instead,
+        } = self;
+        let mut message = format!(
+            "#[mcp] takes no `{key}` — that describes the server, not one host, so it is \
+             declared once: McpModule::for_root(McpOptions {{ server: \
+             Some(McpIdentity::new(name, version).{declares}), ..Default::default() }})",
+        );
+        if !instead.is_empty() {
+            message.push_str(". ");
+            message.push_str(instead);
+        }
+        message
+    }
 }
 
 /// A host's `path` is the whole URL path a client is configured with. Written
@@ -267,5 +345,83 @@ fn opt_str(expr: Option<&Expr>) -> TokenStream2 {
     match expr {
         Some(value) => quote! { ::core::option::Option::Some(#value) },
         None => quote! { ::core::option::Option::None },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{SERVER_FIELDS, UNKNOWN_ARGUMENT};
+
+    /// The identity a host declares for *itself* — the pair
+    /// `McpIdentity::declared` takes, and the only builders the scan below may
+    /// find with no refusal behind them.
+    const HOST_DECLARED: [&str; 2] = ["name", "title"];
+
+    /// A row added later cannot ship a sentence that names nothing: the key it
+    /// refuses, the call that takes it, and the seam that call belongs to all
+    /// have to reach the message the developer reads.
+    #[test]
+    fn every_refused_field_names_its_key_and_the_seam_that_takes_it() {
+        for field in &SERVER_FIELDS {
+            let message = field.refusal();
+            assert!(message.contains(field.key), "{message}");
+            assert!(
+                message.contains(field.declares),
+                "{} names no call to paste: {message}",
+                field.key,
+            );
+            assert!(
+                message.contains("McpModule::for_root"),
+                "{} names no seam: {message}",
+                field.key,
+            );
+            assert!(
+                !UNKNOWN_ARGUMENT.contains(field.key),
+                "`{}` is refused by name, so the accepted-key list must not offer it",
+                field.key,
+            );
+        }
+    }
+
+    /// The drift this file exists to close, executed rather than stated.
+    ///
+    /// `McpIdentity` grew `description`, `website_url` and `icons`; the
+    /// decorator's answers did not, so a host reaching for one got a bare
+    /// unknown key. A `*-macros` crate may not depend on its surface crate, so
+    /// the check reads the source — the same shape, and the same reason, as
+    /// `nest-rs-macro-hygiene`'s emissions scan.
+    #[test]
+    fn no_identity_field_reaches_a_host_without_an_answer() {
+        let identity = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("the crate sits in crates/")
+            .join("nest-rs-mcp/src/identity.rs");
+        let source = std::fs::read_to_string(&identity)
+            .unwrap_or_else(|err| panic!("{} is readable: {err}", identity.display()));
+
+        // A field an app sets is a builder taking `self` by value: everything
+        // `McpIdentity::new` does not already take.
+        let builders: Vec<&str> = source
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("pub fn "))
+            .filter_map(|rest| rest.split_once("(mut self,"))
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            builders.len() >= 5,
+            "the scan found {builders:?} — it is reading the wrong file",
+        );
+
+        for builder in builders {
+            assert!(
+                HOST_DECLARED.contains(&builder)
+                    || SERVER_FIELDS.iter().any(|field| field.key == builder),
+                "McpIdentity::{builder} is a field an app sets, so a host will reach for \
+                 `#[mcp({builder} = …)]` and get a bare unknown key — give it a row in \
+                 SERVER_FIELDS naming the seam that takes it",
+            );
+        }
     }
 }

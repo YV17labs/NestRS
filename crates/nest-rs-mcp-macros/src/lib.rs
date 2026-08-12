@@ -25,12 +25,13 @@ mod mcp_impl;
 /// contributing tools to this app's server wants. Unlike a controller's, the
 /// path is not a namespace the host owns: nothing nests under it, it names the
 /// one endpoint the host joins, and peers that write the same one share it.
-/// `name` / `version` / `title` declare which endpoint stands apart from the
-/// app's default, overriding `McpOptions::server` per field; `version` needs a
-/// `name` beside it, and two hosts on one path both declaring fails boot.
-/// `instructions` is **not** an argument: it describes the *server*, so it is
-/// declared once on `McpOptions::server`, and what each tool does belongs to
-/// its own `#[tool(description = "…")]`.
+/// `name` / `title` declare which endpoint stands apart from the app's default,
+/// overriding `McpOptions::server` per field; two hosts on one path both
+/// declaring fails boot. Neither `version` nor `instructions` is an argument:
+/// both describe the *server* — a feature library knows neither the binary's
+/// version nor, on a shared endpoint, the whole surface — so they are declared
+/// once on `McpOptions::server`, and what each tool does belongs to its own
+/// `#[tool(description = "…")]`.
 ///
 /// ```ignore
 /// #[mcp]
@@ -66,7 +67,7 @@ mod mcp_impl;
 ///     fn register(b) -> ContainerBuilder {
 ///         ::nest_rs_mcp::register_host::<Self>(
 ///             b, "", "MyHandler",
-///             ::nest_rs_mcp::McpIdentity::declared(None, None, None),
+///             ::nest_rs_mcp::McpIdentity::declared(None, None),
 ///             |c| Arc::new(Self::from_container(c)),
 ///             || Self::tool_router().list_all(),
 ///         )

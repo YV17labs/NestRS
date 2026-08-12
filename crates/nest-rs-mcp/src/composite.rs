@@ -22,7 +22,7 @@
 //! Identity is the one part several hosts cannot each answer for, because an
 //! endpoint reports one `serverInfo` however many features share it — so the
 //! app names itself once (`McpOptions::server`) and at most one host on the
-//! path refines that (`#[mcp(name = …, instructions = …)]`). Undeclared, it
+//! path refines that (`#[mcp(name = …, title = …)]`). Undeclared, it
 //! falls back to the hosts' own with a boot `warn`. See [`crate::McpIdentity`].
 //!
 //! `tools/call` is routed through an index the mount builds once, name → host,

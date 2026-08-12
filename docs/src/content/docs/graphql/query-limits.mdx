@@ -1,6 +1,7 @@
 ---
 title: Query limits
 description: Bound query depth and complexity at the schema level — two ceilings that catch the recursive bomb, the wide sweep, and volumetric fanout before a resolver runs.
+tier: all-options
 sidebar:
   order: 8
 ---
@@ -15,8 +16,8 @@ auth even runs:
   massive resolve work.
 - **Wide / flat** — a single selection with hundreds of fields.
 - **Volumetric fanout** — `{ users { posts { comments { … } } } }`
-  where every step is `has_many`. Three levels of 10× fanout = 1000
-  rows resolved per parent.
+  where every step is `has_many`. Three levels of page-sized fanout
+  multiply out per parent.
 
 nestrs wraps async-graphql's two validation visitors that cover the
 three vectors. Both are on by default; tune the ceilings to your
@@ -98,25 +99,24 @@ against your real schema before tightening further.
 
 ## The auto-emitted `HasMany` factor
 
-A `HasMany` relation resolves through an unbounded loader: the
-dataloader returns *every* child row of the parent. With async-graphql's
-default scoring, that field costs 1 — no penalty for the fanout, even
-though 10 000 rows resolve.
+A `HasMany` relation resolves a **page** of children per parent. With
+async-graphql's default scoring, that field costs 1 — no penalty for the
+fanout, even though a hundred rows resolve.
 
-`#[expose]` patches that automatically:
+`#[expose]` patches that automatically, using the page the client asked
+for rather than a guessed constant:
 
 ```rust title="from the macro expansion"
-#[graphql(complexity = "10 * child_complexity")]
-async fn users(&self, …) -> Vec<User> { … }
+#[graphql(complexity = "first.unwrap_or(20) as usize * child_complexity")]
+async fn users(&self, …, first: Option<u64>, after: Option<String>)
+    -> Connection<String, User> { … }
 ```
 
-The 10× factor models a typical fan-out — three levels of `HasMany`
-(`organizations → teams → members`) score `10 × 10 × 10 = 1000`. With
-the strict `>` check, `max_complexity = 1000` lets that query through
-(exactly at the ceiling); pin `999` if you want to reject the canonical
-3-deep chain. Tune the ceiling, not the factor — the factor is
-hard-wired across the framework so the calibration story stays the same
-app-wide.
+So `users(first: 5)` scores a twentieth of `users(first: 100)`, and three
+levels of `HasMany` (`organizations → teams → members`) left at the
+default page size score `20³`. Tune the ceiling, not the formula — the
+formula is hard-wired across the framework so the calibration story stays
+the same app-wide. The `20` mirrors `nest_rs_seaorm::DEFAULT_PAGE_SIZE`.
 
 `BelongsTo` resolvers keep async-graphql's default `1 +
 child_complexity` — they load at most one parent row, and an ability
@@ -146,13 +146,14 @@ pub struct Model {
 Two shapes:
 
 - **Literal** — `#[expose(complexity = 5)]` pins a fixed score.
-- **Expression** — `#[expose(complexity = "10 * child_complexity")]`
+- **Expression** — `#[expose(complexity = "20 * child_complexity")]`
   uses async-graphql's expression grammar with the reserved
-  `child_complexity` variable. Pure arithmetic on `child_complexity`
-  and literals only — the auto-emitted relation resolver takes
-  **no GraphQL arguments**, so a name like `first` in the expression
-  is treated as an unbound identifier and the macro expansion fails
-  to compile.
+  `child_complexity` variable, plus **the field's own arguments**. An
+  auto-emitted `HasMany` takes `first: Option<u64>` and
+  `after: Option<String>`, so `first.unwrap_or(20) as usize *
+  child_complexity` is available there; every other field has no
+  arguments to name, and an unknown name is an unbound identifier that
+  fails the expansion.
 
 The override applies to any exposed field, scalar or relation:
 
@@ -177,14 +178,13 @@ relation unexposed and put `#[graphql(complexity = …)]` directly on the
 `#[field_resolver]` method instead.
 </Aside>
 
-### Argument-aware expressions: the `#[field_resolver]` path
+### Argument-aware expressions
 
-`first * child_complexity` and similar expressions that read a
-GraphQL argument only resolve when the field resolver **declares
-that argument**. The auto-emitted relation does not. For a
-paginated relation taking `first` (or `limit`, or `per_page`), leave
-the relation unexposed (no `#[expose]`) and write the resolver by
-hand with a regular `#[graphql(complexity = …)]`:
+An expression that reads a GraphQL argument only resolves when the field
+**declares that argument**. The auto-emitted `HasMany` declares `first`
+and `after`, which is why its default formula can be argument-aware at
+all. A hand-written `#[field_resolver]` taking its own arguments does the
+same with a regular `#[graphql(complexity = …)]`:
 
 ```rust
 // No #[expose] => no auto-emission; own it on the resolver.
@@ -194,8 +194,8 @@ pub posts: HasMany<crate::posts::Entity>,
 // in the resolver file:
 #[ComplexObject]
 impl User {
-    #[graphql(complexity = "first * child_complexity")]
-    async fn posts(&self, first: i32) -> Vec<Post> { … }
+    #[graphql(complexity = "limit as usize * child_complexity")]
+    async fn recent_posts(&self, limit: u32) -> Vec<Post> { … }
 }
 ```
 
@@ -224,9 +224,8 @@ any other validation error.
    on public endpoints, scrapers requesting hundreds of fields),
    tighten to the lowest value that doesn't trip legitimate traffic.
 4. Override on individual fields only when a relation's realistic
-   fanout differs from the 10× default — a paginated cursor connection
-   typically uses `first * child_complexity`; a known-bounded set
-   can use a smaller literal.
+   cost differs from its page size — a known-bounded set can use a
+   smaller literal, and an expensive computed scalar a larger one.
 
 <Aside type="tip">
 **Complexity scoring runs before authn.** The validation visitor
@@ -254,10 +253,10 @@ for the full reference.
 - `crates/nest-rs-graphql/src/resolver.rs` — `build_schema` applies
   the limits to the `SchemaBuilder` before `.finish()`.
 - `crates/nest-rs-resource-macros/src/relations.rs` — the
-  `default_has_many_complexity()` constant and the
+  `DEFAULT_HAS_MANY_COMPLEXITY` constant and the
   `#[expose(complexity = …)]` parsing.
 
 ## Going further
 
 - [Configuration](/graphql/configuration/) — where `max_depth` and `max_complexity` are set.
-- [Relations](/graphql/relations/) — the auto-emitted `HasMany` complexity factor.
+- [Relations](/graphql/relations/) — the auto-emitted `HasMany` connection and its complexity formula.

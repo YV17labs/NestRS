@@ -1,6 +1,7 @@
 ---
 title: Response masking
 description: Declare Authorize<A, S> on the handler and every successful response is masked automatically — fail-closed, with an unexposed column unable to leak.
+tier: basics
 sidebar:
   order: 5
 ---
@@ -51,20 +52,26 @@ and delegates.
 The parameter is load-bearing even bound as `_authz` — deleting the
 "unused" parameter disarms masking for that route.
 
-`#[routes]` also reads it **by type name**, so importing it under an alias
-(`use ... as Foo`) escapes that detection. The route then **fails closed** — a
-`500` for every caller, never a body — with an `error` on `nest_rs::http`
-naming the route and the fix:
+How you *spell* it does not matter. `#[routes]` hands each parameter type to
+the compiler and asks whether it is a `RouteResponseShaper`, so an alias
+(`use ... as Foo`), a re-export or any module qualification arms the route
+exactly like the canonical name.
+
+One shape stays invisible to that question: an extractor reached **indirectly**
+— nested inside another extractor, or run by a hand-rolled `FromRequest`. Such
+a route arms nothing, and rather than ship an unmasked body it **fails closed**
+— a `500` for every caller — with an `error` on `nest_rs::http` naming the
+route and the fix:
 
 ```text
-ERROR nest_rs::http: a masking extractor ran but response masking is not armed
-  on this route — spell `Authorize<..>`/`Bind<..>` with their own names (a
-  renamed import escapes `#[routes]` detection); failing closed
+ERROR nest_rs::http: a masking extractor ran but no response shaper armed on
+  this route — declare it as a handler parameter (a nested or hand-rolled
+  extractor is invisible to the type-directed arm); failing closed
   route="get /aliased"
 ```
 
-Nothing ships unmasked, so an alias is a wiring error to fix, not an exposure
-to audit. Keep `Authorize` unaliased.
+Nothing ships unmasked, so this is a wiring error to fix, not an exposure to
+audit. Declare the extractor as its own parameter.
 </Aside>
 
 The GraphQL analog is `#[authorize(Action, Entity)]` on a

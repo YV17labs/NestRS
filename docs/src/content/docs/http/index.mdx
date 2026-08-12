@@ -37,8 +37,8 @@ which is a crate you name.
 
 ## In this section
 
-- [Configuration](/http/configuration/) — `HttpConfig`, env vars vs
-  pinned struct, TLS, CORS, the framework `Server:` header.
+### Basics
+
 - [Controllers & routes](/http/controllers/) — `#[controller]`,
   `#[routes]`, path/query/JSON extractors, typed returns.
 - [Responses](/http/responses/) — `Json<T>`, status + body tuples,
@@ -48,8 +48,19 @@ which is a crate you name.
 - [Extractors](/http/extractors/) — the full extractor surface:
   `RawBody`, `ClientIp`, `Scoped<T>`, `Ctx<T>`, `Reflector` +
   `#[meta(...)]`.
+
+### All options
+
+- [Configuration](/http/configuration/) — `HttpConfig`, env vars vs
+  pinned struct, TLS, CORS, the framework `Server:` header.
 - [Versioning](/http/versioning/) — `#[controller(version = "1")]` and
   multi-version controllers.
+- [Compression](/http/compression/) — gzip/brotli negotiated from
+  `Accept-Encoding`, behind one `HttpConfig` flag.
+- [Streaming responses](/http/streaming/) — a chunked body or a
+  Server-Sent Events stream returned from a handler.
+- [File uploads](/http/file-uploads/) — a `multipart/form-data` part
+  streamed straight into object storage.
 
 ## Going further
 

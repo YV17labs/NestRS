@@ -487,11 +487,18 @@ what the model reads when it chooses between them.
 pub struct WeatherTool { /* … */ }
 ```
 
-`name`, `version` and `title` are optional and each overrides the app's per
-field, so the host above renames its endpoint while still inheriting the app's
-version, title and instructions. Two hosts on one path both declaring is a boot
-error naming both — otherwise the endpoint's name would depend on
-`imports = [..]` order.
+`name` and `title` are optional and each overrides the app's per field, so the
+host above renames its endpoint while still inheriting the app's version, title
+and instructions. Two hosts on one path both declaring is a boot error naming
+both — otherwise the endpoint's name would depend on `imports = [..]` order.
+
+**`path`, `name` and `title` are the whole list.** Every other identity field —
+`version`, `description`, `website_url`, `icons`, `instructions` — describes the
+*server*, and writing one on a host is a compile error naming the seam that takes
+it. A feature library knows neither the binary's version nor, on a shared
+endpoint, the whole surface, so those have one owner: the app's
+`McpModule::for_root`. To version the *address*, write it into the path —
+`#[mcp(path = "/mcp/v1")]`.
 
 **Identity is declared; capabilities are observed.** A declaration replaces what
 it states and can never claim a capability no host serves. Declare no

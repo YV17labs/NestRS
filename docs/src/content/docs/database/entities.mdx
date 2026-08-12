@@ -1,6 +1,7 @@
 ---
 title: Entities
 description: "The entity is the wire contract. One #[expose]d SeaORM model emits the DTO, inputs, JSON schema, relation loaders, and lifecycle — opt-in, fail-secure."
+tier: basics
 sidebar:
   order: 2
 ---
@@ -161,6 +162,42 @@ missing impl. A column an ability rule predicates on is therefore best left
 See [Response masking](/security/authorization/response-masking/).
 </Aside>
 
+### Enum columns
+
+An exposed column whose type is your own enum passes through to the wire
+**verbatim**, so the enum is what has to carry the wire traits.
+`#[wire_enum]` is the enum mode of `#[expose]` and emits all of them —
+`Serialize`, `Deserialize`, `JsonSchema`, and under `graphql`
+`async_graphql::Enum`, plus the `Clone`/`Copy`/`Eq` shape those require:
+
+```rust title="src/posts/entities/post.rs"
+use nest_rs::resource::{expose, wire_enum};
+
+#[wire_enum(graphql)]
+#[derive(EnumIter, DeriveActiveEnum)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "lowercase")]
+pub enum PostStatus {
+    #[sea_orm(string_value = "draft")]
+    Draft,
+    #[sea_orm(string_value = "published")]
+    Published,
+}
+```
+
+Each of those derives expands against the **call site's** prelude, so
+hand-writing them put `schemars` and `async-graphql` in your manifest for
+code you never wrote. The decorator routes them back through
+`nest-rs-resource` with a `crate = ` override, so your manifest names
+neither.
+
+It deliberately emits **nothing from SeaORM**: `EnumIter`,
+`DeriveActiveEnum`, `#[sea_orm(rs_type, db_type)]` and the per-variant
+`string_value` stay yours, because how the column is *stored* is your
+decision, not the wire's. Your own `#[serde(rename_all = …)]` and
+`#[derive(Default)]` sit beside it untouched. Drop `graphql` for an enum
+that only crosses HTTP.
+
 ## Write side — inputs and validation
 
 `input(create)` / `input(update)` place a field in the generated
@@ -209,11 +246,14 @@ pub posts: HasMany<crate::posts::Entity>,
 This needs `graphql` **and** `service` on the header. The macro emits
 the PK loader (`<Service>ById`) and, per `belongs_to`, the FK loader
 (`<Service>By<FkCol>`) on the owning side's service, plus the
-`PkLoadable` / `RelatedTo<Parent>` impls that let the inverse side
-reach the loader without naming the other service. Every batch goes
-through `Repo::scoped(Action::Read)`, so the ambient ability filters
-relation reads row-level, exactly as on any other query. Drop
-`#[expose]` on a single relation to opt that one field out.
+`PkLoadable` / `RelatedTo<Parent, Via>` impls that let the inverse side
+reach the loader without naming the other service. The `has_many` side
+is a paged connection (`first` / `after`), one page **per parent**.
+Every batch goes through `Repo::scoped(Action::Read)`, so the ambient
+ability filters relation reads row-level, exactly as on any other query.
+Drop `#[expose]` on a single relation to opt that one field out, and add
+`#[expose(via = "author_id")]` when the child reaches this parent through
+more than one foreign key.
 
 See [GraphQL relations](/graphql/relations/) and
 [Dataloaders](/database/dataloaders/) for the full mechanics, and
@@ -224,8 +264,8 @@ cost the macro attaches.
 
 There is no `#[expose]` "virtual column" attribute — `#[expose]` only
 surfaces real SeaORM columns and relations. For a value computed at
-query time (a derived total, a formatted label, a cursor connection
-over a relation), leave the source unexposed and write a
+query time (a derived total, a formatted label, a filtered subset of a
+relation), leave the source unexposed and write a
 `#[field_resolver]` on the resolver instead. Cost it with
 `#[expose(complexity = …)]` on an exposed field, or
 `#[graphql(complexity = …)]` directly on a hand-rolled resolver.
@@ -305,6 +345,8 @@ See [Migrations](/database/migrations/) for writing and running them
 | `#[expose(validate(…))]` | input column | Attaches a `validator` rule to the input field. |
 | `#[expose(complexity = …)]` | exposed field / relation | Overrides the GraphQL complexity cost (literal or expression string). |
 | `#[expose]` on `HasOne`/`HasMany` | relation | Auto-resolved GraphQL field (needs header `graphql` + `service`). |
+| `#[expose(via = "…")]` | `HasMany` | Names which of the child's foreign keys the relation follows — required when it has two to this parent. |
+| `#[wire_enum]` / `#[wire_enum(graphql)]` | a column's enum type | Emits the wire derives (serde, schemars, async-graphql `Enum`) routed through the framework. |
 
 ## Going further
 

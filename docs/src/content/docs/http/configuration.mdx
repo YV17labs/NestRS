@@ -1,6 +1,7 @@
 ---
 title: Configuration
 description: HttpConfig — host, port, TLS, CORS, the framework header — settable both via NESTRS_HTTP__* env vars and pinned in code.
+tier: all-options
 sidebar:
   order: 2
 ---
@@ -80,11 +81,38 @@ NESTRS_HTTP__TLS_CERT="$(cat fullchain.pem)" \
 NESTRS_HTTP__TLS_KEY="$(cat privkey.pem)" \
 nestrs run dev api
 
-# Or by path (the transport reads the file at boot)
+# Or by path — the transport reads the pair and keeps watching it
 NESTRS_HTTP__TLS_CERT_FILE=/etc/letsencrypt/.../fullchain.pem \
 NESTRS_HTTP__TLS_KEY_FILE=/etc/letsencrypt/.../privkey.pem \
 nestrs run dev api
 ```
+
+### Renewal without a restart
+
+The two forms differ in one way that matters in production: **material read
+from files is watched.** Every `NESTRS_HTTP__TLS_RELOAD_SECS` seconds (60 by
+default, `0` to turn it off) the pair is re-read, and a renewed pair is swapped
+into the running rustls config. The listener is not rebuilt — the port stays
+bound, in-flight connections finish, and certbot's `--deploy-hook` needs no
+`systemctl restart`.
+
+Two things it deliberately will not do:
+
+- **A pair it cannot read leaves the current certificate serving**, with a
+  `warn` on `nest_rs::http`. A renewal tool that unlinks before it writes would
+  otherwise take the listener down between two syscalls.
+- **A pair is installed only once it reads back identical twice**, so a file
+  caught mid-flush is never the one that gets served.
+
+That second rule has a limit worth knowing, because polling cannot see past it:
+a renewal that writes the certificate and its key **more than one interval
+apart** looks settled in between, and that pair is installed. Certbot and
+cert-manager both swap atomically (a new lineage directory plus a symlink, a
+remounted Secret), so this does not arise with either — but a hand-rolled hook
+that writes the two files in sequence should write them together, or set
+`NESTRS_HTTP__TLS_RELOAD_SECS` longer than the gap.
+
+Inline PEM has no source to watch, so it is loaded once, as before.
 
 Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
 tests (production deploys carry secrets in the environment):

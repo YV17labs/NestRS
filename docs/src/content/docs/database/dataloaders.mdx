@@ -1,6 +1,7 @@
 ---
 title: Dataloaders
 description: "Batch field fetches without N+1 — auto-emitted PK and FK loaders from #[expose], plus #[dataloader] for custom keys."
+tier: all-options
 sidebar:
   order: 6
 ---
@@ -34,9 +35,10 @@ GraphQL field auto-resolved through a dataloader. The macro emits:
   with `#[expose(name = ..., service = ...)]` — used by every inverse side
   to reach the parent;
 - an **FK loader** (`<Service>By<FkCol>`) per `belongs_to` on the
-  FK-owning side;
-- `PkLoadable` and `RelatedTo<Parent>` impls so the **inverse side** (the
-  parent's `has_many`) reaches the loader **without naming the other
+  FK-owning side, keyed on the parent id **and the page window**, so it
+  returns one page per parent rather than a share of one global limit;
+- `PkLoadable` and `RelatedTo<Parent, Via>` impls so the **inverse side**
+  (the parent's `has_many`) reaches the loader **without naming the other
   service** — no cross-feature wiring;
 - a `#[ComplexObject]` field resolver on the wire DTO that calls the
   matching loader and returns the related object.

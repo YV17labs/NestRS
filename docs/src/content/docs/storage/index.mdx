@@ -156,10 +156,18 @@ originals: a short-lived signed `GET` URL the client fetches directly.
 | `head(key) -> Option<HeadMetadata>` | object size; `None` if absent |
 | `get_bytes(key) -> Bytes` | download full bytes (server-side) |
 | `get_stream(key) -> impl Stream<Item = Result<Bytes>>` | download chunk by chunk, never buffering the whole object |
+| `list(prefix) -> impl Stream<Item = Result<ObjectEntry>>` | the keys under a prefix, streamed page by page; `""` lists the bucket |
 | `put_bytes(key, bytes, content_type)` | upload bytes — takes anything `Into<Bytes>`, so the `Bytes` from `get_bytes` composes without a copy |
+| `put_stream(key, content_type, stream)` | upload from a stream of `std::io::Result<Bytes>` as a multipart upload, one 5 MiB part at a time |
 | `delete(key)` | remove an object; an absent key succeeds, so retention sweeps and failed-upload cleanup are idempotent |
 
 That is the whole surface.
+
+`list` matches on path segments, so `posts/cover` returns `posts/cover/a.png`
+and never `posts/cover-2.png`, and each `ObjectEntry` carries the key, the byte
+size and a `std::time::SystemTime`. `put_stream` aborts its multipart upload on
+any failure — the store's or your stream's — so an interrupted upload leaves no
+billable parts behind.
 
 `StorageError` is **not** a `ResponseError`: an infrastructure error does not
 get to pick its own HTTP status, so `?`-ing one straight out of a handler does
@@ -221,8 +229,8 @@ server.
 
 ### Reference
 
-- `crates/nest-rs-storage/` — `Storage`, `HeadMetadata`, `StorageConfig`,
-  `StorageModule`.
+- `crates/nest-rs-storage/` — `Storage`, `HeadMetadata`, `ObjectEntry`,
+  `StorageConfig`, `StorageModule`.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
   — presigns an upload URL, and the worker reads the stored object and writes
   a derived one.

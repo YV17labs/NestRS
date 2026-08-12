@@ -1,6 +1,7 @@
 ---
 title: Versioning
-description: "URI versioning — #[controller(version = \"1\")] mounts under /v1; one source of truth across the served path, the boot log, and OpenAPI."
+description: "Declare a version once with #[controller(version = \"1\")]; pick how callers select one — URI, header or media type — as deployment config."
+tier: all-options
 sidebar:
   order: 7
 ---
@@ -31,9 +32,9 @@ impl PostsV1Controller {
 }
 ```
 
-Routes mount under `/v1/posts`. The boot log, the OpenAPI document, and
-the served path all route through the same `version_path` helper, so
-they cannot drift:
+Routes mount under `/v1/posts`. The boot log, the OpenAPI document and the
+served path all route through the same `version_path` helper, so under the
+default strategy they cannot drift:
 
 ```bash frame="terminal"
 $ nestrs run dev api
@@ -44,9 +45,47 @@ The version string is opaque — `"1"`, `"2"`, `"beta"` all work; the
 prefix is built as `format!("/v{version}")`. Stick to integers unless
 you have a reason not to.
 
-## Run multiple versions side by side
+## Serve one controller under several versions
 
-A controller per version, both provided by the feature's HTTP module:
+Most of a v2 is v1. `version = ["1", "2"]` mounts the whole controller at both
+prefixes, and the routes that actually differ say so themselves:
+
+```rust title="crates/features/src/posts/http/controller.rs"
+#[controller(path = "/posts", version = ["1", "2"])]
+pub struct PostsController {
+    #[inject]
+    svc: Arc<PostsService>,
+}
+
+#[routes]
+impl PostsController {
+    #[get("/")]
+    #[authorize(Read, posts::Entity)]
+    async fn list(&self) -> Result<Json<Vec<Post>>> {
+        Ok(Json(self.svc.feed().await?))
+    }
+
+    #[post("/:id/publish")]
+    #[version("2")]
+    #[authorize(Publish, posts::Entity)]
+    async fn publish(&self, Path(id): Path<Uuid>) -> Result<Json<Post>> {
+        Ok(Json(self.svc.publish(id).await?))
+    }
+}
+```
+
+`list` answers at `/v1/posts` and `/v2/posts`; `publish` only at
+`/v2/posts/:id/publish`. `POST /v1/posts/:id/publish` is a `405` — the path
+exists in v1, that verb does not — which is the honest answer, and one a
+`404` would have hidden.
+
+A `#[version]` naming something `#[controller(version = […])]` never declared
+**does not compile**. It would otherwise mount nowhere: a handler that builds,
+registers, appears in the document and answers nothing.
+
+## Run two controllers side by side
+
+When the two versions share nothing but a URL, a controller each is clearer:
 
 ```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
@@ -82,21 +121,134 @@ A common pattern: V2 delegates to the same `PostsService` when the change is
 purely on the wire (rename a field, add an optional field), and only
 the controller's `Json<T>` shape differs. The service stays one.
 
-## When the prefix matters elsewhere
+## Let the caller state the version instead
 
-The version isn't a header, isn't a query, isn't a content type. Three
-consequences:
+The URI is the default, not the only strategy. `NESTRS_HTTP__VERSIONING`
+switches how a caller *selects* a version — and nothing about the controllers
+changes, because `#[controller(version = "2")]` remains the one place a version
+is **declared**:
 
-- **Clients pick the version by URL.** A migration is one URL change,
-  not a header negotiation.
-- **The OpenAPI document carries one path per version.** A doc consumer
-  can list both versions side by side.
-- **A cache or proxy can route on the path** without inspecting headers.
+| `NESTRS_HTTP__VERSIONING` | The caller writes |
+|---|---|
+| `uri` (default) | `GET /v2/posts` |
+| `header` | `GET /posts` + `X-API-Version: 2` |
+| `media_type` | `GET /posts` + `Accept: application/json; version=2` |
 
-If header-based versioning is a hard requirement (some media-type-driven
-APIs lean on `Accept: application/vnd.api+json; version=2`), the URI
-path is the wrong tool. Use a custom guard that reads the header and
-dispatches inside the handler.
+```bash frame="terminal"
+NESTRS_HTTP__VERSIONING=header \
+NESTRS_HTTP__VERSION_HEADER=X-API-Version \
+NESTRS_HTTP__DEFAULT_VERSION=1 \
+nestrs run dev api
+```
+
+Under the last two the version is resolved **per request**, in front of routing,
+and folded into the path the controller already mounts at — so one route table
+serves every strategy. The boot log follows the caller, not the mount: it prints
+the address a client uses and carries the version as its own field.
+
+```bash frame="terminal"
+$ NESTRS_HTTP__VERSIONING=header nestrs run dev api
+INFO nest_rs::routes: mounted route controller=PostsV1Controller method=GET path=/posts version=1 handler=list
+```
+
+Five behaviours worth knowing before you switch:
+
+- **An address no versioned route answers at is served whatever version is
+  stated.** Header versioning is meant to be configured once in the client, so an
+  unversioned controller must stay reachable from a client that always sends the
+  header. There is exactly one shape at `/status`, so no other version could have
+  been meant — this is neutrality, not a fallback, and the difference is the next
+  bullet. It is decided per **route**, not per prefix: an unversioned
+  `#[controller(path = "/posts/drafts")]` beside a versioned `/posts` keeps
+  answering, and a versioned controller at `path = "/"` still selects.
+- **A stated version beats an unversioned route at the same address; a default
+  yields to it.** An explicit request is the strongest signal you can send, so it
+  wins — otherwise a versioned controller would be unreachable wherever an
+  unversioned one shares its address. `NESTRS_HTTP__DEFAULT_VERSION` is the
+  weakest: the caller asked for nothing, so nothing moves under them. Self-mounted
+  endpoints (`/graphql`, `/mcp`, `/api-json`, a WebSocket gateway) are neutral
+  against both — each owns its path outright.
+- **An unknown version on a path that *has* versions is a `404`, never a
+  fallback.** Quietly serving `v1` to a client that asked for `v9` is how a
+  client talks to the wrong API for a month. `NESTRS_HTTP__DEFAULT_VERSION`
+  answers a caller who states none — a default *among versions*, never a rewrite
+  of everything the app mounts, so every self-mounted endpoint (`/graphql`,
+  `/mcp`, `/api-json`, `/health`) is served as written too.
+- **The URI form stops being a second address.** With `header` or `media_type`
+  in force, `GET /v2/posts` is a `404`: there is exactly one way to ask.
+- **A malformed version is a `400`.** The token is spliced into a path, so it is
+  validated first — alphanumerics, `.` and `-`, nothing longer than 32 bytes.
+- **The [OpenAPI document](/openapi/) follows the caller as well.** It names
+  `/posts`, not `/v1/posts`, and each versioned operation gains the version as an
+  `in: header` parameter — your `NESTRS_HTTP__VERSION_HEADER`, or `Accept` with
+  its `version=` parameter — enumerating the versions that serve that path. The
+  parameter is `required` unless `NESTRS_HTTP__DEFAULT_VERSION` answers for a
+  caller who states none.
+
+Because OpenAPI 3.1 keys operations by path, two versions of `/posts` cannot both
+be described in one document — so the document is published per version:
+
+```bash frame="terminal"
+$ curl -s localhost:3000/api-json/v2 | jq '.paths."/posts".get.parameters[0]'
+{
+  "name": "x-api-version",
+  "in": "header",
+  "required": true,
+  "description": "Selects the API version this operation is served under.",
+  "schema": { "type": "string", "enum": ["2"] }
+}
+```
+
+`GET /api-json` serves the default version (every version, when the deployment
+names none), and Swagger UI at `/api` reads that one. A
+`NESTRS_HTTP__DEFAULT_VERSION` naming a version no controller declares **fails
+the boot**, listing the versions that do exist — an empty document is not a
+thing to publish quietly.
+
+Pick by what your consumers are: URL versioning is cacheable and greppable in a
+log; header and media-type versioning keep one URL per resource for its whole
+life. `NESTRS_HTTP__VERSIONING` means that is a deployment decision, not a
+rewrite.
+
+## Which transports have a version
+
+Versioning is **addressing**, so a transport can carry it only if it has an
+address a client picks. Two do:
+
+| Decorator | `version = "…"` | The address |
+|---|---|---|
+| `#[controller]` | full — three strategies, several versions, per route | URL, header, `Accept` |
+| `#[gateway]` | yes — `/v1/ws` | the socket URL |
+
+The rest do not, and writing `version` on one is a **compile error naming that
+transport's own answer** rather than silence:
+
+- **`#[resolver]`** — a GraphQL schema is not versioned. One schema, one
+  introspection, one generated client: evolve the field and deprecate the old
+  one. This is the ecosystem's position, not ours.
+- **`#[mcp]`** — the endpoint is addressed by its whole path, so write
+  `#[mcp(path = "/mcp/v1")]`. On this edge the word already means
+  `serverInfo.version`, and that belongs to the app rather than to any one host.
+- **`#[processor]`** — a queue is addressed by its name, and versioning that name
+  splits the consumer group: a deployment decision, not a declaration. What a job
+  usually needs is payload evolution.
+- **`#[scheduled]`, `#[listeners]`** — the clock and an in-process event have no
+  caller and no wire.
+
+The rule is one sentence: **you never have to wonder whether `version` works
+here.** It compiles and means what it means everywhere else, or the compiler
+tells you what this transport does instead.
+
+## Limits
+
+- The version string is opaque to `#[controller]` but not to the wire: a token a
+  caller sends is validated (alphanumerics, `.`, `-`, ≤ 32 bytes) before it
+  reaches a path. A version you *declare* is checked against the same set at
+  compile time, because it is spliced into a path just the same.
+- With no default version, `/api-json` aggregates every version and resolves a
+  contested path to the highest one. Point a client at `/api-json/v{n}` when it
+  needs a specific version's shapes; the aggregate is a directory, not a
+  contract.
 
 ## Going further
 

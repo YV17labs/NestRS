@@ -14,12 +14,23 @@
 //!    in `nest-rs-http/tests/integration/controller.rs`; the half that belongs
 //!    here is that it holds through the umbrella's own re-export chain.
 
-use nest_rs::http::poem::web::{Json, Path};
-use nest_rs::http::{ClientIp, controller, input, routes};
+use nest_rs::http::poem::web::{Json, Multipart, Path};
+use nest_rs::http::{ClientIp, Header, controller, input, routes};
 
 #[input]
 pub struct HygienePayload {
     pub name: String,
+}
+
+#[input]
+pub struct HygieneHeaders {
+    #[serde(rename = "X-Hygiene")]
+    pub marker: Option<String>,
+}
+
+#[input]
+pub struct HygieneForm {
+    pub file: String,
 }
 
 #[controller(path = "/hygiene")]
@@ -54,4 +65,43 @@ impl HygieneController {
     #[public]
     #[redirect("/probe/moved", 308)]
     async fn moved(&self) {}
+
+    /// The OpenAPI facets that are *types* rather than strings: a `Header<T>`
+    /// payload and an `#[api(multipart = T)]` form both make the expansion emit
+    /// a `schema_of::<T>` and a `RequestBodyMeta`, so both are paths a
+    /// controller crate would otherwise have to declare a crate for.
+    #[post("/upload")]
+    #[public]
+    #[api(
+        summary = "Upload a form",
+        multipart = HygieneForm,
+        response_content_type = "text/plain"
+    )]
+    async fn upload(&self, headers: Header<HygieneHeaders>, form: Multipart) -> String {
+        let _ = form;
+        headers.into_inner().marker.unwrap_or_default()
+    }
+}
+
+/// The versioned mount, whose expansion is a different shape again: the routes
+/// mount inside a loop over `VERSIONS`, and `#[version]` emits a `const`
+/// assertion calling `versions_declare`. Both are framework paths a controller
+/// crate would otherwise have to name a crate for.
+#[controller(path = "/hygiene-versioned", version = ["1", "2"])]
+pub struct HygieneVersionedController;
+
+#[routes]
+impl HygieneVersionedController {
+    #[get("/")]
+    #[public]
+    async fn list(&self) -> String {
+        "list".into()
+    }
+
+    #[post("/")]
+    #[public]
+    #[version("2")]
+    async fn create(&self) -> String {
+        "created".into()
+    }
 }

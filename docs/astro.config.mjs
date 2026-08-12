@@ -5,6 +5,7 @@ import starlightLlmsTxt from 'starlight-llms-txt';
 import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 import rehypeExternalLinks from 'rehype-external-links';
+import { sidebarSection } from './src/sidebar.mjs';
 
 // GitHub Pages: nestrs.dev (custom domain, base /). Local dev defaults match.
 // CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
@@ -27,11 +28,10 @@ export default defineConfig({
     '/graphql/dataloader/': '/database/dataloaders/',
     '/throttler/': '/rate-limiting/',
   },
-  // GFM tables/strikethrough/task-lists must be enabled for .mdx — Astro 6.4+
-  // only wires remark-gfm when `gfm: true` (Starlight still uses @astrojs/mdx@5).
+  // GFM tables/strikethrough/task-lists must be enabled for .mdx. Since
+  // @astrojs/mdx@7 the processor carries that — the top-level `markdown.gfm`
+  // flag Astro 6 needed is deprecated and gone.
   markdown: {
-    // Top-level flag — @astrojs/mdx@5 reads this for .mdx; `processor.gfm` alone is not enough.
-    gfm: true,
     processor: unified({
       gfm: true,
       remarkPlugins: [remarkGfm],
@@ -129,7 +129,11 @@ export default defineConfig({
       },
       lastUpdated: true,
       // Nine doors (audit §2.4.11): a newcomer reads the group labels as a path.
-      // Within-section order is per-page frontmatter `sidebar.order`.
+      // Within-section order is per-page frontmatter `sidebar.order`, and
+      // `sidebarSection` splits a section into Basics / All options from each
+      // page's frontmatter `tier` (STYLE.md §G) — so a page added tomorrow lands
+      // in a tier without this file being touched. Sections under the split's
+      // threshold keep Starlight's plain `autogenerate`.
       sidebar: [
         {
           label: 'Start here',
@@ -144,30 +148,30 @@ export default defineConfig({
             { label: 'The demo apps (Publish)', slug: 'publish' },
           ],
         },
-        { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },
+        { label: 'Tutorial', items: sidebarSection('tutorial') },
         {
           label: 'Concepts',
           items: [
             { label: 'Architecture and naming', slug: 'architecture' },
-            { label: 'Fundamentals', items: [{ autogenerate: { directory: 'fundamentals' } }] },
-            { label: 'Configuration', items: [{ autogenerate: { directory: 'configuration' } }] },
+            { label: 'Fundamentals', items: sidebarSection('fundamentals') },
+            { label: 'Configuration', items: sidebarSection('configuration') },
           ],
         },
         {
           label: 'Transports',
           items: [
-            { label: 'HTTP', items: [{ autogenerate: { directory: 'http' } }] },
-            { label: 'GraphQL', items: [{ autogenerate: { directory: 'graphql' } }] },
-            { label: 'WebSockets', items: [{ autogenerate: { directory: 'websockets' } }] },
-            { label: 'MCP', items: [{ autogenerate: { directory: 'mcp' } }] },
-            { label: 'OpenAPI', items: [{ autogenerate: { directory: 'openapi' } }] },
+            { label: 'HTTP', items: sidebarSection('http') },
+            { label: 'GraphQL', items: sidebarSection('graphql') },
+            { label: 'WebSockets', items: sidebarSection('websockets') },
+            { label: 'MCP', items: sidebarSection('mcp') },
+            { label: 'OpenAPI', items: sidebarSection('openapi') },
           ],
         },
         {
           label: 'Data',
           items: [
-            { label: 'Database', items: [{ autogenerate: { directory: 'database' } }] },
-            { label: 'File storage', items: [{ autogenerate: { directory: 'storage' } }] },
+            { label: 'Database', items: sidebarSection('database') },
+            { label: 'File storage', items: sidebarSection('storage') },
           ],
         },
         {
@@ -179,30 +183,30 @@ export default defineConfig({
             { label: 'Threat model', slug: 'security/threat-model' },
             {
               label: 'Authentication',
-              items: [{ autogenerate: { directory: 'security/authentication' } }],
+              items: sidebarSection('security/authentication'),
             },
             {
               label: 'Authorization',
-              items: [{ autogenerate: { directory: 'security/authorization' } }],
+              items: sidebarSection('security/authorization'),
             },
           ],
         },
         {
           label: 'Background work',
           items: [
-            { label: 'Queue', items: [{ autogenerate: { directory: 'queue' } }] },
-            { label: 'Scheduling', items: [{ autogenerate: { directory: 'schedule' } }] },
-            { label: 'Events', items: [{ autogenerate: { directory: 'events' } }] },
+            { label: 'Queue', items: sidebarSection('queue') },
+            { label: 'Scheduling', items: sidebarSection('schedule') },
+            { label: 'Events', items: sidebarSection('events') },
           ],
         },
         {
           label: 'Operations',
           items: [
-            { label: 'Testing', items: [{ autogenerate: { directory: 'testing' } }] },
-            { label: 'OpenTelemetry', items: [{ autogenerate: { directory: 'opentelemetry' } }] },
+            { label: 'Testing', items: sidebarSection('testing') },
+            { label: 'OpenTelemetry', items: sidebarSection('opentelemetry') },
             { label: 'Server-Timing', slug: 'server-timing' },
-            { label: 'Health checks', items: [{ autogenerate: { directory: 'health' } }] },
-            { label: 'Rate limiting', items: [{ autogenerate: { directory: 'rate-limiting' } }] },
+            { label: 'Health checks', items: sidebarSection('health') },
+            { label: 'Rate limiting', items: sidebarSection('rate-limiting') },
           ],
         },
         {

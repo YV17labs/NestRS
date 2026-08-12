@@ -10,7 +10,7 @@
 //
 // Checks (see STYLE.md): controlled H2 vocabulary, banned prose words + exclamation marks,
 // frontmatter description present / ≤160 / no unquoted '#', closing "## Going further",
-// ≤3 Asides per page, example-canon ban list.
+// ≤3 Asides per page, example-canon ban list, the Basics / All options tier split.
 // Plus the code-truth checks the prose rules can't see — `version-pin`, `unauthed-curl`,
 // `crud-error`, `bind-order`, `queue-name`, `install-stanza`, `otel-guard`, `decorator-import`,
 // `layer-impl`, `exception-response-error`, `bare-log`, `config-table` — each documented on its
@@ -19,10 +19,14 @@
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
+import {
+  CONTENT_ROOT, TIERS, TIER_LABELS, TIER_THRESHOLD, UNTIERED_SECTIONS, sections,
+} from '../src/sidebar.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS_ROOT = join(HERE, '..');
-const CONTENT = join(DOCS_ROOT, 'src', 'content', 'docs');
+// The same root the sidebar reads, so the two never disagree about what a page is.
+const CONTENT = CONTENT_ROOT;
 const BASELINE = join(HERE, 'lint-baseline.json');
 
 // Pages exempt from the closing "Going further" requirement (utility/terminal pages).
@@ -630,6 +634,12 @@ function lintFile(absPath) {
       if (!quoted && /\s#/.test(raw)) add('description', 'unquoted-hash (YAML truncation)');
       if (value.length > 160) add('description', `too-long (${value.length}>160)`);
     }
+    // 1b. A tier places a page inside its section's groups. A page that is in no
+    // section — the hand-listed roots of `Start here` and `Reference` — has no
+    // group to be placed in, so the key would sit there saying nothing.
+    if (!rel.includes('/') && /^tier:/m.test(fm)) {
+      add('tier', 'a page in no section declares a tier — nothing would group it');
+    }
   }
 
   // 2. Banned heading variants (## or ###).
@@ -783,8 +793,50 @@ function lintFile(absPath) {
   return v;
 }
 
+/// 19. The Basics / All options split (STYLE.md §G), checked per **section** —
+/// the one invariant no single page can carry. A section past the threshold
+/// presents two lists, so every page in it says which one it is in, and both
+/// have to hold something: a section that declares one tier is the flat list
+/// with a header on it, which is the state the split exists to replace.
+///
+/// Below the threshold the rule inverts — a `tier` there is a page claiming a
+/// grouping the sidebar will not render, and the reader never sees it.
+/// Violations are filed against the page that carries the wrong frontmatter,
+/// and a missing tier against the `index` that frames the section.
+function lintSections() {
+  const out = [];
+  const add = (rel, detail) => out.push(`${rel}::tier::${detail}`);
+
+  for (const { dir, index, pages, tiered } of sections()) {
+    if (!tiered) {
+      const why = UNTIERED_SECTIONS.has(dir)
+        ? `${dir}/ is an ordered path, exempt from the split at any size`
+        : `${dir}/ has ${pages.length} pages, under the ${TIER_THRESHOLD} a split needs`;
+      for (const page of pages.filter((p) => p.tier)) {
+        add(page.rel, `\`tier: ${page.tier}\` on a page in a flat section — ${why}`);
+      }
+      continue;
+    }
+    for (const page of pages) {
+      if (!page.tier) {
+        add(page.rel, `no tier — ${dir}/ presents ${pages.length} pages in two groups, so `
+          + `each one declares \`tier: ${TIERS.join('` or `tier: ')}\``);
+      } else if (!TIERS.includes(page.tier)) {
+        add(page.rel, `unknown tier \`${page.tier}\` — the tiers are `
+          + TIERS.map((t) => `\`${t}\``).join(' and '));
+      }
+    }
+    for (const tier of TIERS.filter((t) => !pages.some((p) => p.tier === t))) {
+      add(index ? index.rel : `${dir}/index.mdx`,
+        `${dir}/ declares no ${TIER_LABELS[tier]} page — a section split into one tier is `
+        + 'the flat list with a header on it');
+    }
+  }
+  return out;
+}
+
 const files = walk(CONTENT).sort();
-const current = files.flatMap(lintFile).sort();
+const current = [...files.flatMap(lintFile), ...lintSections()].sort();
 
 // Fail closed: a registered mirror that no page matched means the page was
 // renamed or moved and its drift gate silently stopped running.

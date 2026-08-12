@@ -65,6 +65,37 @@ impl DecoratorPair {
         }
     }
 
+    /// Refuse an argument list on the **impl** half, naming what does declare
+    /// the thing the developer probably reached for.
+    ///
+    /// The impl half collects; it declares nothing. Every edge owes the same
+    /// sentence, and every edge was writing its own — nine copies, differing in
+    /// wording and in span mechanism, which is what CLAUDE.md means by
+    /// "refusals are shared, not per key: per-key refusals multiply with the
+    /// matrix, and what multiplies is what gets skipped". The pair already
+    /// carries both nouns the sentence needs.
+    ///
+    /// `declares` names what the host half takes, so the remedy points at the
+    /// line above rather than merely refusing.
+    pub fn reject_args(&self, args: &TokenStream, declares: &str) -> syn::Result<()> {
+        if args.is_empty() {
+            return Ok(());
+        }
+        let Self {
+            host,
+            operations,
+            collects,
+            ..
+        } = self;
+        Err(syn::Error::new_spanned(
+            args,
+            format!(
+                "{operations} takes no arguments; {declares} {host}, and each operation by \
+                 {collects}",
+            ),
+        ))
+    }
+
     /// Parse the **struct** half's input, naming the impl half when the
     /// developer decorated an `impl` block instead.
     ///

@@ -23,6 +23,11 @@ mod posture;
 mod root;
 mod specs;
 mod ty;
+/// Public because the grammar it words has a *runtime* counterpart:
+/// `nest-rs-http` cannot depend on this crate (it pulls `syn`), so it carries a
+/// copy of `is_valid_version` and pins it against this one in a dev-dependency
+/// test. Naming the module is what lets that test exist.
+pub mod versioning;
 
 pub use args::{parse_named_str_arg, require_str_lit};
 pub use attrs::{expr_str, reject_http_only_layers, take_flag_attr, take_path_list};
@@ -44,3 +49,4 @@ pub use ty::{
     PipeWrapper, UUID_V7_REQUIRED, generic_args, impl_self_ident, last_segment_ident,
     nth_generic_type, payload_arg_type, pipe_wrapper, type_label,
 };
+pub use versioning::{Edge, VersionAnswer};

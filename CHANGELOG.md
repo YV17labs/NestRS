@@ -7,6 +7,553 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.0.0] - Current
 
+### An `operationId` is sanitised as one string, not one half of one
+
+The version fragment was mapped onto what an identifier can carry and the
+controller and handler fragments were not, so a raw-ident handler
+(`async fn r#type`) published `probe_r#type` — an id no client generator can name
+a method after. The map now runs over the **composed** id, which covers all three
+halves at once; a collision it newly creates (`r#type` beside `r_type`) is
+reported by the existing duplicate-id `warn`, whose remedy now names the handler
+rename too.
+
+### `#[mcp]` answers every server-level identity key by name
+
+`description`, `website_url` and `icons` got a bare "unknown key" while `version`
+and `instructions` named their owner — the same mistake in three more spellings,
+and a bare "unknown key" is silence. All four now come from one table and one
+sentence pointing at `McpModule::for_root(McpOptions { server })`, with a drift
+guard that reads `McpIdentity`'s builders and fails if one gains no answer. A key
+that is genuinely nobody's still gets the accepted-key list.
+
+### One casing rule, and it reads a run of capitals as one word
+
+`snake_case` inserted `_` before every interior capital, so `HTTPServer` became
+`h_t_t_p_server` and `APIKey` became `a_p_i_key`. A run of capitals is now one
+word: `http_server`, `api_key`, `io_handler`.
+
+It had gone unnoticed because every consumer fed `format_ident!` — private Rust
+identifiers inside macro expansions, which nobody reads. The `operationId` above
+is the first output a **developer** reads, and it is where the rule had been
+copied rather than shared.
+
+The copy is gone. `#[routes]` computes the controller's identifier token at
+compile time, through the one `nest_rs_codegen::snake_case`, and
+`HttpControllerMeta` carries it. A runtime crate cannot reach `codegen` without
+dragging `syn` into every app's dependency graph, so deriving it in the macro is
+what keeps the rule single — the alternative is a second implementation, which is
+exactly what was there.
+
+**One shape no general rule resolves**, and it is documented rather than
+special-cased: `OAuth` → `o_auth`. Nothing distinguishes a single capital
+followed by a capitalised word from a genuine one-letter prefix without a
+dictionary, and a heuristic for it would fire on names it has no business
+touching — the same reasoning that removed the `v`-plus-digits heuristic from
+version detection. Rust's own convention is the answer: acronyms count as one
+word (`Uuid`, not `UUID`), so the type is spelled `Oauth`.
+
+### Every `operationId` is unique, which OpenAPI requires and we were not
+
+`operationId` was the handler's method name alone, so `#[crud]` — which names
+every resource's handlers identically — published one id for many operations.
+The reference product's own document carried **12 collisions across 27
+operations**: `list` four times, `get` four times, `create` / `update` / `delete`
+three each. OpenAPI 3.1 §4.8.10.1 requires the id to be unique across the
+document; a generator either errors or silently renames, so the loser's method
+went missing from every generated SDK.
+
+An id is now `<controller>_<handler>` — the controller struct name with its
+trailing `Controller` stripped, snake_cased, from the same metadata field that
+already supplies the operation's default tag. `posts_list`, `users_get`. This is
+what `@nestjs/swagger` does, for the same reason.
+
+- **A version composes on top**: `reports_list_v1`, and a version that is not a
+  bare integer still reads as an identifier (`reports_list_v2024_08_11`). So a
+  `version = ["1", "2"]` controller and the two-controller layout both name their
+  operations apart.
+- **What survives is reported, not published silently**: two controllers whose
+  names reduce to one token — differing only by the `Controller` suffix or by
+  casing — raise a `warn` on `nest_rs::openapi` naming both addresses. Never a
+  boot failure: a duplicate id degrades a generated client, it does not break the
+  running app.
+- `demo/apps/api/openapi.json` regenerates to 27 operations with 27 distinct ids
+  and boots with no warning.
+
+### `TestApp` boots the transport the app configured, not a fresh one
+
+`TestApp::build` constructed a bare `HttpTransport::new()`. Every field
+`HttpModule::for_root(cfg)` sets was therefore absent under test — the global
+prefix, the versioning strategy, the body cap, the request timeout, CORS,
+compression, the security headers — so a suite asserted against a transport the
+deployment never runs. An app pinning `global_prefix: "/api"` served `/widgets`
+in its own e2e and `/api/widgets` in production, and every test passed.
+
+That is the failure e2e exists to catch: the testing section of `CLAUDE.md`
+opens with "wiring bugs don't surface in unit tests", and the wiring was what
+the harness dropped.
+
+- **`HttpTransport::from_config(&HttpConfig)`** is now the one place a config
+  becomes a transport. `HttpModule`'s `TransportContribution` calls it, and so
+  does the harness — the logic used to live inline in a closure where nothing
+  else could reach it.
+- `TestAppBuilder::http(transport)` still overrides, for a test that needs a
+  transport the app does not declare. Pinning an `HttpConfig` on the module is
+  now the way to assert against non-default settings.
+- `harness_parity` in `nest-rs-testing`'s suite pins the two fields that change
+  a request's **address**, because those are the ones whose absence turns a
+  green suite into a `404` in production.
+
+### A version is declared the same way wherever a client can select one
+
+Versioning was HTTP's, and every other transport was silent about it — so a
+developer who read `#[controller(version = "1")]` and reached for the same word
+on a resolver or a processor got "unknown key" and had to go find out what that
+transport does instead. Silence is the failure of unity here, not the absence of
+a mechanism: versioning is *addressing*, and the transports genuinely differ in
+whether they have an address a client picks.
+
+So the declaration is unified where it can be, and **refused with the
+transport's own answer where it cannot**:
+
+- **`#[controller]`** — full, and wider than before (below).
+- **`#[gateway]`** — `version = "1"` mounts the socket at `/v1/ws`, through the
+  same `version_path` the HTTP routes use, so the two cannot word the `/v{n}`
+  prefix differently. Two gateways may share a `path` under different versions;
+  the duplicate-mount boot error compares the versioned path.
+- **`#[resolver]`, `#[mcp]`, `#[processor]`, `#[scheduled]`, `#[listeners]`** —
+  a compile error naming what to reach for instead: `#[graphql(deprecation = …)]`
+  on the field a GraphQL schema is retiring, `#[mcp(path = "/mcp/v1")]` for an
+  MCP endpoint, a versioned queue name or payload evolution for a job, and
+  nothing at all for a clock or an in-process event. The five sentences are
+  worded once in `nest_rs_codegen::Edge`, beside `DecoratorPair` and
+  `PostureRules` — `rg 'Edge::' crates/*-macros/src/` names every site — and
+  each ships a trybuild snapshot.
+
+`#[processor]` and `#[scheduled]` took an argument list and **silently ignored
+whatever was in it**; both now refuse, `version` by name first.
+
+`#[mcp]` refuses `version` in **every** shape. The word was briefly spelled there
+for `serverInfo.version`, and that was one declaration too many: a feature library
+knows neither the binary's version nor, on a shared endpoint, the whole surface,
+so the server's version has one owner — the app's single
+`McpModule::for_root(McpOptions { server, .. })`. A host declares only which
+endpoint stands apart, `#[mcp(name = …, title = …)]`. The refusal points at
+`#[mcp(path = "/mcp/v1")]` for an address and at that seam for a version.
+
+This follows `reject_http_only_layers` — the framework already answers a layer
+family an edge does not bridge with a named error rather than ignoring it.
+
+### Selection asks the app's real shape, and poem always decides last
+
+Under `header` / `media_type`, the selector answers one question per request:
+does a version have anything to select here? It reads three exact lists the
+transport hands it at boot — the routes that carry a version, the addresses
+answered without one, and the paths self-mounted endpoints own — and matches a
+request against them with the router's own segment forms (`:name`, `<regex>`,
+`*rest`, and a literal and a parameter sharing one segment: `/@:handle`).
+
+**Precedence, which is the whole behaviour:**
+
+- **A self-mounted path is neutral against everything.** `/graphql`, `/mcp`,
+  `/api-json`, a WebSocket gateway — each owns its path outright and has no
+  version to be rewritten to.
+- **A stated version beats an unversioned route at the same address.** An
+  explicit request is the strongest signal a caller sends; yielding to a
+  neighbour would leave `#[controller(version = …)]` unreachable there.
+- **A default version yields to it.** The caller asked for nothing, so nothing
+  moves under them. This is what stops `NESTRS_HTTP__DEFAULT_VERSION` from
+  rewriting the whole surface: a versioned `#[controller(path = "/")]` with a
+  catch-all route would otherwise swallow every unversioned controller beside it.
+- **A version that serves no route, while another version does, is a `404`** —
+  answering with a different version's body is the silent failure the design
+  exists to prevent. Where no version serves the address at all, the request is
+  passed through and the router answers.
+
+**The matcher answers loosely on purpose, and that is the load-bearing part.**
+Every outcome ends at poem: a match produces a rewritten path the router must
+still recognise, a non-match passes the request on as written. So a false match
+costs a `404` the request was heading for anyway, while a false non-match once
+served one controller's body to a caller who asked for another's. Loose in the
+direction the router can correct, never in the direction it cannot see — which
+is what a first attempt at this, matching controller *prefixes*, got backwards
+in both directions at once.
+
+**The rewrite endpoint is not installed at all when nothing is versioned.** A
+strategy set with no versioned controller would otherwise pay an extra routing
+layer per request, forever, for an outcome it could never change. The endpoint
+also resolves behind an immutable borrow, so a neutral or version-less request
+allocates nothing.
+
+Two boot-time consequences:
+
+- **A `NESTRS_HTTP__DEFAULT_VERSION` naming a version nothing declares fails the
+  boot**, in every app. The check used to live in `nest-rs-openapi`, so an app
+  publishing no document got no answer at all and every caller stating no version
+  silently fell through. `declared_versions` moved to `nest-rs-http` and both
+  consumers share it.
+- **Two controllers overlapping on one version are told which version.** The
+  failure used to read "give each one a distinct path" — advice against the
+  two-controller layout the docs prescribe, about a string (`/v2/posts`) neither
+  developer wrote.
+
+### A second API version stops costing a second controller
+
+`#[controller(version = ["1", "2"])]` mounts one controller under every version
+it lists, and `#[version("2")]` on a method narrows one route out of the rest —
+the shape a real v2 has, where most routes are unchanged and one is new.
+
+- `HttpControllerMeta` carries `versions: &'static [&'static str]` and yields one
+  mount per version; the boot log, the OpenAPI document and the served routes all
+  iterate the same list.
+- A `#[version]` naming something the controller never declared **does not
+  compile**. It would otherwise mount nowhere — the transport loops over the
+  controller's versions — leaving a handler that builds, registers, documents
+  itself and answers nothing. `versions_declare` is a `const fn`, so the error
+  lands at the route.
+- A declared version is validated as a path segment at compile time, the same set
+  the wire validator refuses at runtime.
+- A verb absent from a version answers `405` on a path its siblings serve, not
+  `404` — the path exists, that method does not.
+
+### Response masking is armed by the compiler, so a rename cannot disarm it
+
+`#[routes]` used to decide whether a route masks its response by matching a
+parameter's **path segment** against `Authorize` / `Bind`. That is a question
+about how a type is *spelled*, and `use Authorize as Az` gave a different answer
+than `Authorize` for the same type. The hole was covered — an unarmed route ran
+inside a `MaskProbe` and a masking extractor that ran there failed the request
+closed — but the cover was load-bearing, which is exactly what the roadmap
+entry existed to end.
+
+The macro no longer asks the question. It hands each parameter *type* to
+`nest_rs_http::ShaperProbe` and the **compiler** answers whether that type is a
+`RouteResponseShaper`, through the two-arm autoref selection `shaper_of!` spells
+once. A rename changes the spelling and not the type, so the alias arms
+identically — `an_aliased_authorize_masks_a_raw_model_body` used to assert a
+`500` and now asserts a masked `200`.
+
+- **The trait moved from "capture + run" to "capture into a `ResponseShaping`".**
+  `RouteResponseShaper::capture` returns the request-independent half as a boxed
+  object, so the selection can be a plain function pointer rather than a type
+  parameter threaded through the endpoint. One `Box::pin` per *armed* request
+  buys the alias-proofing; an unarmed route pays nothing it did not pay before.
+- **`masked` in the OpenAPI document reads off the same selection**, so a
+  document can no longer describe an aliased route as unmasked.
+- **The probe stays, with a smaller job.** A signature scan of any kind cannot
+  see an extractor reached *indirectly* — nested in another extractor, or run by
+  a hand-rolled `FromRequest`. That is now the only thing the `500` covers, and
+  its message says so.
+- The eager HTTP-D1 diagnostic survives, and got shorter: a local type wearing
+  the name `Authorize` without implementing the trait is still a spanned error
+  naming `RouteResponseShaper`, no longer trailed by a transitive `Endpoint`
+  bound failure from the mount site.
+
+### A certificate renewal no longer needs a restart
+
+`HttpTransport::tls` loaded the PEM pair once, at boot, so certbot's
+`--deploy-hook` ended in `systemctl restart`. Material read from **files** —
+`NESTRS_HTTP__TLS_CERT_FILE` + `_KEY_FILE`, or the new `TlsConfig::from_files` —
+is now watched, and a renewed pair is swapped into the running `rustls` config.
+The listener is not rebuilt: the port stays bound and in-flight connections
+finish.
+
+`NESTRS_HTTP__TLS_RELOAD_SECS` is the interval (60 by default, `0` disables).
+Polling rather than an OS watch is deliberate — a renewal is a minute-scale
+event, and a file watcher's hardest case is precisely the one renewal tools hit,
+an atomic replace that swaps the inode out from under the watch.
+
+Two refusals are as load-bearing as the swap: **a pair that cannot be read
+leaves the current certificate serving** (a tool that unlinks before it writes
+would otherwise take the listener down between two syscalls), and **a pair is
+installed only once it reads back identical twice**, so a file caught mid-flush
+is never the one that gets served.
+
+The second rule is stated as what polling can actually guarantee, because a
+first attempt claimed more: a renewal whose two halves land more than one
+interval apart looks settled in between. Certbot and cert-manager both swap
+atomically and never hit it; `a_pair_that_is_still_changing_is_never_installed`
+pins what does hold, and the docs name the residue rather than implying it away. Inline PEM has no source to watch and is
+loaded once, as before. `a_renewed_certificate_is_served_without_dropping_the_listener`
+proves it through a real handshake: two leaves under one CA, and which hostname
+verifies is the only thing the swap changes.
+
+### A version is declared once; how a caller selects one is deployment config
+
+URI versioning shipped; `Accept: application/json; version=2` and
+`X-API-Version: 2` did not, and the docs told you to write a guard. Now
+`NESTRS_HTTP__VERSIONING` picks between `uri` (the default), `header` and
+`media_type`, and **no controller changes** — `#[controller(version = "2")]`
+remains the one place a version is declared and `version_path` the one place it
+becomes a path.
+
+The two request-time strategies are a rewrite in front of routing, inside the
+global prefix, so one route table serves all three. The boot log follows: it
+reports the address a *client* uses and moves the version into its own field,
+because `/v1/posts` is where the route is mounted, not where it is called.
+Three behaviours are decisions, not defaults:
+
+- **An unknown version is a `404`, never a fallback.** Quietly serving `v1` to a
+  client that asked for `v9` is how a client talks to the wrong API for a month.
+- **The URI form stops being a second address** under the other two strategies —
+  one way to ask, or every version has two names.
+- **A malformed version token is a `400` before it reaches a path.** The token is
+  spliced into a URL, so it is validated first: alphanumerics, `.` and `-`, 32
+  bytes. `a_version_that_could_reach_another_path_is_refused` is the witness.
+
+`NESTRS_HTTP__DEFAULT_VERSION` answers a caller that states none — on the paths
+that have versions. The selector learns which mounted prefixes carry one at
+configure time, so a default is a default *among versions* and never a rewrite of
+everything the app mounts: an unversioned controller, and every self-mounted
+endpoint (`/graphql`, `/mcp`, `/api-json`, `/health`), is served as written.
+`a_default_version_does_not_rewrite_paths_that_have_no_version` pins it.
+
+**One interaction is not finished, and is on the roadmap rather than hidden
+here:** the generated OpenAPI document still describes the URI paths, which a
+non-URI strategy makes unreachable. OpenAPI 3.1 cannot key two operations on one
+path, so describing a header-selected version is a document-shape question, not
+a patch — until it is answered, publish a document from a `uri` deployment.
+
+### An upload never exists whole, at either end
+
+`Storage` grew the two methods the object-store surface was missing, and the
+HTTP side grew the one seam that lets them be reached without buffering:
+
+- **`Storage::list(prefix)`** streams `ObjectEntry { key, byte_size,
+  last_modified }` rather than returning a `Vec`, so a large prefix is never
+  held in memory. It leaks no new third-party type — `last_modified` is a
+  `std::time::SystemTime`.
+- **`Storage::put_stream(key, content_type, stream)`** drives a real multipart
+  upload, sequentially, one part in memory at a time. Every failure path —
+  the source stream's, a part's, the tail's, completion's — **aborts the
+  upload** first, because parts left behind are billed and invisible to `list`.
+  A failing abort is reported at `warn` on `nest_rs::storage` rather than
+  swallowed.
+- **`nest_rs_http::PartExt::into_byte_stream()`** is the other half of poem's
+  `Field::bytes()`: the part as it arrives. The demo's direct upload now goes
+  part → storage without a `Vec<u8>` anywhere, and its service names a stream
+  rather than a transport type, so the same method serves a multipart part, a
+  proxied download or a test fixture.
+
+Streaming bounds **memory**, not the request: `max_body_bytes` remains the
+ceiling, and it still covers `Multipart` like every other extractor.
+
+### `nestrs g entity` and `nestrs info`
+
+`g entity <feature>[/<name>]` scaffolds one `#[expose]` entity into an existing
+feature without the CRUD slice around it. Placement follows the feature: its
+first entity is the lone `entity.rs`, and a feature already keeping several in
+`entities/` gets one more file there.
+
+A feature with a lone `entity.rs` that now needs a second one is **refused with
+the four steps to take**, not migrated. SeaORM spells relation module paths
+inside string literals (`belongs_to = "super::org::Entity"`), so moving
+`entity.rs` into `entities/` either misses those or, reaching into strings,
+corrupts prose that merely mentions one — silently, in code the developer wrote.
+
+`nestrs info` reports the project the current directory sits in — layout, root,
+apps, features, the framework version the manifests pin, the env prefix in
+force, the toolchain — and says so plainly outside a project rather than
+failing. That is the line between it and `about`: `about` is seven lines
+identical on every machine, `info` reads the tree it stands in.
+
+### A relation is a page, an enum is a declaration, and a second foreign key no longer needs a hand-written resolver
+
+Three gaps in `#[expose]`, closed independently.
+
+**`#[wire_enum]` — the enum half of the umbrella promise.** An exposed enum column
+made the developer hand-write nine derives and put `schemars` and `async-graphql`
+in their manifest for nobody's code but the macro's. `#[wire_enum]` emits the wire
+derives with their `crate = ` overrides routed through `nest-rs-resource`, and
+`#[wire_enum(graphql)]` adds `async_graphql::Enum`. It deliberately emits **none**
+of the SeaORM half — `DeriveActiveEnum`, `rs_type`, the per-variant `string_value`
+— because how a column is *stored* is the developer's decision, and their own
+source legitimately writes it.
+
+The `graphql` flag is explicit rather than read off the crate feature: a Cargo
+feature is additive across a workspace, so one GraphQL app would otherwise put an
+`Enum` derive on every enum in every sibling crate.
+
+`nest-rs-macro-hygiene` gains its first witness from the `#[expose]` family: an
+entity cannot live in a zero-dep crate, but an **enum can**, so the derive routing
+that was invisible to review is now compiled against `nest-rs` and nothing else.
+
+**`Connection<T>` — a relation you can page, and a defect that is gone rather than
+documented.** An auto-emitted HasMany resolver returned a `Vec<T>` capped at
+`RELATION_LOAD_CAP` (100 per parent) through one `WHERE fk IN (…) LIMIT cap × keys`
+query — a shape in which low-FK parents could consume the whole budget and leave
+later parents with `[]`, indistinguishable from "no children" (DATA-R2). The field
+is now a Relay `Connection` with `first` / `after` / `PageInfo`, backed by a new
+`Repo::relation_pages` that ranks with `ROW_NUMBER() OVER (PARTITION BY fk ORDER BY
+pk)` — one round trip, a page **per parent**.
+
+- **`RELATION_LOAD_CAP` is deleted, and so is the DATA-R2 comment.** Both existed
+  only to bound the broken shape and make its starvation loud. `clamp_page_size`
+  (1..=100) is the only bound now, with `DEFAULT_PAGE_SIZE = 20`.
+- **The loader key carries the window** (`RelationKey { parent, first, after }`).
+  Keyed on the parent alone, two sibling selections asking for different pages of
+  one relation would be served the same batch entry.
+- **The `after` predicate is inside the ranked subquery**, and a unit test asserts
+  the SQL text says so. Applied outside, a parent's rank would count rows the
+  caller already has and page 2 would come back short — a bug that returns exactly
+  as many plausible rows as a correct query, which is why the assertion is on the
+  text and not the count.
+- **Complexity is `first * child_complexity`** instead of a flat `10 *`. The
+  constant was a guess because there was nothing to multiply by; the field now
+  takes its page size, so `first: 5` costs a twentieth of `first: 100` — which is
+  what a ceiling is for. A 3-deep unannotated chain scores 20³ against the
+  documented `max_complexity` default, and that is the ceiling working on a query
+  that really can materialise 8000 rows.
+- Masking is unchanged and still per item, in the loader. `unmasked` turns out to
+  be irrelevant here rather than needed: a `#[ComplexObject]` field resolver is not
+  an `#[operations]` operation, so the value-level round-trip never sees the
+  connection.
+
+`last` / `before` are deliberately absent: the underlying keyset is forward-only,
+and a backward argument would be a lie in the SDL.
+
+**`via = "…"` — naming which foreign key, when the type cannot.** The ambiguity was
+always on the `has_many` side: a `belongs_to` names its column in `from = "…"`,
+while the parent had only the child's *entity type*, and `RelatedTo<Parent>` was
+keyed on that type alone. Two `belongs_to` at one parent meant two impls of one
+trait, which is why the macro used to refuse the shape outright.
+
+`RelatedTo<Parent, Via>` now carries a per-FK marker the child's `#[expose]` emits,
+and the `SoleForeignKey` default impl is emitted **only when the child targets that
+parent exactly once**. That absence is the enforcement: the ambiguous case fails to
+compile at the relation that is ambiguous, with a note naming
+`#[expose(via = "…")]`. The framework never picks whichever `belongs_to` came
+first. (`via` on a `HasOne` is a compile error pointing back at `from`.)
+
+One half stays the developer's, and it is SeaORM's rule rather than ours: two
+relations to one entity need `relation_enum` / `via_rel` on the entity itself.
+That is entity-site code their own source writes — and sea-orm gates its own
+`Related<E>` impl on the same "targeted exactly once" rule.
+
+### The document describes the addresses a client actually calls
+
+Shipping header and media-type versioning left the generated document naming
+`/v1/posts` while clients had to call `/posts` plus a header — paths that answer
+`404`. A document that lies is worse than one that omits, so it was recorded on
+the roadmap the day it appeared and is closed here.
+
+Under a non-URI strategy the path keys become the **client-facing** ones and each
+operation gains its version parameter — the configured header, or `Accept` for
+media-type — `required` exactly when the deployment names no default. OpenAPI 3.1
+keys operations by path, so two versions cannot share one entry; **each version
+gets its own document at `/api-json/v{n}`**, built through `version_path` rather
+than a second `format!` so the document's own address and the routes it describes
+cannot disagree about the `/v{n}` spelling. `/api-json` describes the default
+version when one is named, and otherwise aggregates, resolving a contested path
+to the highest version — deterministic and stated, where link order would have
+been neither.
+
+**Under the URI strategy nothing changes**: same paths, same operations, no
+version parameter, no extra route, and the committed document's line order is
+left exactly as discovery hands it over — an aggregate sort that reordered a JSON
+object would have rewritten every line of a committed snapshot for no reader's
+benefit.
+
+A `NESTRS_HTTP__DEFAULT_VERSION` naming a version no controller declares now
+**fails the boot**. It used to publish an empty document to every client that
+read it.
+
+The second half of the entry is smaller and older: a required `Query<T>` property
+produces a `400` the document did not advertise, while a required header already
+did. One rule computed from the parameters actually emitted now covers both, and
+the committed snapshot moved with it.
+
+### Every `#[expose]` diagnostic is pinned, and pinning them found three that were wrong
+
+`#[expose]` raised 27 distinct compile errors, `#[wire_enum]` four more, and
+**nothing pinned any of them** — eleven other macro crates carry a trybuild
+suite, this one did not. It does now: `crates/nest-rs-resource/tests/integration/diagnostics/`,
+31 `.rs`/`.stderr` pairs, same arrangement as its siblings.
+
+Writing them down is not the point; **reading them back** is. Three of the 31
+were wrong, and two of those had shipped:
+
+- **`#[expose]` on an enum** answered with syn's `expected struct`. It now names
+  its sibling `#[wire_enum]`, mirroring the refusal that already went the other
+  way. Each half's name is a `const` the *other* one's message reads, so neither
+  can name a decorator that has moved.
+- **`from = "…"` naming a column that does not exist** claimed the column was
+  "not exposed" while checking only existence — two different remedies, one
+  message. The two copies of that check became one function.
+- **`from = "…"` naming a column that exists but is unexposed passed silently**,
+  then failed as ``no field `org_id` on type `Post` `` from inside the expansion,
+  because the field resolver reads the key off the wire object. It is refused at
+  the field now, naming both remedies.
+
+Two diagnostics are deliberately unpinned and say so in the suite's header: the
+`graphql`-feature refusals cannot exist in a build that can run the suite (the
+dev-dep that compiles the GraphQL fixtures turns the feature on), and pinning
+them would need a third suite name, which is locked.
+
+`#[crud]`'s GraphQL list op also stopped spelling its own `20` and reads
+`nest_rs_seaorm::DEFAULT_PAGE_SIZE`. The HTTP half never drifted — it reads
+`PageParams::limit()`, which reads the constant.
+
+### The document stops omitting the three shapes it could not describe
+
+Header parameters, multipart request bodies and streamed responses were invisible
+to the generated OpenAPI document: `/audio/uploads/direct` carried **no**
+`requestBody` at all, the streamed download and the SSE feed carried a bare
+`"200": {"description": "OK"}`, and no operation anywhere declared a header. The
+docs page even promised a `Header<T>` extractor that did not exist.
+
+**`nest_rs_http::Header<T>`** now does — the header-map twin of poem's
+`Query<T>`: one struct field per header, `#[serde(rename)]` for the wire name,
+case-insensitive lookup, values parsed into the field's type, `Option<_>`
+optional. It composes like every other extractor (`Valid<Header<T>>`,
+`Piped<P, Header<T>>`), and the operations that read one describe it.
+
+Its rejections **name the header and never quote its value.** Headers carry
+credentials, so a compound shape is refused by our own arm rather than left to
+serde, whose `invalid_type` message would print the value it could not parse.
+
+The two body shapes follow the same rule — say what the framework emits, never
+guess:
+
+- **`#[api(multipart = T)]`** documents `multipart/form-data` with `T`'s schema.
+  A handler taking `poem::web::Multipart` and declaring nothing still documents
+  `multipart/form-data` with a free-form object, because silence was the defect.
+  The two are **one enum**, not a media-type string beside an optional schema, so
+  "media type disagrees with schema presence" is unrepresentable.
+- **`#[api(response_content_type = "…")]`** declares a non-JSON success body and
+  gets the stream schema that goes with it. **SSE is inferred** from `-> SSE`:
+  that return type serializes as `text/event-stream` and nothing else, so reading
+  it off the signature states a fact rather than repeating a declaration — the
+  same reading that already infers the response schema from `-> Json<T>`. An
+  explicit `response_content_type` still wins.
+
+A required header also makes the operation advertise its `400`, computed from the
+parameters actually emitted, so an all-optional header DTO adds nothing.
+
+The demo carries a real use site rather than a stub: `GET /audio/events` reads
+`Last-Event-ID`, so a reconnecting `EventSource` is not re-sent progress ticks it
+already displayed.
+
+### The docs say which pages you need and which ones you may not
+
+A section was one flat list, so `Controllers`, `Extractors`, `Compression`,
+`Versioning` and `File uploads` read with the same weight and nothing told a
+newcomer which four to open. Every section of five or more pages now splits into
+**Basics** — what you need to ship the section's common case — and **All
+options** — configuration and tuning, opt-in capabilities, operational
+behaviour, extension seams, reference tables.
+
+The mechanism keeps ordering in one place: a page declares `tier:` in its
+frontmatter, `sidebar.order` still sorts *within* a tier, and
+`docs/src/sidebar.mjs` builds the groups. Adding a page needs no config edit and
+cannot be silently dropped from the sidebar. Both halves fail closed — a missing
+or unknown tier stops the **build**, and `lint:docs` reports it — and
+`STYLE.md` §G states the rule so a new page inherits it.
+
+The tier follows **why a reader opens a page**, not its content mix, which is
+what puts `http/extractors` (a reference page you read to write a handler) in
+Basics and `websockets/guards` in Basics against the size logic — "All options"
+must never read as "security is optional".
+
 ### GraphQL subscriptions, and a posture that keeps applying after it is granted
 
 `#[subscription]` joins `#[query]` and `#[mutation]` in the same `#[operations]`
@@ -485,8 +1032,10 @@ whole URL path.
   model's system prompt. All of it is the app's because a shared feature library
   knows neither the deployment's version nor, on an endpoint several features
   share, what the whole surface is. A host declares only which endpoint stands
-  apart — `#[mcp(name = …, version = …, title = …)]`, each overriding the app's
-  per field.
+  apart — `#[mcp(name = …, title = …)]`, each overriding the app's per field.
+  **`version` is not among them**: `#[mcp(version = …)]` is a compile error
+  naming the app's seam, for the same reason the rest of the identity is the
+  app's.
 - **`instructions` is not a `#[mcp]` argument**, and writing one is a compile
   error naming the seam that takes it. It describes the *server*; what each tool
   does is already carried by its own `#[tool(description = "…")]`. Hosts that
@@ -505,7 +1054,7 @@ whole URL path.
   `DEFAULT_PATH`, `McpOptions::server`.
 - Migration: `#[mcp(path = "/mcp")]` becomes `#[mcp]`; any other path is
   unchanged; an `endpoints` entry becomes either `server` (the app's name) or
-  arguments on the host (`instructions`, a distinct `name`).
+  a distinct `name` on the host.
 
 ### One seam per module: `for_root` takes one value
 

@@ -27,7 +27,9 @@ homepage = "https://nestrs.dev"
 #
 # Async runtime
 tokio = { version = "1.53", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+# `io` supplies `ReaderStream`, which turns a multipart part's `AsyncRead`
+# into the byte stream an object-store upload consumes.
+tokio-util = { version = "0.7", features = ["rt", "io"] }
 
 # Tracing / logging
 tracing = "0.1"
@@ -66,6 +68,13 @@ figment = { version = "0.10", features = ["toml", "env"] }
 # `?` a service's `anyhow::Result` with no hand-written error→response mapping.
 # `rustls` terminates TLS with no OpenSSL system dep (single static binary).
 poem = { version = "3.1", features = ["tower-compat", "anyhow", "rustls", "compression", "multipart", "sse"] }
+# Validating a TLS pair before it is published to the listener. poem parses the
+# same bytes but its parser is private, and it builds with `with_cert_resolver`,
+# which never checks that the certificate and the key correspond — so a
+# mismatched or empty pair reaches the acceptor and every handshake fails. This
+# is the same rustls poem resolves to (through `tokio-rustls`), and only
+# `pki_types` (PEM) plus `sign` (`keys_match`) are used.
+rustls = "0.23"
 
 # Chosen over `aws-sdk-s3`: reqwest/rustls-based, no `aws-runtime` (which fails
 # to build on the pinned toolchain). `aws` brings AmazonS3 + its presign Signer.
@@ -126,6 +135,12 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # pinned by integration tests), so the framework's #1 differentiator cannot
 # regress silently.
 trybuild = "1.0"
+
+# Dev-only. Builds a real gzip request body, so the transport's body cap is
+# proved against the composition that defeated it — poem's `Compression`
+# decompresses the body and leaves `Content-Length` describing the compressed
+# bytes. A hand-set header would test the symptom; this tests the wire.
+flate2 = "1.1"
 
 # schemars must match rmcp's re-exported version, or the derive resolves to a
 # different trait than `rmcp::handler::server::wrapper::Parameters` expects.

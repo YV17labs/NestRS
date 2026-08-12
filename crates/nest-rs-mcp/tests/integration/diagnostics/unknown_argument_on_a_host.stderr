@@ -1,0 +1,5 @@
+error: #[mcp] accepts `path`, `name` and `title`, all optional
+  --> tests/integration/diagnostics/unknown_argument_on_a_host.rs:12:7
+   |
+12 | #[mcp(colour = "puce")]
+   |       ^^^^^^^^^^^^^^^

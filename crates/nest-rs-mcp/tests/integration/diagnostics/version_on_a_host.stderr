@@ -1,0 +1,11 @@
+error: #[mcp] declares no client-selectable version: an MCP endpoint is addressed by its whole path, and `version` here is `serverInfo.version` — the server's own version, not a segment a client selects. Write the version into the path: `#[mcp(path = "/mcp/v1")]`. The server's own version is not a host's to state — a feature library knows neither the binary's version nor, on a shared endpoint, the whole surface — so it is declared once, on the app's single `McpModule::for_root(McpOptions { server, .. })`
+  --> tests/integration/diagnostics/version_on_a_host.rs:16:7
+   |
+16 | #[mcp(version = "1")]
+   |       ^^^^^^^
+
+error: #[mcp] declares no client-selectable version: an MCP endpoint is addressed by its whole path, and `version` here is `serverInfo.version` — the server's own version, not a segment a client selects. Write the version into the path: `#[mcp(path = "/mcp/v1")]`. The server's own version is not a host's to state — a feature library knows neither the binary's version nor, on a shared endpoint, the whole surface — so it is declared once, on the app's single `McpModule::for_root(McpOptions { server, .. })`
+  --> tests/integration/diagnostics/version_on_a_host.rs:19:22
+   |
+19 | #[mcp(name = "demo", version = "1")]
+   |                      ^^^^^^^

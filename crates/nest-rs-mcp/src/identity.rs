@@ -23,7 +23,10 @@
 //!   single host can see the whole.
 //! * **A host says which endpoint stands apart** — a `name`/`title` on `#[mcp]`,
 //!   when one endpoint should not be reported as the app's default. That is a
-//!   fact about the mount, so it is declared where the mount is.
+//!   fact about the mount, so it is declared where the mount is. It is also the
+//!   whole of what a host may declare: `#[mcp(version = …)]` and
+//!   `#[mcp(instructions = …)]` are compile errors, because both describe the
+//!   server rather than the mount.
 //!
 //! Neither can shadow the other by accident: a host's fields override the app's
 //! per field, and two hosts sharing one path may not both declare — that fails
@@ -138,16 +141,21 @@ impl McpIdentity {
         self
     }
 
-    /// What the `#[mcp]` attribute declares — every field optional, because a
+    /// What the `#[mcp]` attribute declares — both fields optional, because a
     /// host refines the app's identity rather than restating it.
+    ///
+    /// The pair is the whole of what a host can honestly say: *which endpoint
+    /// stands apart*. `version` is not among them and `#[mcp(version = …)]` is a
+    /// compile error, because a feature library knows neither the binary's
+    /// version nor, on a shared endpoint, the whole surface — so the version
+    /// arrives from the app, through [`new`](Self::new), or from nowhere.
     ///
     /// **Internal ABI** — named by the `#[mcp]` expansion, lockstep with this
     /// crate; never called by hand.
     #[doc(hidden)]
-    pub fn declared(name: Option<&str>, version: Option<&str>, title: Option<&str>) -> Self {
+    pub fn declared(name: Option<&str>, title: Option<&str>) -> Self {
         Self {
             name: name.map(Into::into),
-            version: version.map(Into::into),
             title: title.map(Into::into),
             ..Self::default()
         }
@@ -194,7 +202,9 @@ impl ResolvedIdentity {
 /// The one way this can fail is a name with no version behind it: a host that
 /// renames its endpoint in an app that never named itself. Reporting it is the
 /// point — the alternative is an endpoint introducing itself at the *SDK's*
-/// version, which reads as a working server and is not one.
+/// version, which reads as a working server and is not one. A host cannot close
+/// that gap itself: `version` is the app's word, so the remedy the message
+/// names is the app's one declaration.
 pub(crate) fn resolve(
     host: Option<&McpIdentity>,
     app: Option<&McpIdentity>,
@@ -240,10 +250,12 @@ impl IdentityError {
         let Self::NameWithoutVersion(name) = self;
         format!(
             "MCP host {host} names the endpoint at {path:?} {name:?} but nothing supplies a \
-             version — an endpoint reports both. Either name the app once with \
+             version — an endpoint reports both, and the version is the app's to declare, \
+             since a feature library knows neither the binary's version nor, on a shared \
+             endpoint, the whole surface. Name the app once with \
              McpModule::for_root(McpOptions {{ server: \
              Some(McpIdentity::new(\"{name}\", env!(\"CARGO_PKG_VERSION\"))), ..Default::default() \
-             }}), or write `version = ...` beside the name on #[mcp]",
+             }})",
         )
     }
 }
@@ -276,7 +288,7 @@ mod tests {
     /// to restate — or be able to know — the app's version.
     #[test]
     fn a_host_overrides_per_field_and_inherits_the_rest() {
-        let host = McpIdentity::declared(Some("assistant-posts"), None, None);
+        let host = McpIdentity::declared(Some("assistant-posts"), None);
         let resolved = resolve(Some(&host), Some(&app())).expect("no error");
         let info = resolved.implementation().expect("named");
 
@@ -292,6 +304,27 @@ mod tests {
             Some("Every result is scoped to the caller's token."),
             "a host that stands apart still uses the server the same way — \
              instructions have one author and it is the app",
+        );
+    }
+
+    /// Both halves of what a host may declare, laid over the app at once: the
+    /// two remaining fields override independently, and the version — which
+    /// `#[mcp]` has no argument for — still arrives from the app.
+    #[test]
+    fn a_host_declaring_both_of_its_fields_still_inherits_the_version() {
+        let host = McpIdentity::declared(Some("assistant-posts"), Some("Posts"));
+        let resolved = resolve(Some(&host), Some(&app())).expect("no error");
+        let info = resolved.implementation().expect("named");
+
+        assert_eq!(info.name, "assistant-posts");
+        assert_eq!(
+            info.title.as_deref(),
+            Some("Posts"),
+            "the host's title wins"
+        );
+        assert_eq!(
+            info.version, "1.2.3",
+            "the version has one owner and it is not the host",
         );
     }
 
@@ -319,21 +352,26 @@ mod tests {
 
     #[test]
     fn a_name_no_version_backs_is_a_boot_error_naming_the_remedy() {
-        let host = McpIdentity::declared(Some("orphan"), None, None);
+        let host = McpIdentity::declared(Some("orphan"), None);
         let err = resolve(Some(&host), None).expect_err("rejected");
         let message = err.report("/mcp/posts", "PostsTool");
 
         assert!(message.contains("PostsTool"), "names the host: {message}");
         assert!(message.contains("/mcp/posts"), "names the path: {message}");
         assert!(
-            message.contains("McpIdentity::new"),
+            message.contains("McpModule::for_root"),
             "carries the remedy: {message}",
+        );
+        assert!(
+            !message.contains("#[mcp]"),
+            "…and only the remedy that exists — a host has no `version` argument \
+             to reach for: {message}",
         );
     }
 
     #[test]
     fn an_argumentless_mcp_host_declares_nothing() {
-        assert!(McpIdentity::declared(None, None, None).is_empty());
+        assert!(McpIdentity::declared(None, None).is_empty());
         assert!(!McpIdentity::new("a", "1").is_empty());
     }
 }

@@ -1,0 +1,23 @@
+error: #[mcp] takes no `description` — that describes the server, not one host, so it is declared once: McpModule::for_root(McpOptions { server: Some(McpIdentity::new(name, version).description("…")), ..Default::default() }). What this host's tools *do* belongs to each #[tool(description = "…")]
+  --> tests/integration/diagnostics/server_identity_on_a_host.rs:16:7
+   |
+16 | #[mcp(description = "What this server is")]
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: #[mcp] takes no `website_url` — that describes the server, not one host, so it is declared once: McpModule::for_root(McpOptions { server: Some(McpIdentity::new(name, version).website_url("…")), ..Default::default() })
+  --> tests/integration/diagnostics/server_identity_on_a_host.rs:19:7
+   |
+19 | #[mcp(website_url = "https://example.test")]
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: #[mcp] takes no `icons` — that describes the server, not one host, so it is declared once: McpModule::for_root(McpOptions { server: Some(McpIdentity::new(name, version).icons([…])), ..Default::default() })
+  --> tests/integration/diagnostics/server_identity_on_a_host.rs:22:7
+   |
+22 | #[mcp(icons = [])]
+   |       ^^^^^^^^^^
+
+error: #[mcp] takes no `instructions` — that describes the server, not one host, so it is declared once: McpModule::for_root(McpOptions { server: Some(McpIdentity::new(name, version).instructions("…")), ..Default::default() }). What this host's tools *do* belongs to each #[tool(description = "…")]
+  --> tests/integration/diagnostics/server_identity_on_a_host.rs:25:7
+   |
+25 | #[mcp(instructions = "Ask before writing")]
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

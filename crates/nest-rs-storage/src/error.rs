@@ -28,9 +28,19 @@ pub enum StorageError {
     /// Downloading an object's bytes failed.
     #[error("failed to download object")]
     Get(#[source] object_store::Error),
+    /// Listing the objects under a prefix failed.
+    #[error("failed to list objects")]
+    List(#[source] object_store::Error),
     /// Uploading an object's bytes failed.
     #[error("failed to upload object")]
     Put(#[source] object_store::Error),
+    /// The stream feeding [`put_stream`](crate::Storage::put_stream) yielded an
+    /// error, so the upload was aborted with nothing written.
+    ///
+    /// Distinct from [`Put`](Self::Put): the object store was healthy and the
+    /// caller's own source failed, which is the caller's bug to find.
+    #[error("the upload source stream failed")]
+    PutSource(#[source] std::io::Error),
     /// Deleting an object failed.
     #[error("failed to delete object")]
     Delete(#[source] object_store::Error),

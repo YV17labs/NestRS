@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "S3-compatible object storage for NestRS: a thin, injectable Storage client (presigned PUT/GET, head, byte read/write) built on the `object_store` crate. The AWS-S3 driver ships wired and runs against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style; the GCS, Azure, fs and memory drivers sit behind the same client."
+description = "S3-compatible object storage for NestRS: a thin, injectable Storage client (presigned PUT/GET, head, byte and streamed read/write, prefix listing) built on the `object_store` crate. The AWS-S3 driver ships wired and runs against any S3-compatible server (AWS, MinIO, RustFS) in path- or virtual-host style; the GCS, Azure, fs and memory drivers sit behind the same client."
 keywords = ["framework", "nestrs", "storage", "s3", "object-store"]
 categories = ["web-programming", "filesystem"]
 
@@ -26,15 +26,27 @@ http.workspace = true
 # `get_bytes` hands back `object_store`'s `Bytes` (Arc-backed, cheap clone) so a
 # downloaded body is never copied on the way out.
 bytes.workspace = true
-# `get_stream` maps `object_store`'s chunk stream, mapping its error into ours.
+# `get_stream`/`list` map `object_store`'s streams, mapping their errors into
+# ours; `put_stream` consumes one.
 futures-util.workspace = true
+# One event: a multipart upload whose abort failed leaves billed parts behind,
+# and the caller only gets the failure that caused it.
+tracing.workspace = true
 thiserror.workspace = true
+# A cancelled `put_stream` is dropped mid-part, and `Drop` cannot await — so the
+# abort is handed to a detached task on the runtime that was driving it.
+tokio = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 # The integration test signs a PUT, uploads raw bytes over HTTP, then reads
 # them back — it needs an independent HTTP client.
 reqwest.workspace = true
+# Whether an interrupted multipart upload's parts were discarded is not
+# observable through the store (`ListMultipartUploads` is not on
+# `object_store`'s surface), so the e2e suite asserts on the event the client
+# emits — which means collecting events with a `Layer` of its own.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

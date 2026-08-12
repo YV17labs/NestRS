@@ -42,6 +42,10 @@
 //!   carries only the byte size.
 //! - [`Storage::get_bytes`] / [`Storage::put_bytes`] — server-side byte
 //!   read/write (e.g. a worker transforming an original).
+//! - [`Storage::get_stream`] / [`Storage::put_stream`] — the same read/write
+//!   without holding the object whole, for bodies larger than memory.
+//! - [`Storage::list`] — the objects under a prefix, streamed as
+//!   [`ObjectEntry`] values.
 #![warn(missing_docs)]
 
 mod client;
@@ -49,7 +53,9 @@ mod config;
 mod error;
 mod module;
 
-pub use client::{HeadMetadata, Storage};
+#[doc(hidden)]
+pub use client::MULTIPART_PART_SIZE;
+pub use client::{HeadMetadata, ObjectEntry, Storage};
 pub use config::StorageConfig;
 pub use error::{Result, StorageError};
 pub use module::{StorageModule, StorageSetup};

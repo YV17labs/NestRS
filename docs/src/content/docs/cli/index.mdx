@@ -292,6 +292,12 @@ nestrs g feature posts
 # name AuthnGuard/AuthzGuard, so they would not compile without it.
 nestrs g resource posts
 
+# One #[expose] entity in an existing feature — no controller, no auth
+# bootstrap. The name after the slash is the entity's own when the feature's
+# singular is not it.
+nestrs g entity posts             # → Post, in posts/entity.rs
+nestrs g entity posts/comment     # → Comment
+
 # The app's authn/authz adapter — Claims, AuthnGuard, AppAbility, AuthzGuard.
 # Run it *before* the first `g resource`, or not at all: it refuses when
 # `crates/features/src/authz/` already exists.
@@ -358,6 +364,26 @@ Before inventing a second layout, open
 [`crates/features/src/orgs/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/orgs)
 side by side with what the generator emitted.
 
+### Where `g entity` puts the file
+
+A module keeps its entities in one of two shapes, and the generator reads which
+one you are in rather than asking: a feature with no entity yet gets the lone
+`posts/entity.rs`, and a feature already keeping several in `posts/entities/`
+gets one more file there, named for the singular (`comment.rs` beside `post.rs`).
+
+Growing from the first shape into the second is the one thing it refuses. Moving
+`entity.rs` into `entities/` deepens every `super::` path the file carries — and
+SeaORM's relation form spells those inside string literals, where a rewrite would
+either miss them or damage them silently. So the generator prints the four
+mechanical steps and leaves the move to you; re-run it afterwards.
+
+The entity it writes names **no service**. `#[expose(service = …)]` points at the
+one [`CrudService`](/database/crud/) whose `Entity` is this entity, `g entity`
+writes no service, and a plain `g feature` port's service is not one — so the
+link is yours to add, and the printed next steps spell the line. Reach for
+`g resource` instead when you want the entity, the service and the guarded
+controller together.
+
 ### `g graphql` over a resource carries the same guarantee
 
 The GraphQL adapter for a resource port is the `#[crud]` resolver behind the
@@ -383,7 +409,7 @@ Checks:
 
 Use it after install and before running DB- or Redis-backed apps.
 
-## Version, about, and update
+## Version, about, info, and update
 
 ```bash
 nestrs version
@@ -392,12 +418,21 @@ nestrs version
 nestrs about
 # → version, tagline, docs, repository, license, author
 
+nestrs info
+# → layout, name, root, framework pin, apps, features, env prefix, toolchain
+
 nestrs update
 # → checks crates.io; skips when already on the latest version
 
 nestrs update --force
 # → cargo install --force nest-rs-cli (reinstall even at the same version)
 ```
+
+`about` is the framework — the same lines on every machine. `info` is the tree in
+front of you: which layout you are standing in, the apps and features it holds,
+the `nest-rs` version its manifests pin, and which app a generator would wire
+into. It reports the root relative to where you ran it, and outside a project it
+says so rather than failing.
 
 Contributors inside the monorepo clone:
 
@@ -415,12 +450,14 @@ nestrs update --from-path
 | `nestrs new <name> --check` | Run `cargo check` after scaffolding |
 | `nestrs doctor` | Toolchain and env sanity check |
 | `nestrs version` | Print the CLI version |
-| `nestrs about` | Print project metadata |
+| `nestrs about` | Print NestRS metadata (tagline, docs, license, author) |
+| `nestrs info` | Report the project the current directory sits in |
 | `nestrs update` | Install latest CLI from crates.io when a newer version exists |
 | `nestrs update --force` | Reinstall from crates.io even when already on the latest version |
 | `nestrs update --from-path` | Reinstall from monorepo `crates/nest-rs-cli` |
 | `nestrs g feature <name>` | Transport-agnostic port in `crates/features/src/` |
 | `nestrs g resource <name>` | DB-backed CRUD port + guarded HTTP adapter (deps auto-added) |
+| `nestrs g entity <feature>[/<name>]` | One `#[expose]` entity in an existing feature |
 | `nestrs g auth` | The app's authn/authz adapter — one per workspace |
 | `nestrs g migration <name>` | SeaORM migration, registered in `lib.rs` and `migrator.rs` |
 | `nestrs g http\|graphql\|ws\|queue\|schedule\|mcp <name>` | Add one transport adapter to a port |

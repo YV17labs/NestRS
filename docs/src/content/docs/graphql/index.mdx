@@ -149,7 +149,7 @@ container handle to thread, no factory to call.
 
 ## In this section
 
-The GraphQL surface fans out from here. Each page covers one concern:
+### Basics
 
 - [Queries and mutations](/graphql/queries-mutations/) — `#[query]`,
   `#[mutation]`, inputs, outputs, returning typed entities.
@@ -157,26 +157,29 @@ The GraphQL surface fans out from here. Each page covers one concern:
   fields with `#[field_resolver]`, and the one `ComplexObject`
   caveat to watch for.
 - [Relations resolve themselves](/graphql/relations/) — declare a
-  SeaORM relation, get a typed GraphQL field with a batched loader for
-  free.
-- [Dataloaders](/database/dataloaders/) — `#[dataloader]` on a service
-  method for custom batched fetches, beyond what relations give you.
-- [Subscriptions](/graphql/subscriptions/) — `#[subscription]` over
-  graphql-ws, gated at subscribe and filtered per item pushed.
+  SeaORM relation, get a typed GraphQL field with a batched loader and
+  cursor pagination for free.
 - [Errors](/graphql/errors/) — `async_graphql::Error`, extensions,
   and mapping `ServiceError` to a GraphQL envelope.
-- [WebSockets](/websockets/) — the other realtime surface: typed
-  channels and per-message guards, for protocols that are message-shaped
-  rather than schema-shaped.
+
+### All options
+
 - [Configuration](/graphql/configuration/) — `GraphqlConfig`, SDL
   emission, playground toggle, mount path.
+- [Subscriptions](/graphql/subscriptions/) — `#[subscription]` over
+  graphql-ws, gated at subscribe and filtered per item pushed.
+- [Query limits](/graphql/query-limits/) — depth and complexity
+  ceilings, and what a rejected query looks like.
 
 ## Going further
 
 - [Security](/security/) — bind a `GraphqlAuthnGuard` so resolvers run
   with an authenticated principal and an ambient `Ability`.
-- [Database](/database/) — the data layer that the relation and
-  dataloader pages build on.
+- [Database](/database/) — the data layer the relation pages build on.
+- [Dataloaders](/database/dataloaders/) — `#[dataloader]` on a service
+  method, for batched fetches beyond what relations give you.
+- [WebSockets](/websockets/) — the other realtime surface, for protocols
+  that are message-shaped rather than schema-shaped.
 
 ### Reference
 

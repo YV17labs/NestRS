@@ -131,6 +131,24 @@ The envelope you send is `{event, data}`; the server's reply rides the
 same shape on the same event name. From here, every other concern is a
 matter of adding one decorator.
 
+## Version the socket
+
+`#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`. It is the same
+`version` argument `#[controller]` takes, resolved through the same
+`version_path`, because a gateway's mount is an address the client selects —
+[the edges where it is not](/http/versioning/) refuse the argument with a named
+compile error rather than accept a version nothing could apply.
+
+A gateway owns its mount, so the version is part of that ownership: `version =
+"1"` and `version = "2"` on one path are two mounts that both boot with their own
+message tables, while two gateways sharing a path *and* a version still fail boot
+naming both.
+
+Only the URI form selects a gateway. `NESTRS_HTTP__VERSIONING=header` rewrites
+controller paths in front of routing and never learns a self-mount's prefixes, so
+a versioned gateway stays at `/v1/ws` under every strategy — which is just as
+well, since a browser cannot set headers on a `WebSocket` handshake.
+
 ## Going further
 
 - [Messages](/websockets/messages/) — the envelope shape, the

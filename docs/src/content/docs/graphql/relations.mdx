@@ -1,6 +1,7 @@
 ---
 title: Relations resolve themselves
 description: Declare a SeaORM relation on an exposed entity and the GraphQL field, the loader, and the auth scope appear with it.
+tier: basics
 sidebar:
   order: 5
 ---
@@ -64,7 +65,7 @@ That is the whole declaration — both directions now query:
 
 ```bash frame="terminal"
 $ curl -sX POST http://localhost:3000/graphql -d \
-    '{"query":"{ users { id org { id name } } orgs { users { name } } }"}'
+    '{"query":"{ users { id org { id name } } orgs { users { edges { node { name } } } } }"}'
 ```
 
 ## What the macro emits
@@ -76,9 +77,10 @@ Per `#[expose(service = …)]`:
   key, returns the wire DTO.
 - For every `belongs_to` relation, an **FK loader** on the
   *FK-owning* service: `<Service>By<FkCol>` (e.g.
-  `UsersServiceByOrgId`). Reads a slice of foreign keys, returns the
-  child rows grouped by that key.
-- The trait impls (`PkLoadable`, `RelatedTo<Parent>`) that let the
+  `UsersServiceByOrgId`). Its key carries the page window as well as the
+  parent id, so two selections asking for different pages of one relation
+  cannot be served the same batch entry.
+- The trait impls (`PkLoadable`, `RelatedTo<Parent, Via>`) that let the
   inverse side reach the loader without naming the other service
   directly.
 - A `#[ComplexObject]` field resolver on the wire DTO that calls into
@@ -97,9 +99,34 @@ type User {
 type Org {
     id: ID!
     name: String!
-    users: [User!]!      # has_many side — FK loader on UsersService
+    # has_many side — FK loader on UsersService, paged
+    users(first: Int, after: String): UserConnection!
 }
 ```
+
+The `has_many` side is a **Relay connection**, not a list: `edges { cursor node }`
+plus `pageInfo`, with the child's own primary key as the cursor — the same keyset
+`Repo::page` uses everywhere else. `first` defaults to 20 and is clamped to
+`1..=100` by `clamp_page_size`, so a relation over millions of rows is walked a
+page at a time.
+
+```bash frame="terminal"
+$ curl -sX POST http://localhost:3000/graphql -d \
+    '{"query":"{ users { id posts(first: 1) { edges { cursor node { id } } pageInfo { hasNextPage endCursor } } } }"}'
+{"data":{"users":[
+  {"id":"…ac00","posts":{"edges":[{"cursor":"019ff…","node":{"id":"019ff…"}}],
+                          "pageInfo":{"hasNextPage":false,"endCursor":"019ff…"}}},
+  {"id":"…ac01","posts":{"edges":[{"cursor":"…b001","node":{"id":"…b001"}}],
+                          "pageInfo":{"hasNextPage":true,"endCursor":"…b001"}}}]}}
+```
+
+**Every parent gets its own page.** That is a property of the query, not of the
+buffer: the batch ranks rows *within each parent*
+(`ROW_NUMBER() OVER (PARTITION BY fk ORDER BY pk)`) and keeps the first
+`first + 1` of each, in one round trip. A single `LIMIT` over
+`WHERE fk IN (…)` cannot do this — it bounds the result set, so the parents that
+sort first consume the budget and the rest come back empty, which reads exactly
+like having no children.
 
 ## The cross-entity rule
 
@@ -153,21 +180,27 @@ operator can act on.
 
 ## Fanout-aware complexity
 
-The auto-emitted `HasMany` resolver loads every child of the parent —
-unbounded fanout. With async-graphql's default `1 + child_complexity`
-formula, that field would barely move the score even when the loader
-resolves thousands of rows. The macro adds
-`#[graphql(complexity = "10 * child_complexity")]` for you, so a
-three-level chain like `organizations { teams { members { id } } }`
-scores `10 × 10 × 10 = 1000` — within reach of a sane
-[`max_complexity`](/graphql/query-limits/#complexity) ceiling.
+With async-graphql's default `1 + child_complexity` formula, a relation
+field barely moves the score even when it resolves a hundred rows. The
+macro adds the honest estimate for you — the page the client actually
+asked for, times the cost of each row:
+
+```rust title="from the macro expansion"
+#[graphql(complexity = "first.unwrap_or(20) as usize * child_complexity")]
+```
+
+So `posts(first: 5)` costs a twentieth of `posts(first: 100)`, and a
+three-level chain left at the default page size scores `20³`. That is a
+direct consequence of the field taking its page size: while the relation
+returned an unparameterised list there was nothing to multiply by but a
+guess.
 
 `BelongsTo` keeps the additive default (one parent row, dropping to
 zero when the ambient `Ability` denies it). The two relation kinds
 therefore use **asymmetric base scoring** — multiplicative for
-`HasMany`, additive for `BelongsTo` — which is the point: lists are
-the cost driver. Override per field with `#[expose(complexity = …)]`
-when the realistic fanout differs — full details in
+`HasMany`, additive for `BelongsTo` — which is the point: pages are
+the cost driver. Override per field with `#[expose(complexity = …)]`,
+which may now name `first` — full details in
 [Query limits](/graphql/query-limits/#override-on-the-field).
 
 ## Opt out: leave a single relation unexposed
@@ -175,8 +208,10 @@ when the realistic fanout differs — full details in
 Leaving a relation field unexposed (no `#[expose]`) keeps auto-emission
 off for that field only. The relation stays declared at the ORM level
 (SeaORM still knows about it), and you can write a hand-rolled
-`#[field_resolver]` if you need a custom shape — say a `Connection<User>`
-with cursor pagination, or a filtered subset.
+`#[field_resolver]` if you need a shape the auto-emitted one does not
+give you — a filtered or sorted subset, extra edge fields, a projection.
+Cursor pagination is **not** on that list any more: the auto-emitted
+field already is a connection.
 
 ```rust
 #[expose(name = "Org", service = …, graphql)]
@@ -202,12 +237,12 @@ auto-resolved relations, the single-`ComplexObject` rule applies — see
 [Field resolvers](/graphql/field-resolvers/).
 </Aside>
 
-## A custom shape: the cursor connection
+## A custom shape: a filtered relation
 
 When the unexposed relation opens the slot, write the replacement on the resolver:
 
 ```rust title="src/orgs/graphql/resolver.rs"
-use async_graphql::{Context, Result, connection::*};
+use async_graphql::{Context, Result};
 use nest_rs::graphql::{operations, resolver};
 
 use crate::orgs::Org;
@@ -222,22 +257,42 @@ pub struct OrgsResolver {
 #[operations]
 impl OrgsResolver {
     #[field_resolver]
-    async fn users(
-        &self,
-        _ctx: &Context<'_>,
-        parent: &Org,
-        first: Option<i32>,
-        after: Option<String>,
-    ) -> Result<Connection<String, User>> {
-        let page = self.users.page_in_org(parent.id, first, after.as_deref()).await?;
-        Ok(into_connection(page))
+    async fn admins(&self, _ctx: &Context<'_>, parent: &Org) -> Result<Vec<User>> {
+        Ok(self.users.admins_in_org(parent.id).await?)
     }
 }
 ```
 
-The connection helper, the page service method, and the `User` wire
-DTO all stay where they belong — the resolver only translates between
-the two.
+The filter, the service method, and the `User` wire DTO all stay where
+they belong — the resolver only translates between the two.
+
+## Two foreign keys to one parent
+
+A child can point at the same parent twice — a ticket with a `reporter_id`
+**and** an `assignee_id`. Nothing in the *type* of that relation tells the
+parent's side which column to follow, so it says so:
+
+```rust title="src/people/entity.rs"
+#[sea_orm(has_many, relation_enum = "Reported", via_rel = "Reporter")]
+#[expose(via = "reporter_id")]
+pub reported: HasMany<crate::tickets::Entity>,
+
+#[sea_orm(has_many, relation_enum = "Assigned", via_rel = "Assignee")]
+#[expose(via = "assignee_id")]
+pub assigned: HasMany<crate::tickets::Entity>,
+```
+
+`via` names the child's column; `relation_enum` / `via_rel` are SeaORM's own
+way of telling two relations to one entity apart, and belong to the entity
+file either way. The child side needs nothing new — it already names its
+column in `#[sea_orm(belongs_to, from = "…")]`, so writing `via` there is a
+compile error pointing back at `from`.
+
+**Leaving it out when it is ambiguous does not compile.** A child that reaches
+one parent through exactly one key gets a default; a child with two gets none,
+and the inverse relation fails with the note telling it to name a column. The
+one thing that never happens is the framework picking whichever `belongs_to`
+came first.
 
 ## Advanced: bidirectional and multi-hop graphs
 
@@ -245,18 +300,9 @@ You can skip this on a first read — it only matters once a schema grows
 bidirectional or multi-hop relations.
 
 Bidirectional and multi-hop graphs (`org ↔ membership ↔ user`) are resolved
-explicitly rather than guessed: two relations that would generate the same
-loader impl are caught at compile time, so you pick which side owns the
-generated field and write the other by hand.
-
-When two `belongs_to` relations on the same entity target the **same** parent,
-the macro refuses with an actionable error — leave one side
-unexposed (no `#[expose]`) and write a hand-rolled `#[field_resolver]`, or flatten to
-FK columns only.
-
-Composite primary keys and duplicate loader targets are refused at compile time
-(not a cryptic `E0119`). See `crates/nest-rs-resource-macros/src/relations.rs`
-for the diagnostics.
+explicitly rather than guessed. Composite primary keys are refused at compile
+time (not a cryptic `E0119`). See
+`crates/nest-rs-resource-macros/src/relations.rs` for the diagnostics.
 
 ## Going further
 

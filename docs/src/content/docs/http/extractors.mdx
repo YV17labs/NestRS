@@ -1,6 +1,7 @@
 ---
 title: Extractors
 description: The full HTTP extractor surface — JSON, raw body, client IP, request-scoped providers, guard-attached context, route metadata.
+tier: basics
 sidebar:
   order: 6
 ---
@@ -11,10 +12,11 @@ An extractor pulls a typed value out of the request before the handler
 runs. Most of the surface is [poem](https://docs.rs/poem)'s — `Path<T>`,
 `Query<T>`, `Json<T>`, `Form<T>` cover the request line, query string,
 JSON body, and form body. NestRS adds the framework-specific extractors:
-the validated `Valid<E>`, the raw-body reader `RawBody`, the spoofable
-but observation-grade `ClientIp`, the request-scoped DI resolver
-`Scoped<T>`, the guard-attached context reader `Ctx<T>`, and the route
-metadata reader `Reflector` paired with `#[meta(...)]`.
+the validated `Valid<E>`, the typed header reader `Header<T>`, the
+raw-body reader `RawBody`, the spoofable but observation-grade
+`ClientIp`, the request-scoped DI resolver `Scoped<T>`, the
+guard-attached context reader `Ctx<T>`, and the route metadata reader
+`Reflector` paired with `#[meta(...)]`.
 
 This page is the reference: one extractor, one example, one rule. The
 [Guards](/fundamentals/guards/) for `Ctx<T>` and
@@ -101,6 +103,43 @@ async fn show(&self, id: Piped<ParseUuid, Path<String>>) -> Json<Post> {
 
 Reach for `Piped` when a reusable pipe exists for the job; `Valid` when
 the job is `validator::Validate`.
+
+## `Header<T>` — typed request headers
+
+The header-map twin of `Query<T>`: one struct field per header,
+`#[serde(rename = "…")]` spelling the wire name, and an `Option<_>`
+field marking the header optional. Lookup is case-insensitive, as HTTP
+header names are, and values are parsed into the field's type — a
+`u32` field is an integer, not a string you parse in the handler.
+
+```rust
+use nest_rs::http::Header;
+use nest_rs::http::poem::web::sse::SSE;
+use serde::Deserialize;
+use schemars::JsonSchema;
+
+#[derive(Deserialize, JsonSchema)]
+struct StreamResume {
+    #[serde(rename = "Last-Event-ID")]
+    last_event_id: Option<u32>,
+}
+
+#[get("/events")]
+async fn events(&self, resume: Header<StreamResume>) -> SSE {
+    self.svc.stream_from(resume.into_inner().last_event_id)
+}
+```
+
+A missing required header, or a value that does not parse, is rejected
+with the same RFC 9457 `application/problem+json` `400` a validation
+failure carries. **The rejection names the header and never quotes its
+value** — a header is where credentials travel, and a `400` body is
+logged, cached and proxied.
+
+Each property becomes an `in: header` parameter in the
+[OpenAPI document](/openapi/), `required` following the schema. It
+composes like every other extractor: `Valid<Header<T>>` validates the
+DTO, `Piped<P, Header<T>>` pipes it.
 
 ## `RawBody` — exact bytes, with a size cap
 

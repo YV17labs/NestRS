@@ -53,6 +53,12 @@ That's the whole opt-in. The module self-mounts both endpoints on the existing
   operations; nothing is listed by hand.
 - **`GET /api`** — a **bundled** Swagger UI. The assets ship inside the binary,
   so it works with no internet access and no CDN.
+- **`GET /api-json/v{n}`** — one document per API version, and only under
+  `NESTRS_HTTP__VERSIONING=header` or `media_type`. OpenAPI 3.1 keys operations
+  by path, so two versions selected by a header cannot both be described at
+  `/posts`. Under the default `uri` strategy the version is already in the path
+  and `/api-json` describes every version at once. See
+  [Versioning](/http/versioning/).
 - **Schemas for free.** Request and response bodies are derived from your
   `Json<T>` payload types via [`schemars`](https://docs.rs/schemars). An entity
   declared with `#[expose]` already produces its JSON Schema — the same type
@@ -103,10 +109,12 @@ async fn create(
 }
 ```
 
-`#[api]` accepts four keys — **`summary`**, **`description`**, **`tags(...)`**
-and **`response = Type`** — and nothing else. Everything else on the operation
-(path, method, parameters, request schema, success status) is inferred from the
-handler signature; the macro rejects unknown keys at compile time.
+`#[api]` accepts six keys — **`summary`**, **`description`**, **`tags(...)`**,
+**`response = Type`**, **`multipart = Type`** and
+**`response_content_type = "type/subtype"`** — and nothing else. Everything else
+on the operation (path, method, parameters, request schema, success status) is
+inferred from the handler signature; the macro rejects unknown keys at compile
+time.
 
 `response` is the one escape hatch, for a handler that builds its own
 `Response` and therefore states no payload in its return type. The `#[crud]`
@@ -119,6 +127,62 @@ it can carry `x-next-cursor`, and declares
 #[api(summary = "List Users", response = Vec<User>)]
 async fn list(&self, _authz: Authorize<Read, UserEntity>) -> Result<Response> { /* ... */ }
 ```
+
+### Bodies that are not JSON
+
+`multipart = Type` and `response_content_type = "…"` are the two escape hatches
+for a body `Json<T>` cannot describe — an upload form, a streamed download.
+
+```rust
+#[post("/uploads/direct")]
+#[api(
+    summary = "Upload an audio file directly as multipart/form-data",
+    multipart = DirectUploadDto,
+)]
+async fn upload_direct(&self, upload: UploadedAudio) -> Result<Json<PresignedUrlDto>> { /* ... */ }
+
+#[get("/download")]
+#[api(
+    summary = "Stream a transcoded object back through the server",
+    response_content_type = "audio/mpeg",
+)]
+async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> { /* ... */ }
+```
+
+The form's parts are a type like any other payload — a `String` field carrying
+`#[schemars(extend("format" = "binary"))]` is the file part Swagger UI renders a
+file picker for. A handler that takes poem's `Multipart` directly and declares
+nothing still documents `multipart/form-data` with a free-form object: the media
+type it accepts is knowledge a client needs, even when no type states the parts.
+
+`response_content_type` replaces `application/json` on the success response and,
+with no `response = Type` beside it, types the body the way OpenAPI spells a
+stream — `string` with `format: binary`, or plain `string` for a `text/*` media
+type. **A handler returning poem's `SSE` needs no annotation at all**: that type
+serializes as `text/event-stream` and nothing else, so the document reads it off
+the return type, exactly as it reads a payload schema off a `Json<T>` return.
+
+### Header parameters
+
+A handler that reads headers binds them as a DTO — `Header<T>`, the header-map
+twin of `Query<T>` — and each property becomes an `in: header` parameter, an
+`Option<_>` field being an optional one:
+
+```rust
+#[derive(Deserialize, JsonSchema)]
+pub struct StreamResumeDto {
+    #[serde(rename = "Last-Event-ID")]
+    pub last_event_id: Option<u32>,
+}
+
+#[get("/events")]
+async fn events(&self, resume: Header<StreamResumeDto>) -> SSE { /* ... */ }
+```
+
+A missing required header, or a value that does not parse into its field's type,
+is rejected with the same RFC 9457 `400` every other edge rejection carries —
+naming the header and never quoting its value, because that is where credentials
+travel. A required header also makes the operation advertise its `400`.
 
 ### Ability-shaped responses
 
@@ -190,25 +254,39 @@ so the deployment can still override any one of them. See the
 
 The document composes from the route table, so everything in it is derived:
 the `info` block, `servers` from the transport's `global_prefix`, every
-operation under `paths`, a shared `components.schemas`, a `bearerAuth` entry in
-`components.securitySchemes` with per-operation `security` on guarded routes,
-and the error statuses an operation can actually produce (`400` / `404` / `429`
-alongside its success code) as RFC 9457 `ProblemDetails`.
+operation under `paths`, its path / query / header parameters, its request body
+and the media type that body arrives as, a shared `components.schemas`, a
+`bearerAuth` entry in `components.securitySchemes` with per-operation `security`
+on guarded routes, and the error statuses an operation can actually produce
+(`400` / `404` / `429` alongside its success code) as RFC 9457 `ProblemDetails`.
+
+`operationId` is derived too, as `<controller>_<handler>`, mapped onto what an
+identifier can carry — `PostsController::list` publishes `posts_list`, and a raw
+handler `r#type` publishes `…_r_type` rather than an id with a `#` in it. Qualified by the controller because `#[crud]` names every
+resource's handlers identically, and OpenAPI requires the id to be unique across
+the document: a generator meeting two `list`s either errors or renames one, so a
+method goes missing from the SDK. A versioned operation carries its version too
+(`posts_list_v2`).
 
 What the composer does not derive, it leaves to you:
 
 - **`example` / `examples` on inputs and responses.** schemars derives the
   shape; concrete sample payloads are a documentation choice, so they live in
   the `#[api]` description rather than in a generated block.
-- **Header parameters** — path and query parameters are emitted from the
-  handler signature; a `Header<T>` extractor is described in the operation's
-  `description`.
+- **Response headers other than the two the framework sends itself**
+  (`Location`, `Retry-After`). A header a *handler* sets is not something the
+  route table knows about.
 - **`contact` / `license` / `externalDocs`** on the document header — `title`,
   `version`, and `description` are the configurable fields.
+- **Which version `/api-json` describes, when the deployment names no default.**
+  It then aggregates every declared version and resolves a contested path to the
+  highest one, naming the loser in a boot `warn`. Point a client at
+  `/api-json/v{n}` when it needs one version's shapes exactly.
 
-Don't hand-patch the document: it is regenerated on every request, so an
-out-of-band edit is lost on the next call and breaks the no-drift invariant
-that makes the spec worth trusting.
+Don't hand-patch the document: it is composed at boot from the route table, so
+an out-of-band edit is lost the next time the app starts and breaks the no-drift
+invariant that makes the spec worth trusting. (Composed once, not per request —
+serving it is a string write.)
 
 ## Going further
 

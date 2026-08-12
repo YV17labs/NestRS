@@ -1,6 +1,7 @@
 ---
 title: End-to-end tests
 description: TestApp boots the real AppModule against an EphemeralDatabase — the route table, the DI graph, the access-graph check, authn/authz, and the data path all run.
+tier: basics
 sidebar:
   order: 4
 ---
@@ -165,6 +166,12 @@ let app = TestApp::builder()
 — typed requests, typed responses, no socket. GraphQL
 (`POST /graphql`), the OpenAPI document (`GET /api-json`), and MCP all
 ride the same client because they self-mount as HTTP endpoints.
+
+It drives **the transport your app's `HttpModule::for_root(cfg)` describes**, not
+a bare one — so a global prefix, a versioning strategy, a body cap or a request
+timeout you pin on the module is what the suite exercises. Pin the `HttpConfig`
+on the module to test one; `TestAppBuilder::http(transport)` is for a transport
+the app does not declare at all.
 
 ```rust
 let resp = app.http().get("/api-json").send().await;

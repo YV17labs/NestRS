@@ -1,6 +1,7 @@
 ---
 title: Streaming responses
 description: Return a chunked body or a Server-Sent Events stream from a handler — poem's response types pass straight through.
+tier: all-options
 sidebar:
   order: 9
 ---
@@ -46,10 +47,17 @@ async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SSE {
 }
 ```
 
+The [OpenAPI document](/openapi/) types an SSE route with no annotation at
+all: `SSE` serializes as `text/event-stream` and nothing else, so the media
+type is read off the return type. A hand-built streamed `Response` states
+its own with `#[api(response_content_type = "audio/mpeg")]` — there is no
+return type to read it from.
+
 ## Limits
 
-- A streamed handler advertises no response body schema in the [OpenAPI
-  document](/openapi/) — there is no `Json<T>` to derive one from.
+- A streamed body has no *schema* in the document, only a media type and
+  OpenAPI's `string` / `format: binary` — there is no `Json<T>` to derive one
+  from.
 - SSE and streamed bodies are HTTP only; the WebSocket
   [gateway](/websockets/) is the push channel for two-way traffic.
 - Compression sits outside the handler, so a streamed body is still

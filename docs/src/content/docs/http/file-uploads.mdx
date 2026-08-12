@@ -1,6 +1,7 @@
 ---
 title: File uploads
 description: Accept a multipart/form-data upload with poem's Multipart extractor and stream the part into object storage.
+tier: all-options
 sidebar:
   order: 10
 ---
@@ -14,20 +15,46 @@ stores them.
 ```rust title="crates/features/src/audio/http/controller.rs (abridged)" {2}
 #[post("/uploads/direct")]
 async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> {
-    while let Some(field) = form.next_field().await.map_err(bad_request)? {
-        if field.name() != Some("file") {
+    while let Some(part) = form.next_field().await.map_err(bad_request)? {
+        if part.name() != Some("file") {
             continue;
         }
-        let filename = field.file_name().map(str::to_owned).unwrap_or_default();
+        let filename = part.file_name().map(str::to_owned).unwrap_or_default();
         // Validate before the bytes become an object key.
         UploadRequestDto { filename: filename.clone() }.validate().map_err(unprocessable)?;
-        let bytes = field.bytes().await.map_err(bad_request)?;
-        let ticket = self.svc.store_upload(&filename, bytes).await.map_err(internal)?;
+        // The part streams into storage — it never exists whole in memory.
+        let ticket = self.svc.store_upload(&filename, part.into_byte_stream())
+            .await.map_err(internal)?;
         return Ok(Json(ticket));
     }
     Err(Error::from_string("multipart body has no `file` part", StatusCode::BAD_REQUEST))
 }
 ```
+
+## Stream the part instead of buffering it
+
+`field.bytes()` is the buffered form: the whole part lands in memory before the
+handler sees any of it. That is right for a form value and wrong for a file.
+`PartExt::into_byte_stream()` is the other half — the part as it arrives, in the
+shape [`Storage::put_stream`](/storage/) consumes:
+
+```rust title="crates/features/src/audio/service.rs (abridged)"
+use nest_rs::http::PartExt;
+
+pub async fn store_upload(
+    &self,
+    filename: &str,
+    part: impl Stream<Item = std::io::Result<Bytes>> + Send,
+) -> Result<PresignedUrlDto, AudioError> {
+    let key = format!("{}-{filename}", Uuid::now_v7());
+    self.storage.put_stream(&key, AUDIO_CONTENT_TYPE, part).await?;
+    // …
+}
+```
+
+The service names a stream, not a transport type, so the same method serves a
+multipart part, a proxied download, or a test fixture. Peak memory is one
+multipart chunk plus one object-store part, whatever the file's size.
 
 ## Validate the filename at the edge
 
@@ -37,12 +64,35 @@ slice binds (`UploadRequestDto`), so one anti-traversal allowlist covers
 both the presigned and the direct path. A rejected name is a `422`, never
 a stored object.
 
+## Document the form
+
+Nothing in a `Multipart` handler states what the form's parts are, so
+`#[api(multipart = Type)]` declares them and the
+[OpenAPI document](/openapi/) files the schema under `multipart/form-data`:
+
+```rust
+#[derive(JsonSchema)]
+pub struct DirectUploadDto {
+    #[schemars(extend("format" = "binary"))]
+    pub file: String,
+}
+
+#[post("/uploads/direct")]
+#[api(multipart = DirectUploadDto)]
+async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> { /* ... */ }
+```
+
+`format: binary` is what makes Swagger UI render a file picker for the part.
+Undeclared, a `Multipart` handler still documents `multipart/form-data` with a
+free-form object — the media type is knowledge a client needs even when no type
+states the parts.
+
 ## Presigned or direct
 
 | | Presigned PUT | Direct multipart |
 |---|---|---|
 | Bytes flow | client → storage | client → server → storage |
-| Server memory | none | one part at a time |
+| Server memory | none | one chunk at a time |
 | Round trips | two (mint, then PUT) | one |
 | Use when | large media, offload the transfer | small files, one call |
 
@@ -55,9 +105,11 @@ a stored object.
   is `NESTRS_HTTP__MAX_BODY_BYTES`, not a compensating control in your code.
   The admin gate and rate limit the demo binds are defence in depth, not the
   size bound.
-- The uploaded part is buffered whole per field before it reaches storage
-  (`field.bytes()`); for very large files the presigned PUT avoids proxying
-  through the server entirely.
+- Streaming bounds **memory**, not the request: the part is still read through
+  the request body, so `max_body_bytes` is the ceiling either way. Raising it is
+  what lets a large file through; streaming is what keeps the process from
+  holding it. For very large media the presigned PUT still wins — it avoids
+  proxying the bytes through the server at all.
 
 ## Going further
 

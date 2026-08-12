@@ -1,6 +1,7 @@
 ---
 title: Env-var reference
 description: "Every NESTRS_* environment variable, by namespace — the dual-path rule means each one also has a pinned-struct field."
+tier: all-options
 sidebar:
   order: 6
 ---
@@ -49,6 +50,10 @@ config survives adopting or dropping the observability stack.
 | `SECURITY_HEADERS` | master switch for the secure-by-default response headers |
 | `HSTS` · `FRAME_OPTIONS` · `CONTENT_TYPE_OPTIONS` · `SERVER_HEADER` | individual security-header controls |
 | `TLS_CERT` / `TLS_KEY` | PEM cert + key for HTTPS (inline); `TLS_CERT_FILE` / `TLS_KEY_FILE` read from a path instead. Unset ⇒ plain HTTP |
+| `TLS_RELOAD_SECS` | how often a file-sourced pair is re-read, so a renewal swaps in without a restart — default `60`, `0` disables |
+| `VERSIONING` | how a caller selects an API version — `uri` (default), `header`, `media_type` |
+| `VERSION_HEADER` | the header the `header` strategy reads — default `X-API-Version` |
+| `DEFAULT_VERSION` | the version served to a caller that states none; unset ⇒ the unversioned routes |
 | `CORS_ORIGINS` | comma-separated allowed origins; unset ⇒ no CORS layer |
 | `CORS_METHODS` | comma-separated allowed request methods |
 | `CORS_HEADERS` | comma-separated allowed request headers |

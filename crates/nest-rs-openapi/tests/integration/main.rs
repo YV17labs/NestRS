@@ -6,4 +6,5 @@
 //! `/api-json` and `/api` — and what does a caller get when the deployment
 //! turned the documentation off.
 
+mod document;
 mod module;

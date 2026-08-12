@@ -1,0 +1,5 @@
+error: `belongs_to` declares `from = "organisation_id"` but this entity has no column with that name
+  --> tests/integration/diagnostics/belongs_to_from_an_unknown_column.rs:19:9
+   |
+19 |     pub org: HasOne<crate::orgs::Entity>,
+   |         ^^^

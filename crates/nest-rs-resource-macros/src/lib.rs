@@ -14,6 +14,7 @@ mod input;
 mod lifecycle;
 mod relations;
 mod wire;
+mod wire_enum;
 
 /// Expose a SeaORM entity to REST/OpenAPI (and optionally GraphQL) from one
 /// declaration. Emits a wire DTO (`Serialize` + `JsonSchema`) and
@@ -72,4 +73,54 @@ mod wire;
 #[proc_macro_attribute]
 pub fn expose(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(expose::expose(args, item).into()).into()
+}
+
+/// The enum mode of [`macro@expose`]: make a column's enum type a wire type.
+///
+/// An `#[expose]`d column of a custom enum passes through to the wire DTO
+/// verbatim, so the **enum** is what must carry `Serialize`, `Deserialize`,
+/// `JsonSchema` and — under `graphql` — `async_graphql::Enum`. Written by hand
+/// that puts `schemars` and `async-graphql` in the entity crate's manifest for
+/// code it never wrote. `#[wire_enum]` emits them with their `crate = `
+/// overrides routed through `nest-rs-resource`, so the manifest names neither.
+///
+/// It emits the value shape those derives require — `Clone`, `Copy`, `Debug`,
+/// `PartialEq`, `Eq` — and **nothing from SeaORM**: `EnumIter`,
+/// `DeriveActiveEnum`, `#[sea_orm(rs_type = …, db_type = …)]` and the
+/// per-variant `string_value` stay the developer's, because the column's
+/// storage type is theirs to choose.
+///
+/// ```ignore
+/// use nest_rs_resource::wire_enum;
+///
+/// #[wire_enum(graphql)]
+/// #[derive(EnumIter, DeriveActiveEnum)]
+/// #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+/// #[serde(rename_all = "lowercase")]
+/// pub enum PostStatus {
+///     #[sea_orm(string_value = "draft")]
+///     Draft,
+///     #[sea_orm(string_value = "published")]
+///     Published,
+/// }
+/// ```
+///
+/// # Expands to
+///
+/// The enum unchanged, under the derives and `crate = ` overrides above:
+///
+/// ```ignore
+/// #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Enum, JsonSchema)]
+/// #[serde(crate = "…")]
+/// #[schemars(crate = "…")]
+/// #[graphql(crate = "…")]
+/// pub enum PostStatus { /* the enum, unchanged */ }
+/// ```
+///
+/// Drop `graphql` for an enum that only ever crosses HTTP; the flag means
+/// exactly what it means on `#[expose(…, graphql)]`, and needs the same
+/// `graphql` feature on `nest-rs-resource`.
+#[proc_macro_attribute]
+pub fn wire_enum(args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(wire_enum::wire_enum(args.into(), item.into())).into()
 }

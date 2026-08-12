@@ -28,6 +28,7 @@ nest-rs = { path = "../nest-rs", default-features = false, features = [
     "http",
     "mcp",
     "queue",
+    "resource",
     "schedule",
     "ws",
 ] }

@@ -1,0 +1,5 @@
+error: `deleted_at` must be `Option<DateTimeWithTimeZone>` (or similar) for soft delete
+  --> tests/integration/diagnostics/deleted_at_is_not_optional.rs:15:9
+   |
+15 |     pub deleted_at: DateTimeWithTimeZone,
+   |         ^^^^^^^^^^

@@ -4,10 +4,16 @@
 //! inserts. With UUID-v7 keys (time-ordered), paging by the key is also
 //! chronological with no extra sort column.
 
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use sea_orm::prelude::Uuid;
-use sea_orm::sea_query::{Condition, ValueType};
+use sea_orm::sea_query::{
+    Asterisk, Condition, Expr, ExprTrait, Order, Query, Value, ValueType, WindowStatement,
+};
 use sea_orm::{
-    DbErr, EntityTrait, Iterable, ModelTrait, PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter,
+    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, IdenStatic, Iterable, ModelTrait,
+    PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter, QueryTrait,
 };
 
 use nest_rs_authz::Action;
@@ -16,6 +22,10 @@ use crate::repo::{Repo, scope_for};
 
 /// One keyset page. `next_cursor` is the last row's primary key, present only
 /// when [`has_more`](Page::has_more).
+///
+/// `Clone` because an auto-resolved relation's page is a dataloader value, and
+/// async-graphql hands one batch result to every caller waiting on it.
+#[derive(Clone, Debug)]
 pub struct Page<M> {
     /// The rows on this page, ascending by primary key.
     pub items: Vec<M>,
@@ -33,6 +43,12 @@ pub fn clamp_page_size(first: u64) -> u64 {
     first.clamp(1, 100)
 }
 
+/// The page size a caller who asked for none gets — on the `?first=` query, on
+/// a `#[crud]` list operation, and on an auto-resolved relation. One constant so
+/// "how many rows does an unparameterised page return" has one answer whichever
+/// surface asked.
+pub const DEFAULT_PAGE_SIZE: u64 = 20;
+
 /// Hard backstop on `CrudService::list`: no unpaginated read returns more
 /// rows than this, ever — a capped result logs a `warn` naming the entity.
 /// Deliberately far above `clamp_page_size`'s window: the cap is a safety
@@ -40,14 +56,53 @@ pub fn clamp_page_size(first: u64) -> u64 {
 /// that can grow past it must paginate (`CrudService::page`).
 pub const LIST_CAP: u64 = 1_000;
 
-/// Hard backstop on an auto-resolved `has_many` relation load: no exposed
-/// relation field returns more than this many children **per parent**, ever.
-/// The auto-emitted FK dataloader caps its batch query at `RELATION_LOAD_CAP ×
-/// keys` and truncates each parent's bucket, logging a `warn` — so a relation
-/// with unbounded fanout (`Org.posts` over millions of rows) can never load an
-/// unbounded result set into memory. A relation that legitimately exceeds it
-/// should be a paginated field, not an auto-resolved `#[expose]`d list.
-pub const RELATION_LOAD_CAP: u64 = 100;
+/// SQL alias for the per-parent rank a relation page ranks its rows by, and for
+/// the subquery that carries it. Prefixed so neither can collide with a real
+/// column of the entity being paged.
+const RANK_ALIAS: &str = "__nest_rs_rank";
+const RANKED_ALIAS: &str = "__nest_rs_ranked";
+
+/// Wrap an already-scoped child select so each parent keeps only its own first
+/// `limit + 1` rows: rank within the partition, then filter on the rank.
+///
+/// The query-shape half of [`Repo::relation_pages`], extracted so the SQL it
+/// emits is assertable without a database — the rest of that method is bucketing
+/// rows a real query returned, and a wrong `PARTITION BY` would still return
+/// plausible-looking rows.
+fn rank_per_parent<E: EntityTrait>(
+    scoped: sea_orm::Select<E>,
+    fk: E::Column,
+    pk: E::Column,
+    limit: u64,
+    after: Option<Uuid>,
+) -> sea_orm::sea_query::SelectStatement {
+    let scoped = match after {
+        Some(after) => scoped.filter(pk.gt(after)),
+        None => scoped,
+    };
+    // Unqualified column refs: the window sits over a single-table select, so
+    // `fk`/`pk` are unambiguous — and qualifying them would have to reproduce
+    // whatever table reference SeaORM chose.
+    let mut ranked = scoped.into_query();
+    ranked.expr_window_as(
+        Expr::cust("ROW_NUMBER()"),
+        WindowStatement::partition_by(fk)
+            .order_by(pk, Order::Asc)
+            .take(),
+        RANK_ALIAS,
+    );
+
+    let mut windowed = Query::select();
+    windowed
+        .column(Asterisk)
+        .from_subquery(ranked, RANKED_ALIAS)
+        .and_where(Expr::col(RANK_ALIAS).lte(limit + 1))
+        // Deterministic per parent: the caller buckets rows in arrival order,
+        // and `has_more` / `next_cursor` read the last one.
+        .order_by(fk, Order::Asc)
+        .order_by(pk, Order::Asc);
+    windowed
+}
 
 /// `(items, has_more)` from a `limit + 1` cursor fetch. Truncates `items` to
 /// `limit` when an extra row was returned. The pure-data half of `Repo::page`,
@@ -86,7 +141,7 @@ pub struct PageParams {
 impl PageParams {
     /// Page size, defaulting to 20 and clamped to `1..=100`.
     pub fn limit(&self) -> u64 {
-        clamp_page_size(self.first.unwrap_or(20))
+        clamp_page_size(self.first.unwrap_or(DEFAULT_PAGE_SIZE))
     }
 
     /// The `after` cursor parsed as a primary key, or `None` when absent or
@@ -112,22 +167,7 @@ where
         let conn = Self::conn()?;
         let limit = clamp_page_size(first);
 
-        // SeaORM permits primary-key-less entities (views, raw tables). Keyset
-        // pagination needs a key to page by, so return a typed `DbErr` naming
-        // the entity instead of panicking on this query hot path — the layer's
-        // contract is "never panic, return `DbErr`".
-        let Some(pk) = E::PrimaryKey::iter().next() else {
-            let entity = std::any::type_name::<E>();
-            tracing::error!(
-                target: "nest_rs::orm",
-                entity,
-                "entity has no primary-key column — keyset pagination requires one",
-            );
-            return Err(DbErr::Custom(format!(
-                "entity `{entity}` has no primary-key column; keyset pagination requires one"
-            )));
-        };
-        let pk_col = pk.into_column();
+        let pk_col = Self::keyset_column()?;
 
         let mut cursor = E::find()
             .filter(scope_for::<E>(Action::Read))
@@ -150,11 +190,220 @@ where
             has_more,
         })
     }
+
+    /// The column keyset pagination pages by.
+    ///
+    /// SeaORM permits primary-key-less entities (views, raw tables), so this is
+    /// a typed `DbErr` naming the entity rather than a panic on a query hot
+    /// path — the layer's contract is "never panic, return `DbErr`".
+    fn keyset_column() -> Result<E::Column, DbErr> {
+        let Some(pk) = E::PrimaryKey::iter().next() else {
+            let entity = std::any::type_name::<E>();
+            tracing::error!(
+                target: "nest_rs::orm",
+                entity,
+                "entity has no primary-key column — keyset pagination requires one",
+            );
+            return Err(DbErr::Custom(format!(
+                "entity `{entity}` has no primary-key column; keyset pagination requires one"
+            )));
+        };
+        Ok(pk.into_column())
+    }
+
+    /// **One keyset page per parent**, for every key in `keys`, in a single
+    /// round trip. The read-side primitive an auto-resolved `has_many` relation
+    /// is built on; `extra` is ANDed onto the ability scope exactly as in
+    /// [`page`](Self::page) (e.g. `deleted_at IS NULL`).
+    ///
+    /// Every key gets an entry, so "no children" and "not asked for" stay
+    /// distinguishable at the call site — an absent parent is a bug, an empty
+    /// [`Page`] is an answer.
+    ///
+    /// # Why this is not `WHERE fk IN (keys) LIMIT n`
+    ///
+    /// It cannot be. A single `LIMIT` bounds the *result set*, not each
+    /// parent's slice of it, so `cap × keys` rows ordered by the foreign key
+    /// are consumed by whichever parents sort first and the rest read as `[]` —
+    /// indistinguishable from having no children. That was a silent wrong
+    /// answer, and no amount of over-fetching fixes it: the row a starved
+    /// parent needs may be arbitrarily far down.
+    ///
+    /// So the limit is applied **per partition**, by ranking rows within each
+    /// parent and keeping the first `limit + 1`:
+    ///
+    /// ```sql
+    /// SELECT * FROM (
+    ///   SELECT …, ROW_NUMBER() OVER (PARTITION BY fk ORDER BY pk) AS rank
+    ///   FROM child
+    ///   WHERE <ability scope> AND <extra> AND fk IN (…) AND pk > <after>
+    /// ) ranked
+    /// WHERE rank <= limit + 1
+    /// ```
+    ///
+    /// The extra row per parent is what decides
+    /// [`has_more`](Page::has_more), the same over-fetch
+    /// [`page`](Self::page) uses.
+    ///
+    /// `ROW_NUMBER() OVER (PARTITION BY …)` is SQL:2003 and is implemented by
+    /// every backend SeaORM supports at a currently-maintained version
+    /// (PostgreSQL — the backend this workspace builds against — MySQL 8,
+    /// MariaDB 10.2, SQLite 3.25). The inner query is still built by
+    /// [`scoped`](Repo::scoped), so the ability filter is applied by the same
+    /// code path as every other read; only the ranking wrapper is hand-built.
+    pub async fn relation_pages<K>(
+        fk: E::Column,
+        keys: &[K],
+        first: u64,
+        after: Option<Uuid>,
+        extra: Condition,
+    ) -> Result<HashMap<K, Page<E::Model>>, DbErr>
+    where
+        K: Clone + Eq + Hash + Into<Value> + ValueType + Send + Sync,
+    {
+        let mut pages: HashMap<K, Page<E::Model>> = keys
+            .iter()
+            .map(|key| {
+                (
+                    key.clone(),
+                    Page {
+                        items: Vec::new(),
+                        next_cursor: None,
+                        has_more: false,
+                    },
+                )
+            })
+            .collect();
+        if pages.is_empty() {
+            return Ok(pages);
+        }
+
+        let conn = Self::conn()?;
+        let limit = clamp_page_size(first);
+        let pk_col = Self::keyset_column()?;
+
+        let scoped = E::find()
+            .filter(scope_for::<E>(Action::Read))
+            .filter(extra)
+            .filter(fk.is_in(keys.iter().cloned()));
+        let windowed = rank_per_parent(scoped, fk, pk_col, limit, after);
+
+        let statement = conn.get_database_backend().build(&windowed);
+        let rows = E::find().from_raw_sql(statement).all(&conn).await?;
+
+        for row in rows {
+            let value = ModelTrait::get(&row, fk);
+            let key = K::try_from(value).map_err(|_| {
+                DbErr::Custom(format!(
+                    "relation page: foreign key `{}` on `{}` did not read back as the batch key type",
+                    fk.as_str(),
+                    std::any::type_name::<E>(),
+                ))
+            })?;
+            // A row whose key is not in the batch cannot happen (the `IN` list
+            // is the batch), but dropping it is still wrong to do silently.
+            let Some(page) = pages.get_mut(&key) else {
+                return Err(DbErr::Custom(format!(
+                    "relation page: `{}` returned a row outside the requested key set",
+                    std::any::type_name::<E>(),
+                )));
+            };
+            page.items.push(row);
+        }
+
+        for page in pages.values_mut() {
+            let (items, has_more) = split_overfetched(std::mem::take(&mut page.items), limit);
+            page.next_cursor = next_cursor_from(&items, has_more, |model| {
+                <Uuid as ValueType>::try_from(ModelTrait::get(model, pk_col)).ok()
+            });
+            page.items = items;
+            page.has_more = has_more;
+        }
+
+        Ok(pages)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A minimal child entity, so the relation-page query shape can be asserted
+    // as SQL text. The bug this guards is invisible in a row count: a `LIMIT`
+    // on the result set instead of a rank per partition returns exactly as many
+    // plausible rows, just the wrong ones.
+    mod child {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+        #[sea_orm(table_name = "child")]
+        pub struct Model {
+            #[sea_orm(primary_key, auto_increment = false)]
+            pub id: Uuid,
+            pub parent_id: Uuid,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    fn relation_sql(limit: u64, after: Option<Uuid>) -> String {
+        use sea_orm::sea_query::PostgresQueryBuilder;
+
+        rank_per_parent(
+            <child::Entity as EntityTrait>::find(),
+            child::Column::ParentId,
+            child::Column::Id,
+            limit,
+            after,
+        )
+        .to_string(PostgresQueryBuilder)
+    }
+
+    #[test]
+    fn relation_pages_ranks_within_each_parent() {
+        let sql = relation_sql(2, None);
+        assert!(
+            sql.contains(r#"ROW_NUMBER() OVER ( PARTITION BY "parent_id" ORDER BY "id" ASC )"#),
+            "the limit must be applied per parent, not to the result set: {sql}",
+        );
+    }
+
+    #[test]
+    fn relation_pages_keeps_one_row_beyond_the_page_to_decide_has_more() {
+        // `limit + 1`: the same over-fetch `Repo::page` uses, which is what
+        // makes `has_more` an observation rather than a guess.
+        assert!(
+            relation_sql(2, None).contains(r#""__nest_rs_rank" <= 3"#),
+            "{}",
+            relation_sql(2, None),
+        );
+    }
+
+    #[test]
+    fn relation_pages_orders_parents_together_and_rows_by_key() {
+        let sql = relation_sql(5, None);
+        assert!(
+            sql.contains(r#"ORDER BY "parent_id" ASC, "id" ASC"#),
+            "buckets are filled in arrival order, so the SQL must group and sort them: {sql}",
+        );
+    }
+
+    #[test]
+    fn relation_pages_applies_the_cursor_inside_the_ranking() {
+        // `pk > after` must be *inside* the ranked subquery: applied outside, a
+        // parent's rank would count rows the caller already has, so page 2
+        // would come back short.
+        let after = Uuid::now_v7();
+        let sql = relation_sql(2, Some(after));
+        let (inner, outer) = sql
+            .split_once(r#") AS "__nest_rs_ranked""#)
+            .expect("the ranked subquery is aliased");
+        assert!(inner.contains(r#""id" > "#), "{sql}");
+        assert!(!outer.contains(r#""id" > "#), "{sql}");
+    }
 
     fn params(first: Option<u64>, after: Option<&str>) -> PageParams {
         PageParams {

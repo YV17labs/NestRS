@@ -53,7 +53,7 @@ pub use executor::{
     current_executor_scope, with_executor, with_job_executor, with_request_executor,
 };
 pub use module::{DatabaseModule, DatabaseSetup, connect_from_env};
-pub use page::{LIST_CAP, Page, PageParams, RELATION_LOAD_CAP};
+pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
 pub use service::{
     Access, Authorized, Creatable, CreateModel, CrudService, Deletable, Updatable, UpdateModel,

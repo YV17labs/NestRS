@@ -11,6 +11,12 @@
 //! with no `#[expose]` stays hidden on every transport, so a column added by a
 //! later migration never leaks by omission.
 //!
+//! A column whose type is a **custom enum** passes through to the wire verbatim,
+//! so the enum itself is what carries the wire traits: [`macro@wire_enum`] is
+//! the enum mode of `#[expose]`, emitting them with the same `crate = `
+//! overrides so the entity crate declares neither `schemars` nor
+//! `async-graphql`.
+//!
 //! ```ignore
 //! // HTTP / OpenAPI / masking — no GraphQL deps in the entity crate.
 //! #[expose(name = "Item", service = super::service::ItemsService)]
@@ -31,9 +37,9 @@ pub mod graphql {
 }
 
 #[cfg(feature = "graphql")]
-pub use exposures::relations::{PkLoadable, RelatedTo};
+pub use exposures::relations::{PkLoadable, RelatedTo, RelationKey, RelationPage, SoleForeignKey};
 pub use exposures::wire::WireModelDefaults;
-pub use nest_rs_resource_macros::expose;
+pub use nest_rs_resource_macros::{expose, wire_enum};
 
 // Re-exported so `#[expose]`-generated code resolves these through this crate
 // instead of the consumer's extern prelude. Only the *derive* paths the macro

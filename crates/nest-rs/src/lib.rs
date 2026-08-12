@@ -144,7 +144,7 @@ pub mod prelude {
     pub use nest_rs_queue::{processor, queue};
 
     #[cfg(feature = "resource")]
-    pub use nest_rs_resource::expose;
+    pub use nest_rs_resource::{expose, wire_enum};
 
     #[cfg(feature = "schedule")]
     pub use nest_rs_schedule::scheduled;

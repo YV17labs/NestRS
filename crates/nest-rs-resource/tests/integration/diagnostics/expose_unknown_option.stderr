@@ -1,0 +1,5 @@
+error: unknown #[expose(...)] option (expected `name = "..."`, `service = …`, `graphql`, `soft_delete`, `timestamps`, or `complex`)
+ --> tests/integration/diagnostics/expose_unknown_option.rs:8:51
+  |
+8 | #[expose(name = "Thing", service = ThingsService, cached)]
+  |                                                   ^^^^^^

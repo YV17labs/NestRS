@@ -1,0 +1,7 @@
+error: `#[wire_enum]` decorates an enum — a column's type. The entity `Model` struct that carries the column takes `#[expose(name = "…")]` instead.
+  --> tests/integration/diagnostics/wire_enum_on_a_struct.rs:8:1
+   |
+ 8 | / pub struct Model {
+ 9 | |     pub id: u32,
+10 | | }
+   | |_^

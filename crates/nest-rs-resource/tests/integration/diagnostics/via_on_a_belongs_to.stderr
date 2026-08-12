@@ -1,0 +1,5 @@
+error: a `HasOne` already names its foreign key: `#[sea_orm(belongs_to, from = "org_id", …)]`. `via` belongs on the inverse `HasMany` field, which has nothing else to name the column with
+  --> tests/integration/diagnostics/via_on_a_belongs_to.rs:18:20
+   |
+18 |     #[expose(via = "org_id")]
+   |                    ^^^^^^^^

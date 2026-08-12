@@ -1,0 +1,5 @@
+error: `#[wire_default]` is only valid on an unexposed column — an exposed column reconstructs from the response body; drop `#[wire_default]` or remove `#[expose]`
+  --> tests/integration/diagnostics/wire_default_on_an_exposed_column.rs:18:9
+   |
+18 |     pub name: String,
+   |         ^^^^

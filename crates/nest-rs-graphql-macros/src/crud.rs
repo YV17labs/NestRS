@@ -106,6 +106,12 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // are time-ordered, so the cursor is just the previous page's
             // last `id`). The body stays a plain `Vec` so the automatic
             // response mask applies unchanged.
+            //
+            // A caller who names no `first` gets `DEFAULT_PAGE_SIZE` — the
+            // constant, by path, not the number. `?first=` on the HTTP twin
+            // reads it through `PageParams::limit` and an auto-resolved
+            // relation reads it directly, so "how many rows does an
+            // unparameterised page return" has one answer on every surface.
             Paginate::Cursor => parse_quote! {
                 #[query]
                 #[authorize(::nest_rs_authz::Read, #entity)]
@@ -119,7 +125,10 @@ fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenStream2> {
                         .and_then(|__s| ::nest_rs_resource::uuid::Uuid::parse_str(__s).ok());
                     let __page = ::nest_rs_seaorm::CrudService::page(
                         &*self.#service,
-                        ::core::option::Option::unwrap_or(first, 20),
+                        ::core::option::Option::unwrap_or(
+                            first,
+                            ::nest_rs_seaorm::DEFAULT_PAGE_SIZE,
+                        ),
                         __after,
                     )
                     .await

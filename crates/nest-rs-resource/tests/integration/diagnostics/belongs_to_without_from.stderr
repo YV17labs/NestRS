@@ -1,0 +1,5 @@
+error: `belongs_to` relation needs `#[sea_orm(from = "...")]`
+  --> tests/integration/diagnostics/belongs_to_without_from.rs:18:9
+   |
+18 |     pub org: HasOne<crate::orgs::Entity>,
+   |         ^^^

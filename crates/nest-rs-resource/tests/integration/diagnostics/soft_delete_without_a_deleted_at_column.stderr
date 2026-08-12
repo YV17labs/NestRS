@@ -1,0 +1,5 @@
+error: `#[expose(..., soft_delete)]` requires a `deleted_at: Option<…>` column
+  --> tests/integration/diagnostics/soft_delete_without_a_deleted_at_column.rs:11:12
+   |
+11 | pub struct Model {
+   |            ^^^^^

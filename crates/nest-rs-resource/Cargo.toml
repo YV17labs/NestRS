@@ -58,6 +58,10 @@ nest-rs-seaorm = { path = "../nest-rs-seaorm" }
 nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 nest-rs-core.workspace = true
 sea-orm.workspace = true
+# trybuild pins `#[expose]`'s and `#[wire_enum]`'s compile diagnostics as a
+# contract: the exposure decorators refuse ~25 distinct shapes, and the sentence
+# each refusal prints is the only thing a developer sees.
+trybuild.workspace = true
 uuid.workspace = true
 
 [lints]

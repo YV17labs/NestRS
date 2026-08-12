@@ -1,0 +1,5 @@
+error: `#[wire_enum]` needs an enum whose variants are all unit variants — a GraphQL enum and a SeaORM `DeriveActiveEnum` column both require it; model a payload-carrying variant as its own `#[expose]`d entity
+  --> tests/integration/diagnostics/wire_enum_with_a_payload_variant.rs:10:8
+   |
+10 |     Pro(u8),
+   |        ^^^^

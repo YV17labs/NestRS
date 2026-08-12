@@ -1,0 +1,5 @@
+error: auto-relations on composite primary keys are not supported yet — write a hand-rolled `#[dataloader]` on the service and leave the relation fields unexposed (no `#[expose]`)
+  --> tests/integration/diagnostics/composite_primary_key_relations.rs:17:9
+   |
+17 |     pub user_id: Uuid,
+   |         ^^^^^^^

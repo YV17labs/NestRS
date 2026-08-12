@@ -1,0 +1,5 @@
+error: a relation field cannot be an `input` — expose the scalar FK column (e.g. `org_id`) as the input instead
+  --> tests/integration/diagnostics/relation_as_an_input.rs:19:9
+   |
+19 |     pub org: HasOne<crate::orgs::Entity>,
+   |         ^^^

@@ -1,0 +1,5 @@
+error: `#[wire_enum]` needs at least one variant — an empty enum has no wire representation
+ --> tests/integration/diagnostics/wire_enum_without_variants.rs:7:10
+  |
+7 | pub enum Tier {}
+  |          ^^^^

@@ -1,0 +1,5 @@
+error: #[scheduled] declares no client-selectable version: a scheduled task has no caller to select anything — the clock is the only trigger. Version the work the task calls into, not the tick: the trigger stays `#[every]` / `#[cron]` / `#[after]`
+  --> tests/integration/diagnostics/version_on_a_scheduled_host.rs:12:13
+   |
+12 | #[scheduled(version = "1")]
+   |             ^^^^^^^

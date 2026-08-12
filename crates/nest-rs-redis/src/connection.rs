@@ -1,5 +1,5 @@
 //! Shared Redis connection + typed [`Queue`] producer handle. The queue name
-//! supplied at the call site must match the consuming `#[processor(queue = ...)]`.
+//! supplied at the call site must match the consuming `#[process(queue = ...)]`.
 //!
 //! Wire format is a JSON **envelope** — `{ "v": <number>, "payload": <user
 //! payload> }` — pushed onto an apalis `RedisStorage<serde_json::Value>`. The

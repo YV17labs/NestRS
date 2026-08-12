@@ -1,0 +1,5 @@
+error: #[listeners] declares no client-selectable version: an event listener is in-process — there is no wire, so there is no address to version. Evolve the event's payload, or publish a new event type beside the old one and handle both with a second `#[on_event]` method
+  --> tests/integration/diagnostics/version_on_a_listener_host.rs:13:13
+   |
+13 | #[listeners(version = "1")]
+   |             ^^^^^^^

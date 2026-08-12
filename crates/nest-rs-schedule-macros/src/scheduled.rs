@@ -11,7 +11,7 @@
 
 use std::str::FromStr;
 
-use nest_rs_codegen::{DecoratorPair, impl_self_ident, require_str_lit};
+use nest_rs_codegen::{DecoratorPair, Edge, impl_self_ident, require_str_lit};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -25,7 +25,11 @@ use syn::{Attribute, Expr, ExprLit, ImplItem, Lit, LitStr, MetaNameValue, Token}
 const SCHEDULED_PAIR: DecoratorPair =
     DecoratorPair::on_provider("#[scheduled]", "#[every] / #[cron] / #[after]");
 
-pub(crate) fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
+    if let Err(err) = reject_args(args) {
+        return err.to_compile_error().into();
+    }
+
     let mut item = match SCHEDULED_PAIR.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
@@ -100,6 +104,24 @@ pub(crate) fn scheduled(_args: TokenStream, input: TokenStream) -> TokenStream {
         #(#submissions)*
     };
     out.into()
+}
+
+/// `#[scheduled]` takes no arguments — the triggers are on the methods it
+/// collects. It used to *ignore* whatever it was handed; `version` is called out
+/// first because it is the one key a developer arrives with from
+/// `#[controller(version = "1")]`, and this transport has an answer of its own
+/// rather than a spelling correction.
+fn reject_args(args: TokenStream) -> syn::Result<()> {
+    let args = TokenStream2::from(args);
+    Edge::Schedule.reject_version(&args)?;
+    if args.is_empty() {
+        return Ok(());
+    }
+    Err(syn::Error::new_spanned(
+        &args,
+        "#[scheduled] takes no arguments; tag methods with `#[every(\"...\")]`, \
+         `#[cron(...)]` or `#[after(\"...\")]`",
+    ))
 }
 
 fn is_trigger_attr(path: &syn::Path) -> bool {

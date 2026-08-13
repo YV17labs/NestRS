@@ -339,7 +339,7 @@ directly. **Inventory-based** — the module list *is* the decorated
 things; never enumerate controllers/providers by hand.
 
 **Orchestrator pattern for per-method aggregation:** `#[routes]` scans
-verbs, `#[operations]` scans `#[query]`/`#[mutation]`/`#[field_resolver]`,
+verbs, `#[operations]` scans `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]`/`#[field_resolver]`,
 `#[scheduled]` scans `#[every]`/`#[cron]`/`#[after]`, `#[processor]`
 scans `#[process(queue, ...)]`, `#[listeners]` scans `#[on_event]`,
 `#[hooks]` scans phase attrs. The host struct owns the single
@@ -497,12 +497,20 @@ line whose proof you cannot run is a line you have not done.
    it has no entry passes everything silently. The pattern is `<Edge>Guard: Guard`
    in `nest-rs-guards` with a `#[diagnostic::on_unimplemented]` note, declared by a
    guard beside the `check_*` it attests, and asserted per declared guard through
-   `nest_rs_codegen::guard_capability_bounds`. HTTP is the one edge with **no
-   marker at all**: `check_http` is the trait's base entry — the one method not
-   behind a feature — so every `Guard` has it and a bound there could never fail.
-   Declaring a blanket `HttpGuard` for symmetry is dead API, and it squats the name
-   the roadmap reserves for moving `check_http` off `Guard`. Witness: a trybuild
-   snapshot per marked edge binding an HTTP-only guard at that edge's site.
+   `nest_rs_codegen::guard_capability_bounds`. **All four edges assert, HTTP
+   included.** The bound never proves a *method* exists — the `Ok(())` default
+   guarantees that at every edge — it proves the author **declared** this guard
+   checks this edge; an empty `impl Guard for X {}` satisfies the compiler and
+   passes everything, and the marker is what turns that into an error at the
+   binding site. `HttpGuard` is the one marker carrying no `cfg`: its three
+   siblings gate a `check_*` that exists only when that edge is compiled in, and
+   HTTP is the substrate the other three mount on, so no build of the crate lacks
+   `check_http`. Witness: a trybuild snapshot per edge, binding a guard that does
+   not check it at that edge's site. HTTP has **three** emitters —
+   `#[controller]`, `#[routes]` and the `#[gateway]` struct, whose guards run on
+   the upgrade — and each must underline the decorator the guard was written
+   under; two carry a snapshot today and the gateway site does not, which is a
+   gap to close rather than a shape to copy.
 7. **Per-argument pipes** — `Piped<P, T>` / `Valid<T>` stripped by the impl-half
    decorator, rejection rendered as the edge's native error, and the pipe runs
    **after** the gate so a refused caller never pays for validation and a
@@ -549,13 +557,74 @@ installs the ambient ability while on WS the *data context* does — because a
 gateway is `Guarded`, so its upgrade already ran the real chain and there is
 nothing to re-run in band.
 
-**One residual gap, and it is the small half of what used to be two.** A guard
-may declare a capability marker without overriding the matching `check_*`, and an
-empty `impl Guard for X {}` bound on an HTTP route still passes everything — HTTP
-carries no marker. Both are deliberate lines a reader can see, unlike the silence
-they replaced. Closing them fully would mean four `check_*`-carrying traits with
-no defaults, and then a guard serving three edges needs three container
-registrations: the remedy would cost more than the defect.
+**Two residual gaps, and the declaration sites now hold only the smaller one.**
+A guard may declare a capability marker without overriding the matching
+`check_*` — a deliberate line a reader can see, written next to the method it
+should have been. Its larger twin is closed at every *declaration* site: an empty
+`impl Guard for X {}` bound by `#[use_guards]` no longer compiles at any of the
+four edges, `HttpGuard` being the fourth marker.
+
+**The second gap is the global site.** `use_guards_global([guard::<X>()])` takes
+no capability bound (`nest-rs-guards/src/builder.rs`), so an empty guard
+registered there still passes everything, silently. Bounding it is not the
+answer: a global guard legitimately serves whichever edges it implements, and
+requiring `HttpGuard` would refuse a GraphQL-only one — the fix would be a
+per-edge global list, four declarations where the developer wrote one.
+
+**"Serves whichever edges it implements" is now true of all four, and was not.**
+The pool reaches an operation at the site where the operation exists: HTTP bakes
+it into the `RouteShaper`, WS folds it per message, and the two `Exempt`
+transports fold it into their per-operation chain — one `compose` in
+`dispatch/chain.rs`, no per-transport scope switch. What an `Exempt` endpoint
+guard runs is `check_http`, against the request; what the site runs is
+`check_graphql` / `check_mcp`, against the operation. **Two questions, so
+neither answers the other**, and an edge that ran the first never shortens the
+second.
+
+MCP used to say otherwise, and it was a fail-open: `mcp_chain.rs` excluded the
+pool from the site, so a global guard overriding only `check_mcp` was never
+consulted — while its presence made the pool non-empty and disarmed the deny-all
+`is_empty()` tail in `mcp_operation_guard.rs`, so registering it *opened* an
+endpoint that refused everything without it. The seam that expressed the false
+claim went with it: `McpOperationGuard::already_ran` reported HTTP-scope
+execution and was subtracted from an MCP-scope chain, which is a category error
+that can only ever suppress a check.
+
+**Two residues, both reported rather than closed, both owner questions.**
+
+- **Discovery is not an operation.** `initialize` / `tools/list` / `prompts/list`
+  are rmcp server methods with nothing for a `check_mcp` to be handed, so the
+  endpoint's `check_http` is their only gate. A pool of `check_mcp`-only guards
+  therefore still takes `/mcp` from deny-all to a handshake disclosing the tool
+  inventory. Telling "gates the request" from "gates the operation" inside a pool
+  is exactly the capability bound `use_guards_global` deliberately does not take.
+- **The in-band chains are never phase-validated.** `boot_validate_guards` runs
+  at the `#[routes]` mount and over the global bucket; `#[tools]` and
+  `#[operations]` compose their chain at runtime and emit no such check, so an
+  authorization-phase global guard ordered before an authentication-phase scoped
+  one boots on MCP and GraphQL where HTTP refuses it. It fails **closed** — the
+  ability guard finds no principal and installs nothing, so `Repo` denies — which
+  is why it is a diagnostic gap and not a fail-open. GraphQL has had it all
+  along; folding the pool into the MCP chain is what made it reachable there too,
+  so the fix belongs to both edges at once.
+
+Closing the first gap would mean four `check_*`-carrying traits with no
+defaults, and then a guard serving three edges needs three container
+registrations — every execution site holds `Arc<dyn Guard>`, and a trait object
+cannot be narrowed back. The remedy would cost more than the defect.
+
+**That same arithmetic is why `check_http` stays on `Guard`.** Moving it to an
+extension trait is the shape the roadmap reserved a name for, and it buys
+nothing: **`nest-rs-guards` itself depends on `nest-rs-http` unconditionally**,
+with no `cfg` and no optional flag, so every build that links the guard core
+links the HTTP stack whatever the consumer asked for, and a `cfg` on the trait
+method saves no bytes. That one manifest line is the whole proof — do not
+restate it as a list of dependent crates, which is both longer and false
+(`nest-rs`'s bare `guards` feature and `nest-rs-authz`'s `mcp` feature both pull
+guards without naming `nest-rs-http` themselves, and half such a list is
+dev-dependencies, which no consumer build sees). `cargo tree -i poem` on a
+headless feature set names the crates a worker actually pays for — they are
+elsewhere, and each is its own report.
 
 ### Lifecycle hooks
 
@@ -571,6 +640,28 @@ name order; init failure aborts boot, shutdown is best-effort.
   Every `HttpConfig` field settable via `NESTRS_HTTP__*` env **and** the
   pinned struct — the framework-wide **dual-path config rule**, which
   applies to every `nest-rs-*` module.
+
+  **`#[sse]` is a verb, not an edge.** It sits beside `#[get]`/`#[post]` in
+  `#[routes]`, collapses to `GET` before the route table is built (so
+  `#[sse("/x")]` beside `#[get("/x")]` is the ordinary duplicate-route error),
+  and owes none of *A new edge owes the same list* — it carries the edge's
+  guards, pipes, posture and document verbatim. What it owns is the response:
+  the handler returns an `SseStream`, the decorator writes the
+  `text/event-stream` and arms the ceiling. Three refusals, each a named
+  compile error: `#[authorize]` (masking has no wire model to reconcile against
+  — a capability-only guard is the pattern), the response-decorator family in
+  one sentence (`#[http_code]` / `#[redirect]` / `#[response_header]` all shape
+  a response that *completes*), and `#[api(response_content_type)]`.
+
+  **The stream ceiling lives in `HttpConfig`, and the namespace is the whole
+  argument.** `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS` is the third instance of
+  one security control — a long-lived connection authenticates once and then
+  replays those privileges — so it takes its peers' reading, default and `0` ⇒
+  unlimited spelling verbatim. It does **not** take their namespace: an `sse`
+  one would mean an `SseConfig`, which under *one seam per config* would owe a
+  `for_root`, which would mean a module for a response shape. SSE is not a
+  module, so the knob belongs to the transport that serves it. Asymmetry
+  argued, not silent.
 - **`nest-rs-pipes`** — transport-agnostic, **one Pipe per file**,
   stateless (`transform(In) -> Result<Out, _>`, never a DI provider).
   Binds **per argument on all five transports**, two forms by design

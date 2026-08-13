@@ -5,7 +5,360 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0] - Current
+## [4.0.0] - main
+
+### `#[entity]` — a schema serves as a subgraph, gated like everything else
+
+`NESTRS_GRAPHQL__FEDERATION` serves the schema as an Apollo subgraph: the
+federation directives are declared and the emitted SDL is the subgraph form —
+`@key` present, `_service` / `_entities` stripped, as the spec requires. It is
+one flag on a call this repo already makes; async-graphql `=7.2.1` carries the
+whole thing with no cargo feature and no new dependency, and the roadmap's
+recorded reason for deferring it ("the dedicated schema tooling it would
+reintroduce") was simply false.
+
+**The flag does not switch the surface on, and the boot is what makes it mean
+anything.** async-graphql serves `_service` and `_entities` as soon as one
+entity resolver has registered its keys, whatever the builder was told — so
+`#[entity]` plus `federation = false` would publish the schema's own SDL while
+the config claimed otherwise, and the flag would be a comment. Declaring an
+entity without the flag now fails the boot, naming the resolver.
+
+So does claiming one **key shape** twice. An entity is addressed by `@key`
+rather than by name, so the duplicate leaves nothing in the SDL but a doubled
+`@key` while the router reaches whichever body linked first — access posture
+included. The shape is the identity, not the type: Apollo lets a type carry
+several `@key`s and async-graphql matches a reference against the shape, so two
+resolvers keying `Widget` by `id` and by `slug` are both reachable and are not a
+duplicate. Two claims on `id` are. And it is checked **within** a resolver as
+well as across them — two `#[entity]` methods in one `impl` are one
+registration, which is the arrangement a per-registration diff cannot see and
+the way the mistake is easiest to write. The existing duplicate-operation check
+was blind to all of it, an entity method contributing no field; it now reads the
+key shapes out of the same scratch registry it already builds.
+
+**What it actually cost is a new operation role, and that is the whole of it.**
+`_entities` is a `Query`-root field the router calls with *references* —
+`{__typename, <key fields>}` — for objects the client never named, so it is the
+one operation whose posture is invisible from the document a client reads. Ship
+it ungated and every `@key`-ed type is readable from outside every `#[authorize]`
+in the schema, which is the *Hard "no"* list's first line. `#[entity]` therefore
+takes exactly what a `#[query]` takes, through the same code path: the guard
+chain, a **mandatory** `#[authorize]` / `#[public]`, the argument pipes, the
+response mask, and the `GraphqlGuard` bound on every guard bound at its site.
+The `@key` is inferred from the resolver's own arguments, so `#[expose]` never
+declares a federation key and the cross-transport declaration question never
+arises.
+
+**One thing had to be built rather than switched on**, and it is the half a
+merged root loses silently: `ContainerType::find_entity` defaults to `None`, and
+`DiscoveredQuery` merges its members by hand. A root that forwards only
+`resolve_field` answers *Entity not found* to every reference, however many
+entity resolvers the app wrote — a whole operation role missing with no field
+missing. It now forwards both, under the same first-member-that-answers rule.
+
+Seven refusals, each a named compile error with a trybuild snapshot. Three are
+about the role: an `#[entity]` with no posture (whose sentence names *why* this
+role is the worst one to forget), and `#[entity]` beside `#[mutation]` or
+`#[subscription]` — a role, not a modifier, because `_entities` lives on the
+`Query` root and no other root has one. Four are things a `#[query]` allows and
+this cannot:
+
+- **A `Result` return is required.** The guard chain is emitted only where a
+  denial has somewhere to go, so a bare-return operation silently has none. On a
+  `#[query]` that trade is visible in the document; an entity is reached for a
+  type the client never named, so a resolver-scope `#[use_guards]` compiled out
+  there shows up nowhere at all.
+- **`bind = Service` is refused.** It answers `NOT_FOUND` for an absent row and
+  `FORBIDDEN` for a withheld one — right for a mutation subject the caller
+  named, an existence oracle on a field addressed by key.
+- **`#[entity(key = "…")]` is refused.** The key is not the developer's to
+  declare, and it is the first thing someone arriving from Apollo reaches for.
+- **A `#[graphql(...)]` of its own is refused.** async-graphql reads the first
+  one on a method and removes exactly one, so a developer's would silently take
+  the slot `#[graphql(entity)]` needs and the method would stop being an entity
+  resolver — reported, before this, as a leftover attribute against
+  `#[operations]`. There is no working spelling to redirect to, so the sentence
+  names the limit.
+- **`async` and at least one argument**, reworded from async-graphql's own
+  refusals, which land on the `#[operations]` attribute naming a generated type
+  nobody wrote.
+
+**Deliberately absent: composition, and the demo is not a subgraph.** Merging
+subgraphs is the router's job and `rover` is a dependency this repo will not
+take, so what ships is the subgraph half. And `demo/apps/api` leaves federation
+off — **`_service` cannot be switched off**; `disable_introspection` does not
+cover it and its field is unconditionally visible, so a subgraph publishes its
+own SDL to whoever can reach it. The demo is a standalone API on a public
+address with no router in front of it, so being one would publish its schema and
+buy it nothing. `demo/apps/api/schema.graphql` is unchanged for that reason.
+
+With it, `ROADMAP.md`'s deferred section is empty and gone.
+
+### An `#[sse]` ceiling bounds its stream; its socket is a reported gap
+
+`SseSettings::respond` composes the deadline into the response body, so it is
+evaluated whenever that body is polled: **no event is produced past the ceiling
+at any rate a peer reads at**, measured against a trickling client rather than
+assumed. That is the stale-privilege window, and it holds.
+
+**What outlives it is the socket.** Measured against a client that sent the
+request and then read nothing: the server had ~1.6 MB queued for a peer taking
+none of it, and hyper's connection task, its buffers and everything the stream
+held stayed alive until that peer felt like reading.
+
+**Closing that from inside this crate was attempted twice and neither is sound**,
+which is why the gap is documented and witnessed instead. The only thing still
+polled while a write is parked is the **socket** — and a socket does not know
+which *response* its bytes belong to:
+
+- Arming the connection for the stream's ceiling killed traffic that never asked
+  for a stream: on HTTP/1.1 keep-alive an ordinary request issued afterwards
+  died with zero bytes and no status line; on HTTP/2, where a browser
+  multiplexes an origin's whole traffic onto one connection, siblings died
+  mid-flight without even a `GOAWAY`.
+- Narrowing it to fire only on a *parked write* was worse, not better. A parked
+  write is ordinary TCP backpressure, not a peer that stopped reading: a
+  full-speed client downloading 4 MB over a connection that had once carried a
+  stream received **1 404 928 bytes under a declared `content-length: 4194304`**
+  — a protocol lie told to a well-behaved peer — while a stream small enough to
+  fit the socket buffer never parked at all and so was never bounded.
+
+The information the control needs — *which response is stalled* — lives in the
+body, which is precisely what stops being polled; poem 3.1 and hyper 1 expose no
+per-response write deadline and no abort handle usable while parked. So the
+ceiling stays what it is, `sse::a_peer_that_stops_reading_still_holds_its_socket_past_the_ceiling`
+asserts the residual so it cannot be quietly reclassified as closed, and the
+answer for now is poem's own `Server::idle_timeout` or the reverse proxy —
+controls that do not need to know whose bytes are queued.
+
+### A commit that fails the same way every time no longer costs a retry budget
+
+Per-job transactions above turned an unsettleable attempt into a failure, which
+was right, and then classified every one of them as **retryable**, which was
+not. A constraint checked at `COMMIT` — a deferred unique index, the shape whose
+whole point is that it fires late — fails identically on every attempt. The job
+therefore replayed its body once per unit of retry budget, **including every
+side effect that is not the database's** (an HTTP call, an S3 write, a mail),
+and dead-lettered anyway. `#[process]` already aborts on its three other
+deterministic failures — an unsupported wire version, an undeserializable
+payload, a missing provider — and did the opposite here.
+
+The classification now comes from the database. `CommitError::is_retryable_conflict`
+already existed and the HTTP interceptor already consulted it; the worker
+context could not, because `JobSettlement` was a payload-free `Copy` enum and
+`run_in_job_context`'s `unhonoured: fn() -> T` was a bare function pointer with
+nothing to capture. It carries an `Unhonoured { reason, retryable }` now, and a
+`LazyTransaction` records the same verdict on the **first failed statement**, so
+a poisoned transaction answers the question the same way a failed commit does —
+the first is the one that aborted the transaction, and everything after it fails
+with `25P02`, which says nothing about why.
+
+**An in-doubt commit aborts, and that is the deliberate half.** A connection lost
+during `COMMIT` may have landed. Replaying it turns "may have written once" into
+"wrote twice", so the framework re-attempts only what it *knows* rolled back —
+which is exactly what keeps the default's promise standing: a `PerAttempt` job
+needs no idempotency key because a retry has nothing left to repeat, and
+`transactional = false` needs one because the transaction never was. The
+documentation said both; only one of them is now true of the code as well.
+
+**A schedule reports the classification rather than acting on it**, and the
+asymmetry is the answer rather than an omission: `#[every]` / `#[cron]` /
+`#[after]` have no retry budget and no dead-letter, so the next occurrence is
+the same whichever way it went. What it owes is the sentence, and it logs it —
+the context's own, not one the scheduler invented.
+
+**Breaking for anyone who wrote their own `JobContext`:** `JobSettlement::Unhonoured`
+takes an `Unhonoured`, and the `unhonoured` argument of `run_in_job_context` is
+handed one. `FinalizeOutcome::Poisoned` gained a `retryable` field.
+
+### Registering a global guard could open `/mcp` instead of closing it
+
+`use_guards_global` reached `/graphql` and the WS message loop and **not** the
+MCP operation: the per-operation chain excluded the app-wide pool outright, so a
+global guard overriding only `check_mcp` was never consulted. Its presence still
+made the pool non-empty, which disarmed the endpoint's deny-all tail — so the
+same host answered a tool call *with* the guard registered and refused it
+without. A guard written to close an endpoint opened it.
+
+The pool now composes into the per-operation chain on both in-band transports,
+through the one `compose` in `nest-rs-guards/src/dispatch/chain.rs` — same three
+buckets, same `TypeId` dedup, no per-transport switch over where the pool runs.
+The rule underneath it: **an `Exempt` endpoint guard is handed a request and runs
+`check_http`; the site is handed the operation and runs `check_mcp` /
+`check_graphql`.** Two questions, so neither answers the other, and an edge that
+ran the first never shortens the second.
+
+**`McpOperationGuard::already_ran` is gone**, and it is what expressed the false
+claim: it reported HTTP-scope execution and was subtracted from an MCP-scope
+chain, so its only possible effect was to skip a `check_mcp` that had never run.
+Deleting it took the task-local, the mount-time snapshot and the per-request
+`Arc` clone that carried it into rmcp's dispatch with it. A custom
+`McpOperationGuard` loses a method it could not implement correctly; the
+canonical bridge and the pool fallback each lose an override.
+
+**Deliberately unchanged: the deny-all tail still keys on an empty pool.** What
+made it wrong was a pool that could not reach the operation, and it can now.
+Refusing to arm the fallback for a pool holding no *authentication* guard is a
+different rule about a different failure, and it would decide from
+`GuardPhase` — a declaration, not a check.
+
+**What this closes is the operation, and `tools/list` is not one.** rmcp's own
+server methods — `initialize`, `tools/list`, `prompts/list` — carry no operation
+for a `check_mcp` to be handed, so the only thing gating them is the endpoint's
+`check_http`. A pool holding *only* `check_mcp` guards still takes `/mcp` from
+deny-all to a handshake that discloses the tool inventory. Gating discovery
+means a guard with a `check_http`, and the framework cannot tell the two apart
+in a pool: `use_guards_global` takes no capability bound, deliberately, because
+requiring one would refuse a guard written for a single edge. Reported here
+rather than closed by inventing a per-edge global list.
+
+### A boundary that swallows a database error can no longer report success
+
+Postgres aborts the whole transaction on the first failed statement and refuses
+everything after it (`25P02`) — and a `COMMIT` on an aborted transaction
+*succeeds*, having rolled back. So the commonest shape there is — loop, log what
+fails, carry on — reported `Ok`, was told the commit worked, and persisted
+**nothing**, with no framework event anywhere. It was reachable on any mutating
+HTTP request, and per-job transactions below would have made every queue and cron
+job reachable too.
+
+`LazyTransaction` now records the first failed statement, and `finalize` refuses
+to report a success it cannot honour: it rolls back, logs at `error` on
+`nest_rs::orm`, and returns `FinalizeOutcome::Poisoned`. Every settle site
+already had this shape for an escaped handle and a failed commit, so all three —
+HTTP's `DbContext`, the shared `with_data_context` for WS/MCP, and the worker
+context — treat it the same way: an otherwise-successful outcome fails loudly
+rather than losing its writes.
+
+Nested transactions are unaffected: `begin_nested` runs its statements on its own
+handle, so a `SAVEPOINT`ed insert that fails still leaves the outer transaction
+committable — which is what keeps `Creatable::create`'s scope re-check working.
+
+### A job attempt is atomic, so a retry has nothing left to repeat
+
+A `#[process]` / `#[every]` / `#[cron]` / `#[after]` ran on the connection
+**pool**: every statement committed on its own. A job that wrote a row and then
+failed left that row behind, the queue retried the job, and the second attempt
+wrote it again. The framework carried the transaction for every
+request-carrying edge and left the one execution path whose failures are
+*expected* — that is what a retry budget is — running without it.
+
+`WorkerDbContext` now installs the same lazy transaction the request edges use,
+settled through the same `LazyTransaction::finalize`: commit on `Ok`, roll back
+on `Err`, and nothing at all when the job never touched the database. Commit
+failure and an escaped transaction handle turn a "successful" attempt into a
+failed one rather than reporting writes that were never made — the rule
+`with_data_context` already applied per request, now applied per job.
+
+**The classification the roadmap was waiting for turned out not to be needed.**
+A job has no safe/mutating method to read, but the transaction is **lazy**: what
+opens it is the first data-layer touch, which is a fact about the job rather
+than a guess about its intent, so no verb has to be invented for one. A job that
+never reaches the database opens nothing at all. **A read is a touch**, though —
+a job that only reads still pays a `BEGIN`/`COMMIT` and holds its connection for
+the attempt, which is what not having a verb costs and is what
+`transactional = false` is there to decline.
+
+**`transactional = false` is the opt-out**, one key, the same word on all four
+decorators, parsed and worded once in `nest_rs_codegen::job` with a trybuild
+snapshot on each half of the family. It is for the job whose shape defeats the
+default — read, then minutes of work that is not the database's, then write —
+where the default would pin a pooled connection across the middle. Such a job
+owns its own consistency, and an idempotency key is what makes its retry safe.
+
+**The seam changed shape**, which is breaking for anyone who wrote their own
+`JobContext`: `scope` now takes the declared `JobTransaction` and an `inner`
+yielding whether the job succeeded, and returns a `JobSettlement`.
+`run_in_job_context` grew the matching `succeeded` / `unhonoured` pair — the
+same two functions `with_data_context` takes on the request edges, because the
+settling rule is one rule and a job is not an exception to it.
+
+### `#[sse]` is a route of the framework's own, with the ceiling its peers have
+
+A route could already stream: `nest-rs-http` re-exports poem, so a handler
+returned `poem::web::sse::SSE` and the document typed it `text/event-stream` off
+the return type. What that cost was a `use poem::web::sse::{Event, SSE};` in the
+developer's own controller — the one import the umbrella exists to remove — and a
+hand-written `.keep_alive(Duration::from_secs(15))` at every site that remembered
+to write one.
+
+`#[sse("/path")]` is a `GET` that answers `text/event-stream`. The handler returns
+an `SseStream` of `SseEvent`s; the decorator owns the response. Both types, and
+the `futures_util` combinators that build a stream, come through `nest_rs::http`,
+so a controller that streams still declares one dependency.
+
+**A stream now carries the ceiling WS and graphql-ws already had.** A stream
+authenticates **once**, when the request arrives, then emits with those
+privileges for as long as it lives — it outlived an expired token, a logout and a
+revoked grant, with nothing to stop it. `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS`
+ends it and the client's `EventSource` reconnects, re-running the guard chain:
+same reading, same 4-hour default, same `0` ⇒ unlimited spelling as
+`NESTRS_WS__MAX_CONNECTION_SECS` and `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`.
+`NESTRS_HTTP__SSE_KEEP_ALIVE_SECS` is the interval the demo used to hand-write.
+
+**The namespace is `http`, not `sse`, and that is the one deliberate difference
+from its two peers.** SSE is a response shape of the HTTP transport, not a
+module; it owns no `#[config]`, so under *one seam per config* it gets no
+`for_root` of its own — `HttpModule::for_root` is already its in-code path.
+
+Three refusals ship with it, each a named compile error rather than a key that is
+quietly ignored:
+
+- **`#[authorize]`** — the posture masks the response against the entity model,
+  and an event stream is no wire model to reconcile; the mask could only fail
+  closed at 500 on every request. Gate a stream with a capability-only guard, the
+  same answer a presigned URL and a computed report already have.
+- **`#[http_code]` / `#[redirect]` / `#[response_header]`** — one sentence for the
+  family, so a fourth response decorator inherits the refusal. All three shape a
+  response that completes; a stream does not.
+- **`#[api(response_content_type = …)]`** — the route answers
+  `text/event-stream`; declaring another can only make the published document
+  describe something it never sends.
+
+**Deliberately absent: `SseStream` is a named type, not `impl Stream<Item = SseEvent>`.**
+An `async fn` on `&self` returning an opaque type captures the `&self` lifetime
+under the 2024 rules, so the stream is not `'static` and cannot outlive the call —
+which is the one thing a response body must do. The alternative was making every
+developer write `+ use<>` and know why.
+
+### A guard bound on a route now declares that it checks HTTP
+
+`Guard::check_http` defaults to `Ok(())` exactly like its three siblings, so an
+empty `impl Guard for X {}` bound with `#[use_guards(X)]` compiled, read as a
+protection, and passed every request. GraphQL, WS and MCP closed that this
+release with a capability marker each. HTTP was left out on the argument that
+`check_http` is the trait's base entry, so every `Guard` has it and a bound
+there could never fail — an argument about the wrong thing. The bound never
+proved a *method* exists; the default gives every guard all four. It proves the
+author **declared** that this guard checks this edge.
+
+`HttpGuard: Guard` is the fourth marker. `#[controller]`, `#[routes]`, `#[crud]`
+and the `#[gateway]` struct assert it for every path in a `#[use_guards]` /
+`#[force_guards]`, through the same `nest_rs_codegen::guard_capability_bounds`
+the other three go through, so the refusal is worded once and cannot drift per
+edge. There are three emitters — `#[controller]`, `#[routes]` and the
+`#[gateway]` struct — and each underlines the decorator the guard was written
+under. Two ship a trybuild snapshot; the gateway site is asserted by the
+`nest-rs-macro-hygiene` witness rather than by a snapshot of its own.
+
+**A `#[gateway]`-struct guard attests `HttpGuard`, not `WsGuard`** — those run on
+the upgrade, which is an HTTP `GET`, while `WsGuard` belongs to the per-message
+scope. That split was documented folklore; it is now checked.
+
+**Deliberately absent: `check_http` did not move onto the marker.** Every
+execution site holds `Arc<dyn Guard>`, so an extension trait carrying the method
+needs a second erasure and two container registrations for any guard serving HTTP
+*and* another edge — the cost already weighed and refused for the other three. It
+would also save nothing: `nest-rs-guards` depends on `nest-rs-http`
+unconditionally, so every build that links the guard core links the HTTP stack
+and a `cfg` on the trait method saves no bytes.
+The binary-size argument that deferred this work belonged elsewhere —
+`nest-rs-queue` carried an unused `nest-rs-http` dependency, removed here, its
+`#[input]` re-export having come from `nest-rs-core` for some time.
+
+**Migrating:** write `impl HttpGuard for YourGuard {}` beside the `check_http` it
+attests. The compiler names every site, at the `#[use_guards]` line.
 
 ### An `operationId` is sanitised as one string, not one half of one
 
@@ -307,11 +660,10 @@ everything the app mounts: an unversioned controller, and every self-mounted
 endpoint (`/graphql`, `/mcp`, `/api-json`, `/health`), is served as written.
 `a_default_version_does_not_rewrite_paths_that_have_no_version` pins it.
 
-**One interaction is not finished, and is on the roadmap rather than hidden
-here:** the generated OpenAPI document still describes the URI paths, which a
-non-URI strategy makes unreachable. OpenAPI 3.1 cannot key two operations on one
-path, so describing a header-selected version is a document-shape question, not
-a patch — until it is answered, publish a document from a `uri` deployment.
+**The generated document follows**, in the same release: OpenAPI 3.1 cannot key
+two operations on one path, so a non-URI strategy publishes one document per
+version — see *The document describes the addresses a client actually calls*
+below.
 
 ### An upload never exists whole, at either end
 
@@ -904,14 +1256,13 @@ impl UsersTool {
   whose context carries the app and which operation is running; the caller's
   `Ability` is ambient, so a capability-only guard reads it the same way it does
   on HTTP.
-- **What the edge already ran is reported, not assumed.** `/mcp` gates the HTTP
-  request at its `McpOperationGuard`, so an operation's chain must not re-run
-  what that guard already did — but *which* layers those are depends on which
-  guard is registered: the no-bridge fallback runs the whole pool, a bridge runs
-  its own two and nothing else. `McpOperationGuard::already_ran` reports them and
-  the chain drops exactly that. The assumption-based reading — delete every
-  pooled entry — is a fail-open: a `#[use_guards]` naming a guard that merely
-  also appears in the pool would silently never run.
+- **The edge checks the request; the chain checks the operation.** `/mcp` gates
+  the HTTP request at its `McpOperationGuard` and the operation in band, and the
+  two are different questions — `check_http` against a request, `check_mcp`
+  against an operation — so neither shortens the other. (This shipped first as a
+  reported-and-subtracted set, `McpOperationGuard::already_ran`; *Registering a
+  global guard could open `/mcp` instead of closing it* above is what replaced
+  it, in the same release. That method is not part of 4.0.0.)
 - **Pipes reach the fifth transport.** `Parameters<Valid<T>>` /
   `Parameters<Piped<P, T>>` expose `T` as the operation's JSON Schema — a client
   never sees the carrier — and a rejection is `invalid_params` (`-32602`)

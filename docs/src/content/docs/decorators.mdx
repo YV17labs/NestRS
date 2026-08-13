@@ -30,6 +30,7 @@ position without leaving the page.
 | `#[controller]` | struct | Mounts the struct as a controller with a base path and optional `version` | [Controllers](/http/controllers/) |
 | `#[routes]` | impl block | Wires methods to HTTP routes and emits the route table | [Controllers](/http/controllers/) |
 | `#[get]` `#[post]` `#[put]` `#[patch]` `#[delete]` | method | Binds the method to an HTTP verb at the given path | [Controllers](/http/controllers/) |
+| `#[sse]` | method | Binds a `GET` that answers a `text/event-stream`, with the keep-alive and the connection ceiling | [Streaming](/http/streaming/) |
 | `#[http_code]` | method | Overrides the default response status code | [Responses](/http/responses/) |
 | `#[response_header]` | method | Appends a response header (repeatable) | [Responses](/http/responses/) |
 | `#[redirect]` | method | Issues a redirect and discards the handler payload | [Responses](/http/responses/) |
@@ -47,10 +48,11 @@ position without leaving the page.
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[resolver]` | struct | Marks a resolver provider and declares its resolver-scope guards | [GraphQL](/graphql/) |
-| `#[operations]` | impl block | Orchestrates the block's `#[query]` / `#[mutation]` / `#[subscription]` / `#[field_resolver]` methods | [GraphQL](/graphql/) |
+| `#[operations]` | impl block | Orchestrates the block's `#[query]` / `#[mutation]` / `#[subscription]` / `#[entity]` / `#[field_resolver]` methods | [GraphQL](/graphql/) |
 | `#[query]` | method | Root query operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[mutation]` | method | Root mutation operation; requires an access posture (`#[authorize]` or `#[public]`) | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[subscription]` | method | Root subscription over graphql-ws; same posture, gated at subscribe and masked per item | [Subscriptions](/graphql/subscriptions/) |
+| `#[entity]` | method | Federation entity resolver — the router resolves it by reference through `_entities`; same mandatory posture, and its arguments are the `@key` | [Federation](/graphql/federation/) |
 | `#[authorize]` | method | Access posture: gates the operation by ability (`Action`, `Entity`) and masks the response | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[public]` | method | Access posture: deliberately ungated operation — no gate, no mask | [Queries and mutations](/graphql/queries-mutations/) |
 | `#[field_resolver]` | method | Custom field resolver on a wire type; takes no posture attribute | [Field resolvers](/graphql/field-resolvers/) |
@@ -72,16 +74,16 @@ position without leaving the page.
 |---|---|---|---|
 | `#[queue]` | unit struct | Declares a queue's wire name and payload type in one artifact both producer and consumer import | [Queue](/queue/) |
 | `#[processor]` | impl block | Orchestrates queue consumers on a provider | [Queue](/queue/) |
-| `#[process]` | method | Binds the method to a queue with an optional `retries` budget | [Queue](/queue/) |
+| `#[process]` | method | Binds the method to a queue with an optional `retries` budget and `transactional` settling | [Queue](/queue/) |
 
 ## Schedule
 
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[scheduled]` | impl block | Orchestrates scheduled methods on a provider | [Schedule](/schedule/) |
-| `#[every]` | method | Fires the method on a fixed interval | [Schedule](/schedule/) |
-| `#[cron]` | method | Fires the method on a cron expression, optional `tz` | [Schedule](/schedule/) |
-| `#[after]` | method | Fires the method once, after a delay from boot | [Schedule](/schedule/) |
+| `#[every]` | method | Fires the method on a fixed interval, optional `transactional` | [Schedule](/schedule/) |
+| `#[cron]` | method | Fires the method on a cron expression, optional `tz` and `transactional` | [Schedule](/schedule/) |
+| `#[after]` | method | Fires the method once after a delay from boot, optional `transactional` | [Schedule](/schedule/) |
 
 ## Events
 

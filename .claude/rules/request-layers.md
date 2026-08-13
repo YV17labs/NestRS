@@ -82,6 +82,32 @@ Ordering inside an operation is fixed and load-bearing: **chain → gate → pip
 call → mask**. The gate precedes the pipes so a caller the gate refuses never pays
 for validation, and a validation message never doubles as an existence oracle.
 
+**A GraphQL `#[entity]` is a `#[query]` for every one of these**, and it is the
+role where that matters most: the router resolves it from a *reference* the
+client never wrote (`_entities`), so nothing in the document names it and a
+forgotten posture is invisible from the outside. Ungated, every `@key`-ed type
+in the schema is readable past every `#[authorize]` in it — hence the same
+mandatory posture, worded to name the reason. It is a role and not a modifier:
+`_entities` is a `Query`-root field, so combining `#[entity]` with `#[mutation]`
+or `#[subscription]` is a compile error naming both.
+
+**Being unnamed is also why it is stricter than a `#[query]` in four places**,
+each a compile error: a `Result` return (the chain is emitted only where a denial
+has somewhere to go — a bare-return entity would silently have none, and unlike a
+`#[query]` nothing in the document would show it), no `bind = Service` (its
+`NOT_FOUND`/`FORBIDDEN` split is an existence oracle on a field addressed by
+key), no `#[entity(key = …)]` (the key is inferred from the arguments), and
+`async` with at least one argument.
+
+**Two boot refusals carry the rest**, because neither is expressible at one site:
+an `#[entity]` without `GraphqlConfig::federation` (async-graphql serves
+`_service`/`_entities` from the keys alone, so the flag would otherwise be a
+comment), and two claims on one **key shape** — which clash on no field name, so
+the duplicate-operation check reads the registry's key shapes instead. The shape
+and not the type: several `@key`s per type is Apollo's, and the check is within
+a resolver as well as across them, one `impl` holding two `#[entity]` methods
+being a single registration.
+
 ## Guards
 
 A `Guard` borrows the request **mutably** — gates access (returns
@@ -104,19 +130,21 @@ gates in-band or is deliberately public.
 
 **The two in-band transports also run a per-operation chain**, composed once
 per site in a shared `SiteChainCell` (`nest-rs-guards/src/dispatch/chain.rs`)
-from the provider-scope `#[use_guards]` plus the operation's own. They differ in
-where their pool executes (`GlobalScope`): `/graphql` runs it at the resolver
-site, `/mcp` at its endpoint guard.
+from the app-wide pool, the provider-scope `#[use_guards]` and the operation's
+own — one `compose`, the same three buckets and the same `TypeId` dedup as
+everywhere else. There is no per-transport switch over where the pool executes,
+and there was: `/mcp` excluded it, which left a global `check_mcp` guard
+unreachable at the only site that could consult it.
 
-**On `/mcp`, what the edge already ran is *reported*, never assumed.**
-`McpOperationGuard::already_ran` names the layers that guard executed, and those
-are dropped from every bucket **before** dedup. Both halves are load-bearing: a
-guard the edge ran must not run twice, and one it did *not* run must still run
-even when the app-wide pool contains it — a registered bridge runs its own two
-guards and nothing from the pool. Deleting pooled entries on the assumption the
-edge ran them silently drops a `#[use_guards]` the developer wrote, which is a
-fail-open; `operation::a_guard_the_edge_did_not_run_still_runs_per_operation`
-is the regression test.
+**An `Exempt` endpoint guard checks the request; the site checks the operation.**
+`GlobalPoolMcpGuard` / `GlobalPoolOperationGuard` (and a registered bridge) are
+handed a `&mut Request` and run `check_http`; the per-operation chain is handed
+the operation and runs `check_mcp` / `check_graphql`. **Neither stands in for the
+other** — a guard the edge authenticated is not thereby excused its operation
+check, and subtracting one from the other can only ever skip a check that was
+written to run. `operation::a_pooled_guard_checks_the_request_once_and_the_operation_once`
+holds both halves: one `check_http` per request, one `check_mcp` per operation
+however many scopes declared the guard.
 
 `/graphql` and `/mcp` stay fail-secure under `Exempt` through their
 **fallback operation guard**: with no registered

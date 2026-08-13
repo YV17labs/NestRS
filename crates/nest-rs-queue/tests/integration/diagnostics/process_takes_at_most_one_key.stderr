@@ -1,0 +1,5 @@
+error: #[process] takes at most one `transactional`
+  --> tests/integration/diagnostics/process_takes_at_most_one_key.rs:26:55
+   |
+26 |     #[process(queue = FanQueue, transactional = true, transactional = false)]
+   |                                                       ^^^^^^^^^^^^^

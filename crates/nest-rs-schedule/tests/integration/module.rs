@@ -80,3 +80,53 @@ async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
     // by the same closure, so it must match Tasks' own counter.
     assert_eq!(HITS.load(Ordering::SeqCst), hits);
 }
+
+/// The shared `transactional` key read through a `macro_rules!` fragment, at
+/// **both** positions the trigger grammar allows.
+///
+/// A `$settle:expr` substitution arrives as an invisible-delimiter
+/// `Expr::Group`, and syn unwraps it only when the parse fork it is read in is
+/// empty — so `#[cron(EXPR, transactional = $settle, tz = "UTC")]` was refused
+/// while the same key one position later compiled, with a message telling the
+/// developer to write the value they had written. Compiling this is the
+/// assertion.
+/// The cron expression the fragment case uses, named so the attribute fits on
+/// one line — rustfmt does not reach inside a `macro_rules!` body and reindents
+/// a wrapped attribute a little further on every run.
+const CRON_EXPRESSION: &str = nest_rs_schedule::CronExpression::EVERY_MINUTE;
+
+macro_rules! declare_scheduled_settlement {
+    ($settle:expr) => {
+        #[injectable]
+        #[derive(Default)]
+        pub struct FragmentTasks;
+
+        #[scheduled]
+        impl FragmentTasks {
+            #[every("30s", transactional = $settle)]
+            async fn last_argument(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            #[cron(CRON_EXPRESSION, transactional = $settle, tz = "UTC")]
+            async fn not_the_last_argument(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+    };
+}
+
+declare_scheduled_settlement!(false);
+
+#[test]
+fn a_transactional_fragment_is_read_the_same_wherever_the_key_sits() {
+    let entries = nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
+        .filter(|m| (m.provider_type_id)() == std::any::TypeId::of::<FragmentTasks>())
+        .filter(|m| m.transaction == nest_rs_schedule::nest_rs_worker::JobTransaction::Pool)
+        .count();
+    assert_eq!(
+        entries, 2,
+        "both fragment-declared triggers registered, and both read the fragment \
+         as the `false` it was — not as the `PerAttempt` default",
+    );
+}

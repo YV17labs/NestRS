@@ -19,8 +19,10 @@ impl HygieneTasks {
         Ok(())
     }
 
-    /// One-shot form.
-    #[after("1s")]
+    /// One-shot form, carrying the shared key too: the witness covered three
+    /// of the four sites `transactional` reaches, and the fourth is the one a
+    /// developer meets last.
+    #[after("1s", transactional = false)]
     async fn warmup(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }

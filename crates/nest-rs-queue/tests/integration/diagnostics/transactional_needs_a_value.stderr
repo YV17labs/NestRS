@@ -1,0 +1,5 @@
+error: #[process] `transactional` needs a value — write `transactional = true` or `transactional = false`. `true` (the default) settles the job's data-layer work as one transaction per attempt, so a failed attempt leaves nothing for the retry to repeat; `false` runs it on the pool, for a job that brackets long work that is not the database's
+  --> tests/integration/diagnostics/transactional_needs_a_value.rs:25:26
+   |
+25 |     #[process(queue = Q, transactional)]
+   |                          ^^^^^^^^^^^^^

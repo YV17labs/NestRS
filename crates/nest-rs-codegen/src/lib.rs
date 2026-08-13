@@ -30,7 +30,9 @@ mod ty;
 /// test. Naming the module is what lets that test exist.
 pub mod versioning;
 
-pub use args::{parse_named_str_arg, require_str_lit};
+pub use args::{
+    duplicate_argument, needs_a_value, parse_named_str_arg, require_str_lit, unknown_argument,
+};
 pub use attrs::{expr_str, reject_http_only_layers, take_flag_attr, take_path_list};
 pub use capability::guard_capability_bounds;
 pub use casing::{pascal_case, snake_case};
@@ -42,7 +44,7 @@ pub use inject::{
     injected_methods_with_layers, injected_names_method, injected_names_with_layers, layer_deps,
     mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
 };
-pub use job::{TRANSACTIONAL, job_transaction, transactional_value};
+pub use job::{TRANSACTIONAL, job_argument_needs_a_value, job_transaction, transactional_value};
 pub use pair::DecoratorPair;
 pub use posture::{Posture, PostureRules};
 pub use root::reroot;

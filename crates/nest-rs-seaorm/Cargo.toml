@@ -41,7 +41,7 @@ full = ["http", "graphql", "ws", "mcp", "health"]
 [dependencies]
 nest-rs-core.workspace = true
 # `WorkerDbContext` bridges the framework's worker seam (`JobContext`) to install
-# the pool executor around every scheduler tick / queue job. The trait lives in
+# the job executor around every scheduler tick / queue job. The trait lives in
 # `nest-rs-worker` so neither scheduler nor queue has to depend on the other.
 nest-rs-worker.workspace = true
 # The ORM-agnostic ambient executor + scope seam. SeaORM's `Executor` enum
@@ -106,7 +106,14 @@ nest-rs-seaorm = { path = ".", features = ["full"] }
 # `AbilityGuard`, driven through the in-process harness. `#[routes]` expands to
 # `::nest_rs_guards::` paths, so a crate defining a controller owns that dep
 # directly (same reason `nest-rs-authz`'s bridge tests do).
-nest-rs-guards = { path = "../nest-rs-guards" }
+# `graphql` because the `federation` e2e writes a `#[resolver]`: `#[operations]`
+# expands to the per-site guard chain, which this crate only exposes with the
+# GraphQL edge compiled in.
+nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
+# Same reason one layer up: the subgraph's operation guard is
+# `GraphqlAbilityBridge`, and the bridge lives behind authz's own `graphql`
+# feature. A dev-dep, so no consumer of this crate gains it.
+nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
 nest-rs-testing = { path = "../nest-rs-testing" }
 # The by-id binding's swapped-parameter diagnostic is an upgrade contract: the
 # `on_unimplemented` notes are the only thing that names the 1.1.x order, since
@@ -120,7 +127,7 @@ trybuild.workspace = true
 # The `ws` module inside `tests/e2e/ws.rs` stays additionally `#[cfg]`-gated.
 [[test]]
 name = "e2e"
-required-features = ["http", "ws"]
+required-features = ["http", "ws", "graphql"]
 
 [lints]
 workspace = true

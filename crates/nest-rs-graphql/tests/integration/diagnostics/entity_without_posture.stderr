@@ -1,0 +1,5 @@
+error: an `#[entity]` declares its access posture, and it is the one role where forgetting is invisible: the router calls `_entities` with a *reference* — `{__typename, <key fields>}` — for an entity the client never named, so an ungated one is readable from outside every `#[authorize]` in the schema. Write `#[authorize(Action, Entity)]` (class gate + response mask) or `#[public]`
+  --> tests/integration/diagnostics/entity_without_posture.rs:14:14
+   |
+14 |     async fn find_widget_by_id(&self, id: i32) -> nest_rs_graphql::async_graphql::Result<i32> {
+   |              ^^^^^^^^^^^^^^^^^

@@ -1,0 +1,139 @@
+---
+title: Federation
+description: "Serve this schema as an Apollo subgraph: an entity resolved by reference, gated like every other operation, behind a router and not on the internet."
+tier: all-options
+sidebar:
+  order: 9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **subgraph** is a schema a router composes with others. The router asks it
+two things a client never does: *what does your schema look like* (`_service`)
+and *give me these objects by their keys* (`_entities`). Turn it on with one
+config flag, write one new kind of operation, and the schema answers both.
+
+```rust title="crates/features/src/posts/graphql/resolver.rs"
+#[operations]
+impl PostsResolver {
+    #[entity]
+    #[authorize(Read, PostEntity)]
+    async fn find_post_by_id(&self, id: Uuid) -> Result<Option<Post>> {
+        match self.svc.access(Action::Read, id).await? {
+            Access::Found(post) => Ok(Some(Post::from(post))),
+            // Denied and Missing answer the same thing: a field the router
+            // addresses by key must not say which keys exist.
+            Access::Denied | Access::Missing => Ok(None),
+        }
+    }
+}
+```
+
+That is the whole surface. The `@key` the router matches on is **inferred from
+the resolver's own arguments** — `id` here — so an entity declares its key
+once, where it is resolved, and `#[expose]` never carries a federation key of
+its own.
+
+## An entity is an operation, and it owes what one owes
+
+`_entities` is a field on the `Query` root that the router calls with
+**references** — `{__typename, <key fields>}` — for objects the client never
+named. Nothing in the document a client reads mentions your entity resolver, so
+it is the one role where a forgotten gate is invisible.
+
+It is therefore a `#[query]` in every respect that matters:
+
+| Layer | On an `#[entity]` |
+|---|---|
+| Guard chain | runs — resolver-scope and method-scope, `GraphqlGuard`-attested |
+| Access posture | **mandatory** — `#[authorize(Action, Entity)]` or `#[public]`, no posture ⇒ compile error |
+| Argument pipes | run — `Valid<T>` / `Piped<P, T>` on the key arguments |
+| Response mask | runs — the entity is masked against the caller's ability like any other row |
+
+Four things it refuses that a `#[query]` does not, each a named compile error:
+a **`Result` return** is required (the guard chain is only emitted where a denial
+has somewhere to go, and a chain compiled out here is invisible in the schema and
+on the wire); **`bind = Service`** is refused (it answers `NOT_FOUND` for an
+absent row and `FORBIDDEN` for a withheld one, which by key is an existence
+oracle — load the row in the body and answer `None` for both); the method must be
+**`async`**; and it must take **at least one argument**, since the arguments are
+the key.
+
+<Aside type="caution" title="Ship it ungated and every keyed type is public">
+Without the posture, every `@key`-ed type in the schema is readable **by
+reference**, from outside every `#[authorize]` you wrote. That is why the
+posture is a compile error rather than a lint, and why the error names this
+role specifically.
+</Aside>
+
+`#[entity]` is a role, not a modifier: it cannot be combined with `#[mutation]`
+or `#[subscription]`, because `_entities` lives on the `Query` root and no
+other root has it. Writing both is a compile error naming both.
+
+## Turning it on
+
+```rust title="crates/features/src/graphql/module.rs"
+GraphqlModule::for_root(GraphqlConfig {
+    federation: true,
+    ..GraphqlConfig::default()
+})
+```
+
+or `NESTRS_GRAPHQL__FEDERATION=true` — the same dual path every module config
+has. Default **off**.
+
+**The flag does not switch the federation surface on — the `#[entity]` does.**
+async-graphql serves `_service` and `_entities` the moment one resolver has
+registered its keys, whatever the flag says. So the two are declared together or
+not at all: an `#[entity]` with `federation: false` **fails the boot**, naming
+the resolver. Without that check the flag would be a comment, and an app that
+added one entity would publish its own SDL while its config said it was not a
+subgraph.
+
+What the flag itself decides:
+
+- **The committed SDL becomes the subgraph form.** `@key` appears on every
+  federated type, and `_service` / `_entities` are *stripped* from the export —
+  which is what the Apollo spec asks of a subgraph schema. If your app commits
+  `schema.graphql`, expect it to move in both directions in that first diff.
+- **The directives are declared even with no entity yet**, so `_service` answers
+  for a subgraph that has not written its first key. (`_entities` does not exist
+  until one does — there would be nothing for it to return.)
+
+One key shape, one entity resolver: two claims on the same shape **fail the
+boot**, naming both. An entity is addressed by `@key` rather than by name, so
+the duplicate leaves no clashing operation in the SDL — only a doubled `@key`,
+and a router reaching whichever body linked first, access posture included. The
+shape and not the type: a type may carry several `@key`s, so keying `Post` by
+`id` in one resolver and by `slug` in another is legal and both stay reachable.
+The check applies inside a resolver too — two `#[entity]` methods in one `impl`
+claiming one shape is the same duplicate, written the way it is easiest to
+write.
+
+<Aside type="danger" title="A subgraph sits behind a router, not on the internet">
+**`_service` cannot be switched off.** `NESTRS_GRAPHQL__DISABLE_INTROSPECTION`
+does not cover it — its field is unconditionally visible — so a federated
+endpoint publishes its own SDL to anyone who can reach it, introspection
+disabled or not. Serve a subgraph on the network the router is on, and let the
+router be the thing clients reach.
+
+That is why federation is opt-in and why the demo app in this repo leaves it
+off: it is a standalone API on a public address with no router in front of it,
+so being a subgraph would publish its schema and buy it nothing.
+</Aside>
+
+## What is not here
+
+**Composition.** Merging subgraphs into a supergraph is the router's job, done
+by Apollo's own tooling (`rover`). NestRS ships the subgraph half — the schema,
+the entity resolvers, and the guarantee that both are gated — and takes no
+dependency to do the router's work.
+
+## Going further
+
+- [Queries and mutations](/graphql/queries-mutations/) — the operation shape an
+  `#[entity]` follows in every respect but how it is reached.
+- [Authorization](/security/authorization/) — what the mandatory posture gates
+  and masks.
+- [Configuration](/graphql/configuration/) — the rest of the `NESTRS_GRAPHQL__*`
+  surface, including the introspection switch this one is not covered by.

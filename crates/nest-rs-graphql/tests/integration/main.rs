@@ -3,6 +3,7 @@
 mod context;
 mod diagnostics;
 mod duplicate_operation;
+mod federation;
 mod global_pipe;
 mod guard;
 mod layer_pool;

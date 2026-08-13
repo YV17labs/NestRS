@@ -1,0 +1,5 @@
+error: `#[entity]` takes no arguments — the `@key` is inferred from this method's own arguments, so an entity resolved by `id` is one taking `id`. Add or rename a parameter to change the key
+  --> tests/integration/diagnostics/entity_with_arguments.rs:13:5
+   |
+13 |     #[entity(key = "id")]
+   |     ^^^^^^^^^^^^^^^^^^^^^

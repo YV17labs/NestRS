@@ -7,6 +7,8 @@
 mod harness;
 
 mod create;
+#[cfg(feature = "graphql")]
+mod federation;
 mod interceptor;
 mod lazy;
 mod lifecycle_hooks;

@@ -1,0 +1,5 @@
+error: an `#[entity]` method needs at least one argument — those arguments *are* the `@key` the router matches a reference against, so an entity resolver with none is a type no router can address
+  --> tests/integration/diagnostics/entity_without_a_key.rs:14:14
+   |
+14 |     async fn find_widget(&self) -> nest_rs_graphql::async_graphql::Result<i32> {
+   |              ^^^^^^^^^^^

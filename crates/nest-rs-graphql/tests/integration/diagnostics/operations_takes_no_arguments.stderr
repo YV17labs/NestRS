@@ -1,0 +1,5 @@
+error: #[operations] takes no arguments; a resolver's construction and provider-scope layers are declared by #[resolver], and each operation by #[query] / #[mutation] / #[subscription] / #[entity] / #[field_resolver]
+  --> tests/integration/diagnostics/operations_takes_no_arguments.rs:11:14
+   |
+11 | #[operations(path = "/graphql")]
+   |              ^^^^^^^^^^^^^^^^^

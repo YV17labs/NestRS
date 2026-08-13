@@ -1,0 +1,5 @@
+error: an `#[entity]` method must be `async` — the router resolves references concurrently, and async-graphql's entity resolver is awaited
+  --> tests/integration/diagnostics/entity_that_is_not_async.rs:15:8
+   |
+15 |     fn find_widget_by_id(&self, id: i32) -> nest_rs_graphql::async_graphql::Result<i32> {
+   |        ^^^^^^^^^^^^^^^^^

@@ -16,7 +16,7 @@ use std::any::TypeId;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -147,6 +147,16 @@ pub struct GraphqlResolverRegistration {
     /// field beside each mounted operation at boot, mirroring `#[routes]`.
     pub resolver_name: &'static str,
     pub resolver_type_id: fn() -> TypeId,
+    /// One `(method, resolved GraphQL type name)` per `#[entity]` this
+    /// registration declares — empty for a root that declares none.
+    ///
+    /// The *declaration*, read back at boot against what the registry actually
+    /// keyed. async-graphql's `Registry::add_keys` returns silently when the
+    /// named type is neither an object nor an interface, so a `#[entity]`
+    /// resolving to a `Vec<T>` or a scalar compiles, boots, publishes no `@key`,
+    /// and is unreachable — with `_entities` never created, which also disarms
+    /// the `federation = false` refusal that reads the same pass.
+    pub entities: fn() -> Vec<(&'static str, String)>,
     pub type_info: fn(&mut Registry) -> MetaType,
     pub build: fn(&Container) -> GraphqlRootMember,
 }
@@ -328,6 +338,12 @@ pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static 
     // into `add_keys` and never into the object's fields. It lands in the
     // scratch registry all the same, which is what this reads.
     let mut keyed: HashMap<(String, String), &'static str> = HashMap::new();
+    // Every claim, kept per type so the *overlap* check below can compare shapes
+    // pairwise. `keyed` answers "is this exact shape taken?" and cannot: two
+    // shapes that clash are two different map entries.
+    let mut claims: HashMap<String, Vec<(String, &'static str)>> = HashMap::new();
+    // `#[entity]` methods the registry keyed nothing for.
+    let mut unkeyed: Vec<String> = Vec::new();
     let mut first_entity: Option<&'static str> = None;
 
     for reg in inventory::iter::<GraphqlResolverRegistration>() {
@@ -353,19 +369,39 @@ pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static 
         // what that costs.
         let before = keyed_types(&scratch);
         let type_info = (reg.type_info)(&mut scratch);
-        for (name, keys) in keyed_types(&scratch) {
-            let already = before.get(&name);
+        let after = keyed_types(&scratch);
+        // Every `#[entity]` this registration declared, against what the
+        // registry actually keyed. `add_keys` is a silent no-op on anything that
+        // is not an object or an interface, so this is the only place the two can
+        // be compared — a resolver may not simply be *asked* whether its method
+        // is an entity, since the answer async-graphql gives is the registry's.
+        for (method, resolved) in (reg.entities)() {
+            first_entity.get_or_insert(reg.resolver_name);
+            if !after.contains_key(&resolved) {
+                unkeyed.push(format!(
+                    "`{}::{method}` resolves {resolved:?}",
+                    reg.resolver_name,
+                ));
+            }
+        }
+        for (name, keys) in after.iter() {
+            let already = before.get(name);
             for (index, key) in keys.iter().enumerate() {
                 if already.is_some_and(|seen: &Vec<String>| seen.get(index) == Some(key)) {
                     continue;
                 }
-                first_entity.get_or_insert(reg.resolver_name);
+                claims
+                    .entry(name.clone())
+                    .or_default()
+                    .push((key.clone(), reg.resolver_name));
                 // **The key shape is the identity, not the type.** Apollo lets a
                 // type carry several `@key`s, and async-graphql's `find_entity`
                 // matches a reference against the shape — so two resolvers
-                // keying one type by *different* fields both stay reachable and
+                // keying one type by **disjoint** fields both stay reachable and
                 // are not a duplicate. Two claims on the same shape are: only
-                // one body can answer, and which one is link order.
+                // one body can answer, and which one is link order. Shapes that
+                // are neither equal nor disjoint are [`overlapping_claims`],
+                // wherever they were declared.
                 match keyed.entry((name.clone(), key.clone())) {
                     Entry::Vacant(slot) => {
                         slot.insert(reg.resolver_name);
@@ -402,19 +438,145 @@ pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static 
         }
     }
 
-    if clashes.is_empty() {
-        return Ok(first_entity);
+    if !unkeyed.is_empty() {
+        unkeyed.sort();
+        return Err(format!(
+            "`#[entity]` that keys nothing: {} — async-graphql adds a `@key` to an \
+             **object or interface** type and returns silently for anything else, \
+             so a list, a scalar or a union resolves to a type name the registry \
+             never keys. The method then registers no key, the type never joins \
+             `_entities`, and the resolver is unreachable code the schema does not \
+             mention — which also disarms the `federation` refusal, since a schema \
+             with no key looks like a schema with no entity. Return the object \
+             itself: `Result<T>`, or `Result<Option<T>>` for a reference that may \
+             resolve to nothing.",
+            unkeyed.join(", "),
+        ));
     }
-    clashes.sort();
-    Err(format!(
-        "duplicate GraphQL operation name: {} — an operation is addressed by \
-         bare name within a schema, so the SDL would publish one resolver's \
-         signature while the other resolver's body ran. Rename one of them. \
-         An `entity` clash is the same defect addressed by `@key` instead of by \
-         name: two `#[entity]` resolvers for one type, of which the router \
-         reaches whichever linked first — including its access posture.",
-        clashes.join(", "),
-    ))
+
+    if !clashes.is_empty() {
+        clashes.sort();
+        return Err(format!(
+            "duplicate GraphQL operation name: {} — an operation is addressed by \
+             bare name within a schema, so the SDL would publish one resolver's \
+             signature while the other resolver's body ran. Rename one of them. \
+             An `entity` clash is the same defect addressed by `@key` instead of by \
+             name: two `#[entity]` resolvers for one type, of which the router \
+             reaches whichever linked first — including its access posture.",
+            clashes.join(", "),
+        ));
+    }
+
+    let mut overlaps = overlapping_claims(&claims);
+    if !overlaps.is_empty() {
+        overlaps.sort();
+        return Err(format!(
+            "overlapping `@key` shapes on one GraphQL entity: {} — a reference \
+             carrying the wider shape's fields satisfies the narrower claim as \
+             well, so one of the two bodies is unreachable and the access posture \
+             that runs is the other one's. Nothing orders the two by anything you \
+             declared: across resolvers `_entities` answers from whichever linked \
+             first, and within one resolver async-graphql sorts its matchers by \
+             *argument count* — not key arity — so a key with a non-key argument \
+             beside it outranks a longer key without one. Keep the shapes \
+             disjoint: `@key(fields: \"id\")` beside `@key(fields: \"slug\")` \
+             shares no field, so a reference selects the body rather than the \
+             link order.",
+            overlaps.join(", "),
+        ));
+    }
+
+    Ok(first_entity)
+}
+
+/// The claim pairs on one type whose key shapes are neither equal nor
+/// **disjoint**.
+///
+/// **Wherever they are declared, including on one resolver**, and the exemption
+/// that used to be here is why. It rested on "async-graphql orders a single
+/// `#[Object]`'s entity matchers by key arity, so the more specific one wins" —
+/// which is not what upstream does. `object.rs` pushes `(args.len(), code)` and
+/// sorts on *that*: a method with a non-key argument beside its key counts
+/// higher than a method with more key fields and none, so the **narrow** matcher
+/// can be tried first and the wide body — with its own `#[authorize]` — becomes
+/// unreachable. Equal arity is worse still: the sort is stable, so
+/// `@key(fields: "id tenant")` beside `@key(fields: "tenant id")` is decided by
+/// declaration order and one of the two is dead code the SDL still advertises.
+///
+/// So the rule is the same at both scopes: **disjoint, or one claim**. That is
+/// narrower than Apollo, which allows a type several overlapping `@key`s — and
+/// the narrowing is the honest position, because what a router picks then
+/// decides which access posture answers, and neither this framework nor
+/// async-graphql orders those two bodies by anything a developer declared.
+///
+/// Equal *strings* are excluded because the exact-shape check above already
+/// names them; a permutation is not equal as a string and lands here, which is
+/// why the comparison is on the field **set**.
+fn overlapping_claims(claims: &HashMap<String, Vec<(String, &'static str)>>) -> Vec<String> {
+    let mut overlaps = Vec::new();
+    for (name, declared) in claims {
+        for (index, (key, owner)) in declared.iter().enumerate() {
+            for (other_key, other_owner) in &declared[index + 1..] {
+                if key == other_key {
+                    continue;
+                }
+                let (fields, other_fields) = (key_fields(key), key_fields(other_key));
+                if !fields.is_subset(&other_fields) && !other_fields.is_subset(&fields) {
+                    continue;
+                }
+                // The narrower shape first: it is the one that matches every
+                // reference the other does, which is what makes the pair a clash.
+                let (first, first_owner, second, second_owner) =
+                    if fields.len() <= other_fields.len() {
+                        (key, owner, other_key, other_owner)
+                    } else {
+                        (other_key, other_owner, key, owner)
+                    };
+                overlaps.push(format!(
+                    "entity {name:?} keyed by {first:?} ({first_owner}) and by \
+                     {second:?} ({second_owner})",
+                ));
+            }
+        }
+    }
+    overlaps
+}
+
+/// The **top-level** field names one `@key(fields: …)` selects.
+///
+/// Depth-aware rather than a whitespace split, because Apollo's key syntax
+/// nests: `"id organization { id }"` selects `id` and `organization`, and a
+/// split on whitespace reads the inner `id` as a second top-level field — which
+/// made `@key(fields: "id")` look like a subset of `@key(fields: "org { id }")`
+/// and refused a pair that shares no field at all. What `find_entity` matches on
+/// is the presence of the top-level names, so those are what decides overlap.
+fn key_fields(key: &str) -> BTreeSet<&str> {
+    let mut fields = BTreeSet::new();
+    let mut depth = 0usize;
+    let mut rest = key;
+    while let Some(index) = rest.find(|c: char| !c.is_whitespace()) {
+        rest = &rest[index..];
+        match rest.as_bytes()[0] {
+            b'{' => {
+                depth += 1;
+                rest = &rest[1..];
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                rest = &rest[1..];
+            }
+            _ => {
+                let end = rest
+                    .find(|c: char| c.is_whitespace() || c == '{' || c == '}')
+                    .unwrap_or(rest.len());
+                if depth == 0 {
+                    fields.insert(&rest[..end]);
+                }
+                rest = &rest[end..];
+            }
+        }
+    }
+    fields
 }
 
 /// Every type in `registry` carrying federation keys, and the key shapes it
@@ -530,10 +692,13 @@ macro_rules! discovered_root {
             }
 
             /// Same first-member-that-answers rule as `resolve_field`, and the
-            /// boot is what keeps it unambiguous: two members keying one type
-            /// fail `check_operations`, which reads the keys out of
-            /// its scratch registry precisely because an entity claims a type
-            /// rather than a field name and leaves nothing else to clash.
+            /// boot is what keeps it unambiguous: two members whose key shapes
+            /// are equal — or merely overlap, one being a subset of the other —
+            /// fail `check_operations`, which reads the keys out of its scratch
+            /// registry precisely because an entity claims a type rather than a
+            /// field name and leaves nothing else to clash. What survives to
+            /// here is a set of **disjoint** shapes, where at most one member
+            /// can match any given reference and the order is therefore moot.
             async fn find_entity(
                 &self,
                 ctx: &Context<'_>,
@@ -631,7 +796,19 @@ pub(crate) fn build_schema(container: Container, config: &GraphqlConfig) -> Disc
         DiscoveredSubscription::from_registry(&container),
     )
     .data(container.clone())
-    .extension(crate::loader::LoaderExtensionFactory::new(container));
+    .extension(crate::loader::LoaderExtensionFactory::new(
+        container.clone(),
+    ));
+    // The app-wide chain in front of `_service` / `_entities` — see
+    // `crate::federation`. Installed whatever `config.federation` says, because
+    // async-graphql serves those fields from the keys alone; the boot refusal in
+    // `module.rs` is what makes the flag agree with them, and this is what gates
+    // them once it does.
+    if let Some(gate) =
+        crate::federation::FederationExtensionFactory::from_container(&container, config)
+    {
+        builder = builder.extension(gate);
+    }
     if let Some(d) = config.max_depth {
         builder = builder.limit_depth(d);
     }

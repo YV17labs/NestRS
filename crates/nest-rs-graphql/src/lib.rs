@@ -33,9 +33,11 @@
 mod config;
 mod context;
 mod error;
+mod federation;
 mod loader;
 mod module;
 mod opaque;
+mod operation;
 mod resolver;
 mod scope;
 mod subscription;
@@ -47,6 +49,9 @@ pub use config::GraphqlConfig;
 pub use context::{BoxFuture, FallbackOperationGuard, GraphqlOperationGuard, GraphqlVariablePipe};
 pub use context::{GraphqlContextSeed, SeedLifetime};
 pub use error::{FIELD_ERRORS_EXTENSION, pipe_error};
+/// The gate in front of `_service` / `_entities`, which async-graphql resolves
+/// above the merged root — implemented by `nest_rs_guards`, which owns the pool.
+pub use federation::{FederationGate, GraphqlFederationGuard};
 /// Re-establishes per-request ambient state inside a DataLoader batch (the
 /// batch runs on a spawned task where request task-locals are gone).
 /// Implemented by `nest_rs_seaorm::graphql::LoaderScope`.
@@ -54,6 +59,9 @@ pub use loader::{GraphqlBatchContext, GraphqlBatchFuture, GraphqlBatchSpawner};
 pub use loader::{GraphqlLoaderRegistration, batch_spawner};
 pub use module::{GraphqlModule, GraphqlSetup};
 pub use opaque::Opaque;
+/// What a `Guard::check_graphql` is handed: one operation, whichever of the two
+/// sites async-graphql exposes it at.
+pub use operation::GraphqlOperationContext;
 pub use resolver::{
     GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
     GraphqlSubscriptionObject,

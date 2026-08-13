@@ -41,7 +41,7 @@ chooses the **execution site**, matched to the family's nature:
 
 | Family | Site (global scope) | Site (controller/method) |
 |---|---|---|
-| Guard | `RouteShaper` (post-routing — reads `#[public]`); `Guarded` self-mount edge; in-band `/graphql` + `/mcp` op-guard | same sites, plus the per-operation chain on `/graphql` and `/mcp`, and the per-message table a gateway freezes at mount |
+| Guard | `RouteShaper` (post-routing — reads `#[public]`); `Guarded` self-mount edge; in-band `/graphql` + `/mcp` op-guard; the `_service` / `_entities` gate | same sites, plus the per-operation chain on `/graphql` and `/mcp`, and the per-message table a gateway freezes at mount |
 | Pipe | `RouteShaper` | `RouteShaper`; per argument on graphql/ws/mcp/queue |
 | ExceptionFilter | route site (typed catch, closest to handler) | route site |
 | Interceptor | **transport edge** (band 90) — sees 404s, denials, self-mounts; runs *before* auth (no principal/ability/executor) | around the handler, *inside* guards |
@@ -82,6 +82,30 @@ Ordering inside an operation is fixed and load-bearing: **chain → gate → pip
 call → mask**. The gate precedes the pipes so a caller the gate refuses never pays
 for validation, and a validation message never doubles as an existence oracle.
 
+**The two federation root fields are the fifth guard site, and they had none.**
+`_service` and `_entities` are resolved by async-graphql's own `QueryRoot`,
+above the merged root, so the chain `#[operations]` emits inside a body cannot
+reach them — `_service` answered a `check_graphql` deny-all pool with the whole
+SDL, and `_entities` ran the chain once *per representation*, inside whichever
+member the reference matched. A schema `Extension` is the one seam async-graphql
+leaves in front of a root field, and the app-wide pool runs there, once per
+field. Three facts follow, each load-bearing:
+
+- **The pool is the whole chain at that site**, because a federation field
+  belongs to no resolver: no `#[use_guards]` scope to compose, no posture to
+  read.
+- **`#[entity]` bodies therefore compose everything *but* the pool**
+  (`GlobalBucket::Skip`) — it ran at the field, and folding it again would put
+  the multiplier on every pooled check in the caller's hands. No other site may
+  subtract a bucket without naming where it ran instead.
+- **`Guard::check_graphql` takes a `GraphqlOperationContext`, not a `Context`**,
+  and that is the same rule as everywhere else: async-graphql hands an extension
+  an `ExtensionContext` and offers no public constructor bridging the two, so one
+  declaration covering both sites has to be worded over what both can give.
+  `operation.context()` returns the real `Context` where one exists and `None` at
+  the federation site, which is a refusal a guard can read rather than a
+  fabrication it cannot.
+
 **A GraphQL `#[entity]` is a `#[query]` for every one of these**, and it is the
 role where that matters most: the router resolves it from a *reference* the
 client never wrote (`_entities`), so nothing in the document names it and a
@@ -91,22 +115,49 @@ mandatory posture, worded to name the reason. It is a role and not a modifier:
 `_entities` is a `Query`-root field, so combining `#[entity]` with `#[mutation]`
 or `#[subscription]` is a compile error naming both.
 
-**Being unnamed is also why it is stricter than a `#[query]` in four places**,
-each a compile error: a `Result` return (the chain is emitted only where a denial
-has somewhere to go — a bare-return entity would silently have none, and unlike a
-`#[query]` nothing in the document would show it), no `bind = Service` (its
-`NOT_FOUND`/`FORBIDDEN` split is an existence oracle on a field addressed by
-key), no `#[entity(key = …)]` (the key is inferred from the arguments), and
-`async` with at least one argument.
+**Being unnamed is also why it is stricter than a `#[query]` in six places**,
+each a compile error, and they are named rather than counted because a count
+drifts the day one is added: a `Result` return (the chain is emitted only where a
+denial has somewhere to go — a bare-return entity would silently have none, and
+unlike a `#[query]` nothing in the document would show it), no `bind = Service`
+(its `NOT_FOUND`/`FORBIDDEN` split is an existence oracle on a field addressed by
+key), no `#[entity(key = …)]` (the key is inferred from the arguments), no
+`#[graphql(…)]` of the method's own (async-graphql reads the *first* one on a
+method and the decorator has to emit `#[graphql(entity)]` there, so the
+developer's would silently take its place and the method would stop being an
+entity), `async`, and at least one argument. Five live in `entity_refusals`; the
+`bind` one is refused where the posture is parsed.
 
-**Two boot refusals carry the rest**, because neither is expressible at one site:
+**Four boot refusals carry the rest**, because none is expressible at one site:
 an `#[entity]` without `GraphqlConfig::federation` (async-graphql serves
 `_service`/`_entities` from the keys alone, so the flag would otherwise be a
-comment), and two claims on one **key shape** — which clash on no field name, so
-the duplicate-operation check reads the registry's key shapes instead. The shape
-and not the type: several `@key`s per type is Apollo's, and the check is within
-a resolver as well as across them, one `impl` holding two `#[entity]` methods
-being a single registration.
+comment); two claims on one **key shape** — which clash on no field name, so the
+duplicate-operation check reads the registry's key shapes instead, within a
+resolver as well as across them, one `impl` holding two `#[entity]` methods
+being a single registration; two claims whose shapes **overlap**, at either
+scope; and an `#[entity]` whose resolved type the registry keys
+nothing on — `add_keys` returns silently for anything that is not an object or
+an interface, so a list, a scalar or a union registers no key, never joins
+`_entities`, and leaves the resolver as code the schema does not mention. That
+last one is also what disarmed the `federation` refusal: a schema with no key
+looks exactly like a schema with no entity.
+
+The shape and not the type, because several `@key`s per type is Apollo's — but
+*disjoint* shapes only. `find_entity` matches a reference by "these key fields
+are present", so `id` and `id tenant` both answer `{id, tenant}`, one of the two
+bodies is unreachable, and the posture that runs is the other one's. Ordering the
+members would fix the dispatch and not the posture, which is why this is a
+refusal rather than a sort.
+
+**At both scopes, and the exemption that used to be here is why.** It read
+"async-graphql sorts one `#[Object]`'s matchers by key arity, so the specific one
+wins there" — upstream sorts on `args.len()`, so a key with a non-key argument
+beside it outranks a longer key without one, and at equal counts the stable sort
+makes declaration order decide. Neither is something a developer declared. So:
+disjoint, or one claim, wherever it is written. Narrower than Apollo, argued
+rather than inherited. Overlap is computed on the **top-level** field names —
+`"id organization { id }"` selects two, not four — because that is what
+`find_entity` matches on.
 
 ## Guards
 

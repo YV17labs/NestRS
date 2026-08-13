@@ -43,6 +43,17 @@ pub struct SiteChainSources {
     pub force: Vec<TypeId>,
 }
 
+/// Whether a site composes the app-wide guard pool into its chain.
+///
+/// Every site does, bar one — see [`compose`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GlobalBucket {
+    /// Fold the pool in, deduped against the narrower scopes.
+    Fold,
+    /// Leave it out: a site in front of this one already ran it.
+    Skip,
+}
+
 /// One site's composed guard chain, memoized per [`ContainerId`].
 ///
 /// A decorator emits one as a `static` per guarded operation and hands it to
@@ -75,16 +86,22 @@ impl SiteChainCell {
 
     /// This site's chain for `container`, composing it on first sight. See
     /// [`compose`].
+    ///
+    /// `global` is a **function of the container**, not a value, so the memo's
+    /// key covers everything the composition reads. A site whose bucket varied
+    /// by anything else would otherwise get whichever chain was composed first,
+    /// silently — and in the fail-open direction.
     pub(crate) fn chain(
         &self,
         container: &Container,
         route_label: &str,
         sources: &(dyn Fn() -> SiteChainSources + Sync),
+        global: fn(&Container) -> GlobalBucket,
     ) -> Arc<[ResolvedLayer<dyn Guard>]> {
         let id = container.id();
         let primary = self.primary.get_or_init(|| Cached {
             container: id,
-            chain: compose(container, route_label, sources()),
+            chain: compose(container, route_label, sources(), global(container)),
         });
         if primary.container == id {
             return Arc::clone(&primary.chain);
@@ -101,7 +118,7 @@ impl SiteChainCell {
         if let Some(hit) = slots.iter().find(|c| c.container == id) {
             return Arc::clone(&hit.chain);
         }
-        let chain = compose(container, route_label, sources());
+        let chain = compose(container, route_label, sources(), global(container));
         slots.push(Cached {
             container: id,
             chain: Arc::clone(&chain),
@@ -120,16 +137,38 @@ impl SiteChainCell {
 /// questions, so one is never a reason to skip the other; skipping this one is a
 /// fail-open, because a guard written for an operation would then never be
 /// consulted at the only site that could consult it.
+///
+/// **One site subtracts it, and only because another site already ran it.**
+/// `#[entity]` operations are reached exclusively through `_entities`, in front
+/// of which `nest_rs_graphql`'s federation gate runs the pool once per field —
+/// so folding it here again would re-run every pooled guard once per
+/// representation. That is [`GlobalBucket::Skip`]; every other site is
+/// [`Fold`](GlobalBucket::Fold), and nothing else may subtract a bucket without
+/// naming where it ran instead.
+///
+/// **Subtracting is done by composing and then dropping, never by composing
+/// without.** The pool is what `compose_chain`'s `TypeId` dedup collapses a
+/// narrower declaration *against* — broadest scope wins — so leaving it out
+/// makes a guard declared both globally and on the resolver survive as the
+/// resolver's own copy, and it then runs once per representation *on top of* the
+/// gate's one run. That is the shape `demo`'s resolvers have. Composing first
+/// and dropping the entries whose surviving `source` is the global bucket keeps
+/// the dedup and removes exactly what already ran.
 fn compose(
     container: &Container,
     route_label: &str,
     sources: SiteChainSources,
+    bucket: GlobalBucket,
 ) -> Arc<[ResolvedLayer<dyn Guard>]> {
     let global = dedup_bucket(resolve_global_guards(container));
     let provider = resolve_specs(container, &sources.provider, LayerSite::Controller);
     let method = resolve_specs(container, &sources.method, LayerSite::Method);
 
-    let chain = compose_chain::<dyn Guard>(global, provider, method, &sources.force, route_label);
+    let mut chain =
+        compose_chain::<dyn Guard>(global, provider, method, &sources.force, route_label);
+    if bucket == GlobalBucket::Skip {
+        chain.retain(|entry| entry.source != LayerSite::Global);
+    }
     log_effective_chain(route_label, "guards", &chain);
     chain.into()
 }

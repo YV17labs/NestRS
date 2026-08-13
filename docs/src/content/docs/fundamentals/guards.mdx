@@ -87,7 +87,7 @@ Other guards on the same route still run.
 | Method | Transport | Request shape |
 |--------|-----------|---------------|
 | `check_http` | HTTP | `&mut HttpRequest` — gate and mutate (attach context in extensions) |
-| `check_graphql` | GraphQL | `&GraphqlContext` — read-only; seed context upstream |
+| `check_graphql` | GraphQL | `&GraphqlOperationContext` — read-only; seed context upstream |
 | `check_ws_message` | WS | per inbound message, after the upgrade |
 | `check_mcp` | MCP | per operation, inside rmcp's dispatch — the ability is ambient |
 
@@ -95,7 +95,7 @@ Other guards on the same route still run.
 #[async_trait]
 pub trait Guard: Layer {
     async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> { Ok(()) }
-    async fn check_graphql(&self, _ctx: &GraphqlContext<'_>) -> Result<(), Denial> { Ok(()) }
+    async fn check_graphql(&self, _op: &GraphqlOperationContext<'_>) -> Result<(), Denial> { Ok(()) }
     async fn check_ws_message(&self, _client: &WsClient, _event: &str, _data: &Value)
         -> Result<(), Denial> { Ok(()) }
     async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> { Ok(()) }
@@ -362,7 +362,13 @@ Each transport method runs at a different seam:
 - `check_http` — on `&mut HttpRequest`, post-routing at the route site
   (before the handler, so it can read `#[public]` route data).
 - `check_graphql` — inside the resolver's per-operation chain (context
-  is read-only).
+  is read-only), **and** in front of the two federation root fields
+  `_service` / `_entities`, which async-graphql resolves above the merged root.
+  That second site is why the argument is a `GraphqlOperationContext` rather
+  than async-graphql's `Context`: a schema extension is the only seam there and
+  it is handed no `Context`. Read data with `op.data_opt::<T>()`; reach for
+  `op.context()` when you genuinely need the selection set — it answers `None`
+  on a federation field rather than inventing one.
 - `check_ws_message` — once per inbound message, after the connection
   upgrade.
 - `check_mcp` — once per `#[tool]` / `#[prompt]` operation, inside rmcp's

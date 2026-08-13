@@ -427,6 +427,23 @@ fn sig_returns_result(sig: &Signature) -> bool {
     }
 }
 
+/// The type an operation's signature declares it returns, whole.
+///
+/// Handed to `OutputType::type_name()` in the emitted claim rather than
+/// unwrapped here, because unwrapping here is a second implementation of
+/// async-graphql's rule and the two drifted immediately. Upstream unwraps only a
+/// **literal** `Result` / `FieldResult`; anything else — a type alias, a `Result`
+/// with its parameters in the other order — is handed whole to `add_keys`, where
+/// `impl OutputType for Result<T, E>` reports `T`'s name. Naming the whole type
+/// therefore agrees with the registry by construction: an alias resolves through
+/// its own `OutputType`, and there is no shape the claim can miss or misread.
+fn declared_return_type(sig: &Signature) -> Option<&Type> {
+    match &sig.output {
+        syn::ReturnType::Type(_, ty) => Some(ty),
+        syn::ReturnType::Default => None,
+    }
+}
+
 /// The return type's last path segment when it *reads* as a `Result` but is not
 /// one of the two spellings async-graphql recognises (`Result` / `FieldResult`).
 /// `None` for a literal `Result`, and for a return type that is not
@@ -445,22 +462,57 @@ fn aliased_result_ident(sig: &Signature) -> Option<Ident> {
 /// The ident of a method's `&Context<'_>` parameter (matched on the last
 /// path segment), so guard injection reuses it instead of adding a second.
 pub(crate) fn ctx_param_ident(sig: &Signature) -> Option<Ident> {
-    sig.inputs.iter().find_map(|arg| {
-        let FnArg::Typed(pt) = arg else { return None };
-        let Type::Reference(reference) = &*pt.ty else {
-            return None;
-        };
-        let Type::Path(tp) = &*reference.elem else {
-            return None;
-        };
-        if tp.path.segments.last()?.ident != "Context" {
-            return None;
+    sig.inputs.iter().find_map(ctx_ident_of)
+}
+
+/// Whether one parameter is a `&Context<'_>`, and what it is called.
+fn ctx_ident_of(arg: &FnArg) -> Option<Ident> {
+    let FnArg::Typed(pt) = arg else { return None };
+    let Type::Reference(reference) = &*pt.ty else {
+        return None;
+    };
+    let Type::Path(tp) = &*reference.elem else {
+        return None;
+    };
+    if tp.path.segments.last()?.ident != "Context" {
+        return None;
+    }
+    match &*pt.pat {
+        syn::Pat::Ident(pi) => Some(pi.ident.clone()),
+        _ => None,
+    }
+}
+
+/// Refuse a `&Context` that is not the operation's **first** parameter after
+/// the receiver.
+///
+/// async-graphql's `#[Object]` recognises the context parameter only there and
+/// reads a later one as a schema argument — so what a misplaced one produces is
+/// an `InputType` bound failure against `&ContextBase<…>`, named nowhere in the
+/// developer's source. On an `#[entity]` it is worse than unreadable: the stray
+/// parameter joins the `@key` a router matches references against, silently
+/// changing what the operation is addressed by.
+///
+/// [`ensure_ctx_param`] already knew the rule — it inserts at position 1 — but
+/// only handled the *absent* case: finding a `&Context` anywhere made it decline
+/// to insert one, and the misplaced one then went to async-graphql as an
+/// argument.
+fn reject_misplaced_ctx(sig: &Signature) -> syn::Result<()> {
+    let expected = usize::from(matches!(sig.inputs.first(), Some(FnArg::Receiver(_))));
+    for (index, arg) in sig.inputs.iter().enumerate() {
+        if index == expected || ctx_ident_of(arg).is_none() {
+            continue;
         }
-        match &*pt.pat {
-            syn::Pat::Ident(pi) => Some(pi.ident.clone()),
-            _ => None,
-        }
-    })
+        return Err(syn::Error::new_spanned(
+            arg,
+            "a `&Context` parameter comes first, directly after `&self` — async-graphql\'s \
+             `#[Object]` recognises it only there and reads a later one as a schema argument, \
+             which fails as an `InputType` bound on a type you never wrote. On an `#[entity]` \
+             it also joins the `@key` the router matches on. Move it up, or drop it: the \
+             decorator inserts one when the operation needs it",
+        ));
+    }
+    Ok(())
 }
 
 /// Ensure the delegating signature has a `&Context`. async-graphql's
@@ -493,6 +545,10 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
 /// denial) AND no method/force guards skips the chain entirely. Resolver-
 /// scope guards alone still trigger the chain because the struct may have
 /// declared them.
+///
+/// `is_entity` names the site rather than picking a function: the runner is one
+/// seam, and `GraphqlSite` is what decides whether the app-wide pool is folded
+/// here or left to the federation gate in front of `_entities`.
 fn layered_resolver_chain(
     self_ty: &Type,
     method_guards: &[Path],
@@ -500,6 +556,7 @@ fn layered_resolver_chain(
     ctx: &Ident,
     route_label: &str,
     needs_global: bool,
+    is_entity: bool,
 ) -> TokenStream2 {
     let label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
     let method_specs = scoped_specs(method_guards, quote!(dyn ::nest_rs_guards::Guard));
@@ -513,6 +570,11 @@ fn layered_resolver_chain(
         // auth/authz denials make sense semantically.
         return quote!();
     }
+    let site = if is_entity {
+        quote!(::nest_rs_guards::GraphqlSite::Entity)
+    } else {
+        quote!(::nest_rs_guards::GraphqlSite::Operation)
+    };
     quote! {
         {
             // Composed once per site against this container, then memoized —
@@ -530,6 +592,7 @@ fn layered_resolver_chain(
                     method: #method_specs,
                     force: #force_typeids,
                 },
+                #site,
             ).await?;
         }
     }
@@ -549,11 +612,27 @@ fn attr_role(attr: &Attribute) -> String {
 /// What an `#[entity]` owes beyond what a `#[query]` owes, refused at its own
 /// span rather than inside async-graphql's derive.
 ///
-/// Three of the four are async-graphql's rules, reworded and re-spanned: it
+/// **Five, in the order they are checked**, and naming them is the point — a
+/// count drifts the moment one is added:
+///
+/// 1. no `#[entity(...)]` arguments — the `@key` is read off the method's own;
+/// 2. `async`;
+/// 3. no `#[graphql(...)]` of the method's own;
+/// 4. at least one argument, since those arguments *are* the key;
+/// 5. a `Result` return.
+///
+/// Four of the five are async-graphql's rules reworded and re-spanned: it
 /// reports "Entity need to have at least one key" and "Must be asynchronous"
 /// against the `#[operations]` attribute, followed by a cascade naming a
-/// generated type the developer never wrote. The fourth is this framework's, and
+/// generated type the developer never wrote. The fifth is this framework's, and
 /// it is the load-bearing one — see the `Result` arm.
+///
+/// **Two more live outside this function**, because they are not the entity's
+/// alone: `bind = Service` is refused in `resolver_impl_inner` (where the
+/// posture is parsed), and `check_operations` refuses at boot an `#[entity]`
+/// whose resolved type the registry keys nothing on — a fact only the registry
+/// holds. Two others bind every operation, entity included: a misplaced
+/// `&Context` and a `#[version]`.
 fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> syn::Result<()> {
     // `#[entity(key = "id")]` is the first thing a developer arriving from
     // Apollo reaches for, and the key is not theirs to declare: async-graphql
@@ -683,6 +762,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let mut query_methods: Vec<TokenStream2> = Vec::new();
     let mut mutation_methods: Vec<TokenStream2> = Vec::new();
     let mut subscription_methods: Vec<TokenStream2> = Vec::new();
+    // One `(method, resolved GraphQL type name)` per `#[entity]`, submitted with
+    // the `Query` root — see where they are pushed.
+    let mut entity_claims: Vec<TokenStream2> = Vec::new();
     // async-graphql wants one `#[ComplexObject]` per parent type, so a
     // resolver's `#[field_resolver]` methods for the same parent merge into one impl.
     let mut field_groups: Vec<(Type, Vec<TokenStream2>)> = Vec::new();
@@ -709,6 +791,21 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         let Some(idx) = verb_idx else { continue };
 
         let verb_attr = method.attrs.remove(idx);
+        // Not on a `#[field_resolver]`: its position 1 is the **parent**, so a
+        // `&Context` correctly comes second there — see `field_method`, which
+        // forwards it.
+        if !verb_attr.path().is_ident("field_resolver") {
+            reject_misplaced_ctx(&method.sig)?;
+        }
+        // `#[version]` narrows an HTTP *route* out of the versions its
+        // controller mounts. A GraphQL operation has no address to narrow, and
+        // left alone this is `cannot find attribute `version` in this scope` —
+        // which names neither the edge nor the reason, and reads as a missing
+        // import. Same sentence as the one `#[resolver(version = …)]` gets: the
+        // fact is the edge's, not the site's.
+        if let Some(version) = method.attrs.iter().find(|a| a.path().is_ident("version")) {
+            return Err(Edge::Graphql.refuse_version(version));
+        }
         // One method, one role. `#[entity]` beside `#[mutation]` is the shape
         // that motivates saying so: an entity is resolved **by reference**, from
         // the `_entities` field the router calls on the `Query` root, and no
@@ -1040,6 +1137,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 &gctx,
                 &route_label,
                 needs_global,
+                is_entity,
             );
             // `#[authorize(A, E)]`: class gate before the call, automatic
             // response masking after it — the same two effects the HTTP
@@ -1151,6 +1249,22 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // path to resolve — qualifying it asks the compiler to find a
             // `graphql` item in async-graphql's root, which is not what it is.
             let entity_attr = is_entity.then(|| quote!(#[graphql(entity)]));
+            // What this `#[entity]` claims to key, as a *runtime* pair: the
+            // method's name, and the GraphQL type name async-graphql will resolve
+            // it to. The boot check asks the registry whether that name came back
+            // carrying a `@key` — `add_keys` returns silently for anything that
+            // is not an object or an interface, which is how an `#[entity]`
+            // returning `Vec<T>` compiled, booted, and registered nothing.
+            if is_entity && let Some(declared) = declared_return_type(&sig) {
+                let claimed = LitStr::new(&method_name.to_string(), method_name.span());
+                entity_claims.push(quote! {
+                    (
+                        #claimed,
+                        <#declared as ::nest_rs_graphql::async_graphql::OutputType>::type_name()
+                            .into_owned(),
+                    )
+                });
+            }
             let delegating = quote! {
                 #(#deleg_attrs)*
                 #entity_attr
@@ -1171,18 +1285,26 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         }
     }
 
-    let query_block = root_object(&query_obj, &self_ty, &query_methods, RootKind::Query);
+    let query_block = root_object(
+        &query_obj,
+        &self_ty,
+        &query_methods,
+        RootKind::Query,
+        &entity_claims,
+    );
     let mutation_block = root_object(
         &mutation_obj,
         &self_ty,
         &mutation_methods,
         RootKind::Mutation,
+        &[],
     );
     let subscription_block = root_object(
         &subscription_obj,
         &self_ty,
         &subscription_methods,
         RootKind::Subscription,
+        &[],
     );
     let field_blocks = field_groups.iter().map(|(parent_ty, methods)| {
         let root = async_graphql_root();
@@ -1310,6 +1432,17 @@ fn field_method(
     let mut injected_deps: Vec<Type> = Vec::new();
     for (arg, ident) in rest.iter().copied().zip(&rest_idents) {
         let FnArg::Typed(pt) = arg else { continue };
+        // The documented `#[field_resolver]` shape — `(&self, parent, ctx)` —
+        // and the one site where a `&Context` legitimately follows another
+        // parameter, because position 1 is the parent. Forwarded as the `__ctx`
+        // the wrapper already holds. It used to fall through to the injected-dep
+        // arm below, ask the container for a `Context`, find nothing, and answer
+        // *no provider registered for `& Context < '_ >`* on **every request** —
+        // a shape the docs teach, failing only once served.
+        if ctx_ident_of(arg).is_some() {
+            call_args.push(quote! { __ctx });
+            continue;
+        }
         if let Type::Reference(reference) = &*pt.ty {
             let dep_ty = &*reference.elem;
             let dep = format_ident!("__dep_{}", ident);
@@ -1373,6 +1506,7 @@ fn field_method(
         force_guards,
         &format_ident!("__ctx"),
         field_label,
+        false,
         false,
     );
     let method = quote! {
@@ -1483,6 +1617,7 @@ fn root_object(
     self_ty: &Type,
     methods: &[TokenStream2],
     kind: RootKind,
+    entity_claims: &[TokenStream2],
 ) -> TokenStream2 {
     if methods.is_empty() {
         return quote!();
@@ -1518,6 +1653,7 @@ fn root_object(
                 kind: ::nest_rs_graphql::GraphqlResolverKind::#variant,
                 resolver_name: #resolver_name,
                 resolver_type_id: || ::core::any::TypeId::of::<#self_ty>(),
+                entities: || ::std::vec![#(#entity_claims),*],
                 type_info: |__r| __r.#fake_type::<#obj>(),
                 build: |__c| ::nest_rs_graphql::GraphqlRootMember::#member(
                     ::std::boxed::Box::new(

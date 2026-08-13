@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::{AbilityBuilder, AbilityFactory, current_ability};
 
 #[cfg(feature = "graphql")]
-use nest_rs_graphql::async_graphql::Context as GraphqlContext;
+use nest_rs_graphql::GraphqlOperationContext;
 
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AppAbility>)]`.
 /// `F::Actor` is read from request extensions; its absence on a non-public
@@ -107,7 +107,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     }
 
     #[cfg(feature = "graphql")]
-    async fn check_graphql(&self, _ctx: &GraphqlContext<'_>) -> Result<(), Denial> {
+    async fn check_graphql(&self, _op: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
         if current_ability().is_none() {
             tracing::warn!(
                 target: "nest_rs::authz",

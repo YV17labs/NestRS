@@ -1,0 +1,5 @@
+error: `#[sse]` takes no response decorator — `#[http_code]`, `#[redirect]` and `#[response_header]` all shape a response that completes, and an event stream does not. The route answers `200 text/event-stream` for as long as it streams
+  --> tests/integration/diagnostics/response_decorator_on_an_sse_route.rs:16:7
+   |
+16 |     #[sse("/ticks")]
+   |       ^^^

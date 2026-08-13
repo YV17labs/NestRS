@@ -27,6 +27,7 @@ mod reflector;
 mod scope;
 mod security_headers;
 mod shaper;
+mod sse;
 mod tls;
 mod transport;
 mod versioning;
@@ -52,6 +53,7 @@ pub use reflector::Reflector;
 pub use scope::Scoped;
 pub use security_headers::SecurityHeadersConfig;
 pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};
+pub use sse::{SseEvent, SseSettings, SseStream};
 pub use tls::TlsConfig;
 pub use transport::{
     HttpTransport, join_path, normalize_mount_path, version_path, versions_declare,
@@ -73,6 +75,10 @@ pub use interceptor::{HttpEndpointWrap, priority as endpoint_wrap_priority};
 pub use shaper::{CaptureFn, MaskProbe, ShaperProbe, UnshapedProbe, shaped};
 
 pub use poem;
+// The stream vocabulary an `#[sse]` route is built from — `stream::iter`,
+// `StreamExt`, the channel adapters. Re-exported beside `poem` so a controller
+// that streams declares the umbrella and nothing else.
+pub use futures_util;
 pub use schemars;
 // `#[input]` carries the DTO derives so the developer does not; routing them
 // through here is what keeps `serde` / `validator` / `schemars` out of their

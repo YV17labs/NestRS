@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
-use std::time::Duration;
-
 use std::future::ready;
 
 use futures_util::StreamExt;
-use nest_rs::http::{Header, PartExt, Valid, controller, routes};
+use nest_rs::http::{Header, PartExt, SseEvent, SseStream, Valid, controller, routes};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 use poem::http::StatusCode;
-use poem::web::sse::{Event, SSE};
 use poem::web::{Json, Query};
 use poem::{Body, Error, Response, Result};
 
@@ -112,7 +109,7 @@ impl AudioController {
         }
     }
 
-    #[get("/events")]
+    #[sse("/events")]
     #[meta(Throttle::per_minute(60))]
     #[api(
         summary = "Stream transcode progress as Server-Sent Events",
@@ -129,7 +126,7 @@ impl AudioController {
         &self,
         query: Valid<Query<TranscodeDto>>,
         resume: Header<StreamResumeDto>,
-    ) -> SSE {
+    ) -> SseStream {
         let file = query.into_inner().file;
         let seen = resume.into_inner().last_event_id;
         let events = self
@@ -151,9 +148,9 @@ impl AudioController {
                     );
                     r#"{"state":"error"}"#.to_string()
                 });
-                Event::message(body).event_type("transcode").id(id)
+                SseEvent::message(body).event_type("transcode").id(id)
             });
-        SSE::new(events).keep_alive(Duration::from_secs(15))
+        SseStream::new(events)
     }
 
     #[post("/transcode")]

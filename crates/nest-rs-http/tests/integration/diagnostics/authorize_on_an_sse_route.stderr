@@ -1,0 +1,5 @@
+error: `#[authorize(...)]` cannot arm a `#[sse]` route: the posture masks the response against the entity model, and an event stream is no wire model to reconcile. Gate the stream with a capability-only guard instead — `#[use_guards(YourGuard)]` checking `ability.can_class(...)`
+  --> tests/integration/diagnostics/authorize_on_an_sse_route.rs:20:17
+   |
+20 |     #[authorize(Read, Post)]
+   |                 ^^^^

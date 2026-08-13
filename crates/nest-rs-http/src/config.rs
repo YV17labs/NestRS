@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigService, Result, config};
 use poem::http::HeaderName;
@@ -11,6 +12,13 @@ use crate::versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, VersionSelector};
 
 const DEFAULT_HOST: &str = "0.0.0.0";
 const DEFAULT_PORT: u16 = 3000;
+/// Default `#[sse]` stream ceiling: 4 hours — the same value
+/// `NESTRS_WS__MAX_CONNECTION_SECS` and `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`
+/// default to, because it bounds the same stale-privilege window.
+const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
+/// Default keep-alive comment interval on a `#[sse]` stream: 15 seconds, under
+/// the 30–60 s idle timeout common to proxies and browsers.
+const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
 
 /// HTTP transport options resolved at boot. Every field is settable both via
 /// `NESTRS_HTTP__*` env vars (read by [`Config::from_env`]) and via the pinned
@@ -93,6 +101,29 @@ pub struct HttpConfig {
     /// **aborts the boot** naming the variable. See
     /// [`ClientOrigin`](crate::ClientOrigin) for the resolution rule.
     pub trusted_proxies: Vec<IpAddr>,
+    /// Maximum lifetime of a single `#[sse]` stream. When it elapses the server
+    /// stops emitting and ends the stream, so the client's `EventSource`
+    /// reconnects — re-running the guard chain, and with it authn/authz and the
+    /// token's `exp`. It bounds **emission**: no event is produced past the
+    /// ceiling at any rate a peer reads at. A peer that stops reading parks the
+    /// write and keeps its *socket* past the ceiling — a reported gap, not a
+    /// closed one; see [`SseSettings`](crate::SseSettings) for why it cannot be
+    /// closed from this crate, and bound idle sockets at the server or proxy.
+    ///
+    /// **A security control, not a resource knob**, and the third instance of
+    /// the same one: a stream authenticates once, at the request, then emits
+    /// with those privileges for as long as it lives. Same reading, same
+    /// 4-hour default and same `0` ⇒ unlimited spelling as
+    /// `NESTRS_WS__MAX_CONNECTION_SECS` and
+    /// `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`. Read from
+    /// `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS`; the `http` namespace because SSE
+    /// is a response shape of this transport rather than a module of its own.
+    pub sse_max_connection: Option<Duration>,
+    /// How often a `#[sse]` stream emits a keep-alive comment, so an idle
+    /// stream is not dropped by an intermediary that sees no bytes. `None` ⇒
+    /// none sent. Read from `NESTRS_HTTP__SSE_KEEP_ALIVE_SECS` (whole seconds;
+    /// `0` ⇒ none); defaults to 15 seconds.
+    pub sse_keep_alive: Option<Duration>,
 }
 
 impl Default for HttpConfig {
@@ -113,6 +144,8 @@ impl Default for HttpConfig {
             security_headers: SecurityHeadersConfig::default(),
             compression: false,
             trusted_proxies: Vec::new(),
+            sse_max_connection: Some(Duration::from_secs(DEFAULT_SSE_MAX_CONNECTION_SECS)),
+            sse_keep_alive: Some(Duration::from_secs(DEFAULT_SSE_KEEP_ALIVE_SECS)),
         }
     }
 }
@@ -189,6 +222,8 @@ impl Config for HttpConfig {
             security_headers: SecurityHeadersConfig::from_env(env, base.security_headers)?,
             compression: env.flag("COMPRESSION", base.compression)?,
             trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
+            sse_max_connection: env.seconds("SSE_MAX_CONNECTION_SECS", base.sse_max_connection)?,
+            sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,
         })
     }
 }

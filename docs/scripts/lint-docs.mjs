@@ -538,7 +538,7 @@ const BARE_LOG = /tracing::\w+!\(\s*(?:target:\s*"([^"]*)"\s*,\s*)?"/g;
 /// A **service** method returning `ServiceError` converts `DbErr` through `?`
 /// legitimately, and that is where the conversion belongs: the exemplar's
 /// services return the wire type, so a handler is a one-line delegation.
-const HANDLER_SNIPPET = /#\[(?:get|post|put|patch|delete)\(|#\[(?:query|mutation)\]/;
+const HANDLER_SNIPPET = /#\[(?:get|post|put|patch|delete|sse)\(|#\[(?:query|mutation)\]/;
 
 /// Every fenced block, tagged with the `##` section it sits under. Most checks
 /// ignore the section; `install-stanza` is scoped by it, because "the install

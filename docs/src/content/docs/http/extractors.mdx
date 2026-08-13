@@ -113,8 +113,7 @@ header names are, and values are parsed into the field's type — a
 `u32` field is an integer, not a string you parse in the handler.
 
 ```rust
-use nest_rs::http::Header;
-use nest_rs::http::poem::web::sse::SSE;
+use nest_rs::http::{Header, SseStream};
 use serde::Deserialize;
 use schemars::JsonSchema;
 
@@ -124,8 +123,8 @@ struct StreamResume {
     last_event_id: Option<u32>,
 }
 
-#[get("/events")]
-async fn events(&self, resume: Header<StreamResume>) -> SSE {
+#[sse("/events")]
+async fn events(&self, resume: Header<StreamResume>) -> SseStream {
     self.svc.stream_from(resume.into_inner().last_event_id)
 }
 ```

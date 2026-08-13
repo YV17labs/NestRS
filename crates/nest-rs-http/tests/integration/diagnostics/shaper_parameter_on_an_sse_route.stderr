@@ -1,0 +1,5 @@
+error: a response shaper cannot arm a `#[sse]` route: masking reconciles the body against the entity model, and an event stream is no wire model to reconcile — it would be waved through unmasked while the document claims otherwise. Gate the stream with a capability-only guard instead, and load what it needs inside the handler
+  --> tests/integration/diagnostics/shaper_parameter_on_an_sse_route.rs:27:35
+   |
+27 |     async fn ticks(&self, _proof: Authorize<Read, Post>) -> SseStream {
+   |                                   ^^^^^^^^^^^^^^^^^^^^^

@@ -15,10 +15,13 @@
 //!         Ok(())
 //!     }
 //! }
+//!
+//! impl HttpGuard for MyGuard {}
 //! ```
 
 pub use crate::{
-    AppBuilderGuardsExt, AppBuilderPipesExt, Denial, Guard, GuardSpec, PipeSpec, guard, pipe,
+    AppBuilderGuardsExt, AppBuilderPipesExt, Denial, Guard, GuardSpec, HttpGuard, PipeSpec, guard,
+    pipe,
 };
 pub use async_trait::async_trait;
 pub use nest_rs_core::{HandlerMetadata, Layer, LayerKind, LayerSite, Public, injectable};

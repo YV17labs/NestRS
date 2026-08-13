@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::module;
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::async_trait;
 use nest_rs_mcp::{
     AllowAllMcpGuard, BoxFuture, CallToolResult, Captured, ContentBlock, McpError, McpMount,
@@ -199,6 +199,8 @@ impl Guard for DenyEverythingGuard {
         Err(Denial::forbidden("global pool refused"))
     }
 }
+
+impl HttpGuard for DenyEverythingGuard {}
 
 #[module(providers = [PoolTool, DenyEverythingGuard, AllowAllMcpGuard as dyn McpOperationGuard])]
 struct BridgeWinsModule;

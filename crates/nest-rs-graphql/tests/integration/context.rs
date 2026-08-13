@@ -4,7 +4,7 @@
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Context;
 use nest_rs_graphql::{GraphqlContextSeed, GraphqlModule, SeedLifetime, operations, resolver};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
 use poem::Request;
@@ -25,6 +25,8 @@ impl Guard for TagGuard {
         Ok(())
     }
 }
+
+impl HttpGuard for TagGuard {}
 
 #[resolver]
 struct TagResolver;

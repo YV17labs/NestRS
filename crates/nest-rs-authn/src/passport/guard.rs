@@ -133,3 +133,9 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         Some(PrincipalClaim::of::<S::Principal>())
     }
 }
+
+/// HTTP is the only edge this guard checks, and it is enough for all of them:
+/// the GraphQL POST, the `/mcp` request and the WS upgrade are HTTP requests
+/// `check_http` covers at the connection edge. The marker is what lets a
+/// `#[controller]` or a `#[gateway]` struct bind it.
+impl<S: Strategy> nest_rs_guards::HttpGuard for AuthnGuard<S> {}

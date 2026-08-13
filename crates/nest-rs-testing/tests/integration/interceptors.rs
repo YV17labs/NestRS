@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
@@ -43,6 +43,8 @@ impl Guard for DenyGuard {
         Err(Denial::forbidden("denied"))
     }
 }
+
+impl HttpGuard for DenyGuard {}
 
 #[controller(path = "/a")]
 struct PerHandlerController;

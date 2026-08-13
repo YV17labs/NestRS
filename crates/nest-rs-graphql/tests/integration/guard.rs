@@ -6,7 +6,7 @@ use nest_rs_graphql::async_graphql::{Context, Result};
 use nest_rs_graphql::{
     GraphqlContextSeed, GraphqlModule, SeedLifetime, async_trait, operations, resolver,
 };
-use nest_rs_guards::{Denial, GraphqlGuard, Guard, guard};
+use nest_rs_guards::{Denial, GraphqlGuard, Guard, HttpGuard, guard};
 use nest_rs_http::async_trait as http_async_trait;
 use nest_rs_testing::TestApp;
 use poem::Request;
@@ -35,6 +35,8 @@ impl Guard for RoleHeaderGuard {
         Ok(())
     }
 }
+
+impl HttpGuard for RoleHeaderGuard {}
 
 #[injectable]
 #[derive(Default)]

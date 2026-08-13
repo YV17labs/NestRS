@@ -93,6 +93,8 @@ impl Guard for RequireApiKey {
         }
     }
 }
+
+impl HttpGuard for RequireApiKey {}
 ```
 
 Bind with `#[use_guards(RequireApiKey)]` per controller or per handler,
@@ -112,6 +114,8 @@ impl Guard for AuthnGuard {
         Ok(())
     }
 }
+
+impl HttpGuard for AuthnGuard {}
 
 // In the handler:
 async fn me(&self, auth: Ctx<Claims>) -> Json<User> { /* ... */ }

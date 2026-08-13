@@ -82,6 +82,12 @@ impl Guard for ThrottlerGuard {
     }
 }
 
+/// HTTP, and only HTTP: the bucket is keyed on the matched route pattern, which
+/// no other edge has. Binding this beside a `#[query]` or a
+/// `#[subscribe_message]` is the mistake the markers exist to refuse — it is the
+/// original one, and it throttled nothing.
+impl nest_rs_guards::HttpGuard for ThrottlerGuard {}
+
 /// The identity a rate-limit bucket is keyed on.
 ///
 /// Carried as a value rather than a `String` so the composite route+client key

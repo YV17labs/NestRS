@@ -24,7 +24,7 @@ use nest_rs_authn::{
     AuthnModule, JwtConfig, ProtectedResourceConfig, ProtectedResourceModule, WELL_KNOWN_PATH,
 };
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsModule, gateway, messages};
@@ -110,6 +110,8 @@ impl Guard for RefuseUpgrade {
     }
 }
 
+impl HttpGuard for RefuseUpgrade {}
+
 #[gateway(path = "/ws")]
 #[use_guards(RefuseUpgrade)]
 struct ChatGateway;
@@ -160,6 +162,8 @@ impl Guard for TokenTooNarrow {
     }
 }
 
+impl HttpGuard for TokenTooNarrow {}
+
 /// The refusal that is *not* a scope problem — no wider token fixes it, so no
 /// challenge may be emitted.
 #[injectable]
@@ -174,6 +178,8 @@ impl Guard for NeverAllowed {
         Err(Denial::forbidden("forbidden"))
     }
 }
+
+impl HttpGuard for NeverAllowed {}
 
 /// Every assertion the step-up challenge has to satisfy, in one place: the
 /// error code a client branches on, the scope it must request, and the document

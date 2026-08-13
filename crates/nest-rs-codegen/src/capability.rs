@@ -1,10 +1,10 @@
 //! The compile-time bound an impl-half decorator emits for every guard declared
 //! at its site.
 //!
-//! `Guard::check_graphql` / `check_ws_message` / `check_mcp` all default to
-//! `Ok(())`. Correct as "this guard does not apply to that transport", and also
-//! the reason `#[use_guards(ThrottlerGuard)]` beside a `#[query]` used to compile,
-//! read as a protection, and throttle nothing.
+//! Every `Guard::check_*` defaults to `Ok(())` — `check_http` included. Correct
+//! as "this guard does not apply to that transport", and also the reason
+//! `#[use_guards(ThrottlerGuard)]` beside a `#[query]` used to compile, read as a
+//! protection, and throttle nothing.
 //!
 //! A proc macro cannot ask whether a path implements a method — it has no type
 //! information. But it does not need to: Rust can be *asked* to prove it. Each
@@ -12,10 +12,13 @@
 //! zero-sized assertion per declared guard, which fails at the `#[use_guards]`
 //! line with the marker's `#[diagnostic::on_unimplemented]` note.
 //!
-//! HTTP takes no assertion, and no marker either: `check_http` is the trait's
-//! base entry — the one method not behind a feature — so every `Guard` has it and
-//! a bound there could never fail. Emitting one would cost a `const` block per
-//! guard per route to prove something already true.
+//! **All four edges assert, HTTP included.** The bound is not a proof that a
+//! method exists — the default guarantees that at every edge — it is a proof
+//! that the author *declared* the guard checks this one. An empty
+//! `impl Guard for X {}` bound on a route satisfies the compiler and passes every
+//! request; the marker is what turns that into an error at the binding site. The
+//! only asymmetry left is the `cfg`: `HttpGuard` carries none, because HTTP is
+//! the substrate the other three edges mount on.
 
 use std::collections::HashSet;
 

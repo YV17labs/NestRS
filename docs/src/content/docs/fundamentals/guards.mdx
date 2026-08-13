@@ -1,6 +1,6 @@
 ---
 title: Guards
-description: "Pre-handler gates — decide whether a request runs, attach context, and declare once across HTTP, GraphQL, and WS."
+description: "Pre-handler gates — decide whether a request runs, attach context, and declare once across HTTP, GraphQL, WS and MCP."
 tier: basics
 sidebar:
   order: 6
@@ -17,7 +17,7 @@ attach the principal the handler reads back via `Ctx<T>`.
 
 Four steps on this page:
 
-1. **What a guard is** — one trait, three transports, `Ok(())` or
+1. **What a guard is** — one trait, four transports, `Ok(())` or
    [`Denial`](https://docs.rs/nest-rs-guards/latest/nest_rs_guards/enum.Denial.html).
 2. **Secure the post API** — `#[use_guards(AuthnGuard, AuthzGuard)]` on
    `PostsController`, with the modules that provide those guards.
@@ -37,8 +37,8 @@ flowchart LR
 
 A guard runs *before* the handler. It sees the request first and either
 lets it through (`Ok(())`) or short-circuits with a typed `Denial` the
-framework maps to 401 / 403 / 429. One trait, three transports — the same
-`#[injectable]` impl is reachable from HTTP, GraphQL, and WS through the
+framework maps to 401 / 403 / 429. One trait, four transports — the same
+`#[injectable]` impl is reachable from HTTP, GraphQL, WS and MCP through the
 [the request lifecycle](/fundamentals/request-lifecycle/).
 
 `Guard` ships in
@@ -67,6 +67,11 @@ impl Guard for RateLimitGuard {
         Ok(())
     }
 }
+
+// Attest the edge you implemented — see "A guard must declare the transports
+// it checks" below. Without it, binding this guard on a route is a compile
+// error.
+impl HttpGuard for RateLimitGuard {}
 ```
 
 A guard is an `#[injectable]` provider listed in some module's
@@ -260,6 +265,8 @@ impl Guard for AuthnGuard<MyStrategy> {
     }
 }
 
+impl HttpGuard for AuthnGuard<MyStrategy> {}
+
 #[get("/me")]
 async fn me(&self, auth: Ctx<Claims>) -> Json<Post> {
     Json(self.svc.find_by_author(auth.sub).await?)
@@ -343,9 +350,12 @@ flowchart TB
 For most apps the global HTTP declaration is enough: GraphQL
 `POST /graphql`, `POST /mcp` and the WS upgrade are all HTTP requests that pass
 through the global chain. `/graphql` and `/mcp` are `Exempt` at the HTTP edge
-and gate **in-band** instead, but with no bridge registered each folds the same
-global pool per operation — so `use_guards_global([...])` reaches every
-transport, and a global `ThrottlerGuard` rate-limits a tool call.
+and gate **in-band** instead: with no bridge registered, their endpoint runs the
+pool's `check_http` over the request, and either way the pool joins the
+per-operation chain, where its `check_graphql` / `check_mcp` runs. So
+`use_guards_global([...])` reaches every transport at every method it
+implements — a global `ThrottlerGuard` rate-limits a tool call through
+`check_http`, and a global guard written against `check_mcp` refuses one.
 
 Each transport method runs at a different seam:
 
@@ -371,9 +381,11 @@ because the per-operation context does not carry the poem request:
   same chain, same `around` installing `Ability` — here *inside* rmcp's
   spawned dispatch. With none registered the endpoint falls back to the global
   pool, and with no pool either it is deny-all. Above it, `#[use_guards(...)]`
-  binds ordinary guards per host and per operation; whatever the endpoint guard
-  reports it already ran is dropped from that chain, so a guard runs once and
-  one the endpoint never ran still runs.
+  binds ordinary guards per host and per operation, and the global pool joins
+  them in one chain deduplicated by type. The endpoint guard does not shorten
+  that chain: it is handed a request and runs `check_http`, while the chain is
+  handed the operation and runs `check_mcp` — two questions, so neither answers
+  the other.
 - **WS** — a `SocketContext` (e.g. `WsDataContext`) captures pool +
   `Ability` on upgrade and re-installs them around each message.
   Per-message gating goes through `check_ws_message`.
@@ -423,14 +435,14 @@ impl PostGateway {
 
 Every `check_*` above defaults to `Ok(())` — right as "this guard does not
 apply to that transport", and the reason a guard bound where it has no
-entry used to compile and pass everything. Three marker traits close that:
+entry used to compile and pass everything. Four marker traits close that:
 
 | Bound at | Requires | Because it runs |
 |---|---|---|
+| `#[controller]` / `#[routes]`, `#[gateway]` struct | `HttpGuard` | `check_http` |
 | `#[resolver]` / `#[operations]` | `GraphqlGuard` | `check_graphql` |
 | beside a `#[subscribe_message]` | `WsGuard` | `check_ws_message` |
 | `#[mcp]` host / `#[tools]` operation | `McpGuard` | `check_mcp` |
-| `#[controller]` / `#[routes]`, `#[gateway]` struct | *nothing* | `check_http` |
 
 Declare the marker next to the `check_*` it attests — `impl GraphqlGuard
 for RequireAdmin {}` — and the binding compiles. Bind a guard that lacks
@@ -446,11 +458,22 @@ error[E0277]: `ThrottlerGuard` does not check GraphQL operations
            or bind this guard on an HTTP `#[controller]` / `#[routes]` instead
 ```
 
-HTTP takes no marker on purpose: `check_http` is the trait's base entry —
-the one method not behind a feature — so every `Guard` has it, and a
-bound there could never fail. A guard bound **globally** takes no marker
-either: `use_guards_global` runs on the underlying HTTP request, which is
-also why a global `ThrottlerGuard` does rate-limit `/graphql` and `/mcp`.
+The marker never proves the *method* exists — the `Ok(())` default gives
+every guard all four. It proves you **declared** that this guard checks
+this edge. An empty `impl Guard for X {}` satisfies the compiler and
+passes every request; the marker is what turns that into an error at the
+`#[use_guards]` line rather than a chain entry that guards nothing.
+
+A guard bound **globally** takes no marker, and that is a deliberate hole
+rather than an oversight: a global guard serves whichever edges it
+implements — its `check_http` on the request, its `check_graphql` /
+`check_mcp` on the operation — so requiring `HttpGuard` there would refuse a
+GraphQL-only one, and the alternative is four global lists where the developer
+wrote one. So an empty guard registered globally still passes everything: the
+markers bind `#[use_guards]` sites, not the pool.
+
+A guard on the `#[gateway]` **struct** attests `HttpGuard`, not `WsGuard` —
+the upgrade is an HTTP `GET`, and `WsGuard` belongs to the per-message scope.
 
 See [Security / per-transport bridges](/security/authorization/per-transport-bridges/)
 for the full HTTP / GraphQL / WS wiring, and

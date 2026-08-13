@@ -1,0 +1,22 @@
+error[E0277]: `UnattestedGuard` does not check HTTP requests
+  --> tests/integration/diagnostics/unattested_guard_on_a_route.rs:26:18
+   |
+26 |     #[use_guards(UnattestedGuard)]
+   |                  ^^^^^^^^^^^^^^^ this guard has no `check_http`
+   |
+help: the trait `HttpGuard` is not implemented for `UnattestedGuard`
+  --> tests/integration/diagnostics/unattested_guard_on_a_route.rs:14:1
+   |
+14 | struct UnattestedGuard;
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   = note: a guard bound on a `#[controller]` / `#[routes]`, or on a `#[gateway]` struct (whose guards run on the upgrade, an HTTP `GET`), runs `Guard::check_http` — whose default is `Ok(())`, so binding one that does not override it passes every request silently
+   = note: override `check_http`, then declare `impl HttpGuard for UnattestedGuard {}`; or bind this guard at the edge it does check — a `#[resolver]` (`GraphqlGuard`), beside a `#[subscribe_message]` (`WsGuard`, per message rather than at the upgrade), or an `#[mcp]` host (`McpGuard`)
+note: required by a bound in `__nestrs_assert_guard_capability`
+  --> tests/integration/diagnostics/unattested_guard_on_a_route.rs:23:1
+   |
+23 | #[routes]
+   | ^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
+...
+26 |     #[use_guards(UnattestedGuard)]
+   |                  --------------- required by a bound in this function
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

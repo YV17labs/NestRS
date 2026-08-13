@@ -4,7 +4,7 @@
 //! itself lives in `nest-rs-ws-macros`; this file pins its observable behaviour.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_pipes::{Pipe, PipeError, Piped, Trim, Valid};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::nest_rs_http::poem::Request as HttpRequest;
@@ -599,6 +599,8 @@ impl Guard for V1Guard {
     }
 }
 
+impl HttpGuard for V1Guard {}
+
 #[injectable]
 #[derive(Default)]
 struct V2Guard;
@@ -611,6 +613,8 @@ impl Guard for V2Guard {
         Err(Denial::unauthorized("the v2 socket refused you"))
     }
 }
+
+impl HttpGuard for V2Guard {}
 
 #[gateway(path = "/chat", version = "1")]
 #[use_guards(V1Guard)]

@@ -15,7 +15,7 @@ use nest_rs_graphql::async_graphql::{
     Error as GqlError, Executor, Request as GqlRequest, Result as GqlResult, SimpleObject,
 };
 use nest_rs_graphql::{GraphqlModule, GraphqlOperationGuard, operations, resolver};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
 use nest_rs_resource::WireModelDefaults;
@@ -124,6 +124,10 @@ impl Guard for AbilityInjector {
         Ok(())
     }
 }
+
+impl HttpGuard for AbilityInjector {}
+
+impl HttpGuard for PassGuard {}
 
 #[resolver]
 struct MaskResolver {

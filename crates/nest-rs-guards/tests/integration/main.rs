@@ -4,4 +4,5 @@
 //! transport response, and a chain must run each guard and short-circuit on a
 //! denial.
 
+mod attestation;
 mod endpoint;

@@ -11,8 +11,8 @@ use syn::{LitStr, Meta, Path, Token};
 
 use nest_rs_codegen::{
     DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
-    injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
-    take_path_list,
+    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
+    reject_http_only_layers, take_path_list,
 };
 
 /// The WS edge's pair, read by both halves so their wrong-shape diagnostics name
@@ -80,6 +80,11 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     // nothing declared this just boxes the endpoint.
     let guard_layers = guard_layers(&guards);
     let has_edge_guards = !guards.is_empty();
+    // A gateway-scope guard runs on the upgrade, which is an HTTP `GET`, so it
+    // attests `HttpGuard` — not `WsGuard`, which `#[messages]` requires of the
+    // per-event ones. That split is the whole point of the two markers here.
+    let capability_bounds =
+        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::HttpGuard));
 
     let ns_ty = match &namespace {
         Some(path) => quote! { #path },
@@ -133,6 +138,8 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
 
     quote! {
         #item
+
+        #capability_bounds
 
         #namespace_submission
 

@@ -213,7 +213,9 @@ impl ChatGateway {
 ```
 
 `AuthnGuard` + `AuthzGuard` run at the upgrade — those are real HTTP
-guards on a real `GET`, so they need no capability marker. The upgrade's
+guards on a real `GET`, so they attest `HttpGuard`, not `WsGuard`;
+`#[gateway]` emits that bound, and `WsGuard` is what a guard bound beside
+a `#[subscribe_message]` owes instead. The upgrade's
 task-locals unwind before any message handler runs, so `WsDataContext`
 re-seeds the executor and ability around each message.
 
@@ -297,6 +299,12 @@ the two seams in the crate have one shape.
 no pool either, `/mcp` stays deny-all: the fallback only ever widens what the
 app declared, and unlike `/graphql` the MCP endpoint carries no `Public` marker,
 so a pooled `AuthnGuard` still refuses an anonymous tool call.
+
+What that endpoint runs is `check_http` — it holds a request, not an operation.
+A pooled guard's `check_mcp` runs in the **per-operation chain**, which folds
+the pool whether or not a bridge is registered, so a global guard written
+against MCP gates every tool call even when the bridge already authenticated the
+caller who sent it.
 
 That fallback is compiled in by `nest-rs-guards`' **`mcp` feature**, which
 `nestrs g mcp` turns on. Without it there is nothing to fall back *to*: the boot

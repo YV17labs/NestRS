@@ -150,6 +150,11 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     }
 }
 
+/// `AbilityGuard` checks HTTP: [`check_http`](Guard::check_http) installs the
+/// caller's ability on the request. Declared so a `#[controller]` may bind it —
+/// and so may a `#[gateway]` struct, whose guards run on the upgrade.
+impl<F: AbilityFactory> nest_rs_guards::HttpGuard for AbilityGuard<F> {}
+
 /// `AbilityGuard` checks GraphQL: [`check_graphql`](Guard::check_graphql) refuses
 /// an operation no bridge installed an ability for. Declared so a resolver may
 /// bind it — the marker is what a `#[use_guards]` on a `#[resolver]` requires.

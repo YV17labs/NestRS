@@ -10,7 +10,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, McpGuard, async_trait};
+use nest_rs_guards::{Denial, Guard, HttpGuard, McpGuard, async_trait};
 use nest_rs_mcp::rmcp::serde_json::json;
 use nest_rs_mcp::{
     AllowAllMcpGuard, McpError, McpOperationContext, McpOperationGuard, McpOperationKind, mcp,
@@ -224,6 +224,8 @@ impl Guard for Pooled {
         Ok(())
     }
 }
+
+impl HttpGuard for Pooled {}
 
 impl McpGuard for Pooled {}
 

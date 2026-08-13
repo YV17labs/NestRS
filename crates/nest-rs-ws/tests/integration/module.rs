@@ -194,7 +194,7 @@ async fn a_service_in_a_module_the_gateway_imports_still_resolves_the_registry()
 // learn to scroll past, so the gateway now declares the fact.
 
 use nest_rs_core::{Layer, Transport, injectable};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_testing::LogCapture;
 use nest_rs_ws::async_trait;
 use nest_rs_ws::nest_rs_http::HttpTransport;
@@ -215,6 +215,8 @@ impl Guard for TicketGuard {
         }
     }
 }
+
+impl HttpGuard for TicketGuard {}
 
 #[gateway(path = "/guarded")]
 #[use_guards(TicketGuard)]

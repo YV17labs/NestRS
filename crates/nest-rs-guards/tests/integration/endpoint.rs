@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use nest_rs_core::Layer;
-use nest_rs_guards::{Denial, Guard, GuardExt};
+use nest_rs_guards::{Denial, Guard, GuardExt, HttpGuard};
 use nest_rs_http::async_trait;
 use nest_rs_testing::LogCapture;
 use poem::{Endpoint, IntoResponse, Request, endpoint::make_sync};
@@ -43,6 +43,8 @@ impl Guard for DecisionGuard {
         }
     }
 }
+
+impl HttpGuard for DecisionGuard {}
 
 async fn call_guarded(guard: DecisionGuard) -> poem::Response {
     let ep = make_sync(|_| "ok".into_response()).guard(Arc::new(guard));

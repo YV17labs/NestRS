@@ -1,6 +1,6 @@
 use async_graphql::Context;
 use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, GraphqlGuard, Guard};
+use nest_rs::guards::{Denial, GraphqlGuard, Guard, HttpGuard};
 use nest_rs::http::async_trait;
 use poem::Request;
 use uuid::Uuid;
@@ -67,3 +67,5 @@ impl Guard for PostAuthorGuard {
 }
 
 impl GraphqlGuard for PostAuthorGuard {}
+
+impl HttpGuard for PostAuthorGuard {}

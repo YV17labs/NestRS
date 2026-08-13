@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{App, Layer, MissingDependencyError, injectable, module};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
 use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule, ThrottlerStore};
 
@@ -84,6 +84,8 @@ impl Guard for UnprovidedGuard {
         Ok(())
     }
 }
+
+impl HttpGuard for UnprovidedGuard {}
 
 #[controller(path = "/unwired")]
 #[use_guards(UnprovidedGuard)]

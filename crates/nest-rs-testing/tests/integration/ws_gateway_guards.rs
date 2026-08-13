@@ -11,7 +11,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::async_trait;
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{WsModule, gateway, messages};
@@ -50,6 +50,8 @@ impl Guard for CountingDenyGuard {
         Err(Denial::forbidden("counted-and-denied"))
     }
 }
+
+impl HttpGuard for CountingDenyGuard {}
 
 // --- two gateways: one bare (relies on Global), one redeclaring the guard ---
 

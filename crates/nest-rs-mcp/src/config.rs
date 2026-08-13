@@ -139,8 +139,8 @@ impl Config for McpConfig {
             allowed_hosts: env.list("ALLOWED_HOSTS", base.allowed_hosts),
             legacy_session_mode: env.flag("LEGACY_SESSION_MODE", base.legacy_session_mode)?,
             json_response: env.flag("JSON_RESPONSE", base.json_response)?,
-            sse_keep_alive: duration_secs(env, "SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,
-            sse_retry: duration_secs(env, "SSE_RETRY_SECS", base.sse_retry)?,
+            sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,
+            sse_retry: env.seconds("SSE_RETRY_SECS", base.sse_retry)?,
             max_request_body_bytes: env
                 .parse::<usize>("MAX_REQUEST_BODY_BYTES")?
                 .unwrap_or(base.max_request_body_bytes),
@@ -150,19 +150,6 @@ impl Config for McpConfig {
             )?,
         })
     }
-}
-
-/// `0` is the "off" sentinel both SSE durations share; unset keeps the base.
-fn duration_secs(
-    env: &ConfigService,
-    key: &str,
-    base: Option<Duration>,
-) -> Result<Option<Duration>> {
-    Ok(match env.parse::<u64>(key)? {
-        None => base,
-        Some(0) => None,
-        Some(secs) => Some(Duration::from_secs(secs)),
-    })
 }
 
 #[cfg(test)]

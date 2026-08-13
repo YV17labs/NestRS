@@ -12,6 +12,7 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nest_rs_core::EnvPrefix;
 
@@ -164,6 +165,28 @@ impl ConfigService {
                 )),
             },
         }
+    }
+
+    /// Whole seconds, where **`0` means off** — the spelling every long-lived
+    /// connection in the framework bounds itself with.
+    ///
+    /// Unset keeps `base`, `0` is the off/unlimited sentinel, and a
+    /// set-but-unparseable value is boot-fatal naming the variable. It lives
+    /// here rather than beside any one of them because the sentinel is a
+    /// security control — the ceiling on how long a connection replays the
+    /// privileges it authenticated with once — and four crates each reading `0`
+    /// their own way is four chances for one of them to read it as *zero
+    /// seconds* and turn a ceiling into a kill switch.
+    pub fn seconds(
+        &self,
+        key: &str,
+        base: Option<Duration>,
+    ) -> Result<Option<Duration>, ConfigError> {
+        Ok(match self.parse::<u64>(key)? {
+            None => base,
+            Some(0) => None,
+            Some(secs) => Some(Duration::from_secs(secs)),
+        })
     }
 
     /// Comma-separated, trimmed, empties dropped. `default` is the value the

@@ -6,7 +6,6 @@
 //! `#[authorize]` gate, its response mask — reads that ambient ability, so this
 //! is the one place the caller's authorization is decided on this transport.
 
-use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::injectable;
@@ -18,6 +17,11 @@ use crate::{Ability, run_ability_chain, with_ability};
 
 /// Runs `A` then `G` on each MCP HTTP request and scopes the operation to the
 /// resulting ability. Inject it as `dyn McpOperationGuard`.
+///
+/// It gates the *request*, so it neither runs nor excuses an operation's own
+/// `check_mcp` chain: a guard declared on a `#[tool]` — or in the app-wide pool
+/// — still runs for the operation, even when this bridge already authenticated
+/// the caller who sent it.
 #[injectable]
 pub struct McpAbilityBridge<A: Guard, G: Guard> {
     #[inject]
@@ -27,13 +31,6 @@ pub struct McpAbilityBridge<A: Guard, G: Guard> {
 }
 
 impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
-    /// Exactly the two guards this bridge runs — and, just as load-bearing,
-    /// nothing else. A pooled guard the bridge never touched stays absent here,
-    /// so an operation declaring it still runs it.
-    fn already_ran(&self) -> Vec<TypeId> {
-        ::std::vec![TypeId::of::<A>(), TypeId::of::<G>()]
-    }
-
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             // Same ordering as the GraphQL bridge, from the same function; only

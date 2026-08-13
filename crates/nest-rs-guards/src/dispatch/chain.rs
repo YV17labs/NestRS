@@ -73,23 +73,18 @@ impl SiteChainCell {
         }
     }
 
-    /// This site's chain for `container`, composing it on first sight.
-    ///
-    /// `globals` says where this transport's pool executes; `already_ran` is
-    /// what the transport's edge reports it has already executed for the
-    /// request. See [`GlobalScope`] and [`compose`].
+    /// This site's chain for `container`, composing it on first sight. See
+    /// [`compose`].
     pub(crate) fn chain(
         &self,
         container: &Container,
         route_label: &str,
-        globals: GlobalScope,
-        already_ran: &[TypeId],
         sources: &(dyn Fn() -> SiteChainSources + Sync),
     ) -> Arc<[ResolvedLayer<dyn Guard>]> {
         let id = container.id();
         let primary = self.primary.get_or_init(|| Cached {
             container: id,
-            chain: compose(container, route_label, globals, already_ran, sources()),
+            chain: compose(container, route_label, sources()),
         });
         if primary.container == id {
             return Arc::clone(&primary.chain);
@@ -106,7 +101,7 @@ impl SiteChainCell {
         if let Some(hit) = slots.iter().find(|c| c.container == id) {
             return Arc::clone(&hit.chain);
         }
-        let chain = compose(container, route_label, globals, already_ran, sources());
+        let chain = compose(container, route_label, sources());
         slots.push(Cached {
             container: id,
             chain: Arc::clone(&chain),
@@ -115,55 +110,24 @@ impl SiteChainCell {
     }
 }
 
-/// Where this transport's app-wide guard pool executes.
-///
-/// The two in-band transports answer differently, and the difference is
-/// structural rather than stylistic.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GlobalScope {
-    /// At this site. `/graphql`'s operation guard is the app's own bridge, so
-    /// the resolver site is where a pooled guard reaches a `#[query]`.
-    #[cfg_attr(
-        not(feature = "graphql"),
-        expect(
-            dead_code,
-            reason = "GraphQL is the only site that runs the pool in-band"
-        )
-    )]
-    AtThisSite,
-    /// At the transport's **edge**, before any operation dispatches — `/mcp`,
-    /// whose `McpOperationGuard` gates the HTTP request itself. The pool is
-    /// therefore not part of what an operation's own chain runs; whether a
-    /// *particular* pooled guard already ran is answered by `already_ran`, not
-    /// assumed from the pool's membership.
-    AtTheEdge,
-}
-
 /// Resolve, dedup and order this site's chain.
 ///
-/// `already_ran` is dropped from **every** bucket before `compose_chain` sees
-/// them, and the order matters: filtering afterwards would let the dedup collapse
-/// a scoped declaration onto a global entry that is then removed, so a guard the
-/// developer explicitly wrote beside an operation would silently never run. That
-/// is a fail-open, and dropping first is what makes it unrepresentable.
+/// **The app-wide pool is part of it, on both transports.** This site runs the
+/// pool's [`check_graphql`](Guard::check_graphql) / `check_mcp` against the
+/// operation. What an `Exempt` *edge* runs is `check_http` against the request —
+/// and only when no bridge is registered, since a registered one replaces the
+/// fallback that folds the pool there. Different methods asking different
+/// questions, so one is never a reason to skip the other; skipping this one is a
+/// fail-open, because a guard written for an operation would then never be
+/// consulted at the only site that could consult it.
 fn compose(
     container: &Container,
     route_label: &str,
-    globals: GlobalScope,
-    already_ran: &[TypeId],
     sources: SiteChainSources,
 ) -> Arc<[ResolvedLayer<dyn Guard>]> {
-    let ran = |entry: &ResolvedLayer<dyn Guard>| already_ran.contains(&entry.type_id);
-    let global = match globals {
-        GlobalScope::AtThisSite => dedup_bucket(resolve_global_guards(container)),
-        GlobalScope::AtTheEdge => Vec::new(),
-    };
-    let mut global = global;
-    global.retain(|entry| !ran(entry));
-    let mut provider = resolve_specs(container, &sources.provider, LayerSite::Controller);
-    provider.retain(|entry| !ran(entry));
-    let mut method = resolve_specs(container, &sources.method, LayerSite::Method);
-    method.retain(|entry| !ran(entry));
+    let global = dedup_bucket(resolve_global_guards(container));
+    let provider = resolve_specs(container, &sources.provider, LayerSite::Controller);
+    let method = resolve_specs(container, &sources.method, LayerSite::Method);
 
     let chain = compose_chain::<dyn Guard>(global, provider, method, &sources.force, route_label);
     log_effective_chain(route_label, "guards", &chain);

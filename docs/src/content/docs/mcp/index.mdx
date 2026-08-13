@@ -220,9 +220,9 @@ endpoint's own guard still authenticated the request.
 
 For an answer that is a **capability** rather than a row — a presigned URL, a
 computed report — there is no entity to gate, so bind a guard beside the
-operation instead. `#[use_guards(...)]` works per host and per operation, and a
-guard the endpoint's own gate already ran is dropped from that chain rather than
-run twice:
+operation instead. `#[use_guards(...)]` works per host and per operation, and
+the app-wide pool joins them in one chain deduplicated by type, so a guard
+declared at two scopes still checks the operation once:
 
 ```rust title="src/audio/mcp/tool.rs"
     #[tool(description = "Report whether an uploaded file has been transcoded.")]

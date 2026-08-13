@@ -8,6 +8,11 @@
 //! it reaches `/graphql` — a global `ThrottlerGuard` rate-limits tool calls,
 //! and a forgotten bridge module still authenticates them.
 //!
+//! **What runs here is `check_http`, and that is the whole of it.** The endpoint
+//! holds a request, not an operation, so a pooled guard's `check_mcp` runs where
+//! the operation exists — in the per-operation chain, which folds the pool for
+//! exactly that reason (`dispatch/mcp_chain.rs`).
+//!
 //! **Two deliberate differences from the GraphQL twin.** `/mcp` carries no
 //! [`Public`](nest_rs_core::Public) marker, so a pooled `AuthnGuard` refuses an
 //! unauthenticated tool call instead of admitting it to a resolver-level gate.
@@ -17,7 +22,6 @@
 //! gate lives in the builder, which is the one place that knows whether the
 //! pool is empty; this guard therefore always has a chain to run.
 
-use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::Container;
@@ -52,12 +56,6 @@ impl GlobalPoolMcpGuard {
 }
 
 impl McpOperationGuard for GlobalPoolMcpGuard {
-    /// Every guard in the pool — this fallback runs the whole thing at the
-    /// edge, so an operation that also declares one of them must not re-run it.
-    fn already_ran(&self) -> Vec<TypeId> {
-        self.pool.type_ids()
-    }
-
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             // An empty pool must not read as "every guard passed": `/mcp`'s

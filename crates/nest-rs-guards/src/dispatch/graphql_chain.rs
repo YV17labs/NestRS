@@ -8,7 +8,7 @@
 use nest_rs_core::Container;
 use nest_rs_graphql::async_graphql::{Context as GraphqlContext, Error as GraphqlError};
 
-use crate::dispatch::chain::{GlobalScope, SiteChainCell, SiteChainSources};
+use crate::dispatch::chain::{SiteChainCell, SiteChainSources};
 use crate::dispatch::denial_convert::denial_to_graphql_error;
 
 /// GraphQL shaper helper. Called by `#[operations]` at the start of every
@@ -21,10 +21,9 @@ use crate::dispatch::denial_convert::denial_to_graphql_error;
 /// future, the `tracing` callsite and all — once per operation in the app,
 /// where the erased form codegens once per crate.
 ///
-/// The app-wide pool **runs** here ([`GlobalScope::AtThisSite`]): `/graphql`'s
-/// edge is `EdgePosture::Exempt` and its operation guard is the app's authz
-/// bridge, not the pool, so the resolver site is where a pooled guard reaches an
-/// operation.
+/// The app-wide pool **runs** here: `/graphql`'s edge is `EdgePosture::Exempt`
+/// and its operation guard is the app's authz bridge, not the pool, so the
+/// resolver site is where a pooled guard's `check_graphql` reaches an operation.
 ///
 /// GraphQL pipes ([`nest_rs_pipes::GlobalPipe::transform_graphql_variables`])
 /// are not invoked here — variables live at the operation level, not per
@@ -37,13 +36,7 @@ pub async fn run_layered_graphql_chain(
     route_label: &str,
     sources: &(dyn Fn() -> SiteChainSources + Sync),
 ) -> std::result::Result<(), GraphqlError> {
-    let chain = cell.chain(
-        container,
-        route_label,
-        GlobalScope::AtThisSite,
-        &[],
-        sources,
-    );
+    let chain = cell.chain(container, route_label, sources);
     for entry in chain.iter() {
         // `as_ref()`: dispatch on the erased guard — the `Guard for Arc<T>`
         // blanket would nest a second boxed future per check.

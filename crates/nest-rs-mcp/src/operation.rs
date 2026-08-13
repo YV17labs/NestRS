@@ -12,31 +12,9 @@
 //! body), and handing a guard the arguments invites the check to migrate into
 //! the one place the layer rules say it must not be.
 
-use std::any::TypeId;
 use std::fmt;
-use std::future::Future;
-use std::sync::Arc;
 
 use nest_rs_core::Container;
-
-tokio::task_local! {
-    static MCP_ALREADY_RAN: Arc<[TypeId]>;
-}
-
-/// Run `fut` with the endpoint guard's report ambient for the operation.
-///
-/// Installed by [`PropagatingHandler`](crate::PropagatingHandler) beside the
-/// request scope, from a set the mount computed once — see
-/// [`layers_already_run`].
-pub(crate) async fn with_already_run<F: Future>(
-    already_ran: Option<Arc<[TypeId]>>,
-    fut: F,
-) -> F::Output {
-    match already_ran {
-        Some(already_ran) => MCP_ALREADY_RAN.scope(already_ran, fut).await,
-        None => fut.await,
-    }
-}
 
 /// The container serving the current MCP operation, if one is installed.
 ///
@@ -47,20 +25,6 @@ pub(crate) async fn with_already_run<F: Future>(
 /// not nested under the transport edge.
 pub fn current_container() -> Option<Container> {
     crate::scope::current_scope().map(|scope| scope.root().clone())
-}
-
-/// The layer `TypeId`s the endpoint's
-/// [`McpOperationGuard`](crate::McpOperationGuard) already executed for this
-/// request.
-///
-/// A per-operation `#[use_guards]` chain composes against this set and drops
-/// what it names. Empty when nothing is installed, which is the safe default in
-/// both directions: nothing is skipped for having "already run" when in fact it
-/// did not.
-pub fn layers_already_run() -> Arc<[TypeId]> {
-    MCP_ALREADY_RAN
-        .try_with(Arc::clone)
-        .unwrap_or_else(|_| Arc::from(Vec::new()))
 }
 
 /// Which router an operation belongs to — the two roles `#[tools]` serves.
@@ -150,32 +114,5 @@ impl fmt::Debug for McpOperationContext<'_> {
             .field("kind", &self.kind)
             .field("name", &self.name)
             .finish_non_exhaustive()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn the_edge_report_is_ambient_only_inside_the_dispatch() {
-        let ran: Arc<[TypeId]> = Arc::from(vec![TypeId::of::<u8>()]);
-
-        assert!(
-            layers_already_run().is_empty(),
-            "no MCP dispatch is running, so nothing is installed",
-        );
-        let seen = with_already_run(Some(ran), async { layers_already_run() }).await;
-        assert_eq!(&*seen, [TypeId::of::<u8>()]);
-        assert!(
-            layers_already_run().is_empty(),
-            "the task-local unwinds with the operation",
-        );
-    }
-
-    #[tokio::test]
-    async fn a_mount_that_reports_nothing_installs_nothing() {
-        let seen = with_already_run(None, async { layers_already_run() }).await;
-        assert!(seen.is_empty());
     }
 }

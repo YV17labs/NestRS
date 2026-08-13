@@ -1,11 +1,23 @@
-//! The global guard pool, resolved once and run in-band.
+//! The global guard pool's **HTTP** check, run in-band by a *fallback* endpoint
+//! guard.
 //!
-//! `/graphql` and `/mcp` are both `EdgePosture::Exempt`, so each folds the
-//! global pool into its own per-operation seam. The folding is identical —
-//! resolve the pool at mount, run every guard in order, stop at the first
-//! denial — so it lives here once and each transport keeps only its own
-//! [`Denial`] mapping. A change to how a pooled denial is handled in-band then
-//! cannot land on one transport and miss the other.
+//! `/graphql` and `/mcp` are both `EdgePosture::Exempt`, so no guard runs in
+//! front of them. **With no operation guard registered**, each seeds its
+//! fallback from here: resolve the pool at mount, run every guard's
+//! `check_http` in order, stop at the first denial — identical on both, so it
+//! lives here once and each transport keeps only its own [`Denial`] mapping.
+//!
+//! **A registered bridge replaces the fallback, and then this never runs.** It
+//! owns the request half itself (the canonical bridge runs its own authn and
+//! authz guards), so a pooled guard's `check_http` is not executed for that
+//! transport at all — which is the shape a `use_guards_global([ThrottlerGuard])`
+//! beside an `AppMcpGuard` has, and why the docs qualify the fallback rather
+//! than describing it as the pool's edge.
+//!
+//! Either way this is only the **request** half. A pooled guard's *operation*
+//! check (`check_graphql` / `check_mcp`) runs in the per-operation chain, which
+//! folds the same pool at the site where an operation exists to be checked, and
+//! runs whether or not a bridge is registered.
 
 use nest_rs_core::Container;
 use nest_rs_core::layer_chain::ResolvedLayer;
@@ -39,14 +51,6 @@ impl GlobalPoolChain {
     #[cfg(feature = "mcp")]
     pub(crate) fn is_empty(&self) -> bool {
         self.chain.is_empty()
-    }
-
-    /// The `TypeId` of every guard this pool runs — what an `Exempt`-edge
-    /// transport reports as *already executed* so a per-operation chain does not
-    /// run the same guard a second time.
-    #[cfg(feature = "mcp")]
-    pub(crate) fn type_ids(&self) -> Vec<std::any::TypeId> {
-        self.chain.iter().map(|entry| entry.type_id).collect()
     }
 
     /// Run the pool, returning the first [`Denial`] **as the guard raised it**

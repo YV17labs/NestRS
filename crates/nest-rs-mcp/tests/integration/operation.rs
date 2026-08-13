@@ -201,10 +201,11 @@ async fn the_operation_reports_its_kind_and_name() {
     assert_eq!(ctx.container().id(), container.id());
 }
 
-/// A guard in the app-wide pool that also counts. `static` rather than an
-/// injected handle because nextest runs each test in its own process, so the
-/// counter is this test's alone.
-static POOLED_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// A guard in the app-wide pool that counts each check separately. `static`
+/// rather than an injected handle because nextest runs each test in its own
+/// process, so the counters are this test's alone.
+static POOLED_HTTP_CALLS: AtomicUsize = AtomicUsize::new(0);
+static POOLED_MCP_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[injectable]
 #[derive(Default)]
@@ -215,18 +216,17 @@ impl Layer for Pooled {}
 #[async_trait]
 impl Guard for Pooled {
     async fn check_http(&self, _req: &mut poem::Request) -> Result<(), Denial> {
-        POOLED_CALLS.fetch_add(1, Ordering::SeqCst);
+        POOLED_HTTP_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
     async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
-        POOLED_CALLS.fetch_add(1, Ordering::SeqCst);
+        POOLED_MCP_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
 
 impl HttpGuard for Pooled {}
-
 impl McpGuard for Pooled {}
 
 #[mcp(path = "/mcp/pooled")]
@@ -247,10 +247,12 @@ impl PooledTool {
 #[module(providers = [PooledTool, Pooled])]
 struct PooledModule;
 
-/// The endpoint's guard reports what it ran; an operation's own chain drops
-/// exactly that and nothing more.
+/// The pool gates both scopes and each exactly once: `check_http` for the
+/// request at the endpoint, `check_mcp` for the operation in band — and the
+/// host-scope declaration of the same guard dedups onto the pooled entry rather
+/// than checking the operation a second time.
 #[tokio::test]
-async fn a_pooled_guard_is_not_charged_twice_per_operation() {
+async fn a_pooled_guard_checks_the_request_once_and_the_operation_once() {
     let app = TestApp::builder()
         .use_guards_global([nest_rs_guards::guard::<Pooled>()])
         .module::<PooledModule>()
@@ -261,7 +263,8 @@ async fn a_pooled_guard_is_not_charged_twice_per_operation() {
     // Measure the tool call alone: the handshake before it is two more HTTP
     // requests, and each of those legitimately runs the pool at the edge once.
     let session = open_session(app.http(), "/mcp/pooled", None).await;
-    let before = POOLED_CALLS.load(Ordering::SeqCst);
+    let http_before = POOLED_HTTP_CALLS.load(Ordering::SeqCst);
+    let mcp_before = POOLED_MCP_CALLS.load(Ordering::SeqCst);
 
     let body = call_method(
         app.http(),
@@ -275,12 +278,85 @@ async fn a_pooled_guard_is_not_charged_twice_per_operation() {
     assert!(body.contains("pong"), "the operation ran: {body}");
 
     assert_eq!(
-        POOLED_CALLS.load(Ordering::SeqCst) - before,
+        POOLED_HTTP_CALLS.load(Ordering::SeqCst) - http_before,
         1,
-        "one run for the request, and none for the operation: the pool already \
-         ran at the endpoint's `McpOperationGuard`, so the host-scope duplicate \
-         dedups onto it instead of running a second time — `exactly once per \
-         request` is what the whole Layer System promises",
+        "the endpoint's `McpOperationGuard` folds the pool over the HTTP request \
+         once — `exactly once per request` is what the whole Layer System promises",
+    );
+    assert_eq!(
+        POOLED_MCP_CALLS.load(Ordering::SeqCst) - mcp_before,
+        1,
+        "and the operation is checked once too: the pool joins the per-operation \
+         chain, where the host-scope declaration of the same guard dedups onto it \
+         by `TypeId`. Charging the `check_http` against the `check_mcp` is what \
+         used to leave this at zero",
+    );
+}
+
+/// The defect this pair replaces, stated as the shape that proved it: a global
+/// guard that gates MCP and nothing else. It was never consulted — while its
+/// presence made the pool non-empty, disarming the endpoint's deny-all tail. So
+/// registering a guard *opened* an endpoint that refused everything without it.
+static POOL_ONLY_MCP_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct PoolOnlyMcp;
+
+impl Layer for PoolOnlyMcp {}
+
+#[async_trait]
+impl Guard for PoolOnlyMcp {
+    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+        POOL_ONLY_MCP_CALLS.fetch_add(1, Ordering::SeqCst);
+        Err(Denial::forbidden("the pool refuses this operation"))
+    }
+}
+
+impl McpGuard for PoolOnlyMcp {}
+
+#[mcp(path = "/mcp/unbridged")]
+#[derive(Clone, Default)]
+struct UnbridgedTool;
+
+#[tools]
+impl UnbridgedTool {
+    /// Answer with a constant — reaching it at all is the failure.
+    #[tool]
+    #[public]
+    async fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
+#[module(providers = [UnbridgedTool, PoolOnlyMcp])]
+struct UnbridgedModule;
+
+#[tokio::test]
+async fn a_global_guard_that_only_checks_mcp_still_refuses_the_operation() {
+    let app = TestApp::builder()
+        .use_guards_global([nest_rs_guards::guard::<PoolOnlyMcp>()])
+        .module::<UnbridgedModule>()
+        .build()
+        .await
+        .expect("a global MCP-only guard and no bridge boots");
+
+    let body = call_tool(app.http(), "/mcp/unbridged", "ping", None).await;
+
+    assert_eq!(
+        POOL_ONLY_MCP_CALLS.load(Ordering::SeqCst),
+        1,
+        "the pool reaches the operation: the endpoint runs `check_http`, which \
+         this guard does not implement, so the per-operation chain is the only \
+         site that can consult it",
+    );
+    assert!(
+        !body.contains("pong"),
+        "the tool must not answer a caller its own global guard refused: {body}",
+    );
+    assert!(
+        body.contains("the pool refuses this operation"),
+        "and the denial reaches the client as the guard worded it: {body}",
     );
 }
 

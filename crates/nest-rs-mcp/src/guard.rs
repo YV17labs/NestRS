@@ -1,6 +1,5 @@
 //! Per-operation guard the MCP endpoint runs before each streamable-HTTP request.
 
-use std::any::TypeId;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -23,26 +22,16 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// in-band seam is the *only* place guards run on MCP operations. A registered
 /// guard **replaces** the fallback: it owns the chain (the canonical bridge
 /// runs the same `AuthnGuard` + `AuthzGuard` itself, so nothing runs twice).
+/// **What this guard gates is the HTTP request**, which is all it is handed. An
+/// operation's own `#[use_guards]` chain runs `Guard::check_mcp` against the
+/// operation, and the two never stand in for each other: a guard this endpoint
+/// authenticated is not thereby excused its operation check, and reporting one
+/// as the other is how a `check_mcp` written to refuse a tool call came to be
+/// skipped for it.
 pub trait McpOperationGuard: Send + Sync + 'static {
     /// Gate the operation: inspect/mutate `req` and return `Err` to reject it
     /// before the handler runs.
     fn before<'a>(&'a self, req: &'a mut Request) -> BoxFuture<'a, Result<()>>;
-
-    /// The layer `TypeId`s this guard executes for the request, so a decorated
-    /// operation's own `#[use_guards]` chain does not run them a second time.
-    ///
-    /// Load-bearing in **both** directions, which is why it is the guard's own
-    /// report rather than an assumption about what the global pool holds. A
-    /// guard this endpoint already ran must not run again per operation — and
-    /// one it did *not* run must still run, even when the app-wide pool happens
-    /// to contain it. Getting that second half wrong is a fail-open: a
-    /// `#[use_guards]` the developer wrote would silently never execute.
-    ///
-    /// Read once at mount, so returning an owned `Vec` costs nothing per
-    /// request. Default: none.
-    fn already_ran(&self) -> Vec<TypeId> {
-        Vec::new()
-    }
 
     /// Snapshot what [`around`](Self::around) will need, from the post-`before`
     /// request. `None` (the default) means this guard installs nothing and

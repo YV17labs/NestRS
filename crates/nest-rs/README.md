@@ -12,9 +12,4 @@ One dependency. Each capability — `http`, `graphql`, `seaorm`, `ws`, `mcp`,
 `queue`, `schedule`, … — is a Cargo feature, and a feature you leave off is
 code you never compile. Undecided? `--features full` turns everything on.
 
-```toml
-[dependencies]
-nest-rs = { version = "4.0", features = ["http", "seaorm"] }
-```
-
 [Documentation](https://nestrs.dev/) · [GitHub](https://github.com/YV17labs/NestRS)

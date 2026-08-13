@@ -1,7 +1,7 @@
 # Contributing to NestRS
 
-First off — thank you. NestRS ships at `1.0` under a semver contract, so you
-are contributing to a codebase whose public API is frozen for the `1.x` line.
+First off — thank you. NestRS ships under a semver contract, so you are
+contributing to a codebase whose public API is frozen for the current major.
 This guide is the shortest path from *I want to help* to *my change is merged*.
 
 New here? Browse the

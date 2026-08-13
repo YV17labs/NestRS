@@ -25,11 +25,6 @@ queries each have their own category.
 cargo add nest-rs --features http
 ```
 
-```toml title="Cargo.toml"
-[dependencies]
-nest-rs = { version = "4.0", features = ["http"] }
-```
-
 That is the whole manifest for a controller. The `http` feature carries the
 per-route guard chain, the pipe fold and the interceptor / filter /
 exception-filter sites that `#[controller]` and `#[routes]` expand to — none of

@@ -11,12 +11,11 @@ binary needs it, and a feature you leave off is code you never compile. A
 headless worker compiles no HTTP stack; an MCP-only assistant compiles no
 GraphQL schema.
 
-```toml title="Cargo.toml"
-[dependencies]
-nest-rs = { version = "4.0", features = ["http", "seaorm", "graphql"] }
+```bash frame="terminal"
+cargo add nest-rs --features http,seaorm,graphql
 ```
 
-Undecided? `features = ["full"]` turns everything on — narrow it later without
+Undecided? `--features full` turns everything on — narrow it later without
 moving a single `use`. Either way `nest_rs::prelude::*` covers the decorators
 and types an app reaches for daily.
 
@@ -170,13 +169,13 @@ A decorator is a procedural macro, and its expansion resolves paths against
 `::nest_rs::<concern>::…`, which that single entry reaches — so the feature list
 *is* the install. Nothing a decorator expands into is a line you write.
 
-Get the *dependency* wrong and the compiler says so in your own terms:
+Get the *dependency* wrong and the compiler says so in your own terms, ending on
+the exact line to paste — the version this release publishes at, and the
+features the decorators that failed to resolve need:
 
 ```text frame="terminal"
 error: this nestrs decorator expands into the framework, which this crate
        cannot reach. Add to Cargo.toml:
-
-           nest-rs = { version = "4.0", features = ["http"] }
 ```
 
 Get the **feature** wrong — the likelier mistake, since the dependency is

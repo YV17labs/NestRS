@@ -33,3 +33,6 @@ chrono-tz.workspace = true
 trybuild.workspace = true
 # Raising SIGINT to exercise App::run's graceful-shutdown path end-to-end.
 libc.workspace = true
+# `LogCapture`: a schedule reports a job it could not settle by logging it and
+# firing again, so the log *is* the outcome and only a capture can assert it.
+nest-rs-testing = { path = "../nest-rs-testing" }

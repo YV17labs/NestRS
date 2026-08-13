@@ -198,9 +198,45 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   commit/rollback semantics cannot drift apart. A read-only message or tool
   opens no transaction; a writing one commits on success, rolls back on the
   transport's error shape.
-- **Worker transports** install the pool via the orm-agnostic
-  `JobContext` (`WorkerDbContext`, auto-bound by `DatabaseModule`) —
-  system work ⇒ no ability ⇒ unscoped, correct.
+- **Worker transports** install the executor via the orm-agnostic `JobContext`
+  (`WorkerDbContext`, auto-bound by `DatabaseModule`) — system work ⇒ no
+  ability ⇒ unscoped, correct. **One transaction per attempt** is the default,
+  through the same `LazyTransaction::finalize` every other edge settles
+  through: a job that fails halfway must leave nothing for its retry to write
+  again, and a *lazy* transaction is what makes the missing safe/mutating
+  classification a non-question — the first data-layer touch opens it, so a job
+  that never reaches the database opens none and no verb had to be invented.
+  **A read is a touch**: a job that only reads still pays a `BEGIN`/`COMMIT`
+  and holds the connection for the attempt, which is the honest price of not
+  having a verb to classify on. `transactional =
+  false` runs on the pool instead, and it is for one shape only: a job
+  bracketing long work that is not the database's, which the default would pin
+  a connection across. Such a job owns its idempotency. The key is one word on
+  all four job decorators, worded once in `nest_rs_codegen::job`.
+
+  **An attempt the context could not settle carries *why*, and the database is
+  what says so.** `JobSettlement::Unhonoured` holds an `Unhonoured { reason,
+  retryable }`; the classification comes from the SQLSTATE
+  (`CommitError::is_retryable_conflict`, and the same verdict recorded on the
+  first failed statement so a poisoned transaction answers identically). A
+  retry replays the whole job body, side effects and all, so it is spent only
+  where it could win: `40001`/`40P01` retry, a constraint checked at `COMMIT`
+  aborts, and an **in-doubt** commit — the connection lost mid-`COMMIT` —
+  aborts too, because it may have landed and replaying it writes twice. That
+  last one is what keeps the default's promise honest: the framework replays
+  only what it *knows* rolled back.
+
+  **The promise is per attempt, and stops at the queue.** A durable backend
+  delivers at least once, so a worker that dies between `COMMIT` and the ack
+  redelivers a job whose writes already landed — the transaction bounds what a
+  *retry* repeats, never what a *redelivery* does. So the default removes the
+  need for an idempotency key against the framework's own retry and not against
+  the backend's redelivery; `transactional = false` needs one against both.
+
+  **The schedule reports the classification instead of acting on it**, and that
+  asymmetry is the answer, not an omission: `#[every]`/`#[cron]`/`#[after]`
+  have no retry budget and no dead-letter, so the next occurrence is the same
+  either way. The queue renders it as `JobError::unhonoured`.
 
 ## Dataloaders and relations
 

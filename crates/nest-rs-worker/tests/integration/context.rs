@@ -1,12 +1,13 @@
 //! [`JobContext`] exercised through `run_in_job_context`: a bound context
-//! installs its ambient for the wrapped job and the job's result is preserved
-//! across the unit-returning `scope`; no context runs the job bare.
+//! installs its ambient for the wrapped job, the job's result is preserved
+//! across the `bool`-returning `scope`, and a context that cannot honour a
+//! successful job turns it into a failure. No context runs the job bare.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nest_rs_worker::{JobContext, run_in_job_context};
+use nest_rs_worker::{JobContext, JobSettlement, JobTransaction, Unhonoured, run_in_job_context};
 
 tokio::task_local! {
     static MARKER: u32;
@@ -17,9 +18,13 @@ struct MarkerContext(u32);
 impl JobContext for MarkerContext {
     fn scope<'a>(
         &'a self,
-        inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(MARKER.scope(self.0, inner))
+        _transaction: JobTransaction,
+        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+        Box::pin(async move {
+            MARKER.scope(self.0, inner).await;
+            JobSettlement::Settled
+        })
     }
 }
 
@@ -30,7 +35,14 @@ fn observe_marker() -> Option<u32> {
 #[tokio::test]
 async fn runs_inside_the_bound_context_and_preserves_the_result() {
     let ctx: Arc<dyn JobContext> = Arc::new(MarkerContext(42));
-    let seen = run_in_job_context(Some(&ctx), async { observe_marker() }).await;
+    let seen = run_in_job_context(
+        Some(&ctx),
+        JobTransaction::PerAttempt,
+        async { observe_marker() },
+        Option::is_some,
+        |_| None,
+    )
+    .await;
     assert_eq!(
         seen,
         Some(42),
@@ -40,10 +52,89 @@ async fn runs_inside_the_bound_context_and_preserves_the_result() {
 
 #[tokio::test]
 async fn runs_bare_without_a_context() {
-    let seen = run_in_job_context::<Option<u32>>(None, async { observe_marker() }).await;
+    let seen = run_in_job_context::<Option<u32>>(
+        None,
+        JobTransaction::PerAttempt,
+        async { observe_marker() },
+        Option::is_some,
+        |_| None,
+    )
+    .await;
     assert_eq!(
         seen, None,
         "with no context the job runs without any ambient"
+    );
+}
+
+/// A context that reports it could not settle what the job did — the shape a
+/// failed commit or an escaped transaction handle takes — carrying the
+/// classification it reached.
+struct UnhonouringContext(Unhonoured);
+
+impl JobContext for UnhonouringContext {
+    fn scope<'a>(
+        &'a self,
+        _transaction: JobTransaction,
+        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+        Box::pin(async move {
+            inner.await;
+            JobSettlement::Unhonoured(self.0)
+        })
+    }
+}
+
+async fn unhonoured_outcome(why: Unhonoured) -> Result<&'static str, Unhonoured> {
+    let ctx: Arc<dyn JobContext> = Arc::new(UnhonouringContext(why));
+    run_in_job_context(
+        Some(&ctx),
+        JobTransaction::PerAttempt,
+        async { Ok("the job's own success") },
+        Result::is_ok,
+        Err,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_job_the_context_cannot_settle_is_reported_as_failed() {
+    // The whole point: the job body succeeded, and reporting that would claim
+    // writes that were never committed. The transport's failure stands in.
+    let outcome = unhonoured_outcome(Unhonoured::retryable("not committed")).await;
+    assert_eq!(
+        outcome,
+        Err(Unhonoured::retryable("not committed")),
+        "a success the context could not honour never reaches the transport as one",
+    );
+}
+
+#[tokio::test]
+async fn the_transport_is_told_whether_repeating_the_attempt_could_help() {
+    // A transport with a retry budget spends it replaying the job body, side
+    // effects and all. The context is what knows whether that could ever end
+    // differently, so it says — rather than the transport assuming one answer.
+    let transient = unhonoured_outcome(Unhonoured::retryable("a conflict at commit"))
+        .await
+        .expect_err("the context could not honour it");
+    assert!(
+        transient.retryable,
+        "a transient conflict is worth another attempt",
+    );
+
+    let deterministic = unhonoured_outcome(Unhonoured::deterministic(
+        "a constraint violation at commit",
+    ))
+    .await
+    .expect_err("the context could not honour it");
+    assert!(
+        !deterministic.retryable,
+        "a failure that repeats identically is not — the budget would buy nothing \
+         and every non-transactional side effect would run again",
+    );
+    assert_eq!(
+        deterministic.to_string(),
+        "a constraint violation at commit",
+        "and the sentence the context wrote is what the transport reports",
     );
 }
 
@@ -54,10 +145,11 @@ struct BrokenContext;
 impl JobContext for BrokenContext {
     fn scope<'a>(
         &'a self,
-        _inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        _transaction: JobTransaction,
+        _inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
         // Drops `inner` on the floor instead of awaiting it.
-        Box::pin(async {})
+        Box::pin(async { JobSettlement::Settled })
     }
 }
 
@@ -68,5 +160,12 @@ async fn broken_context_that_skips_the_job_fails_that_job() {
     // per-job boundary (CatchPanicLayer / per-job task) isolates, so the worker
     // keeps consuming rather than the failure taking down the consumer loop.
     let ctx: Arc<dyn JobContext> = Arc::new(BrokenContext);
-    let _ = run_in_job_context(Some(&ctx), async { 1u32 }).await;
+    let _ = run_in_job_context(
+        Some(&ctx),
+        JobTransaction::PerAttempt,
+        async { 1u32 },
+        |_| true,
+        |_| 0u32,
+    )
+    .await;
 }

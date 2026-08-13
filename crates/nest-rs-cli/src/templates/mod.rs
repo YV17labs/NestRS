@@ -54,7 +54,7 @@ pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, St
         ),
         Transport::Schedule => concat!(
             "        // A scheduled tick is system work: `DatabaseModule`'s JobContext\n",
-            "        // installs the pool executor with no ability, so `Repo` runs unscoped.\n",
+            "        // installs the job executor with no ability, so `Repo` runs unscoped.\n",
             "        // Replace the placeholder with the call this tick should make, e.g.\n",
             "        // `self.svc.list().await?`.\n",
             "        let _ = &self.svc;",

@@ -68,6 +68,24 @@ impl JobError {
         }
     }
 
+    /// The failure of a job that ran fine and whose data context could not
+    /// honour it — a transaction that could not be committed, or one whose
+    /// handle outlived the attempt.
+    ///
+    /// **The context's classification is this crate's**: a retry replays the
+    /// job body, so a commit failure that will repeat identically — a deferred
+    /// constraint violation, a commit whose outcome is unknown — costs the
+    /// whole budget in replayed side effects and dead-letters anyway. A
+    /// serialization conflict is the case worth another attempt, and the only
+    /// thing that says which is the database.
+    pub fn unhonoured(unhonoured: nest_rs_worker::Unhonoured) -> Self {
+        Self {
+            retryable: unhonoured.retryable,
+            source: unhonoured.reason.into(),
+            details: None,
+        }
+    }
+
     /// Attach structured detail to a failure — what a rejected pipe knows about
     /// *which* field failed.
     pub fn with_details(mut self, details: Option<serde_json::Value>) -> Self {

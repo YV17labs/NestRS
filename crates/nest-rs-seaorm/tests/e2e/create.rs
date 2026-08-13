@@ -9,7 +9,9 @@ use std::sync::Arc;
 use nest_rs_authz::{AbilityBuilder, Action, with_ability};
 use nest_rs_seaorm::{Creatable, CreateModel, CrudService, Executor, with_request_executor};
 use sea_orm::prelude::Uuid;
-use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set, TransactionTrait,
+};
 
 mod gadget {
     use sea_orm::entity::prelude::*;
@@ -103,6 +105,67 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
         persisted.is_none(),
         "the out-of-scope row must not persist on a pool executor",
     );
+}
+
+/// The `SAVEPOINT` this create opens is a statement like any other, and its
+/// failure poisons the boundary like any other — which it did not, because
+/// `txn_ref().await?.begin()` applies `?` before the flag is ever consulted.
+///
+/// The consequence is the silent write loss the flag exists to refuse, on the
+/// one path it could not see: a job or handler that swallows this `DbErr` and
+/// returns `Ok` settles a boundary reporting `NoTransaction` — "nothing to
+/// settle" — about work that was meant to land and did not.
+///
+/// Forced by exhausting the pool rather than by faking an error: a one
+/// connection pool with that connection held, and the create as the boundary's
+/// **first** data-layer touch, so the acquire this create issues is the one that
+/// times out. That is the shape a restarted database or a saturated pool
+/// actually presents.
+#[tokio::test]
+async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
+    let held = db().await;
+    let starved = sea_orm::Database::connect(
+        sea_orm::ConnectOptions::new(crate::harness::url())
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_millis(250))
+            .to_owned(),
+    )
+    .await
+    .expect("the starved pool connects");
+    // Its one connection, taken and kept for the length of the test.
+    let hog = starved.begin().await.expect("the only connection is held");
+
+    let lazy = Arc::new(nest_rs_seaorm::LazyTransaction::new(starved));
+    let result = with_request_executor(
+        Executor::Lazy(Arc::clone(&lazy)),
+        with_ability(org_scoped_ability(1), async {
+            GadgetsService
+                .create(CreateGadget {
+                    id: Uuid::now_v7(),
+                    org_id: 1,
+                })
+                .await
+        }),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "the create cannot open its SAVEPOINT on an exhausted pool, got {result:?}",
+    );
+
+    // Swallowed, exactly as a real handler would — `let _ = svc.create(..)`.
+    let outcome = lazy.finalize(true, "test").await;
+    assert!(
+        matches!(
+            outcome,
+            nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable: false }
+        ),
+        "a boundary that reported success over a create which never opened must \
+         settle as poisoned, not as `NoTransaction`, got {outcome:?}",
+    );
+
+    hog.rollback().await.expect("the held connection is freed");
+    drop(held);
 }
 
 #[tokio::test]

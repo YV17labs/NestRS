@@ -25,6 +25,10 @@ mod trigger;
 
 pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
+// Re-exported so `#[every]` / `#[cron]` / `#[after]` emit their
+// `JobTransaction` through this crate's own root, the way every other path the
+// decorators name is routed.
+pub use nest_rs_worker;
 pub use scheduler::Scheduler;
 pub use trigger::{CronExpression, Trigger};
 

@@ -15,7 +15,8 @@
 //! backend integration (nest-rs-redis, …) is wired in.
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, PipeWrapper, impl_self_ident, payload_arg_type, pipe_wrapper, snake_case,
+    DecoratorPair, Edge, PipeWrapper, TRANSACTIONAL, impl_self_ident, job_transaction,
+    payload_arg_type, pipe_wrapper, snake_case, transactional_value,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -62,7 +63,11 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(a) => a,
             Err(err) => return err.to_compile_error().into(),
         };
-        let ProcessArgs { queue, retries } = args;
+        let ProcessArgs {
+            queue,
+            retries,
+            transactional,
+        } = args;
 
         let job_ty = match payload_arg_type(method, "#[process]", "job") {
             Ok(ty) => ty,
@@ -116,6 +121,7 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
         );
 
         let retries_lit = LitInt::new(&retries.to_string(), proc_macro2::Span::call_site());
+        let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue));
 
         emissions.push(quote! {
             #queue_assert
@@ -250,14 +256,31 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
                     let __job_context = ::nest_rs_core::Container::get_dyn::<
                         dyn ::nest_rs_queue::nest_rs_worker::JobContext,
                     >(&__container);
+                    // The user `#[process]` method's `Err` is a transient fault —
+                    // retryable (the backend's retry budget applies). Mapped
+                    // *inside* the context so the settling seam reads one error
+                    // type and can report a commit it could not honour in it.
                     ::nest_rs_queue::nest_rs_worker::run_in_job_context(
                         __job_context.as_ref(),
-                        async move { <#self_ty>::#method_ident(&__provider, __job).await },
+                        #transaction_tokens,
+                        async move {
+                            <#self_ty>::#method_ident(&__provider, __job)
+                                .await
+                                .map_err(|__e| ::nest_rs_queue::JobError::retry(__e))
+                        },
+                        ::std::result::Result::is_ok,
+                        // A job that ran fine but whose transaction could not be
+                        // settled has written nothing, so the attempt fails
+                        // rather than reporting a success that lost its writes.
+                        // Whether it is *retried* is the context's call: a
+                        // deterministic failure re-fails identically, having
+                        // replayed every side effect the body performs outside
+                        // the transaction.
+                        |__why| ::std::result::Result::Err(
+                            ::nest_rs_queue::JobError::unhonoured(__why),
+                        ),
                     )
                     .await
-                    // The user `#[process]` method's `Err` is a transient fault —
-                    // retryable (the backend's retry budget applies).
-                    .map_err(|__e| ::nest_rs_queue::JobError::retry(__e))
                 })
             }
 
@@ -372,12 +395,16 @@ impl Parse for QueueId {
 struct ProcessArgs {
     queue: QueueId,
     retries: usize,
+    /// The shared `transactional` key, `None` when unwritten — see
+    /// `nest_rs_codegen::job`, which words it for every job decorator at once.
+    transactional: Option<bool>,
 }
 
 impl Parse for ProcessArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut queue: Option<QueueId> = None;
         let mut retries: usize = 0;
+        let mut transactional: Option<bool> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -385,6 +412,7 @@ impl Parse for ProcessArgs {
             match key.to_string().as_str() {
                 "queue" => queue = Some(input.parse()?),
                 "retries" => retries = input.parse::<LitInt>()?.base10_parse()?,
+                TRANSACTIONAL => transactional = Some(transactional_value(&input.parse()?)?),
                 // `concurrency` was a real key. It is gone rather than
                 // deprecated, so say what replaced it instead of listing the
                 // survivors: the removal is a behaviour change, and a bare
@@ -402,7 +430,7 @@ impl Parse for ProcessArgs {
                         key.span(),
                         format!(
                             "unknown #[process] key `{other}` \
-                             (expected `queue` or `retries`)"
+                             (expected `queue`, `retries` or `transactional`)"
                         ),
                     ));
                 }
@@ -419,6 +447,10 @@ impl Parse for ProcessArgs {
             )
         })?;
 
-        Ok(Self { queue, retries })
+        Ok(Self {
+            queue,
+            retries,
+            transactional,
+        })
     }
 }

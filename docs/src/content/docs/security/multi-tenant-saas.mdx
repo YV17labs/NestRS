@@ -80,8 +80,8 @@ does not apply, and a reviewer who confirms it.
 
 ### 2. Worker and queue jobs run unscoped by definition
 
-A `#[processor]` runs on a pool executor with **no ambient ability and
-no per-job transaction**. There is no caller, so there is no scope to
+A `#[processor]` runs with **no ambient ability** — and, by default, in one
+transaction per attempt. There is no caller, so there is no scope to
 inherit. That is correct for system work — and it means each processor
 is a tenant boundary you re-establish by hand.
 

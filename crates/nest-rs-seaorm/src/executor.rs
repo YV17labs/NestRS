@@ -17,6 +17,7 @@
 use std::any::Any;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use async_trait::async_trait;
 use sea_orm::{
@@ -58,7 +59,37 @@ pub enum Executor {
 pub struct LazyTransaction {
     pool: DatabaseConnection,
     cell: tokio::sync::OnceCell<Arc<DatabaseTransaction>>,
+    /// Set the moment a statement on **this** transaction returns an error, to
+    /// [`POISON_CONFLICT`] or [`POISON_DETERMINISTIC`] according to that error.
+    ///
+    /// Postgres aborts the whole transaction on the first failed statement and
+    /// refuses everything after it (`25P02`), and a `COMMIT` on an aborted
+    /// transaction *succeeds* while rolling back. So a boundary that swallows a
+    /// `DbErr` and reports success would be told the commit worked and write
+    /// nothing — the silent-write-loss this flag exists to refuse. Nested
+    /// transactions ([`begin_nested`](Self::begin_nested)) run their statements
+    /// on their own handle and never reach here, which is why a `SAVEPOINT`ed
+    /// insert that fails still leaves the outer transaction committable.
+    /// *Opening* one does reach here: a `SAVEPOINT` that cannot be issued means
+    /// the outer transaction is already unusable, which is the opposite case.
+    ///
+    /// An `AtomicU8` rather than a flag beside a stored `DbErr`: the only thing
+    /// any settle site asks of that error is whether repeating the attempt could
+    /// end differently, and that answer is one bit every query path can record
+    /// without allocating or locking.
+    poisoned: AtomicU8,
 }
+
+/// No statement on this transaction has failed.
+const POISON_CLEAN: u8 = 0;
+/// One failed on something a re-run would hit again — a constraint violation, a
+/// type error, a missing relation.
+const POISON_DETERMINISTIC: u8 = 1;
+/// One failed on a transient conflict ([`is_retryable_conflict`]) — a
+/// serialization failure or a deadlock, which a re-run may well win.
+///
+/// [`is_retryable_conflict`]: crate::retry::is_retryable_conflict
+const POISON_CONFLICT: u8 = 2;
 
 impl LazyTransaction {
     /// A lazy transaction over `pool` — nothing is opened yet.
@@ -66,7 +97,29 @@ impl LazyTransaction {
         Self {
             pool,
             cell: tokio::sync::OnceCell::new(),
+            poisoned: AtomicU8::new(POISON_CLEAN),
         }
+    }
+
+    /// Run one statement on the request's transaction, poisoning the boundary
+    /// on **either** failure.
+    ///
+    /// Opening is a failure like any other, and it used to be the one that got
+    /// away: `poison(txn_ref().await?.execute(..).await)` applies `?` first, so
+    /// a `BEGIN` that could not be issued — a pool acquire timeout, a restarted
+    /// database — returned `Err` with the flag still clean. A job or handler
+    /// that swallowed it then reported success over a boundary that had opened
+    /// nothing, which is the silent write loss the flag exists to refuse, on the
+    /// one path the flag never saw.
+    async fn run<'a, T, F, Fut>(&'a self, statement: F) -> Result<T, DbErr>
+    where
+        F: FnOnce(&'a DatabaseTransaction) -> Fut,
+        Fut: Future<Output = Result<T, DbErr>> + 'a,
+    {
+        self.poison(match self.txn_ref().await {
+            Ok(txn) => statement(txn).await,
+            Err(err) => Err(err),
+        })
     }
 
     /// The request's transaction, opening it on the first call. Returns a
@@ -91,14 +144,46 @@ impl LazyTransaction {
         self.cell.get().is_some()
     }
 
+    /// Record that a statement on this transaction failed, and what the database
+    /// said about it. Every `Executor::Lazy` query path funnels its `Err`
+    /// through here, so the classification covers the whole data layer rather
+    /// than the call sites that remembered.
+    ///
+    /// **The first failure wins.** It is the one that aborted the transaction;
+    /// everything after it fails with `25P02`, which says nothing about why.
+    fn poison<T>(&self, result: Result<T, DbErr>) -> Result<T, DbErr> {
+        if let Err(err) = &result {
+            let verdict = if crate::retry::is_retryable_conflict(err) {
+                POISON_CONFLICT
+            } else {
+                POISON_DETERMINISTIC
+            };
+            let _ = self.poisoned.compare_exchange(
+                POISON_CLEAN,
+                verdict,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        }
+        result
+    }
+
     /// Force the request transaction open (if a data-layer touch has not
     /// already) and start a **SAVEPOINT** on it. The nested transaction lets an
     /// atomic insert + scope re-check roll back independently of the outer
     /// request transaction, so a handler that swallows the denial cannot leave
     /// an out-of-scope row to be committed with the rest of the request
     /// (DATA-S1).
+    ///
+    /// Through [`run`](Self::run) like every other statement, and for the same
+    /// reason: `txn_ref().await?.begin()` applies `?` first, so neither a
+    /// `BEGIN` that could not be issued nor a refused `SAVEPOINT` would poison
+    /// the boundary. The second one is the dangerous half — Postgres aborts the
+    /// outer transaction, and `COMMIT` on an aborted transaction *succeeds*
+    /// while rolling back, so a caller that swallows this `DbErr` would be told
+    /// its writes landed.
     pub(crate) async fn begin_nested(&self) -> Result<DatabaseTransaction, DbErr> {
-        self.txn_ref().await?.begin().await
+        self.run(|txn| txn.begin()).await
     }
 
     /// Settle the boundary's lazily opened transaction: commit on `success`,
@@ -136,7 +221,28 @@ impl LazyTransaction {
                 return FinalizeOutcome::Escaped { opened };
             }
         };
+        // The one combination that loses writes in silence: a statement failed,
+        // and the boundary reported success anyway. Asked once — both sites
+        // below settle on it, and `Some(retryable)` is the whole answer either
+        // has to carry.
+        let flag = lazy.poisoned.load(Ordering::Relaxed);
+        let poisoned = (success && flag != POISON_CLEAN).then_some(flag == POISON_CONFLICT);
         let Some(txn) = lazy.into_opened() else {
+            // Nothing opened — but something may still have *failed* to open.
+            // Reporting `NoTransaction` for a boundary that swallowed a failed
+            // `BEGIN` would say "nothing to settle" about work that was meant to
+            // land and did not.
+            if let Some(retryable) = poisoned {
+                tracing::error!(
+                    target: "nest_rs::orm",
+                    transport,
+                    outcome = "fail",
+                    retryable,
+                    "a statement failed before this boundary could open its transaction, \
+                     but the boundary reported success; nothing it meant to write was written"
+                );
+                return FinalizeOutcome::Poisoned { retryable };
+            }
             return FinalizeOutcome::NoTransaction;
         };
         let txn = match Arc::try_unwrap(txn) {
@@ -153,6 +259,32 @@ impl LazyTransaction {
                 return FinalizeOutcome::Escaped { opened: true };
             }
         };
+        // A statement already failed, so the transaction is aborted and its
+        // `COMMIT` would succeed having written nothing. Reporting success here
+        // is the one outcome that loses writes in silence, so it is refused
+        // before the round-trip rather than discovered by its absence.
+        if let Some(retryable) = poisoned {
+            if let Err(err) = txn.rollback().await {
+                tracing::error!(
+                    target: "nest_rs::orm",
+                    transport,
+                    error = %err,
+                    "poisoned transaction rollback failed"
+                );
+            }
+            tracing::error!(
+                target: "nest_rs::orm",
+                transport,
+                outcome = "rollback_and_fail",
+                // The same bit `CommitFailed` reports: without it a `40001` a
+                // handler swallowed is indistinguishable in the logs from a
+                // constraint violation it swallowed.
+                retryable,
+                "a statement failed inside this transaction but the boundary reported success; \
+                 nothing it wrote could be committed"
+            );
+            return FinalizeOutcome::Poisoned { retryable };
+        }
         if success {
             match txn.commit().await {
                 Ok(()) => FinalizeOutcome::Committed,
@@ -190,6 +322,19 @@ pub enum FinalizeOutcome {
     },
     /// The commit itself failed — the caller classifies and logs it.
     CommitFailed(CommitError),
+    /// A statement failed inside the transaction, yet the boundary reported
+    /// success. Nothing was committed — Postgres aborts the transaction on the
+    /// first failed statement, and its `COMMIT` then succeeds while rolling
+    /// back, so believing the boundary would report writes that never landed.
+    /// Handled exactly like [`CommitFailed`](Self::CommitFailed): the caller
+    /// fails an otherwise-successful outcome loudly. Already logged at `error`.
+    Poisoned {
+        /// Whether the statement that failed did so on a transient conflict, so
+        /// a caller with a retry budget can tell "this will fail identically
+        /// forever" from "this may well win next time". Read from the failure
+        /// the database reported, never guessed.
+        retryable: bool,
+    },
 }
 
 /// A commit-time database failure. Opaque over the ORM's `DbErr` so a sea-orm
@@ -239,7 +384,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.execute_raw(stmt).await,
             Executor::Txn(t) => t.execute_raw(stmt).await,
-            Executor::Lazy(l) => l.txn_ref().await?.execute_raw(stmt).await,
+            Executor::Lazy(l) => l.run(|txn| txn.execute_raw(stmt)).await,
         }
     }
 
@@ -247,7 +392,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.execute_unprepared(sql).await,
             Executor::Txn(t) => t.execute_unprepared(sql).await,
-            Executor::Lazy(l) => l.txn_ref().await?.execute_unprepared(sql).await,
+            Executor::Lazy(l) => l.run(|txn| txn.execute_unprepared(sql)).await,
         }
     }
 
@@ -255,7 +400,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.query_one_raw(stmt).await,
             Executor::Txn(t) => t.query_one_raw(stmt).await,
-            Executor::Lazy(l) => l.txn_ref().await?.query_one_raw(stmt).await,
+            Executor::Lazy(l) => l.run(|txn| txn.query_one_raw(stmt)).await,
         }
     }
 
@@ -263,7 +408,7 @@ impl ConnectionTrait for Executor {
         match self {
             Executor::Pool(c) => c.query_all_raw(stmt).await,
             Executor::Txn(t) => t.query_all_raw(stmt).await,
-            Executor::Lazy(l) => l.txn_ref().await?.query_all_raw(stmt).await,
+            Executor::Lazy(l) => l.run(|txn| txn.query_all_raw(stmt)).await,
         }
     }
 

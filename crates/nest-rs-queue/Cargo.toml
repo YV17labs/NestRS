@@ -14,7 +14,6 @@ categories = ["asynchronous"]
 [dependencies]
 # Source of the `#[input]` wire-DTO shorthand, re-exported so a payload
 # crossing this transport declares no `serde` of its own.
-nest-rs-http.workspace = true
 nest-rs-core.workspace = true
 # Re-exported so call sites write `nest_rs_queue::processor` for the macro
 # even though it physically lives in the macros crate; the macro emits paths

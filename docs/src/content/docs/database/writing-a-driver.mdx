@@ -149,17 +149,20 @@ write.
 ## Step 3 — The worker context
 
 Cron jobs and queue processors run outside any HTTP request — no method
-to classify, no response to inspect. The worker side installs the
-non-transactional handle through the `JobContext` seam. No caller means
-no ambient ability, which means a job runs unscoped: correct for system
-work.
+to classify, no response to inspect. The `JobContext` seam installs your
+handle around each job and then **settles** what it opened. No caller
+means no ambient ability, which means a job runs unscoped: correct for
+system work.
+
+`scope` is handed the job's declared `JobTransaction` and an `inner` that
+yields **whether the job succeeded**, and answers with a `JobSettlement`:
 
 ```rust
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use nest_rs::core::injectable;
-use nest_rs::worker::JobContext;
+use nest_rs::worker::{JobContext, JobSettlement, JobTransaction, Unhonoured};
 
 #[injectable]
 pub struct YourWorkerContext {
@@ -169,16 +172,46 @@ pub struct YourWorkerContext {
 impl JobContext for YourWorkerContext {
     fn scope<'a>(
         &'a self,
-        inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        // Your code: clone your pool/client into Executor::Default(...).
-        Box::pin(nest_rs::database::with_job_executor(
-            Arc::new(Executor::Default(/* your handle clone */)),
-            inner,
-        ))
+        transaction: JobTransaction,
+        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+        Box::pin(async move {
+            match transaction {
+                // The opt-out: every statement stands alone, nothing to settle.
+                JobTransaction::Pool => {
+                    nest_rs::database::with_job_executor(/* pool handle */, inner).await;
+                    JobSettlement::Settled
+                }
+                // The default: one transaction per attempt.
+                JobTransaction::PerAttempt => {
+                    let succeeded =
+                        nest_rs::database::with_job_executor(/* txn handle */, inner).await;
+                    // Commit on success, roll back otherwise. When a *successful*
+                    // job cannot be honoured, say so — and say whether repeating
+                    // the attempt could end differently.
+                    JobSettlement::Unhonoured(Unhonoured::deterministic(
+                        "the job's transaction could not be committed",
+                    ))
+                }
+            }
+        })
     }
 }
 ```
+
+Three things your impl owes:
+
+- **Drive `inner` to completion.** It *is* the job. Returning without
+  awaiting it fails that one job loudly rather than silently skipping it.
+- **Honour `JobTransaction::Pool`.** It is the developer's
+  `transactional = false`, and ignoring it silently gives up the
+  atomicity the default promises.
+- **Classify an `Unhonoured` from what your backend said, not from a
+  guess.** A retry replays the whole job body, side effects included, so
+  `Unhonoured::retryable` is for a failure that could genuinely end
+  differently — a serialization conflict, a deadlock. A constraint
+  violation, or a commit whose outcome you do not know, is
+  `Unhonoured::deterministic`.
 
 A worker transport (`#[scheduled]`, `#[processor]`) resolves
 `Arc<dyn JobContext>` from the container before each job; binding your

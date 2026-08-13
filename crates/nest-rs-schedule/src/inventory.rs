@@ -19,6 +19,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use nest_rs_core::Container;
+use nest_rs_worker::JobTransaction;
 
 use crate::Trigger;
 
@@ -45,6 +46,10 @@ pub struct CronJobMeta {
     /// The closure the scheduler invokes on each tick — resolves the provider
     /// and calls the method.
     pub run: RunFn,
+    /// How this job's data-layer work is settled — from the `transactional`
+    /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one
+    /// transaction per attempt.
+    pub transaction: JobTransaction,
 }
 
 /// Link-time inventory entry submitted by `#[scheduled]` per `#[every]` /
@@ -64,6 +69,10 @@ pub struct ScheduledMethod {
     pub trigger: Trigger,
     /// The closure the scheduler invokes on each tick.
     pub run: RunFn,
+    /// How this job's data-layer work is settled — from the `transactional`
+    /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one
+    /// transaction per attempt.
+    pub transaction: JobTransaction,
 }
 
 ::nest_rs_core::inventory::collect!(ScheduledMethod);

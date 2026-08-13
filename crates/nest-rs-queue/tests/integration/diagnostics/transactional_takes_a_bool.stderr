@@ -1,0 +1,5 @@
+error: `transactional` takes `true` or `false` — `true` (the default) settles the job's data-layer work as one transaction per attempt, so a failed attempt leaves nothing for the retry to repeat; `false` runs it on the pool, for a job that brackets long work that is not the database's
+  --> tests/integration/diagnostics/transactional_takes_a_bool.rs:24:49
+   |
+24 |     #[process(queue = FanQueue, transactional = "no")]
+   |                                                 ^^^^

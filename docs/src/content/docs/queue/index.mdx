@@ -30,8 +30,9 @@ macro — ship in **`nest-rs-queue`**. The first-class storage, **Redis**,
 ships in **`nest-rs-redis`** (built on
 [`apalis`](https://docs.rs/apalis)): the `QueueConnection` producer,
 the `QueueWorker` transport, and the `QueueModule` / `QueueWorkerModule`
-activation seams. An app depends on both: `nest-rs-queue` for the macro
-and abstractions, `nest-rs-redis` for the Redis-bound types.
+activation seams. Both are compilation units, not lines you write: the
+`redis` feature below pulls them together, and an app's manifest names
+neither.
 
 ## Install
 

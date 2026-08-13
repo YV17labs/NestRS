@@ -169,14 +169,18 @@ A decorator is a procedural macro, and its expansion resolves paths against
 `::nest_rs::<concern>::…`, which that single entry reaches — so the feature list
 *is* the install. Nothing a decorator expands into is a line you write.
 
-Get the *dependency* wrong and the compiler says so in your own terms, ending on
-the exact line to paste — the version this release publishes at, and the
-features the decorators that failed to resolve need:
+Get the *dependency* wrong and the compiler says so in your own terms:
 
 ```text frame="terminal"
 error: this nestrs decorator expands into the framework, which this crate
        cannot reach. Add to Cargo.toml:
 ```
+
+The message does not stop there — it ends on the complete `nest-rs = { … }`
+line to paste, carrying the version the decorator that failed to resolve was
+built from and the features it needs. That line is elided here on purpose:
+printed by the compiler it is always current, and written on this page it
+would go stale at the next release.
 
 Get the **feature** wrong — the likelier mistake, since the dependency is
 already there — and the diagnostic is rustc's own. A missing feature reads as a

@@ -23,12 +23,12 @@
 //! `Parameters<Piped<P, T>>`). They expand in that order, so a caller the class
 //! gate refuses never pays for validation.
 //!
-//! The host struct takes `#[use_guards(...)]` too, and both scopes compose into
-//! one chain per site. What the endpoint's [`McpOperationGuard`] reports it
-//! already executed ([`McpOperationGuard::already_ran`]) is dropped from that
-//! chain, so a guard the edge ran does not run twice — and, just as
-//! deliberately, one the edge did *not* run still runs, whatever the app-wide
-//! pool happens to contain.
+//! The host struct takes `#[use_guards(...)]` too, and the app-wide pool joins
+//! them: all three scopes compose into one chain per site, deduplicated by
+//! `TypeId` like every other layer family. The endpoint's
+//! [`McpOperationGuard`] is not part of it and does not shorten it — that guard
+//! is handed an HTTP request and runs `check_http`, while this chain is handed
+//! the operation and runs `check_mcp`.
 //!
 //! Two things this transport does not inherit, and both follow from the
 //! protocol rather than from a preference. Response masking has no selection set
@@ -109,7 +109,7 @@ pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpOptions, McpSetup};
-pub use operation::{McpOperationContext, McpOperationKind, current_container, layers_already_run};
+pub use operation::{McpOperationContext, McpOperationKind, current_container};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};
 #[doc(hidden)]

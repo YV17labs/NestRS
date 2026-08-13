@@ -1,6 +1,5 @@
 //! The poem endpoint that serves an MCP handler over streamable HTTP.
 
-use std::any::TypeId;
 use std::sync::Arc;
 
 use nest_rs_core::{Container, current_request_scope};
@@ -159,9 +158,6 @@ where
     Route::new().at(
         "/",
         GuardedEndpoint {
-            // What the guard reports it runs is a property of the mount, not of
-            // a request — read once here rather than per operation.
-            already_ran: Arc::from(guard.already_ran()),
             guard,
             context,
             inner,
@@ -172,7 +168,6 @@ where
 struct GuardedEndpoint<E> {
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
-    already_ran: Arc<[TypeId]>,
     inner: E,
 }
 
@@ -200,7 +195,6 @@ where
             scope: scope.clone(),
             captured,
             guard_captured,
-            already_ran: Some(Arc::clone(&self.already_ran)),
         });
 
         // Also install the scope here, so an operation rmcp happens to resolve

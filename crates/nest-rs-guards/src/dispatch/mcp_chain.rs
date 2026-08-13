@@ -6,20 +6,21 @@
 //! scope, `check_mcp`, and the JSON-RPC error a [`Denial`](crate::Denial)
 //! renders as.
 //!
-//! # The pool runs at the edge, not here
+//! # The pool runs here too, exactly as it does on `/graphql`
 //!
 //! `/mcp` is `EdgePosture::Exempt`, and its
 //! [`McpOperationGuard`](nest_rs_mcp::McpOperationGuard) gates **every** request
 //! at the endpoint — the app's authz bridge when one is registered, else
-//! `FallbackMcpGuard` folding the global pool in-band, else deny-all. So an
-//! operation's own chain runs what the *operation* declared
-//! ([`GlobalScope::AtTheEdge`]), and asks the endpoint guard which layers it has
-//! already executed rather than assuming the pool ran.
+//! `FallbackMcpGuard` folding the global pool in-band, else deny-all. What that
+//! endpoint runs is `check_http`, against the HTTP request the operation arrived
+//! in; it has no operation to hand a `check_mcp`, and cannot acquire one.
 //!
-//! That distinction is the whole point. A bridge runs its own two guards and
-//! nothing else, so a `#[use_guards]` naming a guard that merely *happens* to be
-//! in the pool must still run; deleting every pooled entry on the assumption
-//! that the edge ran it is a fail-open.
+//! So the pool is part of *this* chain as well, and the two are not a
+//! duplication: the edge asks "may this request reach the endpoint", this site
+//! asks "may this caller run this operation". Excluding the pool here is what
+//! left a global guard overriding only `check_mcp` never consulted — while its
+//! mere presence disarmed the endpoint's deny-all tail, so registering it opened
+//! what it was written to close.
 //!
 //! # Why the whole preamble is here
 //!
@@ -29,11 +30,10 @@
 //! and codegen'd once per crate instead of once per operation.
 
 use nest_rs_mcp::{
-    McpError, McpOperationContext, McpOperationKind, current_container, layers_already_run,
-    unresolvable_chain,
+    McpError, McpOperationContext, McpOperationKind, current_container, unresolvable_chain,
 };
 
-use crate::dispatch::chain::{GlobalScope, SiteChainCell, SiteChainSources};
+use crate::dispatch::chain::{SiteChainCell, SiteChainSources};
 use crate::dispatch::denial_convert::denial_to_mcp_error;
 
 /// MCP shaper helper. Called by `#[tools]` at the start of every decorated
@@ -53,7 +53,9 @@ pub async fn run_layered_mcp_chain(
     let Some(container) = current_container() else {
         // No app is ambient — a mount assembled without the transport edge.
         // Guards that were *declared* cannot be resolved, so the operation fails
-        // closed and named; one that declared none loses nothing.
+        // closed and named; one that declared none loses nothing. The pool is
+        // not consulted here for the same reason: it lives in a container this
+        // dispatch cannot reach.
         let declared = sources();
         if declared.provider.is_empty() && declared.method.is_empty() {
             return Ok(());
@@ -61,13 +63,7 @@ pub async fn run_layered_mcp_chain(
         return Err(unresolvable_chain(route_label));
     };
 
-    let chain = cell.chain(
-        &container,
-        route_label,
-        GlobalScope::AtTheEdge,
-        &layers_already_run(),
-        sources,
-    );
+    let chain = cell.chain(&container, route_label, sources);
     if chain.is_empty() {
         return Ok(());
     }

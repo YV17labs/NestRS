@@ -32,7 +32,9 @@ and credit in the advisory — unless you prefer to stay anonymous.
 
 Every `nest-rs-*` crate versions in **lockstep** (one number across the
 workspace), and security fixes target the **latest release** — which is what
-`cargo add nest-rs` resolves, and what [`CHANGELOG.md`](CHANGELOG.md) names:
+`cargo add nest-rs` resolves. [`CHANGELOG.md`](CHANGELOG.md) records it, and the
+latest release is its topmost **dated** entry: the heading above it, if any,
+carries `- main` and is the unreleased work in progress.
 
 | Version                     | Supported                      |
 | --------------------------- | ------------------------------ |

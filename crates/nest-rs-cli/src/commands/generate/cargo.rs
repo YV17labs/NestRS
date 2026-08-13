@@ -468,17 +468,24 @@ mod tests {
         // API, so a minor may silently change what it spells out.
         const EXACT: [&str; 2] = ["async-graphql", "async-graphql-poem"];
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifests = [
+        let mut sources: Vec<(String, String)> = Vec::new();
+        for rel in [
             "Cargo.toml",
             "demo/Cargo.toml",
             "bench/sut/nestrs/Cargo.toml",
-        ];
+        ] {
+            // Packaged crate: the sibling workspaces aren't there.
+            if let Ok(raw) = std::fs::read_to_string(repo.join(rel)) {
+                sources.push((rel.to_owned(), raw));
+            }
+        }
+        // The manifests the CLI **generates**, which the rule names and this
+        // test did not reach: a drift there ships to every scaffolded project
+        // and fails no suite in this repo. Discovered rather than listed, so a
+        // template added later is covered the day it is written.
+        sources.extend(generated_manifests());
         let mut checked = 0usize;
-        for rel in manifests {
-            let path = repo.join(rel);
-            let Ok(raw) = std::fs::read_to_string(&path) else {
-                continue; // packaged crate: the sibling workspaces aren't there
-            };
+        for (rel, raw) in &sources {
             let doc = raw.parse::<DocumentMut>().expect("valid TOML");
             let tables = [
                 doc.get("workspace").and_then(|w| w.get("dependencies")),
@@ -505,6 +512,18 @@ mod tests {
                         },
                     };
                     checked += 1;
+                    if req.contains(PLACEHOLDER) {
+                        // Rendered from a `{{…}}`: the only requirement allowed to
+                        // be one is the umbrella's, whose value is `framework_req`
+                        // and tracks our release line rather than this rule.
+                        assert!(
+                            name.starts_with("nest-rs"),
+                            "{rel}: `{name}` takes its version from a template \
+                             placeholder; only the umbrella may, since only its \
+                             requirement is the framework's own",
+                        );
+                        continue;
+                    }
                     assert_eq!(
                         req.trim_start_matches('=').split('.').count(),
                         2,
@@ -516,6 +535,148 @@ mod tests {
             }
         }
         assert!(checked > 0, "no manifest was reachable to check");
+        // Not `starts_with("templates:")`: the spliced `workspace_value` table
+        // is pushed unconditionally and satisfied that on its own, so the guard
+        // could not see the template-file walk breaking — which it silently does
+        // the day a body is written `r##"…"##`.
+        assert!(
+            sources.iter().any(
+                |(rel, _)| rel.starts_with("templates:") && rel.ends_with(".rs#0")
+                    || rel.contains(".rs#")
+            ),
+            "no manifest was discovered in `src/templates/` — the raw-string scan \
+             stopped matching, and a drift in a generated manifest would now ship \
+             to every scaffolded project without failing anything here",
+        );
+    }
+
+    /// The stand-in a `{{placeholder}}` renders to: TOML-safe, and impossible to
+    /// mistake for a version component.
+    const PLACEHOLDER: &str = "PLACEHOLDER";
+
+    /// Every raw-string body in a Rust source — `r#"…"#` and `r##"…"##` alike.
+    ///
+    /// Rust *forces* the second form the moment a body contains `"#`, so a scan
+    /// for the first alone stops finding a template the day someone writes a
+    /// `Cargo.toml` fragment holding one — silently, since finding nothing looks
+    /// exactly like finding nothing to check.
+    fn raw_string_bodies(source: &str) -> Vec<String> {
+        let mut bodies = Vec::new();
+        for hashes in 1..=3usize {
+            let open = format!("r{}\"", "#".repeat(hashes));
+            let close = format!("\"{}", "#".repeat(hashes));
+            for chunk in source.split(&open).skip(1) {
+                if let Some(body) = chunk.split(&close).next() {
+                    bodies.push(body.to_owned());
+                }
+            }
+        }
+        bodies
+    }
+
+    /// Every manifest the CLI generates, discovered from its own sources.
+    ///
+    /// Two shapes, both scanned rather than listed: the raw-string templates
+    /// under `src/templates/`, and the `workspace_value` literals in this file
+    /// — the two places a scaffolded project's requirements actually come from.
+    /// A list would have to be extended by the same edit that adds a template,
+    /// which is exactly the edit that forgets.
+    fn generated_manifests() -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/templates");
+        let entries = std::fs::read_dir(&dir).expect("the templates directory");
+        let mut files: Vec<std::path::PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("rs"))
+            .collect();
+        files.sort();
+        for path in files {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            let source = std::fs::read_to_string(&path).expect("a template source");
+            // `r#"…"#` and `r##"…"##`: Rust forces the second the moment a body
+            // contains `"#`, and a scan for the first alone goes quiet rather
+            // than failing when that happens.
+            for (index, body) in raw_string_bodies(&source).into_iter().enumerate() {
+                let rendered = fill_placeholders(&body);
+                let Ok(doc) = rendered.parse::<DocumentMut>() else {
+                    continue; // not TOML — a Rust or Markdown template
+                };
+                let declares_deps = doc.get("dependencies").is_some()
+                    || doc
+                        .get("workspace")
+                        .and_then(|w| w.get("dependencies"))
+                        .is_some();
+                if declares_deps {
+                    found.push((format!("templates:{name}#{index}"), rendered));
+                }
+            }
+        }
+        // `[workspace.dependencies]` entries this file splices in on demand.
+        // Read off the generator's own accessors, which *are* the exhaustive
+        // enumeration by construction — a `Dep` no accessor reaches is a `Dep`
+        // that is never generated. Scraping this file's `workspace_value:`
+        // literals said the same thing through a hand-written Rust lexer, and
+        // would have gone quiet the day rustfmt wrapped one of them.
+        let mut spliced = String::from("[workspace.dependencies]\n");
+        let mut every: Vec<&'static Dep> = Vec::new();
+        every.extend(resource_deps());
+        every.extend(entity_deps());
+        every.extend(auth_deps());
+        every.extend(migrations_deps());
+        every.extend(graphql_port_deps());
+        for transport in Transport::ALL {
+            every.extend(adapter_deps(transport));
+            every.extend(app_host_deps(transport));
+        }
+        // Deduplicated: several accessors legitimately reach the same `Dep`, and
+        // one TOML table cannot repeat a key.
+        every.sort_by_key(|dep| dep.name);
+        every.dedup_by_key(|dep| dep.name);
+        for dep in every {
+            // The umbrella's requirement is `framework_req`, which tracks our own
+            // release line rather than this rule.
+            if dep.name.starts_with("nest-rs") {
+                continue;
+            }
+            spliced.push_str(&format!("{} = {}\n", dep.name, dep.workspace_value));
+        }
+        found.push(("generator dependency table".to_owned(), spliced));
+        found
+    }
+
+    /// Replace every `{{placeholder}}` with a marker that keeps the TOML
+    /// parseable **and** stays visible in the result.
+    ///
+    /// A version requirement *is* sometimes a placeholder — the umbrella's is
+    /// (`nest-rs = { version = "{{nestrs_version}}" }`), and its value tracks our
+    /// own release line through `framework_req` rather than the `major.minor`
+    /// rule. So the check cannot simply count components on a rendered value: a
+    /// tail placeholder (`"1.{{v}}"`) would render two components and pass
+    /// whatever the real value turns out to be. The marker is what lets the
+    /// caller tell those apart and demand that they belong to the umbrella.
+    fn fill_placeholders(body: &str) -> String {
+        let mut out = String::with_capacity(body.len());
+        let mut rest = body;
+        while let Some(start) = rest.find("{{") {
+            out.push_str(&rest[..start]);
+            let after = &rest[start + 2..];
+            match after.find("}}") {
+                Some(end) => {
+                    out.push_str(PLACEHOLDER);
+                    rest = &after[end + 2..];
+                }
+                None => {
+                    rest = after;
+                    break;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
     }
 
     /// Every manifest that **consumes** the framework names exactly one

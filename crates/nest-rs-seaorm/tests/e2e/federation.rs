@@ -60,12 +60,15 @@ impl WireModelDefaults for post::Entity {
 /// `crate = ` because this derive is the test's own, not one a decorator
 /// emitted: async-graphql resolves its paths from the call site, and this crate
 /// reaches it through `nest-rs-graphql`.
+/// `published` is `Option` because the field grant below masks it: GraphQL
+/// cannot ship a masked-out non-nullable field, so a maskable column is
+/// nullable on the wire or the whole operation fails closed.
 #[derive(SimpleObject, Serialize, Deserialize)]
 #[graphql(crate = "::nest_rs_graphql::async_graphql")]
 struct Post {
     id: String,
     title: String,
-    published: bool,
+    published: Option<bool>,
 }
 
 impl From<post::Model> for Post {
@@ -73,7 +76,7 @@ impl From<post::Model> for Post {
         Self {
             id: model.id.to_string(),
             title: model.title,
-            published: model.published,
+            published: Some(model.published),
         }
     }
 }
@@ -86,6 +89,12 @@ impl CrudService for PostsService {
 
 /// Grants exactly the published rows — so "the ability filtered this" and "the
 /// row does not exist" are two different states the assertions can tell apart.
+///
+/// The grant is also narrowed to two **columns**, and that half is what gives
+/// the mask something to strain: `secret` is stripped by the static expose set
+/// whether or not masking runs, so a test asserting only its absence passes
+/// against an entity resolver that never masks at all. `published` is exposed
+/// *and* withheld by the grant, so it can only be absent if the mask ran.
 #[injectable]
 #[derive(Default)]
 struct PublishedOnly;
@@ -95,7 +104,8 @@ impl AbilityFactory for PublishedOnly {
 
     fn define(&self, _actor: &(), ab: &mut AbilityBuilder) {
         ab.can(Action::Read, post::Entity)
-            .when(|p| p.eq(post::Column::Published, true));
+            .when(|p| p.eq(post::Column::Published, true))
+            .fields([post::Column::Id, post::Column::Title]);
     }
 }
 
@@ -231,9 +241,16 @@ async fn a_row_the_ability_reaches_resolves_by_key_and_arrives_masked() {
         "the reference reached the row through `Repo` under the caller's ability: {body}",
     );
     assert!(
+        entity["published"].is_null(),
+        "and the mask strained the column the field grant withholds, exactly as \
+         it does on a `#[query]` — with no masking call anywhere in the entity \
+         resolver's body, `#[authorize]` being the whole declaration: {body}",
+    );
+    assert!(
         entity.get("secret").is_none(),
-        "and the mask strained the unexposed column, exactly as it does on a \
-         `#[query]`: {body}",
+        "the unexposed column never reaches the wire either — though the static \
+         expose set alone would do that, which is why it is not the witness: \
+         {body}",
     );
 }
 

@@ -162,6 +162,28 @@ work, not only failed work. The measurement and the cause are in
 [Retries and failure](/queue/retries-and-failure/#limits).
 </Aside>
 
+## One attempt, one transaction
+
+A job has **no caller** — system work, intentionally — so no ability is
+installed and `Repo` reads are unscoped, which is correct for work with no
+principal to scope to.
+
+The executor is a **transaction per attempt**: it opens on the job's first
+`Repo` call, commits when the method returns `Ok` and rolls back otherwise,
+so an attempt that failed halfway leaves nothing for the retry to write
+again. Add `transactional = false` to the decorator — `#[process(queue =
+AudioQueue, transactional = false)]`, and the same word on `#[every]`,
+`#[cron]` and `#[after]` — to run on the pool instead, which is right for a
+job that brackets long work that is not the database's. Such a job owns its
+own idempotency.
+
+The transaction bounds what a **retry** repeats, never what a
+**redelivery** does: a durable backend delivers at least once, so a worker
+that dies between the commit and the acknowledgement runs a job whose
+writes already landed. See
+[Repo and the executor](/database/repo-and-executor/) and
+[Retries and failure](/queue/retries-and-failure/).
+
 ## Several methods on the same provider
 
 The pattern the framework is built for: one `#[injectable]` declares

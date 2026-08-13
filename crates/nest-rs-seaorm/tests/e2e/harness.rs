@@ -65,3 +65,44 @@ fn advisory_lock_key(table: &str) -> i64 {
     }
     hash as i64
 }
+
+/// A pool of exactly one connection, with a short acquire timeout — the shape a
+/// saturated pool or a restarted database actually presents.
+///
+/// The caller holds that one connection (`TransactionTrait::begin`) for the
+/// length of the probe; everything else then fails to acquire. Two suites build
+/// this, and their timeouts had already drifted apart, which is what a shared
+/// fixture is for.
+pub(crate) async fn starved_pool() -> DatabaseConnection {
+    let mut options = sea_orm::ConnectOptions::new(url());
+    options
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_millis(250));
+    sea_orm::Database::connect(options)
+        .await
+        .expect("a one-connection pool connects")
+}
+
+/// The backend pid serving `executor`, so a probe can have the server close that
+/// exact session out from under it.
+pub(crate) async fn backend_pid(executor: &impl ConnectionTrait) -> i32 {
+    executor
+        .query_one_raw(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            "SELECT pg_backend_pid()",
+        ))
+        .await
+        .expect("read this session's backend pid")
+        .expect("one row")
+        .try_get_by_index(0)
+        .expect("an i32 pid")
+}
+
+/// Terminate `pid` from another connection — `57P01` on whatever that session
+/// was doing.
+pub(crate) async fn terminate_backend(killer: &DatabaseConnection, pid: i32) {
+    killer
+        .execute_unprepared(&format!("SELECT pg_terminate_backend({pid})"))
+        .await
+        .expect("terminate the probe's backend");
+}

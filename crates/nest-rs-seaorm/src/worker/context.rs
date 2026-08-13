@@ -63,9 +63,9 @@ impl JobContext for WorkerDbContext {
                 JobSettlement::Settled
             }),
             JobTransaction::PerAttempt => Box::pin(async move {
-                let lazy = Arc::new(LazyTransaction::new((*self.db).clone()));
+                let lazy = Arc::new(LazyTransaction::new((*self.db).clone(), TRANSPORT));
                 let success = with_job_executor(Executor::Lazy(lazy.clone()), inner).await;
-                match lazy.finalize(success, TRANSPORT).await {
+                match lazy.finalize(success).await {
                     FinalizeOutcome::NoTransaction
                     | FinalizeOutcome::Committed
                     | FinalizeOutcome::RolledBack => JobSettlement::Settled,
@@ -77,7 +77,7 @@ impl JobContext for WorkerDbContext {
                     // Deterministic: what escaped is the job's own shape — it
                     // spawned a task holding the executor — so the next attempt
                     // spawns the same one.
-                    FinalizeOutcome::Escaped { .. } => {
+                    FinalizeOutcome::Escaped => {
                         if success {
                             JobSettlement::Unhonoured(Unhonoured::deterministic(ESCAPED))
                         } else {

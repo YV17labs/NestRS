@@ -24,7 +24,8 @@ read it once when a placeholder is unclear.
 
 - An `Executor` enum holding your store's handles, with the trait impl.
 - A request interceptor that wraps mutating handlers in a transaction.
-- A `JobContext` that installs the non-transactional handle for worker paths.
+- A `JobContext` that installs a handle per job attempt and settles it —
+  transactional by default, non-transactional on `transactional = false`.
 
 A driver lives in a `nest-rs-<technology>` crate that depends on
 `nest-rs-core`, `nest-rs-database`, `nest-rs-http`, `nest-rs-interceptors`,
@@ -47,10 +48,12 @@ use std::any::Any;
 #[derive(Clone)]
 pub enum Executor {
     /// Non-transactional handle — pool, client, connection.
-    /// Used on safe routes (GET/HEAD/OPTIONS) and worker jobs.
+    /// Used on safe routes (GET/HEAD/OPTIONS) and on a job that opted out
+    /// with `transactional = false`.
     Default(/* your handle, e.g. YourPool */),
     /// Transactional handle — your store's unit of work.
-    /// Used on mutating routes; committed or rolled back at the boundary.
+    /// Used on mutating routes and on a job attempt by default; committed
+    /// or rolled back at the boundary.
     Transactional(/* your tx/session type, wrapped in Arc<Mutex<_>> */),
 }
 
@@ -184,14 +187,33 @@ impl JobContext for YourWorkerContext {
                 }
                 // The default: one transaction per attempt.
                 JobTransaction::PerAttempt => {
+                    let txn = Arc::new(/* txn handle */);
                     let succeeded =
-                        nest_rs::database::with_job_executor(/* txn handle */, inner).await;
-                    // Commit on success, roll back otherwise. When a *successful*
-                    // job cannot be honoured, say so — and say whether repeating
-                    // the attempt could end differently.
-                    JobSettlement::Unhonoured(Unhonoured::deterministic(
-                        "the job's transaction could not be committed",
-                    ))
+                        nest_rs::database::with_job_executor(txn.clone(), inner).await;
+                    if !succeeded {
+                        // The job failed on its own terms. Roll back using your
+                        // store's API and settle: the job's own error is what
+                        // the transport reports, and adding one would say the
+                        // same failure twice.
+                        return JobSettlement::Settled;
+                    }
+                    // It succeeded, so the attempt now stands or falls on the
+                    // commit. When a *successful* job cannot be honoured, say so
+                    // — and say whether repeating the attempt could end
+                    // differently.
+                    match /* commit using your store's API */ {
+                        Ok(()) => JobSettlement::Settled,
+                        // A serialization conflict or a deadlock is the one
+                        // shape another attempt could win.
+                        Err(err) if err.is_conflict() => {
+                            JobSettlement::Unhonoured(Unhonoured::retryable(
+                                "the job's transaction could not be committed",
+                            ))
+                        }
+                        Err(_) => JobSettlement::Unhonoured(Unhonoured::deterministic(
+                            "the job's transaction could not be committed",
+                        )),
+                    }
                 }
             }
         })
@@ -212,6 +234,15 @@ Three things your impl owes:
   differently — a serialization conflict, a deadlock. A constraint
   violation, or a commit whose outcome you do not know, is
   `Unhonoured::deterministic`.
+- **A failed *statement* and a failed *commit* are not the same
+  question**, and answering them alike dead-letters a job over an outage.
+  Inside an open transaction nothing is durable yet, so a connection your
+  store could not acquire, or lost mid-attempt, left nothing behind:
+  **retryable**. At commit the same error means the commit may already
+  have landed: **deterministic**. `nest-rs-seaorm` splits them as
+  `retry::is_transient_failure` (statements) against
+  `CommitError::is_retryable_conflict` (the commit), and yours should
+  split them too.
 
 A worker transport (`#[scheduled]`, `#[processor]`) resolves
 `Arc<dyn JobContext>` from the container before each job; binding your

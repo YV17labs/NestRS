@@ -74,7 +74,7 @@ pub(crate) async fn with_data_context<T>(
         );
         return inner.await;
     };
-    let lazy = Arc::new(LazyTransaction::new(snapshot.pool.clone()));
+    let lazy = Arc::new(LazyTransaction::new(snapshot.pool.clone(), transport));
     let executor = Executor::Lazy(lazy.clone());
 
     let outcome = match &snapshot.ability {
@@ -85,11 +85,11 @@ pub(crate) async fn with_data_context<T>(
     };
 
     let success = succeeded(&outcome);
-    match lazy.finalize(success, transport).await {
+    match lazy.finalize(success).await {
         FinalizeOutcome::NoTransaction
         | FinalizeOutcome::Committed
         | FinalizeOutcome::RolledBack => outcome,
-        FinalizeOutcome::Escaped { .. } => {
+        FinalizeOutcome::Escaped => {
             if success {
                 internal_error()
             } else {

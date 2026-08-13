@@ -124,18 +124,11 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
 #[tokio::test]
 async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
     let held = db().await;
-    let starved = sea_orm::Database::connect(
-        sea_orm::ConnectOptions::new(crate::harness::url())
-            .max_connections(1)
-            .acquire_timeout(std::time::Duration::from_millis(250))
-            .to_owned(),
-    )
-    .await
-    .expect("the starved pool connects");
+    let starved = crate::harness::starved_pool().await;
     // Its one connection, taken and kept for the length of the test.
     let hog = starved.begin().await.expect("the only connection is held");
 
-    let lazy = Arc::new(nest_rs_seaorm::LazyTransaction::new(starved));
+    let lazy = Arc::new(nest_rs_seaorm::LazyTransaction::new(starved, "test"));
     let result = with_request_executor(
         Executor::Lazy(Arc::clone(&lazy)),
         with_ability(org_scoped_ability(1), async {
@@ -154,14 +147,16 @@ async fn a_create_that_cannot_open_its_savepoint_poisons_the_boundary() {
     );
 
     // Swallowed, exactly as a real handler would — `let _ = svc.create(..)`.
-    let outcome = lazy.finalize(true, "test").await;
+    let outcome = lazy.finalize(true).await;
     assert!(
         matches!(
             outcome,
-            nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable: false }
+            nest_rs_seaorm::FinalizeOutcome::Poisoned { retryable: true }
         ),
         "a boundary that reported success over a create which never opened must \
-         settle as poisoned, not as `NoTransaction`, got {outcome:?}",
+         settle as poisoned, not as `NoTransaction` — and *retryable*, since a \
+         pool that handed out no connection ran no statement and left nothing \
+         behind, got {outcome:?}",
     );
 
     hog.rollback().await.expect("the held connection is freed");

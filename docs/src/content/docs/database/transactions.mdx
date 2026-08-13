@@ -26,8 +26,10 @@ provides the `TransactionTrait` the programmatic boundary builds on.
 `DbContext` classifies the HTTP method and branches:
 
 ```text
-GET / HEAD / OPTIONS / TRACE   → Executor::Pool, no transaction
-POST / PUT / PATCH / DELETE    → Executor::Txn,  commit on 2xx/3xx
+GET / HEAD / OPTIONS / TRACE   → Executor::Pool,  no transaction
+POST / PUT / PATCH / DELETE    → Executor::Lazy, BEGIN on the first
+                                                 data-layer touch;
+                                                 commit on 2xx/3xx,
                                                  rollback otherwise
 ```
 
@@ -148,7 +150,7 @@ in bounded time.
 **This is a service primitive.** It lives in `nest_rs::seaorm::retry` and
 takes an `Arc<DatabaseConnection>` because the closure re-opens the
 transaction from scratch. A handler can't use it against the ambient
-`Executor::Txn` — that handle is already aborted past the first attempt's
+transaction — that handle is already aborted past the first attempt's
 failure.
 </Aside>
 

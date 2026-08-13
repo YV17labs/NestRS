@@ -88,19 +88,19 @@ impl Interceptor for DbContext {
         // Lazy: `BEGIN` runs on the first data-layer touch, inside the
         // executor itself. A guard denial (or a handler that never queries)
         // leaves the cell empty and this request costs no transaction.
-        let lazy = Arc::new(LazyTransaction::new((*self.db).clone()));
+        let lazy = Arc::new(LazyTransaction::new((*self.db).clone(), "http"));
 
         let result = with_request_executor(Executor::Lazy(lazy.clone()), next.run(req)).await;
 
         let success = should_commit(&result);
-        match lazy.finalize(success, "http").await {
+        match lazy.finalize(success).await {
             FinalizeOutcome::NoTransaction
             | FinalizeOutcome::Committed
             | FinalizeOutcome::RolledBack => result,
             // The escape invariant (logged by `finalize`): a handle outliving
             // the handler cannot be committed, so an otherwise-successful
             // response is silent data loss — fail it loud.
-            FinalizeOutcome::Escaped { .. } => {
+            FinalizeOutcome::Escaped => {
                 if success {
                     Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
                 } else {

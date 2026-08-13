@@ -214,11 +214,49 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   a connection across. Such a job owns its idempotency. The key is one word on
   all four job decorators, worded once in `nest_rs_codegen::job`.
 
+  **An abandoned attempt holds its locks until its statement drains, and that
+  is new.** Dropping the job future mid-statement — the framework's own shutdown
+  path, `shutdown_timeout` elapsing while apalis is in a `select!` — leaves the
+  attempt's transaction open: sea-orm's rollback is queued on `Drop` and cannot
+  go out while the connection is busy, so every row lock the attempt took is held
+  for the rest of that statement and the connection stays out of the pool. Before
+  one transaction per attempt, each statement auto-committed and an abandoned
+  `pg_sleep` held nothing. Cancelling a statement server-side is not in sea-orm's
+  contract, so what the framework owes is the **event**: a `warn` on
+  `nest_rs::orm` (`outcome = "abandoned"`, the transport), from **two** guards
+  rather than one. `LazyTransaction`'s own `Drop` covers a boundary abandoned
+  before it settles; `AbandonedDuringSettle` covers the window settling itself
+  opens, because `into_opened` takes the cell and drops the `LazyTransaction`
+  before the `COMMIT` is awaited — so the first guard no longer exists across the
+  round-trip, which is precisely where the locks are most certainly still held.
+  One sentence for both, so an operator greps once. Read it before setting a
+  `shutdown_timeout`: the timeout is the ceiling on how long a dying worker holds
+  row locks. The scheduler cannot reach this — `fire(..)` runs in a `select!`
+  *branch body*, which is never dropped mid-poll.
+
+  **An escaped executor fails the attempt whether or not it had opened
+  anything**, and `FinalizeOutcome::Escaped` deliberately carries no flag saying
+  which. `finalize` computes it and logs it — an operator wants it — but the
+  escaped handle is still live: a spawned task holding the executor can open a
+  transaction and write seconds later, and those writes are rolled back when it
+  drops. "Nothing opened yet" is therefore not a promise that nothing will be,
+  and a field on the outcome is exactly what a later reader would take for one.
+
   **An attempt the context could not settle carries *why*, and the database is
   what says so.** `JobSettlement::Unhonoured` holds an `Unhonoured { reason,
-  retryable }`; the classification comes from the SQLSTATE
-  (`CommitError::is_retryable_conflict`, and the same verdict recorded on the
-  first failed statement so a poisoned transaction answers identically). A
+  retryable }`; the classification comes from the SQLSTATE — and it is **two**
+  predicates, not one, because a statement and a commit ask different questions.
+  A statement runs inside an open transaction where nothing is durable yet, so a
+  pool acquire timeout or a connection the server closed left *nothing*:
+  `is_transient_failure` calls those retryable alongside the conflicts, and the
+  verdict is recorded on the first failed statement so a poisoned transaction
+  answers identically. **The promise is the transaction's, not the attempt's** —
+  work the body committed outside it (an HTTP call, or a statement stepped out
+  through `non_transactional`, the documented read-only escape) is replayed with
+  the rest of the body. `CommitError::is_retryable_conflict` stays narrow for the
+  opposite reason — at `COMMIT` the same connection error means the commit may
+  have landed. "Before it left" versus "while it was in flight" is the whole
+  line, and flattening it turns *may have written once* into *wrote twice*. A
   retry replays the whole job body, side effects and all, so it is spent only
   where it could win: `40001`/`40P01` retry, a constraint checked at `COMMIT`
   aborts, and an **in-doubt** commit — the connection lost mid-`COMMIT` —

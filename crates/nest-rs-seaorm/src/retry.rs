@@ -14,10 +14,10 @@
 
 use std::time::Duration;
 
-use sea_orm::{DbErr, RuntimeErr};
+use sea_orm::{DbErr, RuntimeErr, SqlxError};
 
 /// SQLSTATE markers a transient conflict surfaces under across the
-/// supported backends. Matched against the typed `sqlx::Error::Database`'s
+/// supported backends. Matched against the typed `SqlxError::Database`'s
 /// `code()` so a digit substring appearing in a message — a port number,
 /// byte offset, row id, timestamp — does not get misclassified as a
 /// conflict and retried.
@@ -26,6 +26,25 @@ const RETRYABLE_SQLSTATES: &[&str] = &[
     "40P01", // PG — deadlock detected
     "1213",  // MySQL — deadlock
     "1205",  // SQL Server — deadlock victim
+];
+
+/// SQLSTATE markers a **connection** fault surfaces under: the server closed
+/// the session, or refused to open one.
+///
+/// `08007` (`transaction_resolution_unknown`) is deliberately **absent**. It is
+/// the one connection failure whose transaction may have committed, and the
+/// whole point of [`is_transient_failure`] is that it names failures the
+/// framework *knows* rolled back.
+const CONNECTION_SQLSTATES: &[&str] = &[
+    "08000", // PG — connection exception
+    "08001", // PG — sqlclient unable to establish sqlconnection
+    "08003", // PG — connection does not exist
+    "08004", // PG — sqlserver rejected establishment of sqlconnection
+    "08006", // PG — connection failure
+    "08P01", // PG — protocol violation
+    "57P01", // PG — admin shutdown (`pg_terminate_backend`, a restart)
+    "57P02", // PG — crash shutdown
+    "57P03", // PG — cannot connect now (the server is still starting)
 ];
 
 /// Hard ceiling for the public retry budget. A misconfigured `usize::MAX`
@@ -56,6 +75,9 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// formatted error string, so a digit substring in a message (a port, a
 /// row id, a timestamp) cannot trigger a false retry.
 pub fn is_retryable_conflict(err: &DbErr) -> bool {
+    // NOTE: widening this to `is_transient_failure` would replay a `COMMIT` whose
+    // outcome is unknown. `lazy::a_commit_whose_outcome_is_unknown_stays_deterministic`
+    // is the e2e that catches it.
     let sqlx_err = match err {
         DbErr::Query(RuntimeErr::SqlxError(e)) | DbErr::Exec(RuntimeErr::SqlxError(e)) => e,
         _ => return false,
@@ -67,6 +89,57 @@ pub fn is_retryable_conflict(err: &DbErr) -> bool {
         db_err.code().as_deref(),
         Some(code) if RETRYABLE_SQLSTATES.contains(&code)
     )
+}
+
+/// Whether a **statement** failure inside an open transaction is one a fresh
+/// attempt could clear — a conflict, or the connection going away.
+///
+/// The broader half of the pair, and the asymmetry with
+/// [`is_retryable_conflict`] is load-bearing rather than an oversight:
+///
+/// - **Inside** a transaction, nothing is durable until `COMMIT`. A connection
+///   that times out at the pool, or dies mid-attempt, therefore leaves *nothing*
+///   — the server rolls the session back on close — so the framework knows the
+///   attempt wrote nothing and a replay cannot write twice. Classifying those as
+///   deterministic dead-lettered a job over an outage, which is precisely the
+///   failure a retry budget exists for.
+/// - **At** `COMMIT`, the same connection error means the opposite: the `COMMIT`
+///   may have gone out and landed. That is why the commit site keeps
+///   [`is_retryable_conflict`] and this function is not used there. "Before the
+///   commit left" versus "while it was in flight" is the whole distinction, and
+///   flattening it turns *may have written once* into *wrote twice*.
+///
+/// Matched on the typed error — the SQLSTATE, or sea-orm's own connection
+/// variants — never on message text.
+pub fn is_transient_failure(err: &DbErr) -> bool {
+    if is_retryable_conflict(err) {
+        return true;
+    }
+    match err {
+        // The pool never handed one out, so no statement reached the database.
+        DbErr::ConnectionAcquire(_) => true,
+        // sea-orm's own connection variant, narrowed to the driver-reported
+        // shape on purpose. Under the pinned `sqlx-postgres` driver every
+        // `DbErr::Conn` carries a `SqlxError` (connect, ping, pool acquire), so
+        // this is today's behaviour exactly — but sea-orm's rusqlite driver maps
+        // *every* error it sees to `DbErr::Conn`, and a blanket arm would call a
+        // constraint violation transient the day someone adds that backend.
+        DbErr::Conn(RuntimeErr::SqlxError(_)) => true,
+        DbErr::Exec(RuntimeErr::SqlxError(e)) | DbErr::Query(RuntimeErr::SqlxError(e)) => {
+            match &**e {
+                // The socket, the pool, or sqlx's own worker — the connection is
+                // gone whichever it was, and no `COMMIT` was ever issued.
+                SqlxError::Io(_)
+                | SqlxError::PoolTimedOut
+                | SqlxError::PoolClosed
+                | SqlxError::WorkerCrashed => true,
+                other => other.as_database_error().is_some_and(|db| {
+                    matches!(db.code().as_deref(), Some(code) if CONNECTION_SQLSTATES.contains(&code))
+                }),
+            }
+        }
+        _ => false,
+    }
 }
 
 /// Run `op` up to `attempts` times, sleeping `initial_backoff << attempt`
@@ -191,8 +264,67 @@ mod tests {
             code: code.map(str::to_owned),
             msg: msg.to_owned(),
         };
-        let sqlx_err = sea_orm::sqlx::Error::database(stub);
+        let sqlx_err = sea_orm::SqlxError::database(stub);
         DbErr::Exec(RuntimeErr::SqlxError(std::sync::Arc::new(sqlx_err)))
+    }
+
+    // ---------------------------------------------------------------------
+    // The two predicates, and the line between them. `is_retryable_conflict`
+    // answers for a **commit**; `is_transient_failure` for a **statement**.
+    // Widening the first would replay a `COMMIT` that may have landed.
+
+    #[test]
+    fn a_statement_that_lost_its_connection_is_transient() {
+        for code in ["08006", "08003", "57P01", "57P02", "57P03"] {
+            let err = sqlx_db_err(Some(code), "connection went away");
+            assert!(
+                is_transient_failure(&err),
+                "SQLSTATE {code} closes the session, and Postgres rolls the \
+                 transaction back on close — nothing landed",
+            );
+            assert!(
+                !is_retryable_conflict(&err),
+                "and it is not a conflict, so the commit site still refuses it: {code}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_commit_whose_outcome_is_unknown_is_not_transient() {
+        // `08007` is the connection failure that says the transaction's fate is
+        // unknown. Replaying it turns "may have written once" into "wrote twice",
+        // so it stays out of the transient set on purpose.
+        let err = sqlx_db_err(Some("08007"), "transaction resolution unknown");
+        assert!(!is_transient_failure(&err));
+        assert!(!is_retryable_conflict(&err));
+    }
+
+    #[test]
+    fn a_pool_that_never_handed_out_a_connection_is_transient() {
+        let err = DbErr::ConnectionAcquire(sea_orm::ConnAcquireErr::Timeout);
+        assert!(
+            is_transient_failure(&err),
+            "no connection means no statement reached the database",
+        );
+        assert!(!is_retryable_conflict(&err), "and it is not a conflict");
+    }
+
+    #[test]
+    fn a_conflict_is_transient_too() {
+        let err = sqlx_db_err(Some("40001"), "could not serialize access");
+        assert!(is_transient_failure(&err));
+        assert!(is_retryable_conflict(&err));
+    }
+
+    #[test]
+    fn a_constraint_violation_is_neither() {
+        let err = sqlx_db_err(Some("23505"), "unique violation");
+        assert!(
+            !is_transient_failure(&err),
+            "a re-run hits the same row, and the retry budget is spent replaying \
+             every side effect the job body has outside the transaction",
+        );
+        assert!(!is_retryable_conflict(&err));
     }
 
     #[test]

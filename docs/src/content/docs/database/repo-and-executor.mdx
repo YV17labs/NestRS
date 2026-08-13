@@ -51,15 +51,21 @@ through.
 ## Under the hood: the ambient executor
 
 `Executor` is a SeaORM connection — the pool or the request's transaction —
-installed in a `tokio::task_local!` for the duration of the handler. Two
+installed in a `tokio::task_local!` for the duration of the handler. Three
 variants:
 
 ```rust
 pub enum Executor {
     Pool(DatabaseConnection),
     Txn(Arc<DatabaseTransaction>),
+    Lazy(Arc<LazyTransaction>),
 }
 ```
+
+`Lazy` is the one the framework installs wherever work may write: it defers
+`BEGIN` to the first data-layer touch, so a request a guard denies — or one
+that never queries — costs no round-trip at all. `Txn` is the eager handle,
+for a transaction something already opened.
 
 `Repo::<E>::conn()` reads the task-local back. Outside the scope it returns
 an error naming the `DbContext` interceptor — a service called with no
@@ -98,7 +104,7 @@ resolve the same ambient executor through `Repo`:
 HTTP request
   ↓
 DbContext              ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
-                       ──→ installs Executor::Txn  (POST/PUT/PATCH/DELETE)
+                       ──→ installs Executor::Lazy (POST/PUT/PATCH/DELETE)
   ↓
 guards (AuthnGuard, AbilityGuard, ...)
   ↓
@@ -163,10 +169,14 @@ setting.
 
 **And a retry only happens where it could help.** A job whose body succeeded
 but whose transaction could not be settled is a failed attempt — but *whether
-to re-attempt it* is read from what the database said, never assumed. A
-serialization failure or a deadlock (`40001`, `40P01`) is retryable; a
-constraint checked at `COMMIT` fails identically every time, and a commit
-whose outcome is **unknown** — the connection lost mid-`COMMIT` — may have
+to re-attempt it* is read from what the database said, never assumed — and
+where it said it. A **statement** inside the attempt that failed on a
+serialization conflict or a deadlock (`40001`, `40P01`), on a pool that never
+handed out a connection, or on one the server closed (`08…`, `57P0…`) is
+retryable: nothing is durable before `COMMIT`, so the framework knows the
+attempt wrote nothing. At the **commit** the reading flips: a constraint checked
+at `COMMIT` fails identically every time, and a commit whose outcome is
+**unknown** — the connection lost mid-`COMMIT` — may have
 landed. Neither of the last two is replayed: a retry re-runs the whole body,
 including every side effect that is not the database's, and the framework only
 promises "nothing left to repeat" for a transaction it knows rolled back. Both

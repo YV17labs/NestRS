@@ -9,7 +9,10 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 The contract is small: a `#[process]` method returns `anyhow::Result<()>`,
-`Ok(())` acknowledges the job, `Err(_)` marks it failed. After that the
+`Err(_)` marks the attempt failed, and `Ok(())` acknowledges it — once the
+attempt's transaction has settled, which is the one way a body that returned
+`Ok` can still fail (see
+[below](#panics-deserialization-errors-container-misses)). After that the
 backend decides — and Redis (via apalis) gives you a fixed retry budget
 per method, a panic safety net, and a failed-jobs list. Anything richer
 than that is bolted on top.
@@ -23,8 +26,10 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 }
 ```
 
-- `Ok(())` ⇒ the job is removed from the queue. apalis acknowledges
-  it; that's the end of its life.
+- `Ok(())` ⇒ the attempt's transaction commits and the job is removed
+  from the queue. apalis acknowledges it; that's the end of its life. If
+  the commit cannot be honoured, nothing it wrote landed and the attempt
+  fails instead — the one case where `Ok` is not the end.
 - `Err(e)` ⇒ the job goes back for another attempt. apalis tracks the
   attempt count, and after `retries` failures it's moved to the
   queue's failed-jobs list (see [Where failed jobs go](#where-failed-jobs-go)).
@@ -161,10 +166,15 @@ so you don't have to think about them separately:
 - **A transaction that could not be settled** — the body returned `Ok`,
   and the attempt's transaction could not be committed, so nothing it
   wrote landed. The attempt fails rather than reporting writes that were
-  never made, and **the database decides whether it is retried**: a
-  serialization failure or a deadlock is retryable; a constraint checked
-  at `COMMIT`, or a commit whose outcome is unknown because the
-  connection dropped, is not — it dead-letters at once. Retrying replays
+  never made, and **the database decides whether it is retried** — with
+  the answer depending on *where* it failed. A statement inside the
+  attempt failed on a serialization conflict, a deadlock, a pool that
+  timed out, or a connection the server closed: retryable, because
+  nothing is durable before `COMMIT` and the framework therefore knows
+  the attempt wrote nothing. A constraint checked at `COMMIT`, or a
+  commit whose outcome is unknown because the connection dropped
+  mid-flight, is not — it dead-letters at once, because that one may have
+  landed and replaying it would write twice. Retrying replays
   the whole body, side effects included, so spending the budget on a
   failure that repeats identically costs several times over and
   dead-letters anyway. See

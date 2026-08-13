@@ -43,8 +43,17 @@ pub enum Executor {
     /// The shared connection pool — safe (read) methods and system/job work run
     /// here, outside any transaction.
     Pool(DatabaseConnection),
-    /// The request's transaction — a mutating HTTP method runs here so the
-    /// interceptor can commit on success and roll back on failure.
+    /// A transaction the **caller** opened and installed itself.
+    ///
+    /// Nothing in the framework constructs this: every boundary it owns —
+    /// HTTP, WS, MCP, the worker — installs [`Lazy`](Self::Lazy), so the
+    /// `BEGIN` waits for a data-layer touch and a denied request costs no
+    /// round-trip. What keeps the variant is the opposite direction: an app
+    /// that opens its own `DatabaseTransaction` (a programmatic boundary, a
+    /// migration step, a test that wants everything rolled back) installs it
+    /// through `with_executor` and gets the whole `Repo` surface running inside
+    /// it. Being *given* a transaction is also why `create_from_active`
+    /// SAVEPOINTs on it rather than opening one.
     Txn(Arc<DatabaseTransaction>),
     /// A transaction opened on **first data-layer touch**. Installed by the
     /// HTTP `DbContext` for mutating methods, so a request a guard denies (or
@@ -58,9 +67,17 @@ pub enum Executor {
 /// transaction opens per request.
 pub struct LazyTransaction {
     pool: DatabaseConnection,
+    /// The edge this boundary serves — declared once, at construction, and read
+    /// back by [`finalize`](Self::finalize) and by the [`Drop`] warning. It used
+    /// to be an argument to `finalize`, which meant the one path that never
+    /// reaches `finalize` had no way to name itself.
+    transport: &'static str,
     cell: tokio::sync::OnceCell<Arc<DatabaseTransaction>>,
+    /// Set the instant [`finalize`](Self::finalize) begins, so [`Drop`] can tell
+    /// a settled boundary from an **abandoned** one.
+    settled: std::sync::atomic::AtomicBool,
     /// Set the moment a statement on **this** transaction returns an error, to
-    /// [`POISON_CONFLICT`] or [`POISON_DETERMINISTIC`] according to that error.
+    /// [`POISON_TRANSIENT`] or [`POISON_DETERMINISTIC`] according to that error.
     ///
     /// Postgres aborts the whole transaction on the first failed statement and
     /// refuses everything after it (`25P02`), and a `COMMIT` on an aborted
@@ -85,18 +102,22 @@ const POISON_CLEAN: u8 = 0;
 /// One failed on something a re-run would hit again — a constraint violation, a
 /// type error, a missing relation.
 const POISON_DETERMINISTIC: u8 = 1;
-/// One failed on a transient conflict ([`is_retryable_conflict`]) — a
-/// serialization failure or a deadlock, which a re-run may well win.
+/// One failed on something a fresh attempt could clear
+/// ([`is_transient_failure`]) — a serialization conflict, a deadlock, or the
+/// connection going away before anything could be committed.
 ///
-/// [`is_retryable_conflict`]: crate::retry::is_retryable_conflict
-const POISON_CONFLICT: u8 = 2;
+/// [`is_transient_failure`]: crate::retry::is_transient_failure
+const POISON_TRANSIENT: u8 = 2;
 
 impl LazyTransaction {
-    /// A lazy transaction over `pool` — nothing is opened yet.
-    pub fn new(pool: DatabaseConnection) -> Self {
+    /// A lazy transaction over `pool` — nothing is opened yet. `transport` names
+    /// the edge for every event this boundary emits.
+    pub fn new(pool: DatabaseConnection, transport: &'static str) -> Self {
         Self {
             pool,
+            transport,
             cell: tokio::sync::OnceCell::new(),
+            settled: std::sync::atomic::AtomicBool::new(false),
             poisoned: AtomicU8::new(POISON_CLEAN),
         }
     }
@@ -135,8 +156,11 @@ impl LazyTransaction {
     /// The transaction, if a data-layer touch opened one — consumed by
     /// [`finalize`](LazyTransaction::finalize). `None` means no `BEGIN` was
     /// ever issued.
-    pub fn into_opened(self) -> Option<Arc<DatabaseTransaction>> {
-        self.cell.into_inner()
+    ///
+    /// Takes the cell rather than destructuring `self`: this type carries a
+    /// [`Drop`] now, so it cannot be moved out of piecewise.
+    pub fn into_opened(mut self) -> Option<Arc<DatabaseTransaction>> {
+        self.cell.take()
     }
 
     /// Whether a transaction has been opened.
@@ -153,8 +177,15 @@ impl LazyTransaction {
     /// everything after it fails with `25P02`, which says nothing about why.
     fn poison<T>(&self, result: Result<T, DbErr>) -> Result<T, DbErr> {
         if let Err(err) = &result {
-            let verdict = if crate::retry::is_retryable_conflict(err) {
-                POISON_CONFLICT
+            // `is_transient_failure`, not `is_retryable_conflict`: this records a
+            // **statement**, and inside an open transaction nothing is durable
+            // until `COMMIT` — so a pool acquire timeout or a connection the
+            // server closed leaves nothing behind and a replay cannot write
+            // twice. The commit site keeps the narrow predicate, because there
+            // the same error means the `COMMIT` may have landed. See
+            // [`is_transient_failure`](crate::retry::is_transient_failure).
+            let verdict = if crate::retry::is_transient_failure(err) {
+                POISON_TRANSIENT
             } else {
                 POISON_DETERMINISTIC
             };
@@ -196,11 +227,31 @@ impl LazyTransaction {
     /// rolled back (the transaction is gone either way); a commit failure is
     /// **not** logged here — it is returned so the transport can classify it
     /// (serialization conflicts vs. generic failure).
-    pub async fn finalize(
-        self: Arc<Self>,
-        success: bool,
-        transport: &'static str,
-    ) -> FinalizeOutcome {
+    pub async fn finalize(self: Arc<Self>, success: bool) -> FinalizeOutcome {
+        let transport = self.transport;
+        // `Drop` covers the boundary abandoned *before* settling; this covers the
+        // window settling itself opens, and both were needed. `into_opened`
+        // takes the cell and drops the `LazyTransaction` before the `COMMIT` is
+        // awaited, so from that point the `Drop` guard no longer exists — and a
+        // future dropped mid-`COMMIT` is the case where the locks are most
+        // certainly still held. Armed only when something was opened: with no
+        // transaction there is nothing to hold.
+        let mut abandoned = AbandonedDuringSettle {
+            transport,
+            armed: self.is_opened(),
+        };
+        // Before anything can return early: `Drop` reports an *abandoned*
+        // boundary, and every path from here on is a settled one.
+        self.settled.store(true, Ordering::Relaxed);
+        let outcome = Self::settle(self, success).await;
+        abandoned.armed = false;
+        outcome
+    }
+
+    /// [`finalize`](Self::finalize)'s body, split out so the guard above wraps
+    /// every path through it — including the awaits.
+    async fn settle(self: Arc<Self>, success: bool) -> FinalizeOutcome {
+        let transport = self.transport;
         let escaped_outcome = if success {
             "rollback_and_fail"
         } else {
@@ -218,7 +269,7 @@ impl LazyTransaction {
                     outcome = escaped_outcome,
                     "executor escaped into a spawned task"
                 );
-                return FinalizeOutcome::Escaped { opened };
+                return FinalizeOutcome::Escaped;
             }
         };
         // The one combination that loses writes in silence: a statement failed,
@@ -226,7 +277,7 @@ impl LazyTransaction {
         // below settle on it, and `Some(retryable)` is the whole answer either
         // has to carry.
         let flag = lazy.poisoned.load(Ordering::Relaxed);
-        let poisoned = (success && flag != POISON_CLEAN).then_some(flag == POISON_CONFLICT);
+        let poisoned = (success && flag != POISON_CLEAN).then_some(flag == POISON_TRANSIENT);
         let Some(txn) = lazy.into_opened() else {
             // Nothing opened — but something may still have *failed* to open.
             // Reporting `NoTransaction` for a boundary that swallowed a failed
@@ -256,7 +307,7 @@ impl LazyTransaction {
                     outcome = escaped_outcome,
                     "transaction escaped into a spawned task"
                 );
-                return FinalizeOutcome::Escaped { opened: true };
+                return FinalizeOutcome::Escaped;
             }
         };
         // A statement already failed, so the transaction is aborted and its
@@ -304,6 +355,62 @@ impl LazyTransaction {
     }
 }
 
+impl Drop for LazyTransaction {
+    /// The boundary was **abandoned**: the future holding this executor was
+    /// dropped before anything settled it.
+    ///
+    /// That is not hypothetical and not a bug to fix here — it is the
+    /// framework's own shutdown path. A queue worker's `shutdown_timeout`
+    /// elapsing makes apalis drop the job future wherever it was, and if that
+    /// was mid-statement the transaction stays open until the abandoned
+    /// statement drains **server-side**: sea-orm's rollback cannot go out until
+    /// the connection is free again, so every row lock the attempt took is held
+    /// for the rest of that statement, and the connection stays out of the pool.
+    /// The framework cannot cancel a statement — that is not in sea-orm's
+    /// contract — so what it owes is the event, at the level an operator tuning
+    /// a shutdown timeout will actually see.
+    ///
+    /// Silent when nothing was opened (there is nothing to hold) and when
+    /// `finalize` ran (it has already said what happened, in more detail).
+    fn drop(&mut self) {
+        if self.settled.load(Ordering::Relaxed) || self.cell.get().is_none() {
+            return;
+        }
+        report_abandoned(self.transport);
+    }
+}
+
+/// Reports a boundary whose *settling* was abandoned — the future awaiting
+/// `COMMIT` or `ROLLBACK` was dropped before it returned.
+///
+/// The same event `LazyTransaction`'s own `Drop` emits, and it has to be a
+/// second guard rather than a longer-lived first one: settling consumes the
+/// `LazyTransaction`, so by the time the round-trip is in flight there is no
+/// `Drop` left to fire. One sentence for both, so an operator greps once.
+struct AbandonedDuringSettle {
+    transport: &'static str,
+    armed: bool,
+}
+
+impl Drop for AbandonedDuringSettle {
+    fn drop(&mut self) {
+        if self.armed {
+            report_abandoned(self.transport);
+        }
+    }
+}
+
+/// The one wording, for the two guards that can raise it.
+fn report_abandoned(transport: &'static str) {
+    tracing::warn!(
+        target: "nest_rs::orm",
+        transport,
+        outcome = "abandoned",
+        "transaction abandoned without settling; its locks are held until the \
+         abandoned statement drains",
+    );
+}
+
 /// How [`LazyTransaction::finalize`] settled the boundary's transaction.
 #[derive(Debug)]
 pub enum FinalizeOutcome {
@@ -316,10 +423,19 @@ pub enum FinalizeOutcome {
     /// A handle escaped into a task outliving the boundary; nothing could be
     /// committed (the leaked handle's eventual `Drop` rolls back). On a
     /// success path the caller must fail the response loudly.
-    Escaped {
-        /// Whether a transaction had been opened when the escape was detected.
-        opened: bool,
-    },
+    ///
+    /// **It carries no "was anything opened yet" flag, and that is a decision.**
+    /// `finalize` computes it and logs it as a field, because an operator
+    /// reading the event wants it — but the escaped handle is *still live*, so
+    /// "nothing opened at the moment of the check" is not a promise that nothing
+    /// will be: a spawned task holding the executor can open a transaction and
+    /// write seconds later, and those writes are rolled back when it drops.
+    /// Reporting `Settled` on the strength of that flag would turn the one
+    /// failure this whole mechanism exists to refuse — a success that lost its
+    /// writes — into a `warn` nobody reads. So the escape fails closed either
+    /// way, and the flag stays out of the type where a reader would take it for
+    /// a guarantee.
+    Escaped,
     /// The commit itself failed — the caller classifies and logs it.
     CommitFailed(CommitError),
     /// A statement failed inside the transaction, yet the boundary reported
@@ -329,10 +445,20 @@ pub enum FinalizeOutcome {
     /// Handled exactly like [`CommitFailed`](Self::CommitFailed): the caller
     /// fails an otherwise-successful outcome loudly. Already logged at `error`.
     Poisoned {
-        /// Whether the statement that failed did so on a transient conflict, so
-        /// a caller with a retry budget can tell "this will fail identically
-        /// forever" from "this may well win next time". Read from the failure
-        /// the database reported, never guessed.
+        /// Whether the statement that failed did so on something a fresh attempt
+        /// could clear, so a caller with a retry budget can tell "this will fail
+        /// identically forever" from "this may well win next time". Read from
+        /// the failure the database reported, never guessed.
+        ///
+        /// **It answers for this boundary's transaction, and nothing else.**
+        /// `true` says the attempt's *transaction* wrote nothing, which is what
+        /// makes replaying it safe. Work the attempt committed elsewhere — an
+        /// HTTP call, an S3 write, or a statement deliberately stepped out of
+        /// the transaction through
+        /// [`non_transactional`](nest_rs_database::Executor::non_transactional)
+        /// — is outside that promise and is replayed with the rest of the body.
+        /// The step-out is documented as the read-only escape for exactly this
+        /// reason.
         retryable: bool,
     },
 }
@@ -513,9 +639,10 @@ mod tests {
     fn an_unopened_lazy_transaction_hands_out_its_pool() {
         // DATA-S5: the GraphQL endpoint steps a proven read-only operation out
         // of the transaction the POST boundary installed.
-        let lazy = Executor::Lazy(Arc::new(
-            LazyTransaction::new(DatabaseConnection::default()),
-        ));
+        let lazy = Executor::Lazy(Arc::new(LazyTransaction::new(
+            DatabaseConnection::default(),
+            "test",
+        )));
         let handle = nest_rs_database::Executor::non_transactional(&lazy)
             .expect("an unopened lazy transaction can step out");
         assert!(matches!(as_seaorm(&handle), Executor::Pool(_)));

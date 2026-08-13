@@ -197,7 +197,7 @@ next, and you don't have to write Rust to help.
 - 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/YV17labs/NestRS/discussions).
 - 🐛 **Report a bug or request a feature** through [issues](https://github.com/YV17labs/NestRS/issues/new/choose).
 - 🌱 **Pick up a** [`good first issue`](https://github.com/YV17labs/NestRS/labels/good%20first%20issue) — [CONTRIBUTING.md](CONTRIBUTING.md) is the short path from idea to merged PR.
-- 🗺️ **See where it's heading** in the [roadmap](ROADMAP.md).
+- 🗺️ **See what just shipped** in the [changelog](CHANGELOG.md).
 - 🔒 **Found a vulnerability?** Follow [SECURITY.md](SECURITY.md) — please don't open a public issue for it.
 
 If NestRS is useful to you, a ⭐ helps other Rust teams find it.

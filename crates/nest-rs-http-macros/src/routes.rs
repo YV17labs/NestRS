@@ -23,6 +23,9 @@ struct RouteHandler {
     verb: syn::Ident,
     /// The generated wrapper fn's ident.
     wrapper: syn::Ident,
+    /// Whether the verb was `#[sse]` — the endpoint carries the resolved
+    /// [`SseSettings`] and wraps the handler's stream.
+    is_sse: bool,
     /// `#[use_guards]` paths on the method.
     guards: Vec<Path>,
     /// `#[use_filters]` paths on the method.
@@ -103,18 +106,28 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
         };
 
         let verb_idx = method.attrs.iter().position(|attr| {
-            ["get", "post", "put", "delete", "patch"]
+            ["get", "post", "put", "delete", "patch", "sse"]
                 .iter()
                 .any(|v| attr.path().is_ident(v))
         });
         let Some(idx) = verb_idx else { continue };
 
         let attr = method.attrs.remove(idx);
-        let verb_ident = attr
+        let declared_verb = attr
             .path()
             .get_ident()
             .expect("verb attribute has an ident")
             .clone();
+        // `#[sse]` is a `GET` that answers `text/event-stream` — a response
+        // shape, not a sixth method. Collapsing it here is what makes
+        // `#[sse("/x")]` beside `#[get("/x")]` the same duplicate-route error
+        // any two verbs get, instead of two handlers racing for one address.
+        let is_sse = declared_verb == "sse";
+        let verb_ident = if is_sse {
+            format_ident!("get", span = declared_verb.span())
+        } else {
+            declared_verb.clone()
+        };
 
         let route_path: LitStr = match attr.parse_args() {
             Ok(p) => p,
@@ -149,6 +162,41 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(spec) => spec,
             Err(err) => return err.to_compile_error().into(),
         };
+        // `#[authorize]` arms response masking, which round-trips the body
+        // through the entity model. A stream of events is not a wire model and
+        // never will be — there is no value to reconcile, and the shaper would
+        // fail closed at 500 on every request. This is the same case as a
+        // presigned URL or a computed report, and it has the same answer.
+        if is_sse && let Some(spec) = &authorize {
+            return syn::Error::new_spanned(
+                &spec.action,
+                "`#[authorize(...)]` cannot arm a `#[sse]` route: the posture masks the \
+                 response against the entity model, and an event stream is no wire model to \
+                 reconcile. Gate the stream with a capability-only guard instead — \
+                 `#[use_guards(YourGuard)]` checking `ability.can_class(...)`",
+            )
+            .to_compile_error()
+            .into();
+        }
+        // The decorator is not the only way to reach the shaper: `#[public]` +
+        // a hand-written `Authorize<A, E>` is the sanctioned "public reads"
+        // spelling, and `Bind<A, S>` arms it too. On a stream the shaper is
+        // worse than useless — the mask classifies `text/event-stream` as an
+        // opaque body and returns it untouched, so the route reads as masked,
+        // documents itself as masked, and masks nothing. Refuse the parameter,
+        // not just the attribute.
+        if is_sse && let Some(ty) = named_shaper_type(&inputs) {
+            return syn::Error::new_spanned(
+                &ty,
+                "a response shaper cannot arm a `#[sse]` route: masking reconciles the body \
+                 against the entity model, and an event stream is no wire model to reconcile — \
+                 it would be waved through unmasked while the document claims otherwise. Gate \
+                 the stream with a capability-only guard instead, and load what it needs inside \
+                 the handler",
+            )
+            .to_compile_error()
+            .into();
+        }
         if let Some(spec) = &authorize {
             match authorize_param(spec, &inputs) {
                 Ok(param) => inputs.insert(0, param),
@@ -236,6 +284,23 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
                 Ok(d) => d,
                 Err(err) => return err.to_compile_error().into(),
             };
+        // A `#[sse]` route answers `200 text/event-stream` and keeps answering
+        // it: there is no status to override, no redirect to send instead of a
+        // stream, and a header shaper would have to run before the first event
+        // rather than around a body that never completes. One sentence for the
+        // three, so a fourth response decorator inherits the refusal rather
+        // than needing its own.
+        if is_sse && !response_shapers.is_empty() {
+            return syn::Error::new_spanned(
+                &declared_verb,
+                "`#[sse]` takes no response decorator — `#[http_code]`, `#[redirect]` and \
+                 `#[response_header]` all shape a response that completes, and an event \
+                 stream does not. The route answers `200 text/event-stream` for as long as \
+                 it streams",
+            )
+            .to_compile_error()
+            .into();
+        }
         // The effective success status the OpenAPI document advertises for this
         // route (OAPI-O3): a `#[redirect]`/`#[http_code(N)]` overrides the 200
         // default.
@@ -275,7 +340,29 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
             ReturnType::Type(_, ty) => result_inner(ty).is_some(),
             ReturnType::Default => false,
         };
-        let (wrapper_return_type, wrapper_body) = if response_shapers.is_empty() {
+        let (wrapper_return_type, wrapper_body) = if is_sse {
+            // The handler hands back a stream of `SseEvent`; the decorator owns
+            // turning it into the response, applying the keep-alive and arming
+            // the connection ceiling — none of which the developer should have
+            // to remember, and the ceiling least of all. `Result::map` covers
+            // the fallible open (`-> Result<impl Stream<…>, E>`) without naming
+            // `E`; a bare stream takes the direct call. The return type is left
+            // to inference: `SSE` and `Result<SSE, E>` are both `IntoResponse`,
+            // and spelling either would mean naming the handler's own `impl
+            // Stream` opaque type, which no macro can.
+            let wrapped = if returns_result {
+                quote! {
+                    ::core::result::Result::map(#call_expr, |__nestrs_stream| {
+                        ::nest_rs_http::SseSettings::respond(&__nestrs_sse, __nestrs_stream)
+                    })
+                }
+            } else {
+                quote! {
+                    ::nest_rs_http::SseSettings::respond(&__nestrs_sse, #call_expr)
+                }
+            };
+            (quote! { _ }, wrapped)
+        } else if response_shapers.is_empty() {
             (return_type.clone(), call_expr)
         } else {
             let mut wrapper_args: Vec<syn::Ident> = Vec::with_capacity(arg_idents.len() + 1);
@@ -316,10 +403,25 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
                 FnArg::Receiver(_) => None,
             })
             .collect();
+        // The SSE settings are read from `HttpConfig` **once, at mount** and
+        // carried in the endpoint beside the controller `Arc` — they are fixed
+        // for the life of the process, and a container lookup per request on a
+        // route whose whole job is to stay open would be pure overhead. Copied
+        // out of `self` before the async block so the future captures a value
+        // rather than borrowing the endpoint.
+        let (sse_field, sse_binding) = if is_sse {
+            (
+                quote! { __sse: ::nest_rs_http::SseSettings, },
+                quote! { let __nestrs_sse = self.__sse; },
+            )
+        } else {
+            (quote! {}, quote! {})
+        };
         wrappers.push(quote! {
             #[allow(non_camel_case_types)]
             struct #wrapper_name {
                 __ctrl: ::std::sync::Arc<#self_ty>,
+                #sse_field
             }
 
             impl ::nest_rs_http::poem::Endpoint for #wrapper_name {
@@ -333,6 +435,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
                     let (#req_var, mut #body_var) = #req_var.split();
                     #(#extractor_stmts)*
                     let #ctrl_var = &self.__ctrl;
+                    #sse_binding
                     let #res_var: #wrapper_return_type = async move { #wrapper_body }.await;
                     let #res_var = ::nest_rs_http::poem::error::IntoResult::into_result(#res_var);
                     ::std::result::Result::map(
@@ -360,6 +463,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let handler = RouteHandler {
             verb: verb_ident.clone(),
+            is_sse,
             wrapper: wrapper_name.clone(),
             guards,
             filters,
@@ -521,9 +625,18 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
         // nothing else, so inferring it states what the framework emits rather
         // than guessing — the same reading that already infers `response` from
         // a `Json<T>` return. A declaration always wins.
+        if is_sse && let Some(lit) = &api.response_content_type {
+            return syn::Error::new_spanned(
+                lit,
+                "`#[sse]` already answers `text/event-stream`; a `response_content_type` here \
+                 can only make the document describe something the route does not send",
+            )
+            .to_compile_error()
+            .into();
+        }
         let response_content_type = match &api.response_content_type {
             Some(lit) => quote! { ::core::option::Option::Some(#lit) },
-            None if returns_sse(&method.sig.output) => {
+            None if is_sse || returns_sse(&method.sig.output) => {
                 quote! { ::core::option::Option::Some("text/event-stream") }
             }
             None => quote! { ::core::option::Option::None },
@@ -647,6 +760,19 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
         quote!(::nest_rs_guards::HttpGuard),
     );
 
+    // Emitted only when this controller actually streams — an unused binding
+    // would warn in the developer's build, and the resolve costs a container
+    // lookup no non-streaming controller has any use for.
+    let has_sse = routes_by_path
+        .iter()
+        .flat_map(|(_, handlers)| handlers.iter())
+        .any(|handler| handler.is_sse);
+    let sse_resolve = if has_sse {
+        quote! { let __sse = ::nest_rs_http::SseSettings::resolve(container); }
+    } else {
+        quote! {}
+    };
+
     // One entry per path, built *inside* the per-version loop below: a
     // controller declaring `version = ["1", "2"]` mounts the same handlers at
     // two prefixes, and a `#[version]`-narrowed verb drops out of the versions
@@ -718,6 +844,9 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
                 route: ::nest_rs_http::poem::Route,
             ) -> ::nest_rs_http::poem::Route {
                 let __ctrl = ::std::sync::Arc::new(<#self_ty>::from_container(container));
+                // Read once per controller mount, and only when one of its
+                // routes streams — see `sse_resolve`.
+                #sse_resolve
                 let mut __route = route;
                 // `[None]` for an unversioned controller: it still mounts, at
                 // one address. Iterating an empty list would unmount it.
@@ -945,6 +1074,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     let RouteHandler {
         verb: _,
         versions: _,
+        is_sse,
         wrapper,
         guards,
         filters,
@@ -963,7 +1093,11 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     // Constructed at mount time, inside `Controller::mount` where `__ctrl`
     // is in scope — the wrapper endpoint captures the controller `Arc`
     // directly instead of reading it back through a `Data` extension.
-    let wrapper_expr = quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl) } };
+    let wrapper_expr = if *is_sse {
+        quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl), __sse: __sse } }
+    } else {
+        quote! { #wrapper { __ctrl: ::std::sync::Arc::clone(&__ctrl) } }
+    };
     // Arming is the compiler's answer over the parameter *types*, so a renamed
     // import arms exactly like the canonical spelling. What survives from the
     // old name scan is the run-time probe, now a backstop rather than the net:

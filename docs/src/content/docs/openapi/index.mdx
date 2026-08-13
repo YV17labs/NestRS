@@ -158,9 +158,10 @@ type it accepts is knowledge a client needs, even when no type states the parts.
 `response_content_type` replaces `application/json` on the success response and,
 with no `response = Type` beside it, types the body the way OpenAPI spells a
 stream — `string` with `format: binary`, or plain `string` for a `text/*` media
-type. **A handler returning poem's `SSE` needs no annotation at all**: that type
-serializes as `text/event-stream` and nothing else, so the document reads it off
-the return type, exactly as it reads a payload schema off a `Json<T>` return.
+type. **An [`#[sse]`](/http/streaming/) route needs no annotation at all**: it
+answers `text/event-stream` and nothing else, so the document reads the media
+type off the decorator — and declaring `response_content_type` there is a
+compile error, because it could only describe something the route never sends.
 
 ### Header parameters
 
@@ -175,8 +176,8 @@ pub struct StreamResumeDto {
     pub last_event_id: Option<u32>,
 }
 
-#[get("/events")]
-async fn events(&self, resume: Header<StreamResumeDto>) -> SSE { /* ... */ }
+#[sse("/events")]
+async fn events(&self, resume: Header<StreamResumeDto>) -> SseStream { /* ... */ }
 ```
 
 A missing required header, or a value that does not parse into its field's type,

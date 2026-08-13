@@ -61,6 +61,8 @@ config survives adopting or dropping the observability stack.
 | `CORS_CREDENTIALS` | allow credentialed requests — default `false` |
 | `CORS_MAX_AGE` | preflight cache lifetime in seconds |
 | `COMPRESSION` | negotiate response compression from `Accept-Encoding` — default `false` (leave it to the proxy unless the app terminates responses) |
+| `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h), `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
+| `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`, `0` ⇒ none sent |
 | `ACCESS_LOG` | emit one access-log event per request — default `true` (read by `nest-rs-opentelemetry`) |
 | `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `X-Forwarded-For` / `X-Real-IP` are believed. Empty (the default) ⇒ neither header is read and every caller is its transport peer. Shared by [`ClientIp`](/http/extractors/) and the [throttler](/rate-limiting/); an unparseable entry aborts the boot |
 

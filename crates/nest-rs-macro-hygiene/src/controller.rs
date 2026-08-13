@@ -14,8 +14,9 @@
 //!    in `nest-rs-http/tests/integration/controller.rs`; the half that belongs
 //!    here is that it holds through the umbrella's own re-export chain.
 
+use nest_rs::http::futures_util::stream;
 use nest_rs::http::poem::web::{Json, Multipart, Path};
-use nest_rs::http::{ClientIp, Header, controller, input, routes};
+use nest_rs::http::{ClientIp, Header, SseEvent, SseStream, controller, input, routes};
 
 #[input]
 pub struct HygienePayload {
@@ -80,6 +81,17 @@ impl HygieneController {
     async fn upload(&self, headers: Header<HygieneHeaders>, form: Multipart) -> String {
         let _ = form;
         headers.into_inner().marker.unwrap_or_default()
+    }
+
+    /// `#[sse]`, whose expansion resolves a `SseSettings` at mount and wraps
+    /// the handler's stream with the connection ceiling armed. The event type,
+    /// the returned `SseStream` and the combinators that build one all arrive
+    /// through the umbrella — a controller that streams declares neither
+    /// `futures-util` nor `poem`.
+    #[sse("/events")]
+    #[public]
+    async fn events(&self) -> SseStream {
+        SseStream::new(stream::iter([SseEvent::message("tick")]))
     }
 }
 

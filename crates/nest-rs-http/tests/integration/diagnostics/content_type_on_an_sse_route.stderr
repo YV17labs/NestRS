@@ -1,0 +1,5 @@
+error: `#[sse]` already answers `text/event-stream`; a `response_content_type` here can only make the document describe something the route does not send
+  --> tests/integration/diagnostics/content_type_on_an_sse_route.rs:19:35
+   |
+19 |     #[api(response_content_type = "application/json")]
+   |                                   ^^^^^^^^^^^^^^^^^^

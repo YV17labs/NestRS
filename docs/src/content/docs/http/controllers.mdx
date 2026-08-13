@@ -9,7 +9,8 @@ sidebar:
 A controller is a plain struct: inject what it needs, hang verb methods
 off its `impl` block, and `#[routes]` generates the route table. Verb
 attributes (`#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]`) bind a
-method to a path. Extractors, validation and response types all come from
+method to a path, and [`#[sse]`](/http/streaming/) binds a `GET` that
+answers an event stream. Extractors, validation and response types all come from
 [poem](https://docs.rs/poem) — NestRS adds the DI shape, the self-composing
 route table, and a few framework-specific extractors covered on the
 [extractors](/http/extractors/) page.

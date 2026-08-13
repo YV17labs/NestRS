@@ -8,9 +8,9 @@ sidebar:
 
 A handler can return a body that streams instead of one buffered whole in
 memory, or a live Server-Sent Events feed the browser reads with
-`EventSource`. `#[routes]` passes the handler's return type through
-untouched, so any poem response type works — no wrapper, no schema
-requirement.
+`EventSource`. A streamed body is any poem response type, passed through
+untouched — no wrapper, no schema requirement; an events feed is its own
+decorator, `#[sse]`.
 
 ```rust title="crates/features/src/audio/http/controller.rs (abridged)" {6-8}
 #[get("/download")]
@@ -36,22 +36,71 @@ server without ever sitting whole in process memory.
 
 ## Server-Sent Events
 
-Return `poem::web::sse::SSE` for a long-lived `text/event-stream`. Each
-item the stream yields is an `Event`; the browser reconnects on drop.
+`#[sse("/path")]` is a `GET` that answers a long-lived `text/event-stream`.
+The handler returns an `SseStream` of `SseEvent`s and nothing else — the
+decorator owns the response, the keep-alive and the connection ceiling.
 
 ```rust title="crates/features/src/audio/http/controller.rs (abridged)"
-#[get("/events")]
-async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SSE {
-    let stream = /* a Stream<Item = Event> polling the job */;
-    SSE::new(stream).keep_alive(Duration::from_secs(15))
+#[sse("/events")]
+async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SseStream {
+    let stream = /* a Stream<Item = SseEvent> polling the job */;
+    SseStream::new(stream)
 }
 ```
 
-The [OpenAPI document](/openapi/) types an SSE route with no annotation at
-all: `SSE` serializes as `text/event-stream` and nothing else, so the media
-type is read off the return type. A hand-built streamed `Response` states
-its own with `#[api(response_content_type = "audio/mpeg")]` — there is no
-return type to read it from.
+`SseEvent` and `SseStream` come from `nest_rs::http`, which also re-exports
+`futures_util` — so a controller that streams declares no transport crate of
+its own. `SseStream::new` is what makes the stream
+`'static`: an `async fn` on `&self` returning `impl Stream` captures the
+`&self` lifetime, and a response body has to outlive the call.
+
+The [OpenAPI document](/openapi/) types the route from the decorator —
+`text/event-stream`, with no annotation. A hand-built streamed `Response`
+states its own with `#[api(response_content_type = "audio/mpeg")]`; on an
+`#[sse]` route that key is a compile error, because it could only describe
+something the route never sends.
+
+### Configuration
+
+Two `NESTRS_HTTP__*` keys, both defaulting to something usable:
+
+| Key | Default | What it does |
+|---|---|---|
+| `SSE_MAX_CONNECTION_SECS` | `14400` (4 h) | ends the stream, so the client's `EventSource` reconnects. `0` ⇒ unlimited |
+| `SSE_KEEP_ALIVE_SECS` | `15` | comment interval that keeps an idle feed alive through proxies. `0` ⇒ none |
+
+The ceiling is a **security** control, and the same one
+`NESTRS_WS__MAX_CONNECTION_SECS` and
+`NESTRS_GRAPHQL__MAX_CONNECTION_SECS` carry, at the same default. A stream
+is authenticated once, when the request arrives, then emits with those
+privileges for as long as it lives — so without a ceiling it outlives an
+expired token, a logout, or a revoked grant. Reconnecting re-runs the guard
+chain.
+
+It bounds **emission**: the deadline is evaluated whenever the response body is
+polled, so no event is produced past the ceiling at any rate the client reads
+at. Reconnecting re-runs the guard chain, which is the window that matters.
+
+**What it does not bound is the socket**, and that is reported rather than
+quietly closed. A peer that stops reading parks the write, hyper stops polling
+the body, and the connection — its task, its buffers, everything the stream
+holds — outlives the ceiling until that peer reads again. Two attempts to close
+it inside the framework were both wrong, in opposite directions, and both looked
+right: the only thing still polled while a write is parked is the *socket*, and
+a socket does not know which response its bytes belong to. Bounding it there
+truncated unrelated traffic — a full-speed client downloading 4 MB over a
+connection that had carried a stream received 1.4 MB under a declared
+`content-length` — and HTTP/2 multiplexes an origin's whole traffic onto that
+one socket.
+
+Bound idle sockets at the server or the reverse proxy until the transport can
+express "this response is stalled": that is the shape enforceable without
+knowing whose bytes are queued.
+
+Gate a stream with a **capability-only guard**
+(`#[use_guards(TranscodeGuard)]`), never `#[authorize]`: the posture masks
+the response against the entity model, and an event stream is no wire model
+to reconcile. That combination is a compile error saying so.
 
 ## Limits
 

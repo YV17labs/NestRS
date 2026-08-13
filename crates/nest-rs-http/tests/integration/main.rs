@@ -11,6 +11,7 @@ mod global_prefix;
 mod header;
 mod input;
 mod route_decorators;
+mod sse;
 mod tls;
 mod versioning;
 

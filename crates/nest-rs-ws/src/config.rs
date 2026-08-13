@@ -69,13 +69,7 @@ impl WsConfig {
 
 impl Config for WsConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        // `0` is the "unlimited" sentinel; unset keeps the base's ceiling; a
-        // set-but-unparseable value surfaces as a boot error.
-        let max_connection = match env.parse::<u64>("MAX_CONNECTION_SECS")? {
-            None => base.max_connection,
-            Some(0) => None,
-            Some(secs) => Some(Duration::from_secs(secs)),
-        };
+        let max_connection = env.seconds("MAX_CONNECTION_SECS", base.max_connection)?;
         let max_message_bytes = env
             .parse::<usize>("MAX_MESSAGE_BYTES")?
             .unwrap_or(base.max_message_bytes);

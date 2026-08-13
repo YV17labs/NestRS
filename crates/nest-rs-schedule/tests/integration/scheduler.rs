@@ -9,8 +9,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use nest_rs_core::{Container, Transport};
+use nest_rs_schedule::nest_rs_worker::{JobSettlement, JobTransaction};
 use nest_rs_schedule::{CronExpression, CronJobMeta, Scheduler, Trigger};
-use nest_rs_worker::JobContext;
+use nest_rs_worker::{self, JobContext};
 use tokio_util::sync::CancellationToken;
 
 static INTERVAL_HITS: AtomicU64 = AtomicU64::new(0);
@@ -54,12 +55,14 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             method: "interval",
             trigger: Trigger::Interval(Duration::from_millis(200)),
             run: tick_interval,
+            transaction: JobTransaction::PerAttempt,
         })
         .attach_meta::<TimeoutHost, CronJobMeta>(CronJobMeta {
             provider: "TimeoutHost",
             method: "timeout",
             trigger: Trigger::Timeout(Duration::from_millis(300)),
             run: tick_timeout,
+            transaction: JobTransaction::PerAttempt,
         })
         .attach_meta::<CronHost, CronJobMeta>(CronJobMeta {
             provider: "CronHost",
@@ -69,6 +72,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
                 tz: None,
             },
             run: tick_cron,
+            transaction: JobTransaction::PerAttempt,
         })
         .build();
 
@@ -133,12 +137,14 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             method: "panics",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_panic,
+            transaction: JobTransaction::PerAttempt,
         })
         .attach_meta::<SurvivorHost, CronJobMeta>(CronJobMeta {
             provider: "SurvivorHost",
             method: "survives",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_survivor,
+            transaction: JobTransaction::PerAttempt,
         })
         .build();
 
@@ -182,6 +188,7 @@ async fn invalid_cron_expression_fails_configure() {
                 tz: None,
             },
             run: tick_cron,
+            transaction: JobTransaction::PerAttempt,
         })
         .build();
 
@@ -209,9 +216,13 @@ struct MarkerContext;
 impl JobContext for MarkerContext {
     fn scope<'a>(
         &'a self,
-        inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(MARKER.scope(7, inner))
+        _transaction: JobTransaction,
+        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+        Box::pin(async move {
+            MARKER.scope(7, inner).await;
+            JobSettlement::Settled
+        })
     }
 }
 
@@ -235,6 +246,7 @@ async fn jobs_run_inside_the_bound_job_context() {
             method: "observe",
             trigger: Trigger::Interval(Duration::from_millis(100)),
             run: tick_observe,
+            transaction: JobTransaction::PerAttempt,
         })
         .build();
 
@@ -256,5 +268,92 @@ async fn jobs_run_inside_the_bound_job_context() {
     assert!(
         OBSERVED_MARKER.load(Ordering::SeqCst),
         "the tick ran inside the bound JobContext, observing its ambient marker",
+    );
+}
+
+// A context that cannot honour what the job did — the shape a failed commit
+// takes. A schedule has no retry budget and no dead-letter, so the
+// classification it carries changes nothing here; what must not happen is the
+// attempt passing for a success.
+struct UnsettleableContext(nest_rs_worker::Unhonoured);
+
+impl JobContext for UnsettleableContext {
+    fn scope<'a>(
+        &'a self,
+        _transaction: JobTransaction,
+        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+        Box::pin(async move {
+            inner.await;
+            JobSettlement::Unhonoured(self.0)
+        })
+    }
+}
+
+fn tick_succeed(_: &Container) -> RunFuture<'_> {
+    Box::pin(async { Ok(()) })
+}
+
+/// The job body returns `Ok` and its writes never landed, so the schedule has
+/// to say so — its only outcome being the event an operator reads. Single-thread
+/// runtime on purpose: `LogCapture` is thread-local, and the scheduler's spawned
+/// task shares this thread here.
+#[tokio::test]
+async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
+    struct UnsettleableHost;
+
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = Container::builder()
+        .provide_dyn::<dyn JobContext>(Arc::new(UnsettleableContext(
+            nest_rs_worker::Unhonoured::deterministic(
+                "the job's transaction could not be committed",
+            ),
+        )))
+        .attach_meta::<UnsettleableHost, CronJobMeta>(CronJobMeta {
+            provider: "UnsettleableHost",
+            method: "tick",
+            trigger: Trigger::Interval(Duration::from_millis(50)),
+            run: tick_succeed,
+            transaction: JobTransaction::PerAttempt,
+        })
+        .build();
+
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("serve returns Ok");
+
+    let event = logs
+        .find("nest_rs::schedule", "scheduled job failed")
+        .into_iter()
+        .next()
+        .expect("a tick whose transaction could not be settled is reported at error");
+    assert_eq!(event.level, "error");
+    assert_eq!(event.field("provider").as_deref(), Some("UnsettleableHost"));
+    assert!(
+        event
+            .field("error")
+            .expect("the failure names itself")
+            .contains("could not be committed"),
+        "and it carries the context's own sentence, not a message the schedule \
+         invented: {event:?}",
+    );
+    assert_eq!(
+        event.field("retryable").as_deref(),
+        Some("false"),
+        "and the classification the context reached — a schedule has no budget \
+         to spend on it, so reporting it is the whole of what it owes, and \
+         reporting nothing while saying otherwise is what an audit found: \
+         {event:?}",
     );
 }

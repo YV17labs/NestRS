@@ -96,6 +96,10 @@ pub(crate) async fn with_data_context<T>(
                 outcome
             }
         }
+        // Already logged at `error` by `finalize`: a statement failed inside
+        // the transaction while the operation reported success, so its writes
+        // are gone. Report the edge's opaque failure rather than the success.
+        FinalizeOutcome::Poisoned { .. } => internal_error(),
         FinalizeOutcome::CommitFailed(err) => {
             tracing::error!(
                 target: "nest_rs::orm",

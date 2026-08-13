@@ -4,8 +4,9 @@
 //! A worker transport runs work that no client is actively awaiting, so it has
 //! no HTTP request to hang ambient state from. The seam in this crate
 //! ([`JobContext`]) lets a bridge (e.g. an ORM module) install per-job ambient
-//! state — a pool executor, a tenant scope, a trace span — without coupling the
-//! worker transport to that bridge's domain.
+//! state — an executor (by default a transaction settled on the job's own
+//! outcome, see [`JobTransaction`]), a tenant scope, a trace span — without
+//! coupling the worker transport to that bridge's domain.
 //!
 //! Vocabulary: *worker* = transport role (drives execution off the request
 //! path); *job* = unit of work executed. [`JobContext`] is per-**job** ambient
@@ -15,4 +16,4 @@
 
 pub mod context;
 
-pub use context::{JobContext, run_in_job_context};
+pub use context::{JobContext, JobSettlement, JobTransaction, Unhonoured, run_in_job_context};

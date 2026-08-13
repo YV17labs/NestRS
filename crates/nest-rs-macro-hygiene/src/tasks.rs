@@ -9,9 +9,12 @@ pub struct HygieneTasks;
 
 #[scheduled]
 impl HygieneTasks {
-    /// Interval form. A scheduled method returns `anyhow::Result<()>` by
-    /// contract — named here through the surface re-export.
-    #[every("60s")]
+    /// Interval form, carrying the shared `transactional` key so the trailing
+    /// named argument is proved on a trigger that takes one of its own — the
+    /// grammar `#[cron]` shares. A scheduled method returns
+    /// `anyhow::Result<()>` by contract, named here through the surface
+    /// re-export.
+    #[every("60s", transactional = false)]
     async fn tick(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }
@@ -22,8 +25,13 @@ impl HygieneTasks {
         Ok(())
     }
 
-    /// Cron form.
-    #[cron(CronExpression::EVERY_MINUTE)]
+    /// Cron form, with both of its named arguments — `tz` is the trigger's
+    /// own, `transactional` the shared one, and they parse through one list.
+    #[cron(
+        CronExpression::EVERY_MINUTE,
+        tz = "Europe/Paris",
+        transactional = true
+    )]
     async fn heartbeat(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }

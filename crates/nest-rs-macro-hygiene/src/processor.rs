@@ -33,7 +33,10 @@ impl HygieneProcessor {
     /// `T`, the pipe runs after deserialization, and a rejection becomes a job
     /// error. It is exercised here because the carrier is the part of the
     /// expansion that reaches `nest-rs-pipes`.
-    #[process(queue = HygieneQueue, retries = 1)]
+    /// `transactional = false` is the opt-out: the expansion names
+    /// `JobTransaction` through `nest-rs-worker`, which the queue feature has
+    /// to pull for this to resolve.
+    #[process(queue = HygieneQueue, retries = 1, transactional = false)]
     async fn transcode(&self, job: Valid<HygieneCommand>) -> nest_rs::core::anyhow::Result<()> {
         let _ = job.into_inner().file;
         Ok(())

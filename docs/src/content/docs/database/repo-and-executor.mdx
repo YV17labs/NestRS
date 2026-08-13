@@ -75,7 +75,7 @@ Three scopes coexist:
 | Scope    | Installed by                | What it carries                       |
 |----------|-----------------------------|---------------------------------------|
 | Request  | `DbContext` interceptor     | Pool on safe routes, txn on mutations |
-| Job      | `WorkerDbContext` (workers) | Pool, no transaction                  |
+| Job      | `WorkerDbContext` (workers) | One transaction per attempt (or pool) |
 | Unscoped | nothing                     | `Repo::conn()` errors                 |
 
 `current_executor_scope()` distinguishes Request from Job — `Repo` uses it
@@ -131,30 +131,83 @@ don't smuggle the executor across `tokio::spawn`; if you need background
 work after the request, enqueue a job.
 </Aside>
 
-## Workers — same Repo, no transaction
+## Workers — same Repo, one transaction per attempt
 
-Queue processors and cron jobs run outside any HTTP request — no method
-to classify, no response to inspect. `DatabaseModule` binds a
+Queue processors and cron jobs run outside any HTTP request — no method to
+classify, no response to inspect. `DatabaseModule` binds a
 `WorkerDbContext` to `dyn JobContext`, which the worker transport
 (`#[scheduled]`, `#[processor]`) runs around every job:
 
 ```text
 job
   ↓
-WorkerDbContext   ──→ installs Executor::Pool, no transaction
+WorkerDbContext   ──→ installs Executor::Lazy, settled on the job's Ok/Err
   ↓
 processor body
 ```
 
-A job runs on the pool. No caller means no ambient ability, which means
-`Repo` reads and writes are **unscoped** — correct for system work with no
-principal to scope to. A job that needs scoping wraps its body in
-`with_ability(...)` explicitly.
+**A job attempt is atomic by default.** The transaction is lazy — a job
+that never touches the database never opens one — and it commits when the
+job returns `Ok`, rolls back otherwise. That is what makes a **retry**
+safe: a job that failed halfway left nothing behind for the second attempt
+to write again.
 
-A mutating job that wants atomicity opens its own transaction through
-SeaORM's `TransactionTrait` — same as any programmatic transaction in a
-service — and runs `retry_on_conflict` around it if needed
-(see [Transactions](/database/transactions/)).
+**Atomic per attempt is not the same as idempotent per job**, and the
+difference is the queue's, not the transaction's. A backend that delivers
+at least once — which is what a durable queue is — can redeliver a job
+whose attempt *committed*, if the worker died between the commit and the
+acknowledgement. The transaction guarantees you never see half an
+attempt's writes; it cannot promise the body runs once. A job whose
+re-execution would be harmful wants an idempotency key regardless of this
+setting.
+
+**And a retry only happens where it could help.** A job whose body succeeded
+but whose transaction could not be settled is a failed attempt — but *whether
+to re-attempt it* is read from what the database said, never assumed. A
+serialization failure or a deadlock (`40001`, `40P01`) is retryable; a
+constraint checked at `COMMIT` fails identically every time, and a commit
+whose outcome is **unknown** — the connection lost mid-`COMMIT` — may have
+landed. Neither of the last two is replayed: a retry re-runs the whole body,
+including every side effect that is not the database's, and the framework only
+promises "nothing left to repeat" for a transaction it knows rolled back. Both
+abort straight to the dead-letter queue, where the failure is visible, instead
+of burning the budget in silence.
+
+A **schedule** has no retry budget and no dead-letter, so `#[every]` /
+`#[cron]` / `#[after]` report the failure at `error` on `nest_rs::schedule`
+and fire again at the next occurrence — the classification is logged rather
+than acted on, because there is nothing there for it to decide.
+
+No caller means no ambient ability, which means `Repo` reads and writes are
+**unscoped** — correct for system work with no principal to scope to. A job
+that needs scoping wraps its body in `with_ability(...)` explicitly.
+
+### The opt-out, and when it is right
+
+`transactional = false` runs the job on the pool, where every statement
+commits on its own:
+
+```rust
+#[process(queue = AudioQueue, retries = 3, transactional = false)]
+async fn transcode(&self, job: TranscodeCommand) -> anyhow::Result<()> { /* ... */ }
+```
+
+The key is the same word on all four job decorators — `#[process]`,
+`#[every]`, `#[cron]`, `#[after]`.
+
+Reach for it when the job **brackets long work that is not the
+database's**: read a row, spend minutes transcoding, write the result. The
+default would hold a pooled connection across the middle. Such a job owns
+its own consistency, and an **idempotency key** is what makes its retry
+safe — the transaction never was.
+
+A job that wants a *narrower* unit than the attempt has one sanctioned
+answer today: `transactional = false`, plus its own idempotency. The ambient
+executor is not a `TransactionTrait`, so there is no supported way to nest a
+second unit inside the attempt — and `retry_on_conflict` around the ambient
+executor would replay into the transaction the conflict already aborted.
+Both are for a *programmatic* boundary in a service, not for a job body (see
+[Transactions](/database/transactions/)).
 
 ## The contextless-path exception
 

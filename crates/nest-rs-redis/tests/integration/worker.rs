@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use nest_rs_core::{Container, Transport, injectable};
 use nest_rs_queue::{ProcessMethod, Processor, WIRE_FORMAT_VERSION, processor, queue};
 use nest_rs_redis::QueueWorker;
-use nest_rs_worker::JobContext;
+use nest_rs_worker::{JobContext, JobSettlement, JobTransaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -170,9 +170,13 @@ struct MarkerContext;
 impl JobContext for MarkerContext {
     fn scope<'a>(
         &'a self,
-        inner: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        Box::pin(MARKER.scope(7, inner))
+        _transaction: JobTransaction,
+        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+        Box::pin(async move {
+            MARKER.scope(7, inner).await;
+            JobSettlement::Settled
+        })
     }
 }
 
@@ -199,9 +203,15 @@ async fn processors_run_inside_the_bound_job_context() {
     let job_context = container
         .get_dyn::<dyn JobContext>()
         .expect("JobContext bound");
-    nest_rs_worker::run_in_job_context(Some(&job_context), async {
-        ProbeProcessor.process(1).await.expect("job succeeds");
-    })
+    nest_rs_worker::run_in_job_context(
+        Some(&job_context),
+        JobTransaction::PerAttempt,
+        async {
+            ProbeProcessor.process(1).await.expect("job succeeds");
+        },
+        |()| true,
+        |_| (),
+    )
     .await;
 
     assert!(

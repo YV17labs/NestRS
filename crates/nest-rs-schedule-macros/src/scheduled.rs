@@ -11,7 +11,10 @@
 
 use std::str::FromStr;
 
-use nest_rs_codegen::{DecoratorPair, Edge, impl_self_ident, require_str_lit};
+use nest_rs_codegen::{
+    DecoratorPair, Edge, TRANSACTIONAL, impl_self_ident, job_transaction, require_str_lit,
+    transactional_value,
+};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -70,10 +73,11 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
             .into();
         }
 
-        let trigger_tokens = match parse_trigger(&trigger_attr) {
-            Ok(tokens) => tokens,
+        let (trigger_tokens, transactional) = match parse_trigger(&trigger_attr) {
+            Ok(parsed) => parsed,
             Err(err) => return err.to_compile_error().into(),
         };
+        let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_schedule));
 
         let method_ident = method.sig.ident.clone();
         let method_name = method_ident.to_string();
@@ -85,6 +89,7 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
                     method: #method_name,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     trigger: #trigger_tokens,
+                    transaction: #transaction_tokens,
                     run: |__container| ::std::boxed::Box::pin(async move {
                         let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
                             .expect(::std::concat!(
@@ -128,7 +133,13 @@ fn is_trigger_attr(path: &syn::Path) -> bool {
     path.is_ident("cron") || path.is_ident("every") || path.is_ident("after")
 }
 
-fn parse_trigger(attr: &Attribute) -> syn::Result<TokenStream2> {
+/// The trigger tokens, plus whatever the shared `transactional` key said.
+///
+/// All three triggers take the key in the same place — after the trigger's own
+/// argument, as a named value — so `#[every("30s", transactional = false)]`,
+/// `#[after(..)]` and `#[cron(.., tz = .., transactional = false)]` are one
+/// grammar rather than three that happen to spell a word alike.
+fn parse_trigger(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> {
     let key = attr
         .path()
         .get_ident()
@@ -136,72 +147,141 @@ fn parse_trigger(attr: &Attribute) -> syn::Result<TokenStream2> {
         .unwrap_or_default();
     match key.as_str() {
         "every" => {
-            let lit: LitStr = attr.parse_args()?;
+            let (lit, transactional) = parse_period(attr, &key)?;
             let ms = period_millis(&lit)?;
-            Ok(quote! {
-                ::nest_rs_schedule::Trigger::Interval(
-                    ::std::time::Duration::from_millis(#ms)
-                )
-            })
+            Ok((
+                quote! {
+                    ::nest_rs_schedule::Trigger::Interval(
+                        ::std::time::Duration::from_millis(#ms)
+                    )
+                },
+                transactional,
+            ))
         }
         "after" => {
-            let lit: LitStr = attr.parse_args()?;
+            let (lit, transactional) = parse_period(attr, &key)?;
             let ms = period_millis(&lit)?;
-            Ok(quote! {
-                ::nest_rs_schedule::Trigger::Timeout(
-                    ::std::time::Duration::from_millis(#ms)
-                )
-            })
+            Ok((
+                quote! {
+                    ::nest_rs_schedule::Trigger::Timeout(
+                        ::std::time::Duration::from_millis(#ms)
+                    )
+                },
+                transactional,
+            ))
         }
         "cron" => parse_cron(attr),
         _ => unreachable!("is_trigger_attr filtered the attribute set"),
     }
 }
 
-fn parse_cron(attr: &Attribute) -> syn::Result<TokenStream2> {
-    let tokens = attr
+/// The tokens inside `#[<key>(…)]`, or `expects` as the error when the
+/// attribute carries no list at all.
+fn list_tokens(attr: &Attribute, expects: String) -> syn::Result<TokenStream2> {
+    Ok(attr
         .meta
         .require_list()
-        .map_err(|_| {
-            syn::Error::new(
-                attr.span(),
-                "#[cron] expects `#[cron(\"...\")]`, \
-                 `#[cron(CronExpression::EVERY_MINUTE)]`, or \
-                 `#[cron(\"...\", tz = \"Europe/Paris\")]`",
-            )
-        })?
+        .map_err(|_| syn::Error::new(attr.span(), expects))?
         .tokens
-        .clone();
+        .clone())
+}
 
-    let parser = |stream: syn::parse::ParseStream<'_>| -> syn::Result<(Expr, Option<LitStr>)> {
-        let expr: Expr = stream.parse()?;
-        let mut tz: Option<LitStr> = None;
-        if stream.peek(Token![,]) {
-            stream.parse::<Token![,]>()?;
-            // Allow trailing comma.
-            if !stream.is_empty() {
-                let metas: Punctuated<MetaNameValue, Token![,]> =
-                    Punctuated::parse_terminated(stream)?;
-                for meta in metas {
-                    let name = meta
-                        .path
-                        .get_ident()
-                        .map(ToString::to_string)
-                        .unwrap_or_default();
-                    if name == "tz" {
-                        tz = Some(require_str_lit(&meta.value, "cron", "tz", "...")?);
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            &meta.path,
-                            format!("unknown #[cron] argument `{name}`; expected `tz`"),
-                        ));
-                    }
-                }
-            }
-        }
-        Ok((expr, tz))
+/// `#[every("30s")]` / `#[after("10s")]`, with the optional shared key after it.
+fn parse_period(attr: &Attribute, key: &str) -> syn::Result<(LitStr, Option<bool>)> {
+    let tokens = list_tokens(
+        attr,
+        format!(
+            "#[{key}] expects `#[{key}(\"30s\")]`, optionally followed by `{TRANSACTIONAL} = false`"
+        ),
+    )?;
+    let parser = |stream: syn::parse::ParseStream<'_>| -> syn::Result<(LitStr, Option<bool>)> {
+        let lit: LitStr = stream.parse()?;
+        let (transactional, _) = parse_trailing_keys(stream, key, None)?;
+        Ok((lit, transactional))
     };
-    let (expr, tz) = parser.parse2(tokens)?;
+    parser.parse2(tokens)
+}
+
+/// The named keys a trigger accepts after its own argument: the shared
+/// `transactional`, plus the one key the trigger itself may own (`tz`, on
+/// `#[cron]`). Returns both, so the one "unknown key" sentence is worded here
+/// and lists exactly what this trigger takes.
+///
+/// **A repeated key is refused, not last-write-wins.** `#[cron("…", tz = "A",
+/// tz = "B")]` has no reading a developer could have meant, and accepting it
+/// silently drops one of two declarations — which is the shape of defect this
+/// whole grammar was unified to remove.
+fn parse_trailing_keys(
+    stream: syn::parse::ParseStream<'_>,
+    key: &str,
+    extra: Option<&str>,
+) -> syn::Result<(Option<bool>, Option<MetaNameValue>)> {
+    let mut transactional: Option<bool> = None;
+    let mut owned: Option<MetaNameValue> = None;
+    if !stream.peek(Token![,]) {
+        return Ok((transactional, owned));
+    }
+    stream.parse::<Token![,]>()?;
+    // Allow a trailing comma.
+    if stream.is_empty() {
+        return Ok((transactional, owned));
+    }
+    let metas: Punctuated<MetaNameValue, Token![,]> = Punctuated::parse_terminated(stream)?;
+    for meta in metas {
+        let name = meta
+            .path
+            .get_ident()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let taken = if name == TRANSACTIONAL {
+            transactional.is_some()
+        } else if extra == Some(name.as_str()) {
+            owned.is_some()
+        } else {
+            let accepted = match extra {
+                Some(own) => format!("`{own}` or `{TRANSACTIONAL}`"),
+                None => format!("`{TRANSACTIONAL}`"),
+            };
+            return Err(syn::Error::new_spanned(
+                &meta.path,
+                format!("unknown #[{key}] argument `{name}`; expected {accepted}"),
+            ));
+        };
+        if taken {
+            return Err(syn::Error::new_spanned(
+                &meta.path,
+                format!("#[{key}] takes at most one `{name}`"),
+            ));
+        }
+        if name == TRANSACTIONAL {
+            transactional = Some(transactional_value(&meta.value)?);
+        } else {
+            owned = Some(meta);
+        }
+    }
+    Ok((transactional, owned))
+}
+
+fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> {
+    let tokens = list_tokens(
+        attr,
+        format!(
+            "#[cron] expects `#[cron(\"...\")]` or \
+             `#[cron(CronExpression::EVERY_MINUTE)]`, optionally followed by \
+             `tz = \"Europe/Paris\"` and `{TRANSACTIONAL} = false`"
+        ),
+    )?;
+
+    let parser =
+        |stream: syn::parse::ParseStream<'_>| -> syn::Result<(Expr, Option<LitStr>, Option<bool>)> {
+            let expr: Expr = stream.parse()?;
+            let (transactional, tz) = parse_trailing_keys(stream, "cron", Some("tz"))?;
+            let tz = tz
+                .map(|meta| require_str_lit(&meta.value, "cron", "tz", "..."))
+                .transpose()?;
+            Ok((expr, tz, transactional))
+        };
+    let (expr, tz, transactional) = parser.parse2(tokens)?;
 
     // Literal cron expressions validate now; `CronExpression::X` paths wait
     // for boot (the `Scheduler::configure` call).
@@ -215,9 +295,12 @@ fn parse_cron(attr: &Attribute) -> syn::Result<TokenStream2> {
         Some(lit) => quote! { ::std::option::Option::Some(#lit) },
         None => quote! { ::std::option::Option::None },
     };
-    Ok(quote! {
-        ::nest_rs_schedule::Trigger::Cron { expr: #expr, tz: #tz_tokens }
-    })
+    Ok((
+        quote! {
+            ::nest_rs_schedule::Trigger::Cron { expr: #expr, tz: #tz_tokens }
+        },
+        transactional,
+    ))
 }
 
 /// Validate a literal cron expression at macro-expansion time, so a bad

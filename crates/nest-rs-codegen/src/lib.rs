@@ -18,6 +18,7 @@ mod capability;
 mod casing;
 mod crud;
 mod inject;
+mod job;
 mod pair;
 mod posture;
 mod root;
@@ -41,6 +42,7 @@ pub use inject::{
     injected_methods_with_layers, injected_names_method, injected_names_with_layers, layer_deps,
     mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
 };
+pub use job::{TRANSACTIONAL, job_transaction, transactional_value};
 pub use pair::DecoratorPair;
 pub use posture::{Posture, PostureRules};
 pub use root::reroot;

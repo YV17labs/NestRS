@@ -12,7 +12,7 @@ use futures_util::FutureExt;
 use nest_rs_core::{
     Container, DiscoveryService, ReachableProviders, Transport, inventory, panic_message,
 };
-use nest_rs_worker::{JobContext, run_in_job_context};
+use nest_rs_worker::{JobContext, JobTransaction, Unhonoured, run_in_job_context};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval, sleep};
 use tokio_util::sync::CancellationToken;
@@ -30,20 +30,29 @@ enum Job {
     Interval {
         id: JobId,
         period: Duration,
-        run: RunFn,
+        task: Task,
     },
     Timeout {
         id: JobId,
         delay: Duration,
-        run: RunFn,
+        task: Task,
     },
     Cron {
         id: JobId,
         // Boxed because a parsed Cron is ~330 bytes (large_enum_variant).
         schedule: Box<Cron>,
         tz: Option<Tz>,
-        run: RunFn,
+        task: Task,
     },
+}
+
+/// What one fire runs, and how its data-layer work is settled — travelling
+/// together because they are decided together, at the `#[every]` / `#[cron]` /
+/// `#[after]` that declares the job.
+#[derive(Clone, Copy)]
+struct Task {
+    run: RunFn,
+    transaction: JobTransaction,
 }
 
 /// A job's identity, kept split (host struct + method) so logs filter on
@@ -57,6 +66,15 @@ struct JobId {
 impl std::fmt::Display for JobId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}::{}", self.provider, self.method)
+    }
+}
+
+impl From<&CronJobMeta> for Task {
+    fn from(meta: &CronJobMeta) -> Self {
+        Self {
+            run: meta.run,
+            transaction: meta.transaction,
+        }
     }
 }
 
@@ -87,12 +105,12 @@ impl Scheduler {
             Trigger::Interval(period) => Job::Interval {
                 id,
                 period,
-                run: meta.run,
+                task: Task::from(&**meta),
             },
             Trigger::Timeout(delay) => Job::Timeout {
                 id,
                 delay,
-                run: meta.run,
+                task: Task::from(&**meta),
             },
             Trigger::Cron { expr, tz } => {
                 let schedule = Cron::from_str(expr).with_context(|| {
@@ -111,7 +129,7 @@ impl Scheduler {
                     id,
                     schedule: Box::new(schedule),
                     tz,
-                    run: meta.run,
+                    task: Task::from(&**meta),
                 }
             }
         })
@@ -158,6 +176,7 @@ impl Transport for Scheduler {
                 method: entry.method,
                 trigger: entry.trigger,
                 run: entry.run,
+                transaction: entry.transaction,
             });
             jobs.push(Scheduler::resolve(&synthesized)?);
         }
@@ -203,7 +222,7 @@ impl Transport for Scheduler {
         }
 
         // Resolve once: a database module's `WorkerDbContext` binds this so
-        // each tick runs with a pool executor and the job queries through Repo.
+        // each tick runs with an executor and the job queries through Repo.
         let ctx = container.get_dyn::<dyn JobContext>();
 
         let mut tasks = JoinSet::new();
@@ -229,7 +248,7 @@ async fn run_job(
 ) {
     let id = job.id();
     match job {
-        Job::Interval { period, run, .. } => {
+        Job::Interval { period, task, .. } => {
             let mut ticker = interval(period);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             // Drop the immediate first tick — semantics is "every N", not
@@ -238,19 +257,19 @@ async fn run_job(
             loop {
                 tokio::select! {
                     _ = token.cancelled() => break,
-                    _ = ticker.tick() => fire(id, run, &container, &ctx).await,
+                    _ = ticker.tick() => fire(id, task, &container, &ctx).await,
                 }
             }
         }
-        Job::Timeout { delay, run, .. } => {
+        Job::Timeout { delay, task, .. } => {
             tokio::select! {
                 _ = token.cancelled() => return,
-                _ = sleep(delay) => fire(id, run, &container, &ctx).await,
+                _ = sleep(delay) => fire(id, task, &container, &ctx).await,
             }
             token.cancelled().await;
         }
         Job::Cron {
-            schedule, tz, run, ..
+            schedule, tz, task, ..
         } => loop {
             let wait = match next_delay(&schedule, tz) {
                 Some(d) => d,
@@ -267,7 +286,7 @@ async fn run_job(
             };
             tokio::select! {
                 _ = token.cancelled() => break,
-                _ = sleep(wait) => fire(id, run, &container, &ctx).await,
+                _ = sleep(wait) => fire(id, task, &container, &ctx).await,
             }
         },
     }
@@ -288,15 +307,30 @@ fn next_delay(schedule: &Cron, tz: Option<Tz>) -> Option<Duration> {
     Some((next_utc - now).to_std().unwrap_or(Duration::ZERO))
 }
 
-async fn fire(id: JobId, run: RunFn, container: &Container, ctx: &Option<Arc<dyn JobContext>>) {
+async fn fire(id: JobId, task: Task, container: &Container, ctx: &Option<Arc<dyn JobContext>>) {
     // Isolate the fire: a panic in the user method (or the `.expect` the
     // `#[scheduled]` macro emits when the provider is missing) would otherwise
     // unwind this job's task and — since `serve` drops the `JoinError` — stop
     // the schedule permanently while the process still reports healthy. Catch it,
     // log at `error`, and let the loop schedule the next occurrence.
-    let outcome = AssertUnwindSafe(run_in_job_context(ctx.as_ref(), run(container)))
-        .catch_unwind()
-        .await;
+    let outcome = AssertUnwindSafe(run_in_job_context(
+        ctx.as_ref(),
+        task.transaction,
+        (task.run)(container),
+        Result::is_ok,
+        // A job that ran fine but whose transaction could not be settled has
+        // written nothing. Reporting success would hide that; the schedule logs
+        // it as a failed job and fires again at the next occurrence.
+        //
+        // The classification the context carried is *reported*, not acted on: a
+        // schedule has no retry budget to spend and no dead-letter to reach, so
+        // its next occurrence is the same whichever way the answer went. That is
+        // the one site of the four job decorators where "retryable" changes
+        // nothing, and it owes the sentence rather than a mechanism.
+        |why| Err(anyhow::Error::new(why)),
+    ))
+    .catch_unwind()
+    .await;
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(err)) => tracing::error!(
@@ -304,6 +338,12 @@ async fn fire(id: JobId, run: RunFn, container: &Container, ctx: &Option<Arc<dyn
             provider = id.provider,
             method = id.method,
             error = %err,
+            // The classification, as a field rather than a decision. A schedule
+            // has no budget to spend on it, but the operator reading this line
+            // wants to know whether the next occurrence is likely to work — and
+            // saying "reported, not acted on" while reporting nothing was the
+            // gap an audit found in the sentence above.
+            retryable = err.downcast_ref::<Unhonoured>().map(|why| why.retryable),
             "scheduled job failed",
         ),
         Err(panic) => tracing::error!(

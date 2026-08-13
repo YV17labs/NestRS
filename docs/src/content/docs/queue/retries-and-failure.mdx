@@ -139,7 +139,7 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 
 ## Panics, deserialization errors, container misses
 
-Three failure modes the framework converts into the same `Err` path,
+Four failure modes the framework converts into the same `Err` path,
 so you don't have to think about them separately:
 
 - **Panics in the method body** — caught and surfaced as
@@ -158,6 +158,17 @@ so you don't have to think about them separately:
   returns `Err` with the resolution error. This usually means a
   configuration mistake at boot, not a transient — investigate, don't
   rely on retries.
+- **A transaction that could not be settled** — the body returned `Ok`,
+  and the attempt's transaction could not be committed, so nothing it
+  wrote landed. The attempt fails rather than reporting writes that were
+  never made, and **the database decides whether it is retried**: a
+  serialization failure or a deadlock is retryable; a constraint checked
+  at `COMMIT`, or a commit whose outcome is unknown because the
+  connection dropped, is not — it dead-letters at once. Retrying replays
+  the whole body, side effects included, so spending the budget on a
+  failure that repeats identically costs several times over and
+  dead-letters anyway. See
+  [Repo and executor](/database/repo-and-executor/#workers--same-repo-one-transaction-per-attempt).
 
 ## Wire-format mismatch
 

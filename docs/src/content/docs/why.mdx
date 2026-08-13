@@ -95,7 +95,7 @@ A mutating HTTP request installs a transactional [executor](/database/repo-and-e
 before the handler runs. The service reaches the database only through
 [`Repo`](/database/repo-and-executor/), which picks up that executor
 automatically — commit on `2xx`/`3xx`, rollback otherwise. Worker contexts
-install a pool executor for the same code path.
+install a per-attempt transaction on the same code path.
 
 ```rust
 // Ambient executor — no per-method ceremony.

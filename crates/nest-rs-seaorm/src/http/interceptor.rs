@@ -111,6 +111,13 @@ impl Interceptor for DbContext {
                 err,
                 self.config.observe_serialization_conflicts,
             )),
+            // A statement failed and the handler answered 2xx anyway, so the
+            // transaction is aborted and nothing it wrote can land. Same
+            // reading as the escape above: a success that lost its writes is
+            // worse than a 500.
+            FinalizeOutcome::Poisoned { .. } => {
+                Err(Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))
+            }
         }
     }
 }

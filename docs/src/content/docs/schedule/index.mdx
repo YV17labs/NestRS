@@ -238,10 +238,18 @@ error: invalid cron expression: Invalid pattern: Pattern must have between 5 and
 
 ## The ambient data context
 
-A scheduled method has **no caller** — system work, intentionally. The
-framework installs a **pool executor** in the ambient data context (`Repo`
-reads go through the pool) and **no ability** is installed (`Repo` reads
-are unscoped, correct for system work).
+A scheduled method has **no caller** — system work, intentionally. So **no
+ability** is installed and `Repo` reads are unscoped, which is correct for
+work with no principal to scope to.
+
+The executor is a **transaction per attempt**: it opens on the job's first
+`Repo` call, commits when the method returns `Ok` and rolls back otherwise,
+so a tick that failed halfway leaves nothing behind for the next one. Add
+`transactional = false` to the trigger — `#[every("30s", transactional =
+false)]`, and the same word on `#[cron]`, `#[after]` and `#[process]` — to
+run on the pool instead, which is right for a tick that brackets long work
+that is not the database's. See
+[Repo and the executor](/database/repo-and-executor/).
 
 ```rust
 #[injectable]

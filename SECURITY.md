@@ -25,18 +25,19 @@ If you can, include:
 ## What to expect
 
 Reports are triaged on receipt. You can expect an acknowledgement, a disclosure
-timeline agreed with you, a fix shipped in the next patch of the latest `1.x`,
+timeline agreed with you, a fix shipped in the next patch of the current major,
 and credit in the advisory — unless you prefer to stay anonymous.
 
 ## Supported versions
 
 Every `nest-rs-*` crate versions in **lockstep** (one number across the
-workspace), and security fixes target the **latest `1.x`** release:
+workspace), and security fixes target the **latest release** — which is what
+`cargo add nest-rs` resolves, and what [`CHANGELOG.md`](CHANGELOG.md) names:
 
-| Version      | Supported                      |
-| ------------ | ------------------------------ |
-| latest `1.x` | ✅                              |
-| older `1.x`  | ⚠️ upgrade to the latest patch |
+| Version                     | Supported                      |
+| --------------------------- | ------------------------------ |
+| latest patch, current major | ✅                              |
+| anything older              | ⚠️ upgrade to the latest patch |
 
 ## Advisories
 

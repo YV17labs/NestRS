@@ -88,17 +88,19 @@ cargo add nest-rs --features http,seaorm
 
 ## Stability
 
-**NestRS is stable at `2.0` and ready for production.** The public API is
-frozen for the `2.x` line: breaking changes wait for `3.0`. Every `nest-rs-*`
-crate publishes at the same version in lockstep, so one NestRS version names
-exactly one compatible resolution — down to the third-party crates that surface
-in your own signatures (`poem`, `sea-orm`, `async-graphql`, `rmcp`, `schemars`),
-whose majors are tied to the NestRS major and frozen for the whole `2.x` line.
+**NestRS is stable and ready for production.** The public API is frozen for the
+current major: breaking changes wait for the next one. Every `nest-rs-*` crate
+publishes at the same version in lockstep, so one NestRS version names exactly
+one compatible resolution — down to the third-party crates that surface in your
+own signatures (`poem`, `sea-orm`, `async-graphql`, `rmcp`, `schemars`), whose
+majors are tied to the NestRS major and frozen for the whole line.
 
-Coming from `1.x`? [`CHANGELOG.md`](CHANGELOG.md) lists what moved: the install
-collapsed onto the `nest-rs` umbrella (a decorator's expansion now roots at the
-facade), and `nest-rs-mcp` moved to rmcp 3.x, which changes types that appear in
-the signatures an MCP host writes.
+Coming from the previous major? [`CHANGELOG.md`](CHANGELOG.md) lists what moved:
+an edge is now **two** decorators — `#[resolver]` / `#[mcp]` on the struct,
+`#[operations]` / `#[tools]` on the impl; a guard bound where its check never
+runs no longer compiles; `McpModule::for_root` takes one value; a WebSocket
+message declares its posture; and an auto-resolved HasMany relation is a Relay
+`Connection` rather than a capped `Vec`.
 
 ## Documentation
 
@@ -189,8 +191,8 @@ app map, and the Docker build are documented in
 
 ## Community & contributing
 
-NestRS is stable at `2.0` and actively developed — contributors shape where it
-goes next, and you don't have to write Rust to help.
+NestRS is stable and actively developed — contributors shape where it goes
+next, and you don't have to write Rust to help.
 
 - 💬 **Ask a question, propose an idea, or just say hi** in [Discussions](https://github.com/YV17labs/NestRS/discussions).
 - 🐛 **Report a bug or request a feature** through [issues](https://github.com/YV17labs/NestRS/issues/new/choose).

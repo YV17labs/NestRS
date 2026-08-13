@@ -33,11 +33,6 @@ run in [`live`](/publish/) on port **3004**.
 cargo add nest-rs --features ws
 ```
 
-```toml title="crates/features/Cargo.toml"
-[dependencies]
-nest-rs = { version = "4.0", features = ["ws"] }
-```
-
 `#[input]` on a typed payload carries its `serde` derives and routes them back
 through the framework, and `nest_rs::ws::tracing` is the gateway's logger — so
 the manifest stops at one line. `nestrs g ws <feature>` writes it.

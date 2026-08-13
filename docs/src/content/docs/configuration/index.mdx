@@ -24,11 +24,6 @@ trait lets you ship one when you need Vault, K8s, or AWS Parameter Store.
 cargo add nest-rs --features config
 ```
 
-```toml title="Cargo.toml"
-[dependencies]
-nest-rs = { version = "4.0", features = ["config"] }
-```
-
 `#[config]` carries the `Validate` derive itself, so a config struct needs no
 `validator` entry and no version to keep aligned with the framework's.
 

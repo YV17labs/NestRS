@@ -25,12 +25,7 @@ pages, linked at the bottom.
 cargo add nest-rs --features seaorm,http
 ```
 
-Everything the entity below needs, in full:
-
-```toml title="Cargo.toml"
-[dependencies]
-nest-rs = { version = "4.0", features = ["seaorm", "http"] }
-```
+That is everything the entity below needs, in full.
 
 `#[expose]` generates the wire model, the create/update inputs and the
 ActiveModel plumbing — and carries their derives, each pointed back at the
@@ -88,8 +83,8 @@ auto-resolve through dataloaders when the relation field carries `#[expose]`
 
 REST/OpenAPI adopters can compile without pulling in GraphQL:
 
-```toml title="Cargo.toml"
-nest-rs = { version = "4.0", features = ["http", "seaorm", "resource", "authz"] }
+```bash frame="terminal"
+cargo add nest-rs --features http,seaorm,resource,authz
 ```
 
 ```rust title="src/posts/entity.rs"
@@ -104,8 +99,8 @@ pub struct Model {
 
 GraphQL surface when you need it:
 
-```toml
-nest-rs = { version = "4.0", features = ["resource", "graphql"] }
+```bash frame="terminal"
+cargo add nest-rs --features resource,graphql
 ```
 
 ```rust

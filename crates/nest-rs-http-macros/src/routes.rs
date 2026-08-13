@@ -9,9 +9,9 @@ use syn::punctuated::Punctuated;
 use syn::{Attribute, Expr, FnArg, ImplItem, LitStr, Path, ReturnType, Token, Type, parse_quote};
 
 use nest_rs_codegen::{
-    expr_str, force_guard_typeids, impl_self_ident, injected_methods_with_layers, layer_deps,
-    mixed_site_ident, normalize_forwarded_args, nth_generic_type, scoped_specs, take_flag_attr,
-    take_path_list,
+    expr_str, force_guard_typeids, guard_capability_bounds, impl_self_ident,
+    injected_methods_with_layers, layer_deps, mixed_site_ident, normalize_forwarded_args,
+    nth_generic_type, scoped_specs, take_flag_attr, take_path_list,
 };
 
 use crate::attr::opt_str;
@@ -633,6 +633,20 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let injected_methods = injected_methods_with_layers(&self_ty, &route_layers);
 
+    // Every guard declared beside a verb runs `Guard::check_http`, whose default
+    // is `Ok(())` — so one bound per guard, failing at the `#[use_guards]` line
+    // rather than passing every request in silence. `#[force_guards]` re-runs an
+    // already-composed guard at this route, so it owes the same attestation.
+    // Controller-scope guards are bound by `#[controller]`, on the struct where
+    // they are written.
+    let capability_bounds = guard_capability_bounds(
+        routes_by_path
+            .iter()
+            .flat_map(|(_, handlers)| handlers.iter())
+            .flat_map(|handler| handler.guards.iter().chain(&handler.force_guards)),
+        quote!(::nest_rs_guards::HttpGuard),
+    );
+
     // One entry per path, built *inside* the per-version loop below: a
     // controller declaring `version = ["1", "2"]` mounts the same handlers at
     // two prefixes, and a `#[version]`-narrowed verb drops out of the versions
@@ -685,6 +699,8 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 
     quote! {
         #item
+
+        #capability_bounds
 
         #(#wrappers)*
 

@@ -8,7 +8,7 @@
 //! disable switch matter in production.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::poem::web::Multipart;
 use nest_rs_http::{
     ApiVersioning, Header, HttpConfig, HttpModule, async_trait, controller, input, routes,
@@ -290,6 +290,8 @@ impl Guard for DenyEveryone {
         Err(Denial::unauthorized("no"))
     }
 }
+
+impl HttpGuard for DenyEveryone {}
 
 #[module(imports = [openapi(true)], providers = [WidgetsController, DenyEveryone])]
 struct GuardedApp;

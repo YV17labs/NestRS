@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{Layer, MappedError, injectable, module};
 use nest_rs_filters::{Filter, RequestSnapshot, filter};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
@@ -54,6 +54,8 @@ impl Guard for CountingGuard {
         Ok(())
     }
 }
+
+impl HttpGuard for CountingGuard {}
 
 // One controller carries every scope combination on its own route, so a single
 // module covers all cases. `g` = guarded at the named scope(s).
@@ -213,6 +215,8 @@ impl Guard for DenyAll {
         Err(Denial::forbidden("denied"))
     }
 }
+
+impl HttpGuard for DenyAll {}
 
 #[controller(path = "/edge")]
 struct EdgeController;

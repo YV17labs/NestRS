@@ -4,7 +4,7 @@
 //! at mount.
 
 use nest_rs_core::{AccessGraphError, App, Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_http::{async_trait, controller, routes};
 use poem::Request;
 
@@ -20,6 +20,8 @@ impl Guard for AuthzGuard {
         Err(Denial::forbidden("forbidden"))
     }
 }
+
+impl HttpGuard for AuthzGuard {}
 
 #[module(providers = [AuthzGuard])]
 struct GuardModule;

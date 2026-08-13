@@ -12,7 +12,7 @@ use std::sync::Arc;
 use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, Read};
 use nest_rs_core::{Layer, injectable, input, module};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
 use nest_rs_mcp::{Json, McpError, McpOperationGuard, mcp, tools};
@@ -75,6 +75,8 @@ impl Guard for AbilityInjector {
         Ok(())
     }
 }
+
+impl HttpGuard for AbilityInjector {}
 
 #[mcp(path = "/mcp/mask")]
 #[derive(Clone, Default)]

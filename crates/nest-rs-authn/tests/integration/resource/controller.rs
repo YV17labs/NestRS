@@ -20,7 +20,7 @@ use nest_rs_authn::{
     AuthnModule, JwtConfig, ProtectedResourceConfig, ProtectedResourceModule, WELL_KNOWN_PATH,
 };
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::Request;
@@ -59,6 +59,8 @@ impl Guard for AlwaysUnauthorized {
         Err(Denial::unauthorized("missing bearer token"))
     }
 }
+
+impl HttpGuard for AlwaysUnauthorized {}
 
 #[controller(path = "/posts")]
 #[use_guards(AlwaysUnauthorized)]

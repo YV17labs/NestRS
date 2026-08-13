@@ -5,16 +5,31 @@
 //! to name).
 
 use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::Guard;
+use nest_rs::guards::{Denial, Guard, HttpGuard, async_trait};
+use nest_rs::http::poem::Request as HttpRequest;
 use nest_rs::ws::{gateway, messages};
 
-/// No-op guard: every `check_*` inherits the trait's `Ok(())` default.
+/// Bound on the gateway *struct*, so it runs on the upgrade — an HTTP `GET` —
+/// and the attestation it owes is [`HttpGuard`], reachable through the umbrella
+/// like every other path this crate proves.
+///
+/// It overrides `check_http` rather than inheriting the default, and that is not
+/// decoration: an empty `impl Guard for X {}` beside an `impl HttpGuard` is an
+/// attestation that lies, which is exactly what the trybuild snapshots next door
+/// exist to refuse. The witness must not ship the shape it witnesses against.
 #[injectable]
 pub struct HygieneWsGuard;
 
 impl Layer for HygieneWsGuard {}
 
-impl Guard for HygieneWsGuard {}
+#[async_trait]
+impl Guard for HygieneWsGuard {
+    async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
+        Ok(())
+    }
+}
+
+impl HttpGuard for HygieneWsGuard {}
 
 /// Minimal gateway consumer, guarded so the `#[use_guards]` wrap is emitted.
 #[gateway(path = "/hygiene")]

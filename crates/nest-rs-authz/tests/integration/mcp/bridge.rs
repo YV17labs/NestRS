@@ -11,7 +11,7 @@ use std::sync::Arc;
 use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, Action, current_ability};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard};
 use nest_rs_http::async_trait;
 use nest_rs_http::poem::Request;
 // The rmcp `#[tool_router]` / `#[tool_handler]` macros expand to bare `rmcp::`
@@ -52,6 +52,10 @@ impl Guard for RateLimitedGuard {
     }
 }
 
+impl HttpGuard for RateLimitedGuard {}
+
+impl HttpGuard for PassGuard {}
+
 /// Stands in for the `AbilityGuard` slot: attaches a Read grant on widgets.
 #[injectable]
 #[derive(Default)]
@@ -70,6 +74,8 @@ impl Guard for AbilityInjector {
         Ok(())
     }
 }
+
+impl HttpGuard for AbilityInjector {}
 
 /// Reports whether the ambient `Ability` reached the tool body. No
 /// `McpToolContext` is registered anywhere in this suite — the guard's `around`

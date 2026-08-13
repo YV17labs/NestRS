@@ -12,7 +12,7 @@
 //!   explicitly opts down to a warn with `fail_secure_strict(false)`.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::{HttpTransport, async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
@@ -32,6 +32,8 @@ impl Guard for WiredGuard {
     }
 }
 
+impl HttpGuard for WiredGuard {}
+
 /// Deliberately **not** listed in any module's providers.
 #[injectable]
 #[derive(Default)]
@@ -45,6 +47,8 @@ impl Guard for GhostGuard {
         Ok(())
     }
 }
+
+impl HttpGuard for GhostGuard {}
 
 /// Deliberately **not** listed in any module's providers.
 #[injectable]

@@ -1,7 +1,7 @@
 //! # nest-rs-guards
 //!
-//! Transport-spanning guards for nestrs — **one trait, three transports**
-//! (HTTP, GraphQL, WS). Declared once with
+//! Transport-spanning guards for nestrs — **one trait, four transports**
+//! (HTTP, GraphQL, WS, MCP). Declared once with
 //! `App::builder().use_guards_global(...)`, every handler on every
 //! transport runs through the chain.
 //!
@@ -21,9 +21,13 @@
 //! ## Defining a guard
 //!
 //! Override only the `check_*` method(s) where this guard has work to do —
-//! the rest inherit `Ok(())` defaults. `Layer` provides `priority()` /
-//! `name()` defaults; override `priority()` only when this guard must beat
-//! declaration order.
+//! the rest inherit `Ok(())` defaults — then **attest each edge you
+//! overrode** with its marker ([`HttpGuard`], [`GraphqlGuard`], [`WsGuard`],
+//! [`McpGuard`]). The impl-half decorators bind against the marker, so a guard
+//! declared where it has no `check_*` is a compile error at the
+//! `#[use_guards]` line instead of a chain entry that passes everything.
+//! `Layer` provides `priority()` / `name()` defaults; override `priority()`
+//! only when this guard must beat declaration order.
 //!
 //! ```rust,ignore
 //! use nest_rs_guards::prelude::*;
@@ -41,6 +45,8 @@
 //!         Ok(())
 //!     }
 //! }
+//!
+//! impl HttpGuard for AuditGuard {}
 //! ```
 //!
 //! ## Registering globally
@@ -94,15 +100,19 @@
 //! Splitting it would mean duplicating the chain across crates or routing
 //! through a fifth — both worse than the asymmetry.
 //!
-//! **HTTP-coupled by design.** [`Guard`] requires `check_http` and this
-//! crate depends on the HTTP stack, so a worker-only binary links HTTP even
-//! when it never serves a request. This is the deliberate 1.x shape: one
-//! trait, one chain, zero duplicated dispatch. The cost is binary size
-//! only — there is no runtime, security or correctness effect, and
-//! `check_graphql` / `check_ws_message` are already feature-gated. Moving
-//! `check_http` onto an `HttpGuard` extension trait touches every guard impl
-//! and the HTTP dispatch, so a transport-neutral guard core is a planned
-//! major-version evolution (see ROADMAP, "Transport-neutral guard core").
+//! **HTTP-coupled by design, and it costs nothing.** [`Guard`] carries
+//! `check_http` unconditionally and this crate depends on `nest-rs-http`
+//! unconditionally — no `cfg`, no optional flag. That is the deliberate shape:
+//! one trait, one `dyn Guard`, zero duplicated dispatch. It is also why gating
+//! the method would save nothing — every build that links this crate links the
+//! HTTP stack whatever the consumer asked for, so there are no bytes for a
+//! `cfg` to save. A headless worker links neither.
+//!
+//! Moving `check_http` onto an extension trait would therefore buy nothing and
+//! cost a second erasure: every execution site holds `Arc<dyn Guard>`, so a
+//! guard serving HTTP *and* GraphQL would need two container registrations. The
+//! attestation the extension trait was wanted for is what [`HttpGuard`]
+//! provides, at no runtime cost.
 #![warn(missing_docs)]
 
 mod builder;
@@ -117,10 +127,13 @@ mod scope;
 pub use builder::{AppBuilderGuardsExt, AppBuilderPipesExt};
 pub use denial::Denial;
 pub use endpoint::{GuardEndpoint, GuardExt};
-pub use guard::{Guard, GuardPhase, PrincipalClaim};
+pub use guard::{Guard, GuardPhase, HttpGuard, PrincipalClaim};
 // Capability markers: which transports a guard actually checks. The impl-half
 // decorators emit a bound against these, so a guard bound where it has no
 // `check_*` is a compile error rather than a chain entry that passes everything.
+// `HttpGuard` is not behind a `cfg`: its three siblings gate a `check_*` that
+// only exists when that edge is compiled in, and HTTP is the substrate the other
+// three mount on.
 #[cfg(feature = "graphql")]
 pub use guard::GraphqlGuard;
 #[cfg(feature = "mcp")]

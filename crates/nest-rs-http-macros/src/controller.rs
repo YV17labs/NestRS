@@ -11,8 +11,8 @@ use syn::{LitStr, Meta, Token};
 
 use nest_rs_codegen::{
     DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
-    injected_keys_with_layers, injected_names_with_layers, layer_deps, scoped_specs,
-    take_path_list,
+    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
+    scoped_specs, take_path_list,
 };
 
 /// The HTTP edge's pair. Read by `#[controller]` here and by `#[routes]` /
@@ -107,6 +107,10 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     );
     let filter_specs = scoped_specs(&filters, quote!(dyn ::nest_rs_filters::Filter));
     let guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
+    // Controller-scope guards fold into every route's chain, so they owe the
+    // same capability the per-route ones do.
+    let capability_bounds =
+        guard_capability_bounds(guards.iter(), quote!(::nest_rs_guards::HttpGuard));
     // Does a controller-level `#[use_guards]` include `ThrottlerGuard`? `#[routes]`
     // reads this to advertise `429` for every route the controller throttles
     // (OAPI-O4) — a compile-time bool, so the check is free at runtime.
@@ -119,6 +123,8 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 
     quote! {
         #item
+
+        #capability_bounds
 
         impl #impl_generics #name #ty_generics #where_clause {
             /// The controller's route prefix, from `#[controller(path = "…")]`.

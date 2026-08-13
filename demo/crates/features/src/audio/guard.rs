@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use nest_rs::authz::{Ability, Action, current_ability};
 use nest_rs::core::{Layer, injectable};
-use nest_rs::guards::{Denial, Guard, McpGuard, async_trait};
+use nest_rs::guards::{Denial, Guard, HttpGuard, McpGuard, async_trait};
 use nest_rs::mcp::McpOperationContext;
 use poem::Request;
 
@@ -31,6 +31,8 @@ impl Guard for TranscodeGuard {
         Self::decide(&ability)
     }
 }
+
+impl HttpGuard for TranscodeGuard {}
 
 impl McpGuard for TranscodeGuard {}
 

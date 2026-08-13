@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{HandlerMetadata, Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::{Ctx, Reflector, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::Request;
@@ -28,6 +28,8 @@ impl Guard for DenyGuard {
     }
 }
 
+impl HttpGuard for DenyGuard {}
+
 /// Denies with `401 Unauthorized` — paired with [`DenyGuard`] to observe order.
 #[injectable]
 #[derive(Default)]
@@ -41,6 +43,8 @@ impl Guard for ChallengeGuard {
         Err(Denial::unauthorized("unauthorized"))
     }
 }
+
+impl HttpGuard for ChallengeGuard {}
 
 // --- handler + controller scope ----------------------------------------------
 
@@ -194,6 +198,8 @@ impl Guard for CountingGuard {
         Ok(())
     }
 }
+
+impl HttpGuard for CountingGuard {}
 
 #[controller(path = "/dedup")]
 #[use_guards(CountingGuard)]
@@ -350,6 +356,8 @@ impl Guard for PublicAwareGuard {
     }
 }
 
+impl HttpGuard for PublicAwareGuard {}
+
 #[controller(path = "/pub")]
 struct PublicScope;
 
@@ -427,6 +435,8 @@ impl Guard for AttachPrincipalGuard {
         Ok(())
     }
 }
+
+impl HttpGuard for AttachPrincipalGuard {}
 
 #[controller(path = "/ctx")]
 #[use_guards(AttachPrincipalGuard)]

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use nest_rs_authz::http::Authorize as Az;
 use nest_rs_authz::{AbilityBuilder, Action, Read, current_ability};
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_resource::WireModelDefaults;
@@ -78,6 +78,8 @@ impl Guard for GrantInjector {
         Ok(())
     }
 }
+
+impl HttpGuard for GrantInjector {}
 
 #[controller(path = "/gadgets")]
 struct GadgetController;

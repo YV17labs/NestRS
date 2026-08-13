@@ -121,9 +121,10 @@ error[E0277]: `AuthnGuard` does not check WebSocket messages
            or move it to the `#[gateway]` struct, where guards run on the HTTP upgrade
 ```
 
-**A guard on the `#[gateway]` struct needs no marker**: the upgrade is an
-HTTP `GET`, so those are HTTP guards and `check_http` is what runs. The
-bound is where that distinction stops being folklore.
+**A guard on the `#[gateway]` struct attests `HttpGuard`, not `WsGuard`**:
+the upgrade is an HTTP `GET`, so those are HTTP guards and `check_http` is
+what runs. Both scopes are checked, each against its own marker — which is
+where that distinction stops being folklore.
 </Aside>
 
 Bind it beside the message it gates:
@@ -173,12 +174,13 @@ denial — later guards do not run, the handler is skipped, the error
 frame is sent.
 
 <Aside type="note">
-The same `Guard` trait runs across all three transports, so a guard
-that implements `check_http`, `check_graphql`, and `check_ws_message`
-can be wired anywhere without rewriting. A guard that only makes
-sense for one transport implements only `check_ws_message` and leaves
-the others on the default `Ok(())` — there is no separate
-message-guard trait or marker type.
+The same `Guard` trait runs across every transport, so a guard that
+implements `check_http`, `check_graphql`, and `check_ws_message` — and
+attests each with its marker — can be wired anywhere without rewriting.
+A guard that only makes sense for one transport implements only
+`check_ws_message`, declares `WsGuard` alone, and leaves the others on
+the default `Ok(())`. There is no separate message-guard *trait*: the
+markers are attestations on the one `Guard`, not four guard types.
 </Aside>
 
 ## Authentication and authorization

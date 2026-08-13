@@ -57,7 +57,7 @@ impl PrincipalClaim {
 
 /// A transport-spanning guard.
 ///
-/// One impl, three transports. Override only the `check_*` method(s) where
+/// One impl, four transports. Override only the `check_*` method(s) where
 /// this guard has work to do; the rest inherit `Ok(())` defaults — a
 /// no-op means "doesn't apply to this transport," not "skip security."
 ///
@@ -73,6 +73,11 @@ impl PrincipalClaim {
 #[async_trait]
 pub trait Guard: Layer {
     /// HTTP request entry. Default = no-op (this guard doesn't apply to HTTP).
+    ///
+    /// A guard bound on a `#[controller]` / `#[routes]` must attest it with
+    /// [`HttpGuard`], the same way the three edges below are attested — the
+    /// default is what makes an unattested binding pass every request in
+    /// silence.
     async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> {
         Ok(())
     }
@@ -135,6 +140,33 @@ pub trait Guard: Layer {
         None
     }
 }
+
+/// A guard that checks HTTP requests — declared by overriding
+/// [`Guard::check_http`] and then writing `impl HttpGuard for X {}`.
+///
+/// Required by `#[controller]` / `#[routes]` / `#[crud]` of every guard in a
+/// `#[use_guards]`, and by `#[gateway]` of every guard on the gateway struct:
+/// those run on the WS upgrade, which is an HTTP `GET`.
+///
+/// **The one marker with no feature behind it.** Its three siblings gate a
+/// `check_*` that only exists when its edge is compiled in; HTTP is the
+/// substrate the other three mount on — `/graphql`, `/mcp` and a WS upgrade are
+/// all HTTP requests — so there is no build of this crate in which `check_http`
+/// is absent, and nothing to gate. The *attestation* is what makes the four
+/// edges symmetric, not the `cfg`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not check HTTP requests",
+    label = "this guard has no `check_http`",
+    note = "a guard bound on a `#[controller]` / `#[routes]`, or on a `#[gateway]` struct \
+            (whose guards run on the upgrade, an HTTP `GET`), runs `Guard::check_http` — whose \
+            default is `Ok(())`, so binding one that does not override it passes every request \
+            silently",
+    note = "override `check_http`, then declare `impl HttpGuard for {Self} {{}}`; or bind this \
+            guard at the edge it does check — a `#[resolver]` (`GraphqlGuard`), beside a \
+            `#[subscribe_message]` (`WsGuard`, per message rather than at the upgrade), or an \
+            `#[mcp]` host (`McpGuard`)"
+)]
+pub trait HttpGuard: Guard {}
 
 /// A guard that checks GraphQL operations — declared by overriding
 /// [`Guard::check_graphql`] and then writing `impl GraphqlGuard for X {}`.

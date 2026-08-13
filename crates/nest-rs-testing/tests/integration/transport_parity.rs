@@ -21,7 +21,7 @@
 use nest_rs_core::{HandlerMetadata, Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
-use nest_rs_guards::{Denial, Guard, guard};
+use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::{Reflector, async_trait};
 use nest_rs_mcp::{
     AllowAllMcpGuard, McpOperationGuard, ServerHandler, mcp, tool_handler, tool_router,
@@ -51,6 +51,8 @@ impl Guard for BearerGuard {
         Err(Denial::unauthorized("missing bearer token"))
     }
 }
+
+impl HttpGuard for BearerGuard {}
 
 #[resolver]
 struct ParityResolver;

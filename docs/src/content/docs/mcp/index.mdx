@@ -30,11 +30,6 @@ schemas the client reads.
 cargo add nest-rs --features mcp
 ```
 
-```toml title="crates/features/Cargo.toml"
-[dependencies]
-nest-rs = { version = "4.0", features = ["mcp"] }
-```
-
 The `mcp` feature pulls the HTTP transport the endpoint mounts on and the guard
 surface that gates it — including the fallback operation guard that lets a
 registered global pool gate `/mcp` instead of the endpoint staying deny-all.

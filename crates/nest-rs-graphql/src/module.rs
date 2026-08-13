@@ -10,7 +10,7 @@ use poem::{Endpoint, IntoResponse, Request, Response, Route};
 
 use crate::config::GraphqlConfig;
 use crate::context::OperationBridge;
-use crate::resolver::{build_schema, check_duplicate_operations};
+use crate::resolver::{build_schema, check_operations};
 use crate::subscription::SubscriptionEndpoint;
 
 /// Mounts `POST <path>` (queries + mutations) and `GET <path>` — the graphql-ws
@@ -68,7 +68,38 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
     // — two contributions claiming one addressable name — is a boot error here,
     // as it already is on HTTP and MCP. It runs at `configure`, before the
     // mount below composes a schema whose SDL and dispatch would disagree.
-    let builder = builder.provide_meta(HttpBootCheck::new(check_duplicate_operations));
+    //
+    // The same pass answers whether anything declared an `#[entity]`, which the
+    // refusal below is the whole reader of — one walk of the resolver inventory
+    // and one scratch registry per boot, rather than two of each and two copies
+    // of the reachability filter to keep in step.
+    //
+    // `federation = false` has to *mean* something, and on its own it does not:
+    // async-graphql creates `_service` and `_entities` as soon as any entity
+    // resolver has called `add_keys`, whatever the builder was told
+    // (`schema.rs`'s `enable_federation || has_entities()`). So a single
+    // `#[entity]` publishes the schema's own SDL to anyone who can reach the
+    // endpoint — introspection setting notwithstanding, since `_service` is
+    // outside that gate — and the flag would be a comment. The boot refuses the
+    // combination instead: declaring an entity is declaring a subgraph, and a
+    // subgraph is a deployment decision (it belongs behind a router), so the
+    // developer says both or neither.
+    let federation = options.federation;
+    let builder = builder.provide_meta(HttpBootCheck::new(
+        move |container| match check_operations(container)? {
+            Some(resolver) if !federation => Err(format!(
+                "`{resolver}` declares an `#[entity]`, but this schema is not configured as a \
+                 subgraph. An entity resolver *is* the federation surface: async-graphql serves \
+                 `_service` and `_entities` the moment one exists, so the endpoint would publish \
+                 its own SDL — `_service` is not covered by \
+                 `NESTRS_GRAPHQL__DISABLE_INTROSPECTION` — while the committed SDL carried the \
+                 federation plumbing without the `@key` a router needs. Set \
+                 `GraphqlConfig::federation = true` (or `NESTRS_GRAPHQL__FEDERATION=true`) and \
+                 serve it behind a router, or remove the `#[entity]`."
+            )),
+            _ => Ok(()),
+        },
+    ));
     builder.provide_meta(
         HttpEndpointMeta::new(log_path, "graphql", move |container, route: Route| {
             let schema = build_schema(container.clone(), &options);
@@ -77,7 +108,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             // building it twice.
             if options.emit_sdl {
                 let dest = &options.schema_path;
-                let sdl = crate::resolver::render_sdl(&schema);
+                let sdl = crate::resolver::render_sdl(&schema, &options);
                 match std::fs::write(dest, &sdl) {
                     Ok(()) => tracing::info!(
                         target: "nest_rs::graphql",

@@ -1,0 +1,5 @@
+error: an `#[entity]` takes no `#[graphql(...)]` of its own: async-graphql reads the first one on a method and this decorator has to emit `#[graphql(entity)]` there, so yours would silently take its place and the method would stop being an entity resolver. Rename the method itself, or move what you were configuring to the type's own `#[graphql(...)]`
+  --> tests/integration/diagnostics/entity_with_a_graphql_attribute.rs:15:5
+   |
+15 |     #[graphql(name = "findWidget")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

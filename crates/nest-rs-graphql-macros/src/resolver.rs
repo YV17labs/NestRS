@@ -31,7 +31,7 @@ pub(crate) const GRAPHQL_PAIR: DecoratorPair = DecoratorPair {
     host: "#[resolver]",
     subject: "resolver struct",
     operations: "#[operations]",
-    collects: "#[query] / #[mutation] / #[subscription] / #[field_resolver]",
+    collects: "#[query] / #[mutation] / #[subscription] / #[entity] / #[field_resolver]",
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -45,7 +45,7 @@ pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
     if let Err(err) = Edge::Graphql.reject_version(&args) {
         return err.to_compile_error().into();
     }
-    if let Err(err) = reject_args(&args, "resolver") {
+    if let Err(err) = reject_resolver_args(&args) {
         return err.to_compile_error().into();
     }
 
@@ -59,7 +59,14 @@ pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 pub(crate) fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
-    if let Err(err) = reject_args(&TokenStream2::from(args), "operations") {
+    // The shared sentence, from the same pair the wrong-shape error reads: the
+    // operation set it names is `GRAPHQL_PAIR.collects`, so adding a role — this
+    // is how `#[entity]` arrived — cannot leave one of the two listing the old
+    // set.
+    if let Err(err) = GRAPHQL_PAIR.reject_args(
+        &TokenStream2::from(args),
+        "a resolver's construction and provider-scope layers are declared by",
+    ) {
         return err.to_compile_error().into();
     }
 
@@ -69,17 +76,23 @@ pub(crate) fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-/// Neither half takes arguments — the operations are declared by the method
-/// attributes, not by the decorator.
-fn reject_args(args: &TokenStream2, decorator: &str) -> syn::Result<()> {
+/// The **host** half takes no arguments either, which no other edge's does:
+/// `#[controller]` and `#[gateway]` declare a path, `#[mcp]` an endpoint. A
+/// resolver has no address to declare — one schema, one introspection — so the
+/// sentence points at the operations instead of at a sibling argument.
+///
+/// One site, so it stays here rather than on `DecoratorPair`; it reads the
+/// pair's own `collects` all the same, so it and the impl half's refusal cannot
+/// come to name different operation sets.
+fn reject_resolver_args(args: &TokenStream2) -> syn::Result<()> {
     if args.is_empty() {
         return Ok(());
     }
     Err(syn::Error::new_spanned(
         args,
         format!(
-            "#[{decorator}] takes no arguments; tag methods with `#[query]` / `#[mutation]` / \
-             `#[subscription]` / `#[field_resolver]`"
+            "{} takes no arguments; tag methods with {} under {}",
+            GRAPHQL_PAIR.host, GRAPHQL_PAIR.collects, GRAPHQL_PAIR.operations
         ),
     ))
 }
@@ -522,6 +535,100 @@ fn layered_resolver_chain(
     }
 }
 
+/// The role an operation attribute declares, as it is written — used only to
+/// name both halves when a method carries two.
+fn attr_role(attr: &Attribute) -> String {
+    let ident = attr
+        .path()
+        .get_ident()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "?".to_owned());
+    format!("#[{ident}]")
+}
+
+/// What an `#[entity]` owes beyond what a `#[query]` owes, refused at its own
+/// span rather than inside async-graphql's derive.
+///
+/// Three of the four are async-graphql's rules, reworded and re-spanned: it
+/// reports "Entity need to have at least one key" and "Must be asynchronous"
+/// against the `#[operations]` attribute, followed by a cascade naming a
+/// generated type the developer never wrote. The fourth is this framework's, and
+/// it is the load-bearing one — see the `Result` arm.
+fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> syn::Result<()> {
+    // `#[entity(key = "id")]` is the first thing a developer arriving from
+    // Apollo reaches for, and the key is not theirs to declare: async-graphql
+    // reads it off the resolver's own arguments. Accepting and discarding it
+    // would be the ignored argument the rules call silence.
+    if !matches!(attr.meta, syn::Meta::Path(_)) {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "`#[entity]` takes no arguments — the `@key` is inferred from this method's own \
+             arguments, so an entity resolved by `id` is one taking `id`. Add or rename a \
+             parameter to change the key",
+        ));
+    }
+    if sig.asyncness.is_none() {
+        return Err(syn::Error::new_spanned(
+            &sig.ident,
+            "an `#[entity]` method must be `async` — the router resolves references \
+             concurrently, and async-graphql's entity resolver is awaited",
+        ));
+    }
+    // async-graphql's derive parses the **first** `graphql` attribute on a method
+    // and removes exactly one, so a developer's `#[graphql(name = …)]` consumes
+    // the slot and the `#[graphql(entity)]` this decorator emits is silently
+    // dropped — the method stops being an entity resolver, and what the compiler
+    // then reports is a leftover attribute against `#[operations]`. There is no
+    // working spelling to redirect to, `#[graphql(entity, name = …)]` colliding
+    // the same way, so the refusal names the limit rather than an alternative.
+    if let Some(attr) = other.iter().find(|a| a.path().is_ident("graphql")) {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "an `#[entity]` takes no `#[graphql(...)]` of its own: async-graphql reads the \
+             first one on a method and this decorator has to emit `#[graphql(entity)]` there, \
+             so yours would silently take its place and the method would stop being an entity \
+             resolver. Rename the method itself, or move what you were configuring to the \
+             type's own `#[graphql(...)]`",
+        ));
+    }
+    // No argument ⇒ no `@key` ⇒ async-graphql refuses the whole schema, from
+    // inside its derive, naming a generated type.
+    let ctx = ctx_param_ident(sig);
+    let keys = sig.inputs.iter().filter(|arg| match arg {
+        FnArg::Receiver(_) => false,
+        FnArg::Typed(pt) => match &*pt.pat {
+            syn::Pat::Ident(pi) => Some(&pi.ident) != ctx.as_ref(),
+            _ => true,
+        },
+    });
+    if keys.count() == 0 {
+        return Err(syn::Error::new_spanned(
+            &sig.ident,
+            "an `#[entity]` method needs at least one argument — those arguments *are* the \
+             `@key` the router matches a reference against, so an entity resolver with none \
+             is a type no router can address",
+        ));
+    }
+    // The one rule that is ours, and the reason it is stricter here than on a
+    // `#[query]`: the resolver-scope guard chain is only emitted for a
+    // `Result`-returning operation, because a bare-return body has nowhere to
+    // put a denial. On a `#[query]` that trade is visible — the operation is in
+    // the document and a reviewer reads its signature. An entity is reached
+    // through `_entities` for a type the client never named, so a silently
+    // omitted chain is invisible from both the schema and the wire.
+    if !sig_returns_result(sig) {
+        return Err(syn::Error::new_spanned(
+            &sig.output,
+            "an `#[entity]` returns `Result<...>`: the guard chain is only emitted where a \
+             denial has somewhere to go, and this is the one operation a client never \
+             names — a resolver-scope `#[use_guards]` compiled out here is invisible in \
+             the schema and on the wire. Spell it `Result<T>`, or `Result<Option<T>>` for \
+             a reference that may resolve to nothing",
+        ));
+    }
+    Ok(())
+}
+
 /// `#[operations]` on the impl: split `#[query]`/`#[mutation]` methods into
 /// generated `#[Object]` roots and register them.
 fn resolver_impl(item: ItemImpl) -> TokenStream {
@@ -591,15 +698,47 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             continue;
         };
 
-        let verb_idx = method.attrs.iter().position(|a| {
+        let is_verb = |a: &Attribute| {
             a.path().is_ident("query")
                 || a.path().is_ident("mutation")
                 || a.path().is_ident("subscription")
+                || a.path().is_ident("entity")
                 || a.path().is_ident("field_resolver")
-        });
+        };
+        let verb_idx = method.attrs.iter().position(&is_verb);
         let Some(idx) = verb_idx else { continue };
 
         let verb_attr = method.attrs.remove(idx);
+        // One method, one role. `#[entity]` beside `#[mutation]` is the shape
+        // that motivates saying so: an entity is resolved **by reference**, from
+        // the `_entities` field the router calls on the `Query` root, and no
+        // other root has one. Silently keeping the first attribute would mount
+        // the operation under a role the developer did not write.
+        if let Some(second) = method.attrs.iter().find(|a| is_verb(a)) {
+            let first = attr_role(&verb_attr);
+            let second_role = attr_role(second);
+            // The `_entities` clause only when one of the two *is* `#[entity]`:
+            // explaining `#[query]` + `#[mutation]` with the federation root is
+            // an answer to a question the developer did not ask.
+            let why = if first == "#[entity]" || second_role == "#[entity]" {
+                " An entity resolver is a `Query`-root field — the router reaches it through \
+                  `_entities`, which the `Mutation` and `Subscription` roots do not have."
+            } else {
+                ""
+            };
+            return Err(syn::Error::new_spanned(
+                second,
+                format!(
+                    "a method declares one role, and this one declares `{first}` and \
+                     `{second_role}`.{why} Keeping the first and dropping the second would mount \
+                     the operation under a role you did not write, so neither is assumed"
+                ),
+            ));
+        }
+        let is_entity = verb_attr.path().is_ident("entity");
+        if is_entity {
+            entity_refusals(&verb_attr, &method.attrs, &method.sig)?;
+        }
 
         reject_http_only_layers(&method.attrs, "GraphQL", "resolver")?;
         let method_guards = take_use_guards(&mut method.attrs)?;
@@ -689,10 +828,22 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                          operation can only be `#[public]`",
                     ));
                 }
+                (None, false) if is_entity => {
+                    return Err(syn::Error::new_spanned(
+                        &method.sig.ident,
+                        "an `#[entity]` declares its access posture, and it is the one role where \
+                         forgetting is invisible: the router calls `_entities` with a *reference* \
+                         — `{__typename, <key fields>}` — for an entity the client never named, so \
+                         an ungated one is readable from outside every `#[authorize]` in the \
+                         schema. Write `#[authorize(Action, Entity)]` (class gate + response mask) \
+                         or `#[public]`",
+                    ));
+                }
                 (None, false) => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
-                        "every `#[query]`/`#[mutation]`/`#[subscription]` declares its access posture: \
+                        "every `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]` declares its \
+                         access posture: \
                          `#[authorize(Action, Entity)]` (class-level gate + automatic response \
                          masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` \
                          (no `#[authorize]` gate and no response mask — `#[use_guards]` \
@@ -701,7 +852,13 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 }
                 _ => {}
             }
-            let root_kind = if verb_attr.path().is_ident("query") {
+            let root_kind = if verb_attr.path().is_ident("query") || is_entity {
+                // An entity resolver is a `Query`-root field carrying
+                // `#[graphql(entity)]`: async-graphql moves it out of the query
+                // fields and behind `_entities`, and infers the `@key` from its
+                // own arguments. Everything above that — the chain, the gate,
+                // the pipes, the mask — is a `#[query]`'s, because what the
+                // router calls is an operation like any other.
                 RootKind::Query
             } else if verb_attr.path().is_ident("mutation") {
                 RootKind::Mutation
@@ -749,6 +906,22 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // (declared once, no duplicate).
             // Pair the spec with its `bind` service only when set — carries the
             // action alongside so the prelude never re-derives it from the spec.
+            if is_entity
+                && let Some(spec) = authorize_spec.as_ref()
+                && let Some(bind) = spec.bind.as_ref()
+            {
+                return Err(syn::Error::new_spanned(
+                    bind,
+                    "`bind = Service` cannot arm an `#[entity]`: it answers `NOT_FOUND` for a row \
+                     that is absent and `FORBIDDEN` for one the ability withholds, which on a \
+                     field the router addresses **by key** is an existence oracle — a caller \
+                     learns which keys exist by asking for them. That distinction is right on a \
+                     mutation, whose subject the caller already named. Load the row in the body \
+                     instead (`CrudService::access`) and answer `None` for both, so a reference \
+                     the caller may not resolve is indistinguishable from one that resolves to \
+                     nothing",
+                ));
+            }
             let bind_info = match authorize_spec
                 .as_ref()
                 .and_then(|s| s.bind.as_ref().map(|b| (s, b)))
@@ -842,7 +1015,12 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // only (bare-return resolvers can't surface a denial). Local
             // `#[use_guards]` chain runs through the same chain helper.
             let needs_global = sig_returns_result(&sig);
-            let route_label = format!("{} {}", root_kind.label(), method_name);
+            let role_label = if is_entity {
+                "entity"
+            } else {
+                root_kind.label()
+            };
+            let route_label = format!("{role_label} {method_name}");
             // Same label the guard chain logs under, reused as the structured
             // field on a dropped subscription item so one grep answers "which
             // operation refused this?" whichever layer refused it.
@@ -964,8 +1142,18 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     let #ident = #apply.map_err(|__e| ::nest_rs_graphql::pipe_error(&__e))?;
                 }
             });
+            // The one token that makes it an entity resolver, and it is emitted
+            // rather than written: `#[graphql(entity)]` is what calls
+            // `add_keys`, which is what brings `_service` and `_entities` into
+            // existence at all.
+            // Spelled bare on purpose: `graphql` is an *inert helper* the
+            // `#[Object]` derive reads off the method and strips, not a macro
+            // path to resolve — qualifying it asks the compiler to find a
+            // `graphql` item in async-graphql's root, which is not what it is.
+            let entity_attr = is_entity.then(|| quote!(#[graphql(entity)]));
             let delegating = quote! {
                 #(#deleg_attrs)*
+                #entity_attr
                 #gsig { #checks #gate #bind_prelude #(#pipe_prelude)* #body }
             };
             match root_kind {

@@ -1,0 +1,5 @@
+error: `bind = Service` cannot arm an `#[entity]`: it answers `NOT_FOUND` for a row that is absent and `FORBIDDEN` for one the ability withholds, which on a field the router addresses **by key** is an existence oracle — a caller learns which keys exist by asking for them. That distinction is right on a mutation, whose subject the caller already named. Load the row in the body instead (`CrudService::access`) and answer `None` for both, so a reference the caller may not resolve is indistinguishable from one that resolves to nothing
+  --> tests/integration/diagnostics/entity_bound_to_a_service.rs:14:30
+   |
+14 |     #[authorize(Read, bind = WidgetsService)]
+   |                              ^^^^^^^^^^^^^^

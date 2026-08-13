@@ -1,0 +1,5 @@
+error: a method declares one role, and this one declares `#[mutation]` and `#[entity]`. An entity resolver is a `Query`-root field — the router reaches it through `_entities`, which the `Mutation` and `Subscription` roots do not have. Keeping the first and dropping the second would mount the operation under a role you did not write, so neither is assumed
+  --> tests/integration/diagnostics/entity_on_a_mutation.rs:13:5
+   |
+13 |     #[entity]
+   |     ^^^^^^^^^

@@ -72,6 +72,34 @@ pub struct GraphqlConfig {
     ///
     /// [`WsConfig::max_connection`]: https://docs.rs/nest-rs-ws
     pub max_connection: Option<Duration>,
+    /// Serve this schema as an Apollo **subgraph**: the federation directives
+    /// are declared, and the emitted SDL is the subgraph form (`@key` present,
+    /// `_service` / `_entities` stripped, as the spec requires of an exported
+    /// subgraph schema).
+    ///
+    /// **What it does not do is switch the federation surface on**, and the
+    /// distinction is the whole reason the boot enforces it. async-graphql
+    /// serves `_service` and `_entities` as soon as any `#[entity]` resolver has
+    /// registered its keys, whatever this flag says — so an entity plus
+    /// `federation = false` would publish the schema's own SDL while claiming
+    /// not to be a subgraph, and the flag would be a comment. Declaring an
+    /// entity while this is `false` therefore **fails the boot**, naming the
+    /// resolver: an entity resolver *is* the subgraph, and being one is a
+    /// deployment decision.
+    ///
+    /// Default `false`, and it stays an explicit opt-in for a reason a
+    /// deployment cannot undo: **`_service` cannot be switched off**.
+    /// `disable_introspection` does not cover it — its field sits outside that
+    /// gate — so a federated schema publishes its own SDL to anyone who can
+    /// reach the endpoint. A subgraph belongs behind a router, on a network the
+    /// router is on, and not on the internet.
+    ///
+    /// Turning it on without an `#[entity]` anywhere is legal and nearly empty:
+    /// `_service` answers, `_entities` does not exist, because the keys a router
+    /// matches on come from the entity resolvers' own arguments.
+    ///
+    /// Read from `NESTRS_GRAPHQL__FEDERATION`.
+    pub federation: bool,
 }
 
 impl Default for GraphqlConfig {
@@ -86,6 +114,7 @@ impl Default for GraphqlConfig {
             disable_introspection: true,
             max_batch_size: 10,
             max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
+            federation: false,
         }
     }
 }
@@ -105,14 +134,8 @@ impl Config for GraphqlConfig {
             max_complexity: env.parse("MAX_COMPLEXITY")?.or(d.max_complexity),
             disable_introspection: env.flag("DISABLE_INTROSPECTION", d.disable_introspection)?,
             max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
-            // `0` is the "unlimited" sentinel; unset keeps the base's ceiling;
-            // a set-but-unparseable value surfaces as a boot error. Same three
-            // cases, same spelling, as `NESTRS_WS__MAX_CONNECTION_SECS`.
-            max_connection: match env.parse::<u64>("MAX_CONNECTION_SECS")? {
-                None => d.max_connection,
-                Some(0) => None,
-                Some(secs) => Some(Duration::from_secs(secs)),
-            },
+            max_connection: env.seconds("MAX_CONNECTION_SECS", d.max_connection)?,
+            federation: env.flag("FEDERATION", d.federation)?,
         })
     }
 }
@@ -133,6 +156,12 @@ mod tests {
         assert_eq!(d.max_complexity, Some(2000));
         assert!(d.disable_introspection);
         assert_eq!(d.max_batch_size, 10);
+        assert!(
+            !d.federation,
+            "a subgraph publishes its own SDL through `_service`, which no config \
+             can switch off — so being one is opted into, and an `#[entity]` \
+             declared without it fails the boot rather than inheriting it",
+        );
     }
 
     #[test]

@@ -17,8 +17,28 @@
 //! reached through the umbrella's re-export, so the manifest below stays at one
 //! line.
 
+//! `#[entity]` widens it once more, and for a reason nothing else here covers:
+//! it is the only role whose expansion emits an attribute *async-graphql's own
+//! derive* reads (`#[graphql(entity)]`). A federated resolver still names one
+//! crate.
+
+use nest_rs::graphql::async_graphql::SimpleObject;
 use nest_rs::graphql::async_graphql::futures_util::stream::{self, Stream};
 use nest_rs::graphql::{operations, resolver};
+
+/// The federated type. Its `@key` comes from the entity resolver's arguments,
+/// so nothing here declares one.
+///
+/// `crate = ` because this derive is the *developer's* own, not one a decorator
+/// emitted: async-graphql resolves its paths from the call site's manifest, and
+/// the call site declares `nest-rs`. Still one dependency, which is the claim
+/// this crate exists to keep.
+#[derive(SimpleObject)]
+#[graphql(crate = "::nest_rs::graphql::async_graphql")]
+pub struct Greeting {
+    pub id: i32,
+    pub text: String,
+}
 
 /// The lead snippet of `/graphql/`, verbatim — one dependency, one decorator.
 #[resolver]
@@ -39,5 +59,20 @@ impl GreetingResolver {
     #[public]
     async fn greetings(&self) -> impl Stream<Item = String> {
         stream::iter(["Hello, World!".to_string()])
+    }
+
+    /// Resolved by reference, from the `_entities` field a router calls. The
+    /// posture is mandatory here as everywhere, and the decorator is what turns
+    /// this into an entity resolver — no `#[graphql(...)]` is written by hand.
+    #[entity]
+    #[public]
+    async fn find_greeting_by_id(
+        &self,
+        id: i32,
+    ) -> nest_rs::graphql::async_graphql::Result<Greeting> {
+        Ok(Greeting {
+            id,
+            text: "Hello, World!".to_owned(),
+        })
     }
 }

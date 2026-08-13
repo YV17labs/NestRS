@@ -1,0 +1,5 @@
+error: an `#[entity]` returns `Result<...>`: the guard chain is only emitted where a denial has somewhere to go, and this is the one operation a client never names — a resolver-scope `#[use_guards]` compiled out here is invisible in the schema and on the wire. Spell it `Result<T>`, or `Result<Option<T>>` for a reference that may resolve to nothing
+  --> tests/integration/diagnostics/entity_with_a_bare_return.rs:16:48
+   |
+16 |     async fn find_widget_by_id(&self, id: i32) -> i32 {
+   |                                                ^^^^^^

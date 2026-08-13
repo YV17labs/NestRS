@@ -62,6 +62,22 @@ pub trait GraphqlResolverObject: Send + Sync {
         &'a self,
         ctx: &'a Context<'a>,
     ) -> Pin<Box<dyn Future<Output = ServerResult<Option<Value>>> + Send + 'a>>;
+
+    /// Resolve one federation **reference** — `{__typename, <key fields>}` —
+    /// against this member's `#[entity]` resolvers.
+    ///
+    /// A second entry point rather than a case of the first, because the router
+    /// does not name a field: it hands `_entities` a representation, and the
+    /// derive's `find_entity` is what matches it against the keys this member
+    /// declared. A root that forwards only `resolve_field` therefore answers
+    /// *Entity not found* to every reference, however many entity resolvers the
+    /// app wrote — which is how a merged root loses a whole operation role
+    /// without losing a field.
+    fn find_entity<'a>(
+        &'a self,
+        ctx: &'a Context<'a>,
+        params: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = ServerResult<Option<Value>>> + Send + 'a>>;
 }
 
 impl<T: ContainerType + Send + Sync> GraphqlResolverObject for T {
@@ -70,6 +86,14 @@ impl<T: ContainerType + Send + Sync> GraphqlResolverObject for T {
         ctx: &'a Context<'a>,
     ) -> Pin<Box<dyn Future<Output = ServerResult<Option<Value>>> + Send + 'a>> {
         Box::pin(ContainerType::resolve_field(self, ctx))
+    }
+
+    fn find_entity<'a>(
+        &'a self,
+        ctx: &'a Context<'a>,
+        params: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = ServerResult<Option<Value>>> + Send + 'a>> {
+        Box::pin(ContainerType::find_entity(self, ctx, params))
     }
 }
 
@@ -285,7 +309,13 @@ fn merge_subscription_type_info<T: SubscriptionType>(
 /// name is async-graphql's `rename_rule` applied to the method, and a second
 /// implementation of that rule here would be free to drift from the one that
 /// actually builds the schema.
-pub(crate) fn check_duplicate_operations(container: &Container) -> Result<(), String> {
+/// Returns the first reachable resolver that declared an `#[entity]`, which is
+/// the other question this one pass answers. Building the whole meta-type
+/// registry is the expensive half of a GraphQL boot, and asking "does anything
+/// declare a key?" is reading the map this already builds — a second pass for it
+/// would also be a second copy of what counts as an entity and of the
+/// reachability filter, free to disagree with this one.
+pub(crate) fn check_operations(container: &Container) -> Result<Option<&'static str>, String> {
     let reachable = container.get::<ReachableProviders>().map(|p| p.0.clone());
     // A scratch registry, never the schema's: `create_fake_output_type`
     // registers as a side effect, and this pass must leave no trace on the
@@ -293,6 +323,12 @@ pub(crate) fn check_duplicate_operations(container: &Container) -> Result<(), St
     let mut scratch = Registry::default();
     let mut claimed: HashMap<(GraphqlResolverKind, String), &'static str> = HashMap::new();
     let mut clashes: Vec<String> = Vec::new();
+    // An `#[entity]` claims a **type and a key shape**, not a field name, so the
+    // loop below cannot see it: async-graphql's derive routes an entity method
+    // into `add_keys` and never into the object's fields. It lands in the
+    // scratch registry all the same, which is what this reads.
+    let mut keyed: HashMap<(String, String), &'static str> = HashMap::new();
+    let mut first_entity: Option<&'static str> = None;
 
     for reg in inventory::iter::<GraphqlResolverRegistration>() {
         if let Some(set) = reachable.as_ref()
@@ -300,7 +336,54 @@ pub(crate) fn check_duplicate_operations(container: &Container) -> Result<(), St
         {
             continue;
         }
-        let MetaType::Object { fields, .. } = (reg.type_info)(&mut scratch) else {
+        // The keys this registration is about to add, read by diffing the
+        // registry against itself.
+        //
+        // **A key count would be cheaper and is refused.** Keys append today, so
+        // "everything past the cursor is new" holds — but it holds *because of*
+        // an upstream invariant this code cannot check, and the two forms fail in
+        // opposite directions if async-graphql ever stops appending: comparing
+        // the shapes attributes a replaced key to the registration that replaced
+        // it, at worst reporting a clash that is not one, which is a boot error
+        // someone reads; a cursor skips it, and a later claim on that shape finds
+        // no first claimant and passes. This check is what stops two `#[entity]`
+        // resolvers for one type — of which the router reaches whichever linked
+        // first, *including its access posture* — so it is loose only where the
+        // cost is a loud failure. A `HashMap` rebuilt per registration at boot is
+        // what that costs.
+        let before = keyed_types(&scratch);
+        let type_info = (reg.type_info)(&mut scratch);
+        for (name, keys) in keyed_types(&scratch) {
+            let already = before.get(&name);
+            for (index, key) in keys.iter().enumerate() {
+                if already.is_some_and(|seen: &Vec<String>| seen.get(index) == Some(key)) {
+                    continue;
+                }
+                first_entity.get_or_insert(reg.resolver_name);
+                // **The key shape is the identity, not the type.** Apollo lets a
+                // type carry several `@key`s, and async-graphql's `find_entity`
+                // matches a reference against the shape — so two resolvers
+                // keying one type by *different* fields both stay reachable and
+                // are not a duplicate. Two claims on the same shape are: only
+                // one body can answer, and which one is link order.
+                match keyed.entry((name.clone(), key.clone())) {
+                    Entry::Vacant(slot) => {
+                        slot.insert(reg.resolver_name);
+                    }
+                    // A resolver can clash with **itself**: two `#[entity]`
+                    // methods for one type in one `impl` register inside a
+                    // single pass, so a check that diffed per registration
+                    // could never see them — which is the arrangement the whole
+                    // branch exists for, written the way it is easiest to write.
+                    Entry::Occupied(first) => clashes.push(format!(
+                        "entity {name:?} keyed by {key:?} ({} and {})",
+                        first.get(),
+                        reg.resolver_name,
+                    )),
+                }
+            }
+        }
+        let MetaType::Object { fields, .. } = type_info else {
             continue;
         };
         for field in fields.keys() {
@@ -320,15 +403,43 @@ pub(crate) fn check_duplicate_operations(container: &Container) -> Result<(), St
     }
 
     if clashes.is_empty() {
-        return Ok(());
+        return Ok(first_entity);
     }
     clashes.sort();
     Err(format!(
         "duplicate GraphQL operation name: {} — an operation is addressed by \
          bare name within a schema, so the SDL would publish one resolver's \
-         signature while the other resolver's body ran. Rename one of them.",
+         signature while the other resolver's body ran. Rename one of them. \
+         An `entity` clash is the same defect addressed by `@key` instead of by \
+         name: two `#[entity]` resolvers for one type, of which the router \
+         reaches whichever linked first — including its access posture.",
         clashes.join(", "),
     ))
+}
+
+/// Every type in `registry` carrying federation keys, and the key shapes it
+/// carries, in registration order.
+///
+/// The shapes, not a count: the shape is what says whether two claims collide,
+/// several `@key`s per type being Apollo's. That a second `#[entity]` for one
+/// type **appends** to the same vector rather than replacing it is what lets a
+/// cursor say which entries a given registration added. The doubled
+/// `@key(fields: "id") @key(fields: "id")` a same-shape duplicate leaves in the
+/// SDL is the only other trace of it.
+fn keyed_types(registry: &Registry) -> HashMap<String, Vec<String>> {
+    registry
+        .types
+        .iter()
+        .filter_map(|(name, ty)| match ty {
+            MetaType::Object {
+                keys: Some(keys), ..
+            }
+            | MetaType::Interface {
+                keys: Some(keys), ..
+            } if !keys.is_empty() => Some((name.clone(), keys.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Compile-time canary for the pinned async-graphql registry API.
@@ -417,6 +528,24 @@ macro_rules! discovered_root {
                 }
                 Ok(None)
             }
+
+            /// Same first-member-that-answers rule as `resolve_field`, and the
+            /// boot is what keeps it unambiguous: two members keying one type
+            /// fail `check_operations`, which reads the keys out of
+            /// its scratch registry precisely because an entity claims a type
+            /// rather than a field name and leaves nothing else to clash.
+            async fn find_entity(
+                &self,
+                ctx: &Context<'_>,
+                params: &Value,
+            ) -> ServerResult<Option<Value>> {
+                for member in &self.members {
+                    if let Some(value) = member.find_entity(ctx, params).await? {
+                        return Ok(Some(value));
+                    }
+                }
+                Ok(None)
+            }
         }
 
         impl ObjectType for $name {}
@@ -468,7 +597,7 @@ impl SubscriptionType for DiscoveredSubscription {
     ) -> Option<Pin<Box<dyn Stream<Item = Response> + Send + 'a>>> {
         // First member that claims the field answers — the same dispatch rule
         // the object roots use, and the same reason two members may not claim
-        // one name (`check_duplicate_operations`).
+        // one name (`check_operations`).
         self.members
             .iter()
             .find_map(|member| member.create_field_stream(ctx))
@@ -512,6 +641,13 @@ pub(crate) fn build_schema(container: Container, config: &GraphqlConfig) -> Disc
     if config.disable_introspection {
         builder = builder.disable_introspection();
     }
+    if config.federation {
+        // Declares the federation directives and the two fields a router calls.
+        // Not what *creates* them: an `#[entity]` resolver does that on its own
+        // (its `add_keys` is what `has_entities()` reads), so this is the switch
+        // for a subgraph that has yet to declare its first key.
+        builder = builder.enable_federation();
+    }
     builder.finish()
 }
 
@@ -536,11 +672,21 @@ impl Drop for ReachableResetGuard {
 /// Render the composed schema as SDL. Types, fields, arguments, and enum
 /// values are sorted: the resolver registry's link-time iteration order is
 /// not stable, and would otherwise churn the committed SDL diff.
-pub(crate) fn render_sdl(schema: &DiscoveredSchema) -> String {
-    schema.sdl_with_options(
-        SDLExportOptions::new()
-            .sorted_fields()
-            .sorted_arguments()
-            .sorted_enum_items(),
-    )
+///
+/// A subgraph exports the **subgraph form**: `@key` appears on every federated
+/// type, and `_service` / `_entities` are stripped, which is what the Apollo
+/// spec asks of an exported subgraph schema. The committed SDL therefore moves
+/// in both directions the day an app federates — a fact worth seeing in a diff,
+/// which is why the option follows the config rather than being always on.
+pub(crate) fn render_sdl(schema: &DiscoveredSchema, config: &GraphqlConfig) -> String {
+    let options = SDLExportOptions::new()
+        .sorted_fields()
+        .sorted_arguments()
+        .sorted_enum_items();
+    let options = if config.federation {
+        options.federation()
+    } else {
+        options
+    };
+    schema.sdl_with_options(options)
 }

@@ -52,6 +52,7 @@ pub struct GraphqlConfig {
 | `max_complexity` | `NESTRS_GRAPHQL__MAX_COMPLEXITY` | `2000` | Bound on query complexity score; `None` disables. See [Query limits](/graphql/query-limits/). |
 | `disable_introspection` | `NESTRS_GRAPHQL__DISABLE_INTROSPECTION` | `true` | When `true`, the schema rejects introspection queries (production-safe). |
 | `max_batch_size` | `NESTRS_GRAPHQL__MAX_BATCH_SIZE` | `10` | Maximum operations in a single HTTP batch request. |
+| `federation` | `NESTRS_GRAPHQL__FEDERATION` | `false` | Serve as an Apollo subgraph: declares the federation directives and exports the subgraph SDL form. An `#[entity]` declared while this is `false` fails the boot. See [Federation](/graphql/federation/). |
 
 <Aside type="caution">
 **`playground = true` in production is a CVE.** It exposes the full

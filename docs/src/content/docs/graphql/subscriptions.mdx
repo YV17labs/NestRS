@@ -176,7 +176,10 @@ Everything else is the GraphQL module's own configuration — see
   subject for the subscription, the way it names one for a mutation.
 - **A request-scoped provider is unreachable** from a subscription — see
   the table above.
-- **Federation is not supported**, on subscriptions or anywhere else.
+- **Federation reaches queries, not subscriptions.** An `#[entity]` is a
+  `Query`-root field the router resolves by reference; the `Subscription` root
+  has no `_entities`, and declaring one there is a compile error naming both
+  roles. See [Federation](/graphql/federation/).
 
 ## Going further
 

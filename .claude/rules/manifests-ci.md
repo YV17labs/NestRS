@@ -55,8 +55,14 @@ crate's public-but-internal registry API. Nothing else carries a patch.
 
 `versions_are_major_minor`
 (`crates/nest-rs-cli/src/commands/generate/cargo.rs`) walks the repo's
-manifests and fails the suite on any other form — the generator's suite
-because a scaffolded workspace inherits these pins verbatim.
+manifests **and the ones the CLI generates** — the templates' raw-string
+manifests and this file's own `workspace_value` literals, *discovered* from
+the CLI's sources rather than listed, so a template added later is covered
+the day it is written. It lives in the generator's suite because a
+scaffolded workspace inherits these pins verbatim, and it reached only the
+repo's three manifests for a while: the generated half was conformant, and
+a drift there would have shipped to every new project without failing a
+single suite here.
 
 ### One `nest-rs*` line per consumer
 

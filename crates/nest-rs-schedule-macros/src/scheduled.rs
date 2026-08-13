@@ -12,8 +12,9 @@
 use std::str::FromStr;
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, TRANSACTIONAL, impl_self_ident, job_transaction, require_str_lit,
-    transactional_value,
+    DecoratorPair, Edge, TRANSACTIONAL, duplicate_argument, impl_self_ident,
+    job_argument_needs_a_value, job_transaction, require_str_lit, transactional_value,
+    unknown_argument,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -21,7 +22,7 @@ use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, ExprLit, ImplItem, Lit, LitStr, MetaNameValue, Token};
+use syn::{Attribute, Expr, ExprLit, ImplItem, Lit, LitStr, Meta, MetaNameValue, Token};
 
 /// The scheduled-tasks host keeps its own `#[injectable]`; this names the shape
 /// `#[scheduled]` wants rather than reporting syn's `expected impl`.
@@ -226,31 +227,48 @@ fn parse_trailing_keys(
     if stream.is_empty() {
         return Ok((transactional, owned));
     }
-    let metas: Punctuated<MetaNameValue, Token![,]> = Punctuated::parse_terminated(stream)?;
+    // `Meta`, not `MetaNameValue`: a bare `transactional` is a legal `Meta::Path`
+    // and reaches the loop, where it earns a sentence naming the key. Parsed as
+    // `MetaNameValue` it failed the whole `Punctuated`, and syn reported
+    // `expected `=`` against the enclosing `#[scheduled]` — the *other* half of
+    // the pair, and a decorator the developer had not touched.
+    let metas: Punctuated<Meta, Token![,]> = Punctuated::parse_terminated(stream)?;
     for meta in metas {
-        let name = meta
-            .path
+        let path = meta.path().clone();
+        // `get_ident` is `None` for a multi-segment path (`a::b`), and defaulting
+        // made the refusal name the empty string — a sentence that refuses
+        // without saying what it refused.
+        let name = path
             .get_ident()
             .map(ToString::to_string)
-            .unwrap_or_default();
+            .unwrap_or_else(|| quote!(#path).to_string().replace(' ', ""));
+        let known = name == TRANSACTIONAL || extra == Some(name.as_str());
+        if !known {
+            let mut accepted = Vec::new();
+            if let Some(own) = extra {
+                accepted.push(own);
+            }
+            accepted.push(TRANSACTIONAL);
+            return Err(syn::Error::new_spanned(
+                &path,
+                unknown_argument(key, &name, &accepted),
+            ));
+        }
+        let Meta::NameValue(meta) = meta else {
+            return Err(syn::Error::new_spanned(
+                &path,
+                job_argument_needs_a_value(key, &name),
+            ));
+        };
         let taken = if name == TRANSACTIONAL {
             transactional.is_some()
-        } else if extra == Some(name.as_str()) {
-            owned.is_some()
         } else {
-            let accepted = match extra {
-                Some(own) => format!("`{own}` or `{TRANSACTIONAL}`"),
-                None => format!("`{TRANSACTIONAL}`"),
-            };
-            return Err(syn::Error::new_spanned(
-                &meta.path,
-                format!("unknown #[{key}] argument `{name}`; expected {accepted}"),
-            ));
+            owned.is_some()
         };
         if taken {
             return Err(syn::Error::new_spanned(
                 &meta.path,
-                format!("#[{key}] takes at most one `{name}`"),
+                duplicate_argument(key, &name),
             ));
         }
         if name == TRANSACTIONAL {

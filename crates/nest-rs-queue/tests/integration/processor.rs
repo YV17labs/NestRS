@@ -138,3 +138,42 @@ async fn an_attempt_the_context_could_not_settle_carries_its_classification() {
         "the sentence the context wrote is what the dead-letter record carries",
     );
 }
+
+/// The key read through a `macro_rules!` fragment.
+///
+/// `syn` wraps a `$expr:expr` substitution in an invisible-delimiter
+/// `Expr::Group`, and whether it unwraps depends on how the argument list was
+/// parsed and on where in that list the key sits — so the same `false` was
+/// accepted at one site and refused at another, with a message telling the
+/// developer to write the value they had written. The four job decorators
+/// answer identically or the shared key is a fiction.
+macro_rules! declare_transactional_job {
+    ($settle:expr) => {
+        struct FragmentProcessor;
+
+        #[processor]
+        impl FragmentProcessor {
+            #[process(queue = TranscodeQueue, transactional = $settle)]
+            async fn first(&self, _job: TranscodeCommand) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            #[process(queue = TranscodeQueue, transactional = $settle, retries = 2)]
+            async fn second(&self, _job: TranscodeCommand) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+    };
+}
+
+declare_transactional_job!(false);
+
+#[test]
+fn a_transactional_fragment_is_read_the_same_wherever_the_key_sits() {
+    // Compiling is the assertion; this pins the two methods actually reached
+    // the inventory, so the macro above cannot silently become dead code.
+    let entries = nest_rs_core::inventory::iter::<ProcessMethod>()
+        .filter(|m| (m.provider_type_id)() == TypeId::of::<FragmentProcessor>())
+        .count();
+    assert_eq!(entries, 2, "both fragment-declared methods registered");
+}

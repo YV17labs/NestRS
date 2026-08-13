@@ -1,0 +1,5 @@
+error: #[cron] takes at most one `tz`
+  --> tests/integration/diagnostics/trigger_takes_at_most_one_key.rs:15:48
+   |
+15 |     #[cron("0 0 * * * *", tz = "Europe/Paris", tz = "UTC")]
+   |                                                ^^

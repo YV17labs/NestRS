@@ -15,8 +15,9 @@
 //! backend integration (nest-rs-redis, …) is wired in.
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, PipeWrapper, TRANSACTIONAL, impl_self_ident, job_transaction,
-    payload_arg_type, pipe_wrapper, snake_case, transactional_value,
+    DecoratorPair, Edge, PipeWrapper, TRANSACTIONAL, duplicate_argument, impl_self_ident,
+    job_argument_needs_a_value, job_transaction, payload_arg_type, pipe_wrapper, snake_case,
+    transactional_value, unknown_argument,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -403,15 +404,42 @@ struct ProcessArgs {
 impl Parse for ProcessArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut queue: Option<QueueId> = None;
-        let mut retries: usize = 0;
+        let mut retries: Option<usize> = None;
         let mut transactional: Option<bool> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
+            let name = key.to_string();
+            // The `=` is checked before it is consumed so a bare key earns a
+            // sentence naming the key rather than syn's `expected `=``, which
+            // names the grammar. Same refusal as the triggers', worded once.
+            if !input.peek(Token![=]) {
+                return Err(syn::Error::new(
+                    key.span(),
+                    job_argument_needs_a_value("process", &name),
+                ));
+            }
             input.parse::<Token![=]>()?;
-            match key.to_string().as_str() {
+            // A repeated key is refused, not last-write-wins — the same reading
+            // `#[every]`/`#[cron]`/`#[after]` take, through the same sentence.
+            // Which of two declarations gets dropped would be source order, and
+            // one of the two it can drop is `transactional = true`: the default
+            // this decorator exists to let a developer state.
+            let taken = match name.as_str() {
+                "queue" => queue.is_some(),
+                "retries" => retries.is_some(),
+                TRANSACTIONAL => transactional.is_some(),
+                _ => false,
+            };
+            if taken {
+                return Err(syn::Error::new(
+                    key.span(),
+                    duplicate_argument("process", &name),
+                ));
+            }
+            match name.as_str() {
                 "queue" => queue = Some(input.parse()?),
-                "retries" => retries = input.parse::<LitInt>()?.base10_parse()?,
+                "retries" => retries = Some(input.parse::<LitInt>()?.base10_parse()?),
                 TRANSACTIONAL => transactional = Some(transactional_value(&input.parse()?)?),
                 // `concurrency` was a real key. It is gone rather than
                 // deprecated, so say what replaced it instead of listing the
@@ -428,10 +456,11 @@ impl Parse for ProcessArgs {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!(
-                            "unknown #[process] key `{other}` \
-                             (expected `queue`, `retries` or `transactional`)"
-                        ),
+                        // Built from the constant and through the shared
+                        // sentence, so the four job decorators word an unknown
+                        // key one way — and so a rename of the key cannot leave
+                        // a literal behind in the file that already imports it.
+                        unknown_argument("process", other, &["queue", "retries", TRANSACTIONAL]),
                     ));
                 }
             }
@@ -449,7 +478,7 @@ impl Parse for ProcessArgs {
 
         Ok(Self {
             queue,
-            retries,
+            retries: retries.unwrap_or(0),
             transactional,
         })
     }

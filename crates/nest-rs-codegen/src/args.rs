@@ -42,3 +42,58 @@ pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> sy
         ))
     }
 }
+
+/// The sentence a decorator prints when one of its arguments is written twice.
+///
+/// Accepting the repeat means dropping one of two declarations, and which one
+/// it drops is source order — the shape every unified grammar here exists to
+/// remove. So the refusal is worded once, for every decorator whose arguments
+/// are a list of `key = value` pairs, rather than per key: a refusal that
+/// multiplies with the argument matrix is a refusal that gets skipped.
+///
+/// The caller supplies the span, because the two shapes that need this parse
+/// their arguments differently — an `Ident` in a hand-rolled loop, a
+/// `MetaNameValue`'s path in a `Punctuated` — and the span is what puts the
+/// error under the *second* spelling rather than the whole attribute.
+pub fn duplicate_argument(attr: &str, name: &str) -> String {
+    format!("#[{attr}] takes at most one `{name}`")
+}
+
+/// The sentence a decorator prints for an argument written **bare**, with no
+/// value.
+///
+/// The third of the three refusals a `key = value` grammar owes, beside
+/// [`duplicate_argument`] and [`unknown_argument`], and worded here for the same
+/// reason: a bare `expected `=`` names the grammar and not the key, and two
+/// sites wording it themselves is how one of them ends up with its decorator
+/// name as a literal.
+///
+/// A key that has more to say about *which* values it takes wraps this — see
+/// `job::transactional_needs_a_value`.
+pub fn needs_a_value(attr: &str, name: &str) -> String {
+    format!("#[{attr}] `{name}` needs a value — write `{name} = ...`")
+}
+
+/// The sentence a decorator prints for an argument it does not know, listing the
+/// ones it does.
+///
+/// Worded once for the same reason [`duplicate_argument`] is, and it arrived
+/// later for a reason worth remembering: the two halves of the job family had
+/// drifted into two forms — ``unknown #[process] key `x` (expected …)`` against
+/// ``unknown #[every] argument `x`; expected …`` — and the first spelled
+/// `transactional` as a literal in a file that already imports the constant. A
+/// shared key whose refusal reads differently at two of its four sites is a
+/// shared key on paper.
+///
+/// `expected` is listed in the order the decorator declares it, joined with a
+/// final `or`: an alphabetical sort would put the required argument last on
+/// half the decorators.
+pub fn unknown_argument(attr: &str, name: &str, expected: &[&str]) -> String {
+    let quoted: Vec<String> = expected.iter().map(|key| format!("`{key}`")).collect();
+    let list = match quoted.split_last() {
+        None => "no arguments".to_owned(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    };
+    format!("unknown #[{attr}] argument `{name}`; expected {list}")
+}

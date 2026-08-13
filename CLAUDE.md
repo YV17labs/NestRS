@@ -58,6 +58,26 @@ to require it, **stop and ask**.
 - **No silent failure.** Never return `[]`/`None` when the DB errored —
   batch and loader methods return `Result`. Never log-and-pretend-success.
 - **No external DI library.** Ours is internal by decision. Extend it.
+- **Four NestJS surfaces are refused by design**, not deferred. They were
+  recorded in a roadmap that no longer exists, and each is a defect if it
+  reappears:
+  - **No microservice transport split.** `@nestjs/microservices` is a
+    second dispatch model beside HTTP. Here an app is one binary serving
+    the edges it imports; two binaries share `demo/crates/features` and
+    the database and **never RPC each other**.
+  - **No `ClassSerializerInterceptor`.** Exposure is `#[expose]` on the
+    entity and the mask is the caller's ability. A serializer-shaped
+    third place a column can be shown or hidden from is what the
+    fail-secure design exists to not have.
+  - **No `HttpModule` / `HttpService`.** A general-purpose *outbound*
+    client is not a framework concern: an app writes `reqwest` and
+    injects its own. Wrapping it costs the caller every option the client
+    has and buys a module. (A crate that needs one for its own protocol —
+    `nest-rs-authn`'s OAuth exchange, storage's presigned PUT — holds it
+    privately; that is not a surface.)
+  - **No bundled `Logger`.** `tracing` is the ecosystem's, and the span
+    targets under *Observability* are the contract. A framework logger
+    would be a second one, and the first thing to drift from it.
 - **No renaming the umbrella crate.** The facade stays `nest-rs`, every
   sub-crate `nest-rs-*` (paths `nest_rs_*`, span targets
   `nest_rs::<concern>`). The `nestrs` brand (CLI, `NESTRS_*` env,
@@ -274,9 +294,10 @@ sentence, not a stub.
 Three clauses keep the refusal honest, each load-bearing:
 
 - **Cannot is not the same as not yet.** A refusal asserts a property of
-  the standard. A site where the thing is possible but unbuilt is a
-  `ROADMAP.md` entry; writing its refusal instead ships a false statement
-  inside the compiler, where no reader is positioned to contradict it.
+  the standard. A site where the thing is possible but unbuilt is an owner
+  question, raised as one; writing its refusal instead ships a false
+  statement inside the compiler, where no reader is positioned to
+  contradict it.
   Invoking the standard is not naming it — the sentence carries the fact a
   reader can check, or it is not a refusal.
 - **Refusals are shared, not per key.** One helper, one sentence, every key

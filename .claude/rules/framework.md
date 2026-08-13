@@ -592,12 +592,22 @@ that can only ever suppress a check.
 
 **Two residues, both reported rather than closed, both owner questions.**
 
-- **Discovery is not an operation.** `initialize` / `tools/list` / `prompts/list`
-  are rmcp server methods with nothing for a `check_mcp` to be handed, so the
-  endpoint's `check_http` is their only gate. A pool of `check_mcp`-only guards
-  therefore still takes `/mcp` from deny-all to a handshake disclosing the tool
-  inventory. Telling "gates the request" from "gates the operation" inside a pool
-  is exactly the capability bound `use_guards_global` deliberately does not take.
+- **Discovery is not an operation — and that excuse no longer holds.**
+  `initialize` / `tools/list` / `prompts/list` are rmcp server methods the
+  endpoint's `check_http` is the only gate on, so a pool of `check_mcp`-only
+  guards still takes `/mcp` from deny-all to a handshake disclosing the tool
+  inventory. The reason recorded here was "nothing for a `check_mcp` to be
+  handed", and GraphQL has since refuted it: `_service` / `_entities` are the
+  same shape — protocol-owned, owned by no provider, disclosing the inventory —
+  and they are gated, by building the context that *says* the site has no
+  operation (`GraphqlOperationContext::federation`, whose `context()` answers
+  `None`) rather than by declining the guard. The seam exists on this side too:
+  `PropagatingHandler::dispatch` already wraps `list_tools`. So what stands is
+  the residue, not its justification: closing it means an
+  `McpOperationContext` that can name a discovery method and a `dispatch` that
+  runs the pool's operation half for it. **Owner question, not a licence** —
+  widening a guard surface is a decision, and the point of recording it here is
+  that the next reader does not inherit a false reason.
 - **The in-band chains are never phase-validated.** `boot_validate_guards` runs
   at the `#[routes]` mount and over the global bucket; `#[tools]` and
   `#[operations]` compose their chain at runtime and emit no such check, so an
@@ -647,11 +657,16 @@ name order; init failure aborts boot, shutdown is best-effort.
   and owes none of *A new edge owes the same list* — it carries the edge's
   guards, pipes, posture and document verbatim. What it owns is the response:
   the handler returns an `SseStream`, the decorator writes the
-  `text/event-stream` and arms the ceiling. Three refusals, each a named
-  compile error: `#[authorize]` (masking has no wire model to reconcile against
-  — a capability-only guard is the pattern), the response-decorator family in
-  one sentence (`#[http_code]` / `#[redirect]` / `#[response_header]` all shape
-  a response that *completes*), and `#[api(response_content_type)]`.
+  `text/event-stream` and arms the ceiling. **Four** refusals, each a named
+  compile error, and they are named rather than counted because the count is
+  what drifted: `#[authorize]` (masking has no wire model to reconcile against —
+  a capability-only guard is the pattern), a **shaper parameter** — a
+  hand-written `Authorize<A, E>` or a `Bind<A, S>`, which is the second and
+  less obvious way to the same place, and on a stream the worse one, since the
+  mask waves an opaque body through while the document says it masked — the
+  response-decorator family in one sentence (`#[http_code]` / `#[redirect]` /
+  `#[response_header]` all shape a response that *completes*), and
+  `#[api(response_content_type)]`.
 
   **The stream ceiling lives in `HttpConfig`, and the namespace is the whole
   argument.** `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS` is the third instance of

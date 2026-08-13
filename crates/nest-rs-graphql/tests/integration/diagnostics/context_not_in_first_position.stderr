@@ -1,0 +1,5 @@
+error: a `&Context` parameter comes first, directly after `&self` — async-graphql's `#[Object]` recognises it only there and reads a later one as a schema argument, which fails as an `InputType` bound on a type you never wrote. On an `#[entity]` it also joins the `@key` the router matches on. Move it up, or drop it: the decorator inserts one when the operation needs it
+  --> tests/integration/diagnostics/context_not_in_first_position.rs:26:9
+   |
+26 |         ctx: &nest_rs_graphql::async_graphql::Context<'_>,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -39,6 +39,8 @@ mod mcp_chain;
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 mod global_pool;
 #[cfg(feature = "graphql")]
+mod graphql_federation_guard;
+#[cfg(feature = "graphql")]
 mod graphql_operation_guard;
 #[cfg(feature = "mcp")]
 mod mcp_operation_guard;
@@ -58,7 +60,9 @@ pub use denial_convert::denial_to_ws_error;
 pub(crate) use denial_convert::deny_http;
 pub use denial_convert::{denial_to_http_error, denial_to_http_response};
 #[cfg(feature = "graphql")]
-pub use graphql_chain::run_layered_graphql_chain;
+pub use graphql_chain::{GraphqlSite, run_layered_graphql_chain};
+#[cfg(feature = "graphql")]
+pub use graphql_federation_guard::GlobalPoolFederationGuard;
 #[cfg(feature = "graphql")]
 pub use graphql_operation_guard::GlobalPoolOperationGuard;
 #[cfg(feature = "mcp")]

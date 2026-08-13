@@ -67,4 +67,21 @@ impl GlobalPoolChain {
         }
         Ok(())
     }
+
+    /// Run the pool's **operation** half against a GraphQL operation, returning
+    /// the denying guard's name beside its [`Denial`] — the caller logs it, as
+    /// the per-site chain does, and this is the only site with no `ResolvedLayer`
+    /// in the caller's hand to read the name off.
+    #[cfg(feature = "graphql")]
+    pub(crate) async fn check_operation(
+        &self,
+        operation: &nest_rs_graphql::GraphqlOperationContext<'_>,
+    ) -> Result<(), (&'static str, Denial)> {
+        for entry in &self.chain {
+            if let Err(denial) = entry.layer.as_ref().check_graphql(operation).await {
+                return Err((entry.name, denial));
+            }
+        }
+        Ok(())
+    }
 }

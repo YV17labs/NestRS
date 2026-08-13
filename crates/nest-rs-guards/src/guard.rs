@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::denial::Denial;
 
 #[cfg(feature = "graphql")]
-use nest_rs_graphql::async_graphql::Context as GraphqlContext;
+use nest_rs_graphql::GraphqlOperationContext;
 
 /// Where in a guard chain this guard belongs — **declared**, never inferred
 /// from type names. Boot-time chain validation reads it to refuse a chain
@@ -82,10 +82,17 @@ pub trait Guard: Layer {
         Ok(())
     }
 
-    /// GraphQL resolver entry. Default = no-op. Available with the `graphql`
+    /// GraphQL operation entry. Default = no-op. Available with the `graphql`
     /// feature on this crate.
+    ///
+    /// Takes a [`GraphqlOperationContext`] rather than async-graphql's `Context`
+    /// because the operation has **two** sites: a resolver field, and the
+    /// `_service` / `_entities` root fields async-graphql resolves above the
+    /// merged root, where a schema extension is the only seam and no `Context`
+    /// exists. One declaration, both sites; `operation.context()` is how a guard
+    /// that genuinely needs the selection set asks for it.
     #[cfg(feature = "graphql")]
-    async fn check_graphql(&self, _ctx: &GraphqlContext<'_>) -> Result<(), Denial> {
+    async fn check_graphql(&self, _operation: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
         Ok(())
     }
 
@@ -249,7 +256,7 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
     #[cfg(feature = "graphql")]
     fn check_graphql<'s, 'c, 'g, 'fut>(
         &'s self,
-        ctx: &'c GraphqlContext<'g>,
+        operation: &'c GraphqlOperationContext<'g>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Denial>> + Send + 'fut>>
     where
         's: 'fut,
@@ -257,7 +264,7 @@ impl<T: Guard + ?Sized> Guard for Arc<T> {
         'g: 'fut,
         Self: 'fut,
     {
-        (**self).check_graphql(ctx)
+        (**self).check_graphql(operation)
     }
 
     #[cfg(feature = "ws")]

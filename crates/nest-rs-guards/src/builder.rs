@@ -15,12 +15,12 @@ use poem::endpoint::BoxEndpoint;
 use crate::Guard;
 #[cfg(feature = "mcp")]
 use crate::dispatch::GlobalPoolMcpGuard;
-#[cfg(feature = "graphql")]
-use crate::dispatch::GlobalPoolOperationGuard;
 use crate::dispatch::deny_http;
+#[cfg(feature = "graphql")]
+use crate::dispatch::{GlobalPoolFederationGuard, GlobalPoolOperationGuard};
 use crate::registry::{GuardSpec, GuardSpecs, PipeSpec, PipeSpecs};
 #[cfg(feature = "graphql")]
-use nest_rs_graphql::{FallbackOperationGuard, GraphqlVariablePipe};
+use nest_rs_graphql::{FallbackOperationGuard, FederationGate, GraphqlVariablePipe};
 #[cfg(feature = "mcp")]
 use nest_rs_mcp::FallbackMcpGuard;
 #[cfg(feature = "ws")]
@@ -79,6 +79,12 @@ impl AppBuilderGuardsExt for AppBuilder {
         #[cfg(feature = "graphql")]
         {
             builder = builder.provide(FallbackOperationGuard(GlobalPoolOperationGuard::factory));
+            // `_service` / `_entities` are resolved above the merged root, so
+            // the resolver-site chain cannot reach them. Seeded whether or not
+            // the pool is empty: an empty chain passes, and a schema whose gate
+            // depends on the pool being non-empty is one more thing that has to
+            // be true for the endpoint to be gated.
+            builder = builder.provide(FederationGate(GlobalPoolFederationGuard::factory));
         }
         // MCP's no-guard default is deny-all, not pass-through, so the fallback
         // is seeded only for a non-empty pool: it may widen `/mcp` to exactly

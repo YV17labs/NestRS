@@ -87,16 +87,20 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
     let federation = options.federation;
     let builder = builder.provide_meta(HttpBootCheck::new(
         move |container| match check_operations(container)? {
-            Some(resolver) if !federation => Err(format!(
-                "`{resolver}` declares an `#[entity]`, but this schema is not configured as a \
-                 subgraph. An entity resolver *is* the federation surface: async-graphql serves \
-                 `_service` and `_entities` the moment one exists, so the endpoint would publish \
-                 its own SDL — `_service` is not covered by \
-                 `NESTRS_GRAPHQL__DISABLE_INTROSPECTION` — while the committed SDL carried the \
-                 federation plumbing without the `@key` a router needs. Set \
-                 `GraphqlConfig::federation = true` (or `NESTRS_GRAPHQL__FEDERATION=true`) and \
-                 serve it behind a router, or remove the `#[entity]`."
-            )),
+            Some(resolver) if !federation => {
+                let introspection = nest_rs_config::var_name("graphql", "DISABLE_INTROSPECTION");
+                let federation_var = nest_rs_config::var_name("graphql", "FEDERATION");
+                Err(format!(
+                    "`{resolver}` declares an `#[entity]`, but this schema is not configured as a \
+                     subgraph. An entity resolver *is* the federation surface: async-graphql \
+                     serves `_service` and `_entities` the moment one exists, so the endpoint \
+                     would publish its own SDL — `_service` is not covered by \
+                     `{introspection}` — while the committed SDL carried the federation plumbing \
+                     without the `@key` a router needs. Set `GraphqlConfig::federation = true` \
+                     (or `{federation_var}=true`) and serve it behind a router, or remove the \
+                     `#[entity]`."
+                ))
+            }
             _ => Ok(()),
         },
     ));

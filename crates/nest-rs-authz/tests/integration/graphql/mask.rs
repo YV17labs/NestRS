@@ -574,3 +574,107 @@ async fn masked_reply_masks_every_row_of_an_array() {
         assert!(row.get("secret").is_none());
     }
 }
+
+// ---------------------------------------------------------------------------
+// `#[entity]` carries the same posture — and it is the role where that matters
+// most, because the client never names the operation. Everything above reaches
+// the resolver through a field the document spells; everything below reaches it
+// through a **reference** a federation router sends.
+
+#[resolver]
+struct EntityMaskResolver;
+
+#[operations]
+impl EntityMaskResolver {
+    /// Same declaration as the `#[query]` above, on the one operation whose
+    /// posture no document shows.
+    #[entity]
+    #[authorize(Read, widget::Entity)]
+    async fn find_widget_dto_by_id(&self, id: i32) -> GqlResult<WidgetDto> {
+        Ok(WidgetDto {
+            id,
+            name: Some("ada".into()),
+        })
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(nest_rs_graphql::GraphqlConfig {
+        federation: true,
+        ..Default::default()
+    })],
+    providers = [
+        PassGuard,
+        AbilityInjector,
+        TestOpGuard as dyn GraphqlOperationGuard,
+        EntityMaskResolver,
+    ],
+)]
+struct EntityMaskGraphqlModule;
+
+async fn boot_subgraph() -> TestApp {
+    TestApp::builder()
+        .module::<EntityMaskGraphqlModule>()
+        .build()
+        .await
+        .expect("the subgraph boots and mounts at /graphql")
+}
+
+/// One reference, one role — the driver every case below shares.
+async fn reference(app: &TestApp, role: &str) -> serde_json::Value {
+    let mut req = app.http().post("/graphql");
+    if !role.is_empty() {
+        req = req.header("x-role", role);
+    }
+    let resp = req
+        .body_json(&serde_json::json!({
+            "query": "query($reps: [_Any!]!) { _entities(representations: $reps) \
+                      { ... on WidgetDto { id name } } }",
+            "variables": { "reps": [{ "__typename": "WidgetDto", "id": 1 }] },
+        }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    serde_json::to_value(resp.json().await).expect("a GraphQL response is JSON")
+}
+
+#[tokio::test]
+async fn an_entity_answers_an_unrestricted_caller_in_full() {
+    let app = boot_subgraph().await;
+    let json = reference(&app, "admin").await;
+    assert_eq!(json["data"]["_entities"][0]["id"], 1, "{json}");
+    assert_eq!(json["data"]["_entities"][0]["name"], "ada", "{json}");
+}
+
+/// The mask runs on a reference exactly as on a query, and nothing in the
+/// resolver body says so — the posture attribute is the whole mechanism.
+#[tokio::test]
+async fn an_entity_masks_a_field_restricted_caller() {
+    let app = boot_subgraph().await;
+    let json = reference(&app, "viewer").await;
+    assert_eq!(json["data"]["_entities"][0]["id"], 1, "{json}");
+    assert!(
+        json["data"]["_entities"][0]["name"].is_null(),
+        "a field grant the caller lacks is stripped from a reference too — \
+         otherwise every `@key`-ed type is a way past every field grant in the \
+         schema: {json}",
+    );
+}
+
+/// And the class gate: a caller with no rule for the entity is refused, rather
+/// than answered from a body the document never mentioned.
+#[tokio::test]
+async fn an_entity_refuses_a_caller_with_no_rule() {
+    let app = boot_subgraph().await;
+    let json = reference(&app, "stranger").await;
+    assert!(
+        json["data"].is_null() || json["data"]["_entities"][0].is_null(),
+        "the reference is not answered: {json}",
+    );
+    assert!(
+        json["errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty()),
+        "and it is refused rather than answered empty: {json}",
+    );
+}

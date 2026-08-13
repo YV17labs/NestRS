@@ -15,6 +15,10 @@ pub(crate) const DEFAULT_PATH: &str = "/graphql";
 /// carries, because it is the same control on the same kind of socket.
 const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 
+/// A hundred entity references per `_entities` call — a page of parents on the
+/// router's side, which is what a query plan turns into one such call.
+const DEFAULT_MAX_REPRESENTATIONS: usize = 100;
+
 /// GraphQL endpoint options, settable via `NESTRS_GRAPHQL__*` or pinned through
 /// [`GraphqlModule::for_root`](crate::GraphqlModule::for_root). Every field
 /// defaults production-safe.
@@ -100,6 +104,31 @@ pub struct GraphqlConfig {
     ///
     /// Read from `NESTRS_GRAPHQL__FEDERATION`.
     pub federation: bool,
+    /// Maximum number of entity references one `_entities` call may carry.
+    ///
+    /// The **third** limit on an incoming document and the only one that sees
+    /// this number: `max_depth` and `max_complexity` score the document's shape,
+    /// `max_batch_size` counts *operations* — and a single `_entities` operation
+    /// of depth 2 and trivial complexity carries a list whose length the caller
+    /// picks. Each element is a full resolution: the entity body, its posture
+    /// gate and mask, and whatever reads it makes, launched concurrently by
+    /// async-graphql's `try_join_all`. A hundred thousand references passed
+    /// every existing check.
+    ///
+    /// Over the ceiling is a GraphQL error naming it, never a silent truncation
+    /// — a router that quietly received fewer entities than it asked for would
+    /// render a page with holes and no way to tell why.
+    ///
+    /// Read from `NESTRS_GRAPHQL__MAX_REPRESENTATIONS` (`0` ⇒ unlimited);
+    /// defaults to 100. Raise it for a router whose parent pages are larger than
+    /// that; it costs nothing when no `_entities` reaches the schema.
+    ///
+    /// **`Some(0)` is unlimited here, where its neighbours refuse it.** This
+    /// field carries a sentinel and `max_depth` / `max_complexity` do not — for
+    /// them `0` could only mean "reject every query", so the validator refuses it
+    /// rather than let it read as *off*. `None` and `Some(0)` therefore mean the
+    /// same thing on this one, pinned in code exactly as through the variable.
+    pub max_representations: Option<usize>,
 }
 
 impl Default for GraphqlConfig {
@@ -115,6 +144,7 @@ impl Default for GraphqlConfig {
             max_batch_size: 10,
             max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
             federation: false,
+            max_representations: Some(DEFAULT_MAX_REPRESENTATIONS),
         }
     }
 }
@@ -136,6 +166,7 @@ impl Config for GraphqlConfig {
             max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
             max_connection: env.seconds("MAX_CONNECTION_SECS", d.max_connection)?,
             federation: env.flag("FEDERATION", d.federation)?,
+            max_representations: env.count("MAX_REPRESENTATIONS", d.max_representations)?,
         })
     }
 }

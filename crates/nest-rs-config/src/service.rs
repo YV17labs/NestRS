@@ -189,6 +189,23 @@ impl ConfigService {
         })
     }
 
+    /// A whole count, where **`0` means unlimited** — [`seconds`](Self::seconds)'
+    /// spelling for a ceiling that bounds a *quantity* rather than a duration.
+    ///
+    /// Same three cases and the same reason they live here: unset keeps `base`,
+    /// `0` is the unlimited sentinel, and set-but-unparseable is boot-fatal
+    /// naming the variable. A ceiling on how many units of work one request may
+    /// ask for is a security control, and `0` read as *zero allowed* would turn
+    /// it into a kill switch — which is exactly the misreading one shared
+    /// spelling exists to prevent.
+    pub fn count(&self, key: &str, base: Option<usize>) -> Result<Option<usize>, ConfigError> {
+        Ok(match self.parse::<usize>(key)? {
+            None => base,
+            Some(0) => None,
+            Some(count) => Some(count),
+        })
+    }
+
     /// Comma-separated, trimmed, empties dropped. `default` is the value the
     /// field keeps when the variable is unset — the same shape as
     /// [`flag`](Self::flag), so a `from_env` body passes `base.<field>` and the
@@ -388,5 +405,41 @@ mod tests {
             );
             Ok(())
         });
+    }
+
+    /// `count` and `seconds` are one spelling of one sentinel; the tests are
+    /// paired for the same reason the doc comments are — a divergence would mean
+    /// `0` reading as *off* on one and *zero allowed* on the other, which is the
+    /// misreading the shared helper exists to prevent.
+    #[test]
+    fn count_and_seconds_read_zero_as_the_same_sentinel() {
+        let base_count = Some(5usize);
+        let base_secs = Some(Duration::from_secs(5));
+
+        let unset = ConfigService::with_vars("probe", []);
+        assert_eq!(unset.count("N", base_count).expect("unset"), base_count);
+        assert_eq!(unset.seconds("N", base_secs).expect("unset"), base_secs);
+
+        let zero = ConfigService::with_vars("probe", [("NESTRS_PROBE__N", "0")]);
+        assert_eq!(
+            zero.count("N", base_count).expect("zero"),
+            None,
+            "`0` is the unlimited sentinel, never a ceiling of zero",
+        );
+        assert_eq!(zero.seconds("N", base_secs).expect("zero"), None);
+
+        let set = ConfigService::with_vars("probe", [("NESTRS_PROBE__N", "7")]);
+        assert_eq!(set.count("N", base_count).expect("set"), Some(7));
+
+        for bad in ["-1", " 7 ", "abc", "3.0"] {
+            let service = ConfigService::with_vars("probe", [("NESTRS_PROBE__N", bad)]);
+            let err = service
+                .count("N", base_count)
+                .expect_err("a set-but-unparseable ceiling is boot-fatal");
+            assert!(
+                err.to_string().contains("NESTRS_PROBE__N"),
+                "and it names the variable: {err}",
+            );
+        }
     }
 }

@@ -163,10 +163,10 @@ pub use async_trait::async_trait;
 // so a fix to either cannot land on only one of them.
 #[cfg(feature = "ws")]
 pub use dispatch::denial_to_ws_error;
+#[cfg(feature = "graphql")]
+pub use dispatch::{GraphqlSite, denial_to_graphql_error, run_layered_graphql_chain};
 pub use dispatch::{RouteShaper, denial_to_http_error, denial_to_http_response};
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 pub use dispatch::{SiteChainCell, SiteChainSources};
-#[cfg(feature = "graphql")]
-pub use dispatch::{denial_to_graphql_error, run_layered_graphql_chain};
 #[cfg(feature = "mcp")]
 pub use dispatch::{denial_to_mcp_error, run_layered_mcp_chain};

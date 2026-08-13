@@ -1,0 +1,5 @@
+error: #[resolver] declares no client-selectable version: a GraphQL schema is not versioned — one schema, one introspection, one generated client. Evolve the field and mark the old one deprecated: `#[graphql(deprecation = "use `author` instead")]` beside the `#[query]` / `#[mutation]` it retires
+  --> tests/integration/diagnostics/version_on_an_operation.rs:16:5
+   |
+16 |     #[version("2")]
+   |     ^^^^^^^^^^^^^^^

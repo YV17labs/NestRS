@@ -1,5 +1,5 @@
-use async_graphql::Context;
 use nest_rs::core::{Layer, injectable};
+use nest_rs::graphql::GraphqlOperationContext;
 use nest_rs::guards::{Denial, GraphqlGuard, Guard, HttpGuard};
 use nest_rs::http::async_trait;
 use poem::Request;
@@ -39,8 +39,8 @@ impl Guard for PostAuthorGuard {
         Ok(())
     }
 
-    async fn check_graphql(&self, ctx: &Context<'_>) -> Result<(), Denial> {
-        match ctx.data_opt::<Claims>() {
+    async fn check_graphql(&self, op: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
+        match op.data_opt::<Claims>() {
             Some(claims) if claims.sub.is_some() => Ok(()),
             Some(claims) => {
                 tracing::warn!(

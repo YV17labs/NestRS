@@ -50,14 +50,27 @@ It is therefore a `#[query]` in every respect that matters:
 | Argument pipes | run — `Valid<T>` / `Piped<P, T>` on the key arguments |
 | Response mask | runs — the entity is masked against the caller's ability like any other row |
 
-Four things it refuses that a `#[query]` does not, each a named compile error:
-a **`Result` return** is required (the guard chain is only emitted where a denial
-has somewhere to go, and a chain compiled out here is invisible in the schema and
-on the wire); **`bind = Service`** is refused (it answers `NOT_FOUND` for an
-absent row and `FORBIDDEN` for a withheld one, which by key is an existence
-oracle — load the row in the body and answer `None` for both); the method must be
-**`async`**; and it must take **at least one argument**, since the arguments are
-the key.
+Six things it refuses that a `#[query]` does not, each a named compile error:
+
+- a **`Result` return** is required — the guard chain is only emitted where a
+  denial has somewhere to go, and a chain compiled out here is invisible in the
+  schema and on the wire;
+- **`bind = Service`** is refused — it answers `NOT_FOUND` for an absent row and
+  `FORBIDDEN` for a withheld one, which by key is an existence oracle; load the
+  row in the body and answer `None` for both;
+- **`#[entity(key = "…")]`** is refused — the `@key` is read off the method's own
+  arguments, so declaring it would be declaring it twice;
+- **a `#[graphql(…)]` of the method's own** is refused — async-graphql reads the
+  *first* one on a method, and the decorator has to emit `#[graphql(entity)]`
+  there, so yours would silently take its place and the method would quietly stop
+  being an entity resolver;
+- the method must be **`async`**;
+- and it must take **at least one argument**, since the arguments are the key.
+
+Two more are decided at **boot**, because only the built schema holds the fact:
+an `#[entity]` whose resolved type carries no `@key` — a list, a scalar, a union,
+anything async-graphql does not key — fails the boot naming the method and the
+type, and so do two resolvers whose key shapes overlap (below).
 
 <Aside type="caution" title="Ship it ungated and every keyed type is public">
 Without the posture, every `@key`-ed type in the schema is readable **by
@@ -104,17 +117,60 @@ One key shape, one entity resolver: two claims on the same shape **fail the
 boot**, naming both. An entity is addressed by `@key` rather than by name, so
 the duplicate leaves no clashing operation in the SDL — only a doubled `@key`,
 and a router reaching whichever body linked first, access posture included. The
-shape and not the type: a type may carry several `@key`s, so keying `Post` by
-`id` in one resolver and by `slug` in another is legal and both stay reachable.
-The check applies inside a resolver too — two `#[entity]` methods in one `impl`
+check applies inside a resolver too — two `#[entity]` methods in one `impl`
 claiming one shape is the same duplicate, written the way it is easiest to
 write.
 
+**A type may carry several `@key`s — as long as the shapes are disjoint.**
+Keying `Post` by `id` in one resolver and by `slug` in another is legal and both
+stay reachable: no representation can satisfy both matchers, so which resolver
+answers is decided by the reference, not by link order. Shapes that *overlap* —
+`id` here and `id tenant` there, or the same fields in a different order —
+**fail the boot** naming both claimants and both shapes.
+
+**Wherever they are declared, including on one resolver.** A reference carrying
+`id` and `tenant` satisfies the `id` matcher too, so one of the two bodies is
+unreachable and the posture that answers is the other one's — and nothing orders
+them by anything you wrote. Across resolvers `_entities` takes whichever linked
+first. Within one resolver async-graphql sorts its matchers by **argument
+count**, not key arity, so a short key with a non-key argument beside it outranks
+a longer key without one; at equal counts the sort is stable and declaration
+order decides. This is narrower than Apollo, which allows a type several
+overlapping `@key`s. The narrowing is deliberate: what the router picks decides
+which `#[authorize]` runs, and neither this framework nor async-graphql orders
+those two by anything declared.
+
+A nested selection is one field: `@key(fields: "id organization { id }")` selects
+`id` and `organization`, so it is disjoint from `@key(fields: "slug")` and
+overlaps `@key(fields: "id")`.
+
+## What guards the two fields a router calls
+
+`_entities` and `_service` are resolved by async-graphql's own `Query` root,
+*above* the merged root this framework composes — so the chain `#[operations]`
+emits inside a resolver body is not where they are gated. **The app-wide guard
+pool runs in front of both**, once per field, through a schema extension
+`GraphqlModule` installs. A `use_guards_global([AuthnGuard])` therefore refuses
+`_service` and `_entities` exactly as it refuses a `#[query]`, with the same
+native GraphQL error frame.
+
+Two consequences worth reading twice:
+
+- **The pool is the whole chain there, because a federation field belongs to no
+  resolver.** The router calls it on the schema, so there is no `#[use_guards]`
+  scope to compose and no posture to read. An `#[entity]`'s own `#[use_guards]`
+  and `#[authorize]`/`#[public]` still run in its body, per reference.
+- **A pooled guard runs once per `_entities` operation, not once per
+  representation.** The gate runs it at the field; the `#[entity]` bodies
+  reached through it compose everything *except* the pool, precisely so the
+  multiplier on a pooled check is not a number the caller picks.
+
 <Aside type="danger" title="A subgraph sits behind a router, not on the internet">
-**`_service` cannot be switched off.** `NESTRS_GRAPHQL__DISABLE_INTROSPECTION`
-does not cover it — its field is unconditionally visible — so a federated
-endpoint publishes its own SDL to anyone who can reach it, introspection
-disabled or not. Serve a subgraph on the network the router is on, and let the
+**`_service` is not covered by `NESTRS_GRAPHQL__DISABLE_INTROSPECTION`** — that
+switch gates `__schema`, and `_service`'s field is unconditionally visible. A
+subgraph with no guards therefore publishes its own SDL to anyone who can reach
+it, introspection disabled or not. Guards close that (above); the network is
+still the outer answer — serve a subgraph where the router is, and let the
 router be the thing clients reach.
 
 That is why federation is opt-in and why the demo app in this repo leaves it
@@ -126,8 +182,8 @@ so being a subgraph would publish its schema and buy it nothing.
 
 **Composition.** Merging subgraphs into a supergraph is the router's job, done
 by Apollo's own tooling (`rover`). NestRS ships the subgraph half — the schema,
-the entity resolvers, and the guarantee that both are gated — and takes no
-dependency to do the router's work.
+the entity resolvers, and the guarantee that both are gated (above) — and takes
+no dependency to do the router's work.
 
 ## Going further
 

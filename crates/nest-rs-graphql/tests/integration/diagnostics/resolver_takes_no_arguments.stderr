@@ -1,0 +1,5 @@
+error: #[resolver] takes no arguments; tag methods with #[query] / #[mutation] / #[subscription] / #[entity] / #[field_resolver] under #[operations]
+ --> tests/integration/diagnostics/resolver_takes_no_arguments.rs:9:12
+  |
+9 | #[resolver(path = "/graphql")]
+  |            ^^^^^^^^^^^^^^^^^

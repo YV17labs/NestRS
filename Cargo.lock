@@ -2748,6 +2748,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nest-rs-conformance"
+version = "4.0.0"
+dependencies = [
+ "proc-macro2",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "nest-rs-core"
 version = "4.0.0"
 dependencies = [

@@ -57,6 +57,7 @@ pub(crate) fn cascade_map(dir: &Path, env: Environment) -> HashMap<String, Strin
         merge_file(&dir.join(file), &mut values);
     }
     assert_prefix_not_from_cascade(&values);
+    assert_environment_not_from_cascade(&values);
     values
 }
 
@@ -82,6 +83,38 @@ fn assert_prefix_not_from_cascade(values: &HashMap<String, String>) {
          to have done so — set it on the process instead (your container, your shell, the \
          Justfile).",
         EnvPrefix::VAR,
+    );
+}
+
+/// Abort if the cascade tries to name the active environment.
+///
+/// Same refusal as the prefix, one notch stricter. `<PREFIX>_ENV` chooses
+/// which cascade to read, so a value inside a file arrives too late to have
+/// done so — and unlike the prefix, it cannot be tolerated when it merely
+/// matches the *resolved* environment: absence resolves to `development` for
+/// cascade selection while `Environment::declared` answers `None`, and
+/// [`publish`] would launder the file's value into the process env where
+/// `declared` reads it — a committed file arming every development-only
+/// affordance (`nestrs g auth`'s token minter) on any deployment that left the
+/// variable unset. The file may only restate a value the **process** actually
+/// carries; anything else aborts before [`publish`] can see the key.
+fn assert_environment_not_from_cascade(values: &HashMap<String, String>) {
+    let var = Environment::var_name();
+    let Some(declared) = values.get(&var) else {
+        return;
+    };
+    let process = crate::source::real_env_var(&var);
+    assert!(
+        process.as_deref() == Some(declared.as_str()),
+        "{var} is `{declared}` in the `.env` cascade, but the process environment {}. \
+         The variable chooses which `.env` files to read, so a value inside one arrives too \
+         late to have done so — and it arms development-only affordances, which must never \
+         answer to a committed file. Set it on the process instead (`nestrs run dev` does) \
+         and remove it from the file.",
+        match process {
+            Some(actual) => format!("carries `{actual}`"),
+            None => "does not carry it".to_owned(),
+        },
     );
 }
 

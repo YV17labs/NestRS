@@ -6,4 +6,5 @@
 //! one process between them and is unsupported for exactly this class of reason.
 
 mod diagnostics;
+mod dotenv;
 mod env_prefix;

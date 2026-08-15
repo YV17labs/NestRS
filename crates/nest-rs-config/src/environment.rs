@@ -77,6 +77,20 @@ impl Environment {
         env
     }
 
+    /// The environment the process **declares**, or `None` when nobody set it.
+    ///
+    /// [`from_env`](Self::from_env) answers "which `.env` cascade do I load"
+    /// and maps absence to [`Development`](Self::Development) — right for
+    /// picking a file, wrong for arming a development-only affordance. This
+    /// answers the other question: unset, empty and unrecognised are all
+    /// `None`, so a caller gating such an affordance fails closed by
+    /// construction instead of re-deriving the classification — the fork this
+    /// exists to prevent, because a hand-rolled predicate and `classify`
+    /// disagree on exactly the inputs nobody tests (whitespace, a typo).
+    pub fn declared() -> Option<Self> {
+        declare(real_env_var(&Self::var_name()).as_deref())
+    }
+
     /// The variable this reads — `NESTRS_ENV`, or `<PREFIX>_ENV` under
     /// [`EnvPrefix::VAR`]. Public because a harness that
     /// must decide the environment before the framework does (`nest-rs-testing`)
@@ -117,6 +131,17 @@ fn classify(raw: Option<&str>) -> (Environment, Option<String>) {
     }
 }
 
+/// [`Environment::declared`]'s pure half, beside [`classify`] so the two read
+/// the same aliases forever: a positively declared value maps through
+/// `classify`, everything else — unset, blank, unrecognised — is `None`.
+fn declare(raw: Option<&str>) -> Option<Environment> {
+    let value = raw.map(str::trim).filter(|v| !v.is_empty())?;
+    match classify(Some(value)) {
+        (env, None) => Some(env),
+        (_, Some(_)) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +165,25 @@ mod tests {
     #[test]
     fn default_is_development() {
         assert_eq!(Environment::default(), Environment::Development);
+    }
+
+    // `declare` is what a development-only affordance gates on, so its failure
+    // direction is the security-relevant one: everything `classify` defaults —
+    // absence, blank, a typo — must come back `None` here, not `Development`.
+    #[test]
+    fn declare_answers_none_unless_positively_declared() {
+        assert_eq!(declare(None), None);
+        assert_eq!(declare(Some("")), None);
+        assert_eq!(declare(Some("   ")), None);
+        assert_eq!(declare(Some("producton")), None);
+        assert_eq!(declare(Some("development")), Some(Environment::Development));
+        assert_eq!(
+            declare(Some(" development ")),
+            Some(Environment::Development)
+        );
+        assert_eq!(declare(Some("dev")), Some(Environment::Development));
+        assert_eq!(declare(Some("test")), Some(Environment::Test));
+        assert_eq!(declare(Some("production")), Some(Environment::Production));
     }
 
     // The merge is what makes a raw `std::env::var` reader — the framework's own

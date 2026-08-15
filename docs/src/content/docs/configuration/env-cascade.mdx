@@ -52,7 +52,11 @@ The `<environment>` segment is the variant of `Environment`, read from
 the reserved `NESTRS_ENV` variable. This is the one framework variable
 **outside** the `NESTRS_<DOMAIN>__<KEY>` scheme — it selects which `.env`
 files to load, so it must come from the real process environment, not a
-`.env` file.
+`.env` file. Writing it into one is a **boot error** naming the fix, the
+same refusal `NESTRS_ENV_PREFIX` gets: the value arrives after the
+cascade it names was already chosen, and it would arm development-only
+affordances from a committed file. A file may only restate a value the
+process actually carries.
 
 ```rust
 pub enum Environment {

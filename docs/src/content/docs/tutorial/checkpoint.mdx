@@ -47,13 +47,15 @@ build by hand later in
 
    ```bash frame="terminal"
    $ nestrs run db reset
-   seed: 12 row(s) inserted
+   INFO seed: seed complete inserted=12
    $ nestrs run dev auth   # token issuer on :3001
    $ nestrs run dev api    # resource server on :3002
    ```
 
    `db reset` seeds two orgs — Acme and Globex — each with an admin and
-   members. Every demo account shares the password `publish-demo`.
+   members. The four accounts that can sign in share the password
+   `publish-demo`; the rest are seeded without one, so a login attempt with
+   any other address is refused.
 
 3. Sign in as the Acme admin and read the org's users.
 
@@ -61,8 +63,9 @@ build by hand later in
    $ ADMIN=$(curl -s localhost:3001/login -H 'content-type: application/json' \
        -d '{"email":"admin@acme.test","password":"publish-demo"}' | jq -r .access_token)
 
-   $ curl -s localhost:3002/users -H "authorization: Bearer $ADMIN" | jq -c '.[0]'
-   {"id":"018f…","name":"Acme Admin","email":"admin@acme.test"}
+   $ curl -s localhost:3002/users -H "authorization: Bearer $ADMIN" \
+       | jq -c '.[0] | {id, name, email}'
+   {"id":"00000000-0000-7000-8000-00000000ac00","name":"Acme Admin","email":"admin@acme.test"}
    ```
 
    The admin sees every field — `email` included — and only Acme rows.
@@ -74,7 +77,7 @@ build by hand later in
        -d '{"email":"acme-user-1@example.test","password":"publish-demo"}' | jq -r .access_token)
 
    $ curl -s localhost:3002/users -H "authorization: Bearer $MEMBER" | jq -c '.[0]'
-   {"id":"018f…","name":"Acme Admin"}
+   {"id":"00000000-0000-7000-8000-00000000ac00","name":"Acme Admin"}
    ```
 
    Same rows, same route — but `email` is gone from every object. The

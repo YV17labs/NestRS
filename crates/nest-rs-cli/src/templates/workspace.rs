@@ -170,8 +170,10 @@ pub const JUSTFILE: &str = r#"{{env_prefix_export}}_default:
 
 # Run an app with auto-reload — watches the source, rebuilds and restarts on
 # save. Default: hello. Usage: nestrs run dev blog
+#
+{{dev_recipe_note}}
 dev app="hello":
-    bacon run-long -- --bin {{app}}
+    {{env_prefix}}_ENV=development bacon run-long -- --bin {{app}}
 
 # Run an app in release mode. Usage: nestrs run start blog
 start app="hello":

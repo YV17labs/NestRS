@@ -77,27 +77,31 @@ pub(super) fn lib_decls() -> Vec<String> {
 pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<String>) {
     let src = ws.features_root();
 
-    s.create(src.join("identity/mod.rs"), auth::IDENTITY_MOD.to_string());
-    s.create(
-        src.join("identity/claims.rs"),
-        auth::IDENTITY_CLAIMS.to_string(),
-    );
-
-    s.create(src.join("authn/mod.rs"), auth::AUTHN_MOD.to_string());
-    s.create(src.join("authn/module.rs"), auth::AUTHN_MODULE.to_string());
-    s.create(
-        src.join("authn/strategy.rs"),
-        auth::AUTHN_STRATEGY.to_string(),
-    );
+    // Every verbatim file, in one table — the same shape as
+    // [`AuthzBridge::queue`]. The two files below the loop are the ones a
+    // table cannot say: `authz/mod.rs` folds in the caller's index lines, and
+    // `.env` is an edit whenever the file already exists.
+    const FILES: [(&str, &str); 12] = [
+        ("identity/mod.rs", auth::IDENTITY_MOD),
+        ("identity/claims.rs", auth::IDENTITY_CLAIMS),
+        ("authn/mod.rs", auth::AUTHN_MOD),
+        ("authn/module.rs", auth::AUTHN_MODULE),
+        ("authn/strategy.rs", auth::AUTHN_STRATEGY),
+        ("authn/http/mod.rs", auth::AUTHN_HTTP_MOD),
+        ("authn/http/audit.rs", auth::AUTHN_HTTP_AUDIT),
+        ("authn/http/guard.rs", auth::AUTHN_HTTP_GUARD),
+        ("authn/http/controller.rs", auth::AUTHN_HTTP_CONTROLLER),
+        ("authn/http/module.rs", auth::AUTHN_HTTP_MODULE),
+        ("authz/ability.rs", auth::AUTHZ_ABILITY),
+        ("authz/module.rs", auth::AUTHZ_MODULE),
+    ];
+    for (path, body) in FILES {
+        s.create(src.join(path), body.to_string());
+    }
 
     let authz_mod =
         ensure_lines(authz_decls)(auth::AUTHZ_MOD).unwrap_or_else(|| auth::AUTHZ_MOD.to_string());
     s.create(src.join("authz/mod.rs"), authz_mod);
-    s.create(
-        src.join("authz/ability.rs"),
-        auth::AUTHZ_ABILITY.to_string(),
-    );
-    s.create(src.join("authz/module.rs"), auth::AUTHZ_MODULE.to_string());
     HTTP_BRIDGE.queue(s, ws);
 
     // Every scaffolded workspace has one; a hand-rolled tree may not, and a
@@ -120,8 +124,9 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
 /// pulls `AuthnModule` in transitively — an app's `module.rs` is the inventory
 /// of the concerns it serves. Returned rather than wired here so a caller
 /// bootstrapping the adapter folds them into its own single `module.rs` edit.
-pub(super) const APP_IMPORTS: [(&str, &str); 2] = [
+pub(super) const APP_IMPORTS: [(&str, &str); 3] = [
     ("features::authn::AuthnModule", "AuthnModule"),
+    ("features::authn::AuthnHttpModule", "AuthnHttpModule"),
     ("features::authz::AuthzHttpModule", "AuthzHttpModule"),
 ];
 
@@ -324,11 +329,16 @@ fn print_next_steps(env_prefix: &str, wired: bool) {
     println!("  1. Add your rules in `crates/features/src/authz/ability.rs` — nothing is");
     println!("     granted until you do, so guarded routes answer 403.");
     if wired {
-        println!("  2. AuthnModule + AuthzHttpModule are wired into the current app.");
+        println!("  2. AuthnModule, AuthnHttpModule and AuthzHttpModule are wired into the");
+        println!("     current app.");
     } else {
-        println!("  2. Import `features::authn::AuthnModule` and");
+        println!("  2. Import `features::authn::AuthnModule`,");
+        println!("     `features::authn::AuthnHttpModule` and");
         println!("     `features::authz::AuthzHttpModule` in your app's `module.rs`.");
     }
-    println!("  3. `.env` carries a development HS256 secret — replace it through the");
+    println!("  3. `POST /auth/dev-token` mints a bearer token to call your guarded routes");
+    println!("     with. It refuses to boot outside development and test — delete");
+    println!("     `crates/features/src/authn/http/` when you write the real login.");
+    println!("  4. `.env` carries a development HS256 secret — replace it through the");
     println!("     real environment before deploying ({env_prefix}_AUTHN__SECRET).");
 }

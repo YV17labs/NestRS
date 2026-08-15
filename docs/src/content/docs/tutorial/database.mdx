@@ -181,21 +181,19 @@ there is no "connected" confirmation to wait for; the first query is what
 proves the credentials.
 
 Every route is behind the guards you bound on the previous page, so it needs a
-bearer token signed with the `NESTRS_AUTHN__SECRET` that `nestrs g auth` wrote
-to `.env`. [Authenticate and authorize](/tutorial/security/) builds the login
-route that mints one; until then, sign a development token yourself:
+bearer token. `nestrs g auth` wrote one route that mints them — signed with the
+`NESTRS_AUTHN__SECRET` it put in `.env`, and refusing to boot anywhere but
+development and test:
 
-```bash
-TOKEN=$(python3 - <<'PY'
-import base64, hmac, hashlib, json, time
-b = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()
-secret = b"dev-only-insecure-secret-change-me-32b"    # NESTRS_AUTHN__SECRET, from .env
-h = b(b'{"alg":"HS256","typ":"JWT"}')
-p = b(json.dumps({"roles": ["user"], "exp": int(time.time()) + 3600}).encode())
-print(f"{h}.{p}." + b(hmac.new(secret, f"{h}.{p}".encode(), hashlib.sha256).digest()))
-PY
-)
+```bash frame="terminal"
+$ TOKEN=$(curl -s -X POST http://localhost:3005/auth/dev-token \
+    -H 'Content-Type: application/json' -d '{}' | jq -r .access_token)
 ```
+
+Pass `{"roles": ["admin"]}` for an admin token, or a `sub` to pin the subject.
+The real login is yours to write — what counts as a credential and where users
+live are domain decisions, and [Add a login route](/security/add-login/) is the
+pattern. Delete `crates/features/src/authn/http/` the day you write it.
 
 ```bash frame="terminal"
 $ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \

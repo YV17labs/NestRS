@@ -14,10 +14,13 @@ pub use claims::{Claims, Role};
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AppAbility` reads it to build the caller's rules.
 pub const IDENTITY_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
+use nest_rs::resource::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+// `Role` crosses the wire inside every DTO that names it, so it carries the
+// wire derives rather than serde alone — one decorator, no second manifest line.
+#[wire_enum]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Admin,
@@ -52,6 +55,9 @@ impl PrincipalIdentity for Claims {
 pub const AUTHN_MOD: &str = r#"mod module;
 mod strategy;
 
+pub mod http;
+
+pub use http::AuthnHttpModule;
 pub use module::AuthnModule;
 pub use strategy::AuthnGuard;
 "#;
@@ -76,6 +82,173 @@ use super::strategy::{AppJwtStrategy, AuthnGuard};
     providers = [AppJwtStrategy, AuthnGuard],
 )]
 pub struct AuthnModule;
+"#;
+
+// ── authn/http/ — the development token route ───────────────────────────────
+//
+// Every guarded route needs a bearer token, and until an app writes its real
+// login there is nothing that mints one. The gap used to be filled by the docs
+// telling a reader to hand-sign an HS256 token in a shell heredoc — a
+// cryptography exercise on page five of a tutorial, for a framework whose whole
+// claim is that it carries this kind of work.
+//
+// So `g auth` writes the route instead, and makes it impossible to ship: the
+// module refuses the boot outside `development` / `test`, by name, before a
+// single request is served. Delete `authn/http/` the day the real login lands —
+// nothing else references it.
+
+pub const AUTHN_HTTP_MOD: &str = r#"mod audit;
+mod controller;
+mod guard;
+mod module;
+
+pub use module::AuthnHttpModule;
+"#;
+
+/// The route the tutorial `curl`s. `#[public]` because a caller with no token
+/// is exactly who asks for one, and the environment check is what stands in for
+/// the credential this route deliberately does not have.
+pub const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
+
+use nest_rs::authn::JwtService;
+use nest_rs::http::poem::error::InternalServerError;
+use nest_rs::http::poem::web::Json;
+use nest_rs::http::poem::Result;
+use nest_rs::http::{controller, input, routes};
+use uuid::Uuid;
+
+use super::guard::DevOnlyGuard;
+use crate::identity::{Claims, Role};
+
+#[input]
+#[derive(Debug, Default)]
+#[serde(default)]
+pub struct DevTokenDto {
+    pub sub: Option<Uuid>,
+    pub roles: Vec<Role>,
+}
+
+#[input]
+#[derive(Debug)]
+pub struct DevTokenResponseDto {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: u64,
+}
+
+#[controller(path = "/auth")]
+#[use_guards(DevOnlyGuard)]
+pub struct DevTokenController {
+    #[inject]
+    jwt: Arc<JwtService>,
+}
+
+#[routes]
+impl DevTokenController {
+    #[post("/dev-token")]
+    #[public]
+    async fn dev_token(&self, body: Json<DevTokenDto>) -> Result<Json<DevTokenResponseDto>> {
+        let DevTokenDto { sub, roles } = body.0;
+        let claims = Claims {
+            sub: sub.or_else(|| Some(Uuid::now_v7())),
+            roles: if roles.is_empty() { vec![Role::User] } else { roles },
+            exp: self.jwt.expiry(),
+        };
+        let access_token = self.jwt.sign(&claims).map_err(InternalServerError)?;
+        Ok(Json(DevTokenResponseDto {
+            access_token,
+            token_type: "Bearer".into(),
+            expires_in: self.jwt.ttl_secs(),
+        }))
+    }
+}
+"#;
+
+/// The boot refusal, on a provider of its own.
+///
+/// It does **not** live on `DevTokenController`: a `#[controller]` registers
+/// metadata, never an instance, so a `#[hooks]` block on it could only be
+/// skipped at boot — which is why the framework refuses that composition at
+/// compile time (`nest_rs::core::ProviderResidency`). Same shape as the framework's
+/// own `SoftDeleteAudit`: an `#[injectable]` whose only job is to refuse.
+pub const AUTHN_HTTP_GUARD: &str = r#"use nest_rs::core::{Layer, injectable};
+use nest_rs::guards::{Denial, Guard, HttpGuard};
+use nest_rs::http::async_trait;
+use nest_rs::http::poem::Request;
+
+use super::audit::is_development;
+
+/// Refuses every request unless this is a development or test process. The
+/// boot refusal covers the app that imports `AuthnHttpModule`; this covers the
+/// route wherever it is mounted from.
+#[injectable]
+#[derive(Default)]
+pub struct DevOnlyGuard;
+
+impl Layer for DevOnlyGuard {}
+
+#[async_trait]
+impl Guard for DevOnlyGuard {
+    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+        if is_development() {
+            return Ok(());
+        }
+        Err(Denial::forbidden("development-only route"))
+    }
+}
+
+impl HttpGuard for DevOnlyGuard {}
+"#;
+
+pub const AUTHN_HTTP_AUDIT: &str = r#"use nest_rs::config::Environment;
+use nest_rs::core::anyhow::{anyhow, Result};
+use nest_rs::core::{hooks, injectable};
+
+/// Development and test only. Absence answers `false`: `Environment::declared()`
+/// is `None` until somebody sets the variable, so a process nobody told is not
+/// a development one.
+pub fn is_development() -> bool {
+    matches!(
+        Environment::declared(),
+        Some(Environment::Development | Environment::Test)
+    )
+}
+
+#[injectable]
+#[derive(Default)]
+pub struct DevTokenAudit;
+
+#[hooks]
+impl DevTokenAudit {
+    #[on_module_init]
+    async fn refuse_outside_development(&self) -> Result<()> {
+        if is_development() {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "DevTokenController mints unauthenticated bearer tokens, and {} is not set to \
+             `development` or `test` (it reads {:?}). Set it for a development run, or delete \
+             crates/features/src/authn/http/ and its AuthnHttpModule import and write the real \
+             login route in its place.",
+            Environment::var_name(),
+            std::env::var(Environment::var_name()).ok(),
+        ))
+    }
+}
+"#;
+
+pub const AUTHN_HTTP_MODULE: &str = r#"use nest_rs::core::module;
+
+use super::audit::DevTokenAudit;
+use super::controller::DevTokenController;
+use super::guard::DevOnlyGuard;
+use crate::authn::AuthnModule;
+
+#[module(
+    imports = [AuthnModule],
+    providers = [DevTokenAudit, DevOnlyGuard, DevTokenController],
+)]
+pub struct AuthnHttpModule;
 "#;
 
 pub const AUTHZ_MOD: &str = r#"mod ability;

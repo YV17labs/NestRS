@@ -217,12 +217,18 @@ impl {{processor}} {
 /// the real action, or switch to an `…Event` (past tense) when a fact is
 /// published to several consumers.
 pub const QUEUE_COMMAND: &str = r#"use nest_rs::queue::queue;
-use nest_rs::queue::input;
+use serde::{Deserialize, Serialize};
 
 /// Imperative payload for the `{{kebab}}` queue — "do this work", handled by one
 /// processor. Rename it to the action it commands (e.g. `GenerateMediaVariantCommand`).
-#[derive(Debug, Clone)]
-#[input]
+///
+/// Plain `serde` derives rather than `#[input]`, and the difference is not
+/// stylistic: `#[input]` carries `deny_unknown_fields`, which is right at an
+/// edge a client controls and wrong on a producer↔worker contract. A producer
+/// one deploy ahead that adds a field would have every job it enqueues refused
+/// by the older worker — and a decode failure is a `JobError::abort`, so the
+/// job dead-letters on its first attempt instead of retrying.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct {{command}} {
     pub id: String,
 }

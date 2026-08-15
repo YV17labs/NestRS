@@ -743,6 +743,16 @@ name order; init failure aborts boot, shutdown is best-effort.
   Connection seeded via `QueueModule::for_root`; consumer activates via
   `QueueWorkerModule` (producer-only apps skip it). **No apalis types
   leak.**
+
+  **`#[input]` stays re-exported at the queue edge and stays off the queue
+  scaffolds — both on purpose.** Unknown-key rejection is the right default
+  where the sender is an untrusted caller; a job payload's sender is the
+  producer, possibly one deploy ahead, so the same rejection dead-letters
+  the job on attempt 1 instead of ignoring the field the worker does not
+  know yet — retries never help, the payload never changes. The scaffold
+  therefore writes tolerant serde derives; a payload that wants *value*
+  validation may still opt into `#[input]`, accepting that its producer and
+  workers now version together. Asymmetry argued, not silent.
 - **`nest-rs-ws`** — **not a `Transport`**: the WS upgrade is an HTTP
   GET, so `#[gateway(path = "/ws")]` self-mounts on `HttpTransport`
   (inheriting port/CORS/TLS). `#[messages]` orchestrates

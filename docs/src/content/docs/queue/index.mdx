@@ -44,8 +44,8 @@ One line in the feature crate's manifest: `redis` implies `queue` — the
 Redis-bound types, the macros, the worker-context seam and the pipe fold
 `#[process]` expands to, together.
 
-`#[input]` on the job payload carries its `serde` derives; `anyhow` and
-`tracing` come through `nest_rs::core::anyhow` and `nest_rs::queue::tracing`.
+A job payload declares `serde` itself; `anyhow` and `tracing` come through
+`nest_rs::core::anyhow` and `nest_rs::queue::tracing`.
 `nestrs g queue <feature>` writes the stanza for you.
 
 ## The queue's identity
@@ -55,17 +55,18 @@ the `queue/` adapter. The producer is usually the port's own service, so
 this is the artifact both sides reach for:
 
 ```rust title="crates/features/src/audio/command.rs"
-use nest_rs::queue::queue;
-use nest_rs::queue::input;
+use nest_rs::queue::{QueueName, queue};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
-#[input]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscodeCommand {
     pub file: String,
 }
 
 #[queue(name = "audio", job = TranscodeCommand)]
 pub struct AudioQueue;
+
+pub const AUDIO_QUEUE: &str = <AudioQueue as QueueName>::NAME;
 ```
 
 Re-export both from the feature's `mod.rs`. A marker that is not reachable
@@ -194,7 +195,7 @@ same service:
 Three queues, so three `#[queue]` declarations at the port — each pairing
 a wire name with the payload it carries:
 
-```rust title="crates/features/src/audio/command.rs"
+```rust
 #[queue(name = "audio", job = TranscodeCommand)]
 pub struct AudioQueue;
 

@@ -175,12 +175,21 @@ export default defineConfig({
           ],
         },
         {
+          // Four kinds of page sat flat here, so the one entry point read like
+          // a reference page: `security/index` says "here for the first auth
+          // task? start with add-login", and nothing in the navigation agreed.
+          // The two recipes are now a group of their own, above the reference
+          // trees — the order a reader meets them in.
           label: 'Security',
           items: [
             { label: 'Overview', slug: 'security' },
-            { label: 'Add login + protect a route', slug: 'security/add-login' },
-            { label: 'Multi-tenant SaaS in production', slug: 'security/multi-tenant-saas' },
-            { label: 'Threat model', slug: 'security/threat-model' },
+            {
+              label: 'Guides',
+              items: [
+                { label: 'Add login + protect a route', slug: 'security/add-login' },
+                { label: 'Multi-tenant SaaS in production', slug: 'security/multi-tenant-saas' },
+              ],
+            },
             {
               label: 'Authentication',
               items: sidebarSection('security/authentication'),
@@ -189,6 +198,7 @@ export default defineConfig({
               label: 'Authorization',
               items: sidebarSection('security/authorization'),
             },
+            { label: 'Threat model', slug: 'security/threat-model' },
           ],
         },
         {

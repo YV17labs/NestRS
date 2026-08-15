@@ -19,12 +19,14 @@ async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> 
     match self.svc.open_result(&file).await.map_err(internal)? {
         Some(stream) => Ok(Response::builder()
             .content_type("audio/mpeg")
-            // The object's bytes flow chunk by chunk — never whole in memory.
             .body(Body::from_bytes_stream(stream))),
         None => Err(Error::from_status(StatusCode::NOT_FOUND)),
     }
 }
 ```
+
+`Body::from_bytes_stream` is the whole trick: the object's bytes flow chunk
+by chunk, never whole in memory.
 
 ## Streamed bodies
 

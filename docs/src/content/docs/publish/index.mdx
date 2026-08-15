@@ -11,10 +11,14 @@ posts, live comments, background jobs, and an MCP assistant for drafting.
 Several binaries, one workspace, shared `crates/features/`, no chatty RPC
 between deployables.
 
-Simple learning paths (**hello**, **blog**) live in the
-[docs](/getting-started/) and the [CLI](/cli/) — scaffold them in your own
-workspace with `nestrs new`. This repository hosts only the **complex**
-reference: Publish.
+**Three names run through every page of these docs, and this is the whole
+map.** `hello` is the one-route binary `nestrs new` writes, `blog` is what the
+[tutorial](/tutorial/) builds on top of it, and **Publish** is the finished
+workspace every reference page draws its `users`, `orgs`, `posts` and `audio`
+snippets from. The first two you scaffold in your own workspace with
+`nestrs new`; only Publish is hosted in
+[this repository](https://github.com/YV17labs/NestRS/tree/main/demo). A
+snippet naming `posts` is Publish's unless the page says otherwise.
 
 ## The apps
 
@@ -24,7 +28,7 @@ reference: Publish.
 | [`api`](/tutorial/) | 3002 | Main API — users, orgs, audio hooks | HTTP, GraphQL, OpenAPI |
 | [`assistant`](/mcp/) | 3003 | AI tools over the audio pipeline (JWT-guarded) | MCP |
 | [`live`](/websockets/) | 3004 | Live comments and notifications | WebSockets |
-| [`worker`](/queue/) | — | Async jobs — newsletters, audio queue | Queue, Schedule |
+| [`worker`](/queue/) | 3005 | Async jobs — newsletters, audio queue | Queue, Schedule, HTTP (health only) |
 
 ```bash
 git clone https://github.com/YV17labs/NestRS && cd NestRS/demo

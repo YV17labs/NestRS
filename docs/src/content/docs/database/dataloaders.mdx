@@ -3,7 +3,7 @@ title: Dataloaders
 description: "Batch field fetches without N+1 — auto-emitted PK and FK loaders from #[expose], plus #[dataloader] for custom keys."
 tier: all-options
 sidebar:
-  order: 6
+  order: 7
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -43,29 +43,29 @@ GraphQL field auto-resolved through a dataloader. The macro emits:
 - a `#[ComplexObject]` field resolver on the wire DTO that calls the
   matching loader and returns the related object.
 
-```rust
-#[expose(name = "Post", service = super::service::PostsService)]
-#[sea_orm(table_name = "item")]
+```rust title="crates/features/src/posts/entities/post.rs (abridged)"
+#[expose(name = "Post", service = super::super::service::PostsService, graphql)]
+#[sea_orm::model]
+#[derive(Clone, Debug, DeriveEntityModel)]
+#[sea_orm(table_name = "post")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[expose]
     pub id: Uuid,
     #[expose]
     pub org_id: Uuid,
+    #[expose(input(create, update), validate(length(min = 1)))]
+    pub title: String,
+    #[sea_orm(belongs_to, from = "org_id", to = "id")]
     #[expose]
-    pub name: String,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(
-        belongs_to = "super::super::orgs::Entity",
-        from = "Column::OrgId",
-        to = "super::super::orgs::Column::Id",
-    )]
-    Org,
+    pub org: HasOne<crate::orgs::Entity>,
 }
 ```
+
+The relation is a **field** on the model — `#[sea_orm(belongs_to, from, to)]`
+naming the two columns, `#[expose]` deciding it crosses the wire. There is no
+`enum Relation` to write and no `Column::` path to keep in sync;
+[Entities](/database/entities/) is the reference for the whole grammar.
 
 From this, the GraphQL `Post.org` field resolves through a per-request
 dataloader. No `#[dataloader]` to write, no wiring on the resolver — and
@@ -130,7 +130,7 @@ runtime batches every call into a single query:
 
 ```rust
 #[field_resolver]
-async fn items_named(
+async fn by_name(
     &self,
     ctx: &Context<'_>,
     name: String,

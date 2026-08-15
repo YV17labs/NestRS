@@ -109,10 +109,18 @@ async fn create_with_invalid_email_returns_400_with_field_errors() {
 
     let body = resp.json().await;
     let value = body.value();
-    assert_eq!(value.object().get("error").string(), "validation");
-    assert!(value.object().get("fields").object().get_opt("email").is_some());
+    assert_eq!(value.object().get("detail").string(), "validation failed");
+    let first = value.object().get("errors").object().get("email").array().get(0);
+    assert_eq!(first.object().get("code").string(), "email");
 }
 ```
+
+Assert on `errors.<field>[0].code`, never on the human message: the
+code is the validator's identity and survives a reworded message, while
+`message` is `null` unless the rule sets one. The body is
+[RFC 9457](/http/errors/) — `type`, `title`, `status`, `detail`, plus
+the `errors` extension member — so `detail` and `errors` are the two
+keys a validation test reads.
 
 ## Rollback verified
 

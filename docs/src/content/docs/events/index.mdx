@@ -126,7 +126,7 @@ parameter is `PostPublishedEvent` subscribes to it.
 The emitter injects `Arc<EventBus>` like any other dep and calls `emit`
 once the work is done:
 
-```rust title="crates/features/src/posts/service.rs (abridged)"
+```rust title="src/posts/service.rs"
 #[injectable]
 pub struct PostsService {
     #[inject]
@@ -134,11 +134,8 @@ pub struct PostsService {
 }
 
 impl PostsService {
-    pub async fn create_in_org(&self, /* … */) -> Result<Post, ServiceError> {
-        let model = todo!(); // insert through Repo, yielding the created row
-
-        // Publish the fact. `emit` is awaited: every listener has run by
-        // the time it returns.
+    pub async fn create_in_org(&self, input: CreatePost) -> Result<Post, ServiceError> {
+        let model = self.insert_through_repo(input).await?;
         self.bus
             .emit(PostPublishedEvent {
                 post_id: model.id,

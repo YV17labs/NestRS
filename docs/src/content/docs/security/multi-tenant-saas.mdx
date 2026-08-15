@@ -89,15 +89,29 @@ The pattern: carry the tenant id in the job payload, then filter on it
 yourself. The ambient row filter is a no-op here, so the `org_id`
 predicate is yours to add.
 
+The payload carries the tenant id, and it is declared at the feature port
+beside the queue the processor consumes:
+
+```rust title="crates/features/src/posts/command.rs"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishCommand {
+    pub post_id: Uuid,
+    pub org_id: Uuid,
+}
+
+#[queue(name = "posts.publish", job = PublishCommand)]
+pub struct PostsPublishQueue;
+```
+
 ```rust title="crates/features/src/posts/queue/processor.rs"
 #[processor]
-impl PostsProcessor {
-    #[process("posts.publish")]
-    async fn publish(&self, job: PublishJob) -> Result<(), JobError> {
+impl PostsPublishProcessor {
+    #[process(queue = PostsPublishQueue)]
+    async fn publish(&self, job: PublishCommand) -> Result<()> {
         // No ambient ability — scope explicitly from the payload.
-        let post = posts::Entity::find_by_id(job.post_id)
-            .filter(posts::Column::OrgId.eq(job.org_id))
-            .one(&Repo::<posts::Entity>::conn()?)
+        let post = post::Entity::find_by_id(job.post_id)
+            .filter(post::Column::OrgId.eq(job.org_id))
+            .one(&Repo::<post::Entity>::conn()?)
             .await?;
         // ...
         Ok(())

@@ -10,8 +10,8 @@ import { Aside } from '@astrojs/starlight/components';
 
 `Bind<A, S>` is the handler argument that turns `/users/:id` into a
 loaded, authorized model. It runs through the service's `access`
-method, which loads the row **unscoped** and then asks the ambient
-`Ability` whether the caller may perform `A` on it. Three outcomes,
+method, which loads the row **under the caller's own grant** — one SQL
+lookup, filtered by the same condition a list query uses. Three outcomes,
 three HTTP statuses:
 
 - Row not in the database → `404 NOT FOUND`.
@@ -81,43 +81,40 @@ async fn access(&self, action: Action, id: Uuid)
     -> Result<Access<Model>, DbErr>
 {
     let conn = Repo::<E>::conn()?;
-    // Unscoped live load: does the row exist at all?
-    let Some(model) = Repo::<E>::unscoped_by_id(id)
-        .filter(live_read_filter())
-        .one(&conn).await?
-    else {
-        return Ok(Access::Missing);
-    };
-    // Scoped re-load: is it inside the caller's grant for `action`?
-    let allowed = Repo::<E>::unscoped_by_id(id)
+    // Scoped load: the caller's own grant for `action`, in one lookup.
+    if let Some(model) = Repo::<E>::unscoped_by_id(id)
         .filter(scope_for::<E>(action))
         .filter(live_read_filter())
         .one(&conn).await?
-        .is_some();
-    if allowed {
-        Ok(Access::Found(model))
-    } else {
-        Ok(Access::Denied)
+    {
+        return Ok(Access::Found(model));
     }
+    // Only now, and only to tell "forbidden" from "absent".
+    let exists = Repo::<E>::unscoped_by_id(id)
+        .filter(live_read_filter())
+        .one(&conn).await?
+        .is_some();
+    if exists { Ok(Access::Denied) } else { Ok(Access::Missing) }
 }
 ```
 
 Two things to notice:
 
-1. **The first load is unscoped.** It reaches every live row in the
-   table — no `condition_for` joined. That is what lets the framework
-   distinguish "missing" from "denied". A
-   `Repo::scoped(Read).find_by_id(id)` would return `None` for both,
-   collapsing them to 404 and hiding the policy decision.
-2. **The authorization is decided in SQL.** The second lookup filters
-   the same primary key by `scope_for(action)` — the exact
-   `condition_for` the list path joins, evaluated by the same
-   database. One source of truth: the row a list query returns and
-   the row `access` grants cannot diverge. It is also what makes
+1. **The authorization is decided in SQL.** The scoped lookup filters the
+   primary key by `scope_for(action)` — the exact `condition_for` the list
+   path joins, evaluated by the same database. One source of truth: the row
+   a list query returns and the row `access` grants cannot diverge. It is
+   also what makes
    [relational rules](/security/authorization/policies/#relational-scoping)
    enforceable here — a `p.related` scope reaches through a join no
-   in-memory check could evaluate without loading the parent. The
-   cost is one extra primary-key lookup on the binding path.
+   in-memory check could evaluate without loading the parent.
+2. **The authorized path costs one lookup.** The second, unscoped one runs
+   only after the first came back empty, purely to separate `Denied` from
+   `Missing` — so the caller who is refused pays for the distinction, and
+   the caller who is allowed does not. Collapsing the two into a single
+   `Repo::scoped(Read).find_by_id(id)` would cost the same on the happy
+   path and return `None` for both refusals, hiding the policy decision
+   behind a `404`.
 
 ## The `Access` outcome
 

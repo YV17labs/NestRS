@@ -24,7 +24,6 @@ const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_a
 #[config(namespace = "issuer")]
 #[derive(Clone, Debug, Default)]
 pub struct IssuerConfig {
-    // The org id each client acts as is the framework client's generic payload.
     pub clients: Vec<RegisteredClient<Uuid>>,
     pub default_org_id: Uuid,
 }

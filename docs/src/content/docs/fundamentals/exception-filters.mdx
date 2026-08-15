@@ -19,41 +19,40 @@ framework tries them:
    [`nest-rs-exception-filters`](https://crates.io/crates/nest-rs-exception-filters).
 3. **`Filter`** — unconditional mapping; sees any error the inner
    chain raises. Shipped by
-   [`nest-rs-filters`](https://crates.io/crates/nest-rs-filters).
-   On HTTP it builds on [`poem`](https://crates.io/crates/poem)'s
-   error type; on GraphQL on
-   [`async-graphql`](https://crates.io/crates/async-graphql)'s.
+   [`nest-rs-filters`](https://crates.io/crates/nest-rs-filters),
+   over [`poem`](https://crates.io/crates/poem)'s error type. HTTP only —
+   see below.
 
 Both `Filter` and `ExceptionFilter` are [`Layer`](/fundamentals/request-lifecycle/)
-sub-traits — one impl, three transports — and dedup by
+sub-traits — one method each, on HTTP — and dedup by
 [`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html) across
 the global / controller / method scopes.
 
 ```rust
 #[async_trait]
 pub trait Filter: Layer {
-    /// HTTP entry — required.
+    /// HTTP entry — required, no default: a filter that targets HTTP
+    /// without implementing this would silently let errors through.
     async fn filter(&self, req: &RequestSnapshot, error: poem::Error) -> Response;
-    /// GraphQL entry. Default returns the error unchanged.
-    async fn filter_graphql<'a>(&self, ctx: &GraphqlContext<'a>, error: GraphqlError)
-        -> GraphqlError { error }
-    /// WS entry. Default returns the error unchanged.
-    async fn filter_ws(&self, client: &WsClient, event: &str, error: String) -> String { error }
 }
 
 #[async_trait]
 pub trait ExceptionFilter: Layer {
+    /// The concrete exception this filter catches.
     type Exception: std::error::Error + Send + Sync + 'static;
     /// HTTP entry — required. Called with the downcast `Exception`.
     async fn catch(&self, exception: Self::Exception) -> Response;
-    /// GraphQL entry. Default reformats `exception` as a plain message.
-    async fn catch_graphql<'a>(&self, ctx: &GraphqlContext<'a>, exception: &Self::Exception)
-        -> GraphqlError { GraphqlError::new(exception.to_string()) }
-    /// WS entry. Default returns `{"error": "<message>"}`.
-    async fn catch_ws(&self, client: &WsClient, event: &str, exception: &Self::Exception)
-        -> JsonValue { json!({ "error": exception.to_string() }) }
 }
 ```
+
+**HTTP only**, the same answer [interceptors](/fundamentals/interceptors/)
+give: reserved per-resolver and per-message seams were removed rather than
+shipped unwired, so a `filter_graphql` or `catch_ws` method on an impl is an
+`E0407` (`method is not a member of trait`). A global filter still covers a
+GraphQL `POST` or a WS upgrade through its HTTP entry, because both are HTTP
+requests. Inside GraphQL, an operation's error is shaped by
+[its own error handling](/graphql/errors/); inside WS, by the
+[message error frame](/websockets/messages/).
 
 ## The default: framework error types, already mapped
 
@@ -257,15 +256,6 @@ The same defense-in-depth rationale as
 [guards](/fundamentals/guards/#declare-on-the-provider)
 applies: a portable controller that needs a domain filter should
 redeclare it, the dedup keeps the cost at zero.
-
-<Aside type="caution">
-Per-resolver and per-message dispatch for `filter_graphql` /
-`filter_ws` and `catch_graphql` / `catch_ws` is not wired into the
-GraphQL / WS chains today — the trait surface is there so one impl
-covers all three transports, but only HTTP scopes dedup through the
-Layer System. GraphQL and WS overrides fire from the global
-declaration only.
-</Aside>
 
 ## Where filters sit in the chain
 

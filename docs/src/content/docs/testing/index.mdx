@@ -20,9 +20,10 @@ Three categories, Rust's standard model plus the app e2e:
 - **[Unit tests](/testing/unit/)** — `#[cfg(test)] mod tests` inside
   `src/`. Pure logic next to the code under test, with private-item
   access and no DI boot.
-- **[Integration tests](/testing/integration/)** — `tests/*.rs` at the
-  crate root. The crate's public API, exercised as an external consumer
-  would. Shared fixtures go in `tests/common/mod.rs`.
+- **[Integration tests](/testing/integration/)** — `tests/integration/main.rs`,
+  a directory and never a flat `tests/<x>.rs`. The crate's public API,
+  exercised as an external consumer would. Shared fixtures go in
+  `tests/integration/common/mod.rs`.
 - **[End-to-end tests](/testing/e2e/)** — `TestApp` boots the real
   `AppModule` against an `EphemeralDatabase`. The route table, the DI
   graph, the access-graph check, authn/authz, and the data path all run.
@@ -30,8 +31,8 @@ Three categories, Rust's standard model plus the app e2e:
 | Where | What it tests | Boots? |
 |---|---|---|
 | `crates/<crate>/src/**.rs` (`#[cfg(test)]`) | In-file logic, private items | no |
-| `crates/<crate>/tests/*.rs` | Crate's public API | no |
-| `crates/nest-rs-testing/tests/*.rs` | Cross-crate framework wiring | tailored |
+| `crates/<crate>/tests/integration/main.rs` | Crate's public API | no |
+| `crates/<crate>/tests/e2e/main.rs` | Crate's public API against live infra | tailored |
 | `apps/<app>/tests/e2e/main.rs` | The app's real top-level module | ✓ real |
 
 ## Install

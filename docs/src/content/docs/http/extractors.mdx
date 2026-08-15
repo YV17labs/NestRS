@@ -338,10 +338,11 @@ Two rules pin the contract:
   attaches it to the request extensions; the reader resolves by
   `TypeId`. Wrap multiple values of the same underlying shape in
   distinct newtypes when they need to coexist.
-- A **route-bound** guard reads metadata via `Reflector`; a **global**
-  guard (`use_guards_global`) runs before routing has resolved a handler,
-  so no route metadata is attached at that point. A guard that varies its
-  decision per route must be bound per route.
+- Scope does not change what a guard reads. The pool executes
+  post-routing at the `RouteShaper`, inside the metadata wrap, so a guard
+  bound with `use_guards_global` reads the route's `#[meta]` exactly as a
+  `#[use_guards]` one does — see
+  [the request lifecycle](/fundamentals/request-lifecycle/).
 
 `Reflector` implements the framework-wide `HandlerMetadata` trait. The
 same guard can read `Reflector` on HTTP, the per-message metadata reader

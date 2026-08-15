@@ -9,6 +9,13 @@ page that explains it in context. Each row says where the decorator
 goes (struct, impl block, method, field) so you can confirm the
 position without leaving the page.
 
+**What counts as a decorator here: everything you write.** That is the whole
+inclusion rule, and it is wider than "an attribute macro". Roughly half the
+rows below — `#[get]`, `#[query]`, `#[public]`, `#[on_module_init]` — are
+inert tokens an orchestrator reads (`#[routes]`, `#[operations]`, `#[hooks]`),
+not macros of their own, and they need no import. What decides a row is
+whether you type it, not how the compiler resolves it.
+
 ## DI and lifecycle
 
 | Decorator | Goes on | Summary | Read more |
@@ -41,7 +48,20 @@ position without leaving the page.
 | `#[meta]` | method | Attaches typed metadata read back via `Reflector` (repeatable) | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[public]` | method | Marks the route public so auth guards skip it | [Guards](/fundamentals/guards/#attach-context-and-route-metadata) |
 | `#[interceptor]` | struct | Marks a struct as a global HTTP interceptor | [Interceptors](/fundamentals/interceptors/) |
-| `#[input]` | struct | Shorthand for wire DTOs (`Serialize` + `Deserialize` + `Validate` + `JsonSchema` + `deny_unknown_fields`) | [Extractors](/http/extractors/) |
+| `#[version]` | method | Narrows a route to one of the controller's declared versions | [Versioning](/http/versioning/) |
+| `#[force_guards]` | struct or method | Re-runs a guard the broader scope already ran — the opt-out from dedup | [Guards](/fundamentals/guards/#declare-on-the-provider) |
+
+## Wire types
+
+| Decorator | Goes on | Summary | Read more |
+|---|---|---|---|
+| `#[input]` | struct | Shorthand for any type that crosses a wire: `Serialize` + `Deserialize` + `Validate` + `JsonSchema` + `deny_unknown_fields` | [Extractors](/http/extractors/) |
+
+One decorator, one definition — an HTTP body, a GraphQL input, a queue
+payload, a WS message and a tool's arguments all take it. Every surface crate
+re-exports it, so import it from the one the file already uses
+(`nest_rs::http::input`, `nest_rs::queue::input`, `nest_rs::mcp::input`,
+`nest_rs::ws::input`, or `nest_rs::core::input`) — they are the same macro.
 
 ## GraphQL
 
@@ -99,7 +119,7 @@ position without leaving the page.
 | `#[mcp]` | struct | Mounts an MCP endpoint over HTTP, at `/mcp` or a declared path | [MCP](/mcp/) |
 | `#[tools]` | impl block | Serves the block's `#[tool]` and `#[prompt]` methods, deriving the advertised capabilities | [MCP](/mcp/) |
 | `#[tool]` | method | Exposes the method as an MCP tool; `description = "…"`, or the doc comment as a fallback | [MCP](/mcp/) |
-| `#[prompt]` | method | Exposes the method as an MCP prompt; `description = "…"`, or the doc comment as a fallback | [MCP](/mcp/) |
+| `#[prompt]` | method | Exposes the method as an MCP prompt; `description = "…"`, or the doc comment as a fallback | [Resources and prompts](/mcp/resources-and-prompts/) |
 
 ## Health
 
@@ -121,6 +141,7 @@ position without leaving the page.
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[expose]` | struct + field | Exposes a SeaORM entity to GraphQL and OpenAPI from one declaration | [Database](/database/) |
+| `#[wire_enum]` | enum | Carries the wire derives for an entity's enum column, so an `#[expose]`d field of that type crosses GraphQL and OpenAPI | [Entities](/database/entities/#enum-columns) |
 | `#[crud]` | impl block | Generates standard CRUD operations on a controller or resolver | [CRUD](/database/crud/) |
 
 ## OpenAPI

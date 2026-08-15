@@ -14,9 +14,11 @@ client". It ships as a guard on the [HTTP transport](/http/): one
 handler. Over the limit, the response is `429 Too Many Requests` with
 a `Retry-After` header.
 
-`ThrottlerGuard` must be a **per-route** guard, never a global one — a global
-guard runs before routing has resolved a handler, so no route metadata is
-attached at that point.
+Bind it **per route**, or per controller. `use_guards_global` works and reads
+the same `#[meta(Throttle::…)]` — the guard pool runs post-routing, see
+[the request lifecycle](/fundamentals/request-lifecycle/) — but it meters
+*every* route the pool reaches at the module default, which is a wider
+decision than rate limiting usually is.
 
 ## Install
 

@@ -6,10 +6,13 @@
 //! portable across transports — the trait's [`is_public`] default reads the
 //! attached [`Public`] marker uniformly.
 //!
-//! Binding constraint: bind the reading guard **per route** with
-//! `#[use_guards]`. A *global* guard (`HttpTransport::guard`) runs before
-//! routing resolves a handler, so route metadata is not yet attached and the
-//! reflector finds nothing.
+//! Scope does not change what a guard reads. `#[routes]` attaches the metadata
+//! as route data *outside* the guard chain, so it is on the request by the time
+//! any guard runs — pooled globally with `use_guards_global` or bound per route
+//! with `#[use_guards]`, both read it here.
+//!
+//! A self-mounted endpoint (`/graphql`, `/mcp`, a gateway) has no route data to
+//! read: there is no `#[meta]` site there, and the reflector finds nothing.
 
 use std::any::Any;
 

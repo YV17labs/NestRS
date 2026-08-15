@@ -1,4 +1,4 @@
-//! [`ThrottlerGuard`] — per-route rate-limiting guard.
+//! [`ThrottlerGuard`] — rate-limiting guard.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -11,12 +11,13 @@ use poem::{PathPattern, Request};
 use crate::rate::Throttle;
 use crate::store::ThrottlerStore;
 
-/// Bind per route with `#[use_guards(ThrottlerGuard)]`. Reads the route's
-/// `#[meta(Throttle::...)]` via the [`Reflector`], falling back to the module
-/// default; rejects with `429` + `Retry-After`.
+/// Reads the route's `#[meta(Throttle::...)]` via the [`Reflector`], falling
+/// back to the module default; rejects with `429` + `Retry-After`.
 ///
-/// Must be a per-route guard, not a global one: a global guard runs before
-/// routing, so the route's `#[meta(Throttle)]` is not yet attached.
+/// Binding scope chooses *which* routes are measured, never what the guard
+/// reads: `#[use_guards(ThrottlerGuard)]` measures one controller or route,
+/// `use_guards_global` measures every route the pool reaches — the ones
+/// carrying no `#[meta(Throttle)]` at the module default.
 ///
 /// Injects the store as `Arc<dyn ThrottlerStore>`, so **one** guard serves
 /// every backend: [`InMemoryThrottler`](crate::InMemoryThrottler) by default,

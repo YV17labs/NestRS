@@ -48,7 +48,7 @@ so guards plug into dedup-by-`TypeId` and declaration-order chaining.
 
 ### A minimal custom guard
 
-```rust title="crates/features/src/posts/guard.rs"
+```rust title="src/posts/guard.rs"
 use nest_rs::guards::prelude::*;
 use nest_rs::http::poem::Request as HttpRequest;
 
@@ -68,11 +68,12 @@ impl Guard for RateLimitGuard {
     }
 }
 
-// Attest the edge you implemented — see "A guard must declare the transports
-// it checks" below. Without it, binding this guard on a route is a compile
-// error.
 impl HttpGuard for RateLimitGuard {}
 ```
+
+That last line attests the edge you implemented — see
+[A guard must declare the transports it checks](#a-guard-must-declare-the-transports-it-checks)
+below. Without it, binding this guard on a route is a compile error.
 
 A guard is an `#[injectable]` provider listed in some module's
 `providers = [...]`. The access graph (see
@@ -324,6 +325,30 @@ pub struct PostsController { /* ... */ }
 `AuthnGuard` and `AuthzGuard` run **exactly once** per request, not twice.
 The controller's two extra lines cost zero runtime overhead and one `debug`
 line at boot.
+
+### Re-running one on purpose: `#[force_guards]`
+
+Dedup is what makes redeclaring free, so the one thing it takes away is
+running a guard *twice on purpose*. `#[force_guards(...)]` is the opt-out,
+and it takes the same list `#[use_guards]` does:
+
+```rust
+#[patch("/:id/publish")]
+#[force_guards(FreshTokenGuard)]        // replay, even though the pool ran it
+#[authorize(Update, PostEntity)]
+async fn publish(&self, post: Bind<Update, PostsService>) -> Result<Json<Post>> { /* ... */ }
+```
+
+Reach for it when a guard's answer can go stale between the pool's site and
+the handler — a token freshness re-check on a sensitive mutation, a quota
+counted per operation rather than per request. Everywhere else it is a second
+execution nobody asked for, so the default stays dedup.
+
+**Per operation only.** `#[use_guards]` binds on the struct or the method;
+`#[force_guards]` is read only from the method, because re-running a guard is a
+decision about one operation rather than a posture a whole controller takes.
+Writing it on the struct is `cannot find attribute 'force_guards' in this
+scope`.
 
 **Declare layers on the provider that needs them, not only at the app
 boundary.** A `crates/features` controller is designed to be portable — if

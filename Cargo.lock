@@ -3309,6 +3309,7 @@ dependencies = [
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-testing",
  "parking_lot",
  "poem",
  "tokio",

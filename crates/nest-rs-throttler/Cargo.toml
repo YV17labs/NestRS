@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Rate limiting for NestRS: a per-route ThrottlerGuard reading a #[meta(Throttle)] override, over a fixed-window counter behind a pluggable ThrottlerStore trait."
+description = "Rate limiting for NestRS: a ThrottlerGuard reading a #[meta(Throttle)] override, over a fixed-window counter behind a pluggable ThrottlerStore trait."
 keywords = ["framework", "nestrs", "rate-limit", "throttle", "middleware"]
 categories = ["web-programming"]
 
@@ -38,6 +38,11 @@ anyhow.workspace = true
 # `#[handler]`, and a rate-limited controller is the shape the docs describe.
 tokio = { workspace = true, features = ["macros", "rt"] }
 nest-rs-interceptors.workspace = true
+# The scope half of the guard's contract is only observable in a status code:
+# `guard.rs` boots the documented global wiring and counts requests against a
+# route's own `#[meta(Throttle)]`. Path-only (intra-workspace dev-edge), per the
+# manifest rule.
+nest-rs-testing = { path = "../nest-rs-testing" }
 
 [lints]
 workspace = true

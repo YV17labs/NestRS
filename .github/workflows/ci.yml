@@ -1,0 +1,235 @@
+# The *Definition of done* in `CLAUDE.md`, executed.
+#
+# Until this file existed, a push touching only Rust ran nothing: `publish.yml`
+# fires on a `v*.*.*` tag and `docs-pages.yml` only on `docs/**`. So 1711 tests,
+# 62 e2e and both `demo/` suites were guarded by whoever remembered to run them
+# — including the fail-closed refusals (`<PREFIX>_ENV` in the cascade, the
+# residency bound, the dev-token boot refusal) whose only proof is a test.
+#
+# The steps are not a re-invention of that sequence; they are the sequence, in
+# its order, so a green run means exactly what `CLAUDE.md` says done means. When
+# the file changes, this changes with it.
+#
+# Services mirror `.devcontainer/docker-compose.yml` image for image. e2e is a
+# hard requirement here, never a skip: "a real connection failure is a
+# regression to report, not an environment limit."
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A force-push mid-run leaves the old run answering about code nobody has.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # A failed CI run is read, not re-run: the whole point is the failure.
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Lint and the in-process suites. Fast, needs no service, and fails the
+  # cheapest way for the most common mistake.
+  framework:
+    name: framework — lint, tests, doctests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pinned to the toolchain the workspace declares, so CI cannot pass on a
+      # compiler the repo does not claim to support.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.96'
+          components: clippy, rustfmt
+
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      # `--all-targets` reaches the test and example targets too: a lint that
+      # only guards `src/` leaves the suites free to rot.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo nextest (integration + unit)
+        run: cargo nextest run --workspace -E 'not binary(e2e)'
+
+      # nextest does not run doctests; `CLAUDE.md` makes it its own step.
+      - name: cargo test --doc
+        run: cargo test --workspace --doc
+
+  # e2e for the framework crates that reach a real backend.
+  framework-e2e:
+    name: framework — e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: nestrs
+          POSTGRES_PASSWORD: nestrs
+          POSTGRES_DB: nestrs
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nestrs -d nestrs"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:8.6.3
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      rustfs:
+        image: rustfs/rustfs:1.0.0-beta.8
+        env:
+          RUSTFS_VOLUMES: /data
+          RUSTFS_ADDRESS: 0.0.0.0:9000
+          RUSTFS_ACCESS_KEY: nestrs
+          RUSTFS_SECRET_KEY: nestrs
+        ports: ['9000:9000']
+    # The devcontainer resolves these by service name; on a runner the services
+    # are published on localhost. Set here rather than in a committed `.env`,
+    # which is read after the cascade has already been chosen.
+    env:
+      NESTRS_DATABASE__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
+      NESTRS_QUEUE__URL: redis://localhost:6379
+      NESTRS_STORAGE__ENDPOINT: http://localhost:9000
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.96'
+
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: cargo nextest (e2e)
+        run: cargo nextest run --workspace -E 'binary(e2e)'
+
+  # The product workspace: its own lockfile, its own target dir, driven through
+  # its own front door so CI exercises what a developer types.
+  demo:
+    name: demo — lint, unit, e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: nestrs
+          POSTGRES_PASSWORD: nestrs
+          POSTGRES_DB: nestrs
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nestrs -d nestrs"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:8.6.3
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      rustfs:
+        image: rustfs/rustfs:1.0.0-beta.8
+        env:
+          RUSTFS_VOLUMES: /data
+          RUSTFS_ADDRESS: 0.0.0.0:9000
+          RUSTFS_ACCESS_KEY: nestrs
+          RUSTFS_SECRET_KEY: nestrs
+        ports: ['9000:9000']
+    env:
+      NESTRS_DATABASE__URL: postgres://nestrs:nestrs@localhost:5432/nestrs
+      NESTRS_QUEUE__URL: redis://localhost:6379
+      NESTRS_STORAGE__ENDPOINT: http://localhost:9000
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.96'
+          components: clippy, rustfmt
+
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: demo
+
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      # `nestrs run` forwards to `just`, so installing the CLI is what makes CI
+      # type what the developer types. A recipe that breaks then breaks here.
+      - name: Install the nestrs CLI from this tree
+        run: cargo install --path crates/nest-rs-cli --locked --debug
+
+      - name: nestrs run lint
+        working-directory: demo
+        run: nestrs run lint
+
+      - name: nestrs run test unit
+        working-directory: demo
+        run: nestrs run test unit
+
+      - name: nestrs run test e2e
+        working-directory: demo
+        run: nestrs run test e2e
+
+  # The docs gate on every push, not only on a `docs/**` one: the linter derives
+  # its rules from framework source, so a Rust change is exactly what makes a
+  # page stale. `docs-pages.yml` still owns deployment.
+  docs:
+    name: docs — linter
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: npm ci
+        working-directory: docs
+        run: npm ci
+
+      - name: npm run lint:docs
+        working-directory: docs
+        run: npm run lint:docs
+
+      - name: npm run build
+        working-directory: docs
+        run: npm run build

@@ -75,10 +75,35 @@ impl Renderer {
         self
     }
 
+    /// Substitute `{{key}}` for every key this renderer holds, repeatedly until
+    /// nothing changes.
+    ///
+    /// **One pass is not enough, and the bug it caused was invisible.** A seeded
+    /// *value* may itself contain a placeholder — `op_description` is
+    /// `"Count {{kebab}} items."` — and `vars` is a `HashMap`, whose iteration
+    /// order Rust randomises per process. Substituting `kebab` before
+    /// `op_description` left the injected `{{kebab}}` in the file, about half
+    /// the time: `nestrs g mcp` shipped `#[tool(description = "Count {{kebab}}
+    /// items.")]`, which compiles, passes the e2e, and is read by a language
+    /// model. Iterating to a fixed point makes the result independent of that
+    /// order.
+    ///
+    /// Unknown placeholders are untouched, because only this renderer's own keys
+    /// are substituted — which is what lets a Justfile keep Just's `{{app}}`.
+    /// The loop is bounded by the key count: each pass that changes anything has
+    /// resolved at least one key's worth of nesting, and a template cannot nest
+    /// deeper than the number of keys without a cycle.
     pub fn render(&self, template: &str) -> String {
         let mut out = template.to_string();
-        for (key, value) in &self.vars {
-            out = out.replace(&format!("{{{{{key}}}}}"), value);
+        for _ in 0..=self.vars.len() {
+            let mut next = out.clone();
+            for (key, value) in &self.vars {
+                next = next.replace(&format!("{{{{{key}}}}}"), value);
+            }
+            if next == out {
+                return out;
+            }
+            out = next;
         }
         out
     }
@@ -87,6 +112,33 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A seeded value carrying a placeholder resolves too. `op_description` is
+    /// `"Count {{kebab}} items."`, and a single substitution pass left that
+    /// `{{kebab}}` in the file whenever the `HashMap` happened to yield `kebab`
+    /// first — about half of `nestrs g mcp` runs shipped
+    /// `#[tool(description = "Count {{kebab}} items.")]`. It compiles, so
+    /// nothing failed; the artifact is the sentence a language model reads.
+    #[test]
+    fn a_seeded_value_carrying_a_placeholder_is_resolved_too() {
+        let r = Renderer::new(&crate::naming::Names::parse("widget"))
+            .with("op_description", "Count {{kebab}} items.");
+        assert_eq!(
+            r.render("#[tool(description = \"{{op_description}}\")]"),
+            "#[tool(description = \"Count widget items.\")]",
+        );
+    }
+
+    /// …and a placeholder this renderer does not own survives untouched, which
+    /// is what lets a Justfile keep Just's own `{{app}}` / `{{n}}`.
+    #[test]
+    fn a_placeholder_the_renderer_does_not_own_is_left_alone() {
+        let r = Renderer::new(&crate::naming::Names::parse("widget"));
+        assert_eq!(
+            r.render("cargo run --bin {{app}} # {{kebab}}"),
+            "cargo run --bin {{app}} # widget",
+        );
+    }
 
     #[test]
     fn cargo_templates_use_the_version_placeholder_not_a_literal() {

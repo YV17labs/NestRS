@@ -314,9 +314,6 @@ async fn every_parent_gets_its_own_page_of_an_auto_resolved_has_many() {
         "no post is served to two parents",
     );
 
-    // The second page of the *middle* author: under the batch shape this
-    // replaces, a per-parent window could not be expressed at all, and the
-    // parents that sorted last read as having no children.
     let cursor = connection_of(&first_page, &authors[1])["pageInfo"]["endCursor"]
         .as_str()
         .expect("a page with more to come carries an endCursor")
@@ -332,7 +329,13 @@ async fn every_parent_gets_its_own_page_of_an_auto_resolved_has_many() {
     .await;
     let second = connection_of(&second_page, &authors[1]);
     let second_ids = node_ids(second);
-    assert_eq!(second_ids.len() as u64, page, "{second_page}");
+    assert_eq!(
+        second_ids.len() as u64,
+        page,
+        "a per-parent window is expressible: the middle author has a full second page, \
+         where a batch-shaped loader left every late-sorting parent looking childless: \
+         {second_page}",
+    );
     assert_eq!(second["pageInfo"]["hasPreviousPage"], json!(true));
     let firsts = node_ids(connection_of(&first_page, &authors[1]));
     assert!(
@@ -341,7 +344,6 @@ async fn every_parent_gets_its_own_page_of_an_auto_resolved_has_many() {
     );
 }
 
-/// The `posts` connection of one user in a `{ users { posts … } }` response.
 fn connection_of<'a>(body: &'a serde_json::Value, user: &str) -> &'a serde_json::Value {
     body["data"]["users"]
         .as_array()

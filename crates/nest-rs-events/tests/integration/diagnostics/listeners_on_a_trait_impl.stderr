@@ -1,0 +1,5 @@
+error: #[listeners] decorates the inherent impl holding the #[on_event] methods — this one implements `Default` for `DemoProvider`, whose methods answer to that trait. Move it to `impl DemoProvider { … }`
+  --> tests/integration/diagnostics/listeners_on_a_trait_impl.rs:11:6
+   |
+11 | impl Default for DemoProvider {
+   |      ^^^^^^^

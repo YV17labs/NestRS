@@ -1,0 +1,5 @@
+error: #[operations] decorates the inherent impl holding the #[query] / #[mutation] / #[subscription] / #[entity] / #[field_resolver] methods — this one implements `Default` for `DemoResolver`, whose methods answer to that trait. Move it to `impl DemoResolver { … }`
+  --> tests/integration/diagnostics/operations_on_a_trait_impl.rs:11:6
+   |
+11 | impl Default for DemoResolver {
+   |      ^^^^^^^

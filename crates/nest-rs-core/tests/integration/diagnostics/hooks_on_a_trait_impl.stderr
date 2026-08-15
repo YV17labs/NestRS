@@ -1,0 +1,5 @@
+error: #[hooks] decorates the inherent impl holding the #[on_module_init] / #[on_application_bootstrap] / #[on_module_destroy] methods — this one implements `Default` for `DemoProvider`, whose methods answer to that trait. Move it to `impl DemoProvider { … }`
+  --> tests/integration/diagnostics/hooks_on_a_trait_impl.rs:11:6
+   |
+11 | impl Default for DemoProvider {
+   |      ^^^^^^^

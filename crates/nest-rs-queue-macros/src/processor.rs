@@ -40,6 +40,7 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = item.self_ty.clone();
+    let host_check = PROCESSOR_PAIR.provider_host_check(&self_ty);
     let provider_ident = match impl_self_ident(&self_ty, "#[processor]") {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
@@ -287,6 +288,7 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
 
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_queue::ProcessMethod {
+                    origin: ::core::module_path!(),
                     name: #qualified_name,
                     queue: #queue_str,
                     retries: #retries_lit,
@@ -299,6 +301,8 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let out = quote! {
         #item
+
+        #host_check
         #(#emissions)*
     };
     out.into()
@@ -313,14 +317,7 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
 fn reject_args(args: TokenStream) -> syn::Result<()> {
     let args = TokenStream2::from(args);
     Edge::Queue.reject_version(&args)?;
-    if args.is_empty() {
-        return Ok(());
-    }
-    Err(syn::Error::new_spanned(
-        &args,
-        "#[processor] takes no arguments; tag methods with \
-         `#[process(queue = <QueueName type>)]`",
-    ))
+    PROCESSOR_PAIR.reject_args(&args, "the provider's scope is declared by")
 }
 
 /// Split a job argument into (type to deserialize from the wire, expression that

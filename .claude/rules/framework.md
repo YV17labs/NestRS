@@ -15,6 +15,48 @@ Loaded when touching `crates/nest-rs-*`. See also: `request-layers.md`,
 use the decorators. When a pattern recurs without one, write a new
 decorator — if it clears the bar below.
 
+**A refusal lands at the earliest site that can see the fact.** When a
+declaration is wrong in a way something can *know*, the question is only
+who knows it first — and that site owes the error, because every site
+after it costs the developer a run, a boot, or a silence. The
+provider-hosted decorators are the worked example, one fact
+(`Container::get::<Host>()` answers only for a singleton under its own
+type) refused at four different sites:
+
+| Knowable at | Shape | Answer |
+|---|---|---|
+| the host's own decorator (scope is right there) | `scope = request`, `scope = transient` | compile error, reading `ProviderResidency::SINGLETON` |
+| the impl half's expansion | an edge host — metadata only, no instance | the same compile error |
+| the boot, from this app's composition | held under another key — `dyn Trait`, a `for_root`, a hand-written `Module` | `warn` + `INERT_HOST_HINT` |
+| the boot, from this app's imports | module not imported | the same `warn` |
+
+**Stated, never merely absent.** A refusal that reads a *missing* marker is
+fillable: `ProviderResidency` was a bare `Singleton` trait for one audit round,
+and `impl Singleton for PerResolution {}` — the line its own note recommended to
+hand-written providers — put a `scope = transient` host back through the bound
+silently. Every decorator that builds a provider now writes the fact, `true` or
+`false`, so contradicting it is `E0119` and the hatch survives only where nothing
+has spoken. Testable form: a trybuild snapshot per refused shape *plus* one that
+tries the escape.
+
+**A `warn` may name causes; it may not prescribe an edit the framework cannot
+verify.** The same hint offered "list it in `providers` under its own type as
+well" — and `providers = [Foo, Foo as dyn Trait]` runs the constructor twice,
+so the decorators fire on one instance while every `Arc<dyn Trait>` consumer
+holds another, with nothing to notice; on a hand-written `impl Module` the same
+edit fails the boot. Five causes reach that one skip line and the container
+cannot tell which, so it names them and stops.
+
+**Escalate no further than the fact supports.** The last two rows are correct
+in another composition, so they warn — a boot error there would refuse working
+code. And **a `warn` whose sentence is wrong is worse than none**: that line
+claimed *unreachable from app's module tree* about a provider written in
+`providers`, sending the reader to check the one thing already true. One shared
+sentence, every site, or the wording drifts per crate — `INERT_HOST_HINT` is
+that shape, and `is_framework_owned` is the same shape for the *level*: it lived
+at one site of five, so two demo apps warned every boot about an indicator the
+framework owns.
+
 A `proc-macro` crate can only export macros, so each decorator lives in
 a companion `*-macros` crate re-exported by its home crate. **That is
 the one licensed exception to "`lib.rs` carries no logic"** — Rust

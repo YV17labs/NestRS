@@ -12,6 +12,11 @@ use crate::EventBus;
 /// (boot `tracing::warn`, target `nest_rs::events`) — never silently dropped, so
 /// leftover code doesn't disappear without a trace.
 pub struct ListenerMethod {
+    /// `module_path!()` of the crate that declared it — read by
+    /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick the
+    /// report level, and emitted as a field so a skip line names a type the
+    /// developer can find.
+    pub origin: &'static str,
     /// The listener method's name — the `method` field in the boot wire log.
     pub name: &'static str,
     /// `TypeId` of the host provider, matched against the reachable set to

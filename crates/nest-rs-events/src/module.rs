@@ -73,10 +73,11 @@ fn wire_listeners(
             if let Some(r) = reachable.as_ref()
                 && !r.0.contains(&provider_id)
             {
-                tracing::warn!(
+                ::nest_rs_core::report_inert_host!(
                     target: "nest_rs::events",
+                    what: "#[on_event] method",
+                    origin: entry.origin,
                     listener = entry.name,
-                    "skipped #[on_event] method: provider unreachable from app's module tree",
                 );
                 continue;
             }

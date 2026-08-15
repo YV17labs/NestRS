@@ -30,6 +30,7 @@
 //! [`DecoratorPair::on_provider`] and gets the same treatment.
 
 use proc_macro2::TokenStream;
+use quote::{ToTokens, quote};
 use syn::{Item, ItemImpl, ItemStruct};
 
 /// One edge's decorator pair: the vocabulary its two wrong-shape diagnostics are
@@ -63,6 +64,73 @@ impl DecoratorPair {
             operations,
             collects,
         }
+    }
+
+    /// The third wrong-shape refusal, and the one only rustc can deliver: the
+    /// impl half sits on an `impl` block all right, but the container will not
+    /// hold the type it collects for.
+    ///
+    /// An [`on_provider`](Self::on_provider) half resolves its host with
+    /// `Container::get::<Host>()`, outside any request — which answers only for
+    /// a singleton stored under its own type. An edge host registers metadata;
+    /// a `scope = request` provider registers a factory; a `scope = transient`
+    /// one hands back a throwaway whose effects are dropped. A macro cannot see
+    /// the struct's decorator from the impl block, so the refusal reads the fact
+    /// the *struct's* decorator recorded: `nest_rs_core::ProviderResidency`.
+    ///
+    /// Two diagnostics fall out, and both are the framework's own words: a type
+    /// no decorator built has no impl at all and gets the trait's
+    /// `#[diagnostic::on_unimplemented]`; a type whose decorator recorded
+    /// `SINGLETON = false` fails this `const` assertion. **Reading a stated fact
+    /// rather than requiring a marker is the whole point** — a marker is absent
+    /// for the shapes it refuses, and absence is fillable by hand, which is how
+    /// a transient host once slipped through the very bound meant to refuse it.
+    ///
+    /// Every `on_provider` half emits this after a successful
+    /// [`parse_operations`](Self::parse_operations); the edge pairs must not —
+    /// their hosts are what it refuses.
+    pub fn provider_host_check(&self, self_ty: &syn::Type) -> TokenStream {
+        debug_assert!(
+            self.host == "#[injectable]",
+            "only an on_provider pair reads a host's residency",
+        );
+        quote! {
+            const _: () = ::core::assert!(
+                <#self_ty as ::nest_rs_core::ProviderResidency>::SINGLETON,
+                "a provider-hosted decorator (#[hooks], #[scheduled], #[listeners], \
+                 #[indicators], #[processor]) resolves its host with Container::get::<Self>(), \
+                 outside any request, so the host must be a provider the container holds under \
+                 its own type for the app's lifetime. This one is not: an edge host \
+                 (#[controller], #[gateway], #[resolver], #[mcp]) is built at mount, \
+                 `scope = request` builds one per request, and `scope = transient` would hand \
+                 it a throwaway whose effects are dropped. Move these methods to a plain \
+                 #[injectable] provider.",
+            );
+        }
+    }
+
+    /// Emit the struct half's record of what the container will hold under this
+    /// type — the fact [`provider_host_check`](Self::provider_host_check)
+    /// reads, written by the decorator that builds the provider.
+    ///
+    /// Every edge host records `false`: `#[controller]`, `#[gateway]`,
+    /// `#[resolver]` and `#[mcp]` register *metadata*, and the instance is
+    /// built at mount. It is written rather than omitted so that contradicting
+    /// it is `E0119` — a marker that is merely absent for the shapes it refuses
+    /// can be filled in by hand, which is how a `scope = transient` host once
+    /// slipped through the bound meant to refuse it.
+    ///
+    /// Here rather than in each `*-macros` crate for the reason the four copies
+    /// demonstrated: the edge *form* is open, so the path a fifth edge follows
+    /// is whatever the other four did — and a forgotten copy reopens that hole
+    /// silently, since a missing impl falls back to the trait's
+    /// `on_unimplemented` note, which reads plausibly.
+    pub fn host_residency(&self, name: &syn::Ident, generics: &syn::Generics) -> TokenStream {
+        debug_assert!(
+            self.host != "#[injectable]",
+            "a provider-hosted pair records residency through `#[injectable]`, not its impl half",
+        );
+        provider_residency(name, generics, false)
     }
 
     /// Refuse an argument list on the **impl** half, naming what does declare
@@ -140,6 +208,55 @@ impl DecoratorPair {
                     host = self.host,
                 ),
             )),
+        }
+    }
+}
+
+/// Parse `#[injectable]`'s input, naming the impl halves when the developer
+/// decorated the impl block instead.
+///
+/// Free rather than a [`DecoratorPair`] method for the same reason as
+/// [`provider_residency`]: `#[injectable]` owns no pair — it *is* the generic
+/// struct half all five `on_provider` pairs name. So it is the one host whose
+/// refusal cannot name *the* sibling, and names the family instead; which of
+/// the five the developer wanted is theirs to know, and all five are one
+/// sentence away.
+///
+/// Worded here rather than in `#[injectable]`'s own crate because that is the
+/// whole point of this module: the five pairs already say "the struct itself
+/// takes `#[injectable]`", and the sentence coming back the other way has to
+/// agree with them. It answered `expected struct` until this existed — the one
+/// phrasing `CLAUDE.md` names as the defect.
+pub fn parse_provider_host(input: TokenStream) -> syn::Result<ItemStruct> {
+    match syn::parse2::<Item>(input)? {
+        Item::Struct(item) => Ok(item),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "#[injectable] decorates the provider struct — the impl block holding its \
+             methods takes the decorator named for what it collects: #[processor], \
+             #[scheduled], #[listeners], #[indicators] or #[hooks]",
+        )),
+    }
+}
+
+/// The `impl ProviderResidency` a provider-building decorator emits, spelled
+/// once for all five: `#[injectable]` (with `singleton` from its scope) and the
+/// four edge hosts (always `false`, through
+/// [`DecoratorPair::host_residency`]).
+///
+/// Free rather than a method because `#[injectable]` owns no pair — it *is* the
+/// generic struct half every `on_provider` pair names.
+pub fn provider_residency(
+    name: &syn::Ident,
+    generics: &syn::Generics,
+    singleton: bool,
+) -> TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    quote! {
+        impl #impl_generics ::nest_rs_core::ProviderResidency
+            for #name #ty_generics #where_clause
+        {
+            const SINGLETON: bool = #singleton;
         }
     }
 }

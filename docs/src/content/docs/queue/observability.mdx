@@ -78,7 +78,13 @@ provider isn't reachable from this app's module tree is skipped with a
 ```text frame="terminal"
  INFO nest_rs::app: attached module-contributed transport transport=QueueWorker
  INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
- WARN nest_rs::queue: skipped #[process] method: provider unreachable from app's module tree processor=ReportJobs::weekly queue=reports
+ WARN nest_rs::queue: skipped #[process] method: no instance of the provider in
+      this app's container processor=ReportJobs::weekly queue=reports
+      origin="features::reports::queue::processor"
+      hint="nothing is registered under that exact type. Common causes: its module
+      is not imported by this app (import it, or delete the methods); it is bound
+      only as `dyn Trait`; it is imported through a `for_root`; it is registered by
+      hand under a key or a trait"
 ```
 
 The skip line is `warn` — a linked-but-unimported handler is usually a

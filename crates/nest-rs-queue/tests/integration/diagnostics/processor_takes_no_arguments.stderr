@@ -1,0 +1,5 @@
+error: #[processor] takes no arguments; the provider's scope is declared by #[injectable], and each operation by #[process]
+  --> tests/integration/diagnostics/processor_takes_no_arguments.rs:10:13
+   |
+10 | #[processor(concurrency = 2)]
+   |             ^^^^^^^^^^^^^^^

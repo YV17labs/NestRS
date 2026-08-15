@@ -1,0 +1,28 @@
+error[E0277]: `Plain` is not a provider, so a provider-hosted decorator (`#[hooks]`, `#[scheduled]`, `#[listeners]`, `#[indicators]`, `#[processor]`) cannot reach it
+  --> tests/integration/diagnostics/indicators_on_a_non_provider.rs:12:6
+   |
+12 | impl Plain {
+   |      ^^^^^ the container holds no singleton of this type
+   |
+help: the trait `ProviderResidency` is not implemented for `Plain`
+  --> tests/integration/diagnostics/indicators_on_a_non_provider.rs:9:1
+   |
+ 9 | struct Plain;
+   | ^^^^^^^^^^^^
+   = note: those decorators resolve their host with `Container::get::<Self>()`, outside any request, so the host must be a provider the container holds under its own type. Add `#[injectable]` — or, on a provider registered by hand with `ContainerBuilder::provide`, write `impl ProviderResidency` for it with `const SINGLETON: bool = true`
+help: the following other types implement trait `ProviderResidency`
+  --> src/controller.rs
+   |
+   | #[controller(path = "/health")]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HealthController`
+   |
+  ::: src/service.rs
+   |
+   | #[injectable]
+   | ^^^^^^^^^^^^^ `HealthService`
+   |
+  ::: $WORKSPACE/crates/nest-rs-ws/src/server.rs
+   |
+   | #[injectable]
+   | ^^^^^^^^^^^^^ `nest_rs_ws::server::WsServer<N>`
+   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `injectable` (in Nightly builds, run with -Z macro-backtrace for more info)

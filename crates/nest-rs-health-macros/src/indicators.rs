@@ -28,14 +28,8 @@ const PROBE_ATTRS: [(&str, &str); 3] = [
 
 pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
-    if !args.is_empty() {
-        return syn::Error::new_spanned(
-            &args,
-            "#[indicators] takes no arguments; tag methods with `#[liveness]`, \
-             `#[readiness]`, or `#[startup]`",
-        )
-        .to_compile_error()
-        .into();
+    if let Err(err) = INDICATORS_PAIR.reject_args(&args, "the provider's scope is declared by") {
+        return err.to_compile_error().into();
     }
 
     let mut item = match INDICATORS_PAIR.parse_operations(input.into()) {
@@ -43,6 +37,7 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = item.self_ty.clone();
+    let host_check = INDICATORS_PAIR.provider_host_check(&self_ty);
     let provider_name = match impl_self_ident(&self_ty, "#[indicators]") {
         Ok(ident) => ident.to_string(),
         Err(err) => return err.to_compile_error().into(),
@@ -114,6 +109,7 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
         submissions.push(quote! {
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_health::HealthIndicator {
+                    origin: ::core::module_path!(),
                     name: #method_name,
                     kind: ::nest_rs_health::ProbeKind::#kind_ident,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
@@ -133,6 +129,8 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let out = quote! {
         #item
+
+        #host_check
         #(#submissions)*
     };
     out.into()

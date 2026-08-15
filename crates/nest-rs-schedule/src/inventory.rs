@@ -55,6 +55,11 @@ pub struct CronJobMeta {
 /// Link-time inventory entry submitted by `#[scheduled]` per `#[every]` /
 /// `#[cron]` / `#[after]`-tagged method.
 pub struct ScheduledMethod {
+    /// `module_path!()` of the crate that declared it — read by
+    /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick the
+    /// report level, and emitted as a field so a skip line names a type the
+    /// developer can find.
+    pub origin: &'static str,
     /// The host struct (e.g. `"AudioTasks"`) — logged as its own field and
     /// copied to the synthesized [`CronJobMeta`].
     pub provider: &'static str,

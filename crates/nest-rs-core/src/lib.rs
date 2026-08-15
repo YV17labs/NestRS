@@ -34,6 +34,15 @@
 //! `#[on_module_destroy]`, …) run per phase as [`App::run`] drains them —
 //! init failure aborts boot, shutdown is best-effort.
 //!
+//! The two are not free to combine: a hook — like a scheduled method, a
+//! listener, an indicator and a processor — resolves its host with
+//! `Container::get::<Host>()` outside any request, so the host must be a
+//! **singleton stored under its own type**. [`ProviderResidency`] is that requirement
+//! made checkable, and the three shapes that can never satisfy it are compile
+//! errors rather than a boot-time notice. The fourth, a host bound only as
+//! `dyn Trait`, is the app's composition to fix and carries
+//! [`INERT_HOST_HINT`].
+//!
 //! # Discovery
 //!
 //! Module-wired items implement [`Discoverable`] and are found through link-time
@@ -87,7 +96,7 @@ pub use access::{
 };
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
-pub use discoverable::Discoverable;
+pub use discoverable::{Discoverable, INERT_HOST_HINT, ProviderResidency, is_framework_owned};
 pub use discovery::{Discovered, DiscoveryService};
 pub use env_prefix::EnvPrefix;
 pub use layer::{Layer, LayerKind, LayerSite};

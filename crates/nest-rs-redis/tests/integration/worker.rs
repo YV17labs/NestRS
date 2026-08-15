@@ -28,6 +28,7 @@ fn probe_handler(_payload: serde_json::Value, _container: Container) -> ProbeFut
 
 nest_rs_core::inventory::submit! {
     ProcessMethod {
+        origin: module_path!(),
         name: "probe::process",
         queue: "test-queue",
         retries: 0,
@@ -68,6 +69,7 @@ struct SecondClaimant;
 
 nest_rs_core::inventory::submit! {
     ProcessMethod {
+        origin: module_path!(),
         name: "FirstClaimant::drain",
         queue: "contested-queue",
         retries: 1,
@@ -78,6 +80,7 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod {
+        origin: module_path!(),
         name: "SecondClaimant::drain",
         queue: "contested-queue",
         retries: 9,

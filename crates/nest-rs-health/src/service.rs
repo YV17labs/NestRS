@@ -97,14 +97,27 @@ fn report_unreachable_indicators(container: &Container) {
     };
     for entry in inventory::iter::<HealthIndicator>() {
         if !reachable.0.contains(&(entry.provider_type_id)()) {
-            tracing::warn!(
-                target: "nest_rs::health",
-                indicator = entry.name,
-                kind = ?entry.kind,
-                "skipped indicator: provider unreachable from app's module tree",
-            );
+            report_inert_indicator(entry);
         }
     }
+}
+
+/// Report an inert indicator at the level its owner earns.
+///
+/// `debug` for a `nest-rs-*` capability the app never opted into — the
+/// developer cannot act on it, and `nest_rs_seaorm`'s `db` / `db_ready` pair
+/// warned twice per boot on two shipped demo apps, telling the reader to go
+/// bind a framework-internal type. `warn` for the app's own leftover code,
+/// which is what the module-gated discovery rule wants seen. Same call the
+/// lifecycle runner makes, from the same place.
+fn report_inert_indicator(entry: &HealthIndicator) {
+    ::nest_rs_core::report_inert_host!(
+        target: "nest_rs::health",
+        what: "indicator",
+        origin: entry.origin,
+        indicator = entry.name,
+        kind = ::tracing::field::debug(entry.kind),
+    );
 }
 
 /// Run one indicator future under a wall-clock ceiling, mapping success,
@@ -172,6 +185,35 @@ mod tests {
         );
     }
 
+    /// A `nest-rs-*` indicator the app never opted into reports at `debug`, not
+    /// `warn`. `nest_rs_seaorm`'s `db` / `db_ready` pair warned twice on every
+    /// boot of two shipped demo apps, telling the reader to bind a
+    /// framework-internal type. Asserted on the emitted level rather than on
+    /// `is_framework_owned`, which `nest-rs-core` already covers — this is the
+    /// half only the health branch can be wrong about.
+    #[test]
+    fn a_framework_owned_indicator_reports_at_debug() {
+        let logs = nest_rs_testing::LogCapture::install();
+        // Driven directly rather than through a submitted fixture: `inventory`
+        // is process-wide, so a second entry would join every other test in
+        // this file.
+        report_inert_indicator(&HealthIndicator {
+            origin: "nest_rs_seaorm::health::indicator",
+            name: "db",
+            kind: ProbeKind::Readiness,
+            provider_type_id: || std::any::TypeId::of::<UpHost>(),
+            run: |_| Box::pin(async move { Ok(()) }),
+        });
+
+        let skipped = logs.find(
+            "nest_rs::health",
+            "skipped indicator: framework capability not imported by this app",
+        );
+        assert_eq!(skipped.len(), 1, "one line: {:#?}", logs.events());
+        assert_eq!(skipped[0].level, "debug");
+        assert_eq!(skipped[0].field("indicator").as_deref(), Some("db"));
+    }
+
     #[tokio::test]
     async fn a_fast_indicator_is_not_affected_by_the_ceiling() {
         let (status, error) = run_with_timeout(
@@ -201,6 +243,11 @@ mod tests {
 
     nest_rs_core::inventory::submit! {
         HealthIndicator {
+            // App-shaped, deliberately: `module_path!()` here is
+            // `nest_rs_health::…`, which `is_framework_owned` reads as the
+            // framework's and reports at `debug`. These fixtures stand in for a
+            // developer's own indicator, so they must say so.
+            origin: "features::probes::up",
             name: "up_host",
             kind: ProbeKind::Readiness,
             provider_type_id: || std::any::TypeId::of::<UpHost>(),
@@ -212,6 +259,7 @@ mod tests {
 
     nest_rs_core::inventory::submit! {
         HealthIndicator {
+            origin: "features::probes::down",
             name: "down_host",
             kind: ProbeKind::Readiness,
             provider_type_id: || std::any::TypeId::of::<DownHost>(),
@@ -305,7 +353,7 @@ mod tests {
 
         let skipped = logs.find(
             "nest_rs::health",
-            "skipped indicator: provider unreachable from app's module tree",
+            "skipped indicator: no instance of the provider in this app's container",
         );
         assert_eq!(skipped.len(), 1, "one line at boot: {:#?}", logs.events());
         assert_eq!(skipped[0].level, "warn");
@@ -319,7 +367,7 @@ mod tests {
         assert_eq!(
             logs.find(
                 "nest_rs::health",
-                "skipped indicator: provider unreachable from app's module tree",
+                "skipped indicator: no instance of the provider in this app's container",
             )
             .len(),
             1,

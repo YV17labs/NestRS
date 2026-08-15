@@ -8,7 +8,7 @@ use nest_rs::health::HealthModule;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
 use nest_rs::redis::QueueModule;
-use nest_rs::seaorm::DatabaseModule;
+use nest_rs::seaorm::{DatabaseHealthModule, DatabaseModule};
 use nest_rs::server_timing::ServerTimingModule;
 
 const SERVER_NAME: &str = "nestrs-assistant";
@@ -34,6 +34,7 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
         }),
         ProtectedResourceModule::for_root(None),
         DatabaseModule::for_root(None),
+        DatabaseHealthModule,
         QueueModule::for_root(None),
         AudioMcpModule,
         UsersMcpModule,

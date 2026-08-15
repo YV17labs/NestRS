@@ -22,6 +22,13 @@ struct TranscodeProcessor {
     sink: Sink,
 }
 
+// Hand-built and `provide`d below, which is a singleton registration. No
+// decorator built this type, so nothing has stated its residency and the
+// hand-written path is open — the one place it still is.
+impl nest_rs_core::ProviderResidency for TranscodeProcessor {
+    const SINGLETON: bool = true;
+}
+
 #[processor]
 impl TranscodeProcessor {
     // The type-path form: the macro reads `TranscodeQueue::NAME` into the
@@ -150,6 +157,10 @@ async fn an_attempt_the_context_could_not_settle_carries_its_classification() {
 macro_rules! declare_transactional_job {
     ($settle:expr) => {
         struct FragmentProcessor;
+
+        impl nest_rs_core::ProviderResidency for FragmentProcessor {
+            const SINGLETON: bool = true;
+        }
 
         #[processor]
         impl FragmentProcessor {

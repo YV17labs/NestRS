@@ -1,0 +1,11 @@
+error: expected identifier, found keyword `use`
+ --> tests/integration/diagnostics/processor_on_a_request_scoped_provider.rs:8:5
+  |
+8 | use use serde::{Deserialize, Serialize};
+  |     ^^^ expected identifier, found keyword
+
+error: expected one of `::`, `;`, or `as`, found `serde`
+ --> tests/integration/diagnostics/processor_on_a_request_scoped_provider.rs:8:9
+  |
+8 | use use serde::{Deserialize, Serialize};
+  |         ^^^^^ expected one of `::`, `;`, or `as`

@@ -49,6 +49,39 @@ hook-only `impl` the macro scans. The phase attributes
 (`#[on_application_bootstrap]`, …) need no import; `#[hooks]` consumes
 them.
 
+The host **must** be a **singleton** provider — the phases resolve it
+with `Container::get::<Host>()`, outside any request, which answers for
+exactly one registration shape. Three hosts can never satisfy that, and
+all three are compile errors naming the fix rather than a notice at boot:
+
+| Host | Why it cannot |
+|---|---|
+| an edge host (`#[controller]`, `#[gateway]`, `#[resolver]`, `#[mcp]`) | registers metadata; the instance is built at mount |
+| `#[injectable(scope = request)]` | the container holds a factory, not a value |
+| `#[injectable(scope = transient)]` | resolution would build a throwaway, and the hook's effects would be dropped |
+
+Each decorator **records** which of these it built, as
+`ProviderResidency::SINGLETON`, and `#[hooks]` reads it. So the refusal
+is not a marker you can satisfy by implementing it: contradicting what
+your decorator already wrote is a coherence error. A provider you
+register by hand with `ContainerBuilder::provide` is the one case nothing
+has spoken for, and it says so itself:
+
+```rust
+impl ProviderResidency for MyHandWrittenProvider {
+    const SINGLETON: bool = true;
+}
+```
+
+A fourth shape is your composition rather than a contradiction, so it
+warns at boot instead: a host the container holds under some *other* key
+— bound as `providers = [Foo as dyn Trait]`, imported through a
+`for_root`, or registered by hand under a name — has nothing under `Foo`
+itself. Move the methods to a provider listed under its own type.
+Listing the same host twice is **not** the repair it looks like: each
+binding runs the constructor, so the hooks fire on one instance while
+everything injecting `Arc<dyn Trait>` holds another.
+
 ## The five phases
 
 Two run on the way up, three on the way down. They drain in this fixed

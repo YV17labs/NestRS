@@ -161,10 +161,14 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         quote!()
     };
 
+    let residency = GRAPHQL_PAIR.host_residency(&name, &item.generics);
+
     quote! {
         #item
 
         #capability_bounds
+
+        #residency
 
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container

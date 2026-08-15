@@ -121,10 +121,14 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         quote!(dyn ::nest_rs_exception_filters::ExceptionFilterErased),
     );
 
+    let residency = HTTP_PAIR.host_residency(&name, &item.generics);
+
     quote! {
         #item
 
         #capability_bounds
+
+        #residency
 
         impl #impl_generics #name #ty_generics #where_clause {
             /// The controller's route prefix, from `#[controller(path = "…")]`.

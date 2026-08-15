@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: a provider-hosted decorator (#[hooks], #[scheduled], #[listeners], #[indicators], #[processor]) resolves its host with Container::get::<Self>(), outside any request, so the host must be a provider the container holds under its own type for the app's lifetime. This one is not: an edge host (#[controller], #[gateway], #[resolver], #[mcp]) is built at mount, `scope = request` builds one per request, and `scope = transient` would hand it a throwaway whose effects are dropped. Move these methods to a plain #[injectable] provider.
+  --> tests/integration/diagnostics/hooks_on_a_request_scoped_provider.rs:13:1
+   |
+13 | #[hooks]
+   | ^^^^^^^^ evaluation of `_` failed here

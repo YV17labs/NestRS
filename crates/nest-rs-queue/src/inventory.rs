@@ -133,6 +133,11 @@ pub type JobHandler = fn(
 /// provider not reachable from the app's module tree is skipped with a boot
 /// `warn` (the consumer logs it, so leftover code stays visible).
 pub struct ProcessMethod {
+    /// `module_path!()` of the crate that declared it — read by
+    /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick the
+    /// report level, and emitted as a field so a skip line names a type the
+    /// developer can find.
+    pub origin: &'static str,
     /// The process method's name, for boot logs.
     pub name: &'static str,
     /// The queue name this method drains.
@@ -196,6 +201,7 @@ mod tests {
 
     fn method(name: &'static str, queue: &'static str, retries: usize) -> ProcessMethod {
         ProcessMethod {
+            origin: module_path!(),
             name,
             queue,
             retries,

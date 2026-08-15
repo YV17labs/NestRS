@@ -7,15 +7,21 @@ sidebar:
 
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
+<Aside type="caution">
+This page reads the reference **`api`**'s `users` feature, not your **`blog`**.
+Per-caller filtering needs a tenant column and a masked field, and `blog`'s
+`Post` deliberately has neither. Clone the repo to follow along
+(`nestrs run dev api`), then apply the last section to your own `posts`.
+</Aside>
+
 This is the feature behind [See the security payoff](/tutorial/checkpoint/)
-— now you build it. You're now building inside the reference `api`'s
-`users` feature; your `blog` already carries the same two guards from
-[Expose over HTTP](/tutorial/http/), with one blanket `Manage` rule standing in
-for a real policy. Here that policy gets teeth: the framework filters every read by their
-organisation, gates every by-id load against their ability, and masks
-the response before it leaves the process. By the end of this page, a
-cross-tenant `GET /users/:id` returns `403`, a plain user sees only
-their org, and the `email` column disappears from a non-admin listing.
+— now you read how it is built. Your `blog` already carries the same two
+guards from [Expose over HTTP](/tutorial/http/), with one blanket `Manage`
+rule standing in for a real policy. Here that policy gets teeth: the framework
+filters every read by the caller's organisation, gates every by-id load against
+their ability, and masks the response before it leaves the process. By the end
+of this page, a cross-tenant `GET /users/:id` returns `403`, a plain user sees
+only their org, and the `email` column disappears from a non-admin listing.
 
 ## Two layers, two guards
 
@@ -261,7 +267,39 @@ $ curl -s -H 'Authorization: Bearer <plain-user-token>' \
 The email is gone, the cross-tenant load is refused, and the handler
 never had to know.
 
-## What you have now
+## Now narrow your own `blog`
+
+Step 4 left `posts` on one blanket rule — `Action::Manage` for everybody.
+Rewriting `define` in `crates/features/src/authz/ability.rs` turns it into a
+policy, using only the columns `blog` already has (the actor comes first — the
+trait's own order):
+
+```rust title="crates/features/src/authz/ability.rs"
+use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
+
+use crate::identity::Claims;
+use crate::posts::entity as post;
+
+impl AbilityFactory for AppAbility {
+    type Actor = Claims;
+
+    fn define(&self, actor: &Self::Actor, ability: &mut AbilityBuilder) {
+        ability.can(Action::Read, post::Entity);
+        if actor.is_admin() {
+            ability.can(Action::Manage, post::Entity);
+        }
+    }
+}
+```
+
+Anyone signed in may read; only an admin may write.
+
+Restart, mint a plain token and a `{"roles":["admin"]}` one from
+`POST /auth/dev-token`, and `POST /posts` answers `201` for the second and
+`403` for the first — with no check in the handler. That is the same mechanism
+this page just walked through, at the size your domain is.
+
+## What the reference feature has
 
 - A `UsersController` guarded by `AuthnGuard` + `AuthzGuard` — every
   route requires a valid JWT and a matching ability.

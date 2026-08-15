@@ -141,5 +141,14 @@ fn print_next_steps(
         println!();
         println!("Also created the auth adapter (identity/, authn/, authz/) the guards need,");
         println!("plus a development HS256 secret in `.env` — replace it before deploying.");
+        println!();
+        // The adapter includes a route that mints bearer tokens with no
+        // credential — announced here because `g resource` writes it as a side
+        // effect, so a reader who never ran `g auth` would meet it only in a
+        // boot warning whose remedy is to import it.
+        println!("It includes `POST /auth/dev-token`, which mints a token with no credential so");
+        println!("your guarded routes are callable at once. It refuses to boot outside");
+        println!("development and test. Import `features::authn::AuthnHttpModule` to serve it,");
+        println!("or delete `crates/features/src/authn/http/` and write the real login route.");
     }
 }

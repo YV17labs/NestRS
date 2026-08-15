@@ -1,8 +1,8 @@
-use schemars::JsonSchema;
+use nest_rs::resource::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[wire_enum]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Admin,

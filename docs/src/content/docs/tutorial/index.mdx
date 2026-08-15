@@ -9,9 +9,17 @@ import { Aside, FileTree, LinkCard, CardGrid } from '@astrojs/starlight/componen
 
 You ship one feature — **`posts`** — into the [**Publish**](/publish/) story's
 **`blog`** app: entity, service, a `PostsController` behind the guards,
-validation, Postgres, and an e2e test. No GraphQL — that mirror lives in
-[`api`](/publish/). Each page leaves you with code that compiles and a command
-you can run.
+validation, Postgres, and an e2e test. Each page leaves you with code that
+compiles and a command you can run.
+
+**Pages 1–7 build your `blog`. Pages 8 and 9 read the reference `api`.** That
+is a deliberate switch, and worth knowing before you reach it: `blog`'s `Post`
+has an id, a title and a body — no tenant column, no relation — because a small
+domain is what makes pages 2 to 7 short. Per-caller row filtering and an
+auto-resolved GraphQL relation both need a domain that has those things, so the
+last two pages walk through the feature that does (`api`'s `users`) rather than
+first sending you to add a column you have no use for. You still finish each
+one with something to do in your own `blog`.
 
 ## What you end up with
 
@@ -45,10 +53,11 @@ writes on page 4 — a DB-backed route is guarded from its first request.
           - mod.rs
 </FileTree>
 
-Two `curl`s against the running binary, carrying the development token you
-sign on [Persist through Postgres](/tutorial/database/). The bearer is not
-optional: `Repo` filters every read by the caller's ability, so the guards go
-on with the database, not later.
+Two `curl`s against the running binary, carrying the development token
+`POST /auth/dev-token` mints on
+[Persist through Postgres](/tutorial/database/). The bearer is not optional:
+`Repo` filters every read by the caller's ability, so the guards go on with
+the database, not later.
 
 ```bash frame="terminal"
 $ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
@@ -95,8 +104,8 @@ If you cloned **this** repository to explore Publish, scaffold `hello` and
   <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="DatabaseModule, migrations, transactional writes." />
   <LinkCard title="6. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />
   <LinkCard title="7. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e/main.rs against an EphemeralDatabase." />
-  <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Login, AppAbility, Bind — narrow step 4's blanket Manage rule into the per-caller access you lived on step 3." />
-  <LinkCard title="9. Mirror on GraphQL" href="/tutorial/graphql/" description="A UsersResolver over the same service, ability, and dataloader." />
+  <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Read the reference api: AppAbility, Bind, response masking — the per-caller access you lived on step 3, then narrow blog's blanket Manage rule yourself." />
+  <LinkCard title="9. Mirror on GraphQL" href="/tutorial/graphql/" description="Read the reference api: a UsersResolver over the same service, ability, and dataloader — then add one to blog's posts." />
 </CardGrid>
 
 <Aside type="tip">

@@ -8,11 +8,12 @@ sidebar:
 import { FileTree, Aside } from '@astrojs/starlight/components';
 
 <Aside type="caution">
-This page applies to **`api`**, not **`blog`**. The tutorial app
-mounts HTTP only; GraphQL ships on the full Publish API.
+This page reads the reference **`api`**, not your **`blog`**. The auto-resolved
+relation needs a relation, and `blog`'s `Post` has none. The last section adds
+a resolver to your own `posts` — everything but that field carries over.
 </Aside>
 
-You add a GraphQL adapter to the same feature — a single resolver
+The reference feature gains a GraphQL adapter — a single resolver
 struct, two operations, zero changes to the service. By the end of this
 page, `POST /graphql` answers `{ users { id name } }` against the same
 authn, the same ability, the same Postgres rows, and the `User.org`
@@ -38,12 +39,11 @@ use nest_rs::graphql::{crud, resolver};
 use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
-use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -99,9 +99,11 @@ are different:
 | `Bind<Read, UsersService>` extractor | `bind::<Read, UsersService>(ctx, &id).await?` call | Load the row through the service, refuse it on a denied ability |
 | `Ctx<Claims>` extractor | `ctx.data::<Claims>()?` call | Read the principal the authz bridge seeded |
 
-The same `#[use_guards(AuthnGuard, AuthzGuard)]` declaration on the
-resolver struct — the markers are the same, the access graph checks
-the same thing.
+The same `#[use_guards(...)]` declaration on the resolver struct — the
+markers are the same, the access graph checks the same thing. It names
+`AuthzGuard` alone here because `apps/api` already declares `AuthnGuard`
+with `use_guards_global`, and a guard bound at two scopes still runs
+exactly once: scope chooses the site, never the count.
 
 ## The GraphQL module
 
@@ -256,7 +258,23 @@ type Query {
 The dev run emits the SDL on demand — one env var, no extra binary to
 install. Commit the file and assert on it if you want a drift gate.
 
-## What you have now
+## Now mirror your own `blog`
+
+`posts` already has the entity, the service and the policy — a resolver is one
+more adapter over them:
+
+```bash frame="terminal"
+$ nestrs g graphql posts
+```
+
+That writes `crates/features/src/posts/graphql/{resolver.rs,module.rs,mod.rs}`
+and wires `PostsGraphqlModule` into `blog`. Add `GraphqlModule::for_root(None)`
+to the app's imports, restart, and `POST /graphql` answers
+`{ posts { id title } }` through the same ability filter your HTTP routes go
+through. No `User.org` equivalent — that field is the one thing on this page
+that needs a relation `blog` does not have.
+
+## What the reference feature has
 
 - A `UsersResolver` mirroring the HTTP controller's operations, going
   through the same service and the same policy.

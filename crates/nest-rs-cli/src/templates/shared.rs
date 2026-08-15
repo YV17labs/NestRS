@@ -91,6 +91,14 @@ export {{env_prefix_var}} := "{{env_prefix}}"
 
 "#;
 
+/// Why the `dev` recipe sets `<PREFIX>_ENV` on the command line — the workspace
+/// and standalone Justfiles differ in every other line of that recipe, but this
+/// story is one story and drifts the moment it is told twice.
+pub const DEV_RECIPE_NOTE: &str = r#"# `{{env_prefix}}_ENV` is set here rather than in `.env`: it selects the `.env`
+# cascade, so it has to exist before any file is read. It also arms every
+# development-only affordance (the `POST /auth/dev-token` route `nestrs g auth`
+# writes), which is why absence has to mean "not development" everywhere else."#;
+
 /// The same, baked into the image — overridable at `docker run` time, so one
 /// image can still be run under another prefix.
 pub const ENV_PREFIX_DOCKERFILE: &str = r#"
@@ -158,7 +166,10 @@ pub const ENV_WORKSPACE: &str = r#"# {{env_label}} — committed base config (`.
 #   >  .env.<{{env_prefix}}_ENV>  >  .env
 "#;
 
-pub const ENV_DEVELOPMENT: &str = r#"# {{env_label}} — development-only overrides ({{env_prefix}}_ENV=development, the default).
+pub const ENV_DEVELOPMENT: &str = r#"# {{env_label}} — development-only overrides. An unset {{env_prefix}}_ENV still loads
+# this cascade, but arms no development-only affordance: those need it set, on the
+# process, to development, dev or test — `nestrs run dev` does it. Setting it here
+# would be too late and is refused at boot.
 # Committed; layered on top of `.env`, below `.env.local` and the real environment.
 
 # Verbose, human-readable logs while developing.

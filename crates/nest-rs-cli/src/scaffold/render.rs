@@ -60,13 +60,15 @@ impl Renderer {
         // enforces.
         put("env_prefix", crate::context::DEFAULT_ENV_PREFIX.to_owned());
         put("env_prefix_var", crate::context::ENV_PREFIX_VAR.to_owned());
-        // The two lines that *set* the prefix on the processes a project starts
-        // — empty unless overridden, because a project on the default sets
-        // nothing. Seeded here rather than only in `with_env_prefix`: a renderer
-        // that forgot the override would otherwise write the placeholder itself
-        // into a Justfile, which no compiler would ever notice.
-        put("env_prefix_export", String::new());
-        put("env_prefix_env", String::new());
+        // Every key whose value depends on the prefix, seeded from the same
+        // list `with_env_prefix` re-seeds from — so "the override fills nothing
+        // the default leaves empty" holds by construction rather than by a test
+        // comparing two lists. A renderer that never takes the override path
+        // would otherwise write the placeholder itself into a Justfile, which
+        // no compiler would ever notice.
+        for (key, value) in crate::commands::prefix_vars(crate::context::DEFAULT_ENV_PREFIX) {
+            put(key, value);
+        }
         Self { vars }
     }
 

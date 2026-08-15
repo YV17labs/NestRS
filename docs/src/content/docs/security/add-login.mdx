@@ -21,9 +21,24 @@ Three pieces, two of which you already have:
 ## 1. Issue a token on `POST /login`
 
 **This slice is yours to write.** `nestrs g auth` writes the two guards, the
-`Claims` they name and the ability policy — but *not* a login route: what
-counts as a credential, where users live and what the token carries are domain
-decisions. The parts underneath are in the box, so the handler stays thin:
+`Claims` they name, the ability policy — and a `POST /auth/dev-token` route
+that mints a token with no credential at all, so a scaffolded app can call its
+own guarded routes from the first minute. That route refuses to boot outside
+development and test, which is exactly why it is not the login: what counts as
+a credential, where users live and what the token carries are domain decisions.
+Delete `crates/features/src/authn/http/` once the route below exists.
+
+**What keeps it out of production is `NESTRS_ENV`, and absence counts as
+production.** The route arms only when the variable positively reads
+`development` or `test` — not "unless it reads `production`", because the
+variable is unset in a fresh scaffold, in a container, and in most CI, and a
+default of "development" would leave a token minter serving wherever nobody
+thought to set it. `just dev` sets it; nothing else does. The check runs twice:
+`DevTokenAudit` refuses the boot, so a deployment that kept the file finds out
+at start-up, and the handler asks again per request, so registering the
+controller from some other module buys nothing.
+
+The parts underneath the real login are in the box, so the handler stays thin:
 `hash_password` / `verify_password` / `burn_verify` (argon2, constant-time),
 `CredentialError` (one opaque `invalid credentials` for every failure mode),
 and `JwtService::sign`. `LoginDto`, `AccessTokenDto` and the `grant_password`

@@ -105,8 +105,10 @@ pub const JUSTFILE: &str = r#"{{env_prefix_export}}_default:
 
 # Run the app with auto-reload — watches the source, rebuilds and restarts on
 # save (loads `.env` / `.env.development` from the project root).
+#
+{{dev_recipe_note}}
 dev:
-    bacon run-long
+    {{env_prefix}}_ENV=development bacon run-long
 
 # Run an optimized build.
 start:

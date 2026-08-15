@@ -14,5 +14,8 @@ pub use generate::{
 };
 pub use info::{InfoOptions, run as run_info};
 pub use new::{NewOptions, project_dir_for_check, run as run_new, run_cargo_check};
+// The prefix-dependent renderer keys, seeded by `Renderer::new` and re-seeded by
+// `--env-prefix` from the same list.
+pub(crate) use new::prefix_vars;
 pub use run::{RunOptions, run as run_task};
 pub use update::{UpdateOptions, run as run_update};

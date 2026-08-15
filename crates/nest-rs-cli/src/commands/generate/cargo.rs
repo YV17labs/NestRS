@@ -132,7 +132,10 @@ pub fn entity_deps() -> Vec<&'static Dep> {
 
 /// The crates the authn/authz adapter (`g auth`) needs.
 pub fn auth_deps() -> Vec<&'static Dep> {
-    vec![&AUTHN, &AUTHZ, &SERDE, &UUID]
+    // `RESOURCE` is what `#[wire_enum]` on `Role` needs: the principal's role
+    // enum is named by `Claims` *and* by the development token DTO, so it
+    // carries the wire derives rather than serde alone.
+    vec![&AUTHN, &AUTHZ, &RESOURCE, &SERDE, &UUID]
 }
 
 /// The crates the `migrations` + `seed` bootstrap crates need — the union of

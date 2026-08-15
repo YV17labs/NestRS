@@ -316,4 +316,48 @@ mod tests {
             "a field the env does not set keeps the pinned value",
         );
     }
+    /// A trailing slash is *legal*, so this cannot be a boot failure — which is
+    /// why the warning has to be right: it is the only thing a deployment whose
+    /// clients compare identifiers byte-for-byte will ever see.
+    #[test]
+    fn a_trailing_slash_is_accepted_and_reported() {
+        let logs = nest_rs_testing::LogCapture::install();
+        valid()
+            .with_resource("https://api.example.com/")
+            .into_metadata()
+            .expect("a trailing slash is discouraged, never refused");
+
+        let event = logs
+            .find(
+                "nest_rs::authn",
+                "resource URI ends in a trailing slash; clients are told to prefer the \
+                 form without one",
+            )
+            .into_iter()
+            .next()
+            .expect("the discouraged form reports itself");
+        assert_eq!(event.level, "warn");
+        assert_eq!(
+            event.field("uri").as_deref(),
+            Some("https://api.example.com/"),
+            "and it quotes the URI, so an operator running several resources knows \
+             which one to fix: {event:?}",
+        );
+    }
+
+    /// The other half, and the reason the first is worth pinning: a warning that
+    /// also fires on the good shape teaches operators to filter the target out.
+    #[test]
+    fn the_canonical_form_is_silent() {
+        let logs = nest_rs_testing::LogCapture::install();
+        valid().into_metadata().expect("canonical");
+        assert!(
+            logs.find(
+                "nest_rs::authn",
+                "resource URI ends in a trailing slash; clients are told to prefer the \
+                 form without one",
+            )
+            .is_empty(),
+        );
+    }
 }

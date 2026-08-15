@@ -76,27 +76,19 @@ where
         // for this refusal, never a check of its own.
         let missing = ability.missing_scopes(A::ACTION, TypeId::of::<S>());
         if missing.is_empty() {
-            tracing::warn!(
-                target: "nest_rs::authz",
-                action = ?A::ACTION,
-                subject = std::any::type_name::<S>(),
-                reason = "no_class_grant",
-                "authorization denied",
-            );
+            // Through the shared emitter, not beside it: three sites wrote this
+            // one event and only two carried `transport`, so an operator
+            // filtering denials by transport saw every edge except this one.
+            crate::gate::warn_denied::<A, S>("http", None, Some("no_class_grant"));
             return Err(denial_to_http_error(Denial::forbidden("forbidden")));
         }
         // A token that verified but is too narrow. The scopes ride to the edge,
         // where the resource-server interceptor turns them into the RFC 6750
         // `insufficient_scope` challenge — so the client learns what to ask the
         // authorization server for instead of retrying the same token.
-        tracing::warn!(
-            target: "nest_rs::authz",
-            action = ?A::ACTION,
-            subject = std::any::type_name::<S>(),
-            scopes = ?missing,
-            reason = "insufficient_scope",
-            "authorization denied",
-        );
+        // The scopes ride on the `Denial`, and the denial line stays the shared
+        // one: an event named once is an event queried once.
+        crate::gate::warn_denied::<A, S>("http", None, Some("insufficient_scope"));
         Err(denial_to_http_error(Denial::insufficient_scope(
             missing,
             "forbidden",

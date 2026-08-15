@@ -57,9 +57,39 @@ async fn a_mounted_guard_rejects_before_the_handler_runs() {
 // pool fails closed rather than serving the tool surface open.
 #[tokio::test]
 async fn endpoint_without_an_explicit_guard_is_denied_by_default() {
+    let logs = nest_rs_testing::LogCapture::install();
     let open = endpoint(McpMount::deny_all(), || DummyHandler);
     let resp = TestClient::new(open).post("/").send().await;
     assert_eq!(resp.0.status(), StatusCode::UNAUTHORIZED);
+
+    // Failing closed is only half the contract: an endpoint that refuses
+    // everything because nobody wired a guard looks exactly like one that
+    // refuses because the caller is unauthorized. The deploy that gets this
+    // wrong learns it from this line or not at all, so the line is asserted
+    // rather than assumed. Single-thread runtime — `LogCapture` is thread-local.
+    let announced = logs
+        .find(
+            "nest_rs::mcp",
+            "no operation guard registered — mcp endpoint is deny-all",
+        )
+        .into_iter()
+        .next()
+        .expect("an endpoint that fell back to deny-all says so at boot");
+    assert_eq!(announced.level, "warn");
+    assert_eq!(announced.field("mode").as_deref(), Some("deny_all"));
+
+    let denial = logs
+        .find("nest_rs::mcp", "mcp operation denied")
+        .into_iter()
+        .next()
+        .expect("and each refusal it then serves is reported too");
+    assert_eq!(denial.level, "warn");
+    assert_eq!(
+        denial.field("reason").as_deref(),
+        Some("no McpOperationGuard registered"),
+        "naming the cause, so an operator can tell a missing wiring from a \
+         refused caller: {denial:?}",
+    );
 }
 
 // The explicit opt-in counterpart to deny-all: wiring `AllowAllMcpGuard`

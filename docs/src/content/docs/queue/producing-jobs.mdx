@@ -23,19 +23,28 @@ convention is to keep payloads small: a reference to the work, not the
 work itself.
 
 ```rust title="crates/features/src/audio/command.rs"
-use nest_rs::queue::queue;
+use nest_rs::queue::{QueueName, queue};
 use serde::{Deserialize, Serialize};
 
-/// Imperative payload for the `audio` queue — "transcode this file".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscodeCommand {
     pub file: String,
 }
 
-/// The queue's identity: wire name + payload, in one artifact.
 #[queue(name = "audio", job = TranscodeCommand)]
 pub struct AudioQueue;
+
+pub const AUDIO_QUEUE: &str = <AudioQueue as QueueName>::NAME;
 ```
+
+**Plain `serde` derives, not `#[input]`** — the one place the wire-DTO
+shorthand is the wrong tool. `#[input]` carries `deny_unknown_fields`, which
+is right at an edge a client controls and wrong on a producer↔worker contract:
+a producer one deploy ahead that adds a field would have every job it enqueues
+refused by the older worker, and a decode failure aborts rather than retries,
+so the job [dead-letters](/queue/retries-and-failure/) on its first attempt.
+Adding a field to a payload has to be survivable, and that means accepting one
+you do not know yet.
 
 A queue payload is named for the boundary it crosses: an imperative
 "do X" handled by one processor is a **`Command`** (`command.rs` at the

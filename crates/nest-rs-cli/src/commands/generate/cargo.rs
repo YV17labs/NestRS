@@ -162,7 +162,11 @@ pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
         Transport::Http => vec![],
         Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL],
         Transport::Ws => vec![&WS, &TRACING],
-        Transport::Queue => vec![&REDIS, &ANYHOW, &TRACING],
+        // `SERDE`: the payload `g queue` writes at the port carries plain
+        // derives rather than `#[input]` — a producer↔worker contract has to
+        // accept a field a newer producer added, and `deny_unknown_fields`
+        // would dead-letter those jobs on their first attempt.
+        Transport::Queue => vec![&REDIS, &ANYHOW, &TRACING, &SERDE],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW, &TRACING],
         Transport::Mcp => vec![&MCP],
     }

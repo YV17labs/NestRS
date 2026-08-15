@@ -190,7 +190,10 @@ struct PipedArg {
 }
 
 pub(crate) fn mcp_impl(args: TokenStream, item: ItemImpl) -> TokenStream {
-    if let Err(err) = reject_args(&args) {
+    if let Err(err) = crate::mcp::MCP_PAIR.reject_args(
+        &TokenStream2::from(args),
+        "the endpoint's path and identity are declared by",
+    ) {
         return err.to_compile_error().into();
     }
     match expand(item) {
@@ -199,29 +202,12 @@ pub(crate) fn mcp_impl(args: TokenStream, item: ItemImpl) -> TokenStream {
     }
 }
 
-/// `#[tools]` takes nothing: what the endpoint *is* is declared on the struct
-/// by `#[mcp]`, and what each operation does on its own method.
-fn reject_args(args: &TokenStream) -> syn::Result<()> {
-    if args.is_empty() {
-        return Ok(());
-    }
-    Err(syn::Error::new(
-        proc_macro2::Span::call_site(),
-        "#[tools] takes no arguments — the endpoint's path and identity are \
-         declared by #[mcp] on the struct, and each operation is described by its \
-         own #[tool(description = \"…\")] / #[prompt(description = \"…\")]",
-    ))
-}
-
 fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
-    if let Some((_, path)) = &item.trait_ {
-        return Err(syn::Error::new_spanned(
-            path,
-            "#[tools] decorates the inherent impl that holds a host's #[tool] and \
-             #[prompt] methods. A hand-written `impl ServerHandler` stays as it \
-             is — reach for rmcp directly there",
-        ));
-    }
+    // The trait-impl refusal used to be worded here, and it was the only one of
+    // the nine impl halves that had an answer at all. It is now
+    // `DecoratorPair::parse_operations`, so every half says it and says it the
+    // same way; a hand-written `impl ServerHandler` (the escape hatch a host
+    // with no `#[tools]` block takes) is what the shared sentence redirects to.
     reject_http_only_layers(&item.attrs, "MCP", "host")?;
     if let Some(attr) = item.attrs.iter().find(|a| a.path().is_ident("use_guards")) {
         return Err(syn::Error::new_spanned(

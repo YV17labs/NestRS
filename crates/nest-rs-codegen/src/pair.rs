@@ -191,11 +191,36 @@ impl DecoratorPair {
     /// Parse the **impl** half's input, naming the struct half when the
     /// developer decorated the struct instead.
     ///
-    /// Returns the `impl` as written; a half that additionally refuses a *trait*
-    /// impl (`#[tools]`) checks that itself — the distinction is its own, not
-    /// every pair's.
+    /// Returns the `impl` as written, and refuses a **trait** impl for every
+    /// pair: it parses as an `Item::Impl` like any other, so the shape check
+    /// alone waves it through and the expansion collects nothing. Eight of the
+    /// nine halves had no answer to that shape at all and one wrote its own,
+    /// which is the drift this const exists to prevent.
     pub fn parse_operations(&self, input: TokenStream) -> syn::Result<ItemImpl> {
         match syn::parse2::<Item>(input)? {
+            // A trait impl parses as an `Item::Impl` like any other, so the
+            // shape check above waves it through — and the expansion then
+            // collects nothing, because the methods it looks for are the
+            // trait's. The half is accepted, the route or the tick declared
+            // there never exists, and nothing says so. Refused here rather than
+            // per decorator: eight of nine had no answer at all, the ninth
+            // worded its own, and one sentence is what keeps the nine from
+            // drifting apart.
+            Item::Impl(item) if item.trait_.is_some() => {
+                let (path, _) = item.trait_.as_ref().expect("just matched as some");
+                let subject = item.self_ty.to_token_stream();
+                Err(syn::Error::new_spanned(
+                    path,
+                    format!(
+                        "{operations} decorates the inherent impl holding the {collects} \
+                         methods — this one implements `{implemented}` for `{subject}`, whose \
+                         methods answer to that trait. Move it to `impl {subject} {{ … }}`",
+                        operations = self.operations,
+                        collects = self.collects,
+                        implemented = path.to_token_stream(),
+                    ),
+                ))
+            }
             Item::Impl(item) => Ok(item),
             other => Err(syn::Error::new_spanned(
                 other,

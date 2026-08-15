@@ -1,0 +1,5 @@
+error: #[tools] takes no arguments; the endpoint's path and identity are declared by #[mcp], and each operation by #[tool] / #[prompt]
+  --> tests/integration/diagnostics/tools_takes_no_arguments.rs:10:9
+   |
+10 | #[tools(name = "x")]
+   |         ^^^^^^^^^^

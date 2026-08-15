@@ -1,0 +1,5 @@
+error: #[routes] decorates the inherent impl holding the #[get] / #[post] / #[put] / #[patch] / #[delete] methods — this one implements `Default` for `DemoController`, whose methods answer to that trait. Move it to `impl DemoController { … }`
+  --> tests/integration/diagnostics/routes_on_a_trait_impl.rs:11:6
+   |
+11 | impl Default for DemoController {
+   |      ^^^^^^^

@@ -1,0 +1,5 @@
+error: #[messages] decorates the inherent impl holding the #[subscribe_message] / #[on_connect] / #[on_disconnect] methods — this one implements `Default` for `DemoGateway`, whose methods answer to that trait. Move it to `impl DemoGateway { … }`
+  --> tests/integration/diagnostics/messages_on_a_trait_impl.rs:11:6
+   |
+11 | impl Default for DemoGateway {
+   |      ^^^^^^^

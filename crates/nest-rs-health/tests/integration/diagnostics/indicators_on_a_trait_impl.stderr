@@ -1,0 +1,5 @@
+error: #[indicators] decorates the inherent impl holding the #[liveness] / #[readiness] / #[startup] methods — this one implements `Default` for `DemoProvider`, whose methods answer to that trait. Move it to `impl DemoProvider { … }`
+  --> tests/integration/diagnostics/indicators_on_a_trait_impl.rs:11:6
+   |
+11 | impl Default for DemoProvider {
+   |      ^^^^^^^

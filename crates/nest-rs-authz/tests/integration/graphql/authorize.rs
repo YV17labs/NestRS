@@ -177,8 +177,14 @@ async fn a_visitor_grant_still_reaches_a_public_operation() {
     assert_eq!(json["data"]["widgetMotd"], "hello", "{json}");
 }
 
+/// The refusal reaches the caller *and* the operator. The second half is what
+/// an incident queries, and it was asserted nowhere: `warn_denied` is the one
+/// emitter all four transports reach, so a field dropped here goes dark
+/// everywhere at once. Single-thread runtime on purpose — `LogCapture` is
+/// thread-local.
 #[tokio::test]
 async fn non_admin_is_forbidden_by_the_resolver_gate() {
+    let logs = nest_rs_testing::LogCapture::install();
     let app = boot().await;
     // GraphQL reports authorization failures as a 200 response carrying an
     // `errors` array, not an HTTP status.
@@ -186,5 +192,27 @@ async fn non_admin_is_forbidden_by_the_resolver_gate() {
     assert_eq!(
         json["errors"][0]["extensions"]["code"], "FORBIDDEN",
         "{json}"
+    );
+
+    let event = logs
+        .find("nest_rs::authz", "authorization denied")
+        .into_iter()
+        .next()
+        .expect("a refused operation is reported to the operator, not only to the caller");
+    assert_eq!(
+        event.level, "warn",
+        "a denial is a security event: `warn` or above, never `debug`",
+    );
+    assert_eq!(event.field("transport").as_deref(), Some("graphql"));
+    assert!(
+        event.field("subject").is_some_and(|s| s.contains("widget")),
+        "the denial names the subject it refused, or an incident cannot tell \
+         which entity was reached for: {event:?}",
+    );
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("no_class_grant"),
+        "and why, which is what separates a missing grant from a missing \
+         principal when the two render the same to the caller: {event:?}",
     );
 }

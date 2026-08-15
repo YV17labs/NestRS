@@ -176,11 +176,33 @@ struct OpenModule;
 
 #[tokio::test]
 async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
+    let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::for_module::<OpenModule>()
         .await
         .expect("an implicit access decision is a warning, not a boot failure");
     // The route is served — the posture check observes, it does not gate.
     app.http().post("/thing").send().await.assert_status_is_ok();
+
+    // The whole value of an observing check is the line it prints: the route is
+    // served either way, so a deploy learns its access posture was implicit here
+    // or nowhere. The test asserted the boot and the 200 and never the warning,
+    // which left the one thing that distinguishes this from a working app
+    // unpinned. Single-thread runtime — `LogCapture` is thread-local.
+    let event = logs
+        .find("nest_rs::layers", "unguarded routes detected")
+        .into_iter()
+        .next()
+        .expect("a route deciding access implicitly is named at boot");
+    assert_eq!(event.level, "warn");
+    assert!(
+        event.field("routes").is_some_and(|r| r.contains("/thing")),
+        "and the line names the routes, not just how many: a count sends the \
+         reader looking through the whole table: {event:?}",
+    );
+    assert!(
+        event.field("hint").is_some(),
+        "with the remedy, since a warning that cannot be acted on is noise: {event:?}",
+    );
 }
 
 /// Two controllers claiming the same prefix. Each `nest`s under it, so the

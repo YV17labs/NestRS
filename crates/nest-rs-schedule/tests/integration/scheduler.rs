@@ -294,6 +294,66 @@ fn tick_succeed(_: &Container) -> RunFuture<'_> {
     Box::pin(async { Ok(()) })
 }
 
+fn tick_panic_naming_itself(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        panic!("boom from {}", "a job that names its own failure");
+    })
+}
+
+/// A contained panic's only trace is this field, so the field has to carry what
+/// the job said. `a_panicking_job_keeps_firing_and_does_not_stop_others` asserts
+/// the schedule survives and is blind to the sentence — which is how
+/// `panic_message(&panic)` shipped, unsizing the `Box` itself into the trait
+/// object and answering `<non-string panic payload>` to every operator query.
+/// Single-thread runtime for the reason above: `LogCapture` is thread-local.
+#[tokio::test]
+async fn a_panicking_jobs_own_message_reaches_the_operator() {
+    struct NamedPanicHost;
+
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = Container::builder()
+        .attach_meta::<NamedPanicHost, CronJobMeta>(CronJobMeta {
+            provider: "NamedPanicHost",
+            method: "panics",
+            trigger: Trigger::Interval(Duration::from_millis(50)),
+            run: tick_panic_naming_itself,
+            transaction: JobTransaction::PerAttempt,
+        })
+        .build();
+
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins despite a panicking job")
+        .expect("serve returns Ok despite a panicking job");
+
+    let event = logs
+        .find(
+            "nest_rs::schedule",
+            "scheduled job panicked; the schedule continues",
+        )
+        .into_iter()
+        .next()
+        .expect("a contained panic is reported at error");
+    assert_eq!(event.level, "error");
+    assert_eq!(event.field("provider").as_deref(), Some("NamedPanicHost"));
+    assert_eq!(
+        event.field("panic").as_deref(),
+        Some("boom from a job that names its own failure"),
+        "the field carries the payload's own sentence, not the placeholder a \
+         borrowed box downcasts to: {event:?}",
+    );
+}
+
 /// The job body returns `Ok` and its writes never landed, so the schedule has
 /// to say so — its only outcome being the event an operator reads. Single-thread
 /// runtime on purpose: `LogCapture` is thread-local, and the scheduler's spawned

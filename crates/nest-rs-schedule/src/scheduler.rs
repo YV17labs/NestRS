@@ -351,7 +351,11 @@ async fn fire(id: JobId, task: Task, container: &Container, ctx: &Option<Arc<dyn
             target: "nest_rs::schedule",
             provider = id.provider,
             method = id.method,
-            panic = panic_message(&panic),
+            // `panic.as_ref()`, never `&panic`: a `Box<dyn Any + Send>` is itself
+            // `Any`, so the borrow unsizes to a trait object *of the box* and every
+            // downcast inside `panic_message` misses — the operator reads
+            // `<non-string panic payload>` whatever the job said.
+            panic = panic_message(panic.as_ref()),
             "scheduled job panicked; the schedule continues",
         ),
     }

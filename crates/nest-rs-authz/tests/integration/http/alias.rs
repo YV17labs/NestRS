@@ -140,9 +140,25 @@ async fn boot() -> TestApp {
 async fn an_aliased_authorize_still_gates_at_class_level() {
     // Extraction resolves the *type*, not its written name, so the 403 gate
     // survives a rename.
+    let logs = nest_rs_testing::LogCapture::install();
     let app = boot().await;
     let denied = app.http().get("/gadgets/aliased/probe").send().await;
     assert_eq!(denied.0.status(), poem::http::StatusCode::FORBIDDEN);
+
+    // The 403 is what the caller sees; this is what the operator sees, and it
+    // is the half an incident queries. A denial emitted bare — or at `debug` —
+    // is a security gap rather than a style nit.
+    let event = logs
+        .find("nest_rs::authz", "authorization denied")
+        .into_iter()
+        .next()
+        .expect("a class-level refusal reports itself on nest_rs::authz");
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("transport").as_deref(), Some("http"));
+    assert!(
+        event.field("subject").is_some_and(|s| s.contains("gadget")),
+        "the denial names the subject it refused: {event:?}",
+    );
 }
 
 #[tokio::test]

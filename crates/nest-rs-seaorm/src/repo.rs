@@ -34,10 +34,21 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
         // denies exactly like a request. `Job` is the only unscoped tag.
         None if current_executor_scope() == Some(ExecutorScope::Job) => Condition::all(),
         None => {
+            // Read once: the match guard above already consulted it, and the
+            // event below wants the same answer.
+            let scope = current_executor_scope();
+            // The hint travels with the event, because the *symptom* does
+            // not: a route in this state answers `200 []`, which reads as a
+            // business bug and sends the developer to their query. The two
+            // fixes are the only two ways an ability is installed, so naming
+            // both is naming the whole answer.
             tracing::warn!(
                 target: "nest_rs::orm",
                 entity = std::any::type_name::<E>(),
                 ?action,
+                scope = ?scope,
+                hint = "bind #[use_guards(AuthnGuard, AuthzGuard)], or — on a #[public] \
+                          route — take the `Authorize<A, E>` parameter that arms the shaper",
                 "no ambient Ability outside a worker job — denying all rows",
             );
             Condition::all().add(Expr::cust("1 = 0"))

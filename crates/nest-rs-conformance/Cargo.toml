@@ -1,0 +1,24 @@
+[package]
+name = "nest-rs-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Joins the framework's own families against the suites that cover them: a member the framework declares and no test names is a failure, not an oversight."
+# Internal proof crate — never published. It ships no capability; the proof is
+# that its suite fails when a family grows a member nobody covers.
+publish = false
+
+[dependencies]
+# A join reads Rust with Rust's own parser rather than with a regex: a
+# `\`-continued message and a `#[cfg(test)]` block are the two things a text
+# scan gets wrong, and both cost a false reading here before this crate existed.
+syn = { workspace = true, features = ["visit"] }
+
+[dev-dependencies]
+proc-macro2 = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,124 @@
+---
+title: MCP authorization
+description: The operation guard every MCP capability is gated by, the mandatory posture, and what a deny-all endpoint looks like.
+sidebar:
+  label: Authorization
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Authorization
+
+The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To
+authenticate instead — bearer JWT, ability, row-level filtering — import
+`AuthzMcpModule`, which binds
+[`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
+endpoint's `dyn McpOperationGuard` (mirroring `AuthzHttpModule`,
+`AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
+re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
+the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
+in the same order, from the same `run_ability_chain`, nothing re-implemented per
+transport.
+
+```rust title="src/module.rs"
+#[module(
+    imports = [
+        HttpModule::for_root(None),
+        DatabaseModule::for_root(None),
+        AuthnModule,
+        AuthzMcpModule,
+    ],
+    providers = [HelloTool],
+)]
+pub struct AssistantModule;
+```
+
+With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
+endpoint's guard, so the closed default is replaced, not silenced (a registered
+bridge also replaces the global-pool fallback: it runs the same guards itself,
+so nothing runs twice). Tools then
+read the ambient ability the same way HTTP handlers do: through a service that
+goes through `Repo`, which applies the ability's row-level filter automatically.
+A tool that lists users gets only the users the caller is allowed to see — same
+policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
+[per-transport bridges](/security/authorization/per-transport-bridges/) page for
+the four-transport story.
+
+The bridge answers *who is calling*. Each operation then declares what it is,
+with the same two attributes a `#[query]` takes:
+
+```rust title="src/users/mcp/tool.rs"
+#[tools]
+impl UsersTool {
+    #[tool(description = "List the people the caller may see.")]
+    #[authorize(Read, UserEntity)]
+    async fn list_people(&self) -> Result<Json<Vec<User>>, McpError> {
+        Ok(Json(CrudService::list(&*self.svc).await.opaque()?
+            .iter().map(User::from).collect()))
+    }
+}
+```
+
+`#[authorize(Action, Entity)]` emits the class-level gate before the body and
+masks the returned value through the caller's field grants after it — the tool
+writes neither. `#[public]` is the other half: no gate, no mask, and the
+endpoint's own guard still authenticated the request.
+
+For an answer that is a **capability** rather than a row — a presigned URL, a
+computed report — there is no entity to gate, so bind a guard beside the
+operation instead. `#[use_guards(...)]` works per host and per operation, and
+the app-wide pool joins them in one chain deduplicated by type, so a guard
+declared at two scopes still checks the operation once:
+
+```rust title="src/audio/mcp/tool.rs"
+    #[tool(description = "Report whether an uploaded file has been transcoded.")]
+    #[public]
+    #[use_guards(TranscodeGuard)]
+    async fn transcode_status(&self, /* … */) -> Result<String, McpError> { /* … */ }
+```
+
+One `Guard` impl serves both transports: `check_http` reads the ability off the
+request, `check_mcp` reads the ambient one the bridge installed.
+
+Masking round-trips the value through the entity model, so it needs the full
+`#[expose]` shape to reconcile against — and MCP has no selection set to excuse
+a stripped **required** field, so such a mask fails the operation closed. A
+column a field grant may mask should be `Option` on the entity. When a tool
+deliberately answers with a narrower projection, say
+`#[authorize(Action, Entity, unmasked)]`: the gate and the row filter stay, and
+the projection *is* the field restriction.
+
+Guarding the endpoint closes it; it does not tell a client how to open it. The
+MCP authorization spec requires the server to publish that, so add
+`ProtectedResourceModule` and name the deployment:
+
+```rust title="src/module.rs"
+imports = [/* … */, ProtectedResourceModule::for_root(None)]
+```
+
+```bash
+NESTRS_AUTHN__RESOURCE=https://mcp.example.com
+NESTRS_AUTHN__AUTHORIZATION_SERVERS=https://auth.example.com
+NESTRS_AUTHN__AUDIENCE=https://mcp.example.com
+```
+
+Every `401` from `/mcp` then carries the RFC 9728 pointer, and
+`/.well-known/oauth-protected-resource` serves the document behind it:
+
+```
+www-authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"
+```
+
+That is the first hop of the client's flow — rmcp implements the rest of it, so
+an MCP client reaches your authorization server without being configured with
+its address. `NESTRS_AUTHN__AUDIENCE` becomes mandatory under this module: see
+[issuer and resource server](/security/authentication/issuer-and-resource-server/)
+for why a resource server that skips it can be handed someone else's token.
+
+## Going further
+
+- [MCP](/mcp/) — writing the tool this page gates.
+- [Authorization](/security/authorization/) — the ability the bridge installs.
+- [Response masking](/security/authorization/response-masking/) — what
+  `#[authorize]` arms on the way out.

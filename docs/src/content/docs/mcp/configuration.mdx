@@ -1,0 +1,97 @@
+---
+title: MCP configuration
+description: McpConfig and its NESTRS_MCP__* keys, plus how a failing operation answers a language model without leaking.
+sidebar:
+  label: Configuration
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Configuration
+
+`McpConfig` carries the streamable-HTTP options, dual-path like every
+`nest-rs-*` config: `NESTRS_MCP__*` env vars over an optional pinned base.
+Importing `McpModule` is what resolves it; without the import every mount runs
+on the defaults.
+
+```rust title="src/module.rs"
+#[module(imports = [
+    HttpModule::for_root(None),
+    McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+])]
+pub struct AssistantModule;
+```
+
+Pinning options *and* declaring the app's identity is the same one call — an `McpConfig`
+converts into an `McpOptions` whose `server` is empty, so write the whole value
+out when you need both:
+
+```rust title="src/module.rs"
+McpModule::for_root(McpOptions {
+    config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
+    server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
+}),
+```
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `NESTRS_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
+| `NESTRS_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
+| `NESTRS_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
+| `NESTRS_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
+| `NESTRS_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
+
+The host allowlist is a **security control**, and its default is why a
+deployment reached under a real hostname answers `403` until it names itself: a
+page on an attacker's origin can point its own hostname at `127.0.0.1` and POST
+to a locally running MCP server, which would otherwise answer with the user's
+tools and data. Name your hostnames; do not empty the list.
+
+The default looks strict for a public deployment, and that is the point:
+DNS rebinding only reaches a host the victim's browser can resolve to but the
+attacker cannot call directly — loopback and the local network. The vulnerable
+server is the developer's local one, which is exactly the one that configures
+nothing. A default of "off" would disarm the control in the only case the
+attack works. A refused `Host` is logged with the offending value; the
+effective allowlist is logged at `debug` when the endpoint mounts
+(`target: nest_rs::mcp`).
+
+The browser `Origin` half is **not** an MCP setting. It is the HTTP transport's
+CORS policy, `NESTRS_HTTP__CORS_ORIGINS`, and `/mcp` inherits it: the CORS layer
+wraps the whole route tree, and a disallowed `Origin` gets `403` on every
+method, not just the preflight. One knob, and it covers `/graphql` and `/ws`
+too.
+
+## Error handling
+
+`McpError` (re-exported as `nest_rs::mcp::McpError`, alias for rmcp's
+`ErrorData`) gives the model a structured failure with a JSON-RPC error code.
+Six constructors cover the common cases:
+
+| Constructor | When |
+|---|---|
+| `McpError::invalid_params(msg, data)` | The tool input was syntactically valid JSON but semantically wrong — range, missing required field, mutual exclusion |
+| `McpError::invalid_request(msg, data)` | The whole request shape was off |
+| `McpError::parse_error(msg, data)` | The JSON itself couldn't be parsed |
+| `McpError::method_not_found::<MethodName>()` | The client asked for a tool that doesn't exist on this server |
+| `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
+| `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
+
+A typical adapter for a domain error:
+
+```rust
+fn internal<E: std::fmt::Display>(e: E) -> McpError {
+    McpError::internal_error(e.to_string(), None)
+}
+```
+
+The `data` field accepts any JSON value — attach structured diagnostics there
+when the model would benefit from them (e.g. the validator's per-field errors).
+Anything beyond these six codes flows through `internal_error` — there is no
+custom-code constructor.
+
+## Going further
+
+- [MCP](/mcp/) — the server these options configure.
+- [Configuration](/configuration/) — the dual-path rule every module follows.

@@ -1,6 +1,8 @@
 ---
 title: MCP
 description: Expose services to language models via the Model Context Protocol — declared like a controller.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -70,7 +72,7 @@ impl HelloTool {
 Every operation declares its access posture, and one of the two forms is
 **required** — `#[public]` here because a greeting gates nothing. An operation
 nobody thought about does not compile, rather than shipping ungated to a model.
-[Authorization](#authorization) covers the other form.
+[Authorization](/mcp/authorization/) covers the other form.
 
 That's a complete MCP server — but a bare `#[mcp]` endpoint is **closed by
 default**. The endpoint gates through the app's `dyn McpOperationGuard`; with
@@ -100,7 +102,7 @@ pub struct HelloModule;
 `#[mcp]` mounts it on the existing HTTP transport — same port, same CORS, no
 second server. An MCP client pointed at `http://localhost:3003/mcp` sees one
 tool called `hello` and can invoke it. (To authenticate instead of opening it,
-see [Authorization](#authorization) below.)
+see [Authorization](/mcp/authorization/).)
 
 Two decorators, one per item shape:
 
@@ -155,114 +157,6 @@ the `hello` tool with `{ "name": "Ada" }`; the tool answers `Hello, Ada!`. That
 round trip — client → `/mcp` → your `#[tool]` method → response — is the whole
 surface. You have a running assistant, discovered and wired like any other
 provider.
-
-## Authorization
-
-The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To
-authenticate instead — bearer JWT, ability, row-level filtering — import
-`AuthzMcpModule`, which binds
-[`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
-endpoint's `dyn McpOperationGuard` (mirroring `AuthzHttpModule`,
-`AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
-re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
-the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
-in the same order, from the same `run_ability_chain`, nothing re-implemented per
-transport.
-
-```rust title="src/module.rs"
-#[module(
-    imports = [
-        HttpModule::for_root(None),
-        DatabaseModule::for_root(None),
-        AuthnModule,
-        AuthzMcpModule,
-    ],
-    providers = [HelloTool],
-)]
-pub struct AssistantModule;
-```
-
-With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
-endpoint's guard, so the closed default is replaced, not silenced (a registered
-bridge also replaces the global-pool fallback: it runs the same guards itself,
-so nothing runs twice). Tools then
-read the ambient ability the same way HTTP handlers do: through a service that
-goes through `Repo`, which applies the ability's row-level filter automatically.
-A tool that lists users gets only the users the caller is allowed to see — same
-policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
-[per-transport bridges](/security/authorization/per-transport-bridges/) page for
-the four-transport story.
-
-The bridge answers *who is calling*. Each operation then declares what it is,
-with the same two attributes a `#[query]` takes:
-
-```rust title="src/users/mcp/tool.rs"
-#[tools]
-impl UsersTool {
-    #[tool(description = "List the people the caller may see.")]
-    #[authorize(Read, UserEntity)]
-    async fn list_people(&self) -> Result<Json<Vec<User>>, McpError> {
-        Ok(Json(CrudService::list(&*self.svc).await.opaque()?
-            .iter().map(User::from).collect()))
-    }
-}
-```
-
-`#[authorize(Action, Entity)]` emits the class-level gate before the body and
-masks the returned value through the caller's field grants after it — the tool
-writes neither. `#[public]` is the other half: no gate, no mask, and the
-endpoint's own guard still authenticated the request.
-
-For an answer that is a **capability** rather than a row — a presigned URL, a
-computed report — there is no entity to gate, so bind a guard beside the
-operation instead. `#[use_guards(...)]` works per host and per operation, and
-the app-wide pool joins them in one chain deduplicated by type, so a guard
-declared at two scopes still checks the operation once:
-
-```rust title="src/audio/mcp/tool.rs"
-    #[tool(description = "Report whether an uploaded file has been transcoded.")]
-    #[public]
-    #[use_guards(TranscodeGuard)]
-    async fn transcode_status(&self, /* … */) -> Result<String, McpError> { /* … */ }
-```
-
-One `Guard` impl serves both transports: `check_http` reads the ability off the
-request, `check_mcp` reads the ambient one the bridge installed.
-
-Masking round-trips the value through the entity model, so it needs the full
-`#[expose]` shape to reconcile against — and MCP has no selection set to excuse
-a stripped **required** field, so such a mask fails the operation closed. A
-column a field grant may mask should be `Option` on the entity. When a tool
-deliberately answers with a narrower projection, say
-`#[authorize(Action, Entity, unmasked)]`: the gate and the row filter stay, and
-the projection *is* the field restriction.
-
-Guarding the endpoint closes it; it does not tell a client how to open it. The
-MCP authorization spec requires the server to publish that, so add
-`ProtectedResourceModule` and name the deployment:
-
-```rust title="src/module.rs"
-imports = [/* … */, ProtectedResourceModule::for_root(None)]
-```
-
-```bash
-NESTRS_AUTHN__RESOURCE=https://mcp.example.com
-NESTRS_AUTHN__AUTHORIZATION_SERVERS=https://auth.example.com
-NESTRS_AUTHN__AUDIENCE=https://mcp.example.com
-```
-
-Every `401` from `/mcp` then carries the RFC 9728 pointer, and
-`/.well-known/oauth-protected-resource` serves the document behind it:
-
-```
-www-authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"
-```
-
-That is the first hop of the client's flow — rmcp implements the rest of it, so
-an MCP client reaches your authorization server without being configured with
-its address. `NESTRS_AUTHN__AUDIENCE` becomes mandatory under this module: see
-[issuer and resource server](/security/authentication/issuer-and-resource-server/)
-for why a resource server that skips it can be handed someone else's token.
 
 ## Multiple tools on one server
 
@@ -374,284 +268,6 @@ per-operation span; the model gets a constant `internal error`. A *deliberate*
 error is the opposite case — `McpError::invalid_params(...)` exists to be read,
 so return it directly and never route it through `opaque`.
 
-## Several features on one endpoint
-
-Every shipped MCP client config points at a **single URL**, so a real product
-usually wants all its domains behind one path. It gets that without giving up
-one `mcp/` adapter per feature: **hosts that write the same path aggregate onto
-one endpoint**, and a bare `#[mcp]` is how a feature says "the app's endpoint"
-without repeating the URL.
-
-A `#[mcp]` path is not a namespace the host owns the way a `#[controller]`'s
-is — nothing nests under it. It names the one endpoint the host joins, which is
-exactly why peers share it.
-
-```rust title="src/module.rs"
-#[module(imports = [WeatherModule, AuthzMcpModule], providers = [WeatherTool])]
-pub struct WeatherMcpModule;   // #[mcp]
-
-#[module(imports = [HelloModule, AuthzMcpModule], providers = [HelloTool])]
-pub struct HelloMcpModule;     // #[mcp]
-
-#[module(imports = [
-    HttpModule::for_root(None),
-    WeatherMcpModule,
-    HelloMcpModule,
-])]
-pub struct AssistantModule;
-```
-
-One client, one URL, both features' tools:
-
-```text frame="terminal"
-INFO nest_rs::routes: mounted endpoint kind="mcp" path="/mcp"
-INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="WeatherTool" tools="current_weather"
-INFO nest_rs::routes: mounted mcp host kind="mcp" path="/mcp" host="HelloTool" tools="hello"
-```
-
-Nothing in a host changes: it stays a plain `ServerHandler` and never learns
-that it shares. `tools/list`, `prompts/list` and `resources/list` are the union
-of every host on the path; a `tools/call` is routed to the host that declares
-the name; the endpoint's advertised capabilities are the union of theirs.
-**A single host on a path is served verbatim** — the merge only engages beyond
-one.
-
-The one rule the merge adds: **two hosts on one path may not serve the same
-tool name**. MCP addresses a tool by bare name inside an endpoint, so the loser
-would be unreachable — it is a boot error naming the tool and both
-hosts:
-
-```text frame="terminal"
-duplicate MCP tool name on "/mcp": search (WeatherTool and HelloTool) — a tool is
-addressed by bare name within an endpoint, so rename one of them or give each
-host its own path
-```
-
-<Aside type="tip">
-Deliberately separate surfaces are still separate: give one its own `path`.
-`demo/apps/assistant` mounts `audio` + `users` on `/mcp` and `posts` on
-`/mcp/posts`, and the two endpoints list only their own tools.
-</Aside>
-
-## Name your endpoint
-
-An MCP endpoint is **one server** to every client that reaches it: the protocol
-carries one `serverInfo` and one `instructions`, on `initialize` and on
-`server/discover` alike — the same shape `new McpServer({ name, version })`
-builds in the TypeScript SDK, and the one a FastMCP parent keeps when it mounts
-children. Two declarations answer for it, each owned by whoever can know it.
-
-**The app says who it is and how its server is used**, once, for every endpoint
-it exposes:
-
-```rust title="src/module.rs"
-use nest_rs::core::module;
-use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
-
-#[module(imports = [
-    HttpModule::for_root(None),
-    McpModule::for_root(McpOptions {
-        server: Some(
-            McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))
-                .title("Acme assistant")
-                .instructions("Ask before writing anything. Every result is scoped to your token."),
-        ),
-        ..Default::default()
-    }),
-    WeatherMcpModule,
-    HelloMcpModule,
-])]
-pub struct AssistantModule;
-```
-
-Both parts have to come from here. The version, because
-`env!("CARGO_PKG_VERSION")` written in a shared feature library is the library's
-version rather than the deployment's. The `instructions`, because they describe
-**the server** — a client may fold them into the model's system prompt — and on
-an endpoint several features share, no single host can see the whole.
-
-Keep them general: what a caller must know to use the surface at all. What each
-tool *does* is already carried by its own `#[tool(description = "…")]`, which is
-what the model reads when it chooses between them.
-
-**A host says which endpoint stands apart**, on the file that serves it:
-
-```rust title="src/weather/mcp/tool.rs"
-#[mcp(path = "/mcp/weather", name = "acme-weather")]
-#[derive(Clone)]
-pub struct WeatherTool { /* … */ }
-```
-
-`name` and `title` are optional and each overrides the app's per field, so the
-host above renames its endpoint while still inheriting the app's version, title
-and instructions. Two hosts on one path both declaring is a boot error naming
-both — otherwise the endpoint's name would depend on `imports = [..]` order.
-
-**`path`, `name` and `title` are the whole list.** Every other identity field —
-`version`, `description`, `website_url`, `icons`, `instructions` — describes the
-*server*, and writing one on a host is a compile error naming the seam that takes
-it. A feature library knows neither the binary's version nor, on a shared
-endpoint, the whole surface, so those have one owner: the app's
-`McpModule::for_root`. To version the *address*, write it into the path —
-`#[mcp(path = "/mcp/v1")]`.
-
-**Identity is declared; capabilities are observed.** A declaration replaces what
-it states and can never claim a capability no host serves. Declare no
-instructions at all and the hosts' own `get_info` blurbs are joined instead of
-dropped — a fallback, not a second way to write them.
-
-<Aside type="caution">
-Undeclared, an endpoint reports whatever its host does — and a host that never
-overrides `get_info` inherits rmcp's default, so it introduces itself to every
-client as **`rmcp`, at rmcp's version**. That is reported at boot on
-`nest_rs::mcp`, with the remedy in the event. An identity declared in an app
-with no `#[mcp]` host at all fails boot outright.
-</Aside>
-
-## Multiple servers on one app
-
-The other direction: a second server is a second `path` on a host. Each mounts
-on the HTTP transport independently — different tools, different injected
-dependencies, different authorization policy if you want one.
-
-Namespacing is the URL: `/mcp` for the app's own endpoint, whatever you write
-for the second. The MCP spec already namespaces tools per endpoint, so a second
-endpoint **is** the namespace — no extra primitive to learn, and no prefix the
-second path has to sit under.
-
-## Resources and prompts
-
-MCP defines two primitives beyond tools: **prompts** (parameterized templates
-the user picks) and **resources** (documents the model can list and fetch).
-
-A prompt is a `#[prompt]` method in the same decorated block as your tools —
-one `impl`, both routers:
-
-```rust title="src/weather/mcp/tool.rs"
-#[tools]
-impl WeatherTool {
-    #[tool(description = "Return the current temperature for a city.")]
-    #[public]
-    async fn current_temperature(&self, /* … */) -> Result<String, McpError> { /* … */ }
-
-    #[prompt(description = "Draft a travel note for a city, primed with today's conditions.")]
-    #[public]
-    async fn travel_note(&self, /* … */) -> Result<GetPromptResult, McpError> { /* … */ }
-}
-```
-
-Resources are the one surface with no decorator, because they are a mapping from
-URIs to rows rather than a set of methods. A host that serves them writes its own
-`impl ServerHandler` — `list_resources` / `read_resource` /
-`list_resource_templates` — and that is the documented way out of the sugar: it
-uses rmcp's `#[tool_router]` / `#[tool_handler]` directly, since `#[tools]`
-cannot generate a second `ServerHandler` beside a hand-written one. `demo`'s
-`posts/mcp/tool.rs` is that host.
-
-Either way the guarantee is the same one the tool gets. `CrudService::list`
-above writes no organization filter — the ambient ability applies it, so a
-caller from another org gets an empty prompt, and `read_resource` answers
-`resource_not_found` for a row that exists but is not theirs. The demo asserts
-exactly that in `apps/assistant/tests/e2e/posts_tool.rs`.
-
-<Aside type="caution">
-  Lean on tools first. The MCP spec is tool-centric: anything you can phrase as
-  "the model calls a function and gets a result" goes through `#[tool]`. Reach
-  for resources when the model needs to *list* and *browse* documents whose
-  identifiers the model itself doesn't know; reach for prompts when the **user**
-  picks a template the client substitutes.
-</Aside>
-
-Everything else the protocol defines — completion, logging levels,
-subscriptions, the `tasks/*` extension, elicitation, custom methods — is a
-`ServerHandler` method on the same struct, and gets the same treatment. The
-protocol types live under `nest_rs::mcp::model`, the per-operation handles
-under `nest_rs::mcp::service`, and anything newer than this page under
-`nest_rs::mcp::rmcp`.
-
-## Configuration
-
-`McpConfig` carries the streamable-HTTP options, dual-path like every
-`nest-rs-*` config: `NESTRS_MCP__*` env vars over an optional pinned base.
-Importing `McpModule` is what resolves it; without the import every mount runs
-on the defaults.
-
-```rust title="src/module.rs"
-#[module(imports = [
-    HttpModule::for_root(None),
-    McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
-])]
-pub struct AssistantModule;
-```
-
-Pinning options *and* declaring the app's identity is the same one call — an `McpConfig`
-converts into an `McpOptions` whose `server` is empty, so write the whole value
-out when you need both:
-
-```rust title="src/module.rs"
-McpModule::for_root(McpOptions {
-    config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
-    server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
-}),
-```
-
-| Variable | Default | What it controls |
-|---|---|---|
-| `NESTRS_MCP__ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | `Host` header allowlist — anti-DNS-rebinding |
-| `NESTRS_MCP__LEGACY_SESSION_MODE` | `true` | Keep sessions for protocol versions before `2026-07-28` |
-| `NESTRS_MCP__JSON_RESPONSE` | `false` | Answer simple operations as JSON rather than SSE |
-| `NESTRS_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
-| `NESTRS_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
-
-The host allowlist is a **security control**, and its default is why a
-deployment reached under a real hostname answers `403` until it names itself: a
-page on an attacker's origin can point its own hostname at `127.0.0.1` and POST
-to a locally running MCP server, which would otherwise answer with the user's
-tools and data. Name your hostnames; do not empty the list.
-
-The default looks strict for a public deployment, and that is the point:
-DNS rebinding only reaches a host the victim's browser can resolve to but the
-attacker cannot call directly — loopback and the local network. The vulnerable
-server is the developer's local one, which is exactly the one that configures
-nothing. A default of "off" would disarm the control in the only case the
-attack works. A refused `Host` is logged with the offending value; the
-effective allowlist is logged at `debug` when the endpoint mounts
-(`target: nest_rs::mcp`).
-
-The browser `Origin` half is **not** an MCP setting. It is the HTTP transport's
-CORS policy, `NESTRS_HTTP__CORS_ORIGINS`, and `/mcp` inherits it: the CORS layer
-wraps the whole route tree, and a disallowed `Origin` gets `403` on every
-method, not just the preflight. One knob, and it covers `/graphql` and `/ws`
-too.
-
-## Error handling
-
-`McpError` (re-exported as `nest_rs::mcp::McpError`, alias for rmcp's
-`ErrorData`) gives the model a structured failure with a JSON-RPC error code.
-Six constructors cover the common cases:
-
-| Constructor | When |
-|---|---|
-| `McpError::invalid_params(msg, data)` | The tool input was syntactically valid JSON but semantically wrong — range, missing required field, mutual exclusion |
-| `McpError::invalid_request(msg, data)` | The whole request shape was off |
-| `McpError::parse_error(msg, data)` | The JSON itself couldn't be parsed |
-| `McpError::method_not_found::<MethodName>()` | The client asked for a tool that doesn't exist on this server |
-| `McpError::resource_not_found(msg, data)` | An identified resource isn't there (when you ship resources) |
-| `McpError::internal_error(msg, data)` | Anything else — wrap an upstream failure |
-
-A typical adapter for a domain error:
-
-```rust
-fn internal<E: std::fmt::Display>(e: E) -> McpError {
-    McpError::internal_error(e.to_string(), None)
-}
-```
-
-The `data` field accepts any JSON value — attach structured diagnostics there
-when the model would benefit from them (e.g. the validator's per-field errors).
-Anything beyond these six codes flows through `internal_error` — there is no
-custom-code constructor.
-
 ## Trait-based DI
 
 Injecting `Arc<dyn WeatherService>` keeps the concrete provider
@@ -662,37 +278,12 @@ the access graph rejects accidental coupling at boot.
 
 ## Going further
 
-- [Per-transport authz bridges](/security/authorization/per-transport-bridges/)
-  — how `AuthzMcpModule` plugs the ambient `Ability` into your tools.
-- [Database](/database/) — `Repo` honours the same ambient ability inside a
-  tool as inside an HTTP handler.
-- [Security / Authentication](/security/authentication/) — the bearer JWT
-  flow your MCP tools inherit transitively.
-
-### Reference
-
-- `apps/assistant/` + `demo/crates/features/src/posts/mcp/` — one host serving
-  all three capabilities (tool, prompt, resources) over the same row-filtered
-  service; `demo/crates/features/src/audio/mcp/` — a JWT-authenticated
-  `transcode_status` tool over the Publish audio pipeline (no token ⇒ the
-  endpoint refuses); `demo/crates/features/src/users/mcp/` — the second
-  feature sharing `/mcp` with `audio`, with `apps/assistant/tests/e2e/
-  shared_endpoint.rs` proving both list there and `posts` stays on its own path.
-- `crates/nest-rs-mcp/` — `#[mcp]`, `McpMount`, `McpConfig`, the
-  streamable-HTTP endpoint factory, and the re-exported rmcp surface
-  (`tool_router`/`tool`/`tool_handler`, `prompt_router`/`prompt`/
-  `prompt_handler`, `ServerHandler`, `McpError`, `Parameters`, `Json`,
-  `CallToolResult`, plus the whole `model` / `service` / `handler` /
-  `transport` modules).
-- `crates/nest-rs-mcp/tests/integration/mcp_impl.rs` — the proof that the
-  generated module still reaches a host's private fields, that the boot checks
-  still read its tool names, and that capabilities follow the operations
-  present; `crates/nest-rs-mcp/tests/integration/propagate.rs` — the proof that
-  every `ServerHandler` method reaches your host rather than an SDK default;
-  `crates/nest-rs-mcp/tests/integration/registry.rs` — the proof that two
-  modules' hosts answer on one endpoint, that a second path stays its own, and
-  that a duplicate tool name fails boot.
-- `crates/nest-rs-authz/` (with the `mcp` feature) — `McpAbilityBridge`
-  (masking inside a tool body is `masked_output_ambient`);
-  `crates/nest-rs-seaorm/` (with the `mcp` feature) — `McpDataContext`. Both
-  bound through `AuthzMcpModule`.
+- [Authorization](/mcp/authorization/) — the bridge every tool call is gated by,
+  and the posture each operation declares.
+- [Endpoints](/mcp/endpoints/) — several features on one URL, and what the
+  client is told the server is.
+- [Resources and prompts](/mcp/resources-and-prompts/) — the two capabilities
+  beside tools, and the host shape they need.
+- [Configuration](/mcp/configuration/) — , the env keys, and how a
+  failing operation talks to a model.
+- [Guards](/fundamentals/guards/) — the trait an MCP guard implements.

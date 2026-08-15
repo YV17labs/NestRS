@@ -32,13 +32,8 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
     if let Err(err) = Edge::Events.reject_version(&args) {
         return err.to_compile_error().into();
     }
-    if !args.is_empty() {
-        return syn::Error::new_spanned(
-            &args,
-            "#[listeners] takes no arguments; tag methods with `#[on_event]`",
-        )
-        .to_compile_error()
-        .into();
+    if let Err(err) = LISTENERS_PAIR.reject_args(&args, "the provider's scope is declared by") {
+        return err.to_compile_error().into();
     }
 
     let mut item = match LISTENERS_PAIR.parse_operations(input.into()) {
@@ -46,6 +41,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = item.self_ty.clone();
+    let host_check = LISTENERS_PAIR.provider_host_check(&self_ty);
     let provider_ident = match impl_self_ident(&self_ty, "#[listeners]") {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
@@ -139,6 +135,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
 
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_events::ListenerMethod {
+                    origin: ::core::module_path!(),
                     name: #qualified_name,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     declaration_index: #declaration,
@@ -150,6 +147,8 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let out = quote! {
         #item
+
+        #host_check
         #(#emissions)*
     };
     out.into()

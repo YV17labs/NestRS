@@ -1,0 +1,10 @@
+error[E0119]: conflicting implementations of trait `ProviderResidency` for type `PerResolution`
+  --> tests/integration/diagnostics/hooks_escaping_the_residency_fact.rs:11:1
+   |
+11 | #[injectable(scope = transient)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `PerResolution`
+...
+15 | impl ProviderResidency for PerResolution {
+   | ---------------------------------------- first implementation here
+   |
+   = note: this error originates in the attribute macro `injectable` (in Nightly builds, run with -Z macro-backtrace for more info)

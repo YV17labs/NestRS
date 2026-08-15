@@ -1,0 +1,5 @@
+error: #[scheduled] takes no arguments; the provider's scope is declared by #[injectable], and each operation by #[every] / #[cron] / #[after]
+  --> tests/integration/diagnostics/scheduled_takes_no_arguments.rs:10:13
+   |
+10 | #[scheduled(tz = "UTC")]
+   |             ^^^^^^^^^^

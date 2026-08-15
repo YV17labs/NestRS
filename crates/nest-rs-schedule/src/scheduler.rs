@@ -163,11 +163,12 @@ impl Transport for Scheduler {
             if let Some(r) = reachable.as_ref()
                 && !r.0.contains(&provider_id)
             {
-                tracing::warn!(
+                ::nest_rs_core::report_inert_host!(
                     target: "nest_rs::schedule",
+                    what: "scheduled method",
+                    origin: entry.origin,
                     provider = entry.provider,
                     method = entry.method,
-                    "skipped scheduled method: provider unreachable from app's module tree",
                 );
                 continue;
             }

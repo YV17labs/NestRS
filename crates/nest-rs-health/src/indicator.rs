@@ -124,6 +124,11 @@ pub type IndicatorRun = for<'a> fn(&'a Container) -> IndicatorFuture<'a>;
 /// `run` thunk resolves the owning provider from the container and invokes
 /// the method.
 pub struct HealthIndicator {
+    /// `module_path!()` of the crate that declared it — read by
+    /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick the
+    /// report level, and emitted as a field so a skip line names a type the
+    /// developer can find.
+    pub origin: &'static str,
     /// `"<method_name>"` — the indicator's stable id (snake_case method
     /// name), used as the JSON key and the structured-log field.
     pub name: &'static str,

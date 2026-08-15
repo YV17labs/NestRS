@@ -1,0 +1,5 @@
+error: #[hooks] takes no arguments; the provider's scope is declared by #[injectable], and each operation by #[on_module_init] / #[on_application_bootstrap] / #[on_module_destroy]
+  --> tests/integration/diagnostics/hooks_takes_no_arguments.rs:10:9
+   |
+10 | #[hooks(phase = "init")]
+   |         ^^^^^^^^^^^^^^

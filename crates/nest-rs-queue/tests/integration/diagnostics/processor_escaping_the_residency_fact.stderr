@@ -1,0 +1,11 @@
+error: expected identifier, found keyword `use`
+ --> tests/integration/diagnostics/processor_escaping_the_residency_fact.rs:7:5
+  |
+7 | use use serde::{Deserialize, Serialize};
+  |     ^^^ expected identifier, found keyword
+
+error: expected one of `::`, `;`, or `as`, found `serde`
+ --> tests/integration/diagnostics/processor_escaping_the_residency_fact.rs:7:9
+  |
+7 | use use serde::{Deserialize, Serialize};
+  |         ^^^^^ expected one of `::`, `;`, or `as`

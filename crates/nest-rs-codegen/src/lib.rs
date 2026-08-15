@@ -45,7 +45,7 @@ pub use inject::{
     mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
 };
 pub use job::{TRANSACTIONAL, job_argument_needs_a_value, job_transaction, transactional_value};
-pub use pair::DecoratorPair;
+pub use pair::{DecoratorPair, parse_provider_host, provider_residency};
 pub use posture::{Posture, PostureRules};
 pub use root::reroot;
 pub use specs::{force_guard_typeids, scoped_specs};

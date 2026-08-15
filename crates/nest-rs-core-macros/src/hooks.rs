@@ -22,14 +22,8 @@ const HOOK_ATTRS: [(&str, &str); 5] = [
 
 pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
-    if !args.is_empty() {
-        return syn::Error::new_spanned(
-            &args,
-            "#[hooks] takes no arguments; tag methods with `#[on_module_init]`, \
-             `#[on_application_shutdown]`, …",
-        )
-        .to_compile_error()
-        .into();
+    if let Err(err) = HOOKS_PAIR.reject_args(&args, "the provider's scope is declared by") {
+        return err.to_compile_error().into();
     }
 
     let mut item = match HOOKS_PAIR.parse_operations(input.into()) {
@@ -42,6 +36,7 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let provider_lit = base.to_string();
+    let host_check = HOOKS_PAIR.provider_host_check(&self_ty);
 
     let mut submissions: Vec<TokenStream2> = Vec::new();
     for impl_item in item.items.iter_mut() {
@@ -119,6 +114,8 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 
     quote! {
         #item
+
+        #host_check
 
         #(#submissions)*
     }

@@ -73,11 +73,12 @@ impl Transport for QueueWorker {
             if let Some(r) = reachable.as_ref()
                 && !r.0.contains(&provider_id)
             {
-                tracing::warn!(
+                ::nest_rs_core::report_inert_host!(
                     target: "nest_rs::queue",
+                    what: "#[process] method",
+                    origin: entry.origin,
                     processor = entry.name,
                     queue = entry.queue,
-                    "skipped #[process] method: provider unreachable from app's module tree",
                 );
                 continue;
             }

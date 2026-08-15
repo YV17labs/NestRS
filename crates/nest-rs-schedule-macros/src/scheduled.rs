@@ -86,6 +86,7 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
         submissions.push(quote! {
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_schedule::ScheduledMethod {
+                    origin: ::core::module_path!(),
                     provider: #provider_name,
                     method: #method_name,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
@@ -105,8 +106,10 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
         });
     }
 
+    let host_check = SCHEDULED_PAIR.provider_host_check(&self_ty);
     let out = quote! {
         #item
+        #host_check
         #(#submissions)*
     };
     out.into()
@@ -120,14 +123,7 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
 fn reject_args(args: TokenStream) -> syn::Result<()> {
     let args = TokenStream2::from(args);
     Edge::Schedule.reject_version(&args)?;
-    if args.is_empty() {
-        return Ok(());
-    }
-    Err(syn::Error::new_spanned(
-        &args,
-        "#[scheduled] takes no arguments; tag methods with `#[every(\"...\")]`, \
-         `#[cron(...)]` or `#[after(\"...\")]`",
-    ))
+    SCHEDULED_PAIR.reject_args(&args, "the provider's scope is declared by")
 }
 
 fn is_trigger_attr(path: &syn::Path) -> bool {

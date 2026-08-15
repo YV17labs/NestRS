@@ -136,10 +136,14 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         None => quote! {},
     };
 
+    let residency = WS_PAIR.host_residency(&name, &item.generics);
+
     quote! {
         #item
 
         #capability_bounds
+
+        #residency
 
         #namespace_submission
 

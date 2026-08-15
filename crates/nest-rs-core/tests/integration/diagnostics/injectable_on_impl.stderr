@@ -1,0 +1,7 @@
+error: #[injectable] decorates the provider struct — the impl block holding its methods takes the decorator named for what it collects: #[processor], #[scheduled], #[listeners], #[indicators] or #[hooks]
+  --> tests/integration/diagnostics/injectable_on_impl.rs:12:1
+   |
+12 | / impl DemoProvider {
+13 | |     fn tick(&self) {}
+14 | | }
+   | |_^

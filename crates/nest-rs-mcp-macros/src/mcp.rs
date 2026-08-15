@@ -98,10 +98,14 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let (identity_name, identity_title) =
         (opt_str(args.name.as_ref()), opt_str(args.title.as_ref()));
 
+    let residency = MCP_PAIR.host_residency(&name, &item.generics);
+
     quote! {
         #item
 
         #capability_bounds
+
+        #residency
 
         impl #impl_generics #name #ty_generics #where_clause {
             #from_container

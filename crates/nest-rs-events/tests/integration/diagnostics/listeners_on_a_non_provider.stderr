@@ -1,0 +1,12 @@
+error[E0277]: `Plain` is not a provider, so a provider-hosted decorator (`#[hooks]`, `#[scheduled]`, `#[listeners]`, `#[indicators]`, `#[processor]`) cannot reach it
+  --> tests/integration/diagnostics/listeners_on_a_non_provider.rs:15:6
+   |
+15 | impl Plain {
+   |      ^^^^^ the container holds no singleton of this type
+   |
+help: the trait `ProviderResidency` is not implemented for `Plain`
+  --> tests/integration/diagnostics/listeners_on_a_non_provider.rs:12:1
+   |
+12 | struct Plain;
+   | ^^^^^^^^^^^^
+   = note: those decorators resolve their host with `Container::get::<Self>()`, outside any request, so the host must be a provider the container holds under its own type. Add `#[injectable]` — or, on a provider registered by hand with `ContainerBuilder::provide`, write `impl ProviderResidency` for it with `const SINGLETON: bool = true`

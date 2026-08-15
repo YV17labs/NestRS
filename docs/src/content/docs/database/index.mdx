@@ -63,7 +63,7 @@ handlers (`Post`), the `CreatePost` and `UpdatePost` inputs filtered by
 `input(create)` / `input(update)`, the GraphQL `SimpleObject`, the OpenAPI
 schema, the PK dataloader (`PostsServiceById`) for relations, and the
 `From<&Model>` / `IntoActiveModel` plumbing every handler needs. The
-entity-derived inputs are **bare** (`CreatePost`, not `CreatePost`) — one
+entity-derived inputs are **bare** (`CreatePost`, not `CreatePostDto`) — one
 struct is at once the service's create type, the REST body, and the GraphQL
 input, so no boundary suffix fits.
 

@@ -88,11 +88,6 @@ pub struct Claims {
     pub exp: u64,
 }
 
-/// The one required impl. On a successful authentication `AuthnGuard` records
-/// this onto the request span as `actor_id`, so every downstream event —
-/// denials included — is attributable without threading the identity through
-/// each call site. Return `None` for a principal that genuinely has no
-/// identity (a machine token scoped to an org, say).
 impl PrincipalIdentity for Claims {
     fn actor_id(&self) -> Option<String> {
         self.sub.map(|id| id.to_string())
@@ -100,7 +95,12 @@ impl PrincipalIdentity for Claims {
 }
 ```
 
-`nestrs g auth` writes both the struct and the impl.
+`PrincipalIdentity` is the one required impl. On a successful authentication
+`AuthnGuard` records `actor_id` onto the request span, so every downstream
+event — denials included — is attributable without threading the identity
+through each call site. Return `None` for a principal that genuinely has no
+identity (a machine token scoped to an org, say). `nestrs g auth` writes both
+the struct and the impl.
 
 The handler reads them back through `Ctx<Claims>`:
 

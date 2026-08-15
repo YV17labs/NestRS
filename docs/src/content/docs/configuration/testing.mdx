@@ -80,14 +80,14 @@ let app = TestApp::builder()
     .await?;
 ```
 
-```rust title="apps/api/src/module.rs"
+```rust title="src/module.rs"
 #[module(
     imports = [
-        HttpModule::for_root(Some(HttpConfig {
+        HttpModule::for_root(HttpConfig {
             host: "127.0.0.1".into(),
             port: 0,
             ..Default::default()
-        })),
+        }),
     ],
 )]
 pub struct ApiModule;

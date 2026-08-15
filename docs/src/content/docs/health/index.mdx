@@ -94,7 +94,11 @@ $ curl -s http://localhost:3000/health/ready | jq
 ```
 
 When one indicator drops, the response moves to `503` and the
-indicator migrates from `info` to `error` with its stringified cause:
+indicator migrates from `info` to `error` with a **fixed** reason —
+`"check failed"`, or `"timed out"`. Never the indicator's own error: the
+probe is routinely unauthenticated and a connection error carries a DSN or
+an internal hostname. The real cause goes to the log, `warn` on
+`nest_rs::health` (see [Indicators](/health/indicators/)).
 
 ```bash frame="terminal"
 $ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/health/ready
@@ -107,7 +111,7 @@ $ curl -s http://localhost:3000/health/ready | jq
     "upstream": {
       "name": "upstream",
       "status": "down",
-      "error": "connection refused"
+      "error": "check failed"
     }
   },
   "details": { "db": { /* ... */ }, "upstream": { /* ... */ } }

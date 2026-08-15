@@ -3,7 +3,7 @@ title: CRUD
 description: "One #[crud] attribute on a controller or resolver — list, get, create, update, delete are generated, scoped, and masked, all going through the service."
 tier: basics
 sidebar:
-  order: 5
+  order: 6
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -289,13 +289,11 @@ See [Pagination](/database/pagination/) for the shape end to end.
 ## By-id binding goes through the service
 
 Every generated `get` / `update` / `delete` calls
-`CrudService::access(action, id)` — not a raw `find_by_id`. `access` loads
-the row through `Repo` (so the ability's `Condition` filters it), then
-checks the **field-level** rules of `Ability::can` against the loaded
-model. The result tells the handler which HTTP status to return:
-
-The load is deliberately **unscoped**, so an existing row the caller may not
-touch is `Denied`, not hidden as `Missing`:
+`CrudService::access(action, id)` — not a raw `find_by_id`. The
+authorization is decided in **SQL**, by the same `condition_for` the list
+path joins, so the row a list returns and the row `access` grants cannot
+diverge. [Denied vs missing](/security/authorization/by-id-binding/) is the
+reference for how; here is what a handler sees:
 
 | `Access` outcome    | Meaning                                                     | HTTP  |
 |---------------------|-------------------------------------------------------------|-------|

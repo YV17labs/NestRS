@@ -20,9 +20,7 @@ async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDt
             continue;
         }
         let filename = part.file_name().map(str::to_owned).unwrap_or_default();
-        // Validate before the bytes become an object key.
         UploadRequestDto { filename: filename.clone() }.validate().map_err(unprocessable)?;
-        // The part streams into storage — it never exists whole in memory.
         let ticket = self.svc.store_upload(&filename, part.into_byte_stream())
             .await.map_err(internal)?;
         return Ok(Json(ticket));
@@ -30,6 +28,10 @@ async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDt
     Err(Error::from_string("multipart body has no `file` part", StatusCode::BAD_REQUEST))
 }
 ```
+
+Two lines carry the weight: the filename is validated **before** it becomes
+an object key, and `into_byte_stream()` hands the part to storage as it
+arrives, so it never exists whole in memory.
 
 ## Stream the part instead of buffering it
 

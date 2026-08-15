@@ -251,12 +251,13 @@ impl WireModelDefaults for invoice::Entity {
 <Aside type="caution">
 **A column an ability rule predicates on must carry its real value during
 masking — expose it, do not default it.** The mask rebuilds the model and
-re-runs the grant's `Predicate` (e.g. `org_id == actor.org_id`) to decide
-which fields to keep. A `WireModelDefaults` placeholder (`Uuid::nil()`)
-would make that predicate evaluate against the wrong value and mask the
-row's fields *out*. So a tenant key like `org_id` is best `#[expose]`d
-read-only (output, never an input) rather than defaulted — exactly because
-it is the column the policy depends on.
+re-runs the grant's `Predicate` (`org_id == actor.org_id`) to decide which
+fields to keep. A `WireModelDefaults` placeholder (`Uuid::nil()`) would make
+that predicate compare against the wrong value and mask the row's fields *out*,
+while the SQL pre-filter went on using the real column — which is what keeps
+the mistake invisible. So a tenant key like `org_id` is best `#[expose]`d
+read-only (output, never an input), exactly because it is the column the policy
+depends on. **Nothing checks this for you**; it is a review question.
 </Aside>
 
 A handler returning a body that does not deserialize even with

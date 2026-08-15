@@ -65,15 +65,23 @@ arms the response mask. This is the one route shape where you write the
 extractor by hand — `#[authorize(...)]` and `#[public]` declare opposite
 postures, so the decorator form is a compile error here.
 
-<Aside type="caution">
-Without that parameter the route answers `200` with an empty array. The
-visitor's ability reaches the request, but nothing installs it as the
-ambient one, so `Repo` falls back to its no-ability behavior and renders
-`1 = 0`. Fail-closed, and noisy — a `warn` on `nest_rs::orm` names the
-entity and action — but a caller reading the response sees "no posts",
-not "misconfigured". Reach for `Bind<Read, PostsService>` on a detail
-route; it is a shaper too.
-</Aside>
+**Delete that parameter and the route answers `200 []`.** It is prefixed `_`
+and looks unused, so it is what a cleanup pass removes — and the symptom is the
+one symptom that does not point back at it. The visitor's ability still reaches
+the request; nothing installs it as the *ambient* one, so `Repo` falls back to
+its no-ability behaviour and renders `1 = 0`. Fail-closed, and not silent: the
+`warn` on `nest_rs::orm` names the entity, the action and the remedy.
+
+```text frame="terminal"
+WARN nest_rs::orm: no ambient Ability outside a worker job — denying all rows
+  entity=features::posts::entity::Entity action=Read scope=Some(Request)
+  hint="bind #[use_guards(AuthnGuard, AuthzGuard)], or — on a #[public] route —
+        take the `Authorize<A, E>` parameter that arms the shaper"
+```
+
+Grep that target the first time a route returns an empty collection you did not
+expect. On a detail route reach for `Bind<Read, PostsService>` instead; it is a
+shaper too.
 
 ## A token still takes the authenticated branch
 

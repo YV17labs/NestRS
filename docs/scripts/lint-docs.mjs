@@ -16,7 +16,7 @@
 // `layer-impl`, `exception-response-error`, `bare-log`, `config-table` — each documented on its
 // constant below and filed as a shipped defect first.
 
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 import {
@@ -25,6 +25,8 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS_ROOT = join(HERE, '..');
+// The repo the docs live in, spelled once — every source-derived check roots here.
+const REPO_ROOT = join(DOCS_ROOT, '..');
 // The same root the sidebar reads, so the two never disagree about what a page is.
 const CONTENT = CONTENT_ROOT;
 const BASELINE = join(HERE, 'lint-baseline.json');
@@ -62,13 +64,18 @@ const CANON_SHAPES = [
     'off-canon feature type'],
   [/(?:path|title)\s*=\s*"[^"]*\/(?:items|products|orders)\b/, 'off-canon feature path'],
   [/#\[(?:get|post|patch|put|delete)\("\/(?:items|products|orders)\b/, 'off-canon feature route'],
+  // The residue the type and path shapes both miss: an entity keeps the banned
+  // table under a canon `#[expose(name = "Post")]`, and a GraphQL `path` or a
+  // `data` key still spells the field the old example resolved.
+  [/table_name\s*=\s*"\w*(?:item|product|order)s?\w*"/, 'off-canon table'],
+  [/"(?:path|data)":\s*[[{]\s*"(?:item|product|order)s?"/, 'off-canon wire field'],
 ];
 
 /// A file in the repo the docs live in, by repo-relative path. Every code-truth
 /// check that derives its rule from the framework rather than restating it goes
 /// through here, so the tree layout is spelled once.
 function frameworkSource(rel) {
-  return readFileSync(join(DOCS_ROOT, '..', ...rel.split('/')), 'utf8');
+  return readFileSync(join(REPO_ROOT, ...rel.split('/')), 'utf8');
 }
 
 /// The architecture rules, as the CLI embeds them into every generated
@@ -79,7 +86,12 @@ const ARCHITECTURE_CANON = 'crates/nest-rs-cli/src/templates/architecture.md';
 /// [`CONFIG_TABLES`]. Registering here is what makes the mirror *checked*, and
 /// the run asserts every entry was actually visited — rename or move the page
 /// and the build fails rather than the gate quietly ceasing to run.
-const MIRRORED_PAGES = new Map([['architecture.mdx', (src) => architectureDrift(src)]]);
+/// The value carries the rule the violations file under, so a second mirror does
+/// not have to borrow the first's name.
+const MIRRORED_PAGES = new Map([
+  ['architecture.mdx', { rule: 'architecture-drift', check: (src) => architectureDrift(src) }],
+  ['decorators.mdx', { rule: 'decorator-index', check: (src) => decoratorIndexDrift(src) }],
+]);
 const MIRRORS_SEEN = new Set();
 
 /// Backticked file and folder roles — ``service.rs``, ``http/controller.rs``,
@@ -109,6 +121,18 @@ function setDrift(canon, page, what) {
     ...[...canon].filter((x) => !page.has(x)).map((x) => `${what} missing from the page: ${x}`),
     ...[...page].filter((x) => !canon.has(x)).map((x) => `${what} on the page, not in the rules: ${x}`),
   ];
+}
+
+/// `/decorators/` opens by calling itself "the index of every decorator the
+/// framework ships", so a decorator with no row makes that opening false. The
+/// list is derived from the `*-macros` crate roots rather than restated, and the
+/// page is registered in [`MIRRORED_PAGES`] so renaming it throws instead of
+/// retiring the check in silence.
+function decoratorIndexDrift(src) {
+  return DECORATORS.filter((name) => !src.includes(`\`#[${name}]\``)).map(
+    (name) => `#[${name}] is a shipped decorator with no row — the page opens by calling `
+      + 'itself the index of every one',
+  );
 }
 
 /// `/architecture/` deliberately restates the role table and the reserved
@@ -193,15 +217,105 @@ const UNMAPPED_CRUD_READ = /\.(?:list\(\)|page\(|access\()[^;]*?\.await\s*\?/;
 const BIND_ORDER =
   /\b(?:[Bb]ind(?:_required)?(?:::)?<\s*(?:S|[A-Z]\w*Service)|Authorized<\s*(?:E|[A-Z]\w*Entity))\b/g;
 
-/// A queue is named by its `QueueName` **type**, never a string: the macro
-/// rejects `#[process(queue = "audio")]` outright, and the producer's
-/// string-taking `push(name, job)` is the runtime-name escape hatch, not the
-/// default. Both spellings shipped in 1.1.1 across ~10 places, on pages that
-/// predated `QueueName`, so a reader following the queue section
-/// wrote a consumer that would not compile and a producer that silently opted
-/// out of the very check the type exists to provide. Gated rather than trusted.
-const QUEUE_STRING_FORM = /#\[process\(\s*queue\s*=\s*"/g;
+/// A queue is named by its `QueueName` **type**, never a string — the macro
+/// refuses both string spellings by name, so the regex catches both:
+/// `#[process(queue = "audio")]` shipped in 1.1.1 across ~10 places on pages
+/// that predated `QueueName`, and the *positional* `#[process("posts.publish")]`
+/// survived that fix on a page outside the queue section. A reader following
+/// either wrote a consumer that would not compile. Gated rather than trusted.
+const QUEUE_STRING_FORM = /#\[process\(\s*(?:queue\s*=\s*)?"/g;
+
+/// The producer half of the same rule: `push(name, job)` and `of::<…>(…)` are
+/// the runtime-name escape hatch, not the default — a page teaching them as
+/// *the* way to enqueue opts the reader out of the very check the type exists
+/// to provide, and does it silently.
 const QUEUE_UNTYPED_PUSH = /\.(?:of::<[^>]*>\(|push\(\s*[A-Z_]{3,}\b)/g;
+
+/// A test target is a **directory** — `tests/<suite>/main.rs`. Cargo compiles a
+/// flat `tests/<x>.rs` as its own binary, so a suite scattered across sibling
+/// files escapes the `binary(e2e)` gate and relinks once per file. The section
+/// index taught the flat form three times while `testing/integration.mdx` next
+/// door explained why it does not exist, and neither workspace holds one.
+///
+/// Scoped to where a page **prescribes** a location — a fence `title=` and a
+/// table cell — because naming the flat form is exactly how `e2e.mdx` refuses
+/// it, and a check that cannot tell the two apart makes the refusal unwritable.
+const FLAT_TEST_TARGET = /\btests\/[A-Za-z0-9_*]+\.rs\b/g;
+
+/// Two facts a fence titled with a real `demo/` file cannot contradict. Titles
+/// cite the *user's* workspace shape, so the prefix is mapped back onto `demo/`;
+/// a title whose file does not exist there is a fictional snippet, which the
+/// rule does not reach.
+///
+/// The full STYLE.md §C rule is byte-for-byte, and it is deliberately **not**
+/// what runs here: most fences are honest excerpts written before the marker
+/// convention, so the strict form reports 134 pages at once and the signal is
+/// gone. These two are exact, and each was a shipped defect:
+///
+/// - **A comment.** `demo/` carries none — owner's rule, no exceptions — so a
+///   page quoting it with a `///` publishes code the repo forbids writing,
+///   under a title asserting the repo contains it. `producing-jobs.mdx` added
+///   two.
+/// - **A port.** `issuer-and-resource-server.mdx` pinned `3000` in a block
+///   titled `apps/api/src/module.rs` while the app listens on `3002` — and
+///   `curl`ed `3002` forty lines down.
+const DEMO_TITLE_PREFIXES = [
+  [/^crates\//, 'demo/crates/'],
+  [/^apps\//, 'demo/apps/'],
+];
+
+function demoPathFor(title) {
+  const clean = title.replace(/\s*\(abridged\)\s*$/, '').trim();
+  for (const [re, prefix] of DEMO_TITLE_PREFIXES) {
+    if (re.test(clean)) return join(REPO_ROOT, clean.replace(re, prefix));
+  }
+  return null;
+}
+
+/// The `port:` a demo file pins, or `null` when it pins none — `undefined` when
+/// the path is not a file. Cached on the *derived* value rather than the source:
+/// 64 distinct files back 143 titled fences corpus-wide, and one app module is
+/// quoted 18 times.
+const DEMO_PORTS = new Map();
+function demoPort(abs) {
+  if (!DEMO_PORTS.has(abs)) {
+    DEMO_PORTS.set(
+      abs,
+      existsSync(abs) ? (readFileSync(abs, 'utf8').match(/\bport:\s*(\d+)/)?.[1] ?? null) : undefined,
+    );
+  }
+  return DEMO_PORTS.get(abs);
+}
+
+function fenceTitleDrift(blocks) {
+  const out = [];
+  for (const block of blocks) {
+    const title = block.info.match(/title="([^"]+)"/)?.[1];
+    if (!title) continue;
+    const abs = demoPathFor(title);
+    if (!abs) continue;
+    const real = demoPort(abs);
+    if (real === undefined) continue;
+
+    const comment = block.body.match(/^\s*(\/\/\/?!?[^\n]*)/m);
+    // `// …` is the elision mark an excerpt uses; it claims nothing about the file.
+    if (comment && !/^\s*\/\/\s*[….]/.test(comment[1])) {
+      out.push(`${title} is quoted with a comment (\`${comment[1].trim()}\`) — the demo `
+        + 'workspace carries none, so the file does not contain that line');
+    }
+
+    const shown = block.body.match(/\bport:\s*(\d+)/)?.[1];
+    if (shown && real !== null && shown !== real) {
+      out.push(`${title} pins port ${shown}, the app listens on ${real}`);
+    }
+  }
+  return out;
+}
+
+/// The lines that prescribe a path: a fence title, and a table row.
+function prescriptiveLines(src) {
+  return src.split('\n').filter((line) => /^\s*\|/.test(line) || /```[^\n]*title=/.test(line));
+}
 
 /// The binding the crate's own panic text tells a reader to write when
 /// `OpenTelemetryModule` was imported without `OpenTelemetry::init`. Read out of
@@ -425,12 +539,54 @@ function installStanzaViolations(blocks) {
 /// orchestrator consumes (`#[query]`, `#[get]`, `#[on_module_init]`,
 /// `#[public]`) are inert tokens read by the host macro, so they resolve without
 /// an import of their own and must never be demanded.
+/// Every `pub trait` a source declares, with the method names its body holds.
+///
+/// One generator, two callers — the canon side ([`frameworkRules`]) and the page
+/// side (check 20). That is the point rather than a line saving: check 20 *is* a
+/// diff between the two, so teaching one side about a `where` clause or an
+/// associated const and not the other would make it report invented methods that
+/// are not invented, or go silent. Nothing would catch the skew.
+function* traitDecls(src) {
+  for (const m of src.matchAll(/pub trait (\w+)(?:<[^>]*>)?\s*(?::[^{]*)?\{/g)) {
+    const start = m.index + m[0].length;
+    let depth = 1;
+    let i = start;
+    while (i < src.length && depth > 0) {
+      if (src[i] === '{') depth += 1;
+      else if (src[i] === '}') depth -= 1;
+      i += 1;
+    }
+    // A doc comment names methods too, and a default body may nest an `fn`.
+    const decl = src
+      .slice(start, i - 1)
+      .replace(/^\s*\/\/.*$/gm, '')
+      .replace(/\{[^{}]*\}/g, '{}');
+    yield { name: m[1], methods: [...decl.matchAll(/\bfn\s+(\w+)/g)].map((f) => f[1]) };
+  }
+}
+
+/// `traitMethods` — every `pub trait` the framework ships, mapped to the method
+/// names its body declares, so a page publishing a signature can be diffed
+/// against the real one. `/fundamentals/exception-filters/` published `Filter`
+/// and `ExceptionFilter` with **three** methods each — four names that exist
+/// nowhere under `crates/` — then spent an Aside explaining why the four do not
+/// work. A reader who wrote one got `E0407`, and the page was the only source
+/// that had ever claimed the method. One direction only: a page may abridge a
+/// trait, it may never invent a method.
 function frameworkRules() {
   const traits = new Set();
   const decorators = new Set();
-  for (const file of walk(join(DOCS_ROOT, '..', 'crates'), ['.rs'])) {
+  const traitMethods = new Map();
+  for (const file of walk(join(REPO_ROOT, 'crates'), ['.rs'])) {
     const src = readFileSync(file, 'utf8');
     for (const m of src.matchAll(/pub trait (\w+)\s*:\s*Layer\b/g)) traits.add(m[1]);
+    // A trait split across crates (a feature-gated half) contributes its own
+    // names rather than replacing the set.
+    for (const { name, methods } of traitDecls(src)) {
+      const known = traitMethods.get(name) ?? new Set();
+      for (const method of methods) known.add(method);
+      traitMethods.set(name, known);
+    }
     if (!/-macros[\\/]src[\\/]lib\.rs$/.test(file)) continue;
     for (const m of src.matchAll(/#\[proc_macro_attribute\]\s*pub fn (\w+)/g)) {
       decorators.add(m[1]);
@@ -445,10 +601,18 @@ function frameworkRules() {
     throw new Error('no `#[proc_macro_attribute]` found under crates/*-macros — teach '
       + '`frameworkRules` where the decorators moved, do not delete the check');
   }
-  return { traits, decorators: [...decorators] };
+  if (!traitMethods.size) {
+    throw new Error('no `pub trait` found under crates/ — teach `traitDecls` where the '
+      + 'framework moved, do not delete the check');
+  }
+  return { traits, decorators: [...decorators], traitMethods };
 }
 
-const { traits: LAYER_SUBTRAITS, decorators: DECORATORS } = frameworkRules();
+const {
+  traits: LAYER_SUBTRAITS,
+  decorators: DECORATORS,
+  traitMethods: FRAMEWORK_TRAITS,
+} = frameworkRules();
 
 /// A rust snippet — the fence language the code-truth checks read.
 const RUST_INFO = /^rust\b/;
@@ -606,13 +770,24 @@ function stripCode(src) {
     .replace(/`[^`\n]*`/g, '');
 }
 
+/// A page's id — its path under `CONTENT`, slash-separated on every platform.
+function relOf(absPath) {
+  return relative(CONTENT, absPath).split('\\').join('/');
+}
+
+/// Every page's frontmatter `title`, filled as `lintFile` walks. Accumulated
+/// rather than re-read: `lintFile` already has the source and already parsed the
+/// frontmatter, and a second pass would be a second place deciding what counts
+/// as a page.
+const PAGE_TITLES = new Map();
+
 function frontmatter(src) {
   const m = src.match(/^---\n([\s\S]*?)\n---/);
   return m ? m[1] : null;
 }
 
 function lintFile(absPath) {
-  const rel = relative(CONTENT, absPath).split('\\').join('/');
+  const rel = relOf(absPath);
   const src = readFileSync(absPath, 'utf8');
   const prose = stripCode(src);
   const blocks = fencedBlocks(src);
@@ -624,6 +799,11 @@ function lintFile(absPath) {
   if (fm === null) {
     add('frontmatter', 'missing frontmatter');
   } else {
+    const title = fm.match(/^title:\s*(.+?)\s*$/m)?.[1].replace(/^["']|["']$/g, '');
+    if (title) {
+      if (!PAGE_TITLES.has(title)) PAGE_TITLES.set(title, []);
+      PAGE_TITLES.get(title).push(rel);
+    }
     const dm = fm.match(/^description:\s*(.*)$/m);
     if (!dm) {
       add('description', 'missing');
@@ -667,7 +847,7 @@ function lintFile(absPath) {
   const mirror = MIRRORED_PAGES.get(rel);
   if (mirror) {
     MIRRORS_SEEN.add(rel);
-    for (const detail of mirror(src)) add('architecture-drift', detail);
+    for (const detail of mirror.check(src)) add(mirror.rule, detail);
   }
 
   // 5. ≤3 Asides.
@@ -790,6 +970,40 @@ function lintFile(absPath) {
     }
   }
 
+  // 19. One spelling for a pinned config: `for_root(x)`, never `for_root(Some(x))`.
+  for (const m of src.matchAll(/\bfor_root\(\s*Some\(/g)) {
+    add('for-root-form', `${m[0]}…)) — the seam takes \`impl Into<Option<C>>\`, so the demo `
+      + 'and every scaffold write the bare value; keep `None` for the env-only call');
+  }
+
+  // 20. A fence titled with a real file quotes it.
+  for (const detail of fenceTitleDrift(blocks)) add('fence-title', detail);
+
+  // 21. A published trait signature does not invent a method.
+  for (const block of blocks) {
+    if (!RUST_INFO.test(block.info)) continue;
+    for (const { name: trait, methods } of traitDecls(block.body)) {
+      const real = FRAMEWORK_TRAITS.get(trait);
+      // Engage only where the two share a method. 77 bare trait names collide
+      // across `crates/` — `Config`, `Filter`, `Module`, `Job`, `Registry` — so a
+      // page defining its own `pub trait Registry` for an example is not making
+      // a claim about `nest-rs-ws`'s, and diffing it against one is pure noise.
+      if (!real || !methods.some((m) => real.has(m))) continue;
+      for (const method of methods.filter((m) => !real.has(m))) {
+        add('trait-surface', `${trait}-${method} is published on the page but the trait under `
+          + 'crates/ declares no such method — writing it is an E0407');
+      }
+    }
+  }
+
+  // 22. A test target is a directory, never a flat `tests/<x>.rs`.
+  for (const line of prescriptiveLines(src)) {
+    for (const m of line.matchAll(FLAT_TEST_TARGET)) {
+      add('test-layout', `${m[0]} is a flat test target — a suite is a directory, `
+        + 'tests/<suite>/main.rs');
+    }
+  }
+
   return v;
 }
 
@@ -835,8 +1049,20 @@ function lintSections() {
   return out;
 }
 
+/// No two pages carry the same `title`. In search (Pagefind) the title is all a
+/// reader sees, so two "Health" pages — one of them the stale one — is the exact
+/// configuration where the wrong page wins. The fix is a qualified `title` plus
+/// a short `sidebar.label`, which leaves the navigation unchanged.
+function lintTitles() {
+  return [...PAGE_TITLES]
+    .filter(([, pages]) => pages.length > 1)
+    .flatMap(([title, pages]) => pages.map((rel) => `${rel}::title::\`${title}\` is also the `
+      + `title of ${pages.filter((p) => p !== rel).join(', ')} — qualify it and keep the short `
+      + 'name as `sidebar.label`'));
+}
+
 const files = walk(CONTENT).sort();
-const current = [...files.flatMap(lintFile), ...lintSections()].sort();
+const current = [...files.flatMap(lintFile), ...lintSections(), ...lintTitles()].sort();
 
 // Fail closed: a registered mirror that no page matched means the page was
 // renamed or moved and its drift gate silently stopped running.

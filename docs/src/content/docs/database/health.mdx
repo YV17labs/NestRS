@@ -1,9 +1,10 @@
 ---
-title: Health
+title: Database health
 description: Gate readiness on a real round-trip to the database — one module import wires the indicator.
 tier: all-options
 sidebar:
-  order: 10
+  label: Health
+  order: 11
 ---
 
 The readiness probe should fail when the database is unreachable. NestRS
@@ -49,23 +50,20 @@ database — a brief DB outage should not kill the pod.
 
 ## A passing probe
 
-```bash
-curl -s http://localhost:3000/health/ready
+```bash frame="terminal"
+$ curl -s http://localhost:3000/health/ready
+{"status":"up","info":{"db":{"name":"db","status":"up"}},"error":{},
+ "details":{"db":{"name":"db","status":"up"}}}
 ```
 
-```json
-{
-  "status": "ok",
-  "details": {
-    "db": { "status": "up" }
-  }
-}
-```
-
-A failure response surfaces the typed `DbErr` as the `error` field on the
-failing indicator, and the overall `status` switches to `down` with a
-`503`. The same shape across every indicator means a single dashboard
-template covers them all.
+When the ping fails the indicator moves from `info` to `error`, the overall
+`status` switches to `down`, and the response is a `503`. The body carries
+the **fixed** reason `"check failed"` — never the `DbErr`, which would put a
+DSN or an internal hostname on a routinely unauthenticated endpoint. The
+real error goes to the log instead: `warn` on `nest_rs::health`, with
+`indicator`, `kind` and `error` as fields. [Indicators](/health/indicators/)
+is the reference for that split; the shape itself is on
+[Health](/health/).
 
 ## Going further
 

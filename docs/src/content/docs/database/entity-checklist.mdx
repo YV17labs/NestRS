@@ -1,0 +1,80 @@
+---
+title: Entity checklist
+description: "Every decision one #[expose]d entity asks of you, one line each, each pointing at the page that explains it."
+tier: basics
+sidebar:
+  order: 3
+---
+
+One `#[expose]` declaration feeds the REST body, the GraphQL type, the OpenAPI
+schema, the CRUD inputs and the response mask. That is the framework's densest
+payoff and its densest set of choices — and they are documented across four
+pages, because each belongs beside the mechanism it drives.
+
+This page is the list. One line per decision, and a link to where it is
+explained. Read it when you declare your second entity; the first one you copy
+from [Entities](/database/entities/).
+
+## On the entity
+
+```rust
+#[expose(name = "Post", service = …, graphql, timestamps, soft_delete)]
+```
+
+| Argument | Ask yourself | Reference |
+|---|---|---|
+| `name` | What is this type called on the wire? Bare, no suffix | [Entities](/database/entities/) |
+| `service` | Which `CrudService` owns it? Omit for a read-only exposure with none | [CRUD](/database/crud/) |
+| `graphql` | Does it appear in the schema, or is it HTTP-only? | [GraphQL](/graphql/) |
+| `timestamps` | Should `created_at` / `updated_at` be maintained for you? | [Entities](/database/entities/) |
+| `soft_delete` | Does `DELETE` tombstone the row instead of erasing it? | [CRUD](/database/crud/) |
+| `complex` | Does the wire type need a hand-written `#[ComplexObject]` field resolver? | [Field resolvers](/graphql/field-resolvers/) |
+
+## On each field
+
+| Argument | Ask yourself | Reference |
+|---|---|---|
+| `#[expose]` | Does this column cross the wire at all? Silence means hidden | [Entities](/database/entities/) |
+| `input(create, update)` | May a client *write* it, and on which operation? | [CRUD](/database/crud/) |
+| `validate(…)` | What makes a value of it invalid at the edge? | [Pipes](/fundamentals/pipes/) |
+| `via = "…"` | On a `has_many`, which of the child's foreign keys does it follow? | [Entities](/database/entities/) |
+| `complexity = …` | Does resolving it cost more than a column read? | [Query limits](/graphql/query-limits/) |
+
+An enum column takes [`#[wire_enum]`](/database/entities/#enum-columns) — it
+carries the wire derives, so the field can be `#[expose]`d like any scalar.
+
+## What fails on its own, and how loudly
+
+Two of the traps on this page announce themselves. Neither is a compile error,
+and the difference matters when you are deciding what to test:
+
+- **A hidden column with no default** surfaces as a **runtime 500** on the first
+  masked response, not at build time. Reconstructing the model for masking needs
+  a value for every unexposed column; the macro supplies one for safe scalars
+  and deliberately emits nothing for a hidden `Uuid`, timestamp, `Decimal` or
+  enum without `Default`, so `wire_to_model` fails closed. Give those an explicit
+  [`#[wire_default(…)]`](/security/authorization/response-masking/).
+- **A half-wired soft delete fails the boot**, naming the entity and the
+  service — in one direction. The entity flag without
+  `CrudService::soft_delete_column` is caught; the service opting in without the
+  entity flag registers nothing and is not. See [CRUD](/database/crud/).
+
+## The two you carry yourself
+
+**Is every column that should be hidden actually unexposed?** Exposure is
+opt-in, so a column added by a later migration never leaks by omission — the
+failure direction is the safe one. The remaining risk is the reverse: an
+`#[expose]` written by habit on a column that should not travel.
+
+**Does any ability rule predicate on a column you did not expose?** Masking
+rebuilds the row from the wire body and fills unexposed columns with a
+placeholder, so such a rule is evaluated against the placeholder rather than the
+value and masks the wrong fields. Nothing catches this — see
+[Response masking](/security/authorization/response-masking/).
+
+## Going further
+
+- [Entities](/database/entities/) — the full `#[expose]` grammar.
+- [CRUD](/database/crud/) — what the service half owes each argument.
+- [Response masking](/security/authorization/response-masking/) — what the
+  exposed set means once a policy is in play.

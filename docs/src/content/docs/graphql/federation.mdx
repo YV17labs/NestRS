@@ -13,7 +13,7 @@ two things a client never does: *what does your schema look like* (`_service`)
 and *give me these objects by their keys* (`_entities`). Turn it on with one
 config flag, write one new kind of operation, and the schema answers both.
 
-```rust title="crates/features/src/posts/graphql/resolver.rs"
+```rust title="src/posts/graphql/resolver.rs"
 #[operations]
 impl PostsResolver {
     #[entity]
@@ -21,13 +21,14 @@ impl PostsResolver {
     async fn find_post_by_id(&self, id: Uuid) -> Result<Option<Post>> {
         match self.svc.access(Action::Read, id).await? {
             Access::Found(post) => Ok(Some(Post::from(post))),
-            // Denied and Missing answer the same thing: a field the router
-            // addresses by key must not say which keys exist.
             Access::Denied | Access::Missing => Ok(None),
         }
     }
 }
 ```
+
+`Denied` and `Missing` answer the same thing on purpose: a field the router
+addresses by key must not say which keys exist.
 
 That is the whole surface. The `@key` the router matches on is **inferred from
 the resolver's own arguments** — `id` here — so an entity declares its key

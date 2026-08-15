@@ -3,7 +3,7 @@ title: Seeding
 description: Idempotent demo data via the seed crate — factories, the runner, nestrs run db seed.
 tier: all-options
 sidebar:
-  order: 9
+  order: 10
 ---
 
 Demo data lives in the **`seed`** crate — a product crate under `crates/`,
@@ -52,14 +52,14 @@ the unique `email`:
 ```rust title="crates/seed/src/factories/user.rs"
 pub const ACME_AUTHOR: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac01);
 
-// (id, org, name, email, role, password_hash) — an admin plus members per org.
 const DEMO: [(Uuid, Uuid, &str, &str, &str, Option<&str>); 7] = [
     (ACME_AUTHOR, org::ACME, "Acme Author", "acme-user-1@example.test", "user", Some(DEMO_PASSWORD_HASH)),
     // ...
 ];
-
-// INSERT ... ON CONFLICT (email) DO NOTHING.
 ```
+
+The tuple is `(id, org, name, email, role, password_hash)` — an admin plus
+members per org — and the insert is `ON CONFLICT (email) DO NOTHING`.
 
 The password hash is a **pre-computed** argon2id PHC constant, not a fresh hash
 per run — re-hashing would emit a new salt each time and break idempotency.

@@ -1,8 +1,9 @@
 ---
-title: Errors
+title: GraphQL errors
 description: async-graphql Result, extensions, codes — and how a ServiceError lands on the wire as a typed GraphQL error.
 tier: basics
 sidebar:
+  label: Errors
   order: 7
 ---
 
@@ -46,7 +47,7 @@ On the wire:
     "errors": [
         {
             "message": "id must not be empty",
-            "path": ["item"],
+            "path": ["post"],
             "locations": [{ "line": 1, "column": 3 }]
         }
     ]
@@ -79,7 +80,7 @@ async fn post(&self, id: String) -> Result<String> {
         {
             "message": "id must not be empty",
             "extensions": { "code": "INVALID_ARGUMENT" },
-            "path": ["item"]
+            "path": ["post"]
         }
     ]
 }
@@ -202,7 +203,7 @@ outcome (looked something up, found nothing). Reserve errors for
 *abnormal* outcomes (validation failed, DB unreachable, principal
 refused). On the wire:
 
-- `Option<T>` returning `None` → `"data": { "item": null }`,
+- `Option<T>` returning `None` → `"data": { "post": null }`,
   no `errors` block.
 - `Result<T>` returning `Err` → `"errors": [...]`, the field's
   value is `null`.

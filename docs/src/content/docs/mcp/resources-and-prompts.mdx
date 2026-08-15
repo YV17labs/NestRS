@@ -1,0 +1,65 @@
+---
+title: MCP resources and prompts
+description: "The two capabilities beside tools — what #[prompt] generates, and when a host writes rmcp directly instead."
+sidebar:
+  label: Resources and prompts
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Resources and prompts
+
+MCP defines two primitives beyond tools: **prompts** (parameterized templates
+the user picks) and **resources** (documents the model can list and fetch).
+
+A prompt is a `#[prompt]` method in the same decorated block as your tools —
+one `impl`, both routers:
+
+```rust title="src/weather/mcp/tool.rs"
+#[tools]
+impl WeatherTool {
+    #[tool(description = "Return the current temperature for a city.")]
+    #[public]
+    async fn current_temperature(&self, /* … */) -> Result<String, McpError> { /* … */ }
+
+    #[prompt(description = "Draft a travel note for a city, primed with today's conditions.")]
+    #[public]
+    async fn travel_note(&self, /* … */) -> Result<GetPromptResult, McpError> { /* … */ }
+}
+```
+
+Resources are the one surface with no decorator, because they are a mapping from
+URIs to rows rather than a set of methods. A host that serves them writes its own
+`impl ServerHandler` — `list_resources` / `read_resource` /
+`list_resource_templates` — and that is the documented way out of the sugar: it
+uses rmcp's `#[tool_router]` / `#[tool_handler]` directly, since `#[tools]`
+cannot generate a second `ServerHandler` beside a hand-written one. `demo`'s
+`posts/mcp/tool.rs` is that host.
+
+Either way the guarantee is the same one the tool gets. `CrudService::list`
+above writes no organization filter — the ambient ability applies it, so a
+caller from another org gets an empty prompt, and `read_resource` answers
+`resource_not_found` for a row that exists but is not theirs. The demo asserts
+exactly that in `apps/assistant/tests/e2e/posts_tool.rs`.
+
+<Aside type="caution">
+  Lean on tools first. The MCP spec is tool-centric: anything you can phrase as
+  "the model calls a function and gets a result" goes through `#[tool]`. Reach
+  for resources when the model needs to *list* and *browse* documents whose
+  identifiers the model itself doesn't know; reach for prompts when the **user**
+  picks a template the client substitutes.
+</Aside>
+
+Everything else the protocol defines — completion, logging levels,
+subscriptions, the `tasks/*` extension, elicitation, custom methods — is a
+`ServerHandler` method on the same struct, and gets the same treatment. The
+protocol types live under `nest_rs::mcp::model`, the per-operation handles
+under `nest_rs::mcp::service`, and anything newer than this page under
+`nest_rs::mcp::rmcp`.
+
+## Going further
+
+- [MCP](/mcp/) — the `#[tools]` block a `#[prompt]` method lives in.
+- [Authorization](/mcp/authorization/) — every capability is gated, not just
+  `tools/call`.

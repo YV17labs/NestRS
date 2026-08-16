@@ -23,7 +23,13 @@ mod chain;
 mod context;
 mod factory;
 // The class-level decision every `#[authorize]`-emitting transport shares.
-#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
+//
+// **HTTP included**, and leaving it out is what made `--features http` alone
+// stop compiling: `Authorize`'s extractor reaches `gate::warn_denied` for the
+// denial log, so the module is a dependency of the HTTP half whether or not it
+// re-exports `gate` publicly. Four `nest-rs-cli` scaffold e2e tests were the
+// only thing that ever compiled that feature set, and they failed on it.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod gate;
 mod mask;
 mod predicate;

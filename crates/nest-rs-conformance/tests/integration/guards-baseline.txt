@@ -1,0 +1,47 @@
+# Guard capability sites missing a witness. **It only shrinks.**
+#
+# Three cells of twenty-five, all one column: no `boot_validate_*` runs over the
+# chain that marker guards.
+#
+# A misordered chain — an authorization-phase guard ahead of the authentication-
+# phase one whose principal it reads — fails **closed**: the ability guard finds
+# no principal, installs nothing, and `Repo` refuses every row while the app
+# answers and logs normally. That is what kept it quiet, and why the check is
+# worth having wherever it can honestly run.
+#
+# HTTP has it at the `#[routes]` mount and over the global bucket. A gateway's
+# **upgrade** chain has it too (`#[messages]` attaches one `HttpBootCheck`
+# calling `boot_validate_guards` over `#[gateway]`'s own specs) — that chain is
+# an HTTP `GET`, so it runs `check_http`, the entry the check is written about.
+#
+# ── The two in-band edges: the site does not exist at boot (2 cells)
+# `#[operations]` and `#[tools]` compose through `SiteChainCell` on the **first
+# dispatch that reaches the site**, after every boot check has run, and nothing
+# at boot enumerates the sites. Closing these is not a call to add but a
+# link-time registry of sites — the shape `GraphqlLoaderRegistration` already has
+# — submitted by both macro crates and walked once at boot against
+# `ReachableProviders`. Owner question, recorded in `.claude/rules/framework.md`
+# under *Two residues*; the fix belongs to both edges at once.
+nest-rs-graphql emits GraphqlGuard :: a boot-time phase validation of the chain it composes
+nest-rs-mcp emits McpGuard :: a boot-time phase validation of the chain it composes
+#
+# ── WS per message: the check would be wrong there (1 cell)
+# This one was closed for a day and is back, which is the honest outcome. A
+# per-message chain runs `check_ws_message`; `validate_guard_chain` reads
+# `produced_principal` / `expected_principal`, which describe `check_http` — and
+# `AuthnGuard` keeps the no-op `check_ws_message` default *by design*
+# (`nest-rs-authn/src/passport/guard.rs`). Applied at that site the check was
+# wrong in both directions at once:
+#
+#   - silently green on a chain where nothing attaches the principal at all,
+#     because the producer it counted attaches one at a different site;
+#   - a false boot failure on the split-scope shape `authn-authz.md` sanctions
+#     (gateway `#[use_guards(Authn, Authz)]` + message `#[use_guards(Authz)]`),
+#     and on `#[force_guards]` under the canonical global pool, where the
+#     runtime chain `[Authn, Authz, Authn]` is correct and was refused.
+#
+# The phase-*ordering* half would transfer; the principal half does not. Making
+# it honest needs a per-message notion of what "produces" means — a design
+# question, not a patch, and the second silent defect in one round is the signal
+# to stop patching. Raised as an owner question.
+nest-rs-ws emits WsGuard :: a boot-time phase validation of the chain it composes

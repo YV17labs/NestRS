@@ -16,9 +16,11 @@ publish = false
 # `\`-continued message and a `#[cfg(test)]` block are the two things a text
 # scan gets wrong, and both cost a false reading here before this crate existed.
 syn = { workspace = true, features = ["visit"] }
-
-[dev-dependencies]
 proc-macro2 = { workspace = true }
+quote = { workspace = true }
+# The umbrella's `[features]` table is read with a TOML parser for the reason the
+# rest is read with `syn`: a wrapped list is what a line scan gets wrong.
+toml_edit = { workspace = true }
 
 [lints]
 workspace = true

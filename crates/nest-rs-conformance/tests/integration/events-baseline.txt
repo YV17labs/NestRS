@@ -1,163 +1,97 @@
-# Events emitted at `warn`+ that no test reads — the state on the day the join
-# landed. **It only shrinks.** A line removed is a cell filled; a line added is
-# a regression argued in review, never absorbed by a flag.
+# Events emitted at `warn`+ that no test reads. **It only shrinks.** A line
+# removed is a cell filled; a line added is a regression argued in review, never
+# absorbed by a flag.
 #
-# Grouped by target so the file reads as a work list rather than a wall. The
-# order to shrink it in is the repo's own: an access decision first, because
-# `CLAUDE.md` says these are the events queried under incident.
+# What is left is no longer a work list. Every line below has been *tried* and is
+# recorded with the fact that makes it unreachable, because
+# `.claude/rules/testing.md` asks that a cell whose emptiness is a decision be
+# written down as one — and because "impossible" and "not yet done" are two
+# different sentences.
+#
+# **Each reason names something a reader can check**, and that is the standard
+# this file is held to rather than a nicety: four of these once named a type or
+# a function that does not exist in the repo, which is a claim a reviewer cannot
+# refute and therefore cannot trust. If a refactor makes one of these reachable,
+# the claim is wrong and the cell is owed a test — re-reading this file at review
+# time is what that is for.
 
-# ── nest_rs::orm (22)
-# The data layer — the largest block, and untouched by this pass.
-nest_rs::orm :: a statement failed before this boundary could open its transaction, but the boundary reported success; nothing it meant to write was written
-nest_rs::orm :: a statement failed inside this transaction but the boundary reported success; nothing it wrote could be committed
-nest_rs::orm :: access denied
-nest_rs::orm :: access denied — row outside the caller's scope
-nest_rs::orm :: ambient executor is not a SeaORM Executor
-nest_rs::orm :: by-id access load failed
-nest_rs::orm :: crud operation failed
-nest_rs::orm :: dispatch transaction commit failed
-nest_rs::orm :: entity has no primary-key column — keyset pagination requires one
-nest_rs::orm :: executor escaped into a spawned task
-nest_rs::orm :: job transaction commit failed
-nest_rs::orm :: list result truncated at the hard cap
-nest_rs::orm :: poisoned transaction rollback failed
-nest_rs::orm :: rollback of the create SAVEPOINT/transaction failed
-nest_rs::orm :: serialization conflict at commit
-nest_rs::orm :: service error surfaced as 500
-nest_rs::orm :: transaction commit failed
-nest_rs::orm :: transaction conflict — retry budget exhausted
-nest_rs::orm :: transaction conflict — retrying
+# ── nest_rs::orm
+# The boundary hands out its opened `Arc<DatabaseTransaction>` through exactly
+# one accessor, `LazyTransaction::into_opened`, and that accessor **consumes the
+# boundary** — so a live handle and a `finalize` that could report on it cannot
+# coexist. (It is public and called from outside the crate; "never lends it out"
+# was the wrong fact. Reaching this branch takes the private `cell` field, which
+# is cloned nowhere.) The shape a handler *can* produce — leaking the `Executor`
+# — is caught one branch earlier as `executor escaped into a spawned task`, and
+# `interceptor::an_escaped_transaction_fails_an_otherwise_successful_response`
+# covers it.
 nest_rs::orm :: transaction escaped into a spawned task
-nest_rs::orm :: transaction rollback failed
-nest_rs::orm :: unexpected captured data context
 
-# ── nest_rs::authn (10)
-# Credentials and RFC 9728 discovery. The two configuration warnings are
-# covered. The rest split in two: reachable ones (a rejected credential on a
-# public route, an unadvertised scope) and header-encoding errors that need a
-# value the type system almost prevents.
-nest_rs::authn :: OAuth callback rejected
-nest_rs::authn :: authentication unavailable
-nest_rs::authn :: authentication unavailable — identity store unreachable
-nest_rs::authn :: denied for a scope this resource does not advertise — a client following the metadata document cannot request it
-nest_rs::authn :: insufficient-scope challenge is not a valid header value
+# ── nest_rs::authn
+# The challenge is built from the resource URI, the metadata URL and
+# `scopes_supported`, and `into_metadata` — the one production path — rejects
+# `is_ascii_control() || '"' | '\' | ' '` in each (`validate_canonical_uri` and
+# its scope twin in `resource/config.rs`). That is exactly the set
+# `HeaderValue::from_str` refuses; every non-ASCII character encodes to bytes
+# ≥ 0x80, all accepted. Checked by sweeping U+0000..U+2FFFF through both the
+# resource and an advertised scope: none reaches the branch. Its
+# insufficient-scope twin *is* covered, because a scope there arrives from a
+# guard rather than from config.
 nest_rs::authn :: protected resource challenge is not a valid header value
+# `ProtectedResourceMetadata` is `String`s and `Vec<String>`s, and `serde_json`
+# is built without `arbitrary_precision`: no manual `Serialize`, no `flatten`,
+# no non-string key, nothing that can fail.
 nest_rs::authn :: protected resource metadata failed to serialize
-nest_rs::authn :: rejected credential on a public route — continuing as anonymous
+# Not a serialization — the odd one out in this file, filed here because the
+# outcome is the same. `argon2 0.5.3` returns `Err` for six reasons, and the
+# call hashes a 19-byte compile-time constant with the crate's defaults: too
+# long (> 4 GiB), a salt outside 4..64 (`SaltString::generate` gives 22), a
+# secret (none passed), an output length outside 4..=64 (32), and too little
+# memory (19456 KiB).
 nest_rs::authn :: timing dummy hash failed to initialize — absent-account burn degrades to no-op
-nest_rs::authn :: token audience differs from the advertised resource identifier — a client following RFC 8707 will request `resource` and receive a token this server rejects
 
-# ── nest_rs::http (9)
-nest_rs::http :: a masking extractor ran but no response shaper armed on this route — declare it as a handler parameter (a nested or hand-rolled extractor is invisible to the type-directed arm); failing closed
-nest_rs::http :: failed to construct a security header despite boot validation
-nest_rs::http :: imperative mounts bypass the global guard pool
-nest_rs::http :: missing request context — the guard or interceptor that sets it did not run on this route
-nest_rs::http :: rejected a malformed API version
-nest_rs::http :: renewed tls material was refused; keeping the certificate in use
-nest_rs::http :: request failed
-nest_rs::http :: request timed out
-nest_rs::http :: tls material could not be re-read; keeping the certificate in use
-
-# ── nest_rs::authz (8)
-# Access decisions. The class denial and its `reason` are covered; what
-# remains is the fail-closed *internal* paths — a broken ability factory, a
-# predicate whose relation does not match its subject. Each needs a
-# deliberately malformed policy to reach, which is the test to write, not a
-# reason to leave it.
-nest_rs::authz :: ability construction failed — denying the request
-nest_rs::authz :: ability guard denied: no authenticated actor and route is not public
-nest_rs::authz :: ability rule predicate does not match its keyed subject — failing closed
-nest_rs::authz :: authorization denied: no ambient ability
-nest_rs::authz :: invalid ability relation predicate — denying all rows
-nest_rs::authz :: missing request Ability — route is authorized but no ability guard ran
-nest_rs::authz :: response masking failed
-nest_rs::authz :: unexpected captured operation-guard state
-
-# ── nest_rs::graphql (6)
-nest_rs::graphql :: dataloaders linked but unreachable
-nest_rs::graphql :: failed to write GraphQL SDL
-nest_rs::graphql :: graphql operation failed
-nest_rs::graphql :: loaders skipped: no ReachableProviders seeded
-nest_rs::graphql :: no operation guard registered — graphql operations run unguarded
-nest_rs::graphql :: the guarded operation produced no response
-
-# ── nest_rs::mcp (6)
-# MCP mount and dispatch. Deny-all and its refusal are covered.
-nest_rs::mcp :: an MCP host on a shared path returned a pagination cursor — the merged page drops it
-nest_rs::mcp :: mcp host allowlist is empty — inbound Host headers are not validated
-nest_rs::mcp :: mcp hosts on one path declare different protocol versions — the endpoint advertises their intersection
-nest_rs::mcp :: mcp operation declares guards but the mount carries no container
-nest_rs::mcp :: mcp operation failed
-nest_rs::mcp :: mcp operation wrapper returned a foreign value
-
-# ── nest_rs::layers (5)
-# The request chain. `unguarded routes detected` is covered; the global-pipe
-# body failures need a body that reads once and fails to re-serialize.
+# ── nest_rs::layers
+# `serde_json::to_vec` over a `serde_json::Value`. The type cannot hold a state
+# that fails to serialize — `Number::from_f64` refuses NaN and ±Inf at
+# construction, object keys are always `String` — and the `Value` here came from
+# `from_slice`, whose recursion limit is 127, so a hostile body cannot even
+# build a deep one (and that failure takes the `debug` "not valid JSON" branch
+# instead).
 nest_rs::layers :: global pipe: failed to re-serialize the transformed body
-nest_rs::layers :: global pipe: failed to read body
-nest_rs::layers :: guard denied the federation field
-nest_rs::layers :: guard denied the operation
-nest_rs::layers :: guard expects a principal but no guard in the chain produces one — non-public routes will answer 500
 
-# ── nest_rs::ws (5)
+# ── nest_rs::ws
+# The same shape: `WsEnvelope { event: String, data: serde_json::Value }`. This
+# is the *connection loop* serializing the outgoing frame, whose two members are
+# a `String` and a `Value` the dispatcher already built.
+#
+# Its **reachable** twin — `WsReply::reply`, which serializes a handler's own
+# return type — was a live gap when this line landed, and is closed: it routes
+# through `Opaque` like every other failure on the edge, so the operator gets
+# the cause and the client gets `OPAQUE_CLIENT_MESSAGE`. It never appeared in
+# this population and could not have, since the join indexes `warn!`/`error!`
+# and the seam it now calls owns the macro. Asserted by
+# `envelope::tests::a_reply_that_cannot_be_serialized_tells_the_operator_and_not_the_client`.
 nest_rs::ws :: failed to serialize reply
-nest_rs::ws :: server→client frames shed: recipient outbox full (slow/dead client)
-nest_rs::ws :: subscribe_message dispatched to an unknown event
-nest_rs::ws :: websocket message failed
+# Fires only on `JoinError::is_panic` from the writer task, whose whole body is
+# `rx.recv()`, `Arc<str>::to_string()` and `sink.send()`. No panicking site of
+# its own; only an internal panic in poem or tungstenite reaches it.
 nest_rs::ws :: writer task failed
 
-# ── nest_rs::app (4)
+# ── nest_rs::app
+# `tokio::signal::unix::signal` returns `Err` for one reason a process can
+# arrange — a refused signal number — and the call sites hard-code
+# `SignalKind::terminate()`. The other misconfiguration, a runtime built without
+# the signal driver, **panics** rather than returning `Err`.
 nest_rs::app :: failed to install SIGTERM handler
+# Stronger than an environment claim: this line sits under `#[cfg(not(unix))]`,
+# so it is never compiled here at all. It appears in the population because the
+# scan reads the source with `syn`, which is blind to `cfg` — a limit of the
+# join worth knowing, and the reason a `cfg`-gated event cannot simply be
+# filtered out of the family.
 nest_rs::app :: failed to install ctrl-c handler
-nest_rs::app :: transport failed; shutting down
-nest_rs::app :: transport task panicked; shutting down
 
-# ── nest_rs::config (3)
-nest_rs::config :: environment variable is not valid UTF-8 — treated as unset, cascade suppressed
-nest_rs::config :: skipped malformed .env lines
-nest_rs::config :: skipping unreadable .env file
-
-# ── nest_rs::container (3)
-nest_rs::container :: keyed provider override
-nest_rs::container :: provider override
-nest_rs::container :: provider scope conflict
-
-# ── nest_rs::openapi (3)
-nest_rs::openapi :: OpenAPI documentation endpoints are enabled and public outside a dev profile
-nest_rs::openapi :: route omitted from the document: an OpenAPI path template is one whole segment, so a catch-all, an unnamed pattern, or a literal sharing a segment with a parameter cannot be described
-nest_rs::openapi :: two API versions serve one documented path
-
-# ── nest_rs::queue (3)
-nest_rs::queue :: job failed; will retry within the budget
-nest_rs::queue :: queue backend connect timed out
-nest_rs::queue :: queue backend unreachable — retrying within the connect budget
-
-# ── nest_rs::throttler (3)
-nest_rs::throttler :: rate limit exceeded
-nest_rs::throttler :: rate-limit keying degraded to a shared bucket
-nest_rs::throttler :: redis throttler unavailable; denying (fail-closed)
-
-# ── nest_rs::health (2)
-nest_rs::health :: health indicator timed out
+# ── nest_rs::health
+# `ProbeReport` is an `IndicatorStatus` plus three `BTreeMap<&'static str,
+# IndicatorReport>`; `IndicatorReport` is a status and two `Option<String>`s.
+# All `serde`-derived, all string-keyed.
 nest_rs::health :: health report failed to serialize
-
-# ── nest_rs::access_graph (1)
-nest_rs::access_graph :: unreachable resolver skipped from the GraphQL schema
-
-# ── nest_rs::lifecycle (1)
-nest_rs::lifecycle :: lifecycle hook failed
-
-# ── nest_rs::routes (1)
-nest_rs::routes :: failed to write OpenAPI document
-
-# ── nest_rs::schedule (1)
-nest_rs::schedule :: cron job has no future occurrence; it will not run again
-
-# ── nest_rs::social (1)
-nest_rs::social :: linked social provider has no credentials configured; inert
-
-# ── nest_rs::storage (1)
-nest_rs::storage :: no runtime is available to discard them; they are left for the store's lifecycle rule
-
-# ── nest_rs::worker (1)
-nest_rs::worker :: job context returned without running the job to completion; failing this job

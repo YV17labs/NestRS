@@ -18,8 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use nest_rs_conformance::baseline;
-use nest_rs_conformance::sources::{parsed, repo_root, rust_files};
-use syn::{Expr, Item, Lit};
+use nest_rs_conformance::sources::{Pair, declared_pairs, repo_root, rust_files};
 
 const BASELINE: &str = "shapes-baseline.txt";
 
@@ -27,95 +26,12 @@ const BASELINE: &str = "shapes-baseline.txt";
 /// generic `#[injectable]`. Below that the scan is reading the wrong tree.
 const FLOOR: usize = 9;
 
-/// A pair as its own declaration spells it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Pair {
-    /// The struct half — `#[injectable]` for a provider-hosted pair.
-    host: String,
-    /// The impl half.
-    operations: String,
-}
-
 /// `#[controller]` → `controller`, which is how the fixtures spell it.
 fn bare(decorator: &str) -> String {
     decorator
         .trim_start_matches("#[")
         .trim_end_matches(']')
         .to_owned()
-}
-
-fn as_str_lit(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::Lit(lit) => match &lit.lit {
-            Lit::Str(s) => Some(s.value()),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Both spellings of a declaration, and only these two: a third would be a
-/// second way to declare a pair, which the rule forbids before this join has
-/// to care.
-fn pair_from(expr: &Expr) -> Option<(String, String)> {
-    match expr {
-        // `DecoratorPair { host: "#[controller]", operations: "#[routes]", .. }`
-        Expr::Struct(lit) if lit.path.segments.last()?.ident == "DecoratorPair" => {
-            let field = |name: &str| {
-                lit.fields
-                    .iter()
-                    .find(|f| matches!(&f.member, syn::Member::Named(i) if i == name))
-                    .and_then(|f| as_str_lit(&f.expr))
-            };
-            Some((field("host")?, field("operations")?))
-        }
-        // `DecoratorPair::on_provider("#[processor]", "#[process]")` — the host
-        // is the generic `#[injectable]`, which is why five pairs share one
-        // host cell rather than owing five.
-        Expr::Call(call) => {
-            let Expr::Path(path) = &*call.func else {
-                return None;
-            };
-            if path.path.segments.last()?.ident != "on_provider" {
-                return None;
-            }
-            let operations = as_str_lit(call.args.first()?)?;
-            Some(("#[injectable]".to_owned(), operations))
-        }
-        _ => None,
-    }
-}
-
-fn declared_pairs() -> Vec<Pair> {
-    let root = repo_root();
-    let mut out = Vec::new();
-    for dir in std::fs::read_dir(root.join("crates"))
-        .expect("crates/ is readable")
-        .flatten()
-    {
-        let path = dir.path();
-        if !path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with("-macros"))
-        {
-            continue;
-        }
-        for file in rust_files(&path.join("src")) {
-            let Some(ast) = parsed(&file) else {
-                continue;
-            };
-            for item in &ast.items {
-                let Item::Const(konst) = item else {
-                    continue;
-                };
-                if let Some((host, operations)) = pair_from(&konst.expr) {
-                    out.push(Pair { host, operations });
-                }
-            }
-        }
-    }
-    out
 }
 
 /// Every trybuild fixture in the workspace, by bare file name. The population is
@@ -169,12 +85,7 @@ fn owed(pair: &Pair) -> Vec<String> {
 #[test]
 fn every_decorator_pair_refuses_every_wrong_shape_by_name() {
     let pairs = declared_pairs();
-    assert!(
-        pairs.len() >= FLOOR,
-        "the scan found {} DecoratorPair declaration(s) — below {FLOOR} it is \
-         reading the wrong tree, and every hole it reports is an artefact",
-        pairs.len(),
-    );
+    baseline::floor(pairs.len(), FLOOR, "DecoratorPair declaration(s)");
 
     let fixtures = fixtures();
     // Keyed by fixture name so the five provider-hosted pairs share the single
@@ -194,21 +105,12 @@ fn every_decorator_pair_refuses_every_wrong_shape_by_name() {
         .map(|(cell, pair)| format!("{cell} :: {pair}"))
         .collect();
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/integration")
-        .join(BASELINE);
-    let Some(verdict) = baseline::compare(&path, &holes) else {
-        baseline::land(&path, &holes);
-        panic!(
-            "no baseline: wrote {} of {} cells as today's holes. Read it before \
-             committing — every line is a wrong shape no fixture pins.",
-            holes.len(),
-            pairs.iter().map(|p| owed(p).len()).sum::<usize>(),
-        );
-    };
-    assert!(
-        verdict.is_clean(),
-        "{}",
-        verdict.report("decorator pair × wrong shape"),
+    baseline::gate(
+        BASELINE,
+        &holes,
+        pairs.iter().map(|p| owed(p).len()).sum::<usize>(),
+        "cells",
+        "decorator pair × wrong shape",
+        "a wrong shape no fixture pins",
     );
 }

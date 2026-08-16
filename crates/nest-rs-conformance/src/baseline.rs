@@ -76,3 +76,49 @@ pub fn land(path: &Path, holes: &BTreeSet<String>) {
     let listing = holes.iter().cloned().collect::<Vec<_>>().join("\n");
     fs::write(path, format!("{listing}\n")).expect("the baseline path is writable");
 }
+
+/// The floor a join names for its own population, asserted with one sentence.
+///
+/// Every join owes this check — a scan reading the wrong tree reports its whole
+/// family as holes, and a green baseline diff is the worst way to find out. The
+/// sentence is here rather than per join so the seven copies cannot drift into
+/// seven explanations of the same failure.
+#[track_caller]
+pub fn floor(found: usize, floor: usize, unit: &str) {
+    assert!(
+        found >= floor,
+        "the scan found {found} {unit} — below {floor} it is reading the wrong \
+         tree, and every hole it reports is an artefact",
+    );
+}
+
+/// The whole tail of a join: land a first baseline and fail, or compare and
+/// assert.
+///
+/// `file` is the baseline's name inside `tests/integration/`, resolved against
+/// this crate's own manifest — the baselines and this module ship in the same
+/// crate, so no join has to spell the path. `scanned` and `unit` are the
+/// population the join walked, and `line_is` completes "every line is …", which
+/// is the one sentence a first landing exists to make a reader act on.
+#[track_caller]
+pub fn gate(
+    file: &str,
+    holes: &BTreeSet<String>,
+    scanned: usize,
+    unit: &str,
+    family: &str,
+    line_is: &str,
+) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/integration")
+        .join(file);
+    let Some(verdict) = compare(&path, holes) else {
+        land(&path, holes);
+        panic!(
+            "no baseline: wrote {} hole(s) across {scanned} {unit}. Read it \
+             before committing — every line is {line_is}.",
+            holes.len(),
+        );
+    };
+    assert!(verdict.is_clean(), "{}", verdict.report(family));
+}

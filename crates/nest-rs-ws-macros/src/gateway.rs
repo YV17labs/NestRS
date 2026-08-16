@@ -12,7 +12,7 @@ use syn::{LitStr, Meta, Path, Token};
 use nest_rs_codegen::{
     DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
     guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    reject_http_only_layers, take_path_list,
+    reject_http_only_layers, scoped_specs, take_path_list,
 };
 
 /// The WS edge's pair, read by both halves so their wrong-shape diagnostics name
@@ -80,6 +80,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     // nothing declared this just boxes the endpoint.
     let guard_layers = guard_layers(&guards);
     let has_edge_guards = !guards.is_empty();
+    let edge_guard_specs = scoped_specs(&guards, quote!(dyn ::nest_rs_guards::Guard));
     // A gateway-scope guard runs on the upgrade, which is an HTTP `GET`, so it
     // attests `HttpGuard` — not `WsGuard`, which `#[messages]` requires of the
     // per-event ones. That split is the whole point of the two markers here.
@@ -174,6 +175,20 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
             /// to tell a guarded edge from a bare one instead of warning on both.
             #[doc(hidden)]
             pub const HAS_EDGE_GUARDS: bool = #has_edge_guards;
+
+            /// The upgrade-scope guards, as resolvable specs.
+            ///
+            /// The layers above *apply* them; this is the same list in the shape
+            /// the boot check reads, so `#[messages]` can phase-validate the
+            /// upgrade chain the way `#[routes]` validates a controller's. The
+            /// two halves of the pair are one decorator's worth of information
+            /// split across two item shapes, and this is the seam between them.
+            #[doc(hidden)]
+            pub fn __nestrs_edge_guard_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+            {
+                #edge_guard_specs
+            }
 
             #from_container
 

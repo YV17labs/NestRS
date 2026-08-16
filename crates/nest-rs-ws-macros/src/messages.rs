@@ -446,6 +446,37 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
                     .owned_by(#gateway_name)
                     .self_guarded_if(<#self_ty>::HAS_EDGE_GUARDS),
                 )
+                // Boot-time validation of the **upgrade** chain — the same
+                // check `#[routes]` runs for a controller, on the same kind of
+                // chain: a `#[gateway(...)]` guard runs on the HTTP `GET` that
+                // becomes the socket, so it executes `check_http` and attests
+                // `HttpGuard`. A misordered pair fails the boot here instead of
+                // denying every connection with nothing to say why.
+                //
+                // **The per-message chains are deliberately not validated**, and
+                // that is a finding rather than an omission. `validate_guard_chain`
+                // reads `produced_principal`/`expected_principal`, which describe
+                // `check_http`; at the per-message site the entry is
+                // `check_ws_message`, where `AuthnGuard` keeps the no-op default
+                // by design. Applied there the check was wrong in both
+                // directions — silently green on a chain that attaches no
+                // principal, and a false boot failure on the split-scope shape
+                // `authn-authz.md` sanctions — and it refused `#[force_guards]`
+                // under the canonical pool. Answering at that site needs a
+                // per-message notion of "producer", which is a design question,
+                // not a patch. See `guards-baseline.txt`.
+                .attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpBootCheck>(
+                    ::nest_rs_ws::nest_rs_http::HttpBootCheck::new(|__container| {
+                        ::nest_rs_guards::dispatch::boot_validate_guards(
+                            __container,
+                            &<#self_ty>::__nestrs_edge_guard_specs(),
+                            &::std::format!(
+                                "the {} gateway upgrade",
+                                <#self_ty>::__nestrs_mount_path(),
+                            ),
+                        )
+                    }),
+                )
             }
         }
     }
@@ -526,12 +557,10 @@ fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
     })
 }
 
-/// Build the chain-insert for one `#[subscribe_message]` event.
-///
-/// The chain is `global + method_guards`, deduped by `TypeId` (broadest
-/// wins). `#[force_guards]` lets a per-message guard replay even when the
-/// same `TypeId` is global.
-fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
+/// The three inputs one event's chain is composed from, bound as `__global`,
+/// `__method`, `__force` and `__label`, reading `__global_guards` and
+/// `__container` from the enclosing scope.
+fn chain_specs(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
     let method_spec_entries = method_guards.iter().map(|p| {
         quote! {
             ::nest_rs_guards::layer_chain::ResolvedLayer {
@@ -550,23 +579,35 @@ fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -
         quote! { ::core::any::TypeId::of::<#p>() }
     });
     quote! {
+        let __global: ::std::vec::Vec<
+            ::nest_rs_guards::layer_chain::ResolvedLayer<dyn ::nest_rs_guards::Guard>
+        > = __global_guards
+            .iter()
+            .map(|(__tid, __name, __arc)| ::nest_rs_guards::layer_chain::ResolvedLayer {
+                type_id: *__tid,
+                name: __name,
+                source: ::nest_rs_guards::layer_chain::LayerSite::Global,
+                layer: ::std::sync::Arc::clone(__arc),
+            })
+            .collect();
+        let __method: ::std::vec::Vec<
+            ::nest_rs_guards::layer_chain::ResolvedLayer<dyn ::nest_rs_guards::Guard>
+        > = ::std::vec![#(#method_spec_entries),*];
+        let __force: ::std::vec::Vec<::core::any::TypeId> = ::std::vec![#(#force_typeids),*];
+        let __label = ::std::format!("ws {}", #event);
+    }
+}
+
+/// Build the chain-insert for one `#[subscribe_message]` event.
+///
+/// The chain is `global + method_guards`, deduped by `TypeId` (broadest
+/// wins). `#[force_guards]` lets a per-message guard replay even when the
+/// same `TypeId` is global.
+fn chain_insert(event: &LitStr, method_guards: &[Path], force_guards: &[Path]) -> TokenStream2 {
+    let specs = chain_specs(event, method_guards, force_guards);
+    quote! {
         {
-            let __global: ::std::vec::Vec<
-                ::nest_rs_guards::layer_chain::ResolvedLayer<dyn ::nest_rs_guards::Guard>
-            > = __global_guards
-                .iter()
-                .map(|(__tid, __name, __arc)| ::nest_rs_guards::layer_chain::ResolvedLayer {
-                    type_id: *__tid,
-                    name: __name,
-                    source: ::nest_rs_guards::layer_chain::LayerSite::Global,
-                    layer: ::std::sync::Arc::clone(__arc),
-                })
-                .collect();
-            let __method: ::std::vec::Vec<
-                ::nest_rs_guards::layer_chain::ResolvedLayer<dyn ::nest_rs_guards::Guard>
-            > = ::std::vec![#(#method_spec_entries),*];
-            let __force: ::std::vec::Vec<::core::any::TypeId> = ::std::vec![#(#force_typeids),*];
-            let __label = ::std::format!("ws {}", #event);
+            #specs
             let __chain = ::nest_rs_guards::layer_chain::compose_chain::<dyn ::nest_rs_guards::Guard>(
                 __global,
                 ::std::vec![],

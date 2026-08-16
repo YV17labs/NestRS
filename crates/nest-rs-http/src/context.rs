@@ -123,11 +123,29 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_principal_with_no_rejection_stays_a_wiring_500() {
+        let logs = nest_rs_testing::LogCapture::install();
         let err = extract(Request::default())
             .await
             .err()
             .expect("no guard ran");
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // The response body is deliberately bare — a Rust type name is not
+        // something to hand a client — which makes this line the only record of
+        // *which* context was missing. An app attaching several is otherwise
+        // told only that one of them did not arrive.
+        let event = logs.expect_one(
+            "nest_rs::http",
+            "missing request context — the guard or interceptor that sets it did not run on this route",
+        );
+        assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("context_type")
+                .is_some_and(|t| t.contains("Principal")),
+            "the event names the context type that never arrived, got {:?}",
+            event.fields,
+        );
     }
 
     // G5: `#[public]` on an OAuth callback made `AuthnGuard` absorb the

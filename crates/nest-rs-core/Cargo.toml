@@ -41,6 +41,11 @@ validator.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
+# `LogCapture`: the container's two survivable conflicts (a keyed override, a
+# scope that changes under a type) warn and continue, so the event is the only
+# trace a shadowed provider leaves. Dev-only, so the cycle back to this crate
+# never reaches a consumer build.
+nest-rs-testing = { path = "../nest-rs-testing" }
 # Snapshot-tests the core macro compile diagnostics (`#[injectable]`, `#[module]`)
 # — the exact error a developer sees is part of the contract (CORE-I10), the
 # same net the http/graphql/ws macros already have.

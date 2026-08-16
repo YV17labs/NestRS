@@ -204,6 +204,105 @@ mod tests {
     // Falling back to bare `tokio::spawn` is the documented "no row-level
     // security" path. Pin that the spawner actually runs the future end-to-end
     // when no `GraphqlBatchContext` provider is registered.
+    /// A container with no `ReachableProviders` seeds **no** loaders — the
+    /// fail-closed answer, since resolving a loader whose owner module is
+    /// absent would panic on `container.get::<Owner>()`.
+    ///
+    /// What makes the event load-bearing is that nothing else changes: the
+    /// schema builds, every query works, and only a relation field backed by a
+    /// loader errors — at query time, in production, to a client. This line is
+    /// emitted once at build and carries the two ways to fix it.
+    #[test]
+    fn a_container_with_no_reachability_says_it_seeded_no_loaders() {
+        let logs = nest_rs_testing::LogCapture::install();
+        // Hand-rolled: `App::builder`/`App::new` always seed `ReachableProviders`,
+        // so this is the one shape that reaches the branch.
+        let seeds = reachable_seeds(&Container::builder().build());
+        assert!(seeds.is_empty(), "nothing is seeded without reachability");
+
+        let event = logs.expect_one(
+            "nest_rs::graphql",
+            "loaders skipped: no ReachableProviders seeded",
+        );
+        assert_eq!(event.level, "warn");
+        assert!(
+            event
+                .field("hint")
+                .is_some_and(|h| h.contains("App::builder")),
+            "the remedy is the point of the line, got {:?}",
+            event.fields,
+        );
+    }
+
+    /// The owner of a loader no module in the app provides. `inventory` is
+    /// link-time, so this registration is in the test binary whether a given
+    /// test wants it or not — which *is* the situation the event reports, and
+    /// it is inert: `reachable_seeds` filters it out of every seed list.
+    struct AbsentOwner;
+
+    inventory::submit! {
+        GraphqlLoaderRegistration {
+            owner_type_id: || TypeId::of::<AbsentOwner>(),
+            seed: |_, request| request,
+        }
+    }
+
+    /// `ReachableProviders` seeded with exactly `types` — the shape a real boot
+    /// leaves behind, as opposed to the no-gate shape above.
+    fn reached(types: &[TypeId]) -> Container {
+        Container::builder()
+            .provide(ReachableProviders(types.iter().copied().collect()))
+            .build()
+    }
+
+    #[test]
+    fn a_loader_whose_owner_module_is_not_imported_is_counted_at_boot() {
+        // The failure this exists for is silent by construction: the schema
+        // builds, every query answers, and only a relation field backed by the
+        // skipped loader errors — at query time, to a client, in an app whose
+        // boot said nothing. `#[dataloader]` on a service in a feature crate
+        // that this binary links but does not import is all it takes.
+        let logs = nest_rs_testing::LogCapture::install();
+        warn_unreachable_loaders(&reached(&[]));
+
+        let event = logs.expect_one("nest_rs::graphql", "dataloaders linked but unreachable");
+        assert_eq!(event.level, "warn");
+        // At least one, not exactly one: `inventory` is link-time, so the count
+        // is a property of the whole test binary. Pinning it to `1` would break
+        // the day this crate gains a second `#[cfg(test)]` registration or its
+        // first unit test of a real `#[dataloader]` — silently, on a number
+        // that was never this test's subject.
+        let counted: usize = event
+            .field("count")
+            .and_then(|c| c.parse().ok())
+            .unwrap_or_default();
+        assert!(
+            counted >= 1,
+            "the skipped loader is counted: {:?}",
+            event.fields,
+        );
+        assert!(
+            event.field("hint").is_some_and(|h| h.contains("import")),
+            "the remedy is the point of the line, got {:?}",
+            event.fields,
+        );
+    }
+
+    #[test]
+    fn a_loader_whose_owner_is_reachable_is_not_reported() {
+        // The other direction, and the one that keeps the count honest: every
+        // app that works links loaders, so a check reading the registry alone
+        // would warn on all of them.
+        let logs = nest_rs_testing::LogCapture::install();
+        let container = reached(&[TypeId::of::<AbsentOwner>()]);
+        warn_unreachable_loaders(&container);
+        logs.expect_none("nest_rs::graphql", "dataloaders linked but unreachable");
+        assert!(
+            !reachable_seeds(&container).is_empty(),
+            "and it is seeded rather than skipped",
+        );
+    }
+
     #[tokio::test]
     async fn batch_spawner_without_a_context_runs_the_future_on_tokio_spawn() {
         let container = Container::builder().build();
@@ -308,7 +407,7 @@ mod batch_context_warning {
             .build();
         let logs = LogCapture::install();
         warn_missing_batch_context(&container, 3);
-        assert!(logs.find("nest_rs::graphql", EVENT).is_empty());
+        logs.expect_none("nest_rs::graphql", EVENT);
     }
 
     /// An app with no loaders at all needs no context — a schema of plain
@@ -317,6 +416,6 @@ mod batch_context_warning {
     fn no_loaders_means_no_warning() {
         let logs = LogCapture::install();
         warn_missing_batch_context(&Container::builder().build(), 0);
-        assert!(logs.find("nest_rs::graphql", EVENT).is_empty());
+        logs.expect_none("nest_rs::graphql", EVENT);
     }
 }

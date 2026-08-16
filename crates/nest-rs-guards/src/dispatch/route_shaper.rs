@@ -278,3 +278,92 @@ async fn apply_body_pipes(
     req.set_body(Body::from_bytes(rewritten.into()));
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use nest_rs_core::{Layer, LayerSite};
+    use nest_rs_http::poem::Body;
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+
+    struct NoopPipe;
+
+    impl Layer for NoopPipe {}
+    impl GlobalPipe for NoopPipe {}
+
+    fn pipe() -> Vec<ResolvedLayer<dyn GlobalPipe>> {
+        vec![ResolvedLayer {
+            type_id: std::any::TypeId::of::<NoopPipe>(),
+            name: "NoopPipe",
+            source: LayerSite::Global,
+            layer: Arc::new(NoopPipe) as Arc<dyn GlobalPipe>,
+        }]
+    }
+
+    /// A JSON request whose body stream dies mid-read — a client that hung up,
+    /// or a proxy that closed the connection after the headers.
+    fn request_with_a_failing_body() -> Request {
+        let stream = futures_util::stream::once(async {
+            Err::<Vec<u8>, _>(std::io::Error::other("the client hung up mid-body"))
+        });
+        Request::builder()
+            .method(nest_rs_http::poem::http::Method::POST)
+            .uri("/things".parse().expect("a uri"))
+            .content_type("application/json")
+            .body(Body::from_bytes_stream(stream))
+    }
+
+    #[tokio::test]
+    async fn a_body_the_global_pipes_could_not_read_fails_the_request_and_says_why() {
+        // The reason this cannot degrade quietly: reading the body *consumes*
+        // it, and a partial read cannot be put back. Carrying on would run the
+        // handler against an empty body with every global pipe skipped — a
+        // request that looks served, with the app's edge validation silently
+        // absent from it. So the request fails, and this line is what says the
+        // failure was the body rather than the handler.
+        let logs = LogCapture::install();
+        let mut req = request_with_a_failing_body();
+
+        let err = apply_body_pipes(&mut req, &pipe())
+            .await
+            .expect_err("a body that cannot be read is not a body the pipes ran on");
+        assert_eq!(
+            err.status(),
+            nest_rs_http::poem::http::StatusCode::BAD_REQUEST,
+        );
+
+        let event = logs.expect_one("nest_rs::layers", "global pipe: failed to read body");
+        assert_eq!(event.level, "warn");
+        assert!(
+            event.field("error").is_some_and(|e| e.contains("hung up")),
+            "the event carries the read failure, got {:?}",
+            event.fields,
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_the_status_the_limit_names_and_not_this_line() {
+        // Its neighbour, and the reason the branch is split: `PayloadTooLarge`
+        // is the body limit doing its job, so it answers `413` and says nothing
+        // — folding the two would file every oversized upload under a read
+        // failure.
+        let logs = LogCapture::install();
+        let mut req = Request::builder()
+            .method(nest_rs_http::poem::http::Method::POST)
+            .uri("/things".parse().expect("a uri"))
+            .content_type("application/json")
+            .body(Body::from_bytes(vec![b'x'; 64 * 1024 * 1024].into()));
+
+        let err = apply_body_pipes(&mut req, &pipe())
+            .await
+            .expect_err("a body past the limit is refused");
+        assert_eq!(
+            err.status(),
+            nest_rs_http::poem::http::StatusCode::PAYLOAD_TOO_LARGE,
+        );
+        logs.expect_none("nest_rs::layers", "global pipe: failed to read body");
+    }
+}

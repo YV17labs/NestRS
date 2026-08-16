@@ -45,6 +45,9 @@ tokio.workspace = true
 # gateway-scope denial once rendered 401 while logging nothing. Dev-dep cycle,
 # the same one `nest-rs-graphql` and `nest-rs-ws` already carry.
 nest-rs-testing = { path = "../nest-rs-testing" }
+# A request body that fails *mid-stream* is the one shape `Body::from_bytes`
+# cannot make, and it is the shape the global-pipe read failure needs.
+futures-util.workspace = true
 
 [lints]
 workspace = true

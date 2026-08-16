@@ -182,6 +182,55 @@ mod tests {
         .expect("audience matches the resource");
     }
 
+    /// A mismatch is a `warn`, not a refusal — some authorization servers mint
+    /// an opaque audience by policy and the deployment is entitled to that.
+    ///
+    /// Which is exactly why the line matters: the app boots and serves, and the
+    /// failure surfaces one client at a time, as a `401` on a token that
+    /// followed RFC 8707 correctly. Nothing else in the system knows the two
+    /// values disagree — this is the only place both are in scope.
+    #[test]
+    fn a_mismatched_audience_boots_and_says_which_two_values_disagree() {
+        let logs = nest_rs_testing::LogCapture::install();
+        require_audience_binding(
+            Some(&jwt_with_audience(Some("some-opaque-audience"))),
+            &metadata(),
+        )
+        .expect("a mismatch is tolerated, not refused");
+
+        let event = logs.expect_one(
+            "nest_rs::authn",
+            "token audience differs from the advertised resource identifier — a client \
+             following RFC 8707 will request `resource` and receive a token this server rejects",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(
+            event.field("audience").as_deref(),
+            Some("some-opaque-audience")
+        );
+        assert_eq!(
+            event.field("resource").as_deref(),
+            Some("https://api.example.com"),
+        );
+    }
+
+    /// And a matching pair is silent: warning on the correct configuration is
+    /// how a reader learns to ignore the line above.
+    #[test]
+    fn a_matching_audience_says_nothing() {
+        let logs = nest_rs_testing::LogCapture::install();
+        require_audience_binding(
+            Some(&jwt_with_audience(Some("https://api.example.com"))),
+            &metadata(),
+        )
+        .expect("audience matches the resource");
+        assert!(
+            logs.events().is_empty(),
+            "the correct configuration is not an event: {:#?}",
+            logs.events(),
+        );
+    }
+
     #[test]
     fn a_missing_audience_fails_boot_and_names_the_variable() {
         let err = require_audience_binding(Some(&jwt_with_audience(None)), &metadata())

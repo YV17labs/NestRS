@@ -47,6 +47,12 @@ reqwest.workspace = true
 # `object_store`'s surface), so the e2e suite asserts on the event the client
 # emits — which means collecting events with a `Layer` of its own.
 tracing-subscriber.workspace = true
+# `LogCapture`, for the unit half of the same problem: what the abort-on-drop
+# guard says when it is dropped with no runtime to abort on.
+nest-rs-testing = { path = "../nest-rs-testing" }
+# `object_store::MultipartUpload` is an `#[async_trait]` trait, so a test double
+# for it has to be written under the same attribute.
+async-trait.workspace = true
 
 [lints]
 workspace = true

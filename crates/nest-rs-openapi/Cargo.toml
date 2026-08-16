@@ -42,6 +42,9 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 # A global deny-all guard, to prove the documentation edges are `Exempt` — the
 # exposure that makes `enabled = false` the production posture.
 nest-rs-guards = { path = "../nest-rs-guards" }
+# `figment::Jail` isolates `NESTRS_ENV` for the one config branch that reads the
+# *process* environment rather than a `ConfigService`.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

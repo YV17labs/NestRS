@@ -459,14 +459,9 @@ mod tests {
             let _ = scope_for::<widget::Entity>(Action::Read);
         })
         .await;
-        assert!(
-            logs.find(
-                "nest_rs::orm",
-                "no ambient Ability outside a worker job — denying all rows",
-            )
-            .is_empty(),
-            "{:#?}",
-            logs.events(),
+        logs.expect_none(
+            "nest_rs::orm",
+            "no ambient Ability outside a worker job — denying all rows",
         );
     }
 

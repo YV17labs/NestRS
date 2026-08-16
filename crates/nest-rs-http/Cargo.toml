@@ -52,6 +52,10 @@ futures-util.workspace = true
 rustls.workspace = true
 
 [dev-dependencies]
+# `LogCapture`: several transport refusals answer one status code for two very
+# different causes (an unreadable version header and a malformed one both give
+# `400`), so the event is what separates them for an operator.
+nest-rs-testing = { path = "../nest-rs-testing" }
 # Pipe/scope unit tests build small `Serialize`/`Deserialize` payloads to feed
 # the `Json<T>` extractor in `from_request` test paths.
 serde.workspace = true

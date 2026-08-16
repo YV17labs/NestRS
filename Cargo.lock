@@ -2730,6 +2730,7 @@ dependencies = [
  "figment",
  "nest-rs-config-macros",
  "nest-rs-core",
+ "nest-rs-testing",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -2752,7 +2753,9 @@ name = "nest-rs-conformance"
 version = "4.0.0"
 dependencies = [
  "proc-macro2",
+ "quote",
  "syn 3.0.3",
+ "toml_edit 0.25.13+spec-1.1.0",
 ]
 
 [[package]]
@@ -2763,6 +2766,7 @@ dependencies = [
  "async-trait",
  "inventory",
  "nest-rs-core-macros",
+ "nest-rs-testing",
  "parking_lot",
  "schemars",
  "serde",
@@ -2880,6 +2884,7 @@ name = "nest-rs-guards"
 version = "4.0.0"
 dependencies = [
  "async-trait",
+ "futures-util",
  "nest-rs-core",
  "nest-rs-exception-filters",
  "nest-rs-filters",
@@ -2942,6 +2947,7 @@ dependencies = [
  "nest-rs-http-macros",
  "nest-rs-interceptors",
  "nest-rs-pipes",
+ "nest-rs-testing",
  "poem",
  "reqwest 0.13.4",
  "rustls",
@@ -3018,6 +3024,7 @@ dependencies = [
 name = "nest-rs-openapi"
 version = "4.0.0"
 dependencies = [
+ "figment",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
@@ -3246,6 +3253,7 @@ dependencies = [
  "nest-rs-authn",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-testing",
  "serde",
  "serde_json",
  "tokio",
@@ -3257,11 +3265,13 @@ dependencies = [
 name = "nest-rs-storage"
 version = "4.0.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "futures-util",
  "http",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-testing",
  "object_store",
  "reqwest 0.13.4",
  "thiserror 2.0.20",
@@ -3329,6 +3339,8 @@ dependencies = [
 name = "nest-rs-worker"
 version = "4.0.0"
 dependencies = [
+ "futures-util",
+ "nest-rs-testing",
  "tokio",
  "tracing",
 ]

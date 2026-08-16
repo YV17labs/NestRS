@@ -87,6 +87,29 @@ mod tests {
         );
     }
 
+    /// The other half of the same contract, and the half nobody read.
+    ///
+    /// Withholding the cause from the client is only safe because it is
+    /// recorded somewhere else. If this event ever stopped carrying `error`,
+    /// every `.opaque()?` in the framework would turn a real failure into a
+    /// blank `500` with no trace at all — and the test above would still pass,
+    /// because it only asserts what is *absent* from the wire.
+    #[test]
+    fn and_the_operator_gets_the_error_the_client_does_not() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let _: Result<(), Error> = Err(Leaky).opaque();
+
+        let event = logs.expect_one("nest_rs::http", "request failed");
+        assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("error")
+                .is_some_and(|e| e.contains("password_hash")),
+            "the cause the body withholds is exactly what the log has to carry, got {:?}",
+            event.fields,
+        );
+    }
+
     #[test]
     fn it_is_a_500_and_a_problem_document() {
         let out: Result<(), Error> = Err(Leaky).opaque();

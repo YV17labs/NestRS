@@ -128,4 +128,55 @@ mod tests {
              it got wrong, exactly as the HTTP 400 carries them",
         );
     }
+
+    /// The other half of the same contract, and the half nobody read.
+    ///
+    /// Withholding the cause is only safe because it is recorded somewhere
+    /// else — and here the client is a language model, which will happily
+    /// repeat whatever it is handed. If this event stopped carrying `error`, a
+    /// failing tool would be a blank refusal with no trace, and the
+    /// nothing-leaks test next door would still pass: it only asserts what is
+    /// *absent* from the reply.
+    #[test]
+    fn and_the_operator_gets_the_error_the_model_does_not() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let leaky: Result<(), String> =
+            Err("relation \"users\" does not exist; secret_column = 42".to_owned());
+        let _ = leaky.opaque();
+
+        let event = logs.expect_one("nest_rs::mcp", "mcp operation failed");
+        assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("error")
+                .is_some_and(|e| e.contains("secret_column")),
+            "the cause the reply withholds is exactly what the log has to carry, got {:?}",
+            event.fields,
+        );
+    }
+
+    /// A decorated operation that declares guards and finds no container to
+    /// resolve them from fails **closed and named**.
+    ///
+    /// The alternative reading of the same fact — an unresolvable chain
+    /// silently running zero guards — ships a tool surface nobody gated, to a
+    /// language model. So the refusal is the behaviour and the event is what
+    /// makes it diagnosable: the model is handed an opaque error, and
+    /// `operation` plus `reason` are the only place the cause exists.
+    #[test]
+    fn an_operation_with_guards_and_no_container_says_which_operation_and_why() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let _ = unresolvable_chain("posts::publish");
+
+        let event = logs.expect_one(
+            "nest_rs::mcp",
+            "mcp operation declares guards but the mount carries no container",
+        );
+        assert_eq!(event.level, "error");
+        assert_eq!(event.field("operation").as_deref(), Some("posts::publish"));
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("no_ambient_container"),
+        );
+    }
 }

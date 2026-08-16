@@ -422,6 +422,131 @@ fn read_env_pem(env: &ConfigService, inline_key: &str, file_key: &str) -> Result
 mod tests {
     use super::*;
 
+    /// A watcher holding `cert`/`key` in hand and pointed at two paths, ticking
+    /// fast enough for a test to outlast several intervals.
+    fn watcher(dir: &std::path::Path) -> Watcher {
+        Watcher {
+            cert_path: dir.join("tls.pem"),
+            key_path: dir.join("tls.key.pem"),
+            cert: b"--IN-USE-CERT--".to_vec(),
+            key: b"--IN-USE-KEY--".to_vec(),
+            interval: Duration::from_millis(5),
+        }
+    }
+
+    /// A directory the test owns, removed when the returned guard drops.
+    ///
+    /// The `pid` already prevents collisions; what this adds is not leaving one
+    /// behind per run. Cleanup on `Drop` rather than at the end of the test, so
+    /// a failing assertion does not leak either.
+    struct ScratchDir(std::path::PathBuf);
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for ScratchDir {
+        type Target = std::path::Path;
+
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    fn scratch_dir(tag: &str) -> ScratchDir {
+        let dir = std::env::temp_dir().join(format!("nest_rs_tls_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        ScratchDir(dir)
+    }
+
+    #[test]
+    fn material_that_cannot_be_re_read_is_reported_and_the_listener_left_alone() {
+        // A renewal tool that unlinks before it writes leaves this window open
+        // every single renewal. Treating it as fatal would take a listener down
+        // that is serving a perfectly good certificate — so it is skipped, and
+        // this line is the only thing that distinguishes "briefly mid-write"
+        // from "the operator moved the file a week ago and TLS has been frozen
+        // at the old certificate since".
+        let logs = nest_rs_testing::LogCapture::install();
+        let dir = scratch_dir("unreadable");
+        let watcher = watcher(&dir);
+
+        assert!(
+            watcher.read(&watcher.cert_path).is_none(),
+            "a path with nothing at it reads as nothing, not as empty material",
+        );
+
+        let event = logs.expect_one(
+            "nest_rs::http",
+            "tls material could not be re-read; keeping the certificate in use",
+        );
+        assert_eq!(event.level, "warn");
+        assert!(
+            event.field("path").is_some_and(|p| p.ends_with("tls.pem")),
+            "the event names which half of the pair, got {:?}",
+            event.fields,
+        );
+        assert!(
+            event.field("error").is_some(),
+            "…and why, got {:?}",
+            event.fields,
+        );
+    }
+
+    #[tokio::test]
+    async fn a_renewal_that_could_not_serve_is_refused_rather_than_published() {
+        // The failure this exists for is a **total outage announced as an
+        // `info`**: publish first, report success, and every handshake from
+        // then on fails against material that cannot present a chain. So the
+        // check runs before the swap, the working certificate keeps serving,
+        // and the renewal is reported as refused.
+        let logs = nest_rs_testing::LogCapture::install();
+        let dir = scratch_dir("refused");
+        let mut watcher = watcher(&dir);
+        std::fs::write(&watcher.cert_path, b"not a certificate").expect("write the cert half");
+        std::fs::write(&watcher.key_path, b"not a key").expect("write the key half");
+
+        // `next_renewal` loops until something serves, so nothing valid ever
+        // arriving is the point: it must keep waiting rather than publish.
+        let published = tokio::time::timeout(Duration::from_millis(300), watcher.next_renewal())
+            .await
+            .ok();
+        assert!(
+            published.is_none(),
+            "material that cannot serve is never published",
+        );
+
+        let refusals = logs.find(
+            "nest_rs::http",
+            "renewed tls material was refused; keeping the certificate in use",
+        );
+        let event = refusals
+            .first()
+            .unwrap_or_else(|| panic!("the refusal is reported: {:#?}", logs.events()));
+        assert_eq!(event.level, "warn");
+        assert!(
+            event.field("cert").is_some() && event.field("key").is_some(),
+            "the event names both paths, since either half can be the bad one, got {:?}",
+            event.fields,
+        );
+        assert!(
+            event
+                .field("error")
+                .is_some_and(|e| e.contains("certificate")),
+            "…and which check failed, got {:?}",
+            event.fields,
+        );
+        assert!(
+            logs.find("nest_rs::http", "tls certificate renewed on disk")
+                .is_empty(),
+            "and nothing announced a renewal that did not happen: {:#?}",
+            logs.events(),
+        );
+    }
+
     #[test]
     fn new_round_trips_bytes() {
         let cfg = TlsConfig::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
@@ -613,8 +738,7 @@ mod tests {
         // The debounce, stated as what it can actually guarantee: whatever the
         // watcher installs was read identical twice, so a file caught
         // mid-flush is never the thing that gets served.
-        let dir = std::env::temp_dir().join(format!("nestrs-tls-settle-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let dir = scratch_dir("settle");
         let cert_path = dir.join("cert.pem");
         let key_path = dir.join("key.pem");
         std::fs::write(&cert_path, "cert-v1").expect("write cert");
@@ -652,13 +776,11 @@ mod tests {
             key.trim_start_matches("key-"),
             "installed a certificate and a key from different writes: {cert} / {key}",
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
     async fn a_watcher_reports_a_renewal_and_skips_an_unreadable_read() {
-        let dir = std::env::temp_dir().join(format!("nestrs-tls-watch-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let dir = scratch_dir("watch");
         let cert_path = dir.join("cert.pem");
         let key_path = dir.join("key.pem");
         // The certificate is deliberately absent to start with: a renewal tool
@@ -687,7 +809,6 @@ mod tests {
         writer.await.expect("writer task");
         assert_eq!(watcher.cert, b"cert-v2");
         assert_eq!(watcher.key, b"key-v2");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1969,6 +1969,105 @@ mod tests {
     }
 
     #[test]
+    fn a_path_two_versions_contest_names_the_one_the_default_document_drops() {
+        // Under `header`/`media-type` the mounted prefix is not an address, so
+        // both versions of `/posts` key to the same OpenAPI path — and OpenAPI
+        // has one operation per (path, method). One of the two is dropped, and
+        // this line is the only place that fact exists: the served document
+        // simply describes v2, indistinguishable from a deployment that only
+        // ever had v2.
+        let logs = nest_rs_testing::LogCapture::install();
+        let container = Container::builder()
+            .provide(HttpConfig {
+                versioning: ApiVersioning::Header,
+                ..HttpConfig::default()
+            })
+            .provide_meta(controller(
+                "PostsV1Controller",
+                "posts",
+                "/posts",
+                &["1"],
+                vec![route("list", "/")],
+            ))
+            .provide_meta(controller(
+                "PostsV2Controller",
+                "posts",
+                "/posts",
+                &["2"],
+                vec![route("list", "/")],
+            ))
+            .build();
+        let doc = build_document(
+            &container,
+            &info("X", "0", None),
+            None,
+            &mut Reported::default(),
+        );
+        assert_eq!(id_at(&doc, "/posts", "get"), Some("posts_list_v2"));
+
+        let event = logs.expect_one(
+            "nest_rs::openapi",
+            "two API versions serve one documented path",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("path").as_deref(), Some("/posts"));
+        assert_eq!(event.field("method").as_deref(), Some("GET"));
+        // Which of the two survived is the whole content of the event: named
+        // the wrong way round it sends a reader to check the version that is
+        // in fact published.
+        assert_eq!(event.field("described").as_deref(), Some("2"));
+        assert_eq!(event.field("omitted").as_deref(), Some("1"));
+        assert!(
+            event
+                .field("hint")
+                .is_some_and(|h| h.contains("/api-json/v")),
+            "the event carries the per-version document the omitted operation \
+             is still served by, got {:?}",
+            event.fields,
+        );
+    }
+
+    #[test]
+    fn two_versions_of_different_paths_contest_nothing() {
+        // The other direction, and what keeps the warning meaningful: header
+        // versioning alone is not a collision. Without this, a deployment that
+        // versions every controller would warn on all of them.
+        let logs = nest_rs_testing::LogCapture::install();
+        let container = Container::builder()
+            .provide(HttpConfig {
+                versioning: ApiVersioning::Header,
+                ..HttpConfig::default()
+            })
+            .provide_meta(controller(
+                "PostsController",
+                "posts",
+                "/posts",
+                &["1"],
+                vec![route("list", "/")],
+            ))
+            .provide_meta(controller(
+                "UsersController",
+                "users",
+                "/users",
+                &["2"],
+                vec![route("list", "/")],
+            ))
+            .build();
+        let doc = build_document(
+            &container,
+            &info("X", "0", None),
+            None,
+            &mut Reported::default(),
+        );
+        assert_eq!(id_at(&doc, "/posts", "get"), Some("posts_list_v1"));
+        assert_eq!(id_at(&doc, "/users", "get"), Some("users_list_v2"));
+        logs.expect_none(
+            "nest_rs::openapi",
+            "two API versions serve one documented path",
+        );
+    }
+
+    #[test]
     fn an_id_is_the_controller_token_and_the_handler() {
         // The token itself — `PostsController` → `posts`, and the `Controller`
         // suffix that says nothing about which one this is — is `#[routes]`'
@@ -2186,11 +2285,6 @@ mod tests {
             &mut Reported::default(),
         );
         assert_eq!(id_at(&doc, "/things", "get"), Some("things_list"));
-        assert!(
-            logs.find("nest_rs::openapi", "two operations share one operationId")
-                .is_empty(),
-            "{:#?}",
-            logs.events(),
-        );
+        logs.expect_none("nest_rs::openapi", "two operations share one operationId");
     }
 }

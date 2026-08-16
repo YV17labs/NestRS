@@ -111,3 +111,55 @@ pub(crate) async fn with_data_context<T>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::current_executor;
+
+    use super::*;
+
+    /// A `SocketContext`/`McpToolContext` implementation captures per-request
+    /// state as an opaque `Arc<dyn Any>` and this seam downcasts it back. A
+    /// mismatch is a framework bug — but the framework is not the only author
+    /// of those traits, and what it does about the bug decides whether an
+    /// operation runs *unscoped*.
+    #[tokio::test]
+    async fn a_capture_this_seam_does_not_recognise_runs_the_operation_unscoped_and_says_so() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let foreign: Arc<dyn Any + Send + Sync> = Arc::new("not a request snapshot");
+
+        let outcome = with_data_context(
+            &foreign,
+            "ws",
+            Box::pin(async { current_executor().is_none() }),
+            |ran_bare| *ran_bare,
+            || false,
+        )
+        .await;
+
+        // The operation still runs — refusing it would take a whole transport
+        // down over a mismatch that `Repo` already answers safely — but it runs
+        // with no ambient executor and no ambient ability, which is the
+        // fail-closed shape: every scoped read denies.
+        assert!(
+            outcome,
+            "the operation runs, and it runs with nothing installed",
+        );
+
+        let event = logs.expect_one("nest_rs::orm", "unexpected captured data context");
+        assert_eq!(event.level, "error");
+        assert_eq!(
+            event.field("transport").as_deref(),
+            Some("ws"),
+            "the event names the edge whose context seam is wrong, since one \
+             function serves several: {:?}",
+            event.fields,
+        );
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("data_context_downcast_miss"),
+            "{:?}",
+            event.fields,
+        );
+    }
+}

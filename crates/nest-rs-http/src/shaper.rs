@@ -241,9 +241,24 @@ mod tests {
 
     #[tokio::test]
     async fn a_marked_probe_on_success_fails_closed() {
+        let logs = nest_rs_testing::LogCapture::install();
         let ep = shaped(marks_and_succeeds, None, Some("GET /users"));
         let resp = TestClient::new(ep).get("/").send().await;
         resp.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+        // The 500 is deliberately opaque, so the event is the only place the
+        // cause exists — and the cause is a *code* mistake, not an outage: the
+        // route runs a masking extractor the type-directed arm never saw, so it
+        // would have shipped unmasked columns. Without the route in the fields
+        // an operator has a bare 500 and no way back to the handler.
+        let event = logs.expect_one(
+            "nest_rs::http",
+            "a masking extractor ran but no response shaper armed on this route — \
+             declare it as a handler parameter (a nested or hand-rolled extractor \
+             is invisible to the type-directed arm); failing closed",
+        );
+        assert_eq!(event.level, "error");
+        assert_eq!(event.field("route").as_deref(), Some("GET /users"));
     }
 
     #[tokio::test]

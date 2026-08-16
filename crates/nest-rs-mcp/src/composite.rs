@@ -614,3 +614,52 @@ impl ServerHandler for CompositeHandler {
         merged
     }
 }
+
+#[cfg(test)]
+mod protocol_intersection {
+    use super::*;
+
+    fn list(versions: &[ProtocolVersion]) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Owned(versions.to_vec())
+    }
+
+    /// One endpoint negotiates one version, so what it may advertise is what
+    /// **every** host on the path implements.
+    ///
+    /// This is the computation both halves of the contract run — the boot check
+    /// verdicts on it (empty ⇒ refuse, differing ⇒ `warn`) and
+    /// `supported_protocol_versions` answers with it, which is what rmcp checks
+    /// every inline-negotiated request against. Getting it wrong in the
+    /// *widening* direction is the silent one: the endpoint would advertise a
+    /// version some host cannot serve, the boot check would see a non-empty
+    /// intersection and say nothing, and a client would find out at a request.
+    #[test]
+    fn is_what_every_host_declares_and_never_more() {
+        let older = ProtocolVersion::V_2024_11_05;
+        let shared = ProtocolVersion::V_2025_06_18;
+        let newer = ProtocolVersion::V_2025_11_25;
+
+        assert_eq!(
+            common_protocol_versions(&[
+                list(&[older.clone(), shared.clone()]),
+                list(&[shared.clone(), newer.clone()]),
+            ]),
+            vec![shared.clone()],
+            "a version only one host declares is not the endpoint's to offer",
+        );
+        assert_eq!(
+            common_protocol_versions(&[
+                list(std::slice::from_ref(&older)),
+                list(std::slice::from_ref(&newer)),
+            ]),
+            Vec::new(),
+            "no overlap is empty, which is what the boot refuses rather than \
+             quietly narrowing to nothing",
+        );
+        assert_eq!(
+            common_protocol_versions(&[list(&[older.clone(), shared.clone()])]),
+            vec![older, shared],
+            "one host alone keeps its whole list — the merge is what narrows",
+        );
+    }
+}

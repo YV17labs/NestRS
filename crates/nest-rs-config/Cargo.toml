@@ -30,6 +30,11 @@ tracing.workspace = true
 nest-rs-config-macros.workspace = true
 
 [dev-dependencies]
+# `LogCapture`: the cascade's refusals are `warn`s and nothing else — a skipped
+# line or an unreadable file leaves the value absent, so the event is the only
+# evidence the loader ever saw it. Dev-only, so the cycle back to this crate
+# never reaches a consumer build.
+nest-rs-testing = { path = "../nest-rs-testing" }
 # `figment::Jail` isolates the process env + cwd for the loader/cascade tests.
 figment = { workspace = true, features = ["test"] }
 # trybuild pins the `#[config]` macro's compile diagnostics as a contract (CORE-I10).

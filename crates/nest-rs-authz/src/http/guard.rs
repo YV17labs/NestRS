@@ -352,12 +352,22 @@ mod tests {
     // silently pass an unauthenticated message through.
     #[tokio::test]
     async fn ws_message_without_ambient_ability_is_denied() {
+        let logs = nest_rs_testing::LogCapture::install();
         let client = WsClient::for_test();
         let denial = guard()
             .check_ws_message(&client, "ping", &Value::Null)
             .await
             .expect_err("missing ambient ability must deny");
         assert_eq!(denial.http_status(), 401);
+
+        // The 401 says the caller was refused; only the event says *why*, and
+        // which transport asked. A data-context that stopped installing the
+        // ability would produce this same 401 on every message, so the line an
+        // operator greps under incident is the one that has to carry the reason.
+        let event = logs.expect_one("nest_rs::authz", "authorization denied: no ambient ability");
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("transport").as_deref(), Some("ws"));
+        assert_eq!(event.field("event").as_deref(), Some("ping"));
     }
 
     #[tokio::test]

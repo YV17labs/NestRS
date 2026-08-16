@@ -351,13 +351,10 @@ mod tests {
     fn the_canonical_form_is_silent() {
         let logs = nest_rs_testing::LogCapture::install();
         valid().into_metadata().expect("canonical");
-        assert!(
-            logs.find(
-                "nest_rs::authn",
-                "resource URI ends in a trailing slash; clients are told to prefer the \
-                 form without one",
-            )
-            .is_empty(),
+        logs.expect_none(
+            "nest_rs::authn",
+            "resource URI ends in a trailing slash; clients are told to prefer the \
+             form without one",
         );
     }
 }

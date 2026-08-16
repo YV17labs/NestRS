@@ -521,11 +521,6 @@ mod tests {
         .await
         .expect("an echo reply");
         assert!(frame.contains("hi"), "{frame}");
-        assert!(
-            logs.find("nest_rs::ws", "websocket message denied by a guard")
-                .is_empty(),
-            "{:#?}",
-            logs.events(),
-        );
+        logs.expect_none("nest_rs::ws", "websocket message denied by a guard");
     }
 }

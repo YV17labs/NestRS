@@ -425,6 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn surfaces_last_error_when_budget_exhausted() {
+        let logs = nest_rs_testing::LogCapture::install();
         let attempts = std::sync::atomic::AtomicUsize::new(0);
         let result: Result<(), DbErr> = retry_on_conflict(2, Duration::from_millis(1), || async {
             attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -433,6 +434,31 @@ mod tests {
         .await;
         assert!(matches!(result, Err(DbErr::Exec(_))));
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        // A retried conflict is invisible to the caller by design — that is what
+        // the budget is for. So the two events are the only way to tell a
+        // healthy transaction from one that succeeded on its third try, which is
+        // the difference between a working deploy and one about to fall over
+        // under load. Both carry `attempt`/`attempts`, so the ratio is queryable
+        // rather than inferred from a count of lines.
+        let retried = logs.expect_one("nest_rs::orm", "transaction conflict — retrying");
+        assert_eq!(retried.level, "warn");
+        assert_eq!(retried.field("attempt").as_deref(), Some("1"));
+        assert_eq!(retried.field("attempts").as_deref(), Some("2"));
+
+        let exhausted = logs.expect_one(
+            "nest_rs::orm",
+            "transaction conflict — retry budget exhausted",
+        );
+        assert_eq!(exhausted.level, "warn");
+        assert_eq!(exhausted.field("attempt").as_deref(), Some("2"));
+        assert!(
+            exhausted
+                .field("error")
+                .is_some_and(|e| e.contains("serialize")),
+            "the last error is what an operator needs, got {:?}",
+            exhausted.fields,
+        );
     }
 
     #[tokio::test]

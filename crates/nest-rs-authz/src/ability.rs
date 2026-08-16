@@ -384,3 +384,100 @@ fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
     }
     predicate
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod widget {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[sea_orm(table_name = "widgets")]
+        pub struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    mod gadget {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+        #[sea_orm(table_name = "gadgets")]
+        pub struct Model {
+            #[sea_orm(primary_key)]
+            pub id: i32,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    /// A rule keyed under one subject carrying another subject's predicate.
+    ///
+    /// `AbilityBuilder` cannot produce this — it stores the predicate under the
+    /// same `TypeId` it built it for — which is exactly why the branch needs a
+    /// test: nothing else will ever exercise it, and what it decides is whether
+    /// a mismatch **denies** or reads as an unrestricted grant. The second
+    /// would turn a framework bug into a silent authorization bypass, so the
+    /// answer is `None` (no grant) and a line loud enough to find.
+    fn mismatched_rule() -> Rule {
+        Rule {
+            inverted: false,
+            condition: Condition::all(),
+            predicate: Box::new(Predicate::<gadget::Entity>::Always),
+            fields: FieldSet::All,
+        }
+    }
+
+    #[test]
+    fn a_predicate_of_another_subject_yields_no_grant_and_is_reported() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let rule = mismatched_rule();
+
+        assert!(
+            predicate_of::<widget::Entity>(&rule).is_none(),
+            "a predicate that is not this subject's grants nothing — reading it \
+             as unrestricted is the one answer that opens rows",
+        );
+
+        let event = logs.expect_one(
+            "nest_rs::authz",
+            "ability rule predicate does not match its keyed subject — failing closed",
+        );
+        assert_eq!(event.level, "error");
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("predicate_type_mismatch"),
+            "{:?}",
+            event.fields,
+        );
+    }
+
+    #[test]
+    fn a_predicate_of_the_keyed_subject_is_recovered_in_silence() {
+        // The other direction: every rule in every ability goes through this,
+        // so a check reading the wrong thing would deny the whole app.
+        let logs = nest_rs_testing::LogCapture::install();
+        let rule = Rule {
+            inverted: false,
+            condition: Condition::all(),
+            predicate: Box::new(Predicate::<widget::Entity>::Always),
+            fields: FieldSet::All,
+        };
+
+        assert!(predicate_of::<widget::Entity>(&rule).is_some());
+        logs.expect_none(
+            "nest_rs::authz",
+            "ability rule predicate does not match its keyed subject — failing closed",
+        );
+    }
+}

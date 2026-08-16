@@ -123,3 +123,67 @@ impl McpAmbient {
             .cloned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `around` is handed the operation as an opaque value and hands one back.
+    /// An implementation that substitutes a value of a different type — rather
+    /// than returning the one it was given — leaves the dispatch with something
+    /// it cannot hand to rmcp.
+    ///
+    /// Answering with an opaque internal error rather than panicking is what
+    /// keeps one misbehaving wrapper from taking the endpoint down; and since
+    /// that error is indistinguishable from any other, the event is the only
+    /// place the substitution is recorded. It carries the type that *was*
+    /// expected, because the wrapper's own name is not on the dispatch path.
+    #[test]
+    fn an_operation_value_of_the_wrong_type_is_an_opaque_error_and_a_named_event() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let substituted = OperationValue::new(42u8);
+
+        let err = substituted
+            .take::<String>()
+            .expect_err("a value of another type cannot be handed back as this one");
+        assert!(
+            !err.message.contains("u8") && !err.message.contains("String"),
+            "the client — a language model — learns nothing about the internals: {}",
+            err.message,
+        );
+
+        let event = logs.expect_one(
+            "nest_rs::mcp",
+            "mcp operation wrapper returned a foreign value",
+        );
+        assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("expected")
+                .is_some_and(|e| e.contains("String")),
+            "the event names the type the dispatch was waiting for, got {:?}",
+            event.fields,
+        );
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("operation_value_downcast_miss"),
+            "{:?}",
+            event.fields,
+        );
+    }
+
+    #[test]
+    fn an_operation_value_of_the_right_type_comes_back_untouched() {
+        let logs = nest_rs_testing::LogCapture::install();
+        assert_eq!(
+            OperationValue::new(String::from("answer"))
+                .take::<String>()
+                .expect("the value the wrapper was given"),
+            "answer",
+        );
+        logs.expect_none(
+            "nest_rs::mcp",
+            "mcp operation wrapper returned a foreign value",
+        );
+    }
+}

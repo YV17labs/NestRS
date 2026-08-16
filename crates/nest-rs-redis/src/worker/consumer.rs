@@ -486,4 +486,42 @@ mod tests {
             "warn",
         );
     }
+
+    /// The retryable half of the same classification, and the one with no
+    /// visible outcome at all: apalis re-attempts the job, so a transient
+    /// failure that eventually succeeds leaves the queue looking healthy.
+    ///
+    /// Which is exactly when it matters — a job succeeding on attempt four
+    /// every time is a system about to fall over, and this `warn` is the only
+    /// signal before it does. It stays a plain boxed error rather than an
+    /// `Abort`, which is what tells apalis to retry rather than dead-letter.
+    #[tokio::test]
+    async fn a_retryable_failure_is_reported_before_the_budget_re_attempts_it() {
+        fn flaky(
+            _job: serde_json::Value,
+            _c: Container,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>> {
+            Box::pin(async { Err(JobError::retry("the upstream API timed out")) })
+        }
+
+        let logs = LogCapture::install();
+        let err = run_job(flaky, serde_json::json!({}), container())
+            .await
+            .expect_err("a retryable failure still fails this attempt");
+        assert!(
+            err.downcast_ref::<apalis::prelude::Error>().is_none(),
+            "a retryable failure is *not* an Abort — that is what keeps the budget alive",
+        );
+
+        let event = logs.expect_one("nest_rs::queue", "job failed; will retry within the budget");
+        assert_eq!(event.level, "warn");
+        assert!(
+            event
+                .field("error")
+                .is_some_and(|e| e.contains("upstream API")),
+            "the event carries the cause the retry will hit again, got {:?}",
+            event.fields,
+        );
+        assert!(event.field("elapsed_ms").is_some());
+    }
 }

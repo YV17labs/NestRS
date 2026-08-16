@@ -186,7 +186,28 @@ mod tests {
 
     #[test]
     fn consumer_without_any_producer_only_warns() {
+        let logs = nest_rs_testing::LogCapture::install();
         let chain = vec![entry(Authz, "Authz")];
         validate_guard_chain("test", &chain).expect("no producer at all is a warn, not an error");
+
+        // A warn rather than a boot error, because a `#[public]` route on the
+        // same chain is legitimate. Which means the app boots, serves, and
+        // answers 500 on every non-public route — and this line is the only
+        // thing said before that starts happening.
+        let event = logs.expect_one(
+            "nest_rs::layers",
+            "guard expects a principal but no guard in the chain produces one — \
+             non-public routes will answer 500",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("route").as_deref(), Some("test"));
+        assert_eq!(event.field("guard").as_deref(), Some("Authz"));
+        assert!(
+            event
+                .field("expected")
+                .is_some_and(|e| e.contains("ClaimsA")),
+            "the event names the principal type nobody attaches, got {:?}",
+            event.fields,
+        );
     }
 }

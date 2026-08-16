@@ -467,7 +467,121 @@ pub struct ObjectEntry {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
+
+    /// A multipart upload that talks to nothing but records whether it was
+    /// aborted.
+    ///
+    /// The flag is the point: the in-runtime branch is only observable as an
+    /// *absence* of the fallback line, and an absence is what a branch that does
+    /// nothing at all also produces. Deleting the `handle.spawn(...)` outright
+    /// left the test green.
+    #[derive(Debug)]
+    struct NeverUploaded(Arc<AtomicBool>);
+
+    #[async_trait::async_trait]
+    impl MultipartUpload for NeverUploaded {
+        fn put_part(&mut self, _data: object_store::PutPayload) -> object_store::UploadPart {
+            Box::pin(async { Ok(()) })
+        }
+
+        async fn complete(&mut self) -> object_store::Result<object_store::PutResult> {
+            unreachable!("this double is only ever dropped")
+        }
+
+        async fn abort(&mut self) -> object_store::Result<()> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn parts_dropped_outside_a_runtime_are_reported_rather_than_silently_leaked() {
+        // An abandoned multipart upload keeps its parts on the store, and the
+        // store keeps billing for them until a lifecycle rule sweeps them — so
+        // the guard aborts on drop. That abort is async, which means it needs a
+        // runtime, and a `Drop` cannot prove it has one. Panicking here would
+        // turn a billing leak into a crash while already unwinding, so the
+        // fallback is to say what was left behind and to whom: the key, and the
+        // fact that only the bucket's lifecycle rule will now clean it up.
+        //
+        // A plain thread is the shape that reaches it — a value carried out of
+        // a runtime and dropped elsewhere.
+        let handle = std::thread::spawn(|| {
+            let logs = nest_rs_testing::LogCapture::install();
+            let aborted = Arc::new(AtomicBool::new(false));
+            drop(UploadGuard::new(
+                Box::new(NeverUploaded(Arc::clone(&aborted))),
+                "uploads/abandoned",
+            ));
+            assert!(
+                !aborted.load(Ordering::SeqCst),
+                "with no runtime there is nowhere to issue the abort — that is \
+                 the whole reason the line exists",
+            );
+
+            let cancelled = logs.expect_one(
+                "nest_rs::storage",
+                "multipart upload was cancelled mid-flight; discarding its parts",
+            );
+            assert_eq!(cancelled.level, "warn");
+
+            let leaked = logs.expect_one(
+                "nest_rs::storage",
+                "no runtime is available to discard them; they are left for the store's \
+                 lifecycle rule",
+            );
+            assert_eq!(leaked.level, "warn");
+            assert_eq!(
+                leaked.field("key").as_deref(),
+                Some("uploads/abandoned"),
+                "the key is the whole content of the line — without it nothing \
+                 can be reconciled against the bucket: {:?}",
+                leaked.fields,
+            );
+        });
+        handle.join().expect("the dropping thread finishes");
+    }
+
+    #[tokio::test]
+    async fn parts_dropped_inside_a_runtime_are_discarded_rather_than_reported() {
+        // The other direction, and the common one: a cancelled request drops
+        // the guard on the runtime that was driving it, so the abort is
+        // actually issued and the fallback line must not appear.
+        let logs = nest_rs_testing::LogCapture::install();
+        let aborted = Arc::new(AtomicBool::new(false));
+        drop(UploadGuard::new(
+            Box::new(NeverUploaded(Arc::clone(&aborted))),
+            "uploads/cancelled",
+        ));
+        // The abort is spawned, so it lands on a later poll rather than in the
+        // `drop`. Yield until it does — bounded, so a branch that never issues
+        // it fails here instead of hanging.
+        for _ in 0..100 {
+            if aborted.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            aborted.load(Ordering::SeqCst),
+            "the parts really were discarded — asserting only that the fallback \
+             line is absent passes just as well for a branch that does nothing",
+        );
+
+        assert!(
+            logs.find(
+                "nest_rs::storage",
+                "no runtime is available to discard them; they are left for the store's \
+                 lifecycle rule",
+            )
+            .is_empty(),
+            "…and it said nothing about leaving them behind: {:#?}",
+            logs.events(),
+        );
+    }
 
     fn client(endpoint: &str, allow_http: bool) -> Storage {
         Storage::new(Arc::new(StorageConfig {

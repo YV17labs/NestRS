@@ -239,6 +239,73 @@ mod http {
             assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
         }
 
+        /// The opaque half of the same contract: the body carries no cause, so
+        /// the event has to.
+        ///
+        /// A `DbErr` names tables, columns and sometimes values, which is why it
+        /// never reaches the client — and why an operator has exactly one place
+        /// to read it. `kind` is what separates a driver failure from a masking
+        /// failure, and those lead to entirely different files.
+        #[test]
+        fn a_500_emits_the_cause_it_refuses_to_ship() {
+            let logs = nest_rs_testing::LogCapture::install();
+            let _ = ServiceError::Db(sea_orm::DbErr::Custom(
+                "relation \"posts\" does not exist".into(),
+            ))
+            .as_response();
+
+            let event = logs.expect_one("nest_rs::orm", "service error surfaced as 500");
+            assert_eq!(event.level, "error");
+            assert_eq!(event.field("kind").as_deref(), Some("db"));
+            assert!(
+                event.field("detail").is_some_and(|d| d.contains("posts")),
+                "the cause the body withholds is the whole point, got {:?}",
+                event.fields,
+            );
+        }
+
+        /// `#[crud]`'s own mapper, and the same split one layer down: only the
+        /// blanket 500 is logged, because every other status *is* the
+        /// explanation. A `409` says unique-constraint, a `403` says the create
+        /// re-check rolled it back — an unexpected `DbErr` says nothing at all,
+        /// and ships an empty body.
+        #[test]
+        fn a_crud_500_emits_the_cause_and_the_mapped_statuses_do_not() {
+            let logs = nest_rs_testing::LogCapture::install();
+
+            let mapped = crud_error(sea_orm::DbErr::RecordNotInserted);
+            assert_eq!(mapped.status(), StatusCode::FORBIDDEN);
+
+            let unexpected = crud_error(sea_orm::DbErr::Custom("deadlock detected".into()));
+            assert_eq!(unexpected.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+            let event = logs.expect_one("nest_rs::orm", "crud operation failed");
+            assert_eq!(event.level, "error");
+            assert_eq!(event.field("kind").as_deref(), Some("db"));
+            assert!(
+                event
+                    .field("detail")
+                    .is_some_and(|d| d.contains("deadlock")),
+                "only the unmapped failure is logged, and it carries its cause: {:?}",
+                event.fields,
+            );
+        }
+
+        /// And a 4xx stays silent: it is the client's own doing and already
+        /// carries its message on the wire, so logging it would bury the 5xx
+        /// lines that matter under traffic nobody needs to act on.
+        #[test]
+        fn a_business_4xx_emits_nothing() {
+            let logs = nest_rs_testing::LogCapture::install();
+            let _ = ServiceError::not_found("no such widget").as_response();
+            assert!(
+                logs.find("nest_rs::orm", "service error surfaced as 500")
+                    .is_empty(),
+                "a 404 is not an incident: {:#?}",
+                logs.events(),
+            );
+        }
+
         #[test]
         fn business_variants_map_to_their_4xx() {
             assert_eq!(

@@ -91,4 +91,28 @@ mod tests {
         let out: Result<i32, WsError> = Ok::<_, Leaky>(7).opaque();
         assert_eq!(out.ok(), Some(7));
     }
+
+    /// The other half of the same contract, and the half nobody read.
+    ///
+    /// Withholding the cause from the client is only safe because it is
+    /// recorded somewhere else — here, an error frame on a long-lived socket. If this event ever stopped
+    /// carrying `error`, every `.opaque()?` on this edge would turn a real
+    /// failure into a blank refusal with no trace at all, and the
+    /// nothing-leaks test next door would still pass: it only asserts what is
+    /// *absent* from the wire.
+    #[test]
+    fn and_the_operator_gets_the_error_the_client_does_not() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let _ = Err::<(), _>(Leaky).opaque();
+
+        let event = logs.expect_one("nest_rs::ws", "websocket message failed");
+        assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("error")
+                .is_some_and(|e| e.contains("password_hash")),
+            "the cause the frame withholds is exactly what the log has to carry, got {:?}",
+            event.fields,
+        );
+    }
 }

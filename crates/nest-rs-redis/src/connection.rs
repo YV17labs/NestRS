@@ -292,4 +292,90 @@ mod tests {
             "the error names the knob that widens the budget: {rendered}",
         );
     }
+
+    /// A wrong `NESTRS_QUEUE__URL` used to park the process forever with an
+    /// empty log — never healthy, never crashed, which is the worst shape a
+    /// container platform can be handed.
+    ///
+    /// The budget turns that into a boot error; these two events turn the boot
+    /// error into a diagnosis. They need **two** tests because the loop can
+    /// only take one branch per run: a URL the client rejects errors instantly
+    /// and announces every attempt, while an endpoint it merely cannot reach
+    /// hangs — `apalis_redis::connect` retries a refused port internally and
+    /// silently, which is the exact behaviour the budget exists to bound.
+    #[tokio::test]
+    async fn a_rejected_url_announces_every_attempt_with_the_credentials_redacted() {
+        let logs = nest_rs_testing::LogCapture::install();
+        // The budget sits above `FIRST_RETRY_BACKOFF` (250ms) so the loop
+        // retries at least once before it expires.
+        assert!(
+            QueueConnection::connect_within(
+                "redis://user:secret@[::bad-host/",
+                Duration::from_millis(700),
+            )
+            .await
+            .is_err(),
+            "a URL the client rejects fails the boot rather than parking it",
+        );
+
+        let retries = logs.find(
+            "nest_rs::queue",
+            "queue backend unreachable — retrying within the connect budget",
+        );
+        assert!(
+            !retries.is_empty(),
+            "every attempt is announced: {:#?}",
+            logs.events(),
+        );
+        for event in &retries {
+            assert_eq!(event.level, "warn");
+            let endpoint = event
+                .field("endpoint")
+                .expect("the event names the endpoint");
+            assert!(
+                endpoint.contains("bad-host"),
+                "the addressable part is what the operator needs: {endpoint}",
+            );
+            assert!(
+                !endpoint.contains("secret"),
+                "and the credentials are redacted before they reach the log: {endpoint}",
+            );
+            assert!(event.field("attempt").is_some(), "{:?}", event.fields);
+        }
+    }
+
+    /// The other branch: the budget elapses mid-attempt, so a hung DNS or a
+    /// black-holed port is as legible as a refused connection. Without it the
+    /// process reports nothing at all for the whole budget and then fails.
+    #[tokio::test]
+    async fn a_budget_that_expires_mid_attempt_is_its_own_line() {
+        let logs = nest_rs_testing::LogCapture::install();
+        // Port 1 on loopback: the client keeps retrying inside a single
+        // `connect` call, so the budget is what ends it.
+        assert!(
+            QueueConnection::connect_within("redis://127.0.0.1:1/", Duration::from_millis(120))
+                .await
+                .is_err(),
+            "an unreachable endpoint fails the boot rather than parking it",
+        );
+
+        let expired = logs
+            .find("nest_rs::queue", "queue backend connect timed out")
+            .into_iter()
+            .next()
+            .expect("the budget expiring is its own line, not a silent give-up");
+        assert_eq!(expired.level, "warn");
+        assert!(
+            expired.field("timeout_secs").is_some(),
+            "{:?}",
+            expired.fields
+        );
+        assert!(
+            expired
+                .field("endpoint")
+                .is_some_and(|e| e.contains("127.0.0.1:1")),
+            "{:?}",
+            expired.fields,
+        );
+    }
 }

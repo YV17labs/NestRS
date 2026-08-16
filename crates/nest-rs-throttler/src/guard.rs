@@ -219,4 +219,51 @@ mod tests {
     fn no_peer_address_falls_back_to_a_named_global_bucket() {
         assert_eq!(ClientId::from(ClientOrigin::Unknown).to_string(), "global");
     }
+
+    /// Both degradations keep the throttler *answering* — it just stops
+    /// distinguishing callers, so one client can exhaust everyone's budget and
+    /// no status code changes. They are invisible until the outage, which is
+    /// why they are `warn` and why the line carries the remedy.
+    ///
+    /// Deduped once per process by reason. That is safe to assert on because
+    /// nextest runs each test in its own process — a sibling burning the same
+    /// reason cannot silence this one, and `cargo test`'s shared binary is
+    /// unsupported here anyway (`CLAUDE.md`: the runner is nextest).
+    #[test]
+    fn a_degraded_keying_is_reported_once_with_its_remedy() {
+        let logs = nest_rs_testing::LogCapture::install();
+        // A unix socket or a proxy that hides the peer: no address at all, so
+        // every caller lands in one bucket.
+        assert_eq!(
+            ClientId::from(ClientOrigin::Unknown).to_string(),
+            ClientId::Shared.to_string(),
+        );
+
+        let event = logs.expect_one(
+            "nest_rs::throttler",
+            "rate-limit keying degraded to a shared bucket",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("reason").as_deref(), Some("no_peer_address"));
+        assert!(
+            event
+                .field("detail")
+                .is_some_and(|d| d.contains("shares one rate-limit bucket")),
+            "the remedy is the point of the line, got {:?}",
+            event.fields,
+        );
+
+        // And the second call is silent: a per-request line for a structural
+        // fact would bury the events an incident actually queries.
+        let _ = ClientId::from(ClientOrigin::Unknown);
+        assert_eq!(
+            logs.find(
+                "nest_rs::throttler",
+                "rate-limit keying degraded to a shared bucket",
+            )
+            .len(),
+            1,
+            "reported once per process, per reason",
+        );
+    }
 }

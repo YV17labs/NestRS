@@ -605,4 +605,41 @@ mod tests {
         let _ = client.id();
         let _ = client.registry();
     }
+
+    /// A frame the server could not hand to a client is **dropped**, not
+    /// retried — the socket stays open and both sides believe the message was
+    /// delivered.
+    ///
+    /// That is deliberate (a slow client must not stall a broadcast), and it is
+    /// exactly why the loss has to be queryable: without this event a
+    /// notification fleet silently degrades as clients stop draining, and the
+    /// first report is a user saying they never got it. One aggregated line per
+    /// send call, so a broadcast to N slow clients logs once rather than N
+    /// times.
+    #[test]
+    fn a_full_outbox_reports_the_frames_it_dropped_rather_than_losing_them_silently() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let server = WsServer::<Global>::default();
+        // Capacity one, already full: the next frame has nowhere to go.
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Frame>(1);
+        let id = server.connect(tx.clone());
+        tx.try_send(Frame::from("occupied"))
+            .expect("the first frame fits");
+
+        assert!(
+            !server
+                .emit(id, "tick", &"payload")
+                .expect("the payload serializes"),
+            "a full outbox sheds the frame",
+        );
+
+        let event = logs.expect_one(
+            "nest_rs::ws",
+            "server→client frames shed: recipient outbox full (slow/dead client)",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("event").as_deref(), Some("tick"));
+        assert_eq!(event.field("kind").as_deref(), Some("direct"));
+        assert_eq!(event.field("shed").as_deref(), Some("1"));
+    }
 }

@@ -179,4 +179,66 @@ mod tests {
             "the error must name the offending variable",
         );
     }
+
+    /// Docs on in production is a *deliberate* configuration — `enabled` was
+    /// set, and `flag` makes a typo boot-fatal, so nothing here is accidental.
+    ///
+    /// What is accidental is the exposure: `/api` and `/api-json` are
+    /// `EdgePosture::Exempt`, so they answer without the global guard pool.
+    /// A deployment that copied a dev `.env` therefore serves its whole route
+    /// table, unauthenticated, and no status code or test will ever say so.
+    /// This is the line that does.
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn docs_enabled_outside_a_dev_profile_are_reported() {
+        figment::Jail::expect_with(|jail| {
+            let logs = nest_rs_testing::LogCapture::install();
+            // Read from the *process* env, not the `ConfigService` — the
+            // cascade chooses which `.env` to read, so it cannot live in one.
+            jail.set_env("NESTRS_ENV", "production");
+
+            let cfg = OpenApiConfig::from_env(
+                &ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "true")]),
+                Default::default(),
+            )
+            .expect("an explicit `true` is honoured, not overridden");
+            assert!(cfg.enabled, "the deployment's choice stands");
+
+            let event = logs.expect_one(
+                "nest_rs::openapi",
+                "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+            );
+            assert_eq!(event.level, "warn");
+            assert_eq!(event.field("environment").as_deref(), Some("production"));
+            Ok(())
+        });
+    }
+
+    /// And a dev profile says nothing: docs on in development is the default,
+    /// so warning there would train the reader to ignore the line that matters.
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn docs_enabled_in_development_are_silent() {
+        figment::Jail::expect_with(|jail| {
+            let logs = nest_rs_testing::LogCapture::install();
+            jail.set_env("NESTRS_ENV", "development");
+
+            let _ = OpenApiConfig::from_env(
+                &ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "true")]),
+                Default::default(),
+            )
+            .expect("ok");
+
+            assert!(
+                logs.find(
+                    "nest_rs::openapi",
+                    "OpenAPI documentation endpoints are enabled and public outside a dev profile",
+                )
+                .is_empty(),
+                "the default posture is not an incident: {:#?}",
+                logs.events(),
+            );
+            Ok(())
+        });
+    }
 }

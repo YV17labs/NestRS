@@ -349,6 +349,126 @@ mod tests {
         impl ActiveModelBehavior for ActiveModel {}
     }
 
+    // An entity with no primary key at all. SeaORM permits one — a view, or a
+    // table mapped for reads — and `DeriveEntityModel` cannot express it, so
+    // the pieces are written out. That is also why the check exists: nothing
+    // upstream refuses this shape, so the refusal has to be ours.
+    mod keyless {
+        use sea_orm::entity::prelude::*;
+
+        #[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+        pub struct Entity;
+
+        impl EntityName for Entity {
+            fn table_name(&self) -> &'static str {
+                "keyless"
+            }
+        }
+
+        #[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel)]
+        pub struct Model {
+            pub label: String,
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+        pub enum Column {
+            Label,
+        }
+
+        impl ColumnTrait for Column {
+            type EntityName = Entity;
+
+            fn def(&self) -> ColumnDef {
+                match self {
+                    Self::Label => ColumnType::String(StringLen::None).def(),
+                }
+            }
+        }
+
+        /// The whole point: no variants, so `PrimaryKey::iter()` is empty.
+        #[derive(Copy, Clone, Debug, EnumIter)]
+        pub enum PrimaryKey {}
+
+        impl sea_orm::Iden for PrimaryKey {
+            fn unquoted(&self) -> &str {
+                match *self {}
+            }
+        }
+
+        impl sea_orm::IdenStatic for PrimaryKey {
+            fn as_str(&self) -> &'static str {
+                match *self {}
+            }
+        }
+
+        impl PrimaryKeyTrait for PrimaryKey {
+            type ValueType = Uuid;
+
+            fn auto_increment() -> bool {
+                false
+            }
+        }
+
+        impl PrimaryKeyToColumn for PrimaryKey {
+            type Column = Column;
+
+            fn into_column(self) -> Self::Column {
+                match self {}
+            }
+
+            fn from_column(_: Self::Column) -> Option<Self> {
+                None
+            }
+        }
+
+        #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+        pub enum Relation {}
+
+        impl ActiveModelBehavior for ActiveModel {}
+    }
+
+    #[test]
+    fn an_entity_with_no_primary_key_is_refused_by_name_rather_than_panicking() {
+        // `keyset_column` sits on a query hot path, where the layer's contract
+        // is "never panic, return `DbErr`" — so an `iter().next().unwrap()`
+        // here would take down the request rather than fail it. Both halves of
+        // the answer matter: the typed error the caller propagates, and the
+        // event that names *which* entity, since the error surfaces far from
+        // the `#[crud]` or relation field that asked.
+        let logs = nest_rs_testing::LogCapture::install();
+
+        let err = Repo::<keyless::Entity>::keyset_column()
+            .expect_err("an entity with no primary key cannot be paged by one");
+        let message = err.to_string();
+        assert!(
+            message.contains("keyless") && message.contains("primary-key"),
+            "the error names the entity and the missing column: {message}",
+        );
+
+        let event = logs.expect_one(
+            "nest_rs::orm",
+            "entity has no primary-key column — keyset pagination requires one",
+        );
+        assert_eq!(event.level, "error");
+        assert!(
+            event.field("entity").is_some_and(|e| e.contains("keyless")),
+            "the event names the entity, got {:?}",
+            event.fields,
+        );
+    }
+
+    #[test]
+    fn an_entity_with_a_primary_key_pages_by_it() {
+        // The other direction: every entity a nestrs app writes has one, so a
+        // check reading the wrong thing would refuse all of them.
+        assert_eq!(
+            Repo::<child::Entity>::keyset_column()
+                .expect("a keyed entity pages")
+                .as_str(),
+            child::Column::Id.as_str(),
+        );
+    }
+
     fn relation_sql(limit: u64, after: Option<Uuid>) -> String {
         use sea_orm::sea_query::PostgresQueryBuilder;
 

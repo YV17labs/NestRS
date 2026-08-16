@@ -785,3 +785,47 @@ mod tests {
         assert!(current_executor_scope().is_none());
     }
 }
+
+#[cfg(test)]
+mod ambient_tests {
+    use std::any::Any;
+    use std::sync::Arc;
+
+    use nest_rs_database::{Executor as DynExecutor, with_request_executor};
+
+    /// Some *other* ORM's handle installed in the shared task-local — the one
+    /// shape `current_executor`'s downcast can miss.
+    struct ForeignHandle;
+
+    impl DynExecutor for ForeignHandle {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    /// A downcast miss answers `None`, which is exactly what "no ambient
+    /// executor at all" answers — so every caller takes the same fallback and
+    /// the request either opens its own connection or denies, quietly.
+    ///
+    /// That makes this a framework bug that degrades instead of failing, and
+    /// the event is the only thing that distinguishes it from an ordinary
+    /// unscoped call. `reason` is what a reader greps for.
+    #[tokio::test]
+    async fn a_foreign_ambient_executor_is_reported_rather_than_read_as_absent() {
+        let logs = nest_rs_testing::LogCapture::install();
+        with_request_executor(Arc::new(ForeignHandle) as Arc<dyn DynExecutor>, async {
+            assert!(
+                super::current_executor().is_none(),
+                "a handle this crate did not install is not a SeaORM executor",
+            );
+        })
+        .await;
+
+        let event = logs.expect_one("nest_rs::orm", "ambient executor is not a SeaORM Executor");
+        assert_eq!(event.level, "error");
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("executor_downcast_miss"),
+        );
+    }
+}

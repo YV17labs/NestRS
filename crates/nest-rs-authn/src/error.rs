@@ -170,6 +170,7 @@ mod tests {
 
     #[test]
     fn unavailable_renders_500_and_no_bearer_challenge() {
+        let logs = nest_rs_testing::LogCapture::install();
         let resp = AuthError::Unavailable("store unreachable".into()).into_response();
         assert_eq!(
             resp.status(),
@@ -180,6 +181,37 @@ mod tests {
             resp.headers().get(header::WWW_AUTHENTICATE).is_none(),
             "a 500 must not send a Bearer challenge the caller cannot satisfy",
         );
+
+        // The client is told "authentication unavailable" and nothing else, on
+        // purpose — which host is down and why is infrastructure detail. So the
+        // detail exists in exactly one place, and it is the place an operator
+        // looks when every login in the deployment starts answering 500.
+        let event = logs.expect_one("nest_rs::authn", "authentication unavailable");
+        assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("detail")
+                .is_some_and(|d| d.contains("store unreachable")),
+            "the event carries the detail the body withholds, got {:?}",
+            event.fields,
+        );
+    }
+
+    #[test]
+    fn a_failed_authentication_is_a_warn_and_not_this_line() {
+        // The neighbouring branch, and why they are two: a wrong password is a
+        // caller problem answered `401`, an unreachable store is the
+        // deployment's answered `500`. Filed under one message, an outage would
+        // be indistinguishable from a brute-force attempt.
+        let logs = nest_rs_testing::LogCapture::install();
+        let resp = AuthError::Failed("bad password".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            logs.expect_one("nest_rs::authn", "authentication failed")
+                .level,
+            "warn"
+        );
+        logs.expect_none("nest_rs::authn", "authentication unavailable");
     }
 
     #[test]

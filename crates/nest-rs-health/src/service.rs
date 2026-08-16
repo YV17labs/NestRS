@@ -170,6 +170,7 @@ mod tests {
         // HEALTH-I7: an indicator probing a dead peer must not hang the probe.
         // A tiny real ceiling keeps the test fast while exercising the timeout
         // branch against a never-resolving future.
+        let logs = nest_rs_testing::LogCapture::install();
         let (status, error) = run_with_timeout(
             "hang",
             ProbeKind::Readiness,
@@ -182,6 +183,21 @@ mod tests {
             error.as_deref(),
             Some("timed out"),
             "a timed-out indicator reports Down with an opaque reason",
+        );
+
+        // The report says `Down` with an opaque reason — deliberately, since a
+        // readiness body is served to whatever can reach the endpoint. So which
+        // indicator hung, on which probe, and against what ceiling exists only
+        // here, and an operator diagnosing a flapping readiness check has
+        // nothing else to read.
+        let event = logs.expect_one("nest_rs::health", "health indicator timed out");
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("indicator").as_deref(), Some("hang"));
+        assert_eq!(event.field("timeout_secs").as_deref(), Some("0"));
+        assert!(
+            event.field("kind").is_some_and(|k| k.contains("Readiness")),
+            "the event names the probe that hung, got {:?}",
+            event.fields,
         );
     }
 

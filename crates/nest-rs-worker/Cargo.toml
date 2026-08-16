@@ -21,6 +21,12 @@ tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }
+# `LogCapture`: a broken `JobContext` impl fails one job and unwinds, and the
+# scheduler's per-job boundary swallows the panic — the error event is the only
+# place the offending impl is named.
+nest-rs-testing = { path = "../nest-rs-testing" }
+# `catch_unwind` on a future, to assert the unwind without taking the worker down.
+futures-util = { workspace = true }
 
 [lints]
 workspace = true

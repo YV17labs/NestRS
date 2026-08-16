@@ -20,6 +20,14 @@ markers where the store-specific work lands. The reference impl is
 [`nest-rs-seaorm`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-seaorm) —
 read it once when a placeholder is unclear.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features database,worker
+```
+
+A driver implements the seam rather than consuming it, so it takes `database` without `seaorm` — the first-party integration is what you are replacing. `worker` carries the ambient job context, which is what makes the same handle reachable off a request.
+
 ## What you'll implement
 
 - An `Executor` enum holding your store's handles, with the trait impl.

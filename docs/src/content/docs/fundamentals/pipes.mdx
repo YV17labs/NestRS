@@ -36,6 +36,14 @@ pub trait Pipe {
 }
 ```
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features pipes
+```
+
+The `http` feature turns this on, and `http` is a default — name it explicitly only in a headless app built with `default-features = false`, where no transport implies it.
+
 ## Pipes are stateless
 
 A pipe is a **zero-sized marker** named at a call site — never

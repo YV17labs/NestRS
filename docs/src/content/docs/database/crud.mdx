@@ -16,6 +16,14 @@ filtering, by-id binding and response masking come from the same data context
 described in [Database](/database/) and [Security](/security/) — `#[crud]`
 just wires the endpoints.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features resource,seaorm
+```
+
+`#[expose]` is `nest-rs-resource`; `seaorm` supplies the model it decorates and implies `resource` on its own. Name `resource` alone when you want `#[wire_enum]` on a plain enum and no ORM.
+
 ## A full REST CRUD, 22 lines
 
 ```rust title="crates/features/src/orgs/http/controller.rs"

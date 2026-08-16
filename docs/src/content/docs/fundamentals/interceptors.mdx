@@ -44,6 +44,14 @@ Same vocabulary as a guard, different shape:
 It is the seam where the database transaction lives, where response
 masking lives, where tracing spans wrap a request.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features interceptors
+```
+
+The `http` feature turns this on, and `http` is a default — name it explicitly only in a headless app built with `default-features = false`, where no transport implies it.
+
 ## A minimal interceptor
 
 `async_trait` comes from `nest-rs-interceptors` (and `nest-rs-filters` /

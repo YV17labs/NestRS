@@ -473,19 +473,22 @@ mod tests {
         // Exact pin on the patch, with a bump procedure in the root manifest:
         // `nest-rs-graphql` reads async-graphql's public-but-internal registry
         // API, so a minor may silently change what it spells out.
+        //
+        // **The exemption is a property of the table, not of the name.** It was
+        // keyed on the crate name alone, which excused the pin in every manifest
+        // in the repo *and* in every manifest the CLI generates — including the
+        // template that spells `async-graphql = "7.2"` today and would have been
+        // waved through had it drifted. `manifests-ci.md` scopes it twice over:
+        // "One documented exception, **at its pin**", and "Third-party versions
+        // live in `[workspace.dependencies]` **only**". So a `=` outside a
+        // workspace table is a second, undocumented pin whatever the crate is.
         const EXACT: [&str; 2] = ["async-graphql", "async-graphql-poem"];
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let mut sources: Vec<(String, String)> = Vec::new();
-        for rel in [
-            "Cargo.toml",
-            "demo/Cargo.toml",
-            "bench/sut/nestrs/Cargo.toml",
-        ] {
-            // Packaged crate: the sibling workspaces aren't there.
-            if let Ok(raw) = std::fs::read_to_string(repo.join(rel)) {
-                sources.push((rel.to_owned(), raw));
-            }
-        }
+        // Every manifest the repo owns, walked rather than listed — the same
+        // population its twin reads. Three literal paths reached the two
+        // workspace roots and the bench SUT, and nothing else: a member crate
+        // hardcoding a requirement instead of `{ workspace = true }` was outside
+        // what this could see.
+        let mut sources = repo_manifests();
         // The manifests the CLI **generates**, which the rule names and this
         // test did not reach: a drift there ships to every scaffolded project
         // and fails no suite in this repo. Discovered rather than listed, so a
@@ -494,19 +497,14 @@ mod tests {
         let mut checked = 0usize;
         for (rel, raw) in &sources {
             let doc = raw.parse::<DocumentMut>().expect("valid TOML");
-            let tables = [
-                doc.get("workspace").and_then(|w| w.get("dependencies")),
-                doc.get("dependencies"),
-                doc.get("dev-dependencies"),
-                doc.get("build-dependencies"),
-            ];
-            for table in tables.into_iter().flatten() {
-                let Some(table) = table.as_table_like() else {
+            for (is_workspace_policy, table) in dep_tables(&doc) {
+                let Some(table) = table.and_then(|t| t.as_table_like()) else {
                     continue;
                 };
                 for (name, entry) in table.iter() {
                     // `nest-rs-*` tracks the release line, not a third party.
-                    if name.starts_with("nest-rs") || EXACT.contains(&name) {
+                    if name.starts_with("nest-rs") || (is_workspace_policy && EXACT.contains(&name))
+                    {
                         continue;
                     }
                     let req = match entry.as_str() {
@@ -699,40 +697,21 @@ mod tests {
     /// one consumer that can drift unobserved. It did.
     #[test]
     fn consumers_name_only_the_umbrella() {
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifests = [
-            // The product, workspace table and every member.
-            "demo/Cargo.toml",
-            "demo/apps/api/Cargo.toml",
-            "demo/apps/assistant/Cargo.toml",
-            "demo/apps/auth/Cargo.toml",
-            "demo/apps/live/Cargo.toml",
-            "demo/apps/worker/Cargo.toml",
-            "demo/crates/features/Cargo.toml",
-            "demo/crates/migrations/Cargo.toml",
-            "demo/crates/seed/Cargo.toml",
-            // The benchmark SUT: it measures what we ship, so it installs the
-            // way we tell people to install.
-            "bench/sut/nestrs/Cargo.toml",
-            // The compile-time witness. CLAUDE.md: "If its manifest needs a
-            // second line, the rule is broken."
-            "crates/nest-rs-macro-hygiene/Cargo.toml",
-        ];
+        let manifests = consumer_manifests();
+        // The eleven the literal list held, and every consumer added since.
+        // Below that the walk is reading the wrong tree, and a green run would
+        // mean nothing.
+        assert!(
+            manifests.len() >= 11,
+            "the walk found {} consumer manifest(s) — below eleven it is reading \
+             the wrong tree, and passing proves nothing",
+            manifests.len(),
+        );
         let mut checked = 0usize;
-        for rel in manifests {
-            let path = repo.join(rel);
-            let Ok(raw) = std::fs::read_to_string(&path) else {
-                continue; // packaged crate: the sibling workspaces aren't there
-            };
+        for (rel, raw) in &manifests {
             let doc = raw.parse::<DocumentMut>().expect("valid TOML");
-            let tables = [
-                doc.get("workspace").and_then(|w| w.get("dependencies")),
-                doc.get("dependencies"),
-                doc.get("dev-dependencies"),
-                doc.get("build-dependencies"),
-            ];
-            for table in tables.into_iter().flatten() {
-                let Some(table) = table.as_table_like() else {
+            for (_, table) in dep_tables(&doc) {
+                let Some(table) = table.and_then(|t| t.as_table_like()) else {
                     continue;
                 };
                 for (name, _) in table.iter() {
@@ -750,6 +729,124 @@ mod tests {
             }
         }
         assert!(checked > 0, "no consumer manifest was reachable to check");
+    }
+
+    /// Every manifest that consumes the framework, derived rather than listed.
+    ///
+    /// Two disjoint halves, and both are needed:
+    ///
+    /// - **outside the framework's own workspace** — `crates/*` and the root
+    ///   manifest that owns them. Everything else consumes from outside, which
+    ///   is what reaches
+    ///   `bench/sut/nestrs`, which carries its own empty `[workspace]` table so
+    ///   `cargo clippy --workspace` never sees it; it drifted back to a
+    ///   five-crate stanza unobserved, and a *name*-based rule would not have
+    ///   caught it either, since it named no umbrella to be recognised by.
+    /// - **names the umbrella** — a framework crate never depends on `nest-rs`
+    ///   (it would be a cycle), so this half reaches exactly the consumers that
+    ///   live *among* the framework crates. Today that is
+    ///   `nest-rs-macro-hygiene`, the compile-time witness, and `CLAUDE.md` is
+    ///   explicit about it: "If its manifest needs a second line, the rule is
+    ///   broken."
+    ///
+    /// The manifests the CLI **generates** are on the list for the reason its
+    /// twin gives: a scaffolded project inherits them verbatim, so a second
+    /// `nest-rs-*` line there ships to every new project and fails nothing here.
+    ///
+    /// Deriving is not a tidiness argument. The list this replaced held eleven
+    /// paths, and the rule it enforces is about the manifest a *reader* copies —
+    /// a set that grows by the same edit that forgets to extend a list.
+    fn consumer_manifests() -> Vec<(String, String)> {
+        let mut found: Vec<(String, String)> = repo_manifests()
+            .into_iter()
+            .filter(|(rel, raw)| {
+                // The framework's own workspace is `crates/*` **plus the root
+                // manifest that owns them** — that manifest declares every
+                // `nest-rs-*` version in one `[workspace.dependencies]` table,
+                // which is the release line rather than a consumer's install.
+                let outside_the_framework = rel != "Cargo.toml" && !rel.starts_with("crates/");
+                // Short-circuited deliberately: the second half is a full TOML
+                // parse of every manifest in the repo, and it only ever has to
+                // answer for the ones living *among* the framework crates.
+                outside_the_framework
+                    || raw
+                        .parse::<DocumentMut>()
+                        .ok()
+                        .is_some_and(|doc| declares_the_umbrella(&doc))
+            })
+            .collect();
+        found.extend(generated_manifests());
+        found
+    }
+
+    /// Every `Cargo.toml` the repo owns, by repo-relative path.
+    ///
+    /// Both manifest rules read this: one asks what every requirement is spelled
+    /// like, the other which of these manifests consume the framework. Sharing
+    /// the walk is what keeps them from disagreeing about the population, which
+    /// is exactly what happened — the derived half found a drift the literal
+    /// half was blind to.
+    fn repo_manifests() -> Vec<(String, String)> {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut paths = Vec::new();
+        collect_manifests(&repo, &mut paths);
+        paths.sort();
+        paths
+            .into_iter()
+            .filter_map(|path| {
+                let rel = path
+                    .strip_prefix(&repo)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                // Packaged crate: the sibling workspaces aren't there.
+                std::fs::read_to_string(&path).ok().map(|raw| (rel, raw))
+            })
+            .collect()
+    }
+
+    /// The four tables a dependency requirement can be written in, each paired
+    /// with whether it is the **workspace's own policy line** — which is what
+    /// decides whether the documented exact pin applies. All three manifest
+    /// rules read the same four, so the list is here rather than in each.
+    fn dep_tables(doc: &DocumentMut) -> [(bool, Option<&Item>); 4] {
+        [
+            (
+                true,
+                doc.get("workspace").and_then(|w| w.get("dependencies")),
+            ),
+            (false, doc.get("dependencies")),
+            (false, doc.get("dev-dependencies")),
+            (false, doc.get("build-dependencies")),
+        ]
+    }
+
+    fn declares_the_umbrella(doc: &DocumentMut) -> bool {
+        dep_tables(doc)
+            .into_iter()
+            .filter_map(|(_, table)| table?.as_table_like())
+            .any(|table| table.get("nest-rs").is_some())
+    }
+
+    fn collect_manifests(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if path.is_dir() {
+                if matches!(name, "target" | "node_modules" | ".git") {
+                    continue;
+                }
+                collect_manifests(&path, out);
+            } else if name == "Cargo.toml" {
+                out.push(path);
+            }
+        }
     }
 
     // A hand-rolled manifest may pin a version literally; the feature list then

@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <strong>~25× less memory · ~23× faster cold starts · ×4 the throughput of NestJS, core for core</strong><br>
-  Scalable Rust backend apps — measured on a byte-identical contract, <a href="bench/">reproducible from the repo</a>.<br>
-  <sub>Measured in a 4-core / 8 GB Docker VM (Apple Silicon) — virtualized, not peak native: bare-metal figures only go up.</sub>
+  <strong>NestJS architecture, Rust performance.</strong><br>
+  Build production-grade Rust backends without fighting the Rust ecosystem — modules, decorators and dependency injection over a native core.<br>
+  <sub>~25× less memory · ~23× faster cold starts · ×4 the throughput of NestJS, core for core — measured on a byte-identical contract, <a href="bench/">reproducible from the repo</a>.</sub>
 </p>
 
 <p align="center">
@@ -85,6 +85,40 @@ cargo add nest-rs --features http,seaorm
 → [Why not axum?](https://nestrs.dev/why-not-axum/) ·
 [Coming from NestJS](https://nestrs.dev/coming-from-nestjs/) ·
 [Why NestRS](https://nestrs.dev/why/)
+
+## What ships
+
+Every concern below is a module you import and a Cargo feature you can leave
+off — a headless worker compiles no HTTP stack. Each has a reference section on
+[nestrs.dev](https://nestrs.dev).
+
+| Concern | What ships |
+|---|---|
+| **Transports** | HTTP controllers with versioning, extractors, uploads, streaming · OpenAPI 3 + Swagger UI from the route table · GraphQL with dataloaders, subscriptions and federation · WebSocket gateways · MCP tools, prompts and resources |
+| **Data** | SeaORM entities, `Repo`, ambient transactions, pagination, migrations, seeding · S3-compatible object storage |
+| **Security** | JWT on EdDSA keys, OAuth2 with PKCE, Argon2id passwords, social login · abilities, row-level filtering, per-field masking, one policy across every transport |
+| **Background work** | Redis-backed queues with retries, cron schedules, a typed in-process event bus |
+| **Platform** | Typed config with an `.env` cascade · liveness/readiness/startup probes · rate limiting · OpenTelemetry logs, traces, metrics · `Server-Timing` |
+| **Tooling** | The `nestrs` CLI — scaffold, generate a feature or an adapter, run, migrate · an in-process test harness booting the real DI graph |
+
+## What holds it up
+
+Claims a clone of this repository lets you check:
+
+- **66 decorators**, one per integration contract, each expanding to plain Rust
+  you can print with `cargo expand` — the index is on
+  [nestrs.dev/decorators](https://nestrs.dev/decorators/).
+- **1,800+ tests** across the framework workspace, with the end-to-end suites
+  running against live Postgres, Redis and S3 rather than mocks — the dev
+  container brings all three up before you get a shell.
+- **Conformance joins** — the families the framework declares (decorator pairs,
+  `for_root` seams, the `warn`-level events that record a denial) are derived
+  from the source and joined against the suites covering them, so a member no
+  test names fails the suite ([`crates/nest-rs-conformance/`](crates/nest-rs-conformance/)).
+- **Documentation gated against the code** — 120+ pages, and a linter reading
+  the framework's own source for config key tables, trait signatures, version
+  pins and the imports a snippet needs to compile
+  ([`docs/scripts/lint-docs.mjs`](docs/scripts/lint-docs.mjs)).
 
 ## Stability
 

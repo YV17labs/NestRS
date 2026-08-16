@@ -219,6 +219,15 @@ greps for them:
   `ALLOW_HTTP` being the one that decides a boot refusal — and printed the dev branch of a
   profile-split default as *the* default, so a reader preparing a deployment concluded there was
   nothing to pose. Add a page to `CONFIG_TABLES` when it grows such a table.
+- **`landing-claim`** — the landing sells the framework on figures, so the figures are read out of
+  the repo rather than typed once and left there: `28 capabilities` from the umbrella's feature
+  matrix (the derivation the umbrella conformance join runs in Rust), `66 decorators` from the
+  decorator index — itself gated against `crates/*-macros/` — `1,800+ tests` from the test
+  functions under `crates/`, `120+ pages` from this content tree. Two shapes, on purpose: an
+  **exact** count names a set the reader can enumerate elsewhere on the site, so drift is a
+  contradiction; a `+` **floor** may lag what the repo holds, but only inside a band, past which
+  the page undersells a framework that grew. A missing figure is reported too — dropping the claim
+  is dropping the gate, which is how a marketing page starts drifting from the product again.
 - **`otel-guard`** — a snippet binding `OpenTelemetry::init` uses the name the crate's own boot
   panic prescribes, read out of `nest-rs-opentelemetry`'s panic text rather than restated. 1.3.0
   corrected the panic to `let _otel =` and left the page's canonical `main` on

@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0] - main
+## [4.0.0] - 2026-08-16
 
 ### `#[entity]` — a schema serves as a subgraph, gated like everything else
 
@@ -1019,6 +1019,39 @@ error frame and an HTTP error body are read by clients just as untrusted.
   envelope a client parses must not change because the *reason* is withheld.
 - The three non-request edges get no trait and want none — a job, a tick and an
   event have no caller to tell anything.
+- **One site on the WS edge bypassed the seam it already had**, and it was the
+  one nothing could see: `WsReply::reply` builds the frame from a handler's
+  *return*, and when that value would not serialize it handed the socket
+  `serde_json::Error`'s `Display` — which names the handler's types and can
+  carry the value that failed — while emitting no event at all. Its neighbour
+  `pipe_error` had learned the same lesson a release earlier and says so in its
+  own doc. It now routes through `Opaque` like everything else: the operator
+  gets the cause on `nest_rs::ws`, the client gets the constant. A reply that
+  cannot be built is the server failing, not the caller.
+
+### The testing harness can watch a thread it did not start
+
+`LogCapture` is thread-local — `set_default`, which is what keeps parallel tests
+from reading each other's events. That is the right default and it is blind in
+one place, and the place is not a corner: an event the framework emits from a
+task it *spawned* — a `spawn_blocking` write, a socket's writer half — never
+runs on the test's thread, so the assertions worth writing were exactly the ones
+that could not be.
+
+- `LogCapture::install_global()` captures on every thread for the rest of the
+  process. Sound because nextest gives each test its own process; permanent,
+  because `tracing` allows one global default and offers no way back. It panics
+  if anything already took the slot — including an `App` boot, which installs
+  the console fallback — so it is the first statement of a test, never a line
+  near the assertion. Never beside `install()`: a thread-local default shadows
+  the global one silently, and a *negative* assertion then passes for the wrong
+  reason.
+- `LogCapture::expect_none(target, message)` is the quiet half, worded once. A
+  negative log assertion is the easiest to write and the easiest to write
+  uselessly — it passes when the event is absent, and equally when the target is
+  misspelt or nothing ran — so the panic names both coordinates and dumps what
+  *was* captured, which is the half a hand-rolled
+  `assert!(logs.find(..).is_empty())` keeps leaving out.
 
 ### The diagnostics each pair owed
 

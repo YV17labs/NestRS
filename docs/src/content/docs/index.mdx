@@ -1,6 +1,6 @@
 ---
-title: NestRS — ~25× lighter, ×4 the throughput of NestJS
-description: "A Rust backend framework: ×4 the throughput of NestJS in ~25× less memory — multi-tenant isolation that is structural, non-optional, verified at boot."
+title: NestRS — NestJS architecture, Rust performance
+description: "The Rust backend framework with NestJS-style modules and decorators: authn, tenant isolation, masking and transactions verified at boot, on a native core."
 template: splash
 head:
   - tag: meta
@@ -9,9 +9,9 @@ head:
       content: website
 hero:
   title: |
-    You write the logic.<br /><span class="accent">NestRS</span> carries the rest.
+    NestJS architecture.<br /><span class="accent">Rust</span> performance.
   tagline: |
-    <span class="hero-sub">The Rust backend framework with NestJS-style decorators — authentication, tenant isolation, field masking and transactions, verified at boot.</span>
+    <span class="hero-sub">Build production-grade Rust backends without fighting the ecosystem. You write the business logic; NestRS carries authentication, tenant isolation, field masking and transactions — declared as decorators, verified at boot.</span>
     <span class="hero-stats">
       <span class="stat"><b>×4.2</b><span class="stat-label">throughput</span><small>241k req/s on one core · ×2.5 vs Fastify</small></span>
       <span class="stat"><b>×25</b><span class="stat-label">less memory</span><small>8 MB under load · NestJS ~200 MB</small></span>
@@ -22,7 +22,7 @@ hero:
     <span class="hero-proof">Per core against NestJS 11, byte-identical contract — <a href="/benchmarks/">reproducible from the repo</a>.</span>
     <span class="hero-stack">
       <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
-      <span>Database</span><span>Queue</span><span>Schedule</span><span>OpenTelemetry</span>
+      <span>Database</span><span>Storage</span><span>Queue</span><span>Schedule</span><span>Health</span><span>OpenTelemetry</span>
       <span class="hero-stack-accent">Authentication</span><span class="hero-stack-accent">OAuth2</span><span class="hero-stack-accent">Authorization</span>
     </span>
   image:
@@ -164,6 +164,34 @@ HTTP, GraphQL, WebSockets, queues, scheduled jobs, MCP.
 
 </div>
 
+## Everything a backend needs, in one framework
+
+Not a router with plugins to assemble. Each concern below is a module you
+import, documented on this site, and shipped as a Cargo feature you can leave
+off — a headless worker compiles no HTTP stack.
+
+| Concern | What ships | Read more |
+|---|---|---|
+| HTTP | Controllers, routing, versioning, extractors, uploads, streaming, compression, CORS, TLS | [HTTP](/http/) |
+| API contract | OpenAPI 3 document and Swagger UI derived from the route table | [OpenAPI](/openapi/) |
+| GraphQL | Resolvers, dataloaders, relations, subscriptions, federation, query limits | [GraphQL](/graphql/) |
+| Realtime | WebSocket gateways, namespaces, rooms, server push | [WebSockets](/websockets/) |
+| Agents | MCP server — tools, prompts, resources and tasks under the same guards | [MCP](/mcp/) |
+| Database | Entities, `Repo`, ambient transactions, pagination, migrations, seeding | [Database](/database/) |
+| Authentication | JWT on EdDSA keys, OAuth2 with PKCE, Argon2id passwords, social login | [Authentication](/security/authentication/) |
+| Authorization | Abilities, row-level filtering, per-field masking, one policy per transport | [Authorization](/security/authorization/) |
+| Background work | Redis-backed queues with retries, cron schedules, in-process events | [Queue](/queue/) · [Schedule](/schedule/) · [Events](/events/) |
+| Object storage | S3-compatible client, presigned URLs, streamed read and write | [Storage](/storage/) |
+| Configuration | Typed `#[config]` structs, `.env` cascade, every field reachable from the environment | [Configuration](/configuration/) |
+| Operations | Liveness, readiness and startup probes, rate limiting, graceful shutdown | [Health](/health/) · [Rate limiting](/rate-limiting/) |
+| Observability | OpenTelemetry logs, traces, metrics, W3C propagation, `Server-Timing` | [OpenTelemetry](/opentelemetry/) |
+| Testing | In-process harness booting the real DI graph; e2e against live backends | [Testing](/testing/) |
+| Tooling | `nestrs` — scaffold a project, generate a feature or an adapter, run it | [CLI](/cli/) |
+
+**28 capabilities**, one dependency to install them:
+`cargo add nest-rs --features http,seaorm`. The [Packages](/packages/) page maps
+every feature to the crate behind it.
+
 ## How fast, exactly
 
 The same service written twice, each side the way its own CLI scaffolds it, on
@@ -198,6 +226,34 @@ The [benchmark page](/benchmarks/) documents the contract, the full protocol
 and its limits.
 
 </details>
+
+## What holds it up
+
+A backend framework is judged on what it keeps correct over years, not on what
+it demonstrates in one file. Each property below is one you can check from a
+clone of the repository.
+
+- **66 decorators** — everything you write, from `#[module]` to `#[authorize]`,
+  expanding to plain Rust you can print with `cargo expand`. The
+  [index](/decorators/) lists every one with the position it goes in.
+- **1,800+ tests** in the framework workspace, and the end-to-end suites run
+  against live Postgres, Redis and S3 rather than mocks — wiring bugs are the
+  ones unit tests never see.
+- **Conformance joins.** The families the framework declares — its decorator
+  pairs, its `for_root` seams, the `warn`-level events that record a denial —
+  are derived from the source and joined against the suites that cover them, so
+  a member no test names fails the suite instead of passing unnoticed.
+- **Documentation gated against the code.** 120+ pages, and a linter that reads
+  the framework's own source: config key tables, trait signatures, version pins,
+  the imports a snippet needs to compile. A page that contradicts the code fails
+  the lint.
+- **A public API frozen for the major.** Every `nest-rs-*` crate publishes at
+  the same version in lockstep, so one NestRS version names exactly one
+  compatible resolution — down to the third-party crates that surface in your
+  own signatures.
+- **One artifact to operate.** `cargo build --release` produces a native binary
+  for a distroless image: configuration through the environment, probes for the
+  orchestrator, SIGTERM draining connections and running your shutdown hooks.
 
 ## Why developers pick NestRS
 
@@ -358,6 +414,20 @@ per app; no single "scale the monolith" knob.
   </div>
   <p class="scale-aside">One product, four apps — A scales on traffic spikes, B stays lean, C follows backlog, D only when needed.</p>
 </div>
+
+## Start where you are
+
+- **You write NestJS and want Rust's runtime cost.** The vocabulary carries
+  over — module, provider, controller, guard, resolver — and
+  [Coming from NestJS](/coming-from-nestjs/) maps each reflex to its
+  decorator, including the four that changed on purpose.
+- **You write Rust and axum is lower-level than your application.** Routing is
+  the part you already have; tenancy, policy, transactions and masking are the
+  parts that drift. [Why not axum](/why-not-axum/) compares the two on that
+  axis, and says where a bare router is still the right call.
+- **You are starting a service that has to hold its shape.** Scaffold it with
+  [Getting started](/getting-started/), then build a feature end to end in the
+  [tutorial](/tutorial/).
 
 ## Going further
 

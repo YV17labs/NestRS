@@ -29,6 +29,10 @@ const DOCS_ROOT = join(HERE, '..');
 const REPO_ROOT = join(DOCS_ROOT, '..');
 // The same root the sidebar reads, so the two never disagree about what a page is.
 const CONTENT = CONTENT_ROOT;
+// Every page, walked once. Two consumers — the per-file lint pass, and the
+// landing's `N+ pages` floor, which is *checked against this number*: a second
+// walk would be a second answer to the question the claim is gated on.
+const PAGES = walk(CONTENT).sort();
 const BASELINE = join(HERE, 'lint-baseline.json');
 
 // Pages exempt from the closing "Going further" requirement (utility/terminal pages).
@@ -91,6 +95,7 @@ const ARCHITECTURE_CANON = 'crates/nest-rs-cli/src/templates/architecture.md';
 const MIRRORED_PAGES = new Map([
   ['architecture.mdx', { rule: 'architecture-drift', check: (src) => architectureDrift(src) }],
   ['decorators.mdx', { rule: 'decorator-index', check: (src) => decoratorIndexDrift(src) }],
+  ['index.mdx', { rule: 'landing-claim', check: (src) => landingClaims(src) }],
 ]);
 const MIRRORS_SEEN = new Set();
 
@@ -133,6 +138,95 @@ function decoratorIndexDrift(src) {
     (name) => `#[${name}] is a shipped decorator with no row — the page opens by calling `
       + 'itself the index of every one',
   );
+}
+
+/// Every capability the umbrella's feature matrix offers — a feature whose value
+/// activates a `dep:nest-rs-<x>`, which is what separates the capabilities from
+/// `default` and `full`. The same derivation the umbrella conformance join runs
+/// in Rust, so the landing's count and the suite's floor cannot disagree.
+function umbrellaCapabilities() {
+  const manifest = frameworkSource('crates/nest-rs/Cargo.toml');
+  const start = manifest.indexOf('\n[features]');
+  const rest = start === -1 ? '' : manifest.slice(start + 1);
+  const next = rest.slice(1).search(/\n\[[a-z]/);
+  const body = next === -1 ? rest : rest.slice(0, next + 1);
+  const count = [...body.matchAll(/^[\w-]+\s*=\s*\[([\s\S]*?)\]/gm)].filter(([, value]) =>
+    /dep:nest-rs-/.test(value),
+  ).length;
+  // Fail closed: a matrix that stopped parsing would silently agree with any number.
+  if (!count) {
+    throw new Error('no capability feature found in crates/nest-rs/Cargo.toml — teach '
+      + '`umbrellaCapabilities` where the feature matrix moved, do not delete the check');
+  }
+  return count;
+}
+
+/// Every decorator `/decorators/` tabulates, counted the way a reader would: the
+/// distinct `#[name]` tokens in its first column. That page is itself gated
+/// against `crates/*-macros/` by [`decoratorIndexDrift`], so a figure checked
+/// against it is checked against the source one hop away — and the inert
+/// attributes an orchestrator reads (`#[get]`, `#[public]`) count here exactly
+/// because the page's inclusion rule is "everything you write".
+function documentedDecorators() {
+  const src = readFileSync(join(CONTENT, 'decorators.mdx'), 'utf8');
+  const names = new Set();
+  for (const row of src.split('\n').filter((l) => l.startsWith('| `#['))) {
+    for (const m of row.slice(1, row.indexOf('|', 1)).matchAll(/#\[(\w+)/g)) names.add(m[1]);
+  }
+  if (!names.size) {
+    throw new Error('no decorator rows in decorators.mdx — teach `documentedDecorators` where '
+      + 'the index moved, do not delete the check');
+  }
+  return names.size;
+}
+
+/// The landing sells the framework on figures, so the figures are read out of
+/// the repo rather than typed once and left. Four claims, four sources: the
+/// umbrella's feature matrix, the decorator index, the test functions under
+/// `crates/`, and this content tree.
+///
+/// Two shapes, and the difference is deliberate. An **exact** claim (`28
+/// capabilities`) names a set the reader can enumerate on another page of this
+/// site, so any drift is a contradiction. A **floor** (`1,800+ tests`) may lag
+/// what the repo holds — that is what the `+` says — but only within a band:
+/// past it the page undersells a framework that grew, which is the same defect
+/// pointing the other way.
+const CLAIM_BAND = new Map([['tests', 600], ['pages', 30]]);
+function landingClaims(src) {
+  const out = [];
+  const claim = (re) => {
+    const m = src.match(re);
+    return m ? Number(m[1].replace(/,/g, '')) : null;
+  };
+  const exact = [
+    ['capabilities', claim(/\*\*(\d[\d,]*) capabilities\*\*/), umbrellaCapabilities()],
+    ['decorators', claim(/\*\*(\d[\d,]*) decorators\*\*/), documentedDecorators()],
+  ];
+  for (const [what, claimed, actual] of exact) {
+    if (claimed === null) {
+      out.push(`no \`**N ${what}**\` claim on the landing — the figure is gated against the `
+        + `repo, so removing it removes the gate; say what the repo holds (${actual})`);
+    } else if (claimed !== actual) {
+      out.push(`the landing claims ${claimed} ${what}, the repo holds ${actual}`);
+    }
+  }
+  const floors = [
+    ['tests', claim(/\*\*(\d[\d,]*)\+ tests\*\*/), TEST_COUNT],
+    ['pages', claim(/(\d[\d,]*)\+ pages/), PAGES.length],
+  ];
+  for (const [what, claimed, actual] of floors) {
+    const band = CLAIM_BAND.get(what);
+    if (claimed === null) {
+      out.push(`no \`N+ ${what}\` claim on the landing — the figure is gated against the repo, `
+        + `so removing it removes the gate; say what the repo holds (${actual})`);
+    } else if (claimed > actual) {
+      out.push(`the landing claims ${claimed}+ ${what}, the repo holds ${actual}`);
+    } else if (actual - claimed > band) {
+      out.push(`the landing claims ${claimed}+ ${what} and the repo holds ${actual} — past `
+        + `${band} the floor undersells; raise it`);
+    }
+  }
+  return out;
 }
 
 /// `/architecture/` deliberately restates the role table and the reserved
@@ -577,8 +671,12 @@ function frameworkRules() {
   const traits = new Set();
   const decorators = new Set();
   const traitMethods = new Map();
+  // The landing's `N+ tests` floor, counted in the one walk that already reads
+  // every framework file — unit tests in `src/`, suites under `tests/`, alike.
+  let tests = 0;
   for (const file of walk(join(REPO_ROOT, 'crates'), ['.rs'])) {
     const src = readFileSync(file, 'utf8');
+    tests += (src.match(/#\[(?:tokio::)?test\]|#\[rstest\]/g) || []).length;
     for (const m of src.matchAll(/pub trait (\w+)\s*:\s*Layer\b/g)) traits.add(m[1]);
     // A trait split across crates (a feature-gated half) contributes its own
     // names rather than replacing the set.
@@ -605,13 +703,18 @@ function frameworkRules() {
     throw new Error('no `pub trait` found under crates/ — teach `traitDecls` where the '
       + 'framework moved, do not delete the check');
   }
-  return { traits, decorators: [...decorators], traitMethods };
+  if (!tests) {
+    throw new Error('no test function found under crates/ — teach `frameworkRules` how the '
+      + 'suites are spelled now, do not delete the check');
+  }
+  return { traits, decorators: [...decorators], traitMethods, tests };
 }
 
 const {
   traits: LAYER_SUBTRAITS,
   decorators: DECORATORS,
   traitMethods: FRAMEWORK_TRAITS,
+  tests: TEST_COUNT,
 } = frameworkRules();
 
 /// A rust snippet — the fence language the code-truth checks read.
@@ -1061,8 +1164,7 @@ function lintTitles() {
       + 'name as `sidebar.label`'));
 }
 
-const files = walk(CONTENT).sort();
-const current = [...files.flatMap(lintFile), ...lintSections(), ...lintTitles()].sort();
+const current = [...PAGES.flatMap(lintFile), ...lintSections(), ...lintTitles()].sort();
 
 // Fail closed: a registered mirror that no page matched means the page was
 // renamed or moved and its drift gate silently stopped running.

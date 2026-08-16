@@ -1,13 +1,14 @@
 ---
 title: Why NestRS
-description: The thesis behind the framework, and the six structural properties that follow from it.
+description: The thesis behind the framework, who it is for, and the six structural properties that follow from it.
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
 
 ## The thesis
 
-> Scalable Rust backend apps with native performance.
+> NestJS architecture, Rust performance — production-grade backends without
+> fighting the Rust ecosystem.
 
 Cross-cutting concerns — security, transactions, input conversion, lifecycle,
 discovery — are *error-prone exactly because they are repetitive*. Every place a
@@ -35,6 +36,27 @@ written slightly differently in two different files.
   The lineage explains the shape; the guarantees below are what you
   actually get.
 </Aside>
+
+## Who it is for
+
+Three starting points, one framework. What differs is which half of the thesis
+above you came for.
+
+- **You write NestJS or Spring, and you want Rust's memory and latency
+  profile.** The layer vocabulary carries over intact; what changes is that
+  the guarantees are checked rather than remembered.
+  [Coming from NestJS](/coming-from-nestjs/) maps every reflex.
+- **You write Rust, and a router is below the altitude of your application.**
+  axum and tower do their job; tenancy, policy, transactions and masking are
+  still yours to keep correct across every query. [Why not axum](/why-not-axum/)
+  compares the two on that axis.
+- **You are starting a backend that has to hold its shape as the team grows.**
+  Modules, an access graph checked at boot, and one place per concern — the
+  structure is the framework's, not a convention your reviews defend.
+
+A service with no cross-cutting concerns — a proxy, a single-tenant tool, an
+embedded component — is better served by a bare router, and that answer is
+part of the thesis rather than an exception to it.
 
 ## Why now
 

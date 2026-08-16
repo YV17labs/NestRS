@@ -6,6 +6,7 @@ import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 import rehypeExternalLinks from 'rehype-external-links';
 import { sidebarSection } from './src/sidebar.mjs';
+import { DEFAULT_DESCRIPTION } from './src/brand.mjs';
 
 // GitHub Pages: nestrs.dev (custom domain, base /). Local dev defaults match.
 // CI sets ASTRO_SITE + ASTRO_BASE — see .github/workflows/docs-pages.yml.
@@ -13,11 +14,9 @@ const base = process.env.ASTRO_BASE || '/';
 const site = process.env.ASTRO_SITE || 'https://nestrs.dev';
 const asset = (path) => `${base}${path.replace(/^\//, '')}`;
 
-const defaultDescription =
-  'Scalable Rust backend apps with native performance.';
+const defaultDescription = DEFAULT_DESCRIPTION;
 const ogImage = new URL(asset('social-preview.png'), site).href;
-const ogImageAlt =
-  'NestRS — Scalable Rust backend apps with native performance';
+const ogImageAlt = 'NestRS — NestJS architecture, Rust performance';
 
 export default defineConfig({
   site,
@@ -78,7 +77,7 @@ export default defineConfig({
         starlightLlmsTxt({
           projectName: 'NestRS',
           description:
-            'Scalable Rust backend apps with native performance — declarative framework, multi-transport, boot-time wiring checks, scoped data access by composition.',
+            'NestJS architecture, Rust performance — a declarative backend framework: multi-transport, boot-time wiring checks, scoped data access by composition.',
           details:
             'NestRS sits on top of hyper/tokio/poem. It is decorator-driven (procedural macros: #[module], #[controller], #[resolver], #[gateway], #[processor], #[scheduled], #[mcp]), with a flat type-id DI container verified at boot (the "access graph"), an ambient data context that installs a request-scoped executor and ability, row-level filtering and response masking via ability-based authorization, and per-binary subsets through module-gated discovery. NestRS is opinionated about layout and naming, and #[module] carries no "controllers" list, so a type\'s name is the only thing that says what it is for: read /architecture/ first and follow it when writing or reviewing NestRS code. A generated project commits the same rules as AGENTS.md at its root.',
           // The plugin's own default is `['index*']`; naming any value replaces

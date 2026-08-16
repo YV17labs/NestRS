@@ -45,6 +45,13 @@ On conflict about prose, `STYLE.md` wins; about code or naming,
   `pub trait <T>: Layer` under `crates/`, a `#[config]` struct's fields)
   rather than restating it; `bare-log` is the docs half of the
   scaffold's own no-bare-log unit test.
+- **`landing-claim`** — the one written before its defect rather than
+  after it. The landing argues the framework with four figures, so all
+  four are derived: capabilities from the umbrella's feature matrix,
+  decorators from the decorator index, tests from the functions under
+  `crates/`, pages from the content tree. Exact counts must agree; a
+  `+` floor may lag inside a band and no further. Deleting a figure is
+  deleting its gate, and the rule reports that too.
 
 ## Gotchas no page shows
 

@@ -1,7 +1,6 @@
 import { defineRouteMiddleware } from '@astrojs/starlight/route-data';
 
-const defaultDescription =
-  'Scalable Rust backend apps with native performance.';
+import { DEFAULT_DESCRIPTION as defaultDescription } from './brand.mjs';
 
 /** Per-page Twitter tags; JSON-LD on the docs home only. */
 export const onRequest = defineRouteMiddleware((context) => {

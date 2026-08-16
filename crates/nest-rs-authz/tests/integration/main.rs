@@ -19,6 +19,55 @@ mod mcp;
 #[cfg(feature = "ws")]
 mod ws;
 
+/// A parent/child pair whose one job is to be the *wrong* relation: `child`
+/// belongs_to `parent`, so a `related` call naming any other entity is the
+/// mismatch that trips the fail-closed `Deny` sentinel.
+///
+/// At the suite root for the reason [`widget`] is: two modules assert on that
+/// sentinel — the builder's own rejection and the `warn` `AbilityGuard` emits —
+/// and with a copy each they could drift into testing different mismatches
+/// while both reporting the rule holds.
+pub(crate) mod parent {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[sea_orm(table_name = "parents")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub org_id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+pub(crate) mod child {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
+    #[sea_orm(table_name = "children")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub parent_id: i32,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "super::parent::Entity",
+            from = "Column::ParentId",
+            to = "super::parent::Column::Id"
+        )]
+        Parent,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 /// A throwaway SeaORM entity to act as the authorization `Subject`, with a
 /// server-only column (`secret`) the wire DTOs never carry —
 /// [`WireModelDefaults`](nest_rs_resource::WireModelDefaults) reconstructs it so

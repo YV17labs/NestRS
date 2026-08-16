@@ -197,6 +197,9 @@ async fn a_scalar_answer_passes_through_the_mask() {
 
 #[tokio::test]
 async fn a_stripped_required_field_fails_the_operation_closed() {
+    // Thread-local: `#[tokio::test]` is a current-thread runtime, so the
+    // endpoint's task runs on this thread.
+    let logs = nest_rs_testing::LogCapture::install();
     let body = call("viewer", "strict_widget").await;
     assert!(
         !body.contains("first"),
@@ -206,6 +209,24 @@ async fn a_stripped_required_field_fails_the_operation_closed() {
     assert!(
         body.contains("error"),
         "…and it refuses loudly, never as a silent passthrough: {body}",
+    );
+
+    // The caller — a language model here — is handed an opaque refusal, which
+    // is the same answer it would get from a denial. So the log is the only
+    // thing that separates "you may not read this" from "this operation's
+    // return type and this grant cannot both be satisfied", and the second is
+    // a bug in the schema that a developer has to fix.
+    let event = logs.expect_one("nest_rs::authz", "response masking failed");
+    assert_eq!(event.level, "warn");
+    assert!(
+        event.field("entity").is_some_and(|e| e.contains("widget")),
+        "the event names the entity whose mask could not be represented, got {:?}",
+        event.fields,
+    );
+    assert!(
+        event.field("reason").is_some(),
+        "…and which of the mask's steps failed, got {:?}",
+        event.fields,
     );
 }
 

@@ -88,12 +88,35 @@ async fn an_imperative_mount_under_global_guards_refuses_to_boot() {
 async fn the_opt_out_downgrades_the_refusal_to_a_warn() {
     // `fail_secure_strict(false)` is a deliberate choice the deployment is
     // entitled to; it must boot, not fail differently.
+    let logs = nest_rs_testing::LogCapture::install();
     configure(Setup {
         strict: false,
         ..Setup::default()
     })
     .await
     .expect("the documented opt-out boots the same app");
+
+    // "Downgraded to a warn" is the whole name of this test, and the warn was
+    // asserted by nobody. It is the only record that an endpoint outside the
+    // global guard pool is being served: the app boots, the route answers, and
+    // the opt-out is a line in a builder somewhere the operator never reads.
+    let event = logs.expect_one(
+        "nest_rs::http",
+        "imperative mounts bypass the global guard pool",
+    );
+    assert_eq!(event.level, "warn");
+    assert!(
+        event.field("paths").is_some(),
+        "the event names which mounts are unguarded, got {:?}",
+        event.fields,
+    );
+    assert!(
+        event
+            .field("hint")
+            .is_some_and(|h| h.contains("controller")),
+        "and carries the remedy, got {:?}",
+        event.fields,
+    );
 }
 
 #[tokio::test]

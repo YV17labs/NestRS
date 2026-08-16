@@ -3,7 +3,7 @@
 //! - This file is the only `tests/*.rs` binary; paths under `tests/` are modules.
 //! - Shared fixtures live below at the suite root (`crate::…`), so every module
 //!   in the tree mirrors a `src/` counterpart.
-//! - Documented gaps: `jwt/module.rs`, `oauth/module.rs`; app e2e for live HTTP.
+//! - Documented gaps: app e2e for live HTTP.
 
 mod error;
 mod jwt;

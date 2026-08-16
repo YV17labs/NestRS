@@ -154,6 +154,7 @@ async fn resolver_guard_allows_an_admin() {
 
 #[tokio::test]
 async fn resolver_guard_denies_a_non_admin() {
+    let logs = nest_rs_testing::LogCapture::install();
     let app = boot().await;
 
     let resp = app
@@ -169,6 +170,21 @@ async fn resolver_guard_denies_a_non_admin() {
         json.value().object().get_opt("errors").is_some(),
         "a non-admin is forbidden by the resolver guard",
     );
+
+    // GraphQL answers a denial with `200 OK` and an error frame, so the HTTP
+    // status carries nothing an operator can alert on. This event is the
+    // structural floor `deny_http` has on the other side: every denial visible
+    // at `warn`+ whatever the individual guard chose to log.
+    let event = logs.expect_one("nest_rs::layers", "guard denied the operation");
+    assert_eq!(event.level, "warn");
+    assert!(
+        event
+            .field("guard")
+            .is_some_and(|g| g.contains("RequireAdmin")),
+        "the event names the guard that refused, got {:?}",
+        event.fields,
+    );
+    assert_eq!(event.field("status").as_deref(), Some("403"));
 
     let anon = app
         .http()

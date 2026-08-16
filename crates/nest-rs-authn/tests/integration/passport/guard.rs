@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use nest_rs_authn::{AuthError, AuthnGuard, Strategy};
 use nest_rs_guards::{Denial, Guard};
+use nest_rs_testing::LogCapture;
 use poem::Request;
 
 struct AuthenticateAs(&'static str);
@@ -79,17 +80,35 @@ async fn public_route_admits_an_anonymous_caller() {
 async fn public_route_admits_a_rejected_credential_as_anonymous() {
     // The posture `#[public]` promises: a forged token does not turn a public
     // route into a 401 — it is logged and the request continues anonymously.
+    let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(RejectWith(|| AuthError::InvalidSignature)));
     guard
         .check_http(&mut public_request())
         .await
         .expect("a rejected credential still leaves the public route reachable");
+
+    // "and it is logged" is half the promise, and the half nothing read. The
+    // request succeeds, so this event is the *only* trace a forged token
+    // probing a public endpoint leaves — which is why it is `warn` and not the
+    // `debug` its no-credential sibling gets.
+    let event = logs.expect_one(
+        "nest_rs::authn",
+        "rejected credential on a public route — continuing as anonymous",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("reason").as_deref(), Some("invalid_signature"));
+    assert!(
+        event.field("strategy").is_some(),
+        "the event names the strategy that rejected it, got {:?}",
+        event.fields,
+    );
 }
 
 #[tokio::test]
 async fn unreachable_store_fails_closed_even_on_a_public_route() {
     // The credential was never evaluated, so serving the caller as anonymous
     // would silently downgrade every authenticated session during an outage.
+    let logs = LogCapture::install();
     let guard = AuthnGuard::new(Arc::new(RejectWith(|| {
         AuthError::Unavailable("store unreachable".into())
     })));
@@ -99,4 +118,21 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
     assert!(matches!(denial, Denial::Internal { .. }), "{denial:?}");
+
+    // The client message is deliberately opaque, so the outage is only ever
+    // readable here — and an outage that logs a bare line is the one an
+    // operator cannot correlate to a strategy.
+    let event = logs.expect_one(
+        "nest_rs::authn",
+        "authentication unavailable — identity store unreachable",
+    );
+    assert_eq!(event.level, "error");
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|e| e.contains("store unreachable")),
+        "the event carries the underlying failure, got {:?}",
+        event.fields,
+    );
+    assert!(event.field("strategy").is_some(), "{:?}", event.fields);
 }

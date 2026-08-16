@@ -13,6 +13,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{App, hooks, injectable, module};
+use nest_rs_testing::LogCapture;
 
 trait Bridge: Send + Sync {}
 
@@ -93,5 +94,59 @@ async fn listing_a_host_both_ways_builds_it_twice() {
         2,
         "each binding constructs its own instance — the decorators fire on one, \
          every `Arc<dyn Bridge>` consumer holds the other",
+    );
+}
+
+/// A shutdown hook that fails is **not** propagated — and the event is the
+/// whole of what is left.
+///
+/// The split is deliberate: an init failure aborts the boot and reaches `main`
+/// as an error, so it needs no log to be noticed. Shutdown is best-effort, so
+/// one provider's failed cleanup must not skip another's — which means the
+/// error is swallowed by design, and `lifecycle hook failed` is the only record
+/// that a connection pool, a flush or a lock release did not happen.
+#[injectable]
+#[derive(Default)]
+struct BrokenOnDestroy;
+
+#[hooks]
+impl BrokenOnDestroy {
+    #[on_module_destroy]
+    async fn release(&self) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!("the migration lock was already held"))
+    }
+}
+
+#[module(providers = [BrokenOnDestroy])]
+struct BrokenOnDestroyModule;
+
+#[tokio::test]
+async fn a_failing_shutdown_hook_is_named_at_error_and_does_not_abort_the_rest() {
+    let logs = LogCapture::install();
+    // No transports, so `run` drains the serve loop immediately and goes
+    // straight to the shutdown phases — which is the only public path to them.
+    App::new::<BrokenOnDestroyModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("a failed cleanup is swallowed: shutdown is best-effort");
+
+    let event = logs.expect_one("nest_rs::lifecycle", "lifecycle hook failed");
+    assert_eq!(event.level, "error");
+    assert!(
+        event
+            .field("provider")
+            .is_some_and(|p| p.contains("BrokenOnDestroy")),
+        "{:?}",
+        event.fields,
+    );
+    assert_eq!(event.field("method").as_deref(), Some("release"));
+    assert_eq!(event.field("phase").as_deref(), Some("OnModuleDestroy"));
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|e| e.contains("migration lock")),
+        "the event carries the hook's own error, got {:?}",
+        event.fields,
     );
 }

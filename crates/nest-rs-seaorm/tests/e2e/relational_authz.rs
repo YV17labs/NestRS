@@ -13,7 +13,7 @@ use nest_rs_seaorm::{
     with_request_executor,
 };
 use sea_orm::prelude::Uuid;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, DbErr, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, Set};
 
 mod container {
     use sea_orm::entity::prelude::*;
@@ -205,6 +205,7 @@ async fn access_distinguishes_found_denied_and_missing() {
     seed_item(&conn, item_a, cont_a, "in A").await;
     seed_item(&conn, item_b, cont_b, "in B").await;
 
+    let logs = nest_rs_testing::LogCapture::install();
     with_request_executor(Executor::Pool(conn.clone()), async {
         with_ability(items_in_org(org_a), async {
             assert!(
@@ -221,6 +222,14 @@ async fn access_distinguishes_found_denied_and_missing() {
                 ),
                 "a cross-org item resolves to Denied, not Missing",
             );
+            // `Denied` and `Missing` reach the client as the same 404 — the row
+            // is hidden either way, deliberately. So the event is the only
+            // place the two are ever distinguishable, and it is what an
+            // incident query for cross-tenant probing actually reads.
+            let denial = logs.expect_one("nest_rs::orm", "access denied");
+            assert_eq!(denial.level, "warn");
+            assert_eq!(denial.field("entity").as_deref(), Some("rel_item"));
+            assert_eq!(denial.field("id"), Some(item_b.to_string()));
             assert!(
                 matches!(
                     ItemsService
@@ -366,5 +375,55 @@ async fn out_of_scope_delete_is_denied_and_leaves_the_row() {
     assert!(
         survives.is_some(),
         "a denied delete must leave the row in place",
+    );
+}
+
+/// `list()` over-fetches by one and truncates at `LIST_CAP`, silently.
+///
+/// The caller gets a `Vec` of exactly the cap and no signal at all — no error,
+/// no flag, no marker on the last element. A "small, finite collection" that
+/// quietly grew past a thousand rows therefore serves a *wrong* answer that
+/// looks like a right one, and this `warn` is the only place that fact exists.
+/// It names the entity because the fix is per collection: paginate it.
+#[tokio::test]
+async fn a_list_that_hits_the_hard_cap_says_so() {
+    let conn = crate::harness::connect().await;
+    setup_tables(&conn).await;
+
+    let org = Uuid::now_v7();
+    let container = Uuid::now_v7();
+    seed_container(&conn, container, org).await;
+
+    // One past the cap, in a single statement: the point is the truncation, not
+    // the seeding, and a thousand round-trips would make this the slowest test
+    // in the suite for no added coverage.
+    conn.execute_unprepared(&format!(
+        "INSERT INTO rel_item (id, container_id, label) \
+         SELECT gen_random_uuid(), '{container}', 'row ' || g \
+         FROM generate_series(1, {}) AS g",
+        nest_rs_seaorm::LIST_CAP + 1,
+    ))
+    .await
+    .expect("seed one row past the cap");
+
+    let logs = nest_rs_testing::LogCapture::install();
+    let rows = with_request_executor(Executor::Pool(conn.clone()), async {
+        with_ability(items_in_org(org), async { ItemsService.list().await }).await
+    })
+    .await
+    .expect("the list succeeds — truncation is not an error");
+
+    assert_eq!(
+        rows.len() as u64,
+        nest_rs_seaorm::LIST_CAP,
+        "the caller receives exactly the cap, with nothing marking the cut",
+    );
+
+    let event = logs.expect_one("nest_rs::orm", "list result truncated at the hard cap");
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("entity").as_deref(), Some("rel_item"));
+    assert_eq!(
+        event.field("cap").as_deref(),
+        Some(nest_rs_seaorm::LIST_CAP.to_string()).as_deref(),
     );
 }

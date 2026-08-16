@@ -169,3 +169,71 @@ async fn broken_context_that_skips_the_job_fails_that_job() {
     )
     .await;
 }
+
+/// A `JobContext` impl that never drives `inner` — the one contract violation
+/// `run_in_job_context` cannot recover from.
+///
+/// The job's output type is arbitrary, so nothing can be synthesized: the seam
+/// fails *this* job and unwinds, and the transport's per-job boundary catches
+/// it. Which means the panic message reaches a dead-letter record at best, and
+/// on the scheduler side nowhere at all — the error event is what names the
+/// offending impl, and `nest_rs::worker` rather than `nest_rs::queue` because
+/// the same seam serves the scheduler.
+mod a_context_that_never_runs_the_job {
+    use std::pin::Pin;
+    use std::sync::Arc;
+
+    use nest_rs_testing::LogCapture;
+    use nest_rs_worker::{JobContext, JobSettlement, JobTransaction, run_in_job_context};
+
+    struct NeverAwaits;
+
+    impl JobContext for NeverAwaits {
+        fn scope<'a>(
+            &'a self,
+            _transaction: JobTransaction,
+            _inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
+        ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
+            // Returns without ever polling `inner`: the job never runs.
+            Box::pin(async { JobSettlement::Settled })
+        }
+    }
+
+    #[tokio::test]
+    async fn fails_that_job_and_names_the_impl_at_error() {
+        let logs = LogCapture::install();
+        let ctx: Arc<dyn JobContext> = Arc::new(NeverAwaits);
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let unwound = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+            run_in_job_context(
+                Some(&ctx),
+                JobTransaction::PerAttempt,
+                async { 7u8 },
+                |_| true,
+                |_| 0u8,
+            ),
+        ))
+        .await;
+        std::panic::set_hook(previous);
+
+        assert!(
+            unwound.is_err(),
+            "a job that never ran has no output to hand back",
+        );
+
+        let event = logs.expect_one(
+            "nest_rs::worker",
+            "job context returned without running the job to completion; failing this job",
+        );
+        assert_eq!(event.level, "error");
+        assert!(
+            event
+                .field("job_context")
+                .is_some_and(|c| c.contains("JobContext")),
+            "the event names the seam whose contract was broken, got {:?}",
+            event.fields,
+        );
+    }
+}

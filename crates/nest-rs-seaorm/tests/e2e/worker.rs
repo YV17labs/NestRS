@@ -295,3 +295,64 @@ async fn a_transaction_that_loses_a_serialization_conflict_stays_retryable() {
          would dead-letter work that the next attempt completes: {why}",
     );
 }
+
+/// A job whose `COMMIT` the database refuses.
+///
+/// The queue's whole promise is "an attempt that fails leaves nothing for the
+/// retry to write again", and a commit-time constraint is where that promise is
+/// either kept or silently broken: the job body succeeded, so a context that
+/// reported the body's answer would ack a job that wrote nothing. The event is
+/// also what carries `retryable`, and a schedule reports it while a queue spends
+/// its budget on it — so getting it wrong either wastes a budget or drops work.
+#[tokio::test]
+async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = crate::harness::connect_arc().await;
+    crate::harness::deferred_probe_tables(&conn, "worker_deferred").await;
+    let ctx = context(conn.clone());
+
+    let job: Pin<Box<dyn Future<Output = bool> + Send>> = Box::pin(async {
+        let executor = current_executor().expect("the job runs with an ambient executor");
+        executor
+            .execute_unprepared(
+                "INSERT INTO worker_deferred_children (id, parent_id) VALUES (1, 4242)",
+            )
+            .await
+            .expect("a deferred constraint lets the statement through");
+        // The job body itself succeeded. Everything after this is the boundary.
+        true
+    });
+
+    let settlement = ctx.scope(JobTransaction::PerAttempt, job).await;
+    let JobSettlement::Unhonoured(why) = settlement else {
+        panic!("a job whose transaction never committed has not been settled");
+    };
+    assert!(
+        !why.retryable,
+        "a constraint that fails at commit fails identically forever — replaying \
+         the body would buy nothing and repeat every side effect it had",
+    );
+
+    assert_eq!(
+        row_count(&conn, "worker_deferred_children").await,
+        0,
+        "and nothing was written",
+    );
+
+    let event = logs.expect_one("nest_rs::orm", "job transaction commit failed");
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.field("retryable").as_deref(),
+        Some("false"),
+        "the same bit the settlement carries, so a log and a dead-letter cannot \
+         disagree: {:?}",
+        event.fields,
+    );
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|e| e.contains("worker_deferred")),
+        "…and the database's own reason, got {:?}",
+        event.fields,
+    );
+}

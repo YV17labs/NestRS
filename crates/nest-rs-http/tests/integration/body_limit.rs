@@ -8,7 +8,7 @@
 use std::io::Write;
 
 use futures_util::StreamExt;
-use nest_rs_core::{App, Transport, module};
+use nest_rs_core::module;
 use nest_rs_http::{HttpTransport, RawBody, controller, routes};
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
@@ -72,22 +72,12 @@ async fn boot() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Respons
 async fn boot_with(
     compression: bool,
 ) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    let app = App::builder()
-        .module::<BodyModule>()
-        .build()
-        .await
-        .expect("module boots");
-    let mut transport = HttpTransport::new()
-        .max_body_bytes(CAP)
-        .compression(compression);
-    transport
-        .configure(app.container())
-        .await
-        .expect("transport configures against the live container");
-    let endpoint = transport
-        .take_endpoint()
-        .expect("configure populates the endpoint");
-    TestClient::new(endpoint)
+    crate::boot_on::<BodyModule>(
+        HttpTransport::new()
+            .max_body_bytes(CAP)
+            .compression(compression),
+    )
+    .await
 }
 
 fn oversized_json() -> Vec<u8> {

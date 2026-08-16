@@ -269,3 +269,65 @@ async fn a_mismatched_captured_context_runs_bare() {
     )
     .await;
 }
+
+/// A message whose `COMMIT` the database refuses.
+///
+/// `dispatch::with_data_context` is one seam serving WS and MCP, so this is the
+/// commit-failure branch for both — and the reason it must not pass the
+/// handler's reply through is the same as everywhere else: the client is told
+/// the message was handled, and nothing it wrote is there. A socket makes that
+/// worse than a request does, because the next message arrives on the same
+/// connection and looks like it is continuing from a state that never existed.
+#[tokio::test]
+async fn a_message_whose_commit_the_database_refuses_is_not_replied_to_as_a_success() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let conn = crate::harness::connect_arc().await;
+    crate::harness::deferred_probe_tables(&conn, "ws_deferred").await;
+
+    let container = Container::builder().provide_arc(conn.clone()).build();
+    let ctx = WsDataContext::from_container(&container);
+    let captured = ctx.capture(&Request::default());
+
+    let reply = ctx
+        .around(
+            &captured,
+            Box::pin(async {
+                let executor = current_executor().expect("executor installed");
+                executor
+                    .execute_unprepared(
+                        "INSERT INTO ws_deferred_children (id, parent_id) VALUES (1, 4242)",
+                    )
+                    .await
+                    .expect("a deferred constraint lets the statement through");
+                // The handler's own answer is a success.
+                WsReply::None
+            }),
+        )
+        .await;
+
+    assert!(
+        matches!(reply, WsReply::Error(_)),
+        "a reply whose transaction did not commit is turned into an error frame",
+    );
+    assert_eq!(
+        count_rows(&conn, "ws_deferred_children").await,
+        0,
+        "and nothing was written",
+    );
+
+    let event = logs.expect_one("nest_rs::orm", "dispatch transaction commit failed");
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.field("transport").as_deref(),
+        Some("ws"),
+        "which edge, since one seam settles both in-band transports: {:?}",
+        event.fields,
+    );
+    assert!(
+        event
+            .field("error")
+            .is_some_and(|e| e.contains("ws_deferred")),
+        "…and the database's own reason, got {:?}",
+        event.fields,
+    );
+}

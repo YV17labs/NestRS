@@ -361,9 +361,39 @@ struct CatchAllApp;
 /// rather than inferring from one corner of it.
 #[tokio::test]
 async fn a_versioned_root_catch_all_does_not_swallow_the_documents_own_addresses() {
+    let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::for_module::<CatchAllApp>()
         .await
         .expect("boots with a versioned root controller beside the documentation");
+
+    // The same catch-all is a path OpenAPI has no template for, so it is left
+    // out of the document rather than published verbatim — a generated client
+    // once called `/blobs/*rest` as a literal URL. The route still serves, so
+    // nothing about the omission is observable from the app; the warn is the
+    // whole notice the author gets.
+    // Two: the document is rendered per selected version, and the catch-all is
+    // omitted from each. One line per rendering is the honest count — the
+    // author has to fix one route either way.
+    let omitted = logs.find(
+        "nest_rs::openapi",
+        "route omitted from the document: an OpenAPI path template is one whole \
+         segment, so a catch-all, an unnamed pattern, or a literal sharing a \
+         segment with a parameter cannot be described",
+    );
+    assert!(
+        !omitted.is_empty(),
+        "the catch-all is reported: {:#?}",
+        logs.events()
+    );
+    for event in &omitted {
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("handler").as_deref(), Some("anything"));
+        assert!(
+            event.field("path").is_some_and(|p| p.contains("*rest")),
+            "the event names the path it could not template, got {:?}",
+            event.fields,
+        );
+    }
 
     for path in ["/api", "/api-json", "/api/swagger-ui.css"] {
         let resp = app.http().get(path).send().await;
@@ -415,5 +445,79 @@ async fn a_form_encoded_body_is_described_as_one() {
     assert!(
         content["schema"]["$ref"].is_string() || content["schema"]["properties"].is_object(),
         "and carrying the form's own shape: {content}",
+    );
+}
+
+/// A committed `openapi.json` refreshed as a side effect of a run — the same
+/// dev-loop convenience the GraphQL SDL emit is — pointed at a directory that
+/// does not exist.
+///
+/// It must not stop a boot: the app serves the document at `/api-json` whether
+/// or not the file was written, and an operator running in a read-only image
+/// wants the app up. Which leaves nothing else to notice that the committed
+/// document has silently stopped tracking the routes — every client generated
+/// from it drifts from the app one release at a time.
+#[module(
+    imports = [
+        OpenApiModule::for_root(OpenApiConfig {
+            emit_document: true,
+            document_path: unwritable_document_path(),
+            ..OpenApiConfig::default()
+        }),
+    ],
+    providers = [WidgetsController],
+)]
+struct UnwritableDocumentApp;
+
+fn unwritable_document_path() -> std::path::PathBuf {
+    std::env::temp_dir()
+        .join(format!("nest_rs_openapi_absent_{}", std::process::id()))
+        .join("openapi.json")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_document_emit_that_cannot_write_warns_and_still_serves() {
+    // Global: the write is offloaded to `spawn_blocking` so a synchronous write
+    // never stalls the boot executor, which puts the event on another thread —
+    // the one shape a thread-local capture is structurally blind to.
+    let logs = nest_rs_testing::LogCapture::install_global();
+
+    let app = TestApp::for_module::<UnwritableDocumentApp>()
+        .await
+        .expect("a failed document write is never a boot failure");
+
+    let resp = app.http().get("/api-json").send().await;
+    resp.assert_status_is_ok();
+
+    // The blocking pool runs on its own threads; give it a moment to land.
+    for _ in 0..200 {
+        if !logs
+            .find("nest_rs::routes", "failed to write OpenAPI document")
+            .is_empty()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+
+    let event = logs.expect_one("nest_rs::routes", "failed to write OpenAPI document");
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("path").as_deref(),
+        unwritable_document_path().to_str(),
+        "the event names the file that did not get written — the whole path, \
+         since `openapi.json` is what every one of them ends with: {:?}",
+        event.fields,
+    );
+    assert!(
+        event.field("error").is_some(),
+        "and why, got {:?}",
+        event.fields,
+    );
+    assert!(
+        logs.find("nest_rs::routes", "wrote OpenAPI document")
+            .is_empty(),
+        "the success line and the failure line are exclusive: {:#?}",
+        logs.events(),
     );
 }

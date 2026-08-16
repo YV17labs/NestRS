@@ -10,12 +10,12 @@
 //! By-id route-model binding lives in `nest_rs_seaorm::Bind` (it `use`s the
 //! data layer).
 
-mod extractor;
+mod authorize;
 mod guard;
+mod mask;
 mod scope;
-mod shape;
 
-pub use extractor::Authorize;
+pub use authorize::Authorize;
 pub use guard::AbilityGuard;
+pub use mask::{AbilityShaping, mask_entity_response};
 pub use scope::Scope;
-pub use shape::{AbilityShaping, mask_entity_response};

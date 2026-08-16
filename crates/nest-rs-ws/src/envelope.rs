@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::opaque::Opaque;
+
 /// `{ "event": ..., "data": ... }` — the wire shape every gateway message
 /// rides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,10 +97,19 @@ pub enum WsReply {
 
 impl WsReply {
     /// Serializes a handler's return; a failure degrades to [`WsReply::Error`].
+    ///
+    /// Through [`Opaque`](crate::Opaque), like every other failure on this edge,
+    /// and for both of its reasons at once. It said nothing at all — the one
+    /// silent site in this file, next door to [`pipe_error`](Self::pipe_error),
+    /// whose own doc records learning the same lesson — and what it handed the
+    /// socket was `serde_json::Error`'s `Display`, which names the handler's
+    /// types and can carry the value that would not serialize. A reply that
+    /// cannot be built is the *server's* failure, so the operator gets the cause
+    /// and the client gets the constant.
     pub fn reply<T: Serialize>(value: &T) -> WsReply {
-        match serde_json::to_value(value) {
+        match serde_json::to_value(value).opaque() {
             Ok(data) => WsReply::Reply(data),
-            Err(err) => WsReply::Error(WsError::new(format!("failed to serialize reply: {err}"))),
+            Err(err) => WsReply::Error(err),
         }
     }
 
@@ -300,6 +311,40 @@ mod tests {
         assert!(
             frame.get("errors").is_none(),
             "absent detail must not ship an explicit null, matching HTTP: {frame}",
+        );
+    }
+
+    /// A reply that cannot be serialized is the server failing, and it used to
+    /// fail *silently* while handing the socket serde's own `Display`.
+    ///
+    /// Both halves are asserted here because either one alone passes for the
+    /// wrong reason: a constant on the wire proves nothing if the cause went
+    /// nowhere, and an event proves nothing if the frame still carries the
+    /// types. The map keys are the shape `serde_json` refuses — a non-string
+    /// key — so nothing here depends on a hand-written failing `Serialize`.
+    #[test]
+    fn a_reply_that_cannot_be_serialized_tells_the_operator_and_not_the_client() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let unserializable: std::collections::HashMap<(i32, i32), &str> =
+            std::collections::HashMap::from([((1, 2), "corner")]);
+
+        match WsReply::reply(&unserializable) {
+            WsReply::Error(err) => {
+                assert_eq!(err.error, nest_rs_core::OPAQUE_CLIENT_MESSAGE);
+                assert!(
+                    err.errors.is_none(),
+                    "an opaque failure offers no per-field detail: {err:?}",
+                );
+            }
+            _ => panic!("a value that cannot serialize must not read as a reply"),
+        }
+
+        let event = logs.expect_one("nest_rs::ws", "websocket message failed");
+        assert_eq!(event.level, "error");
+        assert!(
+            event.field("error").is_some_and(|e| e.contains("key")),
+            "the cause the frame withholds is what the log has to carry, got {:?}",
+            event.fields,
         );
     }
 }

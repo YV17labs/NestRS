@@ -512,23 +512,64 @@ line whose proof you cannot run is a line you have not done.
    pair), so the wrong shape is a compile error **naming the sibling**, and each
    pair ships a trybuild snapshot **per** wrong shape.
 2. **Mandatory posture per operation** — `#[authorize(Action, Entity)]` or
-   `#[public]`, parsed by the shared `PostureRules` in `nest-rs-codegen`, with a
-   trybuild snapshot for the no-posture case. Silence is not a posture: the
-   refusal is what keeps *no authn/authz decision outside a guard* true, and it
-   is the one item on this list that is load-bearing on its own.
+   `#[public]`, with a trybuild snapshot for the no-posture case. Silence is not
+   a posture: the refusal is what keeps *no authn/authz decision outside a guard*
+   true, and it is the one item on this list that is load-bearing on its own.
+
+   **The grammar is shared where it is the same grammar, and only there.**
+   `PostureRules` in `nest-rs-codegen` words the declaration, the
+   mandatory-posture refusal and the `bind = Service` rejection once; `#[tools]`
+   and `#[messages]` take it verbatim. The other two parse their own, each for a
+   stated reason, and the reasons are the difference — not drift:
+
+   - **`#[operations]` (GraphQL)** accepts `#[authorize(Update, bind = Service)]`
+     and `id_arg = ident`, which synthesise an id argument and an
+     `Authorized<A, E>` proof. No other edge can express that, and carrying the
+     option in the shared rules for two transports that reject it would be the
+     abstraction paying for a case it does not have. Argued at the top of
+     `nest-rs-codegen/src/posture.rs`.
+   - **`#[routes]` (HTTP)** has an **optional** posture — a route's gate may also
+     be `#[use_guards]`, which is why `request-layers.md` says the posture is
+     mandatory *on the last three* — and two refusals that exist nowhere else:
+     `#[authorize]` on an `#[sse]` route, and binding the posture to a handler
+     *parameter* (`authorize_param`). A shared `take` returning `Posture` rather
+     than `Option<Posture>` cannot serve it.
+
+   So the testable form is per site, not one grep: `PostureRules` is the only
+   wording of the two-transport grammar, and each of the four edges ships the
+   no-posture (or, for HTTP, the contradiction) trybuild snapshot. **Two of four
+   is the correct count here**, and it is written down so the next reader does
+   not read a hole where an argument is.
 3. **A class gate the posture emits** — `nest_rs_authz::<edge>::authorize`, whose
    *decision* is the shared `gate` so `#[authorize]` cannot come to mean five
    things. Missing ambient ability fails **closed**.
+
+   **HTTP's gate is the one that does not call it, and must not.** The shared
+   `gate`'s first rung is `is_visitor()` ⇒ `Unauthenticated`, which refuses every
+   anonymous caller before looking at a grant. The sanctioned public-reads
+   pattern — `#[public]` beside a hand-written `Authorize<A, E>` — needs a
+   `define_visitor` grant to *satisfy* the gate, so `Authorize` open-codes
+   `can_class` then `missing_scopes` and has no `Unauthenticated` verdict.
+   Argued on `Ability::is_visitor`, which names the split: on HTTP the route's
+   own posture asks whether there is a principal, on the in-band edges the gate
+   does.
 4. **Response masking the same posture arms** — never hand-written at the use
    site, and `unmasked` is the opt-out for a shape the value-level round-trip
    cannot see through. Which of two shapes depends on what the edge does with the
    value: `masked_value_for` when it must reconstruct the return type (GraphQL's
    non-nullable schema, MCP's `structuredContent`), so a stripped required key
-   refuses the operation; `masked_reply_for` when it ships JSON (WS, and HTTP's
-   shaper), so the key is simply absent. **Pick by the protocol, not by
-   symmetry** — and either way, fail closed on a missing ambient ability. The
-   witness is a test in `nest-rs-authz/tests/integration/<edge>/mask.rs` asserting
-   a field grant strips a column **with no masking call in the handler body**.
+   refuses the operation; `masked_reply_for` when it ships JSON (WS), so the key
+   is simply absent. **Pick by the protocol, not by symmetry** — and either way,
+   fail closed on a missing ambient ability. The witness is a test in
+   `nest-rs-authz/tests/integration/<edge>/mask.rs` asserting a field grant strips
+   a column **with no masking call in the handler body**.
+
+   **HTTP arms neither function**, and that is a fourth mechanism rather than a
+   gap: `#[routes]` installs a `RouteResponseShaper` chosen **by the parameter's
+   type** (`ShaperProbe`, so an alias or a re-export arms identically), and the
+   shaper omits a masked key from the body. Same fail-closed reading, nothing
+   for the expansion to call — which is why that edge's witness proves the
+   effect and cannot spell an entry point.
 5. **Guards at two scopes** — `#[use_guards]` on the host and per operation, plus
    `#[force_guards]`, composed once per site and deduped by `TypeId`. A denial
    renders through one `denial_to_<edge>_error`, so a guard's refusal and a
@@ -550,9 +591,8 @@ line whose proof you cannot run is a line you have not done.
    `check_http`. Witness: a trybuild snapshot per edge, binding a guard that does
    not check it at that edge's site. HTTP has **three** emitters —
    `#[controller]`, `#[routes]` and the `#[gateway]` struct, whose guards run on
-   the upgrade — and each must underline the decorator the guard was written
-   under; two carry a snapshot today and the gateway site does not, which is a
-   gap to close rather than a shape to copy.
+   the upgrade — and each underlines the decorator the guard was written under,
+   with a snapshot of its own (`unattested_guard_on_a_gateway` is the third).
 7. **Per-argument pipes** — `Piped<P, T>` / `Valid<T>` stripped by the impl-half
    decorator, rejection rendered as the edge's native error, and the pipe runs
    **after** the gate so a refused caller never pays for validation and a
@@ -634,31 +674,59 @@ that can only ever suppress a check.
 
 **Two residues, both reported rather than closed, both owner questions.**
 
-- **Discovery is not an operation — and that excuse no longer holds.**
-  `initialize` / `tools/list` / `prompts/list` are rmcp server methods the
-  endpoint's `check_http` is the only gate on, so a pool of `check_mcp`-only
-  guards still takes `/mcp` from deny-all to a handshake disclosing the tool
-  inventory. The reason recorded here was "nothing for a `check_mcp` to be
-  handed", and GraphQL has since refuted it: `_service` / `_entities` are the
-  same shape — protocol-owned, owned by no provider, disclosing the inventory —
-  and they are gated, by building the context that *says* the site has no
-  operation (`GraphqlOperationContext::federation`, whose `context()` answers
-  `None`) rather than by declining the guard. The seam exists on this side too:
-  `PropagatingHandler::dispatch` already wraps `list_tools`. So what stands is
-  the residue, not its justification: closing it means an
-  `McpOperationContext` that can name a discovery method and a `dispatch` that
-  runs the pool's operation half for it. **Owner question, not a licence** —
-  widening a guard surface is a decision, and the point of recording it here is
-  that the next reader does not inherit a false reason.
-- **The in-band chains are never phase-validated.** `boot_validate_guards` runs
-  at the `#[routes]` mount and over the global bucket; `#[tools]` and
-  `#[operations]` compose their chain at runtime and emit no such check, so an
-  authorization-phase global guard ordered before an authentication-phase scoped
-  one boots on MCP and GraphQL where HTTP refuses it. It fails **closed** — the
-  ability guard finds no principal and installs nothing, so `Repo` denies — which
-  is why it is a diagnostic gap and not a fail-open. GraphQL has had it all
-  along; folding the pool into the MCP chain is what made it reachable there too,
-  so the fix belongs to both edges at once.
+- **Discovery is gated where the protocol says it is, and that is not a
+  residue.** `initialize` / `tools/list` / `prompts/list` are rmcp server methods
+  the endpoint's `check_http` is the only gate on. That was recorded here as a
+  hole; the specification says it is the design. MCP "provides authorization
+  capabilities **at the transport level**", the server "acts as an OAuth 2.1
+  resource server", and "authorization **MUST** be included in **every HTTP
+  request** from client to server" — with 401 for an absent or invalid token and
+  403 for insufficient scope, both HTTP statuses. Nowhere does the spec
+  authorize a JSON-RPC method individually, and it never names `tools/list` as
+  needing a check of its own. So the mandated gate is uniform over every HTTP
+  request, discovery included, and it is the one this edge runs.
+
+  **The GraphQL comparison does not transfer, and that is the correction.**
+  `_service` / `_entities` are gated in band because GraphQL has no
+  transport-level authorization to be uniform over — one POST carries an
+  arbitrary document, so the field is the only addressable unit. MCP's unit *is*
+  the HTTP request. Reading the two as the same shape is what turned a
+  conformant edge into a recorded hole. A `check_mcp` chain over discovery would
+  be a layer above the standard, not the standard: build it if a product asks,
+  and do not carry it here as a debt.
+- **The in-band chains are never phase-validated, and only they.** A
+  `boot_validate_*` makes a misordered chain — an authorization-phase guard ahead
+  of the authentication-phase one whose principal it reads — a named boot failure
+  instead of a deployment that denies everything with nothing to say why. It
+  fails **closed** (the ability guard finds no principal and installs nothing, so
+  `Repo` denies), which is exactly what kept it quiet.
+
+  HTTP has it at the `#[routes]` mount and over the global bucket. **WS has it at
+  the upgrade and not per message** — one of its two sites. `#[messages]`
+  attaches an `HttpBootCheck` calling `boot_validate_guards` over `#[gateway]`'s
+  own emitted specs; that chain is an HTTP `GET`, so it runs `check_http`, which
+  is the entry the check is written about. The check lives in the impl half
+  while the upgrade's guards are declared on the struct half because a gateway
+  freezes its chains **at mount**, with the container in hand.
+
+  **Per message it would be wrong, and this was proved by shipping it.** A
+  per-message chain runs `check_ws_message`, while `validate_guard_chain` reads
+  `produced_principal` / `expected_principal` — which describe `check_http`, and
+  `AuthnGuard` keeps the no-op `check_ws_message` default by design. Applied
+  there the check was wrong in both directions at once: silently green on a
+  chain where nothing attaches a principal at all, and a false boot failure on
+  the split-scope shape `authn-authz.md` sanctions. The phase-*ordering* half
+  would transfer; the principal half does not, and making it honest needs a
+  per-message notion of what "produces" means. **Owner question**, recorded in
+  `guards-baseline.txt` with the two defects that closed it for a day.
+
+  `#[operations]` and `#[tools]` cannot answer there: they compose through
+  `SiteChainCell` on the **first dispatch that reaches the site**, after every
+  boot check has run, and nothing at boot enumerates the sites. Closing them is
+  therefore not a call to add but a link-time registry of sites — the shape
+  `GraphqlLoaderRegistration` already has — submitted by both macro crates and
+  walked once at boot against `ReachableProviders`. **Owner question**, and the
+  fix belongs to both edges at once.
 
 Closing the first gap would mean four `check_*`-carrying traits with no
 defaults, and then a guard serving three edges needs three container

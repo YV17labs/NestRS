@@ -155,10 +155,7 @@ async fn an_allowed_request_logs_no_denial() {
     let logs = LogCapture::install();
     let resp = call_guarded(DecisionGuard::allow(Arc::new(AtomicU32::new(0)))).await;
     assert_eq!(resp.status(), poem::http::StatusCode::OK);
-    assert!(
-        logs.find("nest_rs::layers", "guard denied the request")
-            .is_empty(),
-    );
+    logs.expect_none("nest_rs::layers", "guard denied the request");
 }
 
 #[tokio::test]

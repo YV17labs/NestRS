@@ -11,6 +11,7 @@ use std::time::Duration;
 use nest_rs_core::{Container, Transport};
 use nest_rs_schedule::nest_rs_worker::{JobSettlement, JobTransaction};
 use nest_rs_schedule::{CronExpression, CronJobMeta, Scheduler, Trigger};
+use nest_rs_testing::LogCapture;
 use nest_rs_worker::{self, JobContext};
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +20,7 @@ static TIMEOUT_HITS: AtomicU64 = AtomicU64::new(0);
 static CRON_HITS: AtomicU64 = AtomicU64::new(0);
 static PANIC_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static SURVIVOR_HITS: AtomicU64 = AtomicU64::new(0);
+static NEVER_HITS: AtomicU64 = AtomicU64::new(0);
 
 type RunFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
@@ -416,4 +418,80 @@ async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
          reporting nothing while saying otherwise is what an audit found: \
          {event:?}",
     );
+}
+
+fn tick_never(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        NEVER_HITS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })
+}
+
+/// A schedule that is valid, parses, and will never come round again — a
+/// seven-field croner pattern pinned to a year in the past is the plainest
+/// form, and a February 30th or a `2024-02-29`-shaped one-off is the shape a
+/// real app reaches it by.
+///
+/// Nothing else reports it. `configure` succeeds (the pattern is well-formed),
+/// `serve` returns `Ok`, and the job's task parks on the cancel token exactly
+/// like a job waiting for a real occurrence — so a schedule that will never fire
+/// again is indistinguishable, from the outside, from one that has not fired
+/// yet. This line is the difference.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() {
+    struct NeverHost;
+
+    // Global: the job loop runs on a spawned task, so a thread-local capture
+    // installed here would never see the event it exists to read.
+    let logs = LogCapture::install_global();
+
+    let container = Container::builder()
+        .attach_meta::<NeverHost, CronJobMeta>(CronJobMeta {
+            provider: "NeverHost",
+            method: "never",
+            trigger: Trigger::Cron {
+                expr: "0 0 0 1 1 ? 2020",
+                tz: None,
+            },
+            run: tick_never,
+            transaction: JobTransaction::PerAttempt,
+        })
+        // Empty and *present*: `configure` also walks the link-time
+        // `ScheduledMethod` registry, and with no gate seeded it starts every
+        // `#[scheduled]` compiled into this binary — four panicking ticks from
+        // another module's fixtures in 300 ms. `expect_one` discriminates only
+        // by target and message, so one more `#[cron]` in this binary would
+        // turn that into a false failure of this test.
+        .provide(nest_rs_core::ReachableProviders(Default::default()))
+        .build();
+
+    let mut scheduler = Scheduler::new();
+    scheduler.configure(&container).await.expect(
+        "a pattern that is well-formed configures — being in the past is not a parse error",
+    );
+
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("a job that will never fire is not a serve failure");
+
+    assert_eq!(
+        NEVER_HITS.load(Ordering::SeqCst),
+        0,
+        "the job never ran, which is the fact that needed announcing",
+    );
+
+    let event = logs.expect_one(
+        "nest_rs::schedule",
+        "cron job has no future occurrence; it will not run again",
+    );
+    assert_eq!(event.level, "warn");
+    // Provider *and* method: an app with several `#[cron]` methods on one host
+    // learns nothing from the host's name alone.
+    assert_eq!(event.field("provider").as_deref(), Some("NeverHost"));
+    assert_eq!(event.field("method").as_deref(), Some("never"));
 }

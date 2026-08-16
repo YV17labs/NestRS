@@ -868,3 +868,41 @@ async fn an_accept_header_that_is_not_text_is_refused_too() {
     resp.assert_status_is_ok();
     resp.assert_text("none").await;
 }
+
+/// A version header that *is* text and is still not a version.
+///
+/// The undecodable case above is refused for being unreadable; this one is
+/// readable and refused for its shape — a path traversal, a URL, a sentence.
+/// Both answer `400`, which is exactly why the event matters: from the outside
+/// the two are one status code, and only the log separates "a client sent
+/// binary junk" from "a client is probing the version selector".
+///
+/// The event deliberately carries the **length** and not the value: a rejected
+/// version is attacker-controlled text, and logging it verbatim would let a
+/// caller write into the operator's log.
+#[tokio::test]
+async fn a_version_header_that_is_text_but_malformed_is_rejected_and_reported() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let client = boot_edge_cases(Some("2")).await;
+
+    let resp = client
+        .get("/unversioned/ping")
+        .header(DEFAULT_VERSION_HEADER, "../../etc/passwd")
+        .send()
+        .await;
+    resp.assert_status(StatusCode::BAD_REQUEST);
+
+    let event = logs.expect_one("nest_rs::http", "rejected a malformed API version");
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("length").as_deref(), Some("16"));
+    assert!(
+        event.field("strategy").is_some(),
+        "the event names which selector rejected it, got {:?}",
+        event.fields,
+    );
+    assert!(
+        !event.fields.values().any(|v| v.contains("passwd")),
+        "the rejected value is attacker-controlled and must not reach the log: {:?}",
+        event.fields,
+    );
+}

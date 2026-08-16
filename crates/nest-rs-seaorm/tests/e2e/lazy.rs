@@ -144,6 +144,7 @@ async fn a_writing_handler_commits_through_the_lazy_transaction() {
 /// for.
 #[tokio::test]
 async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
+    let logs = nest_rs_testing::LogCapture::install();
     let pool = crate::harness::starved_pool().await;
 
     // Hold the only connection for the duration of the attempt.
@@ -168,6 +169,33 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
         ),
         other => panic!("expected a poisoned boundary, got {other:?}"),
     }
+
+    // Its own message, distinct from the transaction-was-opened twin: nothing
+    // was opened here, so `NoTransaction` would have been the honest-looking
+    // answer and the wrong one — it says "nothing to settle" about work that
+    // was meant to land and did not. An operator reading this line learns the
+    // request never reached the database at all, which is a different incident
+    // from one whose statements ran and were thrown away.
+    let event = logs.expect_one(
+        "nest_rs::orm",
+        "a statement failed before this boundary could open its transaction, but the \
+         boundary reported success; nothing it meant to write was written",
+    );
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.field("retryable").as_deref(),
+        Some("true"),
+        "a pool acquire timeout wrote nothing, so the same bit the outcome \
+         carries says the attempt is worth repeating: {:?}",
+        event.fields,
+    );
+    assert_eq!(
+        event.field("outcome").as_deref(),
+        Some("fail"),
+        "{:?}",
+        event.fields
+    );
+
     hog.rollback().await.expect("release the held connection");
 }
 

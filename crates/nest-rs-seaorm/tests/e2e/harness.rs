@@ -54,6 +54,36 @@ pub(crate) async fn setup_shared_table(conn: &DatabaseConnection, table: &str, s
     .unwrap_or_else(|err| panic!("set up the shared probe table `{table}`: {err}"));
 }
 
+/// The two tables a commit-time failure is provoked with: a child row whose
+/// foreign key is `DEFERRABLE INITIALLY DEFERRED`, so inserting it against a
+/// parent that never arrives succeeds and the `COMMIT` is what refuses.
+///
+/// Three suites need it — the HTTP boundary, the worker's per-attempt
+/// transaction and the WS/MCP data context — for the same reason each time, and
+/// they differ only in the prefix that keeps their tables apart. Shared because
+/// the shape *is* the assertion: a probe that stopped deferring would make all
+/// three green while testing nothing, and the drift would be invisible in each
+/// file on its own. Returns the child table's name, which is what the caller
+/// inserts into.
+pub(crate) async fn deferred_probe_tables(conn: &DatabaseConnection, prefix: &str) -> String {
+    let parents = format!("{prefix}_parents");
+    let children = format!("{prefix}_children");
+    setup_shared_table(
+        conn,
+        &children,
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {parents} (id INT PRIMARY KEY);
+             CREATE TABLE IF NOT EXISTS {children} (
+                 id INT PRIMARY KEY,
+                 parent_id INT NOT NULL REFERENCES {parents}(id)
+                     DEFERRABLE INITIALLY DEFERRED
+             );"
+        ),
+    )
+    .await;
+    children
+}
+
 /// FNV-1a over the table name — a stable `i64` that does not depend on the
 /// std hasher's per-process seed (advisory locks must agree *across* nextest
 /// processes, so `DefaultHasher` would be wrong here).

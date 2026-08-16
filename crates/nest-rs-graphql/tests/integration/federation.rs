@@ -231,6 +231,7 @@ async fn a_resolver_scope_guard_runs_on_a_reference_the_same_as_on_a_query() {
 /// extension or not at all.
 #[tokio::test]
 async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
+    let logs = nest_rs_testing::LogCapture::install();
     let app = TestApp::builder()
         .module::<PooledModule>()
         .use_guards_global([guard::<Closed>()])
@@ -248,6 +249,25 @@ async fn a_pooled_guard_refuses_a_reference_before_any_member_answers() {
         0,
         "and it refuses *before* a member answers — the body that would have \
          resolved the reference never ran: {body}",
+    );
+
+    // `_entities` answers `200 OK` with an error frame like every GraphQL
+    // refusal, so nothing about this reaches an HTTP-level alert. And unlike an
+    // ordinary operation, a federation field belongs to no provider — the
+    // `route` label is the one thing a reader would otherwise have to infer,
+    // which is why this site carries its own event rather than reusing the
+    // operation one.
+    let event = logs.expect_one("nest_rs::layers", "guard denied the federation field");
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("route").as_deref(),
+        Some("POST /graphql (federation)"),
+    );
+    assert_eq!(event.field("field").as_deref(), Some("_entities"));
+    assert!(
+        event.field("guard").is_some_and(|g| g.contains("Closed")),
+        "the event names the guard that refused, got {:?}",
+        event.fields,
     );
 }
 

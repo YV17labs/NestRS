@@ -37,3 +37,36 @@ async fn mcp_tool_self_mounts_and_fails_closed_without_a_guard() {
     let resp = app.http().post("/elsewhere").send().await;
     resp.assert_status(StatusCode::NOT_FOUND);
 }
+
+/// The mount says, once, that its Host allowlist is empty.
+///
+/// An empty `allowed_hosts` turns off rmcp's DNS-rebinding defence. Nothing
+/// about that is observable from a client — the endpoint answers identically
+/// either way — and the deployment that needs it most is the one that never set
+/// `NESTRS_MCP__ALLOWED_HOSTS`. So this warn is the whole control, and it is
+/// emitted from `from_container`, the path a real mount takes; `deny_all()`
+/// skips it because it builds no config at all.
+#[tokio::test]
+async fn a_mount_with_no_allowlist_reports_that_host_validation_is_off() {
+    let logs = nest_rs_testing::LogCapture::install();
+    // The default carries a loopback allowlist, which is correct for the local
+    // server it protects — so the empty case is a deployment that *cleared*
+    // `NESTRS_MCP__ALLOWED_HOSTS`, and that is what this pins.
+    let container = nest_rs_core::Container::builder()
+        .provide(nest_rs_mcp::McpConfig {
+            allowed_hosts: Vec::new(),
+            ..nest_rs_mcp::McpConfig::default()
+        })
+        .build();
+    let _mount = nest_rs_mcp::McpMount::from_container(&container);
+
+    let event = logs.expect_one(
+        "nest_rs::mcp",
+        "mcp host allowlist is empty — inbound Host headers are not validated",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("host_validation_disabled"),
+    );
+}

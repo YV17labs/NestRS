@@ -210,6 +210,7 @@ async fn unit_return_sends_none() {
 
 #[tokio::test]
 async fn unknown_event_returns_unknown_error() {
+    let logs = nest_rs_testing::LogCapture::install();
     let reply = TestGateway
         .dispatch(&WsClient::for_test(), "missing", serde_json::Value::Null)
         .await;
@@ -222,6 +223,18 @@ async fn unknown_event_returns_unknown_error() {
         }
         _ => panic!("expected Error for an unrouted event"),
     }
+
+    // A socket stays open after an unrouted event, so nothing surfaces at the
+    // transport: a client typo and a deploy that dropped a `#[subscribe_message]`
+    // look identical from the outside and both keep the connection alive. The
+    // event is what separates them, and it is the only per-message trace on a
+    // long-lived connection.
+    let event = logs.expect_one(
+        "nest_rs::ws",
+        "subscribe_message dispatched to an unknown event",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("event").as_deref(), Some("missing"));
 }
 
 #[tokio::test]

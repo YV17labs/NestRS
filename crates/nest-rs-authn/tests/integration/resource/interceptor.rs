@@ -286,3 +286,143 @@ async fn an_mcp_scope_denial_carries_the_same_challenge() {
     resp.assert_status(StatusCode::FORBIDDEN);
     assert_is_step_up(&challenge(&resp.0));
 }
+
+// ═══ The drift — a scope the deployment never advertises ════════════════════
+
+/// A deployment whose document advertises `posts:read` and nothing else, while
+/// the guard above demands `posts:write`. That pairing is a real deployment
+/// mistake rather than a contrived one: the guard lives in the feature crate
+/// and the document in the environment, so they drift apart one at a time.
+fn drifted_resource_server() -> nest_rs_authn::ProtectedResourceSetup {
+    ProtectedResourceModule::for_root(
+        ProtectedResourceConfig::default()
+            .with_resource(RESOURCE)
+            .with_authorization_servers(["https://auth.example.com"])
+            .with_scopes_supported(["posts:read"]),
+    )
+}
+
+#[module(
+    imports = [authn(), drifted_resource_server()],
+    providers = [PostsController, TokenTooNarrow],
+)]
+struct DriftedResourceServer;
+
+#[tokio::test]
+async fn a_scope_the_document_never_advertises_is_reported_at_warn() {
+    // The interceptor is the one place both halves are known, so it is the only
+    // place the drift can be caught — and the client cannot see it at all: the
+    // challenge it receives is well-formed and names a scope its authorization
+    // server will refuse to issue. Nothing but this event stands between that
+    // and a client retrying forever.
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<DriftedResourceServer>()
+        .await
+        .expect("boots");
+
+    let resp = app.http().post("/posts").send().await;
+    resp.assert_status(StatusCode::FORBIDDEN);
+    // The challenge is still emitted: the drift is the deployment's to fix, and
+    // withholding the pointer would help no one.
+    assert_is_step_up(&challenge(&resp.0));
+
+    let event = logs.expect_one(
+        "nest_rs::authn",
+        "denied for a scope this resource does not advertise — a client following \
+         the metadata document cannot request it",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("scope_not_advertised")
+    );
+    assert!(
+        event.field("scopes").is_some_and(|s| s.contains(REQUIRED)),
+        "the event names the scope that is missing from the document, got {:?}",
+        event.fields,
+    );
+}
+
+// ═══ A scope name that cannot go in a header ════════════════════════════════
+//
+// The resource URI and the metadata URL are character-checked at boot, so the
+// only way a challenge becomes unrepresentable is a **scope** — and scopes do
+// not come from config. `Denial::insufficient_scope([..])` takes whatever the
+// guard hands it, in application code the config never sees.
+//
+// What must not happen is a 403 that silently loses its `WWW-Authenticate`: the
+// client is then told "forbidden" with no code and no pointer, which reads as a
+// final refusal, and the step-up never happens. Nothing about the response says
+// the header was dropped, so the event is the only trace.
+
+/// A scope carrying a newline — RFC 6749 forbids it in a scope token, and
+/// `HeaderValue::from_str` refuses the challenge built around it.
+const UNREPRESENTABLE: &str = "posts:\nwrite";
+
+#[injectable]
+#[derive(Default)]
+struct ScopeWithAControlCharacter;
+
+impl Layer for ScopeWithAControlCharacter {}
+
+#[async_trait]
+impl Guard for ScopeWithAControlCharacter {
+    async fn check_http(&self, _req: &mut Request) -> Result<(), Denial> {
+        Err(Denial::insufficient_scope([UNREPRESENTABLE], "forbidden"))
+    }
+}
+
+impl HttpGuard for ScopeWithAControlCharacter {}
+
+#[controller(path = "/malformed")]
+#[use_guards(ScopeWithAControlCharacter)]
+struct MalformedScopeController;
+
+#[routes]
+impl MalformedScopeController {
+    #[get("/")]
+    async fn index(&self) -> &'static str {
+        "never reached"
+    }
+}
+
+#[module(
+    imports = [authn(), scoped_resource_server()],
+    providers = [MalformedScopeController, ScopeWithAControlCharacter],
+)]
+struct MalformedScopeServer;
+
+#[tokio::test]
+async fn a_scope_that_cannot_be_a_header_value_is_reported_rather_than_dropped() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let app = TestApp::for_module::<MalformedScopeServer>()
+        .await
+        .expect("boots — the scope is the guard's, not the config's");
+
+    let resp = app.http().get("/malformed").send().await;
+    resp.assert_status(StatusCode::FORBIDDEN);
+    assert!(
+        resp.0.headers().get(header::WWW_AUTHENTICATE).is_none(),
+        "a header value that cannot be built is not built — the alternative \
+         would be smuggling a newline into a response header",
+    );
+
+    let event = logs.expect_one(
+        "nest_rs::authn",
+        "insufficient-scope challenge is not a valid header value",
+    );
+    assert_eq!(event.level, "error");
+    assert!(
+        event
+            .field("challenge")
+            .is_some_and(|c| c.contains("posts:")),
+        "the event carries the challenge that could not be sent, which is what \
+         points at the offending scope, got {:?}",
+        event.fields,
+    );
+    assert!(
+        event.field("error").is_some(),
+        "…and why it could not, got {:?}",
+        event.fields,
+    );
+}

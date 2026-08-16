@@ -18,9 +18,9 @@ use nest_rs_core::{DiscoveryService, module};
 use nest_rs_http::HttpEndpointMeta;
 use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, GetPromptResult, Implementation, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, PromptMessage, ReadResourceRequestParams,
-    ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, Role, ServerCapabilities,
-    ServerInfo, Tool,
+    ListToolsResult, PaginatedRequestParams, PromptMessage, ProtocolVersion,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
 };
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
@@ -1059,4 +1059,372 @@ fn mcp_mount_paths(app: &TestApp) -> Vec<String> {
         .filter(|discovered| discovered.meta.label() == "mcp")
         .map(|discovered| discovered.meta.path().to_owned())
         .collect()
+}
+
+// --- one endpoint, one handshake ----------------------------------------------
+//
+// A client negotiates the protocol version **once per endpoint**, so hosts that
+// share a path share whatever the merge advertises: their intersection. That is
+// the only answer a single handshake can give, and it silently narrows what a
+// host declared — a host built against a newer version finds its endpoint
+// speaking an older one because a peer it never heard of mounted beside it.
+
+const VERSIONS: &str = "/mcp/versions";
+
+/// Two versions apart. Alone it would advertise both.
+#[mcp(path = "/mcp/versions")]
+#[derive(Clone)]
+struct LegacyVersionsTool;
+
+#[tool_router]
+impl LegacyVersionsTool {
+    #[tool(description = "A tool from a host built against the older protocol.")]
+    async fn legacy_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("legacy")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for LegacyVersionsTool {
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Borrowed(&[ProtocolVersion::V_2024_11_05, ProtocolVersion::V_2025_06_18])
+    }
+}
+
+/// Its peer, overlapping in exactly one version — so the endpoint boots, and
+/// the newest version this host declared is not the one it gets.
+#[mcp(path = "/mcp/versions")]
+#[derive(Clone)]
+struct ModernVersionsTool;
+
+#[tool_router]
+impl ModernVersionsTool {
+    #[tool(description = "A tool from a host built against the newer protocol.")]
+    async fn modern_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("modern")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for ModernVersionsTool {
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Borrowed(&[ProtocolVersion::V_2025_06_18, ProtocolVersion::V_2025_11_25])
+    }
+}
+
+#[module(providers = [LegacyVersionsTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct LegacyVersionsModule;
+
+#[module(providers = [ModernVersionsTool])]
+struct ModernVersionsModule;
+
+#[module(imports = [LegacyVersionsModule, ModernVersionsModule])]
+struct DisagreeingVersionsApp;
+
+#[tokio::test]
+async fn hosts_that_disagree_on_the_protocol_boot_on_their_intersection_and_say_so() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<DisagreeingVersionsApp>()
+        .await
+        .expect("an overlapping pair still negotiates one version");
+
+    let event = logs.expect_one(
+        "nest_rs::mcp",
+        "mcp hosts on one path declare different protocol versions — the endpoint \
+         advertises their intersection",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("path").as_deref(), Some(VERSIONS));
+    // Both names, because neither host is at fault on its own: the narrowing is
+    // a property of the pair, and an operator reading one name would go looking
+    // for a bug in a host that declared exactly what it needed.
+    let hosts = event.field("hosts").unwrap_or_default();
+    assert!(
+        hosts.contains("LegacyVersionsTool") && hosts.contains("ModernVersionsTool"),
+        "the event names both hosts sharing the endpoint, got {hosts:?}",
+    );
+
+    // The endpoint answers, which is the half `initialize` can show: rmcp
+    // exempts the handshake itself from the `supported_protocol_versions` check
+    // (`uses_inline_negotiation` is false for an `InitializeRequest`), so what
+    // comes back is the version the client asked for, not the intersection.
+    // Asserting on it would be asserting rmcp's lifecycle.
+    let handshake = initialize(app.http(), VERSIONS, None).await;
+    assert!(
+        result(&handshake)["result"]["capabilities"].is_object(),
+        "the endpoint that warned still serves: {handshake}",
+    );
+}
+
+/// A lone host advertises what it declared — the check has to be about the
+/// pair, or every app that pins a protocol version warns at boot.
+#[module(providers = [ModernVersionsTool])]
+struct LoneVersionModule;
+
+#[tokio::test]
+async fn a_host_alone_on_its_path_narrows_nothing() {
+    let logs = LogCapture::install();
+    let _app = TestApp::for_module::<LoneVersionModule>()
+        .await
+        .expect("one host boots");
+
+    assert!(
+        logs.events()
+            .iter()
+            .all(|e| e.field("reason").as_deref() != Some("protocol_version_disagreement")),
+        "{:#?}",
+        logs.events(),
+    );
+}
+
+/// Its twin, and the reason the warning is only a warning: hosts with *nothing*
+/// in common describe an endpoint that can complete no handshake at all. Every
+/// client would fail at `initialize`, which is a boot fact — so it is refused at
+/// boot rather than discovered by a client.
+#[mcp(path = "/mcp/incompatible")]
+#[derive(Clone)]
+struct AncientOnlyTool;
+
+#[tool_router]
+impl AncientOnlyTool {
+    #[tool(description = "A tool from a host that speaks only the first protocol.")]
+    async fn ancient_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("ancient")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for AncientOnlyTool {
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Borrowed(&[ProtocolVersion::V_2024_11_05])
+    }
+}
+
+#[mcp(path = "/mcp/incompatible")]
+#[derive(Clone)]
+struct FutureOnlyTool;
+
+#[tool_router]
+impl FutureOnlyTool {
+    #[tool(description = "A tool from a host that speaks only the latest protocol.")]
+    async fn future_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("future")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for FutureOnlyTool {
+    fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
+        std::borrow::Cow::Borrowed(&[ProtocolVersion::V_2026_07_28])
+    }
+}
+
+#[module(providers = [AncientOnlyTool])]
+struct AncientOnlyModule;
+
+#[module(providers = [FutureOnlyTool])]
+struct FutureOnlyModule;
+
+#[module(imports = [AncientOnlyModule, FutureOnlyModule])]
+struct IncompatibleVersionsApp;
+
+#[tokio::test]
+async fn hosts_with_no_protocol_in_common_fail_boot_naming_both() {
+    let err = match TestApp::for_module::<IncompatibleVersionsApp>().await {
+        Ok(_) => panic!("an endpoint no client can handshake with must not boot"),
+        Err(err) => err.to_string(),
+    };
+
+    assert!(
+        err.contains("AncientOnlyTool") && err.contains("FutureOnlyTool"),
+        "the failure names both hosts: {err}",
+    );
+    assert!(
+        err.contains("/mcp/incompatible"),
+        "…and the endpoint they share: {err}",
+    );
+}
+
+// --- a cursor the merge cannot honour -----------------------------------------
+//
+// Pagination is per host, and the merged page is not. A cursor names a position
+// in *one* host's listing, so following it would return that host's next page
+// with none of its peers' entries — and every entry already merged in, again.
+// The merge therefore drops it, which turns a truncated listing into one that
+// looks complete: a client sees no `nextCursor` and stops asking.
+
+const PAGED: &str = "/mcp/paged";
+
+/// A host with more resources than it returns at once — a perfectly ordinary
+/// host, which is the point: it did nothing wrong and cannot know it is sharing.
+#[mcp(path = "/mcp/paged")]
+#[derive(Clone)]
+struct PagedResourcesTool;
+
+#[tool_router]
+impl PagedResourcesTool {
+    #[tool(description = "A tool beside a paginated resource listing.")]
+    async fn paged_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("paged")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for PagedResourcesTool {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult {
+            resources: vec![Resource::new("paged://one", "Paged one")],
+            next_cursor: Some("page-2".to_owned()),
+            ..ListResourcesResult::default()
+        })
+    }
+}
+
+/// Its peer. Nothing about it is unusual either — sharing the path is the whole
+/// of what the two of them did.
+#[mcp(path = "/mcp/paged")]
+#[derive(Clone)]
+struct UnpagedResourcesTool;
+
+#[tool_router]
+impl UnpagedResourcesTool {
+    #[tool(description = "A tool beside a complete resource listing.")]
+    async fn unpaged_ping(&self) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("unpaged")]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for UnpagedResourcesTool {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult {
+            resources: vec![Resource::new("plain://one", "Plain one")],
+            ..ListResourcesResult::default()
+        })
+    }
+}
+
+#[module(providers = [PagedResourcesTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct PagedResourcesModule;
+
+#[module(providers = [UnpagedResourcesTool])]
+struct UnpagedResourcesModule;
+
+#[module(imports = [PagedResourcesModule, UnpagedResourcesModule])]
+struct PagedEndpointApp;
+
+#[tokio::test]
+async fn a_dropped_cursor_names_the_host_whose_listing_is_truncated() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<PagedEndpointApp>()
+        .await
+        .expect("a paginating host boots beside a peer");
+    let session = open_session(app.http(), PAGED, None).await;
+
+    let body = call_method(
+        app.http(),
+        PAGED,
+        &session,
+        None,
+        "resources/list",
+        json!({}),
+    )
+    .await;
+    let listed = &result(&body)["result"];
+    // Distinct schemes on purpose: with `paged://one` and `unpaged://one` the
+    // first check was free — `"unpaged://one".contains("paged://one")` is true —
+    // so dropping the paginating host's entries entirely still passed.
+    assert!(
+        body.contains("paged://one"),
+        "the paginating host's entries reach the merged page: {body}",
+    );
+    assert!(
+        body.contains("plain://one"),
+        "…and so do its peer's: {body}",
+    );
+    assert!(
+        listed
+            .get("nextCursor")
+            .is_none_or(serde_json::Value::is_null),
+        "and the cursor is dropped rather than handed back pointing into one \
+         host's listing: {body}",
+    );
+
+    let event = logs.expect_one(
+        "nest_rs::mcp",
+        "an MCP host on a shared path returned a pagination cursor — the merged page drops it",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(event.field("path").as_deref(), Some(PAGED));
+    assert_eq!(
+        event.field("host").as_deref(),
+        Some("PagedResourcesTool"),
+        "the truncated listing belongs to one host, and it is the one named: {:?}",
+        event.fields,
+    );
+    assert_eq!(
+        event.field("method").as_deref(),
+        Some("resources/list"),
+        "…on the listing method that truncated: {:?}",
+        event.fields,
+    );
+}
+
+/// The same host alone: its cursor is its own and a client can still follow it,
+/// so nothing is dropped and nothing is said.
+#[module(providers = [PagedResourcesTool, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct LonePagedModule;
+
+#[tokio::test]
+async fn a_lone_host_keeps_the_cursor_it_returned() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<LonePagedModule>()
+        .await
+        .expect("one paginating host boots");
+    let session = open_session(app.http(), PAGED, None).await;
+
+    let body = call_method(
+        app.http(),
+        PAGED,
+        &session,
+        None,
+        "resources/list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        result(&body)["result"]["nextCursor"].as_str(),
+        Some("page-2"),
+        "an unmerged listing paginates exactly as its host wrote it: {body}",
+    );
+    logs.expect_none(
+        "nest_rs::mcp",
+        "an MCP host on a shared path returned a pagination cursor — the merged page drops it",
+    );
 }

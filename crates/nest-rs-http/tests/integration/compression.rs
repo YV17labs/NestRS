@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use nest_rs_core::{App, Transport, module};
+use nest_rs_core::module;
 use nest_rs_http::{HttpTransport, controller, routes};
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
@@ -42,23 +42,11 @@ async fn boot_with(
     compression: bool,
     request_timeout: Option<Duration>,
 ) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    let app = App::builder()
-        .module::<EchoModule>()
-        .build()
-        .await
-        .expect("module boots");
     let mut transport = HttpTransport::new().compression(compression);
     if let Some(timeout) = request_timeout {
         transport = transport.request_timeout(timeout);
     }
-    transport
-        .configure(app.container())
-        .await
-        .expect("transport configures against the live container");
-    let endpoint = transport
-        .take_endpoint()
-        .expect("configure populates the endpoint");
-    TestClient::new(endpoint)
+    crate::boot_on::<EchoModule>(transport).await
 }
 
 #[tokio::test]
@@ -100,6 +88,7 @@ async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
     // rewrites the body into (uncompressed) problem+json. The rewrite must drop
     // the stale encoding, or a browser (which always sends Accept-Encoding)
     // hits ERR_CONTENT_DECODING_FAILED.
+    let logs = nest_rs_testing::LogCapture::install();
     let client = boot_with(true, Some(Duration::from_millis(50))).await;
     let resp = client
         .get("/echo/slow")
@@ -107,6 +96,19 @@ async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
         .send()
         .await;
     assert_eq!(resp.0.status(), StatusCode::GATEWAY_TIMEOUT);
+
+    // A `504` is what the client sees; it says nothing about which ceiling
+    // fired. The event carries the configured `timeout`, which is the
+    // difference between "this handler is slow" and "the deployment's
+    // `NESTRS_HTTP__TIMEOUT` is too tight" — and a burst of these is the first
+    // sign of the second.
+    let event = logs.expect_one("nest_rs::http", "request timed out");
+    assert_eq!(event.level, "warn");
+    assert!(
+        event.field("timeout").is_some_and(|t| t.contains("50")),
+        "the event names the ceiling that fired, got {:?}",
+        event.fields,
+    );
     resp.assert_header_is_not_exist(header::CONTENT_ENCODING);
     // The body is the real, uncompressed problem+json — parseable as-is.
     let bytes = resp.0.into_body().into_bytes().await.expect("body");

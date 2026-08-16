@@ -83,3 +83,160 @@ async fn the_budget_is_shared_across_store_instances() {
         "replica a: count 3 must be denied — the two replicas share one budget",
     );
 }
+
+/// The `for_root` seam, executed: `RedisThrottlerModule` binds the shared
+/// `dyn ThrottlerStore` the guard injects, and binds the *Redis* one.
+///
+/// Nothing booted this seam before, and a compile could not have covered it —
+/// the store is a factory output that reads `QueueConnection`, another factory
+/// output, so what is under test is a phase the builder runs and a type the
+/// container resolves. The discriminating assertion is the one the in-memory
+/// default cannot satisfy: **two independently booted apps share one budget**,
+/// which is the whole reason this module exists.
+mod module {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use nest_rs_core::{App, module};
+    use nest_rs_redis::{QueueConfig, QueueModule, QueueSetup, RedisThrottlerModule};
+    use nest_rs_throttler::{Throttle, ThrottlerConfig, ThrottlerStore};
+
+    use crate::{redis_url, unique_key};
+
+    fn pinned_queue() -> QueueSetup {
+        QueueModule::for_root(QueueConfig {
+            url: redis_url(),
+            ..QueueConfig::default()
+        })
+    }
+
+    /// A limit no default could produce, so the assertion below can only pass by
+    /// way of this call.
+    fn pinned_throttler() -> nest_rs_redis::RedisThrottlerSetup {
+        RedisThrottlerModule::for_root(ThrottlerConfig {
+            limit: Some(2),
+            window_secs: Some(30),
+        })
+    }
+
+    #[module(imports = [pinned_queue(), pinned_throttler()])]
+    struct RedisThrottlerHost;
+
+    async fn store() -> Arc<dyn ThrottlerStore> {
+        let app = App::builder()
+            .module::<RedisThrottlerHost>()
+            .build()
+            .await
+            .expect("the Redis-backed throttler module boots against the dev container");
+        app.container()
+            .get::<Arc<dyn ThrottlerStore>>()
+            .map(|store| (*store).clone())
+            .expect("for_root binds the shared dyn ThrottlerStore")
+    }
+
+    #[tokio::test]
+    async fn for_root_pins_the_limit_and_binds_a_store_two_apps_share() {
+        let first = store().await;
+        let default = first.default_limit();
+        assert_eq!(
+            (default.limit, default.window),
+            (2, Duration::from_secs(30)),
+            "the pinned base reached the store's default limit",
+        );
+
+        // A second boot is a second app instance: an in-memory store would hand
+        // it a fresh budget, and the test would pass while the module bound the
+        // wrong backend.
+        let second = store().await;
+        let key = unique_key("for-root-shared");
+        let limit = Throttle::new(2, Duration::from_secs(30));
+
+        assert!(first.hit(&key, limit).await.allowed, "app one, hit 1 of 2");
+        assert!(second.hit(&key, limit).await.allowed, "app two, hit 2 of 2");
+        assert!(
+            !first.hit(&key, limit).await.allowed,
+            "the third hit is denied — both apps counted against one budget",
+        );
+    }
+}
+
+/// A store that cannot answer denies, and says so.
+///
+/// This is the security property the whole backend exists to have: a rate
+/// limiter that fails **open** under a backend problem is an authentication
+/// bypass — every login endpoint in the app goes unlimited for the duration of
+/// the outage, and nothing in the response says anything is wrong. So the
+/// interesting assertion is not the status but the *direction* of the failure,
+/// plus the line that makes the outage visible at all, since a denied caller is
+/// indistinguishable from one that genuinely ran out of budget.
+///
+/// The error is produced with a `WRONGTYPE` — the window key made to hold a
+/// hash, so `INCR` refuses it — rather than by pointing at a dead port:
+/// `QueueConnection::connect` refuses an unreachable endpoint up front (that is
+/// its own boot error, asserted in `connection.rs`), so a store that exists at
+/// all has a connection that worked. What this covers is the branch for *any*
+/// error the store gets back, of which an outage mid-flight is the common one.
+#[tokio::test]
+async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_through() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let limit = Throttle::new(3, Duration::from_secs(30));
+    let conn = connect().await;
+    let key = unique_key("unavailable");
+
+    // Make the window key a hash, so the fixed-window script's `INCR` fails.
+    // The namespace is the store's own — spelled here rather than read from it,
+    // so a change to the prefix shows up as this test failing instead of
+    // passing against a key nothing uses.
+    let namespaced = format!("nestrs:throttle:{key}");
+    let mut manager = conn.manager();
+    redis::cmd("HSET")
+        .arg(&namespaced)
+        .arg("field")
+        .arg("value")
+        .query_async::<()>(&mut manager)
+        .await
+        .expect("seed a key the window script cannot count");
+    // With an expiry, because the window script never reaches its `PEXPIRE` on
+    // this key: a failed assertion below would otherwise leave an immortal hash
+    // in the shared Redis, and the dev container already carries one from an
+    // earlier run of this test.
+    redis::cmd("EXPIRE")
+        .arg(&namespaced)
+        .arg(300)
+        .query_async::<()>(&mut manager)
+        .await
+        .expect("bound the probe key's lifetime");
+
+    let store = RedisThrottler::new(conn, limit);
+    let decision = store.hit(&key, limit).await;
+
+    assert!(
+        !decision.allowed,
+        "a store that cannot answer must deny — failing open here is a rate \
+         limit that disappears exactly when the backend is in trouble",
+    );
+    assert!(
+        decision.retry_after > Duration::ZERO,
+        "…and tell the caller when to come back, rather than refusing with no \
+         way forward: {:?}",
+        decision.retry_after,
+    );
+
+    let event = logs.expect_one(
+        "nest_rs::throttler",
+        "redis throttler unavailable; denying (fail-closed)",
+    );
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("key").as_deref(),
+        Some(key.as_str()),
+        "the event names the client whose request was refused, which is what \
+         separates an outage from a caller who really is over budget: {:?}",
+        event.fields,
+    );
+    assert!(
+        event.field("error").is_some(),
+        "…and what the store said, got {:?}",
+        event.fields,
+    );
+}

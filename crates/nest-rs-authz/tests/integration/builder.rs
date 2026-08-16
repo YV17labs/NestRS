@@ -36,49 +36,7 @@ fn model(id: i32, org: i32) -> widget::Model {
     }
 }
 
-// A parent/child pair so a rule can carry a *malformed* relation predicate:
-// `child` belongs_to `parent`, but a `related` call can declare the wrong
-// related entity and trip the fail-closed sentinel.
-mod parent {
-    use sea_orm::entity::prelude::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
-    #[sea_orm(table_name = "parents")]
-    pub struct Model {
-        #[sea_orm(primary_key)]
-        pub id: i32,
-        pub org_id: i32,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
-
-    impl ActiveModelBehavior for ActiveModel {}
-}
-
-mod child {
-    use sea_orm::entity::prelude::*;
-
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
-    #[sea_orm(table_name = "children")]
-    pub struct Model {
-        #[sea_orm(primary_key)]
-        pub id: i32,
-        pub parent_id: i32,
-    }
-
-    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {
-        #[sea_orm(
-            belongs_to = "super::parent::Entity",
-            from = "Column::ParentId",
-            to = "super::parent::Column::Id"
-        )]
-        Parent,
-    }
-
-    impl ActiveModelBehavior for ActiveModel {}
-}
+use crate::{child, parent};
 
 #[test]
 fn denial_overrides_a_matching_grant() {
@@ -200,15 +158,62 @@ fn a_malformed_cannot_fails_ability_construction() {
 fn a_malformed_grant_also_fails_construction() {
     // Same malformation on a grant: fail-closed (deny-all) rather than fail-open,
     // but still a developer error worth surfacing loudly.
+    let logs = nest_rs_testing::LogCapture::install();
     let mut b = AbilityBuilder::new();
+    // The declared related entity is `widget`, deliberately different from the
+    // rule's subject (`child`) *and* from what the relation points at
+    // (`parent`). With `child` in both places the event's `related` field was
+    // indistinguishable from the subject, and a mutation naming the subject
+    // instead passed.
     b.can(Action::Read, child::Entity).when(|p| {
-        p.related::<child::Entity, _>(child::Relation::Parent, |c| c.eq(child::Column::Id, 1))
+        p.related::<widget::Entity, _>(child::Relation::Parent, |w| w.eq(widget::Column::Id, 1))
     });
     let err = match b.build() {
         Ok(_) => panic!("a malformed grant must fail construction"),
         Err(e) => e,
     };
     assert_eq!(err.kind, "grant");
+
+    // The `Deny` sentinel is produced *where the rule is written*, before the
+    // builder ever sees it — so this line is what says which malformation it
+    // was. `build()` reports only that some rule is malformed, and an ability
+    // with several relation predicates leaves the developer guessing.
+    let event = logs.expect_one(
+        "nest_rs::authz",
+        "invalid ability relation predicate — denying all rows",
+    );
+    assert_eq!(event.level, "error");
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("relation_table_mismatch"),
+        "the two malformations — a relation pointing elsewhere, and a composite \
+         key — are told apart by this field, got {:?}",
+        event.fields,
+    );
+    let related = event.field("related").unwrap_or_default();
+    assert!(
+        related.contains("widget") && !related.contains("child"),
+        "…and it names the entity the rule *declared*, not the one it is about: \
+         {related:?}",
+    );
+}
+
+#[test]
+fn a_well_formed_relation_predicate_says_nothing() {
+    // The other direction. A relational grant is the ordinary case — every
+    // multi-tenant app writes one — so a check that fired on all of them would
+    // be noise in exactly the log an incident queries.
+    let logs = nest_rs_testing::LogCapture::install();
+    let mut b = AbilityBuilder::new();
+    b.can(Action::Read, child::Entity).when(|p| {
+        p.related::<parent::Entity, _>(child::Relation::Parent, |c| c.eq(parent::Column::Id, 1))
+    });
+    b.build()
+        .unwrap_or_else(|e| panic!("a well-formed relational grant builds: {e}"));
+    logs.expect_none(
+        "nest_rs::authz",
+        "invalid ability relation predicate — denying all rows",
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@
 //! from anything else silently drops it.
 
 use nest_rs_config::{Config, ConfigService};
-use nest_rs_core::{App, Transport, module};
+use nest_rs_core::module;
 use nest_rs_http::{
     HttpConfig, HttpTransport, caller_path, controller, routes, set_created_location,
 };
@@ -58,23 +58,11 @@ struct TwoControllersModule;
 async fn boot_with_prefix(
     prefix: Option<&str>,
 ) -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>> {
-    let app = App::builder()
-        .module::<TwoControllersModule>()
-        .build()
-        .await
-        .expect("module boots");
     let mut transport = HttpTransport::new();
     if let Some(p) = prefix {
         transport = transport.global_prefix(p);
     }
-    transport
-        .configure(app.container())
-        .await
-        .expect("transport configures against the live container");
-    let endpoint = transport
-        .take_endpoint()
-        .expect("configure populates the endpoint");
-    TestClient::new(endpoint)
+    crate::boot_on::<TwoControllersModule>(transport).await
 }
 
 #[tokio::test]
@@ -177,25 +165,13 @@ async fn global_prefix_root_slash_is_a_noop() {
 /// `HttpConfig::from_env` — pins the dual-path rule from the env side.
 async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'static, poem::Response>>
 {
-    let app = App::builder()
-        .module::<TwoControllersModule>()
-        .build()
-        .await
-        .expect("module boots");
     let cfg = HttpConfig::from_env(&ConfigService::for_namespace("http"), Default::default())
         .expect("HttpConfig::from_env succeeds");
     let mut transport = HttpTransport::new();
     if let Some(prefix) = cfg.global_prefix {
         transport = transport.global_prefix(prefix);
     }
-    transport
-        .configure(app.container())
-        .await
-        .expect("transport configures against the live container");
-    let endpoint = transport
-        .take_endpoint()
-        .expect("configure populates the endpoint");
-    TestClient::new(endpoint)
+    crate::boot_on::<TwoControllersModule>(transport).await
 }
 
 #[test]

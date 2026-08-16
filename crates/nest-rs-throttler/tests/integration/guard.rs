@@ -70,6 +70,7 @@ async fn app() -> TestApp {
 
 #[tokio::test]
 async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
+    let logs = nest_rs_testing::LogCapture::install();
     let app = app().await;
 
     app.http()
@@ -89,6 +90,25 @@ async fn a_pooled_guard_reads_the_route_s_throttle_metadata() {
     let denied = app.http().get("/rated/strict").send().await;
     denied.assert_status(StatusCode::TOO_MANY_REQUESTS);
     denied.assert_header_exist("retry-after");
+
+    // The `429` tells the client it was throttled; only the event says *whose*
+    // bucket filled. `CLAUDE.md` ranks a rate-limit denial with the security
+    // events an incident queries, and a composite key it does not carry is a
+    // denial nobody can attribute to a route or a caller.
+    let event = logs.expect_one("nest_rs::throttler", "rate limit exceeded");
+    assert_eq!(event.level, "warn");
+    assert!(
+        event
+            .field("key")
+            .is_some_and(|k| k.contains("/rated/strict")),
+        "the event names the route half of the composite key, got {:?}",
+        event.fields,
+    );
+    assert!(
+        event.field("retry_after").is_some(),
+        "the event carries the wait it told the client about, got {:?}",
+        event.fields,
+    );
 }
 
 #[tokio::test]

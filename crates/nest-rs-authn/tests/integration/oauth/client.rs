@@ -1,6 +1,7 @@
 //! Covers `src/oauth/client.rs` — authorize URL and pre-network exchange checks.
 
 use nest_rs_authn::{AuthError, JwtOptions, JwtService, OAuth2Client};
+use nest_rs_testing::LogCapture;
 use serde::Deserialize;
 
 use super::config::valid_config;
@@ -45,6 +46,7 @@ fn authorize_url_carries_client_scope_and_pkce_and_a_verifiable_transaction() {
 
 #[tokio::test]
 async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
+    let logs = LogCapture::install();
     let jwt = jwt();
     let auth = client().authorize(&jwt, "acme").expect("authorize");
 
@@ -57,4 +59,15 @@ async fn exchange_rejects_a_state_that_does_not_match_the_transaction() {
         panic!("state mismatch is rejected");
     };
     assert!(matches!(err, AuthError::Failed(_)));
+
+    // A CSRF mismatch on a callback is an attack signature, not a user error:
+    // the caller is told only "OAuth state mismatch", so the `reason` field is
+    // what separates a replayed transaction from a forged one in the log an
+    // incident queries.
+    let event = logs.expect_one("nest_rs::authn", "OAuth callback rejected");
+    assert_eq!(event.level, "warn");
+    assert_eq!(
+        event.field("reason").as_deref(),
+        Some("csrf_state_mismatch")
+    );
 }

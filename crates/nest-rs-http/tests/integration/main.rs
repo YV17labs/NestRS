@@ -11,6 +11,7 @@ mod global_prefix;
 mod header;
 mod input;
 mod route_decorators;
+mod security_headers;
 mod sse;
 mod tls;
 mod versioning;
@@ -31,12 +32,26 @@ pub(crate) async fn boot<M>() -> TestClient<BoxEndpoint<'static, poem::Response>
 where
     M: Module + 'static,
 {
+    boot_on::<M>(HttpTransport::new()).await
+}
+
+/// The same boot, on a transport the caller has already configured by hand.
+///
+/// Half this suite pins one builder call — a body cap, a compression mode, a
+/// global prefix, a `SecurityHeadersConfig` — and every one of them had copied
+/// the six lines around it, `expect` strings included. The transport is the only
+/// thing that ever differed, so it is the only thing a caller passes.
+pub(crate) async fn boot_on<M>(
+    mut transport: HttpTransport,
+) -> TestClient<BoxEndpoint<'static, poem::Response>>
+where
+    M: Module + 'static,
+{
     let app = App::builder()
         .module::<M>()
         .build()
         .await
         .expect("module boots");
-    let mut transport = HttpTransport::new();
     transport
         .configure(app.container())
         .await

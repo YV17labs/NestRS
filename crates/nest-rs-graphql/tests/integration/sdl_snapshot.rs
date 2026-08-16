@@ -141,6 +141,74 @@ async fn merged_schema_sdl_matches_committed_snapshot() {
 }
 
 // ---------------------------------------------------------------------------
+// What the emit says when it cannot write. `emit_sdl` is a *dev* convenience —
+// the committed `schema.graphql` refreshed as a side effect of a run — so a
+// failed write must never stop a boot that otherwise serves fine. Which leaves
+// the event as the only signal, and a developer whose schema silently stopped
+// refreshing has nothing else to go on: the app answers queries at the new
+// shape while the committed SDL, and every client generated from it, stay at
+// the old one.
+
+/// A path under a directory that does not exist, so `std::fs::write` fails with
+/// `NotFound` rather than on a permission the test would have to arrange.
+fn unwritable_path() -> PathBuf {
+    std::env::temp_dir()
+        .join(format!("nest_rs_graphql_absent_{}", std::process::id()))
+        .join("schema.graphql")
+}
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        emit_sdl: true,
+        schema_path: unwritable_path(),
+        ..GraphqlConfig::default()
+    }),
+    AlphaModule,
+])]
+struct UnwritableSdlApp;
+
+#[tokio::test]
+async fn an_sdl_emit_that_cannot_write_warns_and_still_serves() {
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let app = TestApp::builder()
+        .module::<UnwritableSdlApp>()
+        .http(HttpTransport::new())
+        .build()
+        .await
+        .expect("a failed SDL write is a dev-loop annoyance, never a boot failure");
+
+    let response = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ ping: widget(id: 1) { id } }" }))
+        .send()
+        .await;
+    response.assert_status_is_ok();
+
+    let event = logs.expect_one("nest_rs::graphql", "failed to write GraphQL SDL");
+    assert_eq!(event.level, "warn");
+    assert!(
+        event
+            .field("path")
+            .is_some_and(|p| p.ends_with("schema.graphql")),
+        "the event names the file that did not get written, got {:?}",
+        event.fields,
+    );
+    assert!(
+        event.field("error").is_some(),
+        "and why, got {:?}",
+        event.fields,
+    );
+    assert!(
+        logs.find("nest_rs::graphql", "wrote GraphQL SDL")
+            .is_empty(),
+        "the success line and the failure line are exclusive: {:#?}",
+        logs.events(),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The federated branch of `render_sdl`. `SDLExportOptions::federation()` is
 // taken only when `GraphqlConfig::federation` is on, and the app above is not a
 // subgraph — so the *committed* SDL of a federated app, which is the artefact a

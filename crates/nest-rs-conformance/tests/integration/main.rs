@@ -6,5 +6,10 @@
 //! is covered anywhere, which is the one question no individual suite can ask
 //! about itself.
 
+mod edges;
 mod events;
+mod guards;
+mod seams;
 mod shapes;
+mod targets;
+mod umbrella;

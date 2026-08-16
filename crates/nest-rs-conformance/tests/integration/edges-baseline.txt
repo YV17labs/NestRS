@@ -1,0 +1,60 @@
+# Items of *A new edge owes the same list* that an edge does not carry.
+# **It only shrinks.**
+#
+# Five of fifty-two cells, and none of them is work. Each is an asymmetry the
+# rule now states and argues, which `CLAUDE.md` accepts in place of uniformity:
+# *the rule demands that the answer be stated, not that it be identical.* They
+# stay here so the next reader does not re-derive them, and so a sixth line
+# appearing is visible as the new thing it would be.
+#
+# ── The posture grammar is shared where it is the same grammar (2 cells)
+# `PostureRules` words the declaration, the mandatory-posture refusal and the
+# `bind = Service` rejection once, and `#[tools]` / `#[messages]` take it
+# verbatim. The other two parse their own for reasons the rule names:
+# `#[operations]` accepts `bind = Service` / `id_arg`, which synthesise an
+# `Authorized<A, E>` proof no other edge can express; `#[routes]` has an
+# *optional* posture (a route's gate may be `#[use_guards]`) plus two refusals
+# — `#[sse]`, and binding to a handler parameter — that a shared `take`
+# returning `Posture` rather than `Option<Posture>` cannot serve.
+#
+# This block was previously recorded as rule/code drift. It was: the rule said
+# "parsed by the shared `PostureRules`" flatly, and the code had the better
+# argument written next to itself. The rule moved.
+graphql :: 2. posture parsed by the shared PostureRules
+http :: 2. posture parsed by the shared PostureRules
+#
+# ── HTTP's gate and mask are a different mechanism, and must be (2 cells)
+# Both of these columns read a **behaviour** — a call, not a file name. They
+# read `authorize.rs".is_file()` and `mask.rs".is_file()` for a day, and a
+# *rename* closed HTTP's two cells that way: a filename says nothing about what
+# is in it, and `testing.md` clause 3 asks for a proved cell. Renaming the files
+# was still right (one role, one file name, across all four edges) — it just
+# proved nothing.
+#
+# What the behaviour says:
+#
+#   - **item 3.** `graphql`/`ws`/`mcp`'s `authorize` calls the shared `gate`,
+#     whose first rung is `is_visitor()` ⇒ `Unauthenticated`. HTTP's
+#     `Authorize<A, E>` extractor open-codes `can_class` then `missing_scopes`
+#     and never asks. That is **required**, not drift: the sanctioned
+#     `#[public]` + hand-written `Authorize` public-reads pattern needs a
+#     `define_visitor` grant to satisfy the gate, and the shared one refuses
+#     every anonymous caller by construction. Argued on `Ability::is_visitor`,
+#     which names HTTP as the transport whose posture — not whose gate — asks
+#     the question.
+#   - **item 4.** The other three emit `masked_value_for` / `masked_reply_for`
+#     around the returned value. `#[routes]` arms a *response shaper by type*
+#     (`ShaperProbe` answers on the parameter's type, so an alias or a
+#     re-export arms identically), and the shaper omits a masked key from the
+#     body rather than reconstructing a value. The witness file exists and is
+#     asserted; what does not exist is a masking call, and `authn-authz.md`
+#     says outright that a masking call in a handler body is the rule being
+#     bypassed.
+http :: 3. a class gate whose decision is the shared gate
+http :: 4. a mask witness reaching the edge's masking entry point
+#
+# ── An asymmetry the rule itself implies (1 cell)
+# Item 8 is "a named compile error for every layer family **the edge does not
+# bridge**". HTTP bridges all of them, so it is the edge `reject_http_only_layers`
+# refuses *for*, and there is nothing for it to call.
+http :: 8. a named refusal for every layer family it does not bridge

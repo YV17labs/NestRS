@@ -11,11 +11,22 @@
 //! not one error with three messages — a client branches on them, and each
 //! transport spells that branching in its own vocabulary.
 
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
 use std::any::TypeId;
 
-use crate::{Ability, ActionMarker, Subject};
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
+use crate::Ability;
+use crate::{ActionMarker, Subject};
 
 /// What the class-level gate decided.
+///
+/// The verdict and [`gate`] belong to the three transports that decide **in
+/// band**. HTTP's gate is the `Authorize<A, E>` extractor, which reaches only
+/// `warn_denied` here — so an `http`-only build compiles this module for that
+/// one function and would carry the rest as dead code. (Named without a link:
+/// the module is private, and an intra-doc link to it renders dead on docs.rs
+/// — a warning only `cargo doc` sees, which no gate in this repo runs.)
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
 pub enum GateVerdict {
     /// The caller holds the class grant.
     Allowed,
@@ -31,6 +42,7 @@ pub enum GateVerdict {
     InsufficientScope(Vec<String>),
 }
 
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
 impl GateVerdict {
     /// The machine-readable reason a denial logs and reports, or `None` when
     /// nothing was denied.
@@ -72,6 +84,7 @@ pub fn warn_denied<A: ActionMarker, S: Subject>(
 }
 
 /// Decide action `A` on subject `S` against `ability`.
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
 pub fn gate<A: ActionMarker, S: Subject>(ability: &Ability) -> GateVerdict {
     // Authentication first, and separately: an anonymous caller is refused for
     // want of a principal, whatever the visitor branch granted.

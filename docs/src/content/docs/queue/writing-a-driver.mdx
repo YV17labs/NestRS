@@ -20,6 +20,14 @@ here` markers where the storage-specific work lands. The reference impl
 is [`nest-rs-redis`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis)
 (apalis on Redis) — read it once when a placeholder is unclear.
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features queue
+```
+
+The contract without a backend: `redis` would pull the first-party producer and worker, which is what you are replacing.
+
 ## What you'll implement
 
 - A `JobProducer` impl: wrap the wire envelope, push to your storage.

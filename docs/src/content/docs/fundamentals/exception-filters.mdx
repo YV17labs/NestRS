@@ -54,6 +54,14 @@ requests. Inside GraphQL, an operation's error is shaped by
 [its own error handling](/graphql/errors/); inside WS, by the
 [message error frame](/websockets/messages/).
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features exception-filters,filters
+```
+
+Two features because they are two crates: `filters` maps an inner error to a transport response, `exception-filters` catches one concrete type. Both ride `http`, so a default install already has them.
+
 ## The default: framework error types, already mapped
 
 The plumbing failures every service runs into — database errors,

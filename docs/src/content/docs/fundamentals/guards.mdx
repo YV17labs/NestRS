@@ -33,6 +33,14 @@ flowchart LR
   C --> D["④ declare on provider<br/>dedup, access graph"]
 ```
 
+## Install
+
+```bash frame="terminal"
+cargo add nest-rs --features guards
+```
+
+The `http` feature turns this on, and `http` is a default — name it explicitly only in a headless app built with `default-features = false`, where no transport implies it.
+
 ## What a guard does
 
 A guard runs *before* the handler. It sees the request first and either

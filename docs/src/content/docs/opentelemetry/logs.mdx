@@ -27,8 +27,9 @@ request.
 | Module lifecycle | `nest_rs::module` | `info` |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) | `info` |
 
-Controllers, resolvers, gateways log at `info` on success. Services at `debug`.
-`Repo` at `trace`. **Access denials and security events at `warn`+** so they
+Controllers, resolvers, gateways log at `info` on success. Services keep
+per-call chatter at `debug`; a discrete operational event a service owns — a
+job enqueued, a file transcoded — earns `info`. `Repo` at `trace`. **Access denials and security events at `warn`+** so they
 appear under the default `info` filter. A production deploy should respect
 `info` — no per-request `debug!` on the hot path.
 

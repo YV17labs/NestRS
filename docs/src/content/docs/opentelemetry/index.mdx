@@ -186,7 +186,7 @@ A test that does **not** import `OpenTelemetryModule` does not need it.
 
 - **Per-request context** — the request span carries `request_id`,
   `actor_id`, `tenant_id` when an authn module is mounted. Layer your own
-  fields with `tracing::info!(target: "api::users", actor = %auth.sub, …)`.
+  fields with `tracing::info!(target: "features::users", actor = %auth.sub, …)`.
 - **`Server-Timing`** — the companion `nest-rs-server-timing` crate adds a
   `Server-Timing` header summarising the request's main spans. Mount with
   `ServerTimingModule`.

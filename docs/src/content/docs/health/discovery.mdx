@@ -81,7 +81,7 @@ genuine failure — read the `error` bucket.
 Stack traces and ambient context follow the indicator's owning
 provider. An indicator that injects an HTTP client logs under the
 provider's `tracing` target — usually `nest_rs::health` for
-framework-shipped ones, the feature's own `<app>::health` for
+framework-shipped ones, the feature crate's own `features::health` for
 product-level ones.
 </Aside>
 

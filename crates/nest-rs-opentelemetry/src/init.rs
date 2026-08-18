@@ -5,6 +5,8 @@ use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use nest_rs_core::logging::{JsonFormat, TextFormat};
+
 use crate::config::{LogFormat, OpenTelemetryConfig};
 use crate::error::OpenTelemetryError;
 
@@ -155,22 +157,17 @@ where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     match format {
+        // The kernel's formatters, not tracing-subscriber's, and the same ones
+        // the fallback subscriber installs: an app's log lines cannot change
+        // shape because it adopted an exporter, and the ids on a line owe nothing
+        // to one. See `nest_rs_core::logging::TextFormat` for the rule and for
+        // why `with_file` / `with_line_number` are absent here.
         LogFormat::Text => tracing_subscriber::fmt::layer()
-            .with_file(source_location)
-            .with_line_number(source_location)
+            .event_format(TextFormat::new(source_location))
             .boxed(),
-        // The current span carries the canonical fields (`trace_id`, `span_id`,
-        // `actor_id`), so it stays on the line: an OTLP endpoint is optional
-        // even with this crate installed, and a console line that can only be
-        // attributed by joining against an export nobody configured is a line
-        // nobody can attribute. The span *list* — the ancestry — is the verbose
-        // half, and that is what the export is genuinely better at.
         LogFormat::Json => tracing_subscriber::fmt::layer()
-            .with_file(source_location)
-            .with_line_number(source_location)
             .json()
-            .with_current_span(true)
-            .with_span_list(false)
+            .event_format(JsonFormat::new(source_location))
             .boxed(),
     }
 }

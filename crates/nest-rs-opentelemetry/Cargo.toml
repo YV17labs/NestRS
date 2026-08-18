@@ -31,7 +31,10 @@ otlp = [
 ]
 
 [dependencies]
-nest-rs-core.workspace = true
+# `logging` for `TextFormat` / `JsonFormat`: the console this crate installs is
+# the kernel's console, not a second one. Stated rather than leaned on, even
+# though it is one of `nest-rs-core`'s default features.
+nest-rs-core = { workspace = true, features = ["logging"] }
 nest-rs-config.workspace = true
 nest-rs-http = { workspace = true, optional = true }
 nest-rs-interceptors = { workspace = true, optional = true }

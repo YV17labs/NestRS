@@ -80,7 +80,7 @@ pub mod layer;
 pub mod layer_chain;
 pub mod lifecycle;
 #[cfg(feature = "logging")]
-pub(crate) mod logging;
+pub mod logging;
 pub mod metadata;
 pub mod module;
 mod opaque;

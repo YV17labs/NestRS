@@ -75,40 +75,12 @@ fn warn_unparseable(name: &str, raw: &str) {
     );
 }
 
-/// Shape of the console log layer's output.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum LogFormat {
-    /// Human-readable pretty-print for local development. The default in debug
-    /// builds; pinning it is what keeps default apps readable at the terminal.
-    #[default]
-    Text,
-    /// One JSON object per event for log aggregators. The default in release
-    /// builds so a deployed app is machine-parseable without extra config.
-    Json,
-}
-
-impl LogFormat {
-    fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "text" => Some(Self::Text),
-            "json" => Some(Self::Json),
-            _ => None,
-        }
-    }
-}
-
-/// Canonical env-flag grammar shared by every `nest-rs-opentelemetry` boolean
-/// var: `1`/`true`/`yes`/`on` → `true`, `0`/`false`/`no`/`off` → `false`,
-/// anything else → `None`. Case-insensitive, trimmed. Callers apply their own
-/// default for the unrecognized/absent case (source-location defaults off,
-/// access-log defaults on), keeping the truthy/falsy vocabulary in one place.
-pub(crate) fn parse_bool(raw: &str) -> Option<bool> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
+/// The console this crate installs is the kernel's console, so the *grammar* of
+/// `<PREFIX>_LOG_FORMAT` is the kernel's too — one enum, one parser, one
+/// build-profile default, whichever subscriber ends up mounted. Re-exported
+/// rather than aliased so `nest_rs_opentelemetry::LogFormat` keeps naming the
+/// type a caller already writes.
+pub use nest_rs_core::logging::{LogFormat, parse_bool};
 
 impl OpenTelemetryConfig {
     /// Config with framework defaults and the given `service.name`. `log_format`
@@ -126,11 +98,7 @@ impl OpenTelemetryConfig {
             // a dev affordance only. Default by build profile so a release deploy
             // that mounts `OpenTelemetryModule` emits JSON without needing
             // `NESTRS_LOG_FORMAT` set (which still overrides).
-            log_format: if cfg!(debug_assertions) {
-                LogFormat::Text
-            } else {
-                LogFormat::Json
-            },
+            log_format: LogFormat::by_profile(),
             log_source_location: false,
             otlp_endpoint: None,
             trace_sample_ratio: 1.0,

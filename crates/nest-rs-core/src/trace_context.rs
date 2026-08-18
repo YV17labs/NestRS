@@ -121,8 +121,15 @@ impl TraceId {
 }
 
 impl fmt::Display for TraceId {
+    /// One `write_str` into a caller-owned buffer, the shape [`SpanId`]'s
+    /// `Display` already had. `write!(f, "{}", self.0.simple())` was a second
+    /// `Arguments`/`fmt::write` layer nested inside every id write, and since
+    /// every log line the framework renders carries a trace id, that layer is
+    /// paid per **event** rather than per request — the cost the `hex` helper
+    /// below exists to refuse.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0.simple())
+        let mut buf = [0u8; uuid::fmt::Simple::LENGTH];
+        f.write_str(self.0.simple().encode_lower(&mut buf))
     }
 }
 

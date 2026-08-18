@@ -14,9 +14,10 @@ categories = ["rust-patterns", "asynchronous"]
 [features]
 default = ["logging"]
 # Baseline console subscriber (`logging.rs`) — a bare app logs out of the box;
-# a subscriber installed first (e.g. nest-rs-opentelemetry) wins. Disable for
-# an embedder that brings its own subscriber and wants the kernel free of
-# `tracing-subscriber` in its dependency tree.
+# a subscriber installed first wins. Disable for an embedder that brings its own
+# and wants the kernel free of `tracing-subscriber`. Not reachable alongside
+# `nest-rs-opentelemetry`, which enables this feature for the formatters and
+# depends on `tracing-subscriber` itself either way.
 logging = ["dep:tracing-subscriber"]
 
 [dependencies]
@@ -54,6 +55,10 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # — the exact error a developer sees is part of the contract (CORE-I10), the
 # same net the http/graphql/ws macros already have.
 trybuild.workspace = true
+# `JsonFormat` hand-writes its envelope and splices the field formatter's object
+# into it, so "is this line parseable" is the one property that matters and the
+# only proof of it is a parser. Dev-only: no consumer build sees this line.
+serde_json.workspace = true
 
 [lints]
 workspace = true

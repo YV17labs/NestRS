@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "nest-rs-authz",
  "nest-rs-config",
@@ -1567,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-authz"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-codegen"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-config"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "nest-rs-config-macros",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-config-macros"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1617,7 +1617,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-core"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1631,12 +1631,13 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "validator",
 ]
 
 [[package]]
 name = "nest-rs-core-macros"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1646,14 +1647,14 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-database"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "nest-rs-exception-filters"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1663,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-filters"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1673,7 +1674,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-guards"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1690,12 +1691,14 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-http"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
  "futures-util",
+ "http-body",
+ "http-body-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-http-macros",
@@ -1713,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-http-macros"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1723,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-interceptors"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1733,7 +1736,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-pipes"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "nest-rs-core",
  "serde_json",
@@ -1744,7 +1747,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-resource"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1760,7 +1763,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-resource-macros"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1770,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-seaorm"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1799,14 +1802,14 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-worker"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "tracing",
 ]
 
 [[package]]
 name = "nest-rs-ws"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1827,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-ws-macros"
-version = "4.0.0"
+version = "5.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",

@@ -9,7 +9,10 @@ import { Aside } from '@astrojs/starlight/components';
 
 Traces come from `tracing` spans. Because `OpenTelemetry::init` links
 [`tracing-opentelemetry`](https://crates.io/crates/tracing-opentelemetry) to
-the OTel SDK at boot, every `tracing` span automatically gets a `trace_id`
+the OTel SDK at boot, every framework span is **exported under the trace id the
+kernel already decided** — the SDK adopts it rather than minting a second one, so
+a log line and the exported span name one request by one value. Every other span
+automatically gets a `trace_id`
 and exports through OTLP when an endpoint is configured.
 
 ## Span targets
@@ -19,8 +22,8 @@ per crate.
 
 | Layer | Target |
 |---|---|
-| HTTP request span | `nest_rs::http` |
-| HTTP access event | `nest_rs::access` |
+| HTTP request span | `nest_rs::http` — opened by the transport, not by this crate |
+| HTTP access event | `nest_rs::access` — the transport's too; see [Logs](/opentelemetry/logs/) |
 | ORM queries | `nest_rs::orm` |
 | Authentication | `nest_rs::authn` |
 | Authorization | `nest_rs::authz` |
@@ -56,9 +59,13 @@ both scope the span to the future, not the thread.
 
 ## W3C propagation
 
-`traceparent` propagation is automatic on incoming HTTP requests: if a client
-sends a W3C `traceparent` header, the request span is parented onto the
-incoming context, and the outgoing response carries `X-Trace-Id` so a caller
+`traceparent` propagation is automatic on incoming HTTP requests — **behind a
+trusted proxy**. The transport, not this crate, decides whether an inbound
+`traceparent` may be believed: it is continued when the direct peer is in
+`NESTRS_HTTP__TRUSTED_PROXIES`, and the trace is **restarted** otherwise, which
+is what the specification defines a front gate to do. Without that gate any
+client could file its request into a trace of its choosing and set the `sampled`
+flag on traffic it generates. The response carries `traceresponse` so a caller
 can match a span in their backend to a span in yours.
 
 The W3C propagator is installed even when no OTLP endpoint is set — useful when
@@ -87,29 +94,37 @@ Ratios are clamped to `[0.0, 1.0]`.
 ## HTTP interceptor
 
 Importing `OpenTelemetryModule` activates the `OpenTelemetryHttp` interceptor
-automatically — there's nothing else to mount. Per request it:
+automatically — there's nothing else to mount. It does **two** things, and both
+are things nothing else can supply:
 
-1. Opens a span on `nest_rs::http` named `http.request`, with the OTel HTTP
-   semantic-convention attributes — `http.request.method`, `http.route`,
-   `http.response.status_code`, `http.response.body.size`, `client.address`,
-   `user_agent.original` — via
-   [`opentelemetry-semantic-conventions`](https://crates.io/crates/opentelemetry-semantic-conventions).
-2. Extracts the W3C `traceparent` header (via
-   [`opentelemetry-http`](https://crates.io/crates/opentelemetry-http)) and
-   parents the span on the incoming context.
-3. Adds `X-Trace-Id` to every response, so a client can quote the id when
-   filing an issue.
-4. Wraps the response body in a byte-counter — `bytes` and `duration_ms` are
-   measured at **end-of-body**, not at handler return. A client disconnect
-   emits the access event too (via Drop), so a half-streamed response still
-   produces one access line.
-5. Records `http.response.status_code` and `http.response.body.size` on the
-   span when the body finishes, so the span and the access event line up in
-   the backend.
+1. **Links the remote parent** when the transport continued an upstream trace,
+   so the exported span is a child of the caller's rather than a second root. A
+   *restarted* trace has no parent by definition, and none is invented.
+2. **Writes the sampler's decision back** onto the trace context, so an outbound
+   `traceparent` — into a queue envelope, back to the caller — reports what this
+   deployment actually kept.
 
-The access event itself is covered in [Logs](/opentelemetry/logs/) — toggle
-it with `NESTRS_HTTP__ACCESS_LOG=false`; the OTel span still opens, so
-propagation and OTLP export keep working.
+Everything else belongs to the transport and exists whether or not this crate is
+installed: the span itself, its W3C trace context, the `traceresponse` response
+header, and the access log. The span carries the OTel HTTP semantic-convention
+attributes — `http.request.method`, `url.path` (the addressed path),
+`http.route` (the **matched template**, so a backend groups on something
+low-cardinality), `http.response.status_code`, `http.response.body.size`,
+`client.address`, `user_agent.original` — and it is named `{method} {route}`
+through `otel.name`, because `tracing` fixes a span name to a literal and one
+literal for every route makes a trace list unreadable. A request that matched
+nothing is named by its method alone, never by the URL.
+
+Body size and duration are measured at **end-of-body**, not at handler return, so
+a half-streamed response and a client disconnect both still produce one access
+line and one complete span.
+
+The request span and the access event both belong to `nest-rs-http`, and exist
+whether or not this crate is installed. What the interceptor adds is the parent
+from an inbound `traceparent` and the sampler's verdict — the access
+line reads that header, which is the whole of the coupling between the two.
+Toggle the line with `NESTRS_HTTP__ACCESS_LOG=false`; nothing about propagation
+or OTLP export changes.
 
 ## Going further
 

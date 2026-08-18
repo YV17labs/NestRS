@@ -65,7 +65,7 @@ use nest_rs::http::poem::web::Json;
 
 #[post("/posts")]
 #[http_code(201)]
-#[response_header("x-trace-id", "abc-123")]
+#[response_header("x-cache-status", "miss")]
 async fn create(&self, body: Valid<Json<CreatePost>>) -> Json<Post> {
     Json(self.svc.create(body.into_inner()))
 }
@@ -116,7 +116,7 @@ practice:
 ```rust
 #[post("/posts")]
 #[http_code(201)]
-#[response_header("x-trace-id", "abc-123")]
+#[response_header("x-cache-status", "miss")]
 #[response_header("link", "</posts>; rel=collection")]
 async fn create(&self, body: Valid<Json<CreatePost>>) -> Json<Post> {
     Json(self.svc.create(body.into_inner()))

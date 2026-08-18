@@ -1,0 +1,164 @@
+---
+title: Correlation
+description: "Every unit of work runs under a W3C trace the framework starts for you — read it anywhere, and follow one request across a stream, a socket and a queue."
+tier: all-options
+sidebar:
+  order: 11
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every request, message, job and scheduled tick runs under a **W3C Trace Context**
+the framework starts or continues for you. You read it from any code the
+framework carries — a handler, a service under it, the data layer — and it is
+already on every event you log.
+
+```rust title="src/features/posts/service.rs"
+use nest_rs::core::{current_actor_id, current_trace_id};
+
+impl PostService {
+    pub async fn publish(&self, id: Uuid) -> Result<Post, ServiceError> {
+        let post = self.repo.publish(id).await?;
+        tracing::info!(
+            target: "features::posts",
+            %id,
+            // `None` for an anonymous caller. Absence is the answer, not a gap.
+            author = ?current_actor_id(),
+            // `None` only off a unit of work — a unit test, a task you spawned.
+            trace = ?current_trace_id(),
+            "post published",
+        );
+        Ok(post)
+    }
+}
+```
+
+Nothing to install and nothing to wire in: this is `nest-rs-core`, which every
+app already links. It needs no collector, no exporter and no authentication — a
+primitive that some deployments have and others do not is one nobody can build
+on.
+
+## What each value names
+
+| Value | Names | Present |
+|---|---|---|
+| `trace_id` | the whole distributed operation, across every service it touches | always |
+| `span_id` | **this** unit of work inside it — `current_span_id()` | always |
+| `actor_id` | who it is being served for | once a guard resolved a principal |
+
+The split between the first two is what lets a request that enqueues a job be
+**one trace and two spans**: the job's parent is the request's span, so "show me
+everything this request caused" answers across the process boundary.
+
+Both are on the operation span, so every `tracing` event you write inherits them
+without naming them:
+
+```text frame="terminal"
+INFO nest_rs::access: request served method=GET path="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16 client_ip=127.0.0.1 forwarded=false
+```
+
+## Where a trace comes from
+
+Whoever **accepts** the work decides, and there are two answers: continue one
+that arrived with the work, or start one.
+
+An inbound `traceparent` is continued **only from a peer in
+`NESTRS_HTTP__TRUSTED_PROXIES`** — the same list `X-Forwarded-For` is weighed
+against. From anyone else the trace is *restarted*, which is what the
+specification defines a front gate to do. Without that gate a public client could
+file its requests into a trace of its choosing and set the `sampled` flag on
+traffic it generates.
+
+So a deployment behind a proxy that already traces sets that variable, or its
+inbound traces stop at your edge. Nothing is lost either way: the caller's
+claimed `traceparent` is recorded on the span as
+`http.request.header.traceparent`, so you can still join against it.
+
+What the caller reads back is the trace this service **actually used**:
+
+```text frame="terminal"
+traceresponse: 00-01a011c406fb7433abbf3a3ddf952fa5-7f15c145ffbe7ed8-03
+```
+
+<Aside type="note" title="Why not `X-Request-Id`">
+It is a de-facto convention, never a standard, and OpenTelemetry's semantic
+conventions treat it as a *captured header* rather than an identity. Behind a
+trusted peer it is recorded as `http.request.header.x-request-id`, so you can
+join your logs to nginx's — it never decides what a request is called.
+</Aside>
+
+## `actor_id` is an audit identity
+
+You declare it once, on your principal, and the authentication guard publishes it
+the moment it resolves one — see [Authentication](/security/authentication/).
+From then on `current_actor_id()` answers anywhere the framework carries work.
+
+It answers **who**, for a log line, an audit row, a `created_by` column. It does
+not answer what they may do: that is the ambient `Ability`, decided in a guard.
+Branching on this value in a service is the check the framework exists to keep
+out of services.
+
+No sentinel is returned for an anonymous visitor — `""` or `"anonymous"` would be
+indistinguishable from an actor genuinely named that, and a query counting
+anonymous traffic would silently count both.
+
+## It follows the work
+
+A unit of work ends when its **answer** ends, not when its handler returns. That
+matters at every edge, and the one that surprises people is the first:
+
+| Where | What you get |
+|---|---|
+| inside an `#[sse]` stream, or any streaming body | the request that opened it, for as long as it streams |
+| a WebSocket message | its own span, the connection's trace, the actor from the upgrade |
+| a GraphQL subscription | the trace of the upgrade that opened the socket |
+| an MCP operation | the trace of the HTTP request it arrived on |
+| a queue job, in another process | the producer's trace, as a **child** of the enqueue |
+| a scheduled tick | a fresh trace of its own — nothing upstream to continue |
+
+A queue crosses a *process*, so the context travels in the job envelope rather
+than in a task-local. A payload that carries none — a legacy producer, a foreign
+system — starts a trace instead of being refused.
+
+## Calling another service
+
+The framework ships no general outbound HTTP client, by decision — wrapping one
+costs you every option it has and buys a module. So you inject your own, and
+propagating the trace is one line in it:
+
+```rust title="src/features/media/client.rs"
+let mut request = self.http.get(url);
+if let Some(traceparent) = nest_rs::core::current_traceparent() {
+    request = request.header("traceparent", traceparent.to_string());
+}
+// Forwarding `tracestate` untouched is a MUST, including when you understand
+// none of it: a vendor's sampling or routing rides in there, and dropping it
+// breaks them through you.
+if let Some(state) = nest_rs::core::current_tracestate().and_then(|s| s.as_str().map(str::to_owned)) {
+    request = request.header("tracestate", state);
+}
+```
+
+The service you call continues your trace, and its spans appear under the request
+that caused them.
+
+## Limits
+
+- **`None` off a unit of work.** A task you spawn yourself leaves the ambient
+  context behind. Capture it first and re-install it around the work.
+- **A socket inherits identity, never resources.** A connection that outlives its
+  upgrade takes the trace and the actor, and opens its own request scope per
+  message — it does not hold the upgrade's.
+- **The sampling flag is only as good as your sampler.** With no observability
+  stack installed the framework records everything, and says so downstream. Mount
+  [OpenTelemetry](/opentelemetry/) and the flag reports what your sampler decided.
+- **A restarted trace is a deliberate break.** At a front gate that is the point;
+  if you meant to continue, the peer belongs in `TRUSTED_PROXIES`.
+
+## Going further
+
+- [OpenTelemetry](/opentelemetry/) — exporting these traces, sampling, and
+  joining other systems' telemetry.
+- [Logs](/opentelemetry/logs/) — the access log and the structured-field rules.
+- [Authentication](/security/authentication/) — declaring the `actor_id` your
+  principal reports.

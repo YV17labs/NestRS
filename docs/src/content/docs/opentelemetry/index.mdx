@@ -102,7 +102,8 @@ pinned `OpenTelemetryConfig`.
 
 The OTLP exporter wires up **only** when `otlp_endpoint` is set. Without it,
 the subscriber stays console-only; the W3C propagator is still installed so
-incoming `traceparent` is parsed and outgoing headers carry one.
+an inbound `traceparent` is continued behind a trusted proxy and the response
+carries `traceresponse`.
 
 ```bash frame="terminal"
 NESTRS_OPENTELEMETRY__OTLP_ENDPOINT=http://otel-collector:4318 \
@@ -119,19 +120,24 @@ reqwest client is the right pick, the upstream-recommended pairing.
 
 ## Feature flags
 
-`nest-rs-opentelemetry` ships two features of its own. You never name them:
-the umbrella's `opentelemetry` feature turns on `otlp`, and its `http` feature
-turns on the interceptor's — so the two lines below differ only in whether the
-binary serves HTTP at all.
+`nest-rs-opentelemetry` ships two features of its own. You never name them: the
+umbrella's `opentelemetry` feature turns on `otlp`, and the umbrella's `http`
+feature turns on this crate's `http` — so the two lines below differ only in
+whether the binary serves HTTP at all.
 
 - **`otlp`** (default) — pulls the `opentelemetry-*` crates, installs the OTLP
   exporters for traces / metrics / logs, and bridges `tracing` events into OTel
   logs. Without it, the subscriber stays a pure `tracing-subscriber` setup —
   useful for a tiny binary that should not link the OTel SDK.
 - **`http`** — pulls `poem` + `nest-rs-http` + `nest-rs-interceptors` so the
-  per-request HTTP interceptor compiles. A headless app (a queue worker) uses
-  `otlp` **without** `http` and stays free of the HTTP transport. Requires
-  `otlp` — the interceptor reads the trace id off the OTel span.
+  per-request interceptor compiles: the remote parent link and the sampling
+  decision. A headless app (a queue worker) uses `otlp`
+  **without** `http` and stays free of the HTTP transport. Requires `otlp` — the
+  interceptor reads the trace id off the OTel context.
+
+  Without it you still get the request span, the access log and the whole W3C
+  trace context — `trace_id`, `span_id`, `traceparent` across a queue:
+  those are the transport's, and they do not wait on this crate.
 
 ```toml title="Cargo.toml (headless binary)"
 nest-rs = { workspace = true, features = ["opentelemetry"] }
@@ -184,9 +190,10 @@ A test that does **not** import `OpenTelemetryModule` does not need it.
 
 ## Going further
 
-- **Per-request context** — the request span carries `request_id`,
-  `actor_id`, `tenant_id` when an authn module is mounted. Layer your own
-  fields with `tracing::info!(target: "features::users", actor = %auth.sub, …)`.
+- **[Correlation](/fundamentals/correlation/)** — the request span carries
+  `trace_id` and `span_id` always, and `actor_id` once a guard resolved a
+  principal. None of it waits on this crate. Layer your own fields with
+  `tracing::info!(target: "features::users", actor = %auth.sub, …)`.
 - **`Server-Timing`** — the companion `nest-rs-server-timing` crate adds a
   `Server-Timing` header summarising the request's main spans. Mount with
   `ServerTimingModule`.

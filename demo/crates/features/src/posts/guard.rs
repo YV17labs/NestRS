@@ -27,7 +27,8 @@ impl Guard for PostAuthorGuard {
                 tracing::warn!(
                     target: "features::posts",
                     org_id = %claims.org_id,
-                    "post write denied: token carries no subject",
+                    reason = "no_subject",
+                    "post write denied",
                 );
                 return Err(Denial::forbidden(
                     "a bearer token with a subject is required to write posts",
@@ -55,8 +56,8 @@ impl Guard for PostAuthorGuard {
             None => {
                 tracing::warn!(
                     target: "features::posts",
-                    principal = "anonymous",
-                    "post write denied: token carries no subject",
+                    reason = "no_claims",
+                    "post write denied",
                 );
                 Err(Denial::forbidden(
                     "a bearer token with a subject is required to write posts",

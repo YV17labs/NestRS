@@ -107,3 +107,17 @@ section does not bind it.
   to report, never a reason to skip e2e.
 - `nest-rs-testing`'s own test tree organizes by concern — the one
   sanctioned exception to "mirror `src/`".
+- **Runner config is `.config/nextest.toml`**, read automatically, so a
+  *Definition of done* invocation stays the same everywhere.
+- **A suite sharing a build directory declares a test group there.**
+  nextest runs each test in its own *process*, so anything shared
+  between tests is shared between processes. `nest-rs-cli`'s e2e
+  compiles every scaffolded workspace into one `CARGO_TARGET_DIR` —
+  worth keeping, it turns minutes into seconds — and concurrent builds
+  raced on the fingerprints of shared dependencies. It surfaced as a
+  **linker** error on whichever generic crate lost (`quote`,
+  `proc-macro2`, `libc`), naming nothing about the cause and moving
+  between runs, which reads exactly like a broken toolchain.
+  `max-threads = 1` on a group scoped to that binary is the fix;
+  per-test target directories are not, since each would rebuild the
+  whole tree.

@@ -1,0 +1,27 @@
+# Runner configuration for the framework workspace. `cargo nextest` reads this
+# automatically; there is nothing to pass on the command line.
+
+# `nest-rs-cli`'s e2e suite scaffolds a fresh workspace per test into a temp
+# directory and compiles it, and every one of those compiles shares **one**
+# `CARGO_TARGET_DIR` (`target/scaffold-check`, set in `tests/e2e/scaffold.rs`).
+# Sharing it is deliberate and worth keeping: the framework's own artifacts are
+# reused rather than rebuilt per test, which is the difference between seconds
+# and minutes.
+#
+# What it cannot survive is being written by several builds at once. nextest runs
+# each test in its own **process**, and cargo's locking is per build rather than
+# per target directory, so two scaffolded workspaces resolving the same
+# dependency race on its fingerprint and artifacts. The failure surfaces as a
+# **linker** error on whichever generic crate lost — `undefined reference to
+# core::ptr::drop_glue` out of a `quote`, `proc-macro2` or `libc` build script —
+# which names nothing about the real cause and moves from run to run. An audit
+# read it as a broken toolchain more than once.
+#
+# So the group serializes exactly the tests that share the directory, and only
+# those: the rest of the suite keeps every core.
+[test-groups.scaffold-check]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'package(nest-rs-cli) and binary(e2e)'
+test-group = 'scaffold-check'

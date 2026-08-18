@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG RUST_VERSION=1.96
+ARG RUST_VERSION=1.97
 ARG NODE_MAJOR=24
 
 FROM mcr.microsoft.com/devcontainers/base:trixie AS dev

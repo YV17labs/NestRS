@@ -1,7 +1,7 @@
 //! Files shared by standalone and workspace scaffolds (env cascade, gitignore, …).
 
 pub const RUST_TOOLCHAIN: &str = r#"[toolchain]
-channel = "1.96"
+channel = "1.97"
 "#;
 
 /// `db.just` — shipped in every project so the database verbs are present from

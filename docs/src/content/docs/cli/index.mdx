@@ -27,7 +27,7 @@ nestrs version
 A binary, so it is the one thing that does not come through the `nest-rs`
 umbrella — there is no `--features cli`.
 
-Requires **Rust 1.96+** (edition 2024). That single install is all you need: the
+Requires **Rust 1.97+** (edition 2024). That single install is all you need: the
 first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
 toolchain it drives — `just`, `bacon`, `cargo-nextest` — once. Run **`nestrs
 doctor`** after install to check the Rust toolchain and list optional `NESTRS_*`
@@ -172,7 +172,7 @@ files per concern, and the [Publish workspace](/publish/) is the reference.
 </Tabs>
 
 **`Dockerfile`** and **`.dockerignore`** ship in **standalone** mode only.
-**`rust-toolchain.toml`** pins Rust 1.96 in both modes.
+**`rust-toolchain.toml`** pins Rust 1.97 in both modes.
 
 ### One starter, no template flag
 
@@ -403,7 +403,7 @@ nestrs doctor
 
 Checks:
 
-- `rustc` ≥ 1.96 and `cargo` on `PATH`
+- `rustc` ≥ 1.97 and `cargo` on `PATH`
 - whether the current directory sits inside a nestrs workspace
 - optional env vars (`NESTRS_DATABASE__URL`, `NESTRS_QUEUE__URL`, …)
 

@@ -150,6 +150,18 @@ same trace, its own span id, the request's span as its parent — the shape
   own**, under Fundamentals rather than inside OpenTelemetry — the primitive is
   unconditional, and documenting it in an optional section left a developer who
   never installs an exporter with no path to it.
+- **Minimum supported Rust is now 1.97** (was 1.96), moved in one sweep:
+  `rust-toolchain.toml`, all three workspace `rust-version`s (root, `demo/`, the
+  bench SUT), the three images, the publish workflow, and everything `nestrs new`
+  scaffolds. 1.97.1 backports an LLVM fix for a miscompilation present since at
+  least 1.87 — every release profile here is `lto = "fat"` on a single codegen
+  unit, which is the regime that bug reaches. The pin stays two-component:
+  `1.97` resolves to the newest patch **at install time**, so a fresh clone
+  takes the fix without anyone spelling it and a machine that installed 1.97.0
+  earlier takes it on the next `rustup update`. `manifests-ci.md` asserted that
+  these pins agree and nothing read it, so `toolchain_pins_agree` now does —
+  including the scaffold's toolchain file and Dockerfile, which the
+  manifest-shaped scan could never see.
 
 ## [4.0.0] - 2026-08-16
 

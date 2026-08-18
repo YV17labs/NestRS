@@ -5,6 +5,126 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.0] - 2026-08-18
+
+### Every log line carries the trace context of the unit of work that emitted it
+
+**Behaviour change, both log formats.** The correlation on a line is now read
+from the ambient W3C trace context — `trace_id`, `span_id`, `actor_id` — and a
+line carries no span attributes and no span names at all:
+
+```text
+DEBUG features::posts: creating post title="hello" trace_id=01a01569ae687353bc034a9ee8bd8774 span_id=a3f7cc8bac648278 actor_id=01a0112ce24e75509be691162cbbab1f
+```
+
+```json
+{"timestamp":"…","level":"DEBUG","fields":{"message":"creating post","title":"hello"},"target":"features::posts","trace_id":"01a015…74","span_id":"39d4f2…54","actor_id":"01a011…1f"}
+```
+
+It used to render the span scope, and that is a different question with a
+different answer. A service runs under the HTTP request's span, so its every line
+carried the request's `http.request.method`, `url.path`, `client.address` and
+`user_agent.original` — the line stopped being about what the service did — and a
+nested unit of work (an MCP operation inside a request, a job inside its enqueue)
+printed one `trace_id` per level.
+
+- **The ids come from the kernel, not from a formatter's view of the span
+  stack.** `current_trace_id()` / `current_span_id()` / `current_actor_id()` are
+  what the line prints, which is the same read application code does. That makes
+  the line self-contained however deep the nesting runs, and it reaches where a
+  span stack does not: a streaming body is polled after its handler returned, and
+  the framework re-installs the request around it.
+- **Nothing here depends on an exporter.** The trace context is a kernel
+  primitive, so a bare app logging to a terminal has it; `nest-rs-opentelemetry`
+  exports the same ids and installs the same two formatters, so an app's lines do
+  not change shape because it adopted or dropped the observability stack.
+- **JSON puts `trace_id` / `span_id` / `actor_id` at the top level** of the
+  record rather than inside a `span` object. The rest of the envelope keeps
+  tracing-subscriber's keys — `timestamp`, `level`, `fields`, `target`,
+  `filename`, `line_number` — so a pipeline reading this output keeps reading it.
+- **Span structure is untouched**, and none of this was a defect in the trace:
+  nesting is what `tracing-opentelemetry` builds the exported tree from.
+
+Two knobs moved and neither is silent: `.event_format(…)` replaces the `Format`
+that `with_file` / `with_line_number` configure, so `file:line` is the
+formatter's own `source_location` (still `NESTRS_LOG_SOURCE_LOCATION`), and ANSI
+follows the writer as before. There is no variable that puts span state back on a
+line.
+
+### Every edge files one line per unit of work
+
+HTTP has always had an access log; no other edge did. Now a WS message, a socket
+opening and closing, a scheduled tick, a queue job, an MCP operation and a
+GraphQL subscription each file one line on the same `nest_rs::access` target,
+carrying what the work **was** — plus `duration_ms`, and `outcome`
+(`ok` / `error` / `panic`) everywhere a request's `status` does not already say it
+better:
+
+```text
+ INFO nest_rs::access: tick ran provider="AudioTasks" method="enqueue_transcode" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+ INFO nest_rs::access: job ran queue="audio" processor="AudioProcessor::transcode" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+```
+
+Those two lines are from two different binaries ninety seconds apart, and that is
+the point: one query on `nest_rs::access` answers "what did this deployment do
+and what failed" across every transport, and the ids join it to everything each
+unit of work logged.
+
+- **It is the counterpart of a line carrying no span state.** A span's
+  attributes are not part of a log record, so the identity of a unit of work has
+  to arrive as *event* attributes on a line the edge emits — otherwise the ids
+  say two lines belong together and nothing says what they were.
+- **One target is the family's toggle.** `NESTRS_LOG=info,nest_rs::access=off`
+  silences all of them, so no edge grew a `#[config]` field — and the `for_root`
+  seam that one would oblige — for a boolean the filter already answers.
+  `NESTRS_HTTP__ACCESS_LOG` stays: it predates the family and is an app's pinned
+  config rather than a deployment's filter.
+- **A successful queue job is reported once**, not twice: the `job ok` event is
+  gone and `job ran` replaces it. The failure events keep saying *why* and no
+  longer restate `elapsed_ms`.
+- `nest_rs_core::operation_log` holds the target, the outcome words and the
+  duration formula, and *A new edge owes the same list* now includes this line.
+- **Two of the six lines were wrong until real output was captured**, which is
+  the note worth keeping. The MCP line carried no ids at all: it is emitted
+  outside the scope the dispatch installs, so it now emits through the
+  correlation explicitly. And the GraphQL subscription line never fired — a
+  socket that is aborted rather than closed never completes its future — so it is
+  filed from a `Drop` guard, the way HTTP's access log always has been. Neither
+  was visible to a `LogCapture` assertion, because the ids are not fields of the
+  event; only rendering the line found them.
+
+### The HTTP access log stops spelling the ids itself
+
+It wrote `trace_id`, `span_id` and `actor_id` as event fields while every line
+already carried them, so text printed each twice and JSON put them in two
+different positions. The body now re-enters the request's **context** (never its
+span — the line is still nobody's child event) around filing, and the fields are
+gone. Same for four WebSocket connection-lifecycle events, and for the authn
+guard's `authenticated` line.
+
+### The scaffold e2e suite no longer races itself
+
+`nest-rs-cli`'s e2e compiles every scaffolded workspace into one shared
+`CARGO_TARGET_DIR`, and nextest runs each test in its own process, so concurrent
+builds raced on the fingerprints of shared dependencies. It surfaced as a
+**linker** error on whichever generic crate lost — `quote`, `proc-macro2`,
+`libc` — which names nothing about the cause and moved between runs, reading
+exactly like a broken toolchain. `.config/nextest.toml` now puts that binary in a
+`max-threads = 1` test group: the shared directory keeps making the suite fast,
+and nothing else in the workspace loses a core.
+
+### `trace_flags`, and one grammar for `LOG_FORMAT`
+
+JSON records now carry `trace_flags`, the third field OpenTelemetry's log data
+model names beside the two ids. Text does not, deliberately: a record joined
+against an export needs to know whether the export exists, and a human at a
+console never acts on a sampling bit.
+
+`LogFormat` and the boolean env grammar are declared once, in
+`nest_rs_core::logging`; `nest_rs_opentelemetry::LogFormat` is now a re-export of
+it. They were two enums with two parsers and two build-profile defaults, which is
+how an app's log shape could have come to change on adopting the exporter.
+
 ## [5.0.0] - 2026-08-18
 
 ### Correlation is W3C Trace Context, it lives in the kernel, and the homemade id is gone
@@ -3867,7 +3987,9 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
-[Unreleased]: https://github.com/YV17labs/NestRS/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/YV17labs/NestRS/compare/v5.1.0...HEAD
+[5.1.0]: https://github.com/YV17labs/NestRS/compare/v5.0.0...v5.1.0
+[5.0.0]: https://github.com/YV17labs/NestRS/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/YV17labs/NestRS/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/YV17labs/NestRS/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/YV17labs/NestRS/compare/v2.1.0...v3.0.0

@@ -54,7 +54,6 @@ impl PostsService {
             target: "features::posts",
             id = %model.id,
             %org_id,
-            %author_id,
             "post created",
         );
         Ok(Post::from(&model))
@@ -91,7 +90,6 @@ impl PostsService {
             target: "features::posts",
             id = %post_id,
             %org_id,
-            %actor_id,
             "post published",
         );
         let post = Post::from(&published);

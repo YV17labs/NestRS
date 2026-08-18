@@ -126,6 +126,16 @@ The envelope you send is `{event, data}`; the server's reply rides the
 same shape on the same event name. From here, every other concern is a
 matter of adding one decorator.
 
+A socket can live for hours, so the **message** is the unit of work: each one
+opens its own `ws.message` span under the trace and the actor the upgrade
+established — see [Correlation](/fundamentals/correlation/).
+
+```text frame="terminal"
+DEBUG ws.message{otel.kind="server" trace_id=01a014b21b647f338e4315decada1ded span_id=17560d79f19f65d7 ws.event=message ws.connection_id=1 parent_span_id=f8d68ad3f06f390c actor_id="00000000-0000-7000-8000-00000000ac00"}: live::chat: chat message recorded and broadcast author=ada total=1 reached=1
+```
+`parent_span_id` is the `101` that opened the socket. A connection inherits
+identity, never resources: it opens its own request scope per message.
+
 ## Version the socket
 
 `#[gateway(path = "/ws", version = "1")]` serves at `/v1/ws`. It is the same

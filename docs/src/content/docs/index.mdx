@@ -143,11 +143,11 @@ framework; your files hold structs, decorators and async fns.
     { kind: 'output', text: '    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s' },
     { kind: 'output', text: '     Running `target/debug/hello`' },
     { kind: 'output', text: '2026-04-29T12:00:00.799422Z  INFO nest_rs::module: module dependencies initialized module="HelloModule"' },
-    { kind: 'output', text: '2026-04-29T12:00:00.799862Z  INFO nest_rs::routes: GET    /  (hello)' },
+    { kind: 'output', text: '2026-04-29T12:00:00.799862Z  INFO nest_rs::routes: mounted route controller="HelloController" method="GET" path="/" handler="hello"' },
     { kind: 'omit' },
     { kind: 'output', text: '2026-04-29T12:00:00.802100Z  INFO poem::server: listening addr=socket://0.0.0.0:3000' },
     { kind: 'output', text: '2026-04-29T12:00:00.802552Z  INFO poem::server: server started' },
-    { kind: 'output', text: '2026-04-29T12:00:00.803011Z  INFO nest_rs::access: method=GET path=/ status=200 bytes=11 duration_ms=0.189 client_ip=127.0.0.1 user_agent=curl/8.7.1 trace_id=48643283b6e9c222dadc23480117d76a' },
+    { kind: 'output', text: '2026-04-29T12:00:00.803011Z  INFO nest_rs::access: request served method=GET path="/" status=200 bytes=11 duration_ms=0.189 trace_id=01a014a761597910a10b2d568b170da5 span_id=493b44fac57aef19 client_ip=127.0.0.1 forwarded=false user_agent="curl/8.7.1"' },
     { kind: 'input', text: 'curl http://localhost:3000' },
     { kind: 'response', text: 'Hello World' },
   ]}

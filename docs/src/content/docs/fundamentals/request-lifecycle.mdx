@@ -69,6 +69,10 @@ pool) → `#[meta]`/`#[public]` route data**. At the transport edge
 (innermost → outermost band): **routing → DbContext (−10) → global filter pool
 (50) → global interceptor pool (90) → infra `#[interceptor]` (100)**.
 
+The operation span is outside all of it: the transport opens it before routing,
+so every stage above logs under one `trace_id` — see
+[Correlation](/fundamentals/correlation/).
+
 Interceptors sit outside filters; exception-filters sit closest to the handler
 — at both sites. `Layer::priority` orders entries *within* a site, never across
 sites.

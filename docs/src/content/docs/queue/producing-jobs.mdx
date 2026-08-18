@@ -109,7 +109,9 @@ over any producer — import the trait, and it is available on
 because Redis is async; that is the whole producer surface from a
 feature's point of view. Inside the call, `nest-rs-redis` wraps your
 payload in the wire envelope (`{ "v": 1, "payload": ... }`) so any other
-backend can drain it. You never see that.
+backend can drain it, and seals your trace context into it so the job
+runs under the trace that enqueued it. You never see either — see
+[Correlation](/fundamentals/correlation/).
 
 <Aside>
 Two escape hatches, in descending order of preference. `push(name, job)`

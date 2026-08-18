@@ -48,14 +48,25 @@ macro-emitted consumer unwraps, the storage in between only moves
 JSON.
 
 ```json
-{ "v": 1, "payload": <user job as JSON> }
+{
+  "v": 1,
+  "payload": <user job as JSON>,
+  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "tracestate": "rojo=00f067aa0ba902b7",
+  "actor_id": "01a0…"
+}
 ```
 
-`WIRE_FORMAT_VERSION` is exported from `nest-rs-queue`; use it instead of
-hard-coding `1`. The macro on the `#[process]` side validates the
-version and fails closed with a clear error on mismatch, so a producer
-that wraps a different shape surfaces immediately. Mismatching this is
-the most common driver bug, so wrap exactly once at the producer edge.
+You never write that shape by hand: `envelope::seal(payload)` builds it,
+and `envelope::open(value)` takes the trace context back off, leaving the
+`{ v, payload }` envelope the macro decodes. A queue is the one hop that
+crosses a **process**, so a hand-rolled wrapper silently costs every job
+its link back to the request that enqueued it — see
+[Correlation](/fundamentals/correlation/).
+
+The macro on the `#[process]` side validates the version and fails closed
+with a clear error on mismatch, so a producer that wraps a different
+shape surfaces immediately.
 
 ## Step 1 — The producer
 
@@ -78,11 +89,9 @@ pub struct YourConnection {
 impl nest_rs::queue::JobProducer for YourConnection {
     async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError> {
         // (1) Wrap in the wire envelope — required for the
-        //     macro-emitted consumer to decode it.
-        let envelope = serde_json::json!({
-            "v": nest_rs::queue::WIRE_FORMAT_VERSION,
-            "payload": payload,
-        });
+        //     macro-emitted consumer to decode it. `seal` stamps the
+        //     version and seals the ambient trace context into the value.
+        let envelope = nest_rs::queue::envelope::seal(payload);
 
         // (2) Push the envelope onto your storage for `queue`.
         //     Your code: `self.client.send(queue, envelope).await?`,
@@ -169,8 +178,12 @@ impl Transport for YourWorker {
                     tokio::select! {
                         _ = cancel.cancelled() => break,
                         envelope = /* your_pop_from_queue(queue) */ => {
-                            // (4) Dispatch. The macro-emitted handler takes
-                            //     the raw serde_json::Value and the Container.
+                            // (4) Take the producer's trace context off the
+                            //     value, then dispatch.
+                            let (envelope, inherited) =
+                                nest_rs::queue::envelope::open(envelope);
+                            //     The macro-emitted handler takes
+                            //     the serde_json::Value and the Container.
                             //     It internally:
                             //       - unwraps the wire envelope (v + payload),
                             //       - deserializes the typed Job,
@@ -195,6 +208,11 @@ impl Transport for YourWorker {
     }
 }
 ```
+
+`inherited` is `None` for a legacy or foreign payload: mint a
+`Correlation` there and open the job's span under it through
+`nest_rs::core::operation_span!`, the way `nest-rs-redis` does. Without
+that span the job's events file under nothing.
 
 The handler call — `(method.handler)(envelope, container)` — is the
 only thing your worker needs to know about a job. Inside that function

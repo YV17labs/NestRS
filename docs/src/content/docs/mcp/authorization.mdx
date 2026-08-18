@@ -45,8 +45,18 @@ policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
 [per-transport bridges](/security/authorization/per-transport-bridges/) page for
 the four-transport story.
 
-The bridge answers *who is calling*. Each operation then declares what it is,
-with the same two attributes a `#[query]` takes:
+The bridge answers *who is calling*, and it answers it in the logs too: every
+operation runs in its own [`mcp.operation` span](/fundamentals/correlation/),
+under the trace of the HTTP request it arrived on and carrying the `actor_id`
+the authn guard resolved — a model calling a tool is still a caller you can
+name afterwards.
+
+```text frame="terminal"
+DEBUG mcp.operation{otel.kind="server" trace_id=01a014b2de3577c0bec25a6150d6627f span_id=3150b8f17af68017 parent_span_id=f4db23f0fd4e6060 actor_id="00000000-0000-7000-8000-00000000ac00"}: nest_rs::orm: listing rows entity="user"
+```
+
+Each operation then declares what it is, with the same two attributes a
+`#[query]` takes:
 
 ```rust title="src/users/mcp/tool.rs"
 #[tools]

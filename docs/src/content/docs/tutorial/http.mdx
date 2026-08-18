@@ -258,11 +258,11 @@ DEBUG nest_rs::http: transport listening addr=0.0.0.0:3005 tls=false
 ```
 
 ```text frame="terminal"
-INFO nest_rs::routes: mounted route controller=PostsController method=GET path=/posts
-INFO nest_rs::routes: mounted route controller=PostsController method=POST path=/posts
-INFO nest_rs::routes: mounted route controller=PostsController method=GET path=/posts/:id
-INFO nest_rs::routes: mounted route controller=PostsController method=PATCH path=/posts/:id
-INFO nest_rs::routes: mounted route controller=PostsController method=DELETE path=/posts/:id
+INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts" handler="list"
+INFO nest_rs::routes: mounted route controller="PostsController" method="POST" path="/posts" handler="create"
+INFO nest_rs::routes: mounted route controller="PostsController" method="GET" path="/posts/:id" handler="get"
+INFO nest_rs::routes: mounted route controller="PostsController" method="PATCH" path="/posts/:id" handler="update"
+INFO nest_rs::routes: mounted route controller="PostsController" method="DELETE" path="/posts/:id" handler="delete"
 ```
 
 Five routes mounted from one `#[crud]` block — the full CRUD surface,
@@ -280,9 +280,12 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3005/posts
 ```
 
 ```text frame="terminal"
-WARN nest_rs::authn: authentication failed reason="missing_credentials"
-WARN nest_rs::layers: guard denied the request status=401
+WARN http.request{trace_id=01a014ad539f7903986200f145f71c41 span_id=d7c5e5890c5a90eb http.request.method=GET url.path="/posts"}: nest_rs::authn: authentication failed reason="missing_credentials"
+WARN http.request{trace_id=01a014ad539f7903986200f145f71c41 span_id=d7c5e5890c5a90eb …}: nest_rs::layers: guard denied the request status=401
 ```
+
+Both lines carry the request's `trace_id`, and no `actor_id` — nobody was
+authenticated, which is the whole story of a `401`.
 
 Drop `#[use_guards(...)]` from the controller and the answer becomes a **500**
 instead, because `#[crud]` still emits the class gate and nothing installed an

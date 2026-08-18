@@ -139,8 +139,8 @@ injects something its module doesn't own or import transitively.
 
 ```text frame="terminal"
 $ nestrs run dev worker
- INFO nest_rs::app: attached module-contributed transport transport=QueueWorker
- INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
+ INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
+ INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
 ```
 
 One `attached` line per transport, one `registered` line per

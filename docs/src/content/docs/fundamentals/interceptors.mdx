@@ -171,7 +171,9 @@ Interceptors are pooled by `TypeId` and run **once per request**: a global inter
 ## Common things an interceptor does
 
 - **Install ambient state** for the handler's duration (transactions,
-  tracing spans, request id, authorization ability).
+  tracing spans, authorization ability). The trace and the `actor_id` are
+  not on that list — the transport installs those before any interceptor
+  runs, see [Correlation](/fundamentals/correlation/).
 - **Transform the response** — add headers (`Server-Timing`,
   `X-Cache-Status`), compress, paginate.
 - **Time the call** — measure latency by route, emit a metric.

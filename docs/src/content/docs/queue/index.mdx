@@ -303,14 +303,15 @@ $ nestrs run dev worker
 ```
 
 ```text frame="terminal"
- INFO nest_rs::app: attached module-contributed transport transport=QueueWorker
- INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
- INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: features::audio: transcoded file=track-1717405126521.mp3
- INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: nest_rs::queue: job ok elapsed_ms=342
+ INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
+ INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
+ INFO process job{trace_id=… span_id=… queue="audio" processor="AudioProcessor::transcode" job_id=01HFEX… attempt=1}: features::audio: transcoded file="track-1717405126521.mp3"
+ INFO process job{trace_id=… span_id=… …}: nest_rs::queue: job ok elapsed_ms=342
 ```
 
-The two `process job{…}` lines share the per-job span; see
-[Observability](/queue/observability/) for the full field set.
+The two `process job{…}` lines share the per-job span, and its `trace_id`
+is the producer's — see [Observability](/queue/observability/) for the
+full field set.
 
 ## Going further
 

@@ -24,6 +24,7 @@ request.
 | Layer composition (per-route guard/pipe/… chains) | `nest_rs::layers` | `trace` for the per-route effective-chain dump; `debug` for the redundant multi-scope lint (HTTP deduped once, WS per gateway); `warn` for actionable posture smells (reversed authn/authz order, denials, **routes with no guard and no `#[public]` when no global pool is active**) |
 | Authn / Authz | `nest_rs::authn` / `nest_rs::authz` | `info` (denials `warn`) |
 | WebSocket events | `nest_rs::ws` | `info` |
+| GraphQL execution and subscriptions | `nest_rs::graphql` | `info` |
 | Queue / Schedule | `nest_rs::queue` / `nest_rs::schedule` | `info` |
 | Module lifecycle | `nest_rs::module` | `info` |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) | `info` |
@@ -40,10 +41,13 @@ appear under the default `info` filter. A production deploy should respect
 tracing::info!(
     target: "features::users",
     user_id = %id,
-    actor = %auth.sub,
     "creating user",
 );
 ```
+
+`user_id` is the subject the event is *about*. Who asked for it is not a field
+you write: the operation span carries `actor_id`, and restating it here gives a
+backend two spellings of one fact.
 
 Always prefer `field = %value` to `format!("{}", value)`. The OTLP bridge
 serializes structured fields directly; a formatted string becomes opaque text

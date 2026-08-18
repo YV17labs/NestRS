@@ -32,6 +32,7 @@ covers — logging, request id, rate limiting, auth, opening a transaction
 | Rate-limiting | **Guard** | Short-circuit on 429 before any work runs |
 | Parsing/normalizing the body | **Pipe** at the boundary | Pure transform, no DI |
 | Opening a database transaction | **Interceptor** (`DbContext`, auto-mounted) | Wraps the handler, commits/rolls back on exit |
+| Stamping a request / correlation id | **Nothing to write** | Every unit of work already runs under a [W3C trace](/fundamentals/correlation/) |
 | CORS, security headers | poem middleware, configured on `HttpConfig` | Lower-level than a Guard/Interceptor |
 
 The split is on purpose: "gate" and "wrap" are different shapes, the

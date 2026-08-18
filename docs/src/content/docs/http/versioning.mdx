@@ -38,7 +38,7 @@ default strategy they cannot drift:
 
 ```bash frame="terminal"
 $ nestrs run dev api
-INFO nest_rs::routes: mounted route controller=PostsV1Controller method=GET path=/v1/posts handler=list
+INFO nest_rs::routes: mounted route controller="PostsV1Controller" method="GET" path="/v1/posts" handler="list"
 ```
 
 The version string is opaque — `"1"`, `"2"`, `"beta"` all work; the
@@ -148,7 +148,7 @@ the address a client uses and carries the version as its own field.
 
 ```bash frame="terminal"
 $ NESTRS_HTTP__VERSIONING=header nestrs run dev api
-INFO nest_rs::routes: mounted route controller=PostsV1Controller method=GET path=/posts version=1 handler=list
+INFO nest_rs::routes: mounted route controller="PostsV1Controller" method="GET" path="/posts" version=1 handler="list"
 ```
 
 Five behaviours worth knowing before you switch:

@@ -41,6 +41,9 @@ async fn push_to_routes_by_the_typed_handle() {
     let (queue_name, payload) = &pushed[0];
     // The name came from `TranscodeQueue::NAME`, not a hand-typed literal.
     assert_eq!(queue_name, <TranscodeQueue as QueueName>::NAME);
+    // The typed push hands the payload over untouched. Wrapping is the
+    // *backend's* step (`envelope::seal`, on the way to the wire), so a
+    // `JobProducer` implementor sees exactly what the caller passed.
     assert_eq!(payload, &json!({ "file": "song.wav" }));
 }
 

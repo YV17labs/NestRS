@@ -8,7 +8,7 @@
 //! ```ignore
 //! #[query]
 //! async fn who(&self, ctx: &Context<'_>) -> async_graphql::Result<String> {
-//!     let per_req = Scoped::<RequestId>::from_context(ctx)?;
+//!     let per_req = Scoped::<PerRequestCache>::from_context(ctx)?;
 //!     Ok(per_req.value().to_string())
 //! }
 //! ```

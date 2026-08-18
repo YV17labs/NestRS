@@ -24,7 +24,8 @@ use async_graphql_poem::{GraphQLProtocol, GraphQLWebSocket};
 use poem::web::websocket::WebSocket;
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response, Result};
 
-use nest_rs_core::Container;
+use nest_rs_core::{Container, Correlation};
+use tracing::Instrument;
 
 use crate::config::GraphqlConfig;
 use crate::context::OperationBridge;
@@ -113,6 +114,28 @@ fn socket_executor() -> Option<Arc<dyn nest_rs_database::Executor>> {
         .map(|executor| executor.non_transactional().unwrap_or(executor))
 }
 
+/// The identity a socket runs under, taken from the **upgrade request** — the
+/// same last moment [`socket_executor`] reads, and for the same reason.
+///
+/// The upgrade *is* an HTTP request, so the socket inherits that request's id,
+/// and its actor: the guard that just ran resolved one, and nothing on this
+/// socket ever re-authenticates anybody. Without it every subscription item,
+/// every withheld row and every mask failure below files under no request at
+/// all — poem answers the `101` before the connection task runs, so the request
+/// boundary is gone by the time the first item is produced.
+///
+/// A mint is the honest answer where there is nothing to inherit — an endpoint
+/// mounted outside the HTTP edge. The socket's own events still group with each
+/// other, which is strictly more than nothing.
+///
+/// **Identity, never the upgrade's resources.** The socket already steps out of
+/// the request transaction ([`socket_executor`]) and holds no request scope, for
+/// one reason: a connection that may live for hours would pin whatever the
+/// upgrade resolved for that whole time.
+fn socket_correlation() -> Correlation {
+    Correlation::inherited()
+}
+
 /// Run `serve` under the socket-lifetime ceiling.
 ///
 /// Same control and same reasoning as a WebSocket gateway's: a principal
@@ -199,10 +222,24 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
         // path — `around` never runs otherwise, since a socket has no response
         // future to wrap.
         let guard = self.bridge.op_guard.clone();
+        // Read here, on the request task, for the same reason the executor is.
+        let correlation = socket_correlation();
 
         Ok(websocket
             .protocols(ALL_WEBSOCKET_PROTOCOLS)
             .on_upgrade(move |stream| async move {
+                // One span for the whole socket, and that granularity is the
+                // honest one: `serve()` is async-graphql's own loop, so this
+                // crate never sees an operation boundary to open a span at.
+                // Where it *does* see one — a WebSocket gateway's messages — the
+                // message is the unit and the connection is a field. Here the
+                // connection is all there is.
+                let span = nest_rs_core::operation_span!(
+                    target: "nest_rs::graphql",
+                    kind: "server",
+                    "graphql.subscription",
+                    &correlation,
+                );
                 let serve = GraphQLWebSocket::new(stream, executor, protocol)
                     .with_data(data)
                     .serve();
@@ -214,12 +251,15 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // Executor outermost, ability inside — the same nesting the POST
                 // path uses (`without_transaction` over the guarded operation),
                 // so the two cannot come to disagree about which is in scope.
-                match socket_executor {
+                let served: crate::BoxFuture<'_, ()> = match socket_executor {
                     Some(executor) => {
-                        nest_rs_database::with_request_executor(executor, guarded).await
+                        Box::pin(nest_rs_database::with_request_executor(executor, guarded))
                     }
-                    None => guarded.await,
-                }
+                    None => guarded,
+                };
+                nest_rs_core::with_request_scope(None, correlation, None, served)
+                    .instrument(span)
+                    .await
             })
             .into_response())
     }
@@ -271,6 +311,43 @@ mod tests {
             captured.as_any().is::<Pool>(),
             "the socket runs on the pool, not on the request transaction",
         );
+    }
+
+    /// The identity half of the same capture. Every event a subscription
+    /// produces — an item withheld, a mask that failed — is filed in the trace
+    /// that opened the socket, so "what did this subscriber see?" is one query
+    /// against the trace the client already has from its upgrade.
+    #[tokio::test]
+    async fn a_socket_runs_in_the_upgrades_trace() {
+        let upgrade = Correlation::mint();
+        let captured = nest_rs_core::with_request_scope(None, upgrade.clone(), None, async {
+            socket_correlation()
+        })
+        .await;
+
+        assert_eq!(captured.trace_id(), upgrade.trace_id());
+    }
+
+    /// And its actor, because nothing on a socket re-authenticates: what the
+    /// upgrade's guard resolved is the only answer there will ever be.
+    #[tokio::test]
+    async fn a_socket_runs_under_the_upgrades_actor() {
+        let captured = nest_rs_core::with_request_scope(None, Correlation::mint(), None, async {
+            nest_rs_core::set_actor_id("alice-42");
+            socket_correlation()
+        })
+        .await;
+
+        assert_eq!(captured.actor_id(), Some("alice-42"));
+    }
+
+    /// Mounted outside the HTTP edge there is nothing to inherit. A fresh id
+    /// still groups the socket's own events with each other, which is the point
+    /// — an unidentified socket is the one outcome that helps nobody.
+    #[tokio::test]
+    async fn a_socket_with_no_upgrade_to_inherit_from_starts_its_own_trace() {
+        assert!(nest_rs_core::current_trace_id().is_none());
+        assert!(socket_correlation().actor_id().is_none());
     }
 
     /// The other half: a handle that is *already* the pool is kept, rather than

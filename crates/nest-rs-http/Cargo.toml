@@ -42,6 +42,12 @@ serde.workspace = true
 # `RawBody` returns the body as `bytes::Bytes` (zero-copy view) with a size
 # guard.
 bytes.workspace = true
+# The access log's byte counter is an `http_body::Body` wrapper that forwards
+# `size_hint`, so the response keeps its `Content-Length` instead of falling back
+# to chunked framing. `http_body_util::combinators::BoxBody` is the type poem's
+# public `From<Body>` / `From<BoxBody>` impls convert through.
+http-body.workspace = true
+http-body-util.workspace = true
 # TLS material is handed to poem's listener as a *stream* of configs, so a
 # renewed certificate swaps in without rebuilding the listener; `stream::unfold`
 # + `chain` is what turns the watched PEM pair into one.

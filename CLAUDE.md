@@ -25,7 +25,7 @@ Rust as in TS. Reach for one first.
 A framework has **no local change**. Every name, default, error sentence
 and declaration is met by every feature that will ever use it, so the
 unit of design is the whole surface, never the corner that motivated the
-work — see *No declaration designed for one site*.
+work — see *The ask names a site; the design answers the family*.
 
 ## Rule priority — Rust first, conventions second
 
@@ -106,6 +106,11 @@ to require it, **stop and ask**.
 - **No umbrella module re-exporting every edge of a feature.**
 - **No transport-level discovery without module-gating.**
 - **No two decorators for the same concern** — deprecate first.
+- **No capability built for the site that asked.** A need surfaces at one
+  member of a family and is answered for the family: every other member is
+  built, refused in a sentence, or raised as an owner question. Fitting the
+  answer to the caller that raised it is the defect, whatever it costs to
+  widen. See *The ask names a site; the design answers the family*.
 - **No declaration designed for one site.** Anything the framework
   interprets is designed against every site the underlying standard
   permits — one grammar wherever it is possible, a compile error naming
@@ -264,6 +269,49 @@ The compile-time witness is `nest-rs-macro-hygiene`: one dependency,
 `nest-rs`, all features. If its manifest needs a second line, the rule
 is broken.
 
+## The ask names a site; the design answers the family
+
+An ask always arrives at one site, because a site is where the developer hit
+the gap. **The site is where the need surfaced; it is never the scope of the
+answer.** So the first move on any work is to widen before writing: name the
+family the site belongs to, derive its members, and settle all of them before
+building at one. A **family** is any set the framework holds several
+interchangeable members of; the ask never names it, because the caller sees
+only the member they use. This is the general posture — *One declaration,
+every site the standard permits* is it applied to what the framework
+interprets, `.claude/rules/testing.md` to what the suite asserts — and it
+binds **behaviour** as much as grammar.
+
+**Widening the design is not widening the work.** What may never be one member
+is the *decision*; the deliverable still can be. Each member ends in exactly
+one of three states, and there is no fourth:
+
+- **built** — its standard permits the thing there;
+- **refused** — a compile error or a written sentence naming the fact that
+  makes it impossible there, under the clauses below;
+- **raised** — possible but unbuilt, hence an owner question, asked as one and
+  never written as a refusal.
+
+A proposal states the family and the state of every member. One that names only
+the site the ask came from is incomplete, not concise, and a member left
+unstated is the silence these rules exist to forbid.
+
+**A defect widens the same way a capability does.** Found at one member, it is
+presumed at every other until each is checked; a fix scoped to the member that
+reported it repairs the report, not the defect.
+
+**A concern the thesis calls transparent is family-wide by definition**, so
+delivering it at the member that asked leaves it untrue everywhere else —
+worse than absent, because the capability now reads as present. Whether the
+gap is visible from the member's own code decides nothing: the framework is
+what the whole family sees.
+
+**None of this licenses an abstraction.** Family-wide are the decision, the
+vocabulary, the defaults and the sentence; a shared implementation still waits
+for its second real user (*No premature abstraction*). Designing wide and
+building narrow is the intended outcome — building wide for one user is a
+different defect, not compliance with this one.
+
 ## One declaration, every site the standard permits
 
 You are working on a framework, so a declaration is never local. Anything
@@ -382,6 +430,114 @@ Three consequences are load-bearing enough to repeat here:
   not a style nit: those are the events queried under incident.
 - **One event, said once.** Don't restate what a field or the enclosing
   span carries; don't emit the same event at two layers.
+
+### Correlation — W3C Trace Context, in the kernel, never optional
+
+**The framework's correlation primitive is W3C Trace Context and it lives in
+`nest-rs-core`.** A `trace_id` names the whole distributed operation; a `span_id`
+names one unit of work inside it — an HTTP request, a WS message, an MCP
+operation, a queue job, a scheduled tick — and each names the span that caused
+it. Minted by whoever *accepts* the work, or continued from what carried it.
+
+**The standard replaced a homemade `request_id`, and the argument is recorded
+because it will be re-litigated.** That id answered the question `trace_id`
+answers, so the two were duplicates. Three defences were offered and the
+specification retires all three: a forgeable inbound id is answered by the
+spec's own *restart trace* mutation at a trust boundary, not by a second
+identifier; the standard needs 16 random bytes and a `format!`, not an SDK; and
+a trace-id sorts by time if you choose bytes that do — ours are a UUID v7's, so
+the value is a conformant trace-id **and** an ordered UUID, and its right-most 7
+bytes still satisfy the `random-trace-id` flag. The deciding fact is the
+ecosystem's: OpenTelemetry's semantic conventions have **no request-id concept**,
+only `http.request.header.x-request-id` — a *captured* header. `X-Request-Id` is
+therefore upstream data, recorded as an attribute behind a trusted peer, and
+never an identity.
+
+A primitive cannot be optional, so this depends on no crate the app may decline,
+no collector, and no authentication. Reaching it is `current_trace_id()` /
+`current_span_id()`, the same names at every edge; `current_traceparent()` is
+what an application injects into its own outbound client, since the framework
+ships none.
+
+**Every edge opens exactly one operation span per unit of work, through
+`operation_span!`.** That macro is the only place the canonical field vocabulary
+is written — `trace_id`, `span_id`, `parent_span_id`, `actor_id` — and declaring
+is the whole mechanism: `tracing` fixes a span's fields at creation, so a field
+no span declared can never be recorded and a `record` call at such a site is a
+**silent no-op**. That is exactly how `actor_id` came to be recorded nowhere on
+any transport while the rules claimed otherwise. **Never declare a field nothing
+fills** — the same defect wearing the opposite sign.
+
+**Trust is one decision, one list.** An inbound `traceparent` is continued only
+from a peer in `trusted_proxies` — the same evidence `X-Forwarded-For` is weighed
+on — and restarted otherwise, which is what the spec defines a front gate to do.
+An ungated extraction let a public client choose the trace its request joined and
+set `sampled` on traffic it generated, which is the denial-of-service surface the
+spec names. `tracestate` is forwarded **verbatim** wherever the trace is
+continued (a MUST), and dropped with the `traceparent` it belongs to wherever it
+is not.
+
+**Two values ride beside the trace and neither is traceability.** `actor_id` is
+written by the authn guard when it resolves a principal — absent means anonymous
+— and is an **audit identity, never an authorization input**: branching on it in
+a service is the defect *no authn/authz decision outside a guard* forbids, and
+what a caller may do is the ambient `Ability`. It is ambient as well as on the
+span (`set_actor_id`, write-once; `current_actor_id()` anywhere the framework
+carries work), and no sentinel is ever returned — `""` or `"anonymous"` would be
+indistinguishable from an actor named that. The **sampling flag** is shared and
+updatable for the mirror reason: an installed sampler decides after the span
+exists, and an outbound `traceparent` carrying a decision nobody made is a claim
+about another system's data.
+
+**The observability stack enriches; it never owns.** `nest-rs-opentelemetry` mints
+no identifier — its `IdGenerator` **adopts** the kernel's, so the exported trace
+and the log lines name one request by one value rather than two. What it adds is
+the remote parent link and the sampler's verdict. It owns neither the span, nor
+the access log, nor the trace context.
+
+**Propagation is the edge's obligation, at every boundary it crosses — task,
+process, and response.**
+
+- A framework `spawn` that does not carry the span roots its events at nothing —
+  found at MCP, WS and the GraphQL dataloader, and presumed at any new one until
+  checked.
+- A queue crosses a *process*, so `traceparent` and `tracestate` travel in the
+  wire envelope (`nest_rs_queue::envelope`) and the consumer continues from them,
+  making the job a **child of the enqueue**. A value carrying none is a legacy or
+  foreign payload and starts a trace, never a refusal.
+- **A unit of work ends when its answer ends, not when its handler returns.** A
+  streaming body — `#[sse]`, a download, anything over a `Stream` — runs
+  afterwards on the connection task with the edge's task-locals unwound. The HTTP
+  edge carries the request into that gap (`RequestContinuation`, re-installed
+  around every body poll) and does so **whatever the access log is set to**: a
+  config flag is a weaker condition than a crate, and a primitive true for short
+  responses and false for long ones reads as present while being absent exactly
+  where a long operation needs it.
+
+**A continuation that outlives its request inherits identity, never resources.**
+A socket opened by an upgrade may live for hours after its `101`, so it takes the
+upgrade's trace and actor and nothing else: it already steps out of the request
+transaction, and pinning that request's scope for the socket's life is the same
+defect wearing another name. Where the framework dispatches *inside* the
+connection, the operation is the unit and the connection is a field
+(`ws.message` carries `ws.connection_id`); where it cannot see one, the
+connection is the unit (`graphql.subscription`). Both lifecycle hooks are units
+too — `ws.connect`, `ws.disconnect` — because a hook is developer code that logs
+and writes like any handler.
+
+**What the caller reads back is `traceresponse`**, the working group's response
+form — standards-track rather than a Recommendation, and stated as such. It
+carries the trace this service *actually used*, which at a front gate is
+deliberately not the one the caller asked for.
+
+**The span reports the route template, never the path as addressed.**
+`http.route` is what a backend groups latency and error rates on, so
+`/users/01a0…` there is one group per identifier and no signal at all; the
+addressed path is `url.path`. And because `tracing` fixes a span's name to a
+literal, the exported name comes from **`otel.name`** — `{method} {route}`,
+recorded once poem's router has answered, and the method alone when nothing
+matched. Naming an unmatched span after its URL is how one scanner fills a
+tracing backend with junk, so that fallback is the conventions' and ours.
 
 ## Testing
 

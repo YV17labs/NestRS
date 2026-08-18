@@ -31,40 +31,159 @@ type AnyArc = Arc<dyn Any + Send + Sync>;
 /// extractors and handlers all run inside the transport's endpoint task, so
 /// the scope provably covers them (the same pattern as the ambient executor
 /// and ability).
-struct RequestCtx {
-    scope: Arc<RequestScope>,
+pub(crate) struct RequestCtx {
+    /// The DI scope, when the edge had a container to open one over. `None` is
+    /// a real answer rather than a degenerate one: an edge may accept a unit of
+    /// work with no container in hand (an MCP endpoint mounted outside the
+    /// transport edge, a WS gateway on a bare upgrade), and the correlation is
+    /// the primitive that cannot be optional — so it is installed either way and
+    /// only `Scoped<T>` goes without.
+    scope: Option<Arc<RequestScope>>,
+    /// What this unit of work is filed under — its id, and who, once
+    /// authentication has resolved anyone. Ambient for the same reason the
+    /// scope is: the queue producer that copies it into a job envelope, the
+    /// access log that files the line and a service stamping `created_by` are
+    /// unrelated call sites, and threading an argument through all of them is
+    /// how a field ends up missing at the fourth.
+    pub(crate) correlation: crate::Correlation,
     /// The transport's byte budget for whole-body readers; `None` when the
     /// transport enforces no cap (readers fall back to their own default).
     body_limit: Option<usize>,
 }
 
 tokio::task_local! {
-    static REQUEST_CTX: RequestCtx;
+    /// Behind an `Arc` so re-installing it is one refcount bump rather than a
+    /// deep clone of every handle it holds — a streaming response body does that
+    /// on every poll, for as long as the stream runs.
+    static REQUEST_CTX: Arc<RequestCtx>;
+}
+
+/// Read one field off the ambient context, or `None` off the request task.
+pub(crate) fn current_request_ctx<T>(read: impl FnOnce(&Arc<RequestCtx>) -> T) -> Option<T> {
+    REQUEST_CTX.try_with(read).ok()
 }
 
 /// The current request's [`RequestScope`], installed by the transport edge.
 /// `None` off the request task (or before the edge — a transport wiring bug).
 pub fn current_request_scope() -> Option<Arc<RequestScope>> {
-    REQUEST_CTX.try_with(|ctx| Arc::clone(&ctx.scope)).ok()
+    current_request_ctx(|ctx| ctx.scope.clone()).flatten()
 }
 
 /// The transport's configured whole-body byte cap, when one is installed.
 /// Body readers fall back to their own default on `None`.
 pub fn current_body_limit() -> Option<usize> {
-    REQUEST_CTX.try_with(|ctx| ctx.body_limit).ok().flatten()
+    current_request_ctx(|ctx| ctx.body_limit).flatten()
 }
 
 /// Run `fut` under an ambient request context — the transport edges' installer,
 /// and the seam for driving handlers outside a transport (in-process test
 /// harnesses, a transport's mirror of the edge).
+///
+/// **`scope` is an `Option` and `correlation` is not**, and the asymmetry is the
+/// whole contract. An edge may accept a unit of work with no container to open a
+/// scope over — an MCP endpoint mounted outside the transport edge, a gateway on
+/// a bare upgrade — and only `Scoped<T>` goes without. The correlation has no
+/// default: **whoever accepts a unit of work decides its identity**, by
+/// continuing one that arrived with the work or by starting one
+/// ([`Correlation`](crate::Correlation)). A default would let an edge install a
+/// scope while quietly leaving its events uncorrelated, which is the failure this
+/// seam exists to make impossible.
+///
+/// The `Option` lives here rather than at the edges because it used to be two
+/// installers, and every edge whose scope was optional re-derived the same match
+/// — one of them dropping the correlation on the scope-less arm, which made
+/// `current_trace_id()`'s answer depend on how the endpoint happened to be
+/// mounted.
 pub async fn with_request_scope<F: std::future::Future>(
-    scope: Arc<RequestScope>,
+    scope: Option<Arc<RequestScope>>,
+    correlation: crate::Correlation,
     body_limit: Option<usize>,
     fut: F,
 ) -> F::Output {
-    REQUEST_CTX
-        .scope(RequestCtx { scope, body_limit }, fut)
+    RequestContinuation::new(scope, correlation, body_limit)
+        .scope(fut)
         .await
+}
+
+/// The ambient request context, held so work that continues the **same** unit
+/// after the future that accepted it has returned can re-install it.
+///
+/// # Why a unit of work outlives its handler
+///
+/// An `async fn` returning is not the work ending. An HTTP handler returns a
+/// *response*, and a response with a streaming body — Server-Sent Events, a
+/// download, anything built on a `Stream` — is written afterwards, by the
+/// transport's connection task, with every task-local the edge installed already
+/// unwound. Code inside that stream is still serving the request the handler was
+/// serving, so `current_trace_id()` answering `None` there is the framework
+/// contradicting itself: the id is the framework's primitive precisely so that
+/// "which request is this?" has one answer everywhere the framework carries
+/// work, and a body being written is work being carried.
+///
+/// [`enter`](Self::enter) is synchronous because that is the shape a body has:
+/// a `poll` is not a future, so the context is re-installed around each poll —
+/// the same thing [`tracing::Instrument`](crate::tracing::Instrument) does with
+/// a span, for the same reason.
+///
+/// **Identity, not resources.** What continues here is the whole ambient
+/// context, and that is sound only because the continuation is the *same*
+/// request: the scope's cache is this request's, and the response ends when the
+/// request does. An edge whose continuation genuinely outlives the request — a
+/// WebSocket that stays open for hours after its upgrade answered `101` —
+/// inherits the [`Correlation`](crate::Correlation) alone and opens its own
+/// scope, which is why those edges install
+/// [`with_correlation`](crate::with_correlation) rather than one of these.
+#[derive(Clone)]
+pub struct RequestContinuation(Arc<RequestCtx>);
+
+impl RequestContinuation {
+    /// Build the context an edge is about to install, so the same edge can
+    /// re-install it around the response body it hands back.
+    ///
+    /// The arguments are [`with_request_scope`]'s, deliberately: an edge builds
+    /// one value and uses it twice — [`scope`](Self::scope) around the handler,
+    /// [`enter`](Self::enter) around the body — rather than assembling the
+    /// context twice and having the two spellings drift.
+    pub fn new(
+        scope: Option<Arc<RequestScope>>,
+        correlation: crate::Correlation,
+        body_limit: Option<usize>,
+    ) -> Self {
+        Self(Arc::new(RequestCtx {
+            scope,
+            correlation,
+            body_limit,
+        }))
+    }
+
+    /// Capture whatever context is ambient, to re-install around work that
+    /// continues this same unit on another task.
+    ///
+    /// This is the shape a **task boundary** wants — a spawned dataloader batch,
+    /// any `spawn` the framework adds later — because it takes no arguments and
+    /// therefore cannot drift from the install it mirrors. `None` off a request
+    /// task, where there is nothing to continue.
+    pub fn current() -> Option<Self> {
+        current_request_ctx(|ctx| Self(Arc::clone(ctx)))
+    }
+
+    /// Run `fut` under this context — the async installer every edge reaches
+    /// through [`with_request_scope`].
+    pub async fn scope<F: std::future::Future>(&self, fut: F) -> F::Output {
+        REQUEST_CTX.scope(Arc::clone(&self.0), fut).await
+    }
+
+    /// Run `f` under this context — `current_trace_id()`,
+    /// `current_actor_id()`, [`current_request_scope`] and
+    /// [`current_body_limit`] all answer exactly what they answered inside the
+    /// handler.
+    ///
+    /// Synchronous because that is the shape a response body has: a `poll` is not
+    /// a future. One refcount bump per poll, which is what the `Arc` is for — a
+    /// streaming response polls this once per chunk for as long as it runs.
+    pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
+        REQUEST_CTX.sync_scope(Arc::clone(&self.0), f)
+    }
 }
 
 thread_local! {
@@ -176,6 +295,64 @@ mod tests {
 
     struct Counter(u32);
     struct Greeter(&'static str);
+
+    /// The rule the response body rests on: a *synchronous* continuation of the
+    /// same unit of work reads the same ambient answers the handler read.
+    ///
+    /// Without it a `#[sse]` stream — polled by the connection task long after
+    /// the handler returned — logs under no trace at all, which is the one thing
+    /// the correlation primitive exists to make impossible.
+    #[tokio::test]
+    async fn a_continuation_reinstalls_the_context_the_handler_ran_under() {
+        let scope = Arc::new(RequestScope::new(
+            Container::builder().provide(Greeter("hi")).build(),
+        ));
+        let correlation = crate::Correlation::mint();
+        let trace_id = correlation.trace_id();
+
+        let continuation = with_request_scope(
+            Some(Arc::clone(&scope)),
+            correlation.clone(),
+            Some(1024),
+            async move { RequestContinuation::new(Some(scope), correlation, Some(1024)) },
+        )
+        .await;
+
+        // Off the request task entirely — exactly where a body is polled.
+        assert!(crate::current_trace_id().is_none());
+
+        continuation.enter(|| {
+            assert_eq!(crate::current_trace_id(), Some(trace_id));
+            assert_eq!(current_body_limit(), Some(1024));
+            assert!(
+                current_request_scope().is_some_and(|s| s.get::<Greeter>().is_some()),
+                "the request's own scope answers, not a fresh one",
+            );
+        });
+
+        // And it is scoped to the closure: nothing leaks onto the task after.
+        assert!(crate::current_trace_id().is_none());
+    }
+
+    /// The actor is shared state on the [`Correlation`](crate::Correlation), so
+    /// a principal the guard resolved *after* the continuation was built is
+    /// still what the continuation reports — which is what lets the access line
+    /// name who was served.
+    #[tokio::test]
+    async fn a_continuation_sees_an_actor_resolved_after_it_was_built() {
+        let scope = Arc::new(RequestScope::new(Container::builder().build()));
+        let correlation = crate::Correlation::mint();
+        let continuation = RequestContinuation::new(Some(scope.clone()), correlation.clone(), None);
+
+        with_request_scope(Some(scope), correlation, None, async {
+            crate::set_actor_id("alice-42");
+        })
+        .await;
+
+        continuation.enter(|| {
+            assert_eq!(crate::current_actor_id().as_deref(), Some("alice-42"));
+        });
+    }
 
     #[test]
     fn caches_a_scoped_provider_building_it_once() {

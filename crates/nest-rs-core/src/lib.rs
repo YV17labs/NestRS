@@ -86,6 +86,7 @@ pub mod module;
 mod opaque;
 pub mod panic;
 pub mod request_scope;
+pub mod trace_context;
 pub mod transport;
 
 pub use access::{
@@ -107,8 +108,15 @@ pub use module::{DynamicModule, Module};
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
 pub use panic::panic_message;
 pub use request_scope::{
-    RequestScope, current_body_limit, current_request_scope, with_request_scope,
+    RequestContinuation, RequestScope, current_body_limit, current_request_scope,
+    with_request_scope,
 };
+pub use trace_context::{
+    Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,
+    current_span_id, current_trace_id, current_traceparent, current_tracestate,
+};
+#[doc(hidden)]
+pub use trace_context::{current_correlation, set_actor_id};
 pub use transport::{Transport, TransportContribution};
 
 // Cross-crate Layer-System wiring — `pub` for the five registry crates and
@@ -125,6 +133,13 @@ pub use module::__module_registered;
 // Re-exported so `#[hooks]`-generated `inventory::submit!` resolves through the
 // framework — apps never depend on `inventory` directly.
 pub use inventory;
+
+// Re-exported so `operation_span!` resolves `info_span!` and `field::Empty`
+// through the kernel rather than against the expanding crate's extern prelude.
+// Every framework crate happens to declare `tracing`, so this changes nothing
+// today — and the day one does not, the macro keeps working instead of failing
+// inside an expansion nobody can read.
+pub use tracing;
 
 // Re-exported so the `#[hooks]`-generated run-fn signature
 // (`anyhow::Result<()>`) resolves through the framework — a downstream app

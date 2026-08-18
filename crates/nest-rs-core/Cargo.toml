@@ -39,6 +39,9 @@ schemars.workspace = true
 validator.workspace = true
 # Request-scope cache lock — poison-free locking off the request hot path.
 parking_lot.workspace = true
+# `RequestId` is a UUID v7: time-ordered, so ids sort by arrival. In the kernel
+# because the correlation primitive cannot be optional — see `request_id.rs`.
+uuid.workspace = true
 
 [dev-dependencies]
 # `LogCapture`: the container's two survivable conflicts (a keyed override, a

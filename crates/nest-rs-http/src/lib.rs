@@ -6,6 +6,7 @@
 //! [`HttpTransport::mount`].
 #![warn(missing_docs)]
 
+mod access_log;
 mod boot_check;
 mod client_ip;
 mod config;
@@ -24,11 +25,13 @@ mod pipe;
 mod problem;
 mod raw_body;
 mod reflector;
+mod response_body;
 mod scope;
 mod security_headers;
 mod shaper;
 mod sse;
 mod tls;
+mod trace_context;
 mod transport;
 mod versioning;
 
@@ -55,6 +58,9 @@ pub use security_headers::SecurityHeadersConfig;
 pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};
 pub use sse::{SseEvent, SseSettings, SseStream};
 pub use tls::TlsConfig;
+pub use trace_context::{
+    TRACEPARENT_HEADER, TRACERESPONSE_HEADER, TRACESTATE_HEADER, UPSTREAM_REQUEST_ID_HEADER,
+};
 pub use transport::{
     HttpTransport, join_path, normalize_mount_path, version_path, versions_declare,
 };

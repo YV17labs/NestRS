@@ -101,9 +101,20 @@ pub(crate) fn init_fallback() -> Result<()> {
     let format = std::env::var(EnvPrefix::var("LOG_FORMAT")).ok();
     let _ = match LogFormat::resolve(format.as_deref()) {
         LogFormat::Text => builder.try_init(),
+        // `with_current_span(true)` is what puts the operation span's fields —
+        // `request_id`, and `actor_id` once authn resolved one — on every JSON
+        // line. It used to be `false`, on the reasoning that "the OTel export
+        // carries span structure": true of the *observability* subscriber, and
+        // false here, where there is no export to carry anything. JSON is also
+        // the release-profile default, so the effect was that a production
+        // build with no collector logged every denial with no way to tell who
+        // was denied.
+        //
+        // `with_span_list(false)` stays: the *ancestry* is what is verbose, and
+        // the immediate span is where the canonical fields live.
         LogFormat::Json => builder
             .json()
-            .with_current_span(false)
+            .with_current_span(true)
             .with_span_list(false)
             .try_init(),
     };

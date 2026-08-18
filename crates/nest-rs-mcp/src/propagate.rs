@@ -23,12 +23,17 @@
 //!
 //! # What each kind of operation gets
 //!
-//! | Kind | Request scope | Guard ability | Data context |
-//! |---|---|---|---|
-//! | Requests (`tools/call`, `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`, `tasks/*`, lifecycle, custom) | yes | yes | yes |
-//! | `subscriptions/listen` | yes | yes | no — it outlives any sane transaction |
-//! | Notifications | yes | no | no — nothing to commit or roll back on |
-//! | Synchronous accessors (`get_info`, `get_tool`, …) | — | — | — |
+//! | Kind | Request span | Request scope | Guard ability | Data context |
+//! |---|---|---|---|---|
+//! | Requests (`tools/call`, `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`, `tasks/*`, lifecycle, custom) | yes | yes | yes | yes |
+//! | `subscriptions/listen` | yes | yes | yes | no — it outlives any sane transaction |
+//! | Notifications | yes | yes | no | no — nothing to commit or roll back on |
+//! | Synchronous accessors (`get_info`, `get_tool`, …) | — | — | — | — |
+//!
+//! The span is in that table for the same reason the scope is: it is ambient
+//! request state, and everything dispatched here runs on a task the request did
+//! not create. A notification carries it too — it commits nothing, but the
+//! events it emits still belong to the request that sent it.
 
 // `subscribe` / `unsubscribe` are SEP-2575-deprecated in rmcp but still part of
 // the trait for legacy protocol versions; a wrapper must forward them or a
@@ -53,11 +58,11 @@ use rmcp::model::{
 use rmcp::service::{
     MaybeSendFuture, NotificationContext, RequestContext, RoleServer, SubscriptionContext,
 };
+use tracing::Instrument;
 
 use crate::McpError;
 use crate::context::{McpAmbient, McpToolContext, OperationOutcome, OperationValue};
 use crate::guard::{BoxFuture, McpOperationGuard};
-use crate::scope::maybe_with_request_scope;
 
 /// Wraps a tool host so each operation runs with the request scope, the
 /// operation guard's ambient state, and the registered [`McpToolContext`]'s
@@ -107,28 +112,61 @@ impl<H> PropagatingHandler<H> {
             scope,
             captured: context_captured,
             guard_captured,
+            span,
+            correlation,
         } = ambient;
+
+        // **An MCP operation is its own unit of work**, so it opens its own span
+        // rather than re-entering the HTTP request's. Under rmcp's default
+        // session mode one request carries many operations, and filing them all
+        // under the request that opened the session makes "what did this tool
+        // call do" unanswerable. The correlation is a `child()`: same trace, a
+        // fresh span, the request's span as its parent — the shape `ws.message`
+        // already had.
+        let correlation = correlation.child();
+        let operation = nest_rs_core::operation_span!(
+            target: "nest_rs::mcp",
+            kind: "server",
+            "mcp.operation",
+            &correlation,
+        );
 
         // One box, not two: the type erasure the guard's `around` needs and the
         // scope installation are the same future, and this runs on every MCP
         // operation.
         let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(async move {
-            maybe_with_request_scope(scope, inner)
+            nest_rs_core::with_request_scope(scope, correlation, None, inner)
                 .await
                 .map(OperationValue::new)
         });
 
-        let guarded = match &guard_captured {
-            Some(captured) => self.guard.around(captured, scoped),
-            None => scoped,
-        };
+        // Instrumented around the *outermost* composition, so the data context,
+        // the guard's `around` and the handler all inherit the request's span
+        // rather than only the innermost of them. Composing inside the block
+        // matters as much as awaiting inside it: an `around` that opens a span
+        // of its own does so when it is called, not when it is polled.
+        //
+        // A disabled span (nothing installed a subscriber, or no HTTP span is
+        // mounted) costs one branch per poll and no allocation, so this is not
+        // gated on anything.
+        async move {
+            let guarded = match &guard_captured {
+                Some(captured) => self.guard.around(captured, scoped),
+                None => scoped,
+            };
 
-        let outcome = match (context, &context_captured) {
-            (Some(context), Some(captured)) => context.around(captured, guarded).await,
-            _ => guarded.await,
-        };
-
-        outcome.and_then(OperationValue::take::<T>)
+            match (context, &context_captured) {
+                (Some(context), Some(captured)) => context.around(captured, guarded).await,
+                _ => guarded.await,
+            }
+        }
+        .instrument(operation)
+        // Inside the request's span, so the console still shows the operation
+        // nested under the request that carried it; the exported parent link is
+        // the correlation's, above.
+        .instrument(span)
+        .await
+        .and_then(OperationValue::take::<T>)
     }
 }
 
@@ -158,8 +196,10 @@ macro_rules! request_method {
     };
 }
 
-/// Delegate one notification: the request scope is installed so `Scoped<T>`
-/// resolves uniformly, and nothing else is — see the table in the module doc.
+/// Delegate one notification: the request span and scope are installed — the
+/// first so the notification's events are attributable, the second so
+/// `Scoped<T>` resolves uniformly — and nothing else is. See the table in the
+/// module doc.
 macro_rules! notification_method {
     ($name:ident ( $($arg:ident : $arg_ty:ty),* )) => {
         fn $name(
@@ -168,9 +208,11 @@ macro_rules! notification_method {
             context: NotificationContext<RoleServer>,
         ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
             async move {
-                let scope = McpAmbient::from_extensions(&context.extensions)
-                    .and_then(|ambient| ambient.scope);
-                maybe_with_request_scope(scope, self.inner.$name($($arg,)* context)).await
+                let McpAmbient { scope, span, correlation, .. } =
+                    McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
+                nest_rs_core::with_request_scope(scope, correlation, None, self.inner.$name($($arg,)* context))
+                    .instrument(span)
+                    .await
             }
         }
     };

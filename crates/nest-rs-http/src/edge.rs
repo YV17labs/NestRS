@@ -35,6 +35,7 @@
 //! CORS / compression the wrap stays outermost, unchanged.
 
 use std::future::{Future, poll_fn};
+use std::net::IpAddr;
 use std::pin::pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -43,14 +44,33 @@ use std::task::Poll;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use nest_rs_core::{Container, RequestScope, with_request_scope};
+use nest_rs_core::{Container, RequestContinuation, RequestScope};
 use poem::error::ReadBodyError;
 use poem::http::uri::{PathAndQuery, Uri};
 use poem::http::{HeaderName, HeaderValue, StatusCode};
 use poem::web::headers::{ContentLength, HeaderMapExt};
-use poem::{Body, Endpoint, IntoResponse, Request, Response, Result};
+use poem::{Body, Endpoint, IntoResponse, PathPattern, Request, Response, Result};
 
+use tracing::Instrument;
+
+use crate::access_log::AccessLog;
+use crate::client_ip::{ClientIp, ClientOrigin};
 use crate::location::CallerUri;
+use crate::{response_body, trace_context};
+
+/// The route template poem's router matched, off whichever shape came back.
+///
+/// It is attached to the response *and* to the error, so a 404 that never
+/// reached a controller and a handler's `Err` are both answerable — and a
+/// request that matched nothing yields `None`, which is the honest answer rather
+/// than the path it was aiming at.
+fn matched_route(result: &Result<Response>) -> Option<&str> {
+    let pattern = match result {
+        Ok(resp) => resp.data::<PathPattern>(),
+        Err(err) => err.data::<PathPattern>(),
+    };
+    pattern.map(|PathPattern(pattern)| &**pattern)
+}
 
 /// A bare status-only response — the edge's own rejections (`413`, `504`).
 fn bare(status: StatusCode) -> Response {
@@ -188,6 +208,15 @@ pub(crate) struct EdgeEndpoint<E> {
     /// hyper's length decoder already bounds the body and the count could never
     /// fire.
     counts_body: bool,
+    /// Whether a request is filed. From `HttpConfig.access_log`; `true` by
+    /// default, and the only thing this toggle decides — the correlation id is
+    /// resolved, installed and echoed on every request regardless.
+    access_log: bool,
+    /// `HttpConfig.trusted_proxies`, shared rather than copied per request.
+    /// Transport state, not the access log's: it is what decides whether an
+    /// inbound `X-Forwarded-For` **or** `X-Request-Id` may be believed, and both
+    /// answers are needed whether or not a line is emitted.
+    trusted_proxies: Arc<[IpAddr]>,
 }
 
 impl<E> EdgeEndpoint<E> {
@@ -202,6 +231,19 @@ impl<E> EdgeEndpoint<E> {
     ) -> Self {
         let shared_scope = (!container.has_dynamic_scopes())
             .then(|| Arc::new(RequestScope::new(container.clone())));
+        // Read once, at boot, from the container the edge already holds — rather
+        // than threaded through the transport as two more constructor
+        // arguments. `ClientOrigin::of` reads the same list off the same place
+        // per request; the edge cannot, because it runs *before* the request
+        // scope that lookup goes through exists. An app with no `HttpConfig` —
+        // an imperatively built transport, a unit test — takes the answer the
+        // defaults describe: the line is on, nothing is trusted.
+        let config = container.get::<crate::HttpConfig>();
+        let access_log = config.as_deref().is_none_or(|config| config.access_log);
+        let trusted_proxies = config.as_deref().map_or_else(
+            || Arc::from([]),
+            |config| config.trusted_proxies.as_slice().into(),
+        );
         Self {
             inner,
             container,
@@ -211,6 +253,8 @@ impl<E> EdgeEndpoint<E> {
             headers,
             normalize,
             counts_body,
+            access_log,
+            trusted_proxies,
         }
     }
 
@@ -228,7 +272,18 @@ where
     E: Endpoint,
     E::Output: IntoResponse,
 {
-    async fn handle(&self, mut req: Request) -> Result<Response> {
+    /// The inner tree, under the ambient context `call` built.
+    ///
+    /// The context arrives already assembled rather than being opened here,
+    /// because `call` installs it a second time — around the response *body*,
+    /// which is written after this future has returned. **One value, installed
+    /// twice**, so the two cannot come to disagree about what the request was and
+    /// neither install pays for re-assembling it.
+    async fn handle(
+        &self,
+        mut req: Request,
+        continuation: &RequestContinuation,
+    ) -> Result<Response> {
         // Trailing-slash normalization, before anything routes on the path.
         // `/kitchen` and `/kitchen/` are the same resource; the router is
         // exact-match, so without this the second one 404s — and a 404 leaves
@@ -297,13 +352,6 @@ where
             }
         }
 
-        // Request scope + configured cap, ambient for everything inward —
-        // guards, extractors, the data layer, global pipes.
-        let scope = match &self.shared_scope {
-            Some(shared) => Arc::clone(shared),
-            None => Arc::new(RequestScope::new(self.container.clone())),
-        };
-
         // Timeout around the inner tree — guards / interceptors / handler
         // are all bounded; the edge's own header work is not. The timer arms
         // lazily: the inner future is polled once bare, and only a `Pending`
@@ -312,7 +360,7 @@ where
         // wheel entry, with identical semantics: a timeout only ever fires
         // at an await point, so the synchronous prefix was never
         // interruptible under the eager timer either.
-        let inner = with_request_scope(scope, self.body_limit, self.inner.call(req));
+        let inner = continuation.scope(self.inner.call(req));
         let result = match self.timeout {
             Some(timeout) => {
                 let mut inner = pin!(inner);
@@ -352,19 +400,92 @@ where
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Response> {
-        let result = self.handle(req).await;
-        if !self.normalize {
-            return result;
-        }
-        // The transport-edge error boundary this edge absorbs when it is the
-        // outermost layer: an `Err` escaping the inner tree renders without
-        // the header stamp (exactly as the standalone `.around` wrap saw it),
-        // then any raw transport error is lifted onto `problem+json`.
-        let resp = match result {
-            Ok(resp) => resp,
-            Err(err) => err.into_response(),
+        // Decided before anything else runs: everything below — the ambient
+        // context, the echoed header, the access line — has to agree on one id,
+        // and the only way to guarantee that is to resolve it once, here. The
+        // client origin is resolved first because the id's gate reads it: one
+        // proxy list, one trust decision, two consumers.
+        let origin = ClientOrigin::of_with(&req, &self.trusted_proxies);
+        let client = ClientIp::from(origin);
+        let correlation = trace_context::resolve(&req, origin);
+        let user_agent = trace_context::user_agent(&req);
+        // The operation span, opened here and **not** gated on anything. It is
+        // what carries `request_id` onto every event below, and what declares
+        // the `actor_id` field the authn guard records into — a span that only
+        // exists when an observability crate is installed makes both of those
+        // optional, which is the defect this replaces.
+        let span = trace_context::request_span(&req, &correlation, &client, origin, user_agent);
+        // Kept because `req` is about to be consumed and the span's name needs it
+        // once the router has answered — one clone of a `Method`, which is an
+        // enum for every standard verb.
+        let method = req.method().clone();
+        // Opened before the request is consumed, because only the request can
+        // answer what it was. `None` when the line is off — one `Option`, and
+        // nothing else on the path pays for a disabled access log.
+        let log = self
+            .access_log
+            .then(|| AccessLog::open(&req, correlation.clone(), client, user_agent));
+
+        // Request scope + configured cap, ambient for everything inward —
+        // guards, extractors, the data layer, global pipes — and for the
+        // response body afterwards. Assembled here rather than inside `handle`
+        // because a streaming body outlives that future, and what it continues
+        // is *this* request, not a reconstruction of it.
+        let scope = match &self.shared_scope {
+            Some(shared) => Arc::clone(shared),
+            None => Arc::new(RequestScope::new(self.container.clone())),
         };
-        Ok(crate::problem::normalize_error_response(resp).await)
+        let continuation =
+            RequestContinuation::new(Some(scope), correlation.clone(), self.body_limit);
+
+        let result = self
+            .handle(req, &continuation)
+            .instrument(span.clone())
+            .await;
+        // Read here, before anything renders an `Err` into a `Response`: poem's
+        // router attaches the matched template to whichever of the two came back,
+        // and rendering builds a fresh response that carries none of it. This is
+        // the only point where both shapes are still in hand.
+        trace_context::name_route(&span, &method, matched_route(&result));
+        let result = if self.normalize {
+            // The transport-edge error boundary this edge absorbs when it is the
+            // outermost layer: an `Err` escaping the inner tree renders without
+            // the header stamp (exactly as the standalone `.around` wrap saw it),
+            // then any raw transport error is lifted onto `problem+json`.
+            let resp = match result {
+                Ok(resp) => resp,
+                Err(err) => err.into_response(),
+            };
+            Ok(crate::problem::normalize_error_response(resp).await)
+        } else {
+            result
+        };
+
+        match result {
+            Ok(mut resp) => {
+                // Always, whatever the access log is set to: the status is what
+                // an exported server span is read for, and it costs one record.
+                span.record("http.response.status_code", resp.status().as_u16());
+                trace_context::stamp(&correlation, &mut resp);
+                // Unconditional, unlike the log it may or may not carry: a
+                // streaming body is the request still running, and what
+                // `current_request_id()` answers inside one cannot depend on
+                // whether an operator wanted an access line.
+                Ok(response_body::carry(continuation, span, log, resp))
+            }
+            // Only reachable with CORS or compression configured, where a wrap
+            // outside this one renders the error. The request is still filed —
+            // a request that failed is exactly the one an operator looks for,
+            // and it would be the only status class silently missing from the
+            // log.
+            Err(err) => {
+                span.record("http.response.status_code", err.status().as_u16());
+                if let Some(log) = log {
+                    log.abandoned(err.status().as_u16());
+                }
+                Err(err)
+            }
+        }
     }
 }
 

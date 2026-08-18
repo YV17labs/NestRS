@@ -12,7 +12,7 @@
 //! failing closed — so the assertion is on what the tool body actually saw,
 //! not on the transport succeeding.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use nest_rs_core::{Container, RequestScope};
 use nest_rs_mcp::{
@@ -22,6 +22,7 @@ use nest_rs_mcp::{
 use nest_rs_testing::mcp::call_tool;
 use poem::test::TestClient;
 use poem::{Endpoint, EndpointExt, IntoEndpoint};
+use tracing::Instrument;
 
 /// A request-scoped provider the tool tries to resolve. Its presence is the
 /// signal; nothing reads the payload.
@@ -58,7 +59,10 @@ fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
     poem::endpoint::make(move |req| {
         let inner = Arc::clone(&inner);
         let scope = Arc::new(RequestScope::new(container.clone()));
-        async move { nest_rs_core::with_request_scope(scope, None, inner.call(req)).await }
+        let correlation = nest_rs_core::Correlation::mint();
+        async move {
+            nest_rs_core::with_request_scope(Some(scope), correlation, None, inner.call(req)).await
+        }
     })
 }
 
@@ -76,5 +80,114 @@ async fn ambient_request_scope_reaches_a_tool_body() {
         body.contains("scoped") && !body.contains("unscoped"),
         "the request scope must reach the tool body across rmcp's spawn — \
          `Scoped<T>` and every `Repo`-backed tool depend on it. Body: {body}",
+    );
+}
+
+/// The span identity a tool body ran under, reported back to the test.
+/// What the tool body observed: the span it ran under, and the trace it was
+/// filed in.
+type SeenSpan = Arc<Mutex<Option<(Option<&'static str>, Option<String>)>>>;
+
+#[derive(Clone)]
+struct SpanProbeTool {
+    seen: SeenSpan,
+}
+
+#[tool_router]
+impl SpanProbeTool {
+    /// Records the ambient span rather than asserting on it: the tool body is
+    /// the only place that can answer what the dispatch installed.
+    #[tool(description = "Record the span this tool body ran under.")]
+    async fn probe_span(&self) -> Result<CallToolResult, McpError> {
+        *self.seen.lock().expect("probe lock") = Some((
+            tracing::Span::current().metadata().map(|meta| meta.name()),
+            nest_rs_core::current_trace_id().map(|id| id.to_hex()),
+        ));
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            "recorded",
+        )]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for SpanProbeTool {}
+
+/// Mirrors what the HTTP transport's outermost band does: run the whole request
+/// under one span, the way the OTel interceptor's `http.request` wraps
+/// everything below it.
+fn under_span(inner: impl IntoEndpoint, span: tracing::Span) -> impl Endpoint {
+    let inner = Arc::new(inner.into_endpoint().map_to_response());
+    poem::endpoint::make(move |req| {
+        let inner = Arc::clone(&inner);
+        let span = span.clone();
+        async move { inner.call(req).instrument(span).await }
+    })
+}
+
+#[tokio::test]
+async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
+    // A subscriber, so spans have identities at all. Thread-local is enough:
+    // `#[tokio::test]` is a current-thread runtime, so rmcp's spawned dispatch
+    // stays on this thread.
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let seen: SeenSpan = Arc::default();
+    let host = SpanProbeTool { seen: seen.clone() };
+    let guard = Arc::new(AllowAllMcpGuard) as Arc<dyn McpOperationGuard>;
+    let app = under_span(
+        endpoint(McpMount::deny_all().with_guard(guard), move || host.clone()),
+        tracing::info_span!("http.request"),
+    );
+
+    call_tool(&TestClient::new(app), "/", "probe_span", None).await;
+
+    let (span_name, trace_id) = seen
+        .lock()
+        .expect("probe lock")
+        .clone()
+        .expect("the tool ran and reported what it ran under");
+
+    // rmcp dispatches every operation on a spawned task, so without the ambient
+    // being carried across it every event a tool and the services below it emit
+    // is rooted at the spawn — attributable to no request at all.
+    assert_eq!(
+        span_name,
+        Some("mcp.operation"),
+        "an MCP operation is its own unit of work, not a second name for the \
+         request that carried it — under rmcp's session mode one request carries \
+         many, and filing them together makes \"what did this call do\" unanswerable",
+    );
+    let operations: Vec<_> = logs
+        .spans()
+        .into_iter()
+        .filter(|span| span.target == "nest_rs::mcp" && span.name == "mcp.operation")
+        .collect();
+    // The handshake and the call are separate operations, so several spans are
+    // captured — which is itself the point: each is its own unit of work.
+    let spans: std::collections::HashSet<_> = operations
+        .iter()
+        .filter_map(|span| span.field("span_id"))
+        .collect();
+    assert_eq!(
+        spans.len(),
+        operations.len(),
+        "no two operations share a span id: {operations:?}",
+    );
+    assert!(
+        operations
+            .iter()
+            .all(|span| span.field("parent_span_id").is_some()),
+        "each naming the request that carried it — the causal edge a flat id \
+         could not express: {operations:?}",
+    );
+
+    let ran_under = operations
+        .iter()
+        .find(|span| span.field("trace_id").as_deref() == trace_id.as_deref())
+        .unwrap_or_else(|| panic!("the tool's own trace has a span: {operations:?}"));
+    assert_ne!(
+        ran_under.field("span_id"),
+        ran_under.field("parent_span_id"),
+        "the operation is not a second name for the request that carried it",
     );
 }

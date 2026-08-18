@@ -1,7 +1,8 @@
 //! Live-Redis e2e for `nest-rs-redis`. One module per concern in `src/`:
 //! [`throttler`] for the cross-process rate-limit store, [`concurrency`] and
-//! [`replicas`] for the worker's fetch guarantees, [`portable_producer`] for the
-//! two names `QueueModule::for_root` binds.
+//! [`replicas`] for the worker's fetch guarantees, [`correlation`] for the
+//! `request_id` that crosses the producer/consumer process boundary, and
+//! [`portable_producer`] for the two names `QueueModule::for_root` binds.
 //!
 //! Needs a reachable Redis — gated out of `unit` by the nextest `binary(e2e)`
 //! filter, and behind the `throttler` feature (off by default, so producer /
@@ -18,6 +19,7 @@
 //! module named for the concern it covers.
 
 mod concurrency;
+mod correlation;
 mod portable_producer;
 mod replicas;
 mod throttler;

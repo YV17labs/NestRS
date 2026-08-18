@@ -98,8 +98,9 @@ pub trait McpToolContext: Send + Sync + 'static {
 }
 
 /// The value the endpoint puts in the HTTP request extensions so it survives
-/// into rmcp's per-operation `RequestContext`. Cheap to clone (three `Arc`s).
-#[derive(Clone, Default)]
+/// into rmcp's per-operation `RequestContext`. Cheap to clone (three `Arc`s and
+/// a span handle).
+#[derive(Clone)]
 pub(crate) struct McpAmbient {
     /// The per-request scope backing [`Scoped<T>`](crate::Scoped).
     pub(crate) scope: Option<Arc<RequestScope>>,
@@ -109,6 +110,43 @@ pub(crate) struct McpAmbient {
     /// [`McpOperationGuard`](crate::McpOperationGuard) snapshotted — the
     /// caller's ability, for the canonical bridge.
     pub(crate) guard_captured: Option<Captured>,
+    /// The span the request arrived under. A span is ambient request state
+    /// exactly as the three above are, and rmcp dispatches every operation on
+    /// its own spawned task — so without carrying it explicitly, a tool's
+    /// events and every service event below it are rooted at the spawn rather
+    /// than at the request that caused them.
+    ///
+    /// It held incidentally until now, and only on one path: rmcp instruments
+    /// its serve loop with whatever span was current where the loop was
+    /// *created*, which is the request task in stateless mode and a bare
+    /// `tokio::spawn` in session mode — where the chain breaks outright.
+    /// Carrying it here makes the propagation a property of this crate rather
+    /// than of a dependency's internals.
+    pub(crate) span: tracing::Span,
+    /// What the HTTP request this operation arrived in is filed under — its id,
+    /// and the actor once the endpoint guard resolved one — so a tool body reads
+    /// the same answers the access log did.
+    pub(crate) correlation: nest_rs_core::Correlation,
+}
+
+impl Default for McpAmbient {
+    /// Hand-written because `tracing::Span` has no `Default`: the empty ambient
+    /// state is a *disabled* span, which costs nothing to enter and keeps the
+    /// no-subscriber and no-request paths free of a branch.
+    ///
+    /// The id is **minted** rather than left empty. This is the path where no
+    /// HTTP edge was found, and an operation with no id is one whose events
+    /// cannot be grouped at all — a fresh id groups them with each other, which
+    /// is strictly more than nothing.
+    fn default() -> Self {
+        Self {
+            scope: None,
+            captured: None,
+            guard_captured: None,
+            span: tracing::Span::none(),
+            correlation: nest_rs_core::Correlation::mint(),
+        }
+    }
 }
 
 impl McpAmbient {

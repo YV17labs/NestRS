@@ -83,10 +83,14 @@ mod tests {
         let scope = Arc::new(RequestScope::new(container));
 
         let (req, mut body) = Request::default().split();
-        let scoped: Scoped<Marker> =
-            crate::with_request_scope(scope, None, Scoped::from_request(&req, &mut body))
-                .await
-                .expect("resolves via singleton fallback");
+        let scoped: Scoped<Marker> = crate::with_request_scope(
+            Some(scope),
+            nest_rs_core::Correlation::mint(),
+            None,
+            Scoped::from_request(&req, &mut body),
+        )
+        .await
+        .expect("resolves via singleton fallback");
         assert_eq!(scoped.0.0, "registered");
     }
 
@@ -117,7 +121,8 @@ mod tests {
 
         let (req, mut body) = Request::default().split();
         let err = match crate::with_request_scope(
-            scope,
+            Some(scope),
+            nest_rs_core::Correlation::mint(),
             None,
             Scoped::<Marker>::from_request(&req, &mut body),
         )

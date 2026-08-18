@@ -16,6 +16,7 @@ use nest_rs_worker::{JobContext, JobTransaction, Unhonoured, run_in_job_context}
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval, sleep};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use crate::{CronJobMeta, RunFn, ScheduledMethod, Trigger};
 
@@ -309,6 +310,38 @@ fn next_delay(schedule: &Cron, tz: Option<Tz>) -> Option<Duration> {
 }
 
 async fn fire(id: JobId, task: Task, container: &Container, ctx: &Option<Arc<dyn JobContext>>) {
+    // A tick is a unit of work with no upstream — nothing enqueued it and no
+    // caller is waiting — so it mints its own id rather than inheriting one.
+    // That is the whole of what makes a scheduled job's events attributable: a
+    // job that enqueues work seals this id into the payload, so the worker that
+    // picks it up files under the tick that caused it.
+    let correlation = nest_rs_core::Correlation::mint();
+    let span = nest_rs_core::operation_span!(
+        target: "nest_rs::schedule",
+        // No caller and no wire: the clock is not a producer.
+        kind: "internal",
+        "scheduled job",
+        &correlation,
+        provider = id.provider,
+        method = id.method,
+    );
+    let scope = Arc::new(nest_rs_core::RequestScope::new(container.clone()));
+    nest_rs_core::with_request_scope(
+        Some(scope),
+        correlation,
+        None,
+        fire_inner(id, task, container, ctx),
+    )
+    .instrument(span)
+    .await
+}
+
+async fn fire_inner(
+    id: JobId,
+    task: Task,
+    container: &Container,
+    ctx: &Option<Arc<dyn JobContext>>,
+) {
     // Isolate the fire: a panic in the user method (or the `.expect` the
     // `#[scheduled]` macro emits when the provider is missing) would otherwise
     // unwind this job's task and — since `serve` drops the `JoinError` — stop

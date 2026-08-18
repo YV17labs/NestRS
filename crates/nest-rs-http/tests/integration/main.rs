@@ -10,10 +10,12 @@ mod fail_secure;
 mod global_prefix;
 mod header;
 mod input;
+mod response_body;
 mod route_decorators;
 mod security_headers;
 mod sse;
 mod tls;
+mod trace_context;
 mod versioning;
 
 use nest_rs_core::{App, Module, Transport};

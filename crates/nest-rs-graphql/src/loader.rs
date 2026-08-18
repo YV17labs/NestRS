@@ -14,7 +14,7 @@ use async_graphql::extensions::{
     Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest,
 };
 use async_graphql::{Request, ServerResult};
-use nest_rs_core::{Container, ReachableProviders};
+use nest_rs_core::{Container, ReachableProviders, RequestContinuation};
 
 /// One DataLoader registration. `owner_type_id` is the `TypeId` of the
 /// `#[dataloader]` impl's `Self`; when the owner is not in
@@ -59,12 +59,42 @@ pub trait GraphqlBatchContext: Send + Sync + 'static {
 
 #[doc(hidden)]
 pub fn batch_spawner(container: &Container) -> GraphqlBatchSpawner {
-    match container.get_dyn::<dyn GraphqlBatchContext>() {
+    let inner = match container.get_dyn::<dyn GraphqlBatchContext>() {
         Some(ctx) => ctx.spawner(),
         None => Box::new(|fut| {
             tokio::spawn(fut);
         }),
-    }
+    };
+    instrumented(inner)
+}
+
+/// Carry the request across the batch's task boundary, whatever the registered
+/// context does with the future otherwise.
+///
+/// A batch runs the loader's SQL, so its statements, its `Repo` denials and its
+/// errors are events of the request that asked for the field. Spawned bare they
+/// were rooted at nothing — the same defect MCP had across rmcp's spawn, at a
+/// site nobody looks at because the relation still resolves.
+///
+/// **Both halves cross, and neither substitutes for the other.** The span is what
+/// puts `trace_id` on the events a batch emits; the ambient context is what makes
+/// `current_trace_id()` answer inside it, and a queue push from a loader seal the
+/// right envelope. Carrying only the span left the events *looking* correlated
+/// while every accessor below answered `None` — the more expensive failure of the
+/// two, because it reads as covered.
+///
+/// Wrapping *here*, rather than asking every `GraphqlBatchContext` implementor
+/// to remember it, is the point: this is the one seam every batch goes through,
+/// bound or unbound.
+fn instrumented(inner: GraphqlBatchSpawner) -> GraphqlBatchSpawner {
+    Box::new(move |fut| {
+        let span = tracing::Span::current();
+        let carried: crate::BoxFuture<'static, ()> = match RequestContinuation::current() {
+            Some(request) => Box::pin(async move { request.scope(fut).await }),
+            None => fut,
+        };
+        inner(Box::pin(tracing::Instrument::instrument(carried, span)));
+    })
 }
 
 /// Seeds every discovered DataLoader into each GraphQL request.

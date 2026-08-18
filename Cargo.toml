@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "4.0.0"
+version = "5.0.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.96"
@@ -41,7 +41,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 opentelemetry-otlp = "0.32"
-opentelemetry-http = "0.32"
 opentelemetry-semantic-conventions = { version = "0.32", features = ["semconv_experimental"] }
 opentelemetry-appender-tracing = "0.32"
 tracing-opentelemetry = "0.33"
@@ -83,10 +82,20 @@ object_store = { version = "0.14", features = ["aws"] }
 # direct dep keeps nest-rs-storage off whichever reqwest minor object_store pins.
 http = "1.5"
 
-# The access log wraps poem's body stream in a byte counter to report the exact
-# size sent (poem stamps Content-Length past the interceptor).
+# The access log counts the response bytes actually sent. Counting means wrapping
+# the body, and the wrapper has to be an `http_body::Body` that **forwards
+# `size_hint`**: hyper picks the framing from `size_hint().exact()`, so a wrapper
+# that drops it turns every response into `Transfer-Encoding: chunked`. poem's
+# only public stream constructor (`Body::from_bytes_stream`) does drop it, which
+# is why the count goes through the trait rather than through poem's own seam —
+# `Body` converts to and from `http_body_util`'s `BoxBody` in public impls.
+#
+# Neither crate is new to the build: poem and object_store both compile them
+# already. These two lines name what `nest-rs-http`'s own source now writes.
+http-body = "1.1"
+http-body-util = "0.1"
+
 bytes = "1.12"
-futures-core = "0.3"
 futures-util = "0.3"
 
 async-trait = "0.1"
@@ -119,7 +128,7 @@ inventory = "0.3"
 argon2 = "0.5"
 validator = { version = "0.21", features = ["derive"] }
 # `serde` so UUID-keyed entity rows serialize for the authz response masker.
-uuid = { version = "1.24", features = ["v7", "serde"] }
+uuid = { version = "1.24", features = ["v4", "v7", "serde"] }
 
 # EXACT pin (`=`), not a caret range: sea-orm types saturate the ORM public
 # surface (`Repo` bounds, `Executor`'s `ConnectionTrait`, `ServiceError::Db`),
@@ -194,47 +203,47 @@ libc = "0.2"
 
 # Internal crates. Kebab-case everywhere (the crates.io form); Cargo's default
 # hyphen→underscore mapping gives the `nest_rs_*` import paths the macros emit.
-nest-rs-core = { version = "4.0.0", path = "crates/nest-rs-core" }
-nest-rs-authn = { version = "4.0.0", path = "crates/nest-rs-authn" }
-nest-rs-throttler = { version = "4.0.0", path = "crates/nest-rs-throttler" }
-nest-rs-config = { version = "4.0.0", path = "crates/nest-rs-config" }
-nest-rs-config-macros = { version = "4.0.0", path = "crates/nest-rs-config-macros" }
-nest-rs-events = { version = "4.0.0", path = "crates/nest-rs-events" }
-nest-rs-events-macros = { version = "4.0.0", path = "crates/nest-rs-events-macros" }
-nest-rs-authz = { version = "4.0.0", path = "crates/nest-rs-authz" }
-nest-rs-codegen = { version = "4.0.0", path = "crates/nest-rs-codegen" }
-nest-rs-core-macros = { version = "4.0.0", path = "crates/nest-rs-core-macros" }
-nest-rs-graphql = { version = "4.0.0", path = "crates/nest-rs-graphql" }
-nest-rs-graphql-macros = { version = "4.0.0", path = "crates/nest-rs-graphql-macros" }
-nest-rs-guards = { version = "4.0.0", path = "crates/nest-rs-guards" }
-nest-rs-health = { version = "4.0.0", path = "crates/nest-rs-health" }
-nest-rs-health-macros = { version = "4.0.0", path = "crates/nest-rs-health-macros" }
-nest-rs-http = { version = "4.0.0", path = "crates/nest-rs-http" }
-nest-rs-http-macros = { version = "4.0.0", path = "crates/nest-rs-http-macros" }
-nest-rs-mcp = { version = "4.0.0", path = "crates/nest-rs-mcp" }
-nest-rs-mcp-macros = { version = "4.0.0", path = "crates/nest-rs-mcp-macros" }
-nest-rs-interceptors = { version = "4.0.0", path = "crates/nest-rs-interceptors" }
-nest-rs-filters = { version = "4.0.0", path = "crates/nest-rs-filters" }
-nest-rs-exception-filters = { version = "4.0.0", path = "crates/nest-rs-exception-filters" }
-nest-rs-openapi = { version = "4.0.0", path = "crates/nest-rs-openapi" }
-nest-rs-database = { version = "4.0.0", path = "crates/nest-rs-database" }
-nest-rs-seaorm = { version = "4.0.0", path = "crates/nest-rs-seaorm" }
-nest-rs-pipes = { version = "4.0.0", path = "crates/nest-rs-pipes" }
-nest-rs-queue = { version = "4.0.0", path = "crates/nest-rs-queue" }
-nest-rs-queue-macros = { version = "4.0.0", path = "crates/nest-rs-queue-macros" }
-nest-rs-redis = { version = "4.0.0", path = "crates/nest-rs-redis" }
-nest-rs-resource = { version = "4.0.0", path = "crates/nest-rs-resource" }
-nest-rs-resource-macros = { version = "4.0.0", path = "crates/nest-rs-resource-macros" }
-nest-rs-schedule = { version = "4.0.0", path = "crates/nest-rs-schedule" }
-nest-rs-schedule-macros = { version = "4.0.0", path = "crates/nest-rs-schedule-macros" }
-nest-rs-server-timing = { version = "4.0.0", path = "crates/nest-rs-server-timing" }
-nest-rs-social = { version = "4.0.0", path = "crates/nest-rs-social" }
-nest-rs-opentelemetry = { version = "4.0.0", path = "crates/nest-rs-opentelemetry" }
-nest-rs-testing = { version = "4.0.0", path = "crates/nest-rs-testing" }
-nest-rs-storage = { version = "4.0.0", path = "crates/nest-rs-storage" }
-nest-rs-worker = { version = "4.0.0", path = "crates/nest-rs-worker" }
-nest-rs-ws = { version = "4.0.0", path = "crates/nest-rs-ws" }
-nest-rs-ws-macros = { version = "4.0.0", path = "crates/nest-rs-ws-macros" }
+nest-rs-core = { version = "5.0.0", path = "crates/nest-rs-core" }
+nest-rs-authn = { version = "5.0.0", path = "crates/nest-rs-authn" }
+nest-rs-throttler = { version = "5.0.0", path = "crates/nest-rs-throttler" }
+nest-rs-config = { version = "5.0.0", path = "crates/nest-rs-config" }
+nest-rs-config-macros = { version = "5.0.0", path = "crates/nest-rs-config-macros" }
+nest-rs-events = { version = "5.0.0", path = "crates/nest-rs-events" }
+nest-rs-events-macros = { version = "5.0.0", path = "crates/nest-rs-events-macros" }
+nest-rs-authz = { version = "5.0.0", path = "crates/nest-rs-authz" }
+nest-rs-codegen = { version = "5.0.0", path = "crates/nest-rs-codegen" }
+nest-rs-core-macros = { version = "5.0.0", path = "crates/nest-rs-core-macros" }
+nest-rs-graphql = { version = "5.0.0", path = "crates/nest-rs-graphql" }
+nest-rs-graphql-macros = { version = "5.0.0", path = "crates/nest-rs-graphql-macros" }
+nest-rs-guards = { version = "5.0.0", path = "crates/nest-rs-guards" }
+nest-rs-health = { version = "5.0.0", path = "crates/nest-rs-health" }
+nest-rs-health-macros = { version = "5.0.0", path = "crates/nest-rs-health-macros" }
+nest-rs-http = { version = "5.0.0", path = "crates/nest-rs-http" }
+nest-rs-http-macros = { version = "5.0.0", path = "crates/nest-rs-http-macros" }
+nest-rs-mcp = { version = "5.0.0", path = "crates/nest-rs-mcp" }
+nest-rs-mcp-macros = { version = "5.0.0", path = "crates/nest-rs-mcp-macros" }
+nest-rs-interceptors = { version = "5.0.0", path = "crates/nest-rs-interceptors" }
+nest-rs-filters = { version = "5.0.0", path = "crates/nest-rs-filters" }
+nest-rs-exception-filters = { version = "5.0.0", path = "crates/nest-rs-exception-filters" }
+nest-rs-openapi = { version = "5.0.0", path = "crates/nest-rs-openapi" }
+nest-rs-database = { version = "5.0.0", path = "crates/nest-rs-database" }
+nest-rs-seaorm = { version = "5.0.0", path = "crates/nest-rs-seaorm" }
+nest-rs-pipes = { version = "5.0.0", path = "crates/nest-rs-pipes" }
+nest-rs-queue = { version = "5.0.0", path = "crates/nest-rs-queue" }
+nest-rs-queue-macros = { version = "5.0.0", path = "crates/nest-rs-queue-macros" }
+nest-rs-redis = { version = "5.0.0", path = "crates/nest-rs-redis" }
+nest-rs-resource = { version = "5.0.0", path = "crates/nest-rs-resource" }
+nest-rs-resource-macros = { version = "5.0.0", path = "crates/nest-rs-resource-macros" }
+nest-rs-schedule = { version = "5.0.0", path = "crates/nest-rs-schedule" }
+nest-rs-schedule-macros = { version = "5.0.0", path = "crates/nest-rs-schedule-macros" }
+nest-rs-server-timing = { version = "5.0.0", path = "crates/nest-rs-server-timing" }
+nest-rs-social = { version = "5.0.0", path = "crates/nest-rs-social" }
+nest-rs-opentelemetry = { version = "5.0.0", path = "crates/nest-rs-opentelemetry" }
+nest-rs-testing = { version = "5.0.0", path = "crates/nest-rs-testing" }
+nest-rs-storage = { version = "5.0.0", path = "crates/nest-rs-storage" }
+nest-rs-worker = { version = "5.0.0", path = "crates/nest-rs-worker" }
+nest-rs-ws = { version = "5.0.0", path = "crates/nest-rs-ws" }
+nest-rs-ws-macros = { version = "5.0.0", path = "crates/nest-rs-ws-macros" }
 
 # Every crate opts in with `[lints] workspace = true`, so `unsafe` is a compile
 # error in libs AND test targets. Three crates keep a source-level attribute

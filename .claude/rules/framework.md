@@ -778,6 +778,14 @@ name order; init failure aborts boot, shutdown is best-effort.
   `#[response_header]` all shape a response that *completes*), and
   `#[api(response_content_type)]`.
 
+  **Correlation is not among what it owns, and that is the point.** An SSE
+  stream is polled after the handler returned, so its events once filed under no
+  request at all — closed at the *body*, in `response_body.rs`, which wraps every
+  streaming response the transport serves. `#[sse]` is the loudest member of that
+  family and was never the scope of the fix: a hand-built `Body::from_bytes_stream`
+  is the same gap, and closing it at the decorator would have left the other one
+  open. See *Correlation* in `CLAUDE.md`.
+
   **The stream ceiling lives in `HttpConfig`, and the namespace is the whole
   argument.** `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS` is the third instance of
   one security control — a long-lived connection authenticates once and then

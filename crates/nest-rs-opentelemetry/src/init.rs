@@ -71,6 +71,10 @@ impl OpenTelemetry {
         {
             let exporters = crate::otlp::build(&config)?;
             let otel_layer = tracing_opentelemetry::layer().with_tracer(exporters.tracer);
+            // Every span the framework opens, at every edge — see `linker`. It
+            // is seeded here rather than mounted as a module because a queue
+            // worker imports no transport and would otherwise get nothing.
+            crate::linker::install();
 
             // Bridge only when an exporter is present; otherwise it pays the
             // per-event cost just to drop the event.
@@ -155,11 +159,17 @@ where
             .with_file(source_location)
             .with_line_number(source_location)
             .boxed(),
+        // The current span carries the canonical fields (`request_id`,
+        // `actor_id`), so it stays on the line: an OTLP endpoint is optional
+        // even with this crate installed, and a console line that can only be
+        // attributed by joining against an export nobody configured is a line
+        // nobody can attribute. The span *list* — the ancestry — is the verbose
+        // half, and that is what the export is genuinely better at.
         LogFormat::Json => tracing_subscriber::fmt::layer()
             .with_file(source_location)
             .with_line_number(source_location)
             .json()
-            .with_current_span(false)
+            .with_current_span(true)
             .with_span_list(false)
             .boxed(),
     }

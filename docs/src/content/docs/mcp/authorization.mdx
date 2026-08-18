@@ -51,9 +51,20 @@ under the trace of the HTTP request it arrived on and carrying the `actor_id`
 the authn guard resolved — a model calling a tool is still a caller you can
 name afterwards.
 
+Every operation files its own line, and that matters more here than on a request
+edge: rmcp addresses many operations over one HTTP request, so the endpoint's
+access line names the session and would say nothing about the work.
+
 ```text frame="terminal"
-DEBUG mcp.operation{otel.kind="server" trace_id=01a014b2de3577c0bec25a6150d6627f span_id=3150b8f17af68017 parent_span_id=f4db23f0fd4e6060 actor_id="00000000-0000-7000-8000-00000000ac00"}: nest_rs::orm: listing rows entity="user"
+INFO nest_rs::access: operation served operation="call_tool" outcome="ok" duration_ms=25.252 trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=50514602c8481e19
+INFO nest_rs::access: request served method=POST path="/mcp" status=200 bytes=211 duration_ms=25.927 client_ip=0.0.0.0 forwarded=false trace_id=01a015e24b537fe2a2ae2d06832576a9 span_id=b3162e5d41cfe17e
 ```
+
+The tool call and the request that carried it share a `trace_id` and hold
+different `span_id`s, so "what did this call do" is answerable on its own.
+Everything the tool and the data layer below it log carries the operation's ids
+and its `actor_id`. See [Logs](/opentelemetry/logs/).
+
 
 Each operation then declares what it is, with the same two attributes a
 `#[query]` takes:

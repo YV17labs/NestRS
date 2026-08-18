@@ -130,11 +130,20 @@ A socket can live for hours, so the **message** is the unit of work: each one
 opens its own `ws.message` span under the trace and the actor the upgrade
 established — see [Correlation](/fundamentals/correlation/).
 
+The whole conversation is legible from the console — the `101` that opened the
+socket, the connection, then a line per message, all under the upgrade's trace:
+
 ```text frame="terminal"
-DEBUG ws.message{otel.kind="server" trace_id=01a014b21b647f338e4315decada1ded span_id=17560d79f19f65d7 ws.event=message ws.connection_id=1 parent_span_id=f8d68ad3f06f390c actor_id="00000000-0000-7000-8000-00000000ac00"}: live::chat: chat message recorded and broadcast author=ada total=1 reached=1
+INFO nest_rs::access: request served method=GET path="/ws" status=101 bytes=0 duration_ms=1.265 client_ip=127.0.0.1 forwarded=false trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::access: socket lifecycle lifecycle="connect" conn_id=0 duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::access: message served event=message conn_id=0 outcome="ok" duration_ms=0.045 trace_id=01a015e0074575729557467b3d9e2317 span_id=3398a131c2baa84a
+INFO nest_rs::access: message served event=nope conn_id=0 outcome="error" duration_ms=0.011 trace_id=01a015e0074575729557467b3d9e2317 span_id=2a3f10371aa5cbc8
 ```
-`parent_span_id` is the `101` that opened the socket. A connection inherits
-identity, never resources: it opens its own request scope per message.
+
+Same `trace_id` throughout, a fresh `span_id` per message — because a connection
+inherits identity, never resources: it takes the upgrade's trace and actor, and
+opens its own request scope per message. Your own handler's events carry the
+message's ids without naming them; see [Logs](/opentelemetry/logs/).
 
 ## Version the socket
 

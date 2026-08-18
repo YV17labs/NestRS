@@ -280,8 +280,8 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3005/posts
 ```
 
 ```text frame="terminal"
-WARN http.request{trace_id=01a014ad539f7903986200f145f71c41 span_id=d7c5e5890c5a90eb http.request.method=GET url.path="/posts"}: nest_rs::authn: authentication failed reason="missing_credentials"
-WARN http.request{trace_id=01a014ad539f7903986200f145f71c41 span_id=d7c5e5890c5a90eb …}: nest_rs::layers: guard denied the request status=401
+WARN nest_rs::authn: authentication failed strategy="…JwtStrategy<…Claims>" reason="missing_credentials" trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
+WARN nest_rs::layers: guard denied the request guard="…AuthnGuard<…>" status=401 trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
 ```
 
 Both lines carry the request's `trace_id`, and no `actor_id` — nobody was

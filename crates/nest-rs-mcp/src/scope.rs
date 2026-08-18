@@ -11,7 +11,7 @@
 //! ```ignore
 //! #[tool(description = "…")]
 //! async fn do_it(&self) -> Result<CallToolResult, McpError> {
-//!     let per_op = nest_rs_mcp::Scoped::<RequestId>::from_context()?;
+//!     let cache = nest_rs_mcp::Scoped::<RequestCache>::from_context()?;
 //!     // …
 //! }
 //! ```

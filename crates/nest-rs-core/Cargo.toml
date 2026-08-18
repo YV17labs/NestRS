@@ -39,8 +39,9 @@ schemars.workspace = true
 validator.workspace = true
 # Request-scope cache lock — poison-free locking off the request hot path.
 parking_lot.workspace = true
-# `RequestId` is a UUID v7: time-ordered, so ids sort by arrival. In the kernel
-# because the correlation primitive cannot be optional — see `request_id.rs`.
+# A trace id's bytes are a UUID v7's: time-ordered, so ids sort by arrival and
+# the value is a conformant W3C trace-id. In the kernel because the correlation
+# primitive cannot be optional — see `trace_context.rs`.
 uuid.workspace = true
 
 [dev-dependencies]

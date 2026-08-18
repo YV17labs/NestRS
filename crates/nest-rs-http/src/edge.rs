@@ -410,7 +410,7 @@ where
         let correlation = trace_context::resolve(&req, origin);
         let user_agent = trace_context::user_agent(&req);
         // The operation span, opened here and **not** gated on anything. It is
-        // what carries `request_id` onto every event below, and what declares
+        // what carries `trace_id` onto every event below, and what declares
         // the `actor_id` field the authn guard records into — a span that only
         // exists when an observability crate is installed makes both of those
         // optional, which is the defect this replaces.
@@ -469,7 +469,7 @@ where
                 trace_context::stamp(&correlation, &mut resp);
                 // Unconditional, unlike the log it may or may not carry: a
                 // streaming body is the request still running, and what
-                // `current_request_id()` answers inside one cannot depend on
+                // `current_trace_id()` answers inside one cannot depend on
                 // whether an operator wanted an access line.
                 Ok(response_body::carry(continuation, span, log, resp))
             }

@@ -32,10 +32,11 @@
 //! deployments, and the only thing that reaches from one to the other is the
 //! payload itself.
 //!
-//! That is what makes "one id, end to end" true rather than aspirational: an
+//! That is what makes "one trace, end to end" true rather than aspirational: an
 //! HTTP request that enqueues a job, and the worker that runs it minutes later
-//! in another binary, file their events under the same `request_id`. No
-//! collector, no `traceparent`, no shared process.
+//! in another binary, file their events under the same `trace_id` — the job's
+//! span a child of the enqueue's. No collector and no shared process: the
+//! `traceparent` this envelope carries is the whole mechanism.
 //!
 //! # One envelope, not two
 //!

@@ -117,7 +117,7 @@ async fn an_sse_stream_emits_under_the_request_that_opened_it() {
     let client = boot::<StreamModule>().await;
 
     let resp = client.get("/stream/events").send().await.0;
-    let request_id = echoed_id(&resp);
+    let trace_id = echoed_id(&resp);
     // Draining the body is what runs the stream — before this line the handler
     // has returned and not one event has been produced.
     let _ = resp.into_body().into_string().await.expect("the stream");
@@ -127,7 +127,7 @@ async fn an_sse_stream_emits_under_the_request_that_opened_it() {
     for event in &events {
         assert_eq!(
             event.field("ambient").as_deref(),
-            Some(request_id.as_str()),
+            Some(trace_id.as_str()),
             "`current_trace_id()` inside the stream is the request's own: {:?}",
             event.fields,
         );
@@ -146,7 +146,7 @@ async fn a_hand_built_streaming_body_is_carried_the_same_way() {
     let client = boot::<StreamModule>().await;
 
     let resp = client.get("/stream/chunks").send().await.0;
-    let request_id = echoed_id(&resp);
+    let trace_id = echoed_id(&resp);
     let body = resp.into_body().into_string().await.expect("the stream");
 
     assert_eq!(body, "ab", "the wrapper does not reshape what is written");
@@ -155,7 +155,7 @@ async fn a_hand_built_streaming_body_is_carried_the_same_way() {
     assert!(
         events
             .iter()
-            .all(|event| event.field("ambient").as_deref() == Some(request_id.as_str())),
+            .all(|event| event.field("ambient").as_deref() == Some(trace_id.as_str())),
         "an ordinary streaming body is the same family as `#[sse]`: {events:?}",
     );
 }
@@ -166,7 +166,7 @@ async fn a_stream_is_carried_with_the_access_log_switched_off() {
     let client = boot::<SilentStreamModule>().await;
 
     let resp = client.get("/stream/events").send().await.0;
-    let request_id = echoed_id(&resp);
+    let trace_id = echoed_id(&resp);
     let _ = resp.into_body().into_string().await.expect("the stream");
 
     logs.expect_none("nest_rs::access", "request served");
@@ -175,7 +175,7 @@ async fn a_stream_is_carried_with_the_access_log_switched_off() {
     assert!(
         events
             .iter()
-            .all(|event| event.field("ambient").as_deref() == Some(request_id.as_str())),
+            .all(|event| event.field("ambient").as_deref() == Some(trace_id.as_str())),
         "the context is the request's, not the access log's: {events:?}",
     );
 }

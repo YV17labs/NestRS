@@ -9,10 +9,17 @@
 //! an operator answers "what did this deployment do", and that question does not
 //! become answerable only once OTLP is configured.
 //!
-//! `trace_id` and `span_id` are the transport's too, and that is the change
-//! this shape records: they are W3C Trace Context, minted or continued by the
-//! edge with no collector, propagator or exporter involved. The observability
-//! stack *enriches* what is exported; it never decides what this line can say.
+//! `trace_id` and `span_id` are the transport's too — W3C Trace Context, minted
+//! or continued by the edge with no collector, propagator or exporter involved.
+//! The observability stack *enriches* what is exported; it never decides what
+//! this line can say.
+//!
+//! They are **not** written here, and that is deliberate: every line the console
+//! renders carries the correlation of the unit of work it belongs to, read off
+//! the ambient context, so spelling them as event fields would print them twice
+//! in text and put them in two different positions in the JSON envelope. The
+//! body re-enters the request's context around this line for exactly that
+//! reason — see `response_body`.
 //!
 //! # What is filed here, and what is not
 //!
@@ -27,8 +34,6 @@ use std::time::Instant;
 use poem::Request;
 use poem::http::{Method, Uri};
 
-use nest_rs_core::Correlation;
-
 use crate::client_ip::ClientIp;
 
 /// A request being timed. Opened before the inner tree runs, filed once the
@@ -38,12 +43,6 @@ pub(crate) struct AccessLog {
     /// Cloned rather than formatted: `Uri`'s path is a `Bytes` slice, so this is
     /// a refcount bump and the path is read back without allocating.
     uri: Uri,
-    /// The whole correlation, not just its id: the actor is resolved by a guard
-    /// *after* this is opened, and the shared `OnceLock` is what lets the line
-    /// report who was served without the edge having to wait for authentication
-    /// to happen. A line that cannot say who was denied is the gap this change
-    /// exists to close.
-    correlation: Correlation,
     client: ClientIp,
     user_agent: Option<String>,
     start: Instant,
@@ -55,16 +54,10 @@ impl AccessLog {
     /// `client` and `user_agent` are passed in rather than read here because the
     /// operation span needs the same answers: reading twice would be two chances
     /// for the span and the line to disagree about who called.
-    pub(crate) fn open(
-        req: &Request,
-        correlation: Correlation,
-        client: ClientIp,
-        user_agent: Option<&str>,
-    ) -> Self {
+    pub(crate) fn open(req: &Request, client: ClientIp, user_agent: Option<&str>) -> Self {
         Self {
             method: req.method().clone(),
             uri: req.uri().clone(),
-            correlation,
             client,
             // Owned rather than borrowed: the `HeaderValue`'s bytes are a slice
             // of hyper's shared read buffer, which holding would pin until the
@@ -75,23 +68,25 @@ impl AccessLog {
     }
 
     /// The line. `bytes` is the response body actually written.
+    ///
+    /// The target and the duration formula come from
+    /// [`operation_log`](nest_rs_core::operation_log) rather than being spelled
+    /// here: this is one member of a family every edge files into, and a second
+    /// copy of either is what makes a family drift while both halves look right.
+    ///
+    /// **No `outcome` field, and that is deliberate.** Its peers carry one
+    /// because they have no other way to say how the work ended; a request has
+    /// `status`, which says it more precisely than three words could. Classifying
+    /// a `404` or a `401` as `ok` or `error` is a judgement the framework has no
+    /// business making on an operator's behalf.
     pub(crate) fn emit(self, status: u16, bytes: u64) {
-        // Microsecond resolution, rendered in milliseconds: a sub-millisecond
-        // request is the common case and `0` tells an operator nothing.
-        let duration_ms = (self.start.elapsed().as_secs_f64() * 1e6).round() / 1e3;
         tracing::info!(
-            target: "nest_rs::access",
+            target: nest_rs_core::operation_log::TARGET,
             method = %self.method,
             path = self.uri.path(),
             status,
             bytes,
-            duration_ms,
-            trace_id = %self.correlation.trace_id(),
-            span_id = %self.correlation.span_id(),
-            // Absent for an anonymous caller, which is the answer rather than a
-            // missing one — and present on exactly the line an operator greps
-            // after a `403`.
-            actor_id = self.correlation.actor_id(),
+            duration_ms = nest_rs_core::operation_log::duration_ms(self.start),
             client_ip = %self.client.ip,
             // Whether the address came from a proxy header or from the peer.
             // Two very different confidences, and an incident query that cannot

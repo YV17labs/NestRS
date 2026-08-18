@@ -84,6 +84,7 @@ pub mod logging;
 pub mod metadata;
 pub mod module;
 mod opaque;
+pub mod operation_log;
 pub mod panic;
 pub mod request_scope;
 pub mod trace_context;

@@ -539,6 +539,50 @@ recorded once poem's router has answered, and the method alone when nothing
 matched. Naming an unmatched span after its URL is how one scanner fills a
 tracing backend with junk, so that fallback is the conventions' and ours.
 
+### What a log line carries — one unit of work, read off the context
+
+**Every log line carries the W3C trace context of the unit of work that emitted
+it** — `trace_id`, `span_id`, `actor_id` — and **carries no span state at all**:
+not a span's attributes, not a span's name. The formatters are
+`nest_rs_core::logging::{TextFormat, JsonFormat}`, they are the *same* two
+whichever subscriber is mounted, and they read the ambient correlation rather
+than the span scope. Three reasons, each already a shipped defect: a span's
+fields belong to the span, so rendering them put an HTTP request's method, path
+and client address on every line a service below it emitted; `tracing` renders a
+whole scope, so a nested unit of work printed one `trace_id` per level; and the
+context outlives the span, so a streaming body is readable exactly where a span
+stack is not. **Never write those three as event fields** — that is the
+duplicate, and it is what `#[deny]`-less code drifts back into.
+
+Three deviations from OpenTelemetry's log data model, all deliberate, stated
+here because the rule is that the answer is stated rather than identical:
+
+- **`actor_id` is not in the model**, whose nearest equivalent is the `user.id`
+  *attribute*. Ours is an audit identity with framework-wide vocabulary, carried
+  as a top-level key beside the ids because that is where an operator greps it.
+  Renaming it to `user.id` and demoting it into `fields` is the only conformant
+  alternative, and it buys nothing operationally.
+- **`trace_flags` is JSON-only.** The model names it beside the two ids, and a
+  JSON record may be joined against an export where the sampling bit decides
+  whether the other half exists. A human at a console never acts on it.
+- **`parent_span_id` is a span field and never a line field.** The model has no
+  ancestry, and a line has no need of one now that nothing renders a scope.
+
+**Every edge files one line per unit of work, and that is what makes the rest
+affordable.** The ids relate lines; the *identity* of the work — which route,
+which event, which job, which tool — is an **event** attribute on a line the edge
+emits once per unit, the way `nest_rs::access` does for HTTP. An edge without
+that line leaves its work anonymous on the console, which is the state HTTP's
+access log has always prevented and the other edges lacked.
+
+**One target is the family's toggle, and that is why no edge grows a config for
+it.** Every operation line is `nest_rs::access`, so `<PREFIX>_LOG` silences the
+whole family with `nest_rs::access=off` and no other spelling exists.
+`NESTRS_HTTP__ACCESS_LOG` stays because it predates the family and is an app's
+pinned config rather than a deployment's filter; inventing a `#[config]` — and
+the `for_root` seam that one obliges — for four more booleans would be four
+declarations of a decision the filter already makes.
+
 ## Testing
 
 Wiring bugs don't surface in unit tests.

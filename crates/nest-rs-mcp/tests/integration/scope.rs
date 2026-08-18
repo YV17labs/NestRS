@@ -190,4 +190,43 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         ran_under.field("parent_span_id"),
         "the operation is not a second name for the request that carried it",
     );
+
+    // Each operation also files the family's line. It is the only place a tool
+    // call reports itself: rmcp addresses many operations over one HTTP request,
+    // so the endpoint's access line names the session and says nothing about the
+    // work.
+    let served = logs.find(nest_rs_core::operation_log::TARGET, "operation served");
+    // At least one line per operation span, and possibly more: a **notification**
+    // is dispatched work and files a line, but opens no `mcp.operation` span of
+    // its own — it runs under the request's. So the counts are not equal, and
+    // asserting they were would forbid the notification line rather than check it.
+    assert!(
+        served.len() >= operations.len(),
+        "every operation files a line: {} lines for {} operations: {served:?}",
+        served.len(),
+        operations.len(),
+    );
+    assert!(
+        served.iter().all(|line| line.field("operation").is_some()),
+        "every line names which operation it was: {served:?}",
+    );
+    assert!(
+        served
+            .iter()
+            .any(|line| line.field("operation").as_deref() == Some("call_tool")),
+        "the line names the JSON-RPC method a client addressed: {served:?}",
+    );
+    assert!(
+        served
+            .iter()
+            .all(|line| line.field("duration_ms").is_some()),
+        "every line is timed: {served:?}",
+    );
+    // The ids are deliberately *not* asserted here, and the reason is worth
+    // writing down: they are not fields of this event. The formatter reads them
+    // off the ambient context at emission, so `LogCapture` — which records what
+    // an event declared — cannot see them at any layer. That the line sits inside
+    // a context at all is what `nest-rs-core`'s own formatter tests cover, and
+    // this line emits through `RequestContinuation` precisely because the
+    // dispatch installs its scope deeper than the line is written.
 }

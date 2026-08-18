@@ -621,7 +621,15 @@ line whose proof you cannot run is a line you have not done.
 14. **A mount** — a `Transport` via `TransportContribution`, or an HTTP self-mount
     declaring its `EdgePosture`.
 15. **`nest_rs::<edge>` span target**, level per layer, ≥1 structured field per
-    event.
+    event — **and one `nest_rs::access` line per unit of work**, through
+    `nest_rs_core::operation_log`. A log line renders no span state, so the span's
+    attributes say nothing on the console: the line is where the work is named
+    (which route, which event, which job, which tool), and an edge without one
+    leaves its work anonymous. It carries the edge's own identity fields plus
+    `outcome` and `duration_ms`, its field names are **flat** (a dotted name is
+    ambiguous to `tracing` beside a path target), and it takes no config toggle —
+    the shared target is the family's, so one filter directive silences all of
+    them.
 16. **Four witnesses** — an `integration` suite covering guards / pipes / scope /
     posture; a driver in `nest-rs-testing` if the protocol needs one; an adapter
     in `demo/` (`<feature>/<edge>/`); and a use site in `nest-rs-macro-hygiene`

@@ -354,6 +354,22 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
         "the field carries the payload's own sentence, not the placeholder a \
          borrowed box downcasts to: {event:?}",
     );
+
+    // And the tick still files the family's line, saying what ran and how it
+    // ended — a clock has no caller, so this is the only place a tick reports
+    // itself at all.
+    let ran = logs
+        .find(nest_rs_core::operation_log::TARGET, "tick ran")
+        .into_iter()
+        .next()
+        .expect("every tick files one line, panic included");
+    assert_eq!(
+        ran.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "a panicking tick is not reported as a plain error: {ran:?}",
+    );
+    assert_eq!(ran.field("provider").as_deref(), Some("NamedPanicHost"));
+    assert!(ran.field("duration_ms").is_some());
 }
 
 /// The job body returns `Ok` and its writes never landed, so the schedule has

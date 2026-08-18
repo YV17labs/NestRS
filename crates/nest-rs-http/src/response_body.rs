@@ -70,7 +70,8 @@ pub(crate) fn carry(
     if body.is_empty() {
         span.record("http.response.body.size", 0);
         if let Some(log) = log {
-            log.emit(status, 0);
+            // Inside the context, outside the span — see `Carried::file`.
+            continuation.enter(|| log.emit(status, 0));
         }
         return Response::from_parts(parts, body);
     }
@@ -117,8 +118,16 @@ impl Carried {
         // an exported server span is read for, and the span is held open until
         // here precisely so it can.
         self.span.record("http.response.body.size", self.counted);
+        let counted = self.counted;
         if let Some(pending) = self.pending.take() {
-            pending.log.emit(pending.status, self.counted);
+            // **The context, not the span.** The line is still nobody's child
+            // event — entering the span would file it under the request it
+            // reports on — but its `trace_id` / `span_id` / `actor_id` come off
+            // the ambient correlation like every other line's, rather than being
+            // spelled a second time as event fields. One source, one position in
+            // the JSON envelope.
+            self.continuation
+                .enter(|| pending.log.emit(pending.status, counted));
         }
     }
 }
@@ -137,8 +146,9 @@ impl HttpBody for Carried {
         // span, and a `current_trace_id()` inside the stream reads the
         // task-local. Neither substitutes for the other.
         //
-        // Both are left behind before the line is filed: the access log carries
-        // its own fields and is nobody's child event.
+        // The span is left behind before the line is filed — it is nobody's
+        // child event — while the context is re-entered around it, so the ids on
+        // that line come from where every other line's come from.
         let polled = {
             let Carried {
                 inner,

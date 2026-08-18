@@ -23,12 +23,16 @@
 //!
 //! # What each kind of operation gets
 //!
-//! | Kind | Request span | Request scope | Guard ability | Data context |
-//! |---|---|---|---|---|
-//! | Requests (`tools/call`, `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`, `tasks/*`, lifecycle, custom) | yes | yes | yes | yes |
-//! | `subscriptions/listen` | yes | yes | yes | no — it outlives any sane transaction |
-//! | Notifications | yes | yes | no | no — nothing to commit or roll back on |
-//! | Synchronous accessors (`get_info`, `get_tool`, …) | — | — | — | — |
+//! | Kind | Request span | Request scope | Guard ability | Data context | Files a line |
+//! |---|---|---|---|---|---|
+//! | Requests (`tools/call`, `prompts/get`, `resources/read`, `completion/complete`, `logging/setLevel`, `tasks/*`, lifecycle, custom) | yes | yes | yes | yes | yes |
+//! | `subscriptions/listen` | yes | yes | yes | no — it outlives any sane transaction | yes |
+//! | Notifications | yes | yes | no | no — nothing to commit or roll back on | yes |
+//! | Synchronous accessors (`get_info`, `get_tool`, …) | — | — | — | — | no — no work is dispatched |
+//!
+//! The last column is why notifications are not a special case: they commit
+//! nothing and run no guard, but they *are* dispatched work, so an operator asking
+//! `nest_rs::access` what this endpoint did gets them too.
 //!
 //! The span is in that table for the same reason the scope is: it is ambient
 //! request state, and everything dispatched here runs on a task the request did
@@ -100,6 +104,7 @@ impl<H> PropagatingHandler<H> {
     /// is `Repo`'s fail-closed case rather than a silently unscoped one.
     async fn dispatch<T, F>(
         &self,
+        method: &'static str,
         ambient: McpAmbient,
         context: Option<&Arc<dyn McpToolContext>>,
         inner: F,
@@ -124,6 +129,10 @@ impl<H> PropagatingHandler<H> {
         // fresh span, the request's span as its parent — the shape `ws.message`
         // already had.
         let correlation = correlation.child();
+        // Held for the line below: the ambient context is installed *inside*
+        // `scoped`, so the outer composition — where the guard's verdict and the
+        // whole duration are known — is outside it.
+        let reported = correlation.clone();
         let operation = nest_rs_core::operation_span!(
             target: "nest_rs::mcp",
             kind: "server",
@@ -149,21 +158,53 @@ impl<H> PropagatingHandler<H> {
         // A disabled span (nothing installed a subscriber, or no HTTP span is
         // mounted) costs one branch per poll and no allocation, so this is not
         // gated on anything.
+        let started = std::time::Instant::now();
         async move {
             let guarded = match &guard_captured {
                 Some(captured) => self.guard.around(captured, scoped),
                 None => scoped,
             };
 
-            match (context, &context_captured) {
+            let settled = match (context, &context_captured) {
                 (Some(context), Some(captured)) => context.around(captured, guarded).await,
                 _ => guarded.await,
-            }
+            };
+            // One line per operation. rmcp addresses many operations over one
+            // request, so without it a tool call is anonymous on the console —
+            // the endpoint's HTTP access line names the session, not the work.
+            //
+            // Emitted through the correlation explicitly, because this sits
+            // *outside* the scope `scoped` installs and a line with no ambient
+            // context carries no ids at all — which is exactly what it did until a
+            // capture of real output showed the gap. Outside is still the right
+            // depth: here the guard's verdict and the whole duration are known.
+            nest_rs_core::RequestContinuation::new(None, reported, None).enter(|| {
+                tracing::info!(
+                    target: nest_rs_core::operation_log::TARGET,
+                    // The JSON-RPC method this operation was, which is what a
+                    // client addressed. Not `mcp.method`: a dotted field name is
+                    // ambiguous to `tracing`'s parser beside a bare-ident value.
+                    operation = method,
+                    outcome = if settled.is_ok() {
+                        nest_rs_core::operation_log::OK
+                    } else {
+                        nest_rs_core::operation_log::ERROR
+                    },
+                    duration_ms = nest_rs_core::operation_log::duration_ms(started),
+                    "operation served",
+                );
+            });
+            settled
         }
         .instrument(operation)
-        // Inside the request's span, so the console still shows the operation
-        // nested under the request that carried it; the exported parent link is
-        // the correlation's, above.
+        // Inside the request's span, so the operation stays nested under the
+        // request that carried it. That nesting is what `tracing-opentelemetry`
+        // builds the exported tree from; the exported parent link is the
+        // correlation's, above.
+        //
+        // **It contributes nothing to a log line**, and must not — see
+        // `nest_rs_core::logging::TextFormat`. This is about the exported tree,
+        // not about what a line shows.
         .instrument(span)
         .await
         .and_then(OperationValue::take::<T>)
@@ -186,6 +227,7 @@ macro_rules! request_method {
             async move {
                 let ambient = McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
                 self.dispatch(
+                    stringify!($name),
                     ambient,
                     self.context.as_ref(),
                     self.inner.$name($($arg,)* context),
@@ -210,9 +252,27 @@ macro_rules! notification_method {
             async move {
                 let McpAmbient { scope, span, correlation, .. } =
                     McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
-                nest_rs_core::with_request_scope(scope, correlation, None, self.inner.$name($($arg,)* context))
-                    .instrument(span)
-                    .await
+                let started = std::time::Instant::now();
+                nest_rs_core::with_request_scope(scope, correlation, None, async move {
+                    self.inner.$name($($arg,)* context).await;
+                    // A notification is dispatched work, so it files the family's
+                    // line like every other unit — the same message as a request
+                    // method, discriminated by `operation`, because a notification
+                    // *is* an MCP operation and one query should find both.
+                    //
+                    // `outcome` is `ok` and that is honest rather than assumed: a
+                    // notification handler returns `()`, so it has no failure
+                    // channel, and had it unwound this line would not be reached.
+                    tracing::info!(
+                        target: nest_rs_core::operation_log::TARGET,
+                        operation = stringify!($name),
+                        outcome = nest_rs_core::operation_log::OK,
+                        duration_ms = nest_rs_core::operation_log::duration_ms(started),
+                        "operation served",
+                    );
+                })
+                .instrument(span)
+                .await
             }
         }
     };
@@ -268,7 +328,7 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         let ambient =
             McpAmbient::from_extensions(&context.request_context().extensions).unwrap_or_default();
-        self.dispatch(ambient, None, self.inner.listen(context))
+        self.dispatch("listen", ambient, None, self.inner.listen(context))
             .await
     }
 

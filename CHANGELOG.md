@@ -169,6 +169,13 @@ same trace, its own span id, the request's span as its parent — the shape
   project resolved, so an old compiler produced a page of type errors instead of
   one sentence naming the requirement. Both scaffold modes, and the generated
   migration and seed crates.
+- **`nestrs doctor` stops reporting three different toolchain failures as one.**
+  `rustc --version` collapsed "not on `PATH`", "on `PATH` and exited non-zero"
+  and "printed a line I cannot parse" into a single `None`, printed as `rustc
+  not found` — so a `rustc` that ran and diagnosed itself was reported absent
+  and its diagnosis discarded, and `rustc 1.x.0` was reported as merely old.
+  Each is now its own sentence, and every one of them names the floor, which the
+  CLI page has always promised (`rustc ≥ 1.97`) and doctor never printed.
 
 ## [4.0.0] - 2026-08-16
 

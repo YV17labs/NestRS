@@ -11,8 +11,10 @@ pub struct DoctorOptions {
 
 #[derive(Debug, Default)]
 pub struct DoctorReport {
-    pub rustc_ok: bool,
-    pub rustc_version: Option<String>,
+    /// What asking for the toolchain produced, kept structural: a consumer
+    /// reads the outcome rather than matching on an English sentence, and the
+    /// three fields this replaced could disagree with one another.
+    pub rustc: Rustc,
     pub cargo_ok: bool,
     pub in_nestrs_workspace: bool,
     /// Set when workspace detection itself failed (e.g. a malformed manifest),
@@ -34,6 +36,12 @@ impl DoctorReport {
     /// the two cannot disagree.
     pub fn env_prefix(&self) -> &str {
         self.env_prefix_source.prefix()
+    }
+
+    /// Whether the toolchain meets the floor. Derived, so it cannot disagree
+    /// with the outcome it summarises.
+    pub fn rustc_ok(&self) -> bool {
+        matches!(self.rustc, Rustc::Version { release: Some(release), .. } if release >= MIN_RUST_VERSION)
     }
 }
 
@@ -60,14 +68,11 @@ pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
         .path
         .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
 
-    let mut report = DoctorReport::default();
-
-    report.rustc_version = rustc_version();
-    report.rustc_ok = report
-        .rustc_version
-        .as_ref()
-        .is_some_and(|v| version_at_least(v, MIN_RUST_VERSION));
-    report.cargo_ok = which("cargo");
+    let mut report = DoctorReport {
+        rustc: rustc_probe(),
+        cargo_ok: which("cargo"),
+        ..Default::default()
+    };
 
     match crate::context::NestrsWorkspace::discover(&start) {
         Ok(Some(_)) => report.in_nestrs_workspace = true,
@@ -99,7 +104,7 @@ pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
     // An unusable prefix blocks like a missing toolchain does: every app in
     // this environment aborts on the first name it builds.
     let prefix_ok = !matches!(report.env_prefix_source, EnvPrefixSource::Invalid(_));
-    if !report.rustc_ok || !report.cargo_ok || !prefix_ok {
+    if !report.rustc_ok() || !report.cargo_ok || !prefix_ok {
         return Err(CliError::Anyhow(anyhow::anyhow!(
             "doctor found blocking issues — fix them before continuing"
         )));
@@ -112,11 +117,24 @@ fn print_report(report: &DoctorReport) {
     println!("nestrs doctor");
     println!();
 
-    status_line(
-        "Rust toolchain",
-        report.rustc_ok,
-        report.rustc_version.as_deref().unwrap_or("rustc not found"),
-    );
+    // Every sentence written once, here, and every one of them names the floor
+    // — a version and a verdict without the requirement is what the docs page
+    // promising `rustc ≥ 1.97` described and doctor did not do.
+    let (major, minor) = MIN_RUST_VERSION;
+    let needs = format!("nestrs needs {major}.{minor} or newer");
+    let toolchain = match &report.rustc {
+        Rustc::Version { line, .. } if report.rustc_ok() => line.clone(),
+        Rustc::Version {
+            line,
+            release: None,
+        } => {
+            format!("{line} — no version to read in that line; {needs}")
+        }
+        Rustc::Version { line, .. } => format!("{line} — {needs}"),
+        Rustc::NotOnPath => format!("rustc not on PATH — {needs}"),
+        Rustc::Failed(said) => format!("rustc is on PATH but failed: {said}"),
+    };
+    status_line("Rust toolchain", report.rustc_ok(), &toolchain);
     status_line(
         "cargo",
         report.cargo_ok,
@@ -223,17 +241,59 @@ fn file_defines(contents: &str, name: &str) -> bool {
     })
 }
 
-/// The `rustc --version` line, or `None` when it is not on `PATH`. Shared with
-/// `nestrs info`, which reports the same toolchain without doctor's verdict.
-pub(super) fn rustc_version() -> Option<String> {
-    let output = std::process::Command::new("rustc")
+/// What asking `rustc` for its version produced.
+///
+/// Three outcomes, kept apart all the way to the printed line. Collapsed into
+/// one `None` they all rendered as `rustc not found`, so a `rustc` that *was*
+/// on `PATH` and printed a diagnosis was reported as absent and its diagnosis
+/// discarded — the operator was sent to fix the wrong thing.
+#[derive(Debug, Default)]
+pub enum Rustc {
+    Version {
+        line: String,
+        /// `None` when the line carries no version to read — which is not the
+        /// same as a compiler that is merely old, and no longer shares its
+        /// sentence with one.
+        release: Option<(u32, u32)>,
+    },
+    /// Nothing has been probed yet — a default report, never an answer.
+    #[default]
+    NotOnPath,
+    /// On `PATH`, ran, and failed. Carries what it said.
+    Failed(String),
+}
+
+pub(super) fn rustc_probe() -> Rustc {
+    let output = match std::process::Command::new("rustc")
         .arg("--version")
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Rustc::NotOnPath,
+        Err(e) => return Rustc::Failed(e.to_string()),
+    };
     if !output.status.success() {
-        return None;
+        let said = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let said = if said.is_empty() {
+            format!("exited {}", output.status)
+        } else {
+            said
+        };
+        return Rustc::Failed(said);
     }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    let line = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let release = rustc_release(&line);
+    Rustc::Version { line, release }
+}
+
+/// The `rustc --version` line, or `None` when there is none to report. Shared
+/// with `nestrs info`, which reports the toolchain without doctor's verdict and
+/// so has nothing to do with *why* there isn't one.
+pub(super) fn rustc_version() -> Option<String> {
+    match rustc_probe() {
+        Rustc::Version { line, .. } => Some(line),
+        _ => None,
+    }
 }
 
 fn which(program: &str) -> bool {
@@ -246,15 +306,20 @@ fn which(program: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn version_at_least(version_line: &str, min: (u32, u32)) -> bool {
-    let Some(rest) = version_line.strip_prefix("rustc ") else {
-        return false;
-    };
-    let version_token = rest.split_whitespace().next().unwrap_or("");
-    let mut parts = version_token.split('.');
-    let major: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-    let minor: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-    (major, minor) >= min
+/// The `(major, minor)` a `rustc --version` line reports, or `None` when the
+/// line carries none to read.
+///
+/// Kept apart from the verdict because the two have different fixes: parsing a
+/// component with `unwrap_or(0)` turned `rustc 1.x.0` into version zero, and an
+/// unreadable line was then reported in the same sentence as a compiler that is
+/// merely old. Both still fail closed — an unreadable version is never enough.
+fn rustc_release(version_line: &str) -> Option<(u32, u32)> {
+    let rest = version_line.strip_prefix("rustc ")?;
+    let token = rest.split_whitespace().next()?;
+    let mut parts = token.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next()?.parse().ok()?;
+    Some((major, minor))
 }
 
 #[cfg(test)]
@@ -263,8 +328,47 @@ mod tests {
 
     #[test]
     fn parses_rustc_version() {
-        assert!(version_at_least("rustc 1.96.0 (abc 2025-01-01)", (1, 96)));
-        assert!(!version_at_least("rustc 1.95.0 (abc 2025-01-01)", (1, 96)));
+        // Fixtures derive from the floor rather than restate it: a copied
+        // literal keeps passing after `MIN_RUST_VERSION` moves without it.
+        let (major, minor) = MIN_RUST_VERSION;
+        assert_eq!(
+            rustc_release(&format!("rustc {major}.{minor}.0 (abc 2025-01-01)")),
+            Some(MIN_RUST_VERSION)
+        );
+        // Below the floor on the axis that always has room: decrementing the
+        // minor overflowed at a `(2, 0)` floor, which is a trap for whoever
+        // bumps next rather than a fixture.
+        let below = format!("{}.{minor}", major.saturating_sub(1));
+        assert!(!verdict(&format!("rustc {below}.0 (abc 2025-01-01)")));
+        assert!(verdict(&format!(
+            "rustc {major}.{minor}.0 (abc 2025-01-01)"
+        )));
+
+        // Unreadable is not old — the distinction the printed line now makes,
+        // and every one of these used to parse as version zero and be reported
+        // as a compiler that is merely out of date.
+        assert_eq!(rustc_release("rustc 1.97"), Some((1, 97)));
+        assert_eq!(rustc_release("rustc 1.97.0-nightly (abc)"), Some((1, 97)));
+        assert_eq!(rustc_release("rustc 1.x.0 (abc)"), None);
+        assert_eq!(rustc_release("rustc 4294967296.0.0"), None);
+        assert_eq!(rustc_release("hello world"), None);
+        assert_eq!(rustc_release(""), None);
+        // Everything unreadable still fails closed.
+        assert!(!verdict("rustc 1.x.0 (abc)"));
+        assert!(!verdict("hello world"));
+    }
+
+    /// `rustc_ok` for a report whose probe returned `line` — the real path the
+    /// verdict travels, rather than a comparison written twice.
+    fn verdict(line: &str) -> bool {
+        DoctorReport {
+            rustc: Rustc::Version {
+                release: rustc_release(line),
+                line: line.to_owned(),
+            },
+            ..Default::default()
+        }
+        .rustc_ok()
     }
 
     // B9: doctor read only `std::env`, so it answered `not set` for a variable

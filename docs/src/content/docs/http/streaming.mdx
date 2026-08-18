@@ -71,6 +71,13 @@ Two `NESTRS_HTTP__*` keys, both defaulting to something usable:
 | `SSE_MAX_CONNECTION_SECS` | `14400` (4 h) | ends the stream, so the client's `EventSource` reconnects. `0` ⇒ unlimited |
 | `SSE_KEEP_ALIVE_SECS` | `15` | comment interval that keeps an idle feed alive through proxies. `0` ⇒ none |
 
+A stream runs **inside the request that opened it**, even though its handler
+returned long before the first event. `current_trace_id()` and
+`current_actor_id()` answer there, and every event the stream logs carries the
+request's `trace_id` — see [Correlation](/fundamentals/correlation/). That is the
+framework's doing, not the decorator's: the same holds for any streaming body a
+handler returns.
+
 The ceiling is a **security** control, and the same one
 `NESTRS_WS__MAX_CONNECTION_SECS` and
 `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` carry, at the same default. A stream
@@ -120,3 +127,4 @@ to reconcile. That combination is a compile error saying so.
 - [File storage](/storage/) — the streaming object-store client.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio/http/controller.rs) — the streamed download and SSE feed in full.
 - [File uploads](/http/file-uploads/) — the multipart counterpart.
+- [Correlation](/fundamentals/correlation/) — what a stream's own events are filed under.

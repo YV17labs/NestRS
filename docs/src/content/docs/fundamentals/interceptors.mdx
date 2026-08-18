@@ -173,7 +173,7 @@ Interceptors are pooled by `TypeId` and run **once per request**: a global inter
 - **Install ambient state** for the handler's duration (transactions,
   tracing spans, request id, authorization ability).
 - **Transform the response** — add headers (`Server-Timing`,
-  `X-Request-Id`), compress, paginate.
+  `X-Cache-Status`), compress, paginate.
 - **Time the call** — measure latency by route, emit a metric.
 - **Mask the body** — `nest-rs-authz`'s `Authorize` shaper is technically
   a "shaper" (inside the interceptors), but the pattern is the same: see

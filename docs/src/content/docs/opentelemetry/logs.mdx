@@ -18,6 +18,7 @@ request.
 |---|---|---|
 | HTTP request log | `nest_rs::access` | `info` |
 | HTTP span | `nest_rs::http` | `info` |
+| MCP operations | `nest_rs::mcp` | `info` |
 | Route / endpoint mounting (boot) | `nest_rs::routes` | `info` |
 | ORM queries | `nest_rs::orm` | `trace` |
 | Layer composition (per-route guard/pipe/… chains) | `nest_rs::layers` | `trace` for the per-route effective-chain dump; `debug` for the redundant multi-scope lint (HTTP deduped once, WS per gateway); `warn` for actionable posture smells (reversed authn/authz order, denials, **routes with no guard and no `#[public]` when no global pool is active**) |
@@ -48,10 +49,29 @@ Always prefer `field = %value` to `format!("{}", value)`. The OTLP bridge
 serializes structured fields directly; a formatted string becomes opaque text
 the backend cannot filter on.
 
-The request span (installed by the HTTP interceptor — see
-[Traces](/opentelemetry/traces/#http-interceptor)) already carries
-`request_id`, `actor_id`, `tenant_id` when an authn module is mounted, so
-your structured fields layer on top of those.
+Every event runs under the **operation span** its edge opened, which already
+carries `trace_id` and `span_id` — the OpenTelemetry log-record vocabulary, so a
+backend joins logs to traces with no field mapping — and `actor_id` once an authn
+guard resolved a principal.
+Your structured fields layer on top of those, and you never write either by
+hand.
+
+Both are also readable from code, anywhere the framework carries work —
+a handler, a service below it, a WS message, an MCP tool, a queue job in another
+process, and **inside a streaming response**, which is the one that surprises
+people: an `#[sse]` stream is written after its handler returned, and it still
+runs under the request that opened it.
+
+```rust
+let trace_id = nest_rs::core::current_trace_id();
+let span_id = nest_rs::core::current_span_id();
+// `None` for an anonymous caller — absence is the answer, not a missing one.
+let actor_id = nest_rs::core::current_actor_id();
+```
+
+`actor_id` is an **audit** identity: who, for a log line or a `created_by`
+column. What a caller may *do* is decided in a guard, never by branching on this
+value.
 
 ## Text vs JSON
 
@@ -62,8 +82,10 @@ prod, set:
 NESTRS_LOG_FORMAT=json
 ```
 
-JSON drops the `current_span` and `span_list` fields — the OTel export carries
-span structure, and duplicating it in the console line is noise.
+JSON keeps the **current span** — that is where `trace_id`, `span_id` and `actor_id`
+live, so a line stays attributable with no exporter configured. It drops the
+`span_list` (the full ancestry), which is the verbose half and the one an OTel
+export is genuinely better at.
 
 ## Source location (file:line)
 
@@ -87,18 +109,26 @@ it is live while developing and off everywhere else, or pin it explicitly with
 
 ## Access log
 
-The HTTP interceptor emits one access event per request on `nest_rs::access`,
-at end-of-body, with byte-accurate `bytes` and `duration_ms`:
+**The access log belongs to `nest-rs-http`, not to this crate.** Method, path,
+status, duration, client, `trace_id`, `span_id` and `actor_id` are what the transport
+knows about a request it served — no collector, no exporter and no propagator is
+involved, so none is required. It emits one event per request on
+`nest_rs::access`, at end-of-body, with byte-accurate `bytes`:
 
 ```text frame="terminal"
-INFO nest_rs::access: GET /users 200 28ms request_id=01J… bytes=412 client_ip=10.0.0.1 trace_id=4bf92f…
+INFO nest_rs::access: request served method=GET path="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16 client_ip=127.0.0.1 forwarded=false
 ```
 
-The same fields land on the OTel HTTP span (see
-[Traces](/opentelemetry/traces/#http-interceptor)), so the access line and
-the span line up in the backend. Toggle the access line with
-`NESTRS_HTTP__ACCESS_LOG=false`; the OTel span still opens, so propagation
-and OTLP export keep working.
+`actor_id` joins the line once an authn guard resolved a principal, and is
+absent above because nobody was authenticated — which is why that request is a
+`401`. `trace_id` and `span_id` are the transport's own W3C trace context and
+need no collector to exist. That is the shape of the whole relationship: the
+observability stack **enriches** what is exported and never owns what this line
+can say.
+
+Toggle it with `NESTRS_HTTP__ACCESS_LOG=false`. That silences the line only —
+the trace is still started, still reported as `traceresponse`, and still carried
+into the response body, because everything else is filed under it.
 
 ## OTel logs bridge
 

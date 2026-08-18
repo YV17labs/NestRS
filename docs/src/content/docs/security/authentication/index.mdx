@@ -119,6 +119,13 @@ A custom strategy binds exactly like the shipped one:
 `AuthnGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
 bound with `#[use_guards(...)]`.
 
+You declare `actor_id` once, here. Reading it back is
+`nest_rs::core::current_actor_id()`, anywhere the framework carries work — a
+service, the data layer, a queue job in another process — and it answers `None`
+for an anonymous caller. It is an **audit** identity and never an authorization
+input: what a caller may *do* is the ambient `Ability`, decided in a guard. See
+[Correlation](/fundamentals/correlation/).
+
 ## One return type — principal or error
 
 ```rust

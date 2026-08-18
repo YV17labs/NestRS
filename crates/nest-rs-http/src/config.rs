@@ -90,9 +90,9 @@ pub struct HttpConfig {
     /// when the app terminates responses directly.
     pub compression: bool,
     /// Emit one access event per request on `nest_rs::access` — method, path,
-    /// status, byte-exact size, duration, client, `request_id`, and `trace_id`
-    /// when an observability stack is mounted. **On by default**, and read from
-    /// `NESTRS_HTTP__ACCESS_LOG`.
+    /// status, byte-exact size, duration, client, `trace_id` and `span_id`, plus
+    /// `actor_id` once an authn guard resolved a principal. **On by default**,
+    /// and read from `NESTRS_HTTP__ACCESS_LOG`.
     ///
     /// It belongs to the transport rather than to `nest-rs-opentelemetry`
     /// because everything it reports is what *this* transport knows about a

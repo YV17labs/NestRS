@@ -102,7 +102,7 @@ pub(crate) fn init_fallback() -> Result<()> {
     let _ = match LogFormat::resolve(format.as_deref()) {
         LogFormat::Text => builder.try_init(),
         // `with_current_span(true)` is what puts the operation span's fields —
-        // `request_id`, and `actor_id` once authn resolved one — on every JSON
+        // `trace_id` and `span_id`, and `actor_id` once authn resolved one — on every JSON
         // line. It used to be `false`, on the reasoning that "the OTel export
         // carries span structure": true of the *observability* subscriber, and
         // false here, where there is no export to carry anything. JSON is also

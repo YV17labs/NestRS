@@ -159,7 +159,7 @@ where
             .with_file(source_location)
             .with_line_number(source_location)
             .boxed(),
-        // The current span carries the canonical fields (`request_id`,
+        // The current span carries the canonical fields (`trace_id`, `span_id`,
         // `actor_id`), so it stays on the line: an OTLP endpoint is optional
         // even with this crate installed, and a console line that can only be
         // attributed by joining against an export nobody configured is a line

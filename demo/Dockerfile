@@ -30,7 +30,7 @@
 #   - No HEALTHCHECK directive: rely on Kubernetes liveness/readiness probes
 #     exposed at /health/{live,ready,startup}.
 
-ARG RUST_VERSION=1.96
+ARG RUST_VERSION=1.97
 ARG CARGO_CHEF_VERSION=0.1.77
 
 # --- chef ---------------------------------------------------------------------

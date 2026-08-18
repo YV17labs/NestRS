@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::context::{ENV_PREFIX_VAR, EnvPrefixSource};
 use crate::error::{CliError, CliResult};
 
-const MIN_RUST_VERSION: (u32, u32) = (1, 96);
+const MIN_RUST_VERSION: (u32, u32) = (1, 97);
 
 pub struct DoctorOptions {
     pub path: Option<PathBuf>,

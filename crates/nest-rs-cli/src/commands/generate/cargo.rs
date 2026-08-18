@@ -529,9 +529,8 @@ mod tests {
                         );
                         continue;
                     }
-                    assert_eq!(
-                        req.trim_start_matches('=').split('.').count(),
-                        2,
+                    assert!(
+                        is_major_minor(req.trim_start_matches('=')),
                         "{rel}: `{name} = \"{req}\"` — third-party requirements are \
                          `major.minor`; a bare major accepts releases we never built \
                          against, a patch component rejects the fixes we want",
@@ -553,6 +552,298 @@ mod tests {
              stopped matching, and a drift in a generated manifest would now ship \
              to every scaffolded project without failing anything here",
         );
+    }
+
+    // `manifests-ci.md` states that `rust-toolchain.toml` "pins the toolchain and
+    // matches the workspace `rust-version`" — and nothing read it. The floor is
+    // restated by three workspaces, three images, the publish workflow, the
+    // doctor's own floor, the documented requirement and everything `nestrs new`
+    // writes — so a bump that misses one ships a scaffold pinning a compiler the
+    // framework no longer builds on, failing no suite here. Same reason its twin walks the generated manifests:
+    // the half nobody runs is the half that drifts.
+    #[test]
+    fn toolchain_pins_agree() {
+        // Every shape, and how its match is to be read. Three obligations, not
+        // one: every value **agrees** with the anchor, every shape is **present**
+        // (a scan that stops matching finds nothing, and finding nothing reads
+        // exactly like finding nothing wrong), and every value a `Pin::Exact`
+        // marker introduces is **well formed** — the case that motivated the
+        // distinction is `channel = "stable"` in the scaffold's own
+        // `rust-toolchain.toml`, which pins no version at all and which a
+        // value-comparing scan walks straight past.
+        // The third field is whether the shape must still be found when the
+        // repo is not readable — i.e. whether the *templates* carry it. Kept on
+        // the shape rather than in a second list: a list is edited by a
+        // different hand than the one that renames a marker, and a `matches!`
+        // that stops matching turns its presence check into a silent no-op.
+        const SHAPES: [(&str, Pin, bool); 9] = [
+            ("rust-version = \"", Pin::Exact, true),
+            ("channel = \"", Pin::Exact, true),
+            ("ARG RUST_VERSION=", Pin::Exact, true),
+            ("toolchain: '", Pin::Exact, false),
+            ("const MIN_RUST_VERSION: (u32, u32) = (", Pin::Tuple, false),
+            ("FROM rust:", Pin::Image, true),
+            ("**Rust ", Pin::Prose, false),
+            ("pins Rust ", Pin::Prose, false),
+            ("`rustc` \u{2265} ", Pin::Prose, false),
+        ];
+
+        let (in_repo, sources) = floor_sources();
+
+        // The anchor is the toolchain the repo actually builds on; away from the
+        // repo it is whatever the scaffold writes, which is the only floor a
+        // packaged crate can be wrong about.
+        let floor = sources
+            .iter()
+            .filter(|(rel, _)| !in_repo || rel == "rust-toolchain.toml")
+            .find_map(|(_, raw)| read_channel(raw))
+            .expect("the pinned toolchain channel");
+        // The anchor is checked before it is trusted. Unvalidated, a
+        // `channel = "1.97.1"` or `channel = "stable"` reported every correctly
+        // pinned file in the repo as the stale one, naming whichever sorted
+        // first — one edit, an accusation against every other site, and the
+        // culprit named nowhere.
+        assert!(
+            is_major_minor(&floor),
+            "rust-toolchain.toml pins `channel = \"{floor}\"`, which is not a bare \
+             `major.minor`. It is the anchor every other spelling in the repo is \
+             compared against, so a channel name or a patch component here \
+             reports every correctly pinned site as stale and none of them is",
+        );
+
+        let mut seen = [0usize; SHAPES.len()];
+        for (rel, raw) in &sources {
+            for (shape, (marker, kind, _)) in SHAPES.iter().enumerate() {
+                for chunk in raw.split(marker).skip(1) {
+                    // `MIN_RUST_VERSION` spells the pair as a tuple; every other
+                    // shape spells it dotted.
+                    let read = match kind {
+                        Pin::Tuple => read_version(&chunk.replacen(", ", ".", 1)),
+                        _ => read_version(chunk),
+                    };
+                    match read.as_deref().filter(|value| is_major_minor(value)) {
+                        Some(value) => {
+                            seen[shape] += 1;
+                            assert_eq!(
+                                value, floor,
+                                "{rel}: `{marker}{value}` — the Rust floor is \
+                                 pinned at `{floor}` by `rust-toolchain.toml`. \
+                                 Every spelling moves in one edit: a stale one \
+                                 here is a scaffold, an image or a doc promising \
+                                 a compiler this workspace no longer builds on",
+                            );
+                        }
+                        // An image may name the `ARG` carrying the floor
+                        // rather than the floor itself, which is what all three
+                        // Dockerfiles do. A *literal* tag there is a pin nobody
+                        // would think to move, so it is read and compared above.
+                        None if *kind == Pin::Image && chunk.starts_with("${RUST_VERSION}") => {
+                            seen[shape] += 1;
+                        }
+                        // A sentence that merely opens with the marker —
+                        // `**Rust 1.97+**` carries the floor, `**Rust and Cargo**`
+                        // does not.
+                        None if *kind == Pin::Prose => {}
+                        None => panic!(
+                            "{rel}: `{marker}{}` — this marker spells the Rust \
+                             floor, so what follows it must be a bare \
+                             `major.minor`, and `{floor}` is what \
+                             `rust-toolchain.toml` pins. A channel name, a patch \
+                             component or a suffixed tag pins something else, and \
+                             a scan that only compares *values* passes over it \
+                             without a word",
+                            preview(chunk),
+                        ),
+                    }
+                }
+            }
+        }
+
+        // Away from the repo only the templates are readable, so only the
+        // shapes they carry can be required to appear.
+        for ((marker, _, in_templates), count) in SHAPES.iter().zip(seen) {
+            if in_repo || *in_templates {
+                assert!(
+                    count > 0,
+                    "no `{marker}…` was found — the scan for that shape stopped \
+                     matching, so a stale floor written that way would now pass \
+                     unread",
+                );
+            }
+        }
+    }
+
+    // Presence per *shape* catches a scan that stopped matching, but not a pin
+    // deleted from one of several files sharing a shape: `rust-version` is
+    // written five times, so removing it from `demo/Cargo.toml` — or from the
+    // workspace scaffold — left the count positive and `toolchain_pins_agree`
+    // green. This is the obligation that sees it, derived rather than listed,
+    // since a list is extended by the same edit that forgets.
+    #[test]
+    fn every_workspace_root_declares_the_floor() {
+        let (_, sources) = floor_sources();
+        let mut checked = 0;
+        for (rel, raw) in &sources {
+            // Only a manifest can root a workspace, and TOML-parsing 129 docs
+            // pages to watch every one of them fail was a third of the scan.
+            if !rel.ends_with("Cargo.toml") && !rel.starts_with("templates:") {
+                continue;
+            }
+            let Ok(doc) = fill_placeholders(raw).parse::<DocumentMut>() else {
+                continue; // a template body that is not TOML
+            };
+            if doc.get("workspace").is_none() {
+                continue;
+            }
+            checked += 1;
+            let declares = doc
+                .get("workspace")
+                .and_then(|w| w.get("package"))
+                .and_then(|p| p.get("rust-version"))
+                .is_some()
+                || doc
+                    .get("package")
+                    .and_then(|p| p.get("rust-version"))
+                    .is_some();
+            assert!(
+                declares,
+                "{rel} roots a workspace but declares no `rust-version` — the \
+                 floor is what tells cargo to refuse an old compiler with a \
+                 sentence instead of a page of type errors, and a root that \
+                 states none states it for every crate beneath it",
+            );
+        }
+        assert!(checked > 0, "no workspace root was reachable to check");
+    }
+
+    /// How a marker's match is to be read.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Pin {
+        /// The marker is syntax: whatever follows it *is* the floor, so a value
+        /// that is not a bare `major.minor` is a malformed or stale pin, never
+        /// prose — and is reported rather than skipped.
+        Exact,
+        /// [`Pin::Exact`], spelled as the Rust tuple `(major, minor)`.
+        Tuple,
+        /// A base image tag: either the floor, or the `ARG` carrying it.
+        Image,
+        /// The marker is English that *may* open a version. Only a leading
+        /// version is read; anything else is a sentence, and skipping it is
+        /// correct rather than a hole.
+        Prose,
+    }
+
+    /// The version a marker introduces: the leading run of digits and dots.
+    ///
+    /// Every site terminates its own version — `1.97"`, `1.97+**`, `1.97)`,
+    /// `1.97-slim`, or the end of the line — which closing *characters* did not.
+    /// `**Rust ` closed on the next `+` anywhere in the file, so `**Rust 1.96**`
+    /// read a paragraph, failed the shape test, and was skipped in silence.
+    fn read_version(chunk: &str) -> Option<String> {
+        let end = chunk
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(chunk.len());
+        (end > 0).then(|| chunk[..end].to_owned())
+    }
+
+    /// Two components, both digits — the form `manifests-ci.md` requires of
+    /// every version this repo writes.
+    fn is_major_minor(value: &str) -> bool {
+        // A third component fails the digit test rather than needing its own
+        // arm: the extra dot lands inside `minor`.
+        let Some((major, minor)) = value.split_once('.') else {
+            return false;
+        };
+        !major.is_empty()
+            && !minor.is_empty()
+            && major
+                .bytes()
+                .chain(minor.bytes())
+                .all(|b| b.is_ascii_digit())
+    }
+
+    /// What a marker was actually followed by, for an assertion message: to the
+    /// end of the line and capped, so a whole file never lands in the output.
+    fn preview(chunk: &str) -> String {
+        chunk
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(24)
+            .collect()
+    }
+
+    /// Every raw-string body under `src/templates/`, unfiltered.
+    ///
+    /// `generated_manifests` keeps only bodies that parse as TOML **and** declare
+    /// dependencies — right for a requirement rule, wrong for this one: the
+    /// scaffold's `rust-toolchain.toml` declares no dependency and its Dockerfile
+    /// is not TOML at all, so the two pins a developer inherits most directly
+    /// would both have been invisible to the test written to guard them.
+    fn template_bodies() -> Vec<(String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/templates");
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .expect("the templates directory")
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("rs"))
+            .collect();
+        files.sort();
+        let mut found = Vec::new();
+        for path in files {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            let source = std::fs::read_to_string(&path).expect("a template source");
+            for (index, body) in raw_string_bodies(&source).into_iter().enumerate() {
+                found.push((format!("templates:{name}#{index}"), body));
+            }
+        }
+        found
+    }
+
+    /// The anchor's `channel = "…"` value, **literally**.
+    ///
+    /// Literally, not as a version: `channel = "stable"` has to reach the
+    /// assertion that rejects it, which a version reader would have dropped on
+    /// the way.
+    fn read_channel(raw: &str) -> Option<String> {
+        let after = raw.split("channel = \"").nth(1)?;
+        Some(after[..after.find('"')?].to_owned())
+    }
+
+    /// Whether a file may spell the Rust floor: manifests, the toolchain pin,
+    /// the images, the workflows, the CLI's own floor and the documented
+    /// requirement. A predicate rather than a list of paths — a new app, image
+    /// or page is covered the day it is written, which a list never is.
+    fn version_bearing(name: &str, path: &std::path::Path) -> bool {
+        matches!(name, "Cargo.toml" | "rust-toolchain.toml" | "doctor.rs")
+            || name.starts_with("Dockerfile")
+            || matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("yml") | Some("mdx")
+            )
+    }
+
+    /// Every source that may spell the Rust floor, and whether the repo itself
+    /// was readable.
+    ///
+    /// Away from the repo — a packaged crate — the sibling workspaces and the
+    /// docs are gone, so only the templates can be read and only they can be
+    /// required to carry anything.
+    fn floor_sources() -> (bool, Vec<(String, String)>) {
+        let in_repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../rust-toolchain.toml")
+            .is_file();
+        let mut sources = if in_repo {
+            repo_sources(&version_bearing)
+        } else {
+            Vec::new()
+        };
+        sources.extend(template_bodies());
+        (in_repo, sources)
     }
 
     /// The stand-in a `{{placeholder}}` renders to: TOML-safe, and impossible to
@@ -587,39 +878,22 @@ mod tests {
     /// A list would have to be extended by the same edit that adds a template,
     /// which is exactly the edit that forgets.
     fn generated_manifests() -> Vec<(String, String)> {
-        let mut found = Vec::new();
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/templates");
-        let entries = std::fs::read_dir(&dir).expect("the templates directory");
-        let mut files: Vec<std::path::PathBuf> = entries
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("rs"))
-            .collect();
-        files.sort();
-        for path in files {
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_owned();
-            let source = std::fs::read_to_string(&path).expect("a template source");
-            // `r#"…"#` and `r##"…"##`: Rust forces the second the moment a body
-            // contains `"#`, and a scan for the first alone goes quiet rather
-            // than failing when that happens.
-            for (index, body) in raw_string_bodies(&source).into_iter().enumerate() {
+        // `template_bodies` owns the walk, including the `r#"…"#` / `r##"…"##`
+        // discovery rule that goes *quiet* rather than failing when it breaks —
+        // a rule with two copies is a rule that gets fixed in one of them.
+        let mut found: Vec<(String, String)> = template_bodies()
+            .into_iter()
+            .filter_map(|(rel, body)| {
                 let rendered = fill_placeholders(&body);
-                let Ok(doc) = rendered.parse::<DocumentMut>() else {
-                    continue; // not TOML — a Rust or Markdown template
-                };
+                let doc = rendered.parse::<DocumentMut>().ok()?; // a Rust or Markdown template
                 let declares_deps = doc.get("dependencies").is_some()
                     || doc
                         .get("workspace")
                         .and_then(|w| w.get("dependencies"))
                         .is_some();
-                if declares_deps {
-                    found.push((format!("templates:{name}#{index}"), rendered));
-                }
-            }
-        }
+                declares_deps.then_some((rel, rendered))
+            })
+            .collect();
         // `[workspace.dependencies]` entries this file splices in on demand.
         // Read off the generator's own accessors, which *are* the exhaustive
         // enumeration by construction — a `Dep` no accessor reaches is a `Dep`
@@ -787,22 +1061,7 @@ mod tests {
     /// is exactly what happened — the derived half found a drift the literal
     /// half was blind to.
     fn repo_manifests() -> Vec<(String, String)> {
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let mut paths = Vec::new();
-        collect_manifests(&repo, &mut paths);
-        paths.sort();
-        paths
-            .into_iter()
-            .filter_map(|path| {
-                let rel = path
-                    .strip_prefix(&repo)
-                    .unwrap_or(&path)
-                    .display()
-                    .to_string();
-                // Packaged crate: the sibling workspaces aren't there.
-                std::fs::read_to_string(&path).ok().map(|raw| (rel, raw))
-            })
-            .collect()
+        repo_sources(&|name, _| name == "Cargo.toml")
     }
 
     /// The four tables a dependency requirement can be written in, each paired
@@ -828,7 +1087,18 @@ mod tests {
             .any(|table| table.get("nest-rs").is_some())
     }
 
-    fn collect_manifests(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    /// Every file under `dir` that `pick` accepts, skipping the trees no rule
+    /// here has business reading.
+    ///
+    /// One walker for every rule that needs one. Two of them had already
+    /// diverged — one pruned `dist/`, the other descended into it — so the
+    /// manifest rules and the toolchain rule saw different populations of the
+    /// same repo, for no reason either could state.
+    fn collect_files(
+        dir: &std::path::Path,
+        pick: &dyn Fn(&str, &std::path::Path) -> bool,
+        out: &mut Vec<std::path::PathBuf>,
+    ) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -837,16 +1107,37 @@ mod tests {
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or_default();
+                .unwrap_or_default()
+                .to_owned();
             if path.is_dir() {
-                if matches!(name, "target" | "node_modules" | ".git") {
+                if matches!(name.as_str(), "target" | "node_modules" | ".git" | "dist") {
                     continue;
                 }
-                collect_manifests(&path, out);
-            } else if name == "Cargo.toml" {
+                collect_files(&path, pick, out);
+            } else if pick(&name, &path) {
                 out.push(path);
             }
         }
+    }
+
+    /// Every file `pick` accepts, by repo-relative path, with its contents.
+    fn repo_sources(pick: &dyn Fn(&str, &std::path::Path) -> bool) -> Vec<(String, String)> {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut paths = Vec::new();
+        collect_files(&repo, pick, &mut paths);
+        paths.sort();
+        paths
+            .into_iter()
+            .filter_map(|path| {
+                let rel = path
+                    .strip_prefix(&repo)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
+                // Packaged crate: the sibling workspaces aren't there.
+                std::fs::read_to_string(&path).ok().map(|raw| (rel, raw))
+            })
+            .collect()
     }
 
     // A hand-rolled manifest may pin a version literally; the feature list then

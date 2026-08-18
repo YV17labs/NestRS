@@ -83,9 +83,45 @@ it is created.
   publishing doesn't drag test-only cycles.
 - Product crates under `demo/` set `publish = false`; `demo/` is its
   own workspace and never joins the root `members`.
-- `rust-toolchain.toml` pins the toolchain and matches the workspace
-  `rust-version`; `.cargo/config.toml` (mold) is inherited by `demo/`
-  hierarchically — never duplicated.
+- **The Rust floor is one value, restated everywhere it is read.**
+  `rust-toolchain.toml` pins the channel and is the anchor; the three workspace
+  `rust-version`s, the images' `ARG RUST_VERSION` and their `FROM rust:` tag,
+  the publish workflow's toolchain, `MIN_RUST_VERSION` in `nestrs doctor` and
+  the documented requirement all restate it, and everything `nestrs new`
+  scaffolds restates it again. `toolchain_pins_agree` (same file as
+  `versions_are_major_minor`, for the same reason) enforces **four**
+  obligations, and each exists because the three before it were silent
+  somewhere:
+  - the **anchor** is a bare `major.minor` — unchecked, a `channel = "stable"`
+    reported every correctly pinned site as stale and named whichever sorted
+    first;
+  - every value **agrees** with it, the site named in the failure;
+  - every shape is **present**, since a scan that stops matching finds nothing
+    and finding nothing reads exactly like finding nothing wrong;
+  - and every value a *syntactic* marker introduces is **well formed**. A
+    marker like `rust-version = "` or `channel = "` is syntax: what follows it
+    *is* the floor, so `"1"`, `"1.96.1"`, `1.96-slim` and `"stable"` are stale
+    or unpinned rather than prose, and are reported. Only the three English
+    markers (`**Rust `, `pins Rust `, `` `rustc` ≥ ``) may legitimately open a
+    sentence carrying no version, and only they are skipped.
+
+  Presence is per shape, so it cannot see a pin deleted from one of several
+  files sharing one. `every_workspace_root_declares_the_floor` is the
+  obligation that can, and it is **derived, never listed**: a manifest that
+  roots a workspace declares `rust-version`, and a member inherits it with
+  `rust-version.workspace = true` — a root's floor that no member opts into is
+  a value cargo never reads. Counting the shapes in prose is not one of the
+  obligations, and deliberately: a hand-written numeral restating what the
+  table already says is the same drift these rules exist to catch.
+
+  It walks the templates **raw** rather than through `generated_manifests`,
+  which keeps only TOML declaring dependencies: the scaffold's own
+  `rust-toolchain.toml` declares none and its Dockerfile is not TOML, so the two
+  pins a developer inherits most directly were invisible to the generated-half
+  machinery. A benchmark's recorded `rustc` is a **measurement**, not a pin, and
+  never moves with the floor.
+- `.cargo/config.toml` (mold) is inherited by `demo/` hierarchically — never
+  duplicated.
 
 ## CI is NOT the gate
 

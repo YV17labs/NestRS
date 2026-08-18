@@ -111,10 +111,12 @@ matters at every edge, and the one that surprises people is the first:
 |---|---|
 | inside an `#[sse]` stream, or any streaming body | the request that opened it, for as long as it streams |
 | a WebSocket message | its own span, the connection's trace, the actor from the upgrade |
+| a `#[on_connect]` / `#[on_disconnect]` hook | a unit of work too — `ws.connect`, `ws.disconnect`, under the upgrade's trace |
 | a GraphQL subscription | the trace of the upgrade that opened the socket |
 | an MCP operation | the trace of the HTTP request it arrived on |
 | a queue job, in another process | the producer's trace, as a **child** of the enqueue |
 | a scheduled tick | a fresh trace of its own — nothing upstream to continue |
+| an `#[on_event]` listener | the span of whatever emitted the event — dispatch is inline, not a unit of work of its own |
 
 A queue crosses a *process*, so the context travels in the job envelope rather
 than in a task-local. A payload that carries none — a legacy producer, a foreign

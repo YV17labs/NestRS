@@ -165,8 +165,8 @@ computation — batches re-establish ambient state through their own
 </Aside>
 
 **Transient** — rebuild on every `Scoped<T>` / `get::<T>()` extraction.
-Use for throw-away per-call state (a fresh correlation id, a one-shot
-builder). A transient must not depend on itself — cycles panic at
+Use for throw-away per-call state (a one-shot builder — never a
+correlation id, which the framework already carries). A transient must not depend on itself — cycles panic at
 resolution with a clear diagnostic.
 
 <Aside type="note">

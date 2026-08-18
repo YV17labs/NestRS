@@ -195,6 +195,11 @@ At bootstrap each wired listener logs one line at `debug`, target
 DEBUG nest_rs::events: wired event listener listener="NotificationsListener::on_post_published"
 ```
 
+Dispatch is inline — `emit` awaits each listener in turn — so a listener is not
+a unit of work of its own: its logs file under the span of whatever emitted the
+event, with that request's `trace_id` and `actor_id`. See
+[Correlation](/fundamentals/correlation/).
+
 <Aside>
 Without `EventsModule` anywhere in the tree, the `EventBus` is absent —
 every `#[listeners]` provider compiles in but stays inert (no

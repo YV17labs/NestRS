@@ -96,6 +96,7 @@ const MIRRORED_PAGES = new Map([
   ['architecture.mdx', { rule: 'architecture-drift', check: (src) => architectureDrift(src) }],
   ['decorators.mdx', { rule: 'decorator-index', check: (src) => decoratorIndexDrift(src) }],
   ['index.mdx', { rule: 'landing-claim', check: (src) => landingClaims(src) }],
+  ['queue/writing-a-driver.mdx', { rule: 'envelope-drift', check: (src) => envelopeDrift(src) }],
 ]);
 const MIRRORS_SEEN = new Set();
 
@@ -126,6 +127,24 @@ function setDrift(canon, page, what) {
     ...[...canon].filter((x) => !page.has(x)).map((x) => `${what} missing from the page: ${x}`),
     ...[...page].filter((x) => !canon.has(x)).map((x) => `${what} on the page, not in the rules: ${x}`),
   ];
+}
+
+/// `/queue/writing-a-driver/` publishes the wire envelope a third-party driver
+/// has to produce, so its JSON block is diffed against the keys
+/// `nest_rs_queue::envelope` actually seals rather than trusted. A key the
+/// framework adds and the page omits is a driver that compiles, runs, and drops
+/// that key across the one hop the framework crosses as a *process*.
+const ENVELOPE_CANON = 'crates/nest-rs-queue/src/envelope.rs';
+function envelopeDrift(src) {
+  const canon = frameworkSource(ENVELOPE_CANON);
+  const keys = [...canon.matchAll(/^const [A-Z_]+: &str = "([a-z_]+)";$/gm)].map((m) => m[1]);
+  if (keys.length === 0) {
+    throw new Error(`no envelope key constants in ${ENVELOPE_CANON} — teach \`envelopeDrift\``);
+  }
+  return keys
+    .filter((key) => !src.includes(`"${key}"`))
+    .map((key) => `${key} is sealed into the wire envelope and the page's shape omits it — `
+      + 'a driver written from this page would drop it');
 }
 
 /// `/decorators/` opens by calling itself "the index of every decorator the

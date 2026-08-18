@@ -19,7 +19,7 @@ service-level logs your `#[process]` method emits keep their own target
 | Target | What | Level |
 |---|---|---|
 | `nest_rs::queue` | Boot registration, per-job span + events, skipped/unversioned warnings. | `debug` on job start, `info` on success, `warn` on failure. |
-| `nest_rs::app` | Boot: `attached module-contributed transport transport=QueueWorker`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
+| `nest_rs::app` | Boot: `attached module-contributed transport transport="QueueWorker"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
 | `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
 
 Hot paths respect `RUST_LOG=info`: `job started` sits at `debug`, so a
@@ -39,9 +39,18 @@ tagged with the span's fields:
 | `processor` | The processor host name, e.g. `AudioProcessor::transcode`. |
 | `job_id` | The apalis `TaskId` for this job. |
 | `attempt` | The apalis attempt counter (`1` on the first try, higher on retries). |
+| `trace_id` / `span_id` | This job's [W3C trace context](/fundamentals/correlation/) — always present. |
+| `parent_span_id` | The span that enqueued the job: the HTTP request, the message, the tick. |
+| `continued_trace` | `true` when the envelope carried a `traceparent`, `false` when this job started a trace of its own. |
+| `actor_id` | Who the *enqueue* was served for. Absent when nobody was authenticated — a job pushed by a scheduled tick has none. |
+| `otel.kind` | `consumer` — a job is work delivered *to* this process. |
 
 `attempt` distinguishes retries of the same `job_id`. The OTLP appender
 from `nest-rs-opentelemetry` exports these as span attributes.
+
+The trace fields cross a **process** boundary: the producer seals them
+into the job envelope and the consumer continues from them — see
+[Correlation](/fundamentals/correlation/).
 
 ## What a job's life looks like
 
@@ -49,24 +58,25 @@ On success the worker emits `job started` at `debug` and `job ok` at
 `info` (carrying `elapsed_ms`, the wall time of the handler call):
 
 ```text frame="terminal"
-DEBUG process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: nest_rs::queue: job started
- INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: features::audio: transcoded file=track-1717405126521.mp3
- INFO process job{queue=audio processor=AudioProcessor::transcode job_id=01HFEX… attempt=1}: nest_rs::queue: job ok elapsed_ms=342
+DEBUG process job{otel.kind="consumer" trace_id=01a014a851807b2196a2b35038bd442b span_id=d0c61da1201df4a8 queue="audio" processor="AudioProcessor::transcode" job_id=01HFEX… attempt=1 continued_trace=true parent_span_id=fdbb09d1841e9ec8 actor_id="00000000-0000-7000-8000-00000000ac00"}: nest_rs::queue: job started
+ INFO process job{otel.kind="consumer" trace_id=01a014a851807b2196a2b35038bd442b span_id=d0c61da1201df4a8 …}: features::audio: transcoded file="track-1717405126521.mp3"
+ INFO process job{otel.kind="consumer" trace_id=01a014a851807b2196a2b35038bd442b span_id=d0c61da1201df4a8 …}: nest_rs::queue: job ok elapsed_ms=342
 ```
 
 A failed attempt emits `job failed` at `warn`, carrying `elapsed_ms`
 and the `error`:
 
 ```text frame="terminal"
-DEBUG process job{queue=audio processor=AudioProcessor::transcode job_id=01HFFA… attempt=1}: nest_rs::queue: job started
- WARN process job{queue=audio processor=AudioProcessor::transcode job_id=01HFFA… attempt=1}: nest_rs::queue: job failed elapsed_ms=12 error=connection refused
+DEBUG process job{… job_id=01HFFA… attempt=1}: nest_rs::queue: job started
+ WARN process job{… job_id=01HFFA… attempt=1}: nest_rs::queue: job failed elapsed_ms=12 error=connection refused
 ```
 
 The `attempt` field on the span is how you correlate a retry: apalis
 re-runs the same `job_id` with `attempt=2`, opening a fresh `process
-job` span. There is no separate terminal line — the retry budget lives
-in the apalis `RetryLayer`; see [Retries and
-failure](/queue/retries-and-failure/) for the policy behind `attempt`.
+job` span — same `trace_id`, new `span_id`. There is no separate
+terminal line — the retry budget lives in the apalis `RetryLayer`; see
+[Retries and failure](/queue/retries-and-failure/) for the policy behind
+`attempt`.
 
 ## What boot looks like
 
@@ -76,8 +86,8 @@ provider isn't reachable from this app's module tree is skipped with a
 `warn`:
 
 ```text frame="terminal"
- INFO nest_rs::app: attached module-contributed transport transport=QueueWorker
- INFO nest_rs::queue: registered queue processor processor=AudioProcessor::transcode queue=audio retries=3
+ INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
+ INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
  WARN nest_rs::queue: skipped #[process] method: no instance of the provider in
       this app's container processor=ReportJobs::weekly queue=reports
       origin="features::reports::queue::processor"

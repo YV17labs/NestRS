@@ -211,19 +211,24 @@ from the app's module tree.
 ```bash frame="terminal"
 $ nestrs run dev api
 …
- INFO nest_rs::app: attached module-contributed transport transport=Scheduler
- INFO nest_rs::schedule: scheduled job (interval) provider=AudioTasks method=enqueue_transcode interval_ms=5000
- INFO nest_rs::schedule: scheduled job (one-shot) provider=AudioTasks method=warmup_on_boot delay_ms=3000
- INFO nest_rs::schedule: scheduled job (cron) provider=AudioTasks method=heartbeat timezone=UTC
- INFO features::audio: audio pipeline ready to enqueue phase=warmup
- INFO features::audio: enqueued transcode job file=track-1717405126521.mp3
- INFO features::audio: audio producer heartbeat queue=audio
+ INFO nest_rs::app: attached module-contributed transport transport="Scheduler"
+ INFO nest_rs::schedule: scheduled job (interval) provider="AudioTasks" method="enqueue_transcode" interval_ms=5000
+ INFO nest_rs::schedule: scheduled job (one-shot) provider="AudioTasks" method="warmup_on_boot" delay_ms=3000
+ INFO nest_rs::schedule: scheduled job (cron) provider="AudioTasks" method="heartbeat" timezone="UTC"
+ INFO scheduled job{otel.kind="internal" trace_id=01a014a7409a7d60b6db79d6fb668cfe span_id=858be0eeb84fe593 provider="AudioTasks" method="warmup_on_boot"}: features::audio: audio pipeline ready to enqueue phase="warmup"
+DEBUG scheduled job{otel.kind="internal" trace_id=01a014ad48107b2189deec939630eb9e span_id=5859a403369ada9f provider="AudioTasks" method="enqueue_transcode"}: features::audio: enqueued transcode job file="track-1717405126521.mp3"
+ INFO scheduled job{otel.kind="internal" trace_id=01a014ada9b87c81a3ac2d6376f7cc06 span_id=c97ff4bd2ac5f292 provider="AudioTasks" method="heartbeat"}: features::audio: audio producer heartbeat queue="audio"
 ```
 
 The scheduler logs one line per job at boot, then stays quiet on a
 successful tick — the service logs are what you see running. A failed run
 adds one `scheduled job failed` line at `error`; the schedule keeps
 ticking.
+
+Every tick opens its own `scheduled job` span, so the lines your task
+writes are already correlated: a **fresh** `trace_id` each time (a clock
+has nothing upstream to continue) and no `actor_id` (nobody is being
+served). See [Correlation](/fundamentals/correlation/).
 
 A bad cron **literal** never reaches boot — it fails `cargo build`:
 

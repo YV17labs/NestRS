@@ -135,6 +135,7 @@ whole request.
 | From the upgrade | On the socket |
 |---|---|
 | The principal and its `Ability` | Carried, for the connection's life |
+| The trace and the `actor_id` | Carried — the socket opens one `graphql.subscription` span under the upgrade's trace |
 | A database handle | Carried, always **outside** the upgrade's transaction |
 | `RequestScope` (`Scoped<T>`) | **Not** carried — reported as absent |
 
@@ -143,6 +144,10 @@ The middle row is what makes a `Repo`-backed subscription work at all: the
 boundary's handle is already gone. The socket takes a pool-bound one
 instead. Carrying the transaction would pin a pooled connection for hours
 and write through something nobody will commit.
+
+The second row's span covers the **connection**, not each item: async-graphql
+owns the operation loop, so this crate never sees an operation boundary to open
+one at. See [Correlation](/fundamentals/correlation/).
 
 The last row is deliberate too. A request-scoped provider built once at
 connect and shared by every operation for four hours is not request-scoped

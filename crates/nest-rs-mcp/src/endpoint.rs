@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{Container, current_request_scope};
+use nest_rs_core::{Container, Correlation, current_request_scope};
 use poem::endpoint::TowerCompatExt;
 use poem::{Endpoint, IntoEndpoint, Request, Response, Result, Route};
 use rmcp::ServerHandler;
@@ -187,6 +187,10 @@ where
         // `PropagatingHandler` can re-install them *inside* the spawned
         // dispatch, where a task-local from this task would not reach.
         let scope = current_request_scope();
+        // One read, one decision. Resolved twice, the two calls disagree on the
+        // path that has to mint — the extensions would carry one id and the
+        // inline install another, for the same operation.
+        let correlation = nest_rs_core::current_correlation().unwrap_or_else(Correlation::mint);
         let captured = self.context.as_ref().map(|context| context.capture(&req));
         // The guard captures for its own `around` the same way — post-`before`,
         // so it sees the ability its chain just attached.
@@ -195,10 +199,18 @@ where
             scope: scope.clone(),
             captured,
             guard_captured,
+            // The interceptor band is the outermost wrap on the request, so the
+            // span current here is the request's own — the one an access log
+            // and an OTel export are keyed on. Disabled when nothing installed
+            // one, which is the free case rather than a special one.
+            span: tracing::Span::current(),
+            correlation: correlation.clone(),
         });
 
-        // Also install the scope here, so an operation rmcp happens to resolve
-        // inline (rather than on a spawned task) is covered by the same seam.
-        crate::scope::maybe_with_request_scope(scope, self.inner.call(req)).await
+        // Also install it here, so an operation rmcp happens to resolve inline
+        // (rather than on a spawned task) is covered by the same seam. Already
+        // ambient from the HTTP edge — re-installing the same id keeps an inline
+        // (non-spawned) rmcp resolution on the same footing as a spawned one.
+        nest_rs_core::with_request_scope(scope, correlation, None, self.inner.call(req)).await
     }
 }

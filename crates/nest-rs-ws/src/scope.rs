@@ -5,7 +5,7 @@
 //! dispatched on the connection task *after* the upgrade request unwound, so
 //! there is no per-message request to carry a scope through. The gateway
 //! endpoint captures the singleton container once at upgrade; the dispatch loop
-//! then opens a fresh [`RequestScope`] per message — the same per-message model
+//! then opens a fresh [`RequestScope`](nest_rs_core::RequestScope) per message — the same per-message model
 //! guards already run under — and installs it as a task-local. A handler reads
 //! it back with [`Scoped::<T>::from_context`].
 //!
@@ -21,24 +21,17 @@
 //! Scope is **per message**, so an `#[injectable(scope = request)]` provider is
 //! rebuilt for each message and shared within that one dispatch — connection is
 //! not request.
+//!
+//! **The installer is the kernel's** ([`nest_rs_core::with_request_scope`]),
+//! called by the dispatch loop. It used to be a task-local of this crate's own,
+//! which made `Scoped<T>` work here while `nest_rs_core::current_trace_id()` —
+//! the one accessor every other edge offers — returned `None` inside a message
+//! handler. One ambient context, one accessor, every edge: a second mechanism is
+//! a blind spot by construction.
 
 use std::any::type_name;
-use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
-
-use nest_rs_core::RequestScope;
-
-tokio::task_local! {
-    static WS_REQUEST_SCOPE: Arc<RequestScope>;
-}
-
-/// Run `fut` with `scope` installed as the ambient per-message request scope, so
-/// any handler it drives can resolve request-scoped providers via [`Scoped<T>`].
-/// Called by the gateway's connection loop around each message dispatch.
-pub(crate) async fn with_request_scope<F: Future>(scope: Arc<RequestScope>, fut: F) -> F::Output {
-    WS_REQUEST_SCOPE.scope(scope, fut).await
-}
 
 /// Why a request-scoped provider could not be resolved inside a WS message
 /// handler. `Display` is what the `#[messages]` reply mapping puts on the error
@@ -56,7 +49,7 @@ pub enum WsScopeError {
 }
 
 /// Resolves a provider of type `T` from the current WS message's
-/// [`RequestScope`] — the per-message mirror of [`nest_rs_http::Scoped<T>`].
+/// [`RequestScope`](nest_rs_core::RequestScope) — the per-message mirror of [`nest_rs_http::Scoped<T>`].
 pub struct Scoped<T>(pub Arc<T>);
 
 impl<T> Scoped<T> {
@@ -76,13 +69,11 @@ impl<T> Deref for Scoped<T> {
 impl<T: Send + Sync + 'static> Scoped<T> {
     /// Resolve `T` from the message's request scope, installed by the gateway's
     /// connection loop as a task-local for the duration of the dispatch. A
-    /// singleton falls through [`RequestScope::get`] (prefer plain `#[inject]`
+    /// singleton falls through [`RequestScope::get`](nest_rs_core::RequestScope::get) (prefer plain `#[inject]`
     /// for those); a request-scoped provider is built fresh per message.
     pub fn from_context() -> Result<Self, WsScopeError> {
-        let resolved = WS_REQUEST_SCOPE
-            .try_with(|scope| scope.get::<T>())
-            .map_err(|_| WsScopeError::NoScope)?;
-        match resolved {
+        let scope = nest_rs_core::current_request_scope().ok_or(WsScopeError::NoScope)?;
+        match scope.get::<T>() {
             Some(value) => Ok(Scoped(value)),
             None => Err(WsScopeError::NoProvider(type_name::<T>())),
         }
@@ -93,7 +84,7 @@ impl<T: Send + Sync + 'static> Scoped<T> {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use nest_rs_core::Container;
+    use nest_rs_core::{Container, Correlation, RequestScope};
 
     use super::*;
 
@@ -111,7 +102,7 @@ mod tests {
     #[tokio::test]
     async fn from_context_shares_one_instance_within_a_message() {
         let scope = Arc::new(RequestScope::new(scoped_container()));
-        with_request_scope(scope, async {
+        nest_rs_core::with_request_scope(Some(scope), Correlation::mint(), None, async {
             let a = Scoped::<Probe>::from_context().expect("scope installed");
             let b = Scoped::<Probe>::from_context().expect("scope installed");
             assert!(Arc::ptr_eq(&a.0, &b.0));
@@ -123,13 +114,19 @@ mod tests {
     #[tokio::test]
     async fn separate_messages_build_distinct_instances() {
         let container = scoped_container();
-        let first = with_request_scope(Arc::new(RequestScope::new(container.clone())), async {
-            Scoped::<Probe>::from_context().expect("scope").0.0
-        })
+        let first = nest_rs_core::with_request_scope(
+            Some(Arc::new(RequestScope::new(container.clone()))),
+            Correlation::mint(),
+            None,
+            async { Scoped::<Probe>::from_context().expect("scope").0.0 },
+        )
         .await;
-        let second = with_request_scope(Arc::new(RequestScope::new(container)), async {
-            Scoped::<Probe>::from_context().expect("scope").0.0
-        })
+        let second = nest_rs_core::with_request_scope(
+            Some(Arc::new(RequestScope::new(container))),
+            Correlation::mint(),
+            None,
+            async { Scoped::<Probe>::from_context().expect("scope").0.0 },
+        )
         .await;
         assert_ne!(
             first, second,

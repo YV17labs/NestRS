@@ -21,6 +21,12 @@ pub trait JobProducer: Send + Sync + 'static {
     /// Push a JSON-encoded job onto `queue`. The wire format is always JSON;
     /// a backend may re-encode internally but must round-trip the payload. A
     /// backend failure surfaces as [`QueueError::Backend`].
+    ///
+    /// A backend implementing this wraps the payload with
+    /// [`envelope::seal`](crate::envelope::seal), which stamps the wire-format
+    /// version **and** the ambient `request_id` — that is what makes a job
+    /// traceable back to the request that enqueued it, across the process
+    /// boundary a queue puts between the two.
     async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError>;
 }
 

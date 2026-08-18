@@ -21,6 +21,11 @@ mod processor;
 mod producer;
 mod queue_name;
 
+// The wire envelope, both halves. `pub` because a backend crate
+// (`nest-rs-redis`, or a third-party one) is what pushes and drains, so it is
+// what seals and opens; this crate owns the *shape* so every backend wraps
+// identically. A seam between framework crates, not a surface an app calls.
+pub mod envelope;
 pub use error::QueueError;
 pub use inventory::{
     JobError, JobHandler, ProcessMethod, WIRE_FORMAT_VERSION, check_duplicate_queue_claims,

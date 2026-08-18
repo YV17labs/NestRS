@@ -22,6 +22,16 @@
 //! the framework emits from a task it *spawned* — a `spawn_blocking` write, a
 //! socket's writer half — never runs on the test's thread. Reach for
 //! [`LogCapture::install_global`] there.
+//!
+//! # Spans are captured too, and they carry the contract
+//!
+//! Most of what the framework promises an operator lives on the **operation
+//! span**, not on an event: `trace_id`, `span_id`, `actor_id`, `http.route`,
+//! `otel.name`. A harness that could only read events could assert none of it,
+//! which is why [`spans`](LogCapture::spans) exists — and why fields recorded
+//! *after* a span opens are captured as well as the ones declared at creation.
+//! That second half is the whole point at an HTTP edge, where the route template
+//! and the status are only known once the inner tree has answered.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -54,9 +64,32 @@ impl CapturedEvent {
     }
 }
 
+/// One recorded `tracing` span, with every field value it ever held.
+#[derive(Clone, Debug)]
+pub struct CapturedSpan {
+    /// The span's target — `nest_rs::http`, `nest_rs::ws`, …
+    pub target: String,
+    /// The span's *name* as `tracing` fixes it (`http.request`), which is a
+    /// literal and never the exported OTel name — that one is the `otel.name`
+    /// field, because `tracing` cannot vary a name per instance.
+    pub name: String,
+    /// Fields declared at creation **and** recorded afterwards, last write
+    /// winning. A field declared `Empty` and never filled is absent, which is
+    /// exactly the silent no-op worth asserting against.
+    pub fields: BTreeMap<String, String>,
+}
+
+impl CapturedSpan {
+    /// One field, if the span carries it.
+    pub fn field(&self, name: &str) -> Option<String> {
+        self.fields.get(name).cloned()
+    }
+}
+
 /// A live capture of everything logged on this thread until it is dropped.
 pub struct LogCapture {
     events: Arc<Mutex<Vec<CapturedEvent>>>,
+    spans: Arc<Mutex<Vec<CapturedSpan>>>,
     /// `None` for a global capture, which cannot be uninstalled.
     _guard: Option<DefaultGuard>,
 }
@@ -65,11 +98,11 @@ impl LogCapture {
     /// Start capturing on the current thread. Capturing stops when the returned
     /// value is dropped, restoring whatever subscriber was default before.
     pub fn install() -> Self {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let guard = tracing::subscriber::set_default(Self::subscriber(&events));
+        let capture = Self::empty();
+        let guard = tracing::subscriber::set_default(capture.subscriber());
         Self {
-            events,
             _guard: Some(guard),
+            ..capture
         }
     }
 
@@ -109,20 +142,26 @@ impl LogCapture {
     /// If a global subscriber is already installed — including the one an
     /// `App` boot installs.
     pub fn install_global() -> Self {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        tracing::subscriber::set_global_default(Self::subscriber(&events)).expect(
+        let capture = Self::empty();
+        tracing::subscriber::set_global_default(capture.subscriber()).expect(
             "no global subscriber is installed yet — `LogCapture::install_global` must come \
              before anything that boots an `App`, which installs tracing's console fallback",
         );
+        capture
+    }
+
+    fn empty() -> Self {
         Self {
-            events,
+            events: Arc::new(Mutex::new(Vec::new())),
+            spans: Arc::new(Mutex::new(Vec::new())),
             _guard: None,
         }
     }
 
-    fn subscriber(events: &Arc<Mutex<Vec<CapturedEvent>>>) -> impl tracing::Subscriber {
+    fn subscriber(&self) -> impl tracing::Subscriber {
         Registry::default().with(CollectLayer {
-            events: Arc::clone(events),
+            events: Arc::clone(&self.events),
+            spans: Arc::clone(&self.spans),
         })
     }
 
@@ -154,6 +193,35 @@ impl LogCapture {
         hits.remove(0)
     }
 
+    /// Every span captured so far, in creation order.
+    pub fn spans(&self) -> Vec<CapturedSpan> {
+        self.spans.lock().expect("span buffer").clone()
+    }
+
+    /// The single span on `target` named `name`, or a panic naming what was
+    /// captured instead.
+    ///
+    /// Reach for this to assert the fields an operator actually queries —
+    /// `trace_id`, `actor_id`, `http.route`. A field declared `Empty` and never
+    /// recorded is **absent** here, which is what makes a `record` call nobody
+    /// wired assertable at all: `tracing` fixes a span's fields at creation, so
+    /// such a call is a silent no-op and nothing else in a test can see it.
+    #[track_caller]
+    pub fn expect_span(&self, target: &str, name: &str) -> CapturedSpan {
+        let mut hits: Vec<_> = self
+            .spans()
+            .into_iter()
+            .filter(|span| span.target == target && span.name == name)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected exactly one `{name}` span on `{target}`, captured: {:#?}",
+            self.spans(),
+        );
+        hits.remove(0)
+    }
+
     /// Assert nothing on `target` carried `message` — the quiet half, and the
     /// one worth wording once.
     ///
@@ -175,9 +243,49 @@ impl LogCapture {
 
 struct CollectLayer {
     events: Arc<Mutex<Vec<CapturedEvent>>>,
+    spans: Arc<Mutex<Vec<CapturedSpan>>>,
 }
 
-impl<S: tracing::Subscriber> Layer<S> for CollectLayer {
+impl<S> Layer<S> for CollectLayer
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::Id,
+        ctx: Context<'_, S>,
+    ) {
+        let mut visitor = FieldVisitor::default();
+        attrs.record(&mut visitor);
+        let meta = attrs.metadata();
+        let mut spans = self.spans.lock().expect("span buffer");
+        spans.push(CapturedSpan {
+            target: meta.target().to_string(),
+            name: meta.name().to_string(),
+            fields: visitor.fields,
+        });
+        // The buffer entry *is* the storage — a later `record` writes straight
+        // into it. The index rides the registry's own per-span extensions rather
+        // than a map keyed by id, because an id is reused once a span closes and
+        // a map would merge two unrelated spans under one entry.
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut().insert(SpanIndex(spans.len() - 1));
+        }
+    }
+
+    fn on_record(&self, id: &tracing::Id, values: &tracing::span::Record<'_>, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else { return };
+        let Some(SpanIndex(index)) = span.extensions().get::<SpanIndex>().copied() else {
+            return;
+        };
+        let mut visitor = FieldVisitor::default();
+        values.record(&mut visitor);
+        if let Some(captured) = self.spans.lock().expect("span buffer").get_mut(index) {
+            captured.fields.extend(visitor.fields);
+        }
+    }
+
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = FieldVisitor::default();
         event.record(&mut visitor);
@@ -190,6 +298,10 @@ impl<S: tracing::Subscriber> Layer<S> for CollectLayer {
         });
     }
 }
+
+/// Which entry in the capture buffer a span writes into.
+#[derive(Clone, Copy)]
+struct SpanIndex(usize);
 
 #[derive(Default)]
 struct FieldVisitor {

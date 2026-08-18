@@ -89,6 +89,18 @@ pub struct HttpConfig {
     /// proxy in most deployments; flip on with `NESTRS_HTTP__COMPRESSION=true`
     /// when the app terminates responses directly.
     pub compression: bool,
+    /// Emit one access event per request on `nest_rs::access` — method, path,
+    /// status, byte-exact size, duration, client, `request_id`, and `trace_id`
+    /// when an observability stack is mounted. **On by default**, and read from
+    /// `NESTRS_HTTP__ACCESS_LOG`.
+    ///
+    /// It belongs to the transport rather than to `nest-rs-opentelemetry`
+    /// because everything it reports is what *this* transport knows about a
+    /// request it served: no collector, no exporter and no propagator is
+    /// involved, so none may be required. Turning it off does **not** turn off
+    /// the correlation id — that is minted and echoed on every request either
+    /// way, because it is what everything else is filed under.
+    pub access_log: bool,
     /// Reverse proxies whose `X-Forwarded-For` / `X-Real-IP` this deployment
     /// believes. Empty by default — with no entry the framework reads neither
     /// header and every caller is identified by its transport peer, which is
@@ -143,6 +155,9 @@ impl Default for HttpConfig {
             fail_secure_strict: true,
             security_headers: SecurityHeadersConfig::default(),
             compression: false,
+            // On by default. A deployment that serves requests and records none
+            // of them is the surprising configuration, not the reverse.
+            access_log: true,
             trusted_proxies: Vec::new(),
             sse_max_connection: Some(Duration::from_secs(DEFAULT_SSE_MAX_CONNECTION_SECS)),
             sse_keep_alive: Some(Duration::from_secs(DEFAULT_SSE_KEEP_ALIVE_SECS)),
@@ -221,6 +236,7 @@ impl Config for HttpConfig {
             fail_secure_strict: env.flag("FAIL_SECURE_STRICT", base.fail_secure_strict)?,
             security_headers: SecurityHeadersConfig::from_env(env, base.security_headers)?,
             compression: env.flag("COMPRESSION", base.compression)?,
+            access_log: env.flag("ACCESS_LOG", base.access_log)?,
             trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
             sse_max_connection: env.seconds("SSE_MAX_CONNECTION_SECS", base.sse_max_connection)?,
             sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,

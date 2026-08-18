@@ -134,7 +134,8 @@ mod tests {
         // `extract_with_limit` behaviour driven through the extractor.
         let (req, mut body) = Request::builder().body(vec![b'x'; 64]).split();
         let err = crate::with_request_scope(
-            test_scope(),
+            Some(test_scope()),
+            nest_rs_core::Correlation::mint(),
             Some(32),
             RawBody::from_request(&req, &mut body),
         )
@@ -150,7 +151,8 @@ mod tests {
         // pins that the extractor reads the cap rather than the constant.
         let (req, mut body) = Request::builder().body(vec![b'x'; 32]).split();
         let raw = crate::with_request_scope(
-            test_scope(),
+            Some(test_scope()),
+            nest_rs_core::Correlation::mint(),
             Some(32),
             RawBody::from_request(&req, &mut body),
         )

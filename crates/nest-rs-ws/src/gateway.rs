@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::{Container, RequestScope};
 use nest_rs_pipes::PipeError;
+use tracing::Instrument;
 
-use crate::scope::with_request_scope;
 use poem::web::websocket::{Message, WebSocket, WebSocketConfig};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
@@ -146,6 +146,12 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             ambient,
             data_pipe: self.data_pipe.clone(),
             root_container,
+            // The upgrade *is* an HTTP request, so the connection inherits that
+            // request's id: "which request opened this socket" is answerable,
+            // and every message this connection carries names it. Minted only
+            // when the gateway is mounted outside the HTTP edge, which is a
+            // wiring shape rather than a normal deployment.
+            connection: nest_rs_core::Correlation::inherited(),
         };
         let limits = SocketLimits {
             max_lifetime,
@@ -168,6 +174,14 @@ struct DispatchWiring {
     ambient: Option<(Arc<dyn SocketContext>, Captured)>,
     data_pipe: Option<Arc<WsDataFold>>,
     root_container: Option<Container>,
+    /// The upgrade that opened this socket. Every message names its id, so a
+    /// connection's whole conversation is one query — while each message keeps an
+    /// id of its own, because a message is the unit of work, not the socket.
+    ///
+    /// It carries the **actor** too: the guards authenticated once, at the
+    /// upgrade, and nothing re-authenticates per message — so without inheriting
+    /// it here every message would be attributed to nobody.
+    connection: nest_rs_core::Correlation,
 }
 
 /// Per-socket limits resolved once at upgrade from [`WsConfig`], threaded into
@@ -232,7 +246,25 @@ async fn serve_connection<G: Gateway, N: 'static>(
     let registry: Arc<dyn Registry> = server.clone();
     let client = WsClient::new(conn_id, registry);
 
-    gateway.on_connect(&client).await;
+    // `on_connect` and `on_disconnect` are units of work like any message —
+    // developer code that logs, writes and emits — so each gets a span and the
+    // ambient id, and both are the *connection's*: the upgrade is what accepted
+    // this work, and nothing between opening and closing re-authenticates. Two
+    // short spans rather than one wrapping the loop, because the message is the
+    // unit here and a parent that stays open for the socket's life would file
+    // every message under a span that never closes.
+    under_connection(
+        &wiring.connection,
+        nest_rs_core::operation_span!(
+            target: "nest_rs::ws",
+            kind: "server",
+            "ws.connect",
+            &wiring.connection,
+            ws.connection_id = conn_id,
+        ),
+        gateway.on_connect(&client),
+    )
+    .await;
 
     // Optional socket-lifetime ceiling. When it elapses the server closes the
     // socket through the same path as a client `Close`, so a principal captured
@@ -258,6 +290,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                 tracing::info!(
                     target: "nest_rs::ws",
                     conn_id,
+                    trace_id = %wiring.connection.trace_id(),
                     "closing socket: max lifetime reached",
                 );
                 break;
@@ -271,7 +304,12 @@ async fn serve_connection<G: Gateway, N: 'static>(
                         // while reading; this second check covers the boundary
                         // exactly at the limit and keeps the reply symmetric.
                         if text.len() > limits.max_message_bytes {
-                            let frame = error_frame("error", &crate::WsError::new("message too large"));
+                            let frame = refuse_oversize(
+                                &wiring.connection,
+                                conn_id,
+                                text.len(),
+                                limits.max_message_bytes,
+                            );
                             if outbox.try_send(frame.into()).is_err() {
                                 break;
                             }
@@ -292,7 +330,13 @@ async fn serve_connection<G: Gateway, N: 'static>(
                     Ok(Message::Close(_)) => break,
                     Ok(_) => {}
                     Err(err) => {
-                        tracing::debug!(target: "nest_rs::ws", error = %err, "websocket read error");
+                        tracing::debug!(
+                            target: "nest_rs::ws",
+                            conn_id,
+                            trace_id = %wiring.connection.trace_id(),
+                            error = %err,
+                            "websocket read error",
+                        );
                         break;
                     }
                 }
@@ -304,7 +348,18 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // remove the entry. Dropping it *before* awaiting the writer releases the
     // registry's outbox `Sender` clone so the writer task observes the channel
     // close; on an unwind the guard's `Drop` does the same cleanup.
-    gateway.on_disconnect(&client).await;
+    under_connection(
+        &wiring.connection,
+        nest_rs_core::operation_span!(
+            target: "nest_rs::ws",
+            kind: "server",
+            "ws.disconnect",
+            &wiring.connection,
+            ws.connection_id = conn_id,
+        ),
+        gateway.on_disconnect(&client),
+    )
+    .await;
     drop(registry_guard);
     drop(outbox);
     // A `JoinError` from the writer means it panicked (it is never aborted);
@@ -312,8 +367,64 @@ async fn serve_connection<G: Gateway, N: 'static>(
     if let Err(err) = writer.await
         && err.is_panic()
     {
-        tracing::warn!(target: "nest_rs::ws", error = %err, "writer task failed");
+        tracing::warn!(
+            target: "nest_rs::ws",
+            conn_id,
+            trace_id = %wiring.connection.trace_id(),
+            error = %err,
+            "writer task failed",
+        );
     }
+}
+
+/// Refuse a message past the per-message cap, and say so.
+///
+/// A refusal the client is told about and the operator is not is invisible
+/// exactly where it matters: a deployment whose cap is set too low looks, from
+/// the outside, like clients that quietly stopped sending. `debug` rather than
+/// `warn`, matching the read-error path beside it — a message over a configured
+/// size is a client-shaped error, not a security denial.
+///
+/// The frame is built here too, so the sentence the client reads and the event
+/// the operator greps cannot come to describe different refusals.
+fn refuse_oversize(
+    connection: &nest_rs_core::Correlation,
+    conn_id: ConnId,
+    bytes: usize,
+    max_message_bytes: usize,
+) -> String {
+    tracing::debug!(
+        target: "nest_rs::ws",
+        conn_id,
+        trace_id = %connection.trace_id(),
+        bytes,
+        max_message_bytes,
+        "websocket message refused: over the per-message cap",
+    );
+    error_frame("error", &crate::WsError::new("message too large"))
+}
+
+/// Run one connection-lifecycle hook — `on_connect` / `on_disconnect` — under
+/// the connection's identity.
+///
+/// A hook is developer code that logs, writes and emits, so it is a unit of work
+/// like any message; what differs is only whose id it takes. Both take the
+/// *connection's*: the upgrade is what accepted this work, and nothing between
+/// opening and closing re-authenticates anybody.
+///
+/// Both halves are needed and neither substitutes for the other — the span is
+/// what puts `trace_id` on the events the hook emits, the ambient context is
+/// what makes `current_trace_id()` answer inside it. The span is passed in
+/// because `tracing` fixes a span's name at the macro, so the two call sites
+/// name themselves (`ws.connect` / `ws.disconnect`) and share everything else.
+async fn under_connection<F: std::future::Future<Output = ()>>(
+    connection: &nest_rs_core::Correlation,
+    span: tracing::Span,
+    hook: F,
+) {
+    nest_rs_core::with_request_scope(None, connection.clone(), None, hook)
+        .instrument(span)
+        .await;
 }
 
 /// Per-message guards run **inside** a present [`SocketContext::around`], so
@@ -378,13 +489,35 @@ async fn handle_text<G: Gateway>(
         Some((ctx, captured)) => ctx.around(captured, inner),
         None => inner,
     };
-    let reply = match wiring.root_container.as_ref() {
-        Some(container) => {
-            let scope = Arc::new(RequestScope::new(container.clone()));
-            with_request_scope(scope, dispatch).await
-        }
-        None => dispatch.await,
-    };
+    // A message is its own unit of work — its own id, its own span — carrying
+    // the connection's id as a field so a socket's whole conversation still
+    // groups. The span is what puts `trace_id` on every event a handler emits
+    // and what declares the `actor_id` field the ability guard records into;
+    // without it a WS handler's events were attributable to nothing at all.
+    // A message is its own unit of work inside the socket's trace: same trace,
+    // a fresh span, and the connection's span as its parent. The actor rides
+    // along because nothing per message re-authenticates.
+    let correlation = wiring.connection.child();
+    let span = nest_rs_core::operation_span!(
+        target: "nest_rs::ws",
+        kind: "server",
+        "ws.message",
+        &correlation,
+        ws.event = %event,
+        ws.connection_id = conn_id,
+    );
+    // The correlation is installed either way, and the kernel's installer is what
+    // makes that free: a gateway with no container to open a scope over still
+    // accepted a unit of work, and dropping the id there would make
+    // `current_trace_id()` answer differently depending on how the app happened
+    // to be wired. Only `Scoped<T>` goes without.
+    let scope = wiring
+        .root_container
+        .as_ref()
+        .map(|container| Arc::new(RequestScope::new(container.clone())));
+    let reply = nest_rs_core::with_request_scope(scope, correlation, None, dispatch)
+        .instrument(span)
+        .await;
     match reply {
         WsReply::Reply(data) => {
             let envelope = WsEnvelope { event, data };
@@ -424,6 +557,87 @@ mod tests {
     use super::*;
     use crate::guard::WsMessageCheck;
 
+    /// A connection hook is developer code, and until it ran under the
+    /// connection's identity its events were attributable to nothing: the
+    /// upgrade's request boundary is gone by the time `on_upgrade`'s task runs,
+    /// so `on_connect` logged with no `trace_id` on the span and
+    /// `current_trace_id()` answered `None` inside it.
+    ///
+    /// Both halves are asserted because neither implies the other — a span
+    /// without the ambient context leaves the developer's own reads empty, and
+    /// the ambient context without a span leaves the framework's events bare.
+    #[tokio::test]
+    async fn a_connection_hook_runs_under_the_connections_identity() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let connection = nest_rs_core::Correlation::mint();
+        let trace_id = connection.trace_id().to_hex();
+
+        under_connection(
+            &connection,
+            nest_rs_core::operation_span!(
+                target: "nest_rs::ws",
+                kind: "server",
+                "ws.connect",
+                &connection,
+                ws.connection_id = 7u64,
+            ),
+            async {
+                tracing::info!(
+                    target: "nest_rs::ws",
+                    // What the hook's own code can reach — the task-local half.
+                    ambient = nest_rs_core::current_trace_id().map(|id| id.to_hex()),
+                    // And the span it is emitted under — the half that carries
+                    // `trace_id` onto events the hook never thought about.
+                    span = tracing::Span::current().metadata().map(|meta| meta.name()),
+                    "hook ran",
+                );
+            },
+        )
+        .await;
+
+        let event = logs.expect_one("nest_rs::ws", "hook ran");
+        assert_eq!(
+            event.field("ambient").as_deref(),
+            Some(trace_id.as_str()),
+            "`current_trace_id()` inside the hook is the connection's: {:?}",
+            event.fields,
+        );
+        assert_eq!(
+            event.field("span").as_deref(),
+            Some("ws.connect"),
+            "the hook's events are rooted at the connection span: {:?}",
+            event.fields,
+        );
+    }
+
+    /// The client is told; the operator has to be told too. A cap set too low
+    /// looks from the outside exactly like clients that stopped sending, and
+    /// the only place that difference is visible is here.
+    #[tokio::test]
+    async fn a_message_over_the_cap_is_refused_to_the_client_and_recorded_for_the_operator() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let connection = nest_rs_core::Correlation::mint();
+
+        let frame = refuse_oversize(&connection, 7, 4096, 1024);
+
+        assert!(
+            frame.contains("message too large"),
+            "the client is told why: {frame}",
+        );
+        let event = logs.expect_one(
+            "nest_rs::ws",
+            "websocket message refused: over the per-message cap",
+        );
+        assert_eq!(
+            event.field("trace_id").as_deref(),
+            Some(connection.trace_id().to_hex().as_str()),
+            "the refusal joins the connection's conversation: {:?}",
+            event.fields,
+        );
+        assert_eq!(event.field("bytes").as_deref(), Some("4096"));
+        assert_eq!(event.field("max_message_bytes").as_deref(), Some("1024"));
+    }
+
     struct DenyAll;
 
     #[async_trait]
@@ -461,6 +675,7 @@ mod tests {
             ambient: None,
             data_pipe: None,
             root_container: None,
+            connection: nest_rs_core::Correlation::mint(),
         }
     }
 

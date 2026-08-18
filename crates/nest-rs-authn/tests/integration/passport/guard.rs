@@ -136,3 +136,48 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
     );
     assert!(event.field("strategy").is_some(), "{:?}", event.fields);
 }
+
+/// Authentication is the one moment anybody learns who is calling, so it is the
+/// one place the ambient identity can be set. Everything downstream — a service
+/// stamping `created_by`, the queue producer sealing a job, an audit row — reads
+/// it back through `current_actor_id()` rather than having the handler thread it
+/// down, which is what makes the answer available at call sites the handler
+/// never passes through.
+#[tokio::test]
+async fn a_successful_check_publishes_the_actor_into_the_ambient_context() {
+    let guard = AuthnGuard::new(Arc::new(AuthenticateAs("ada")));
+    let correlation = nest_rs_core::Correlation::mint();
+
+    let seen = nest_rs_core::with_request_scope(None, correlation, None, async {
+        let mut req = Request::default();
+        guard
+            .check_http(&mut req)
+            .await
+            .expect("the strategy authenticates");
+        nest_rs_core::current_actor_id()
+    })
+    .await;
+
+    assert_eq!(
+        seen.as_deref(),
+        Some("ada"),
+        "the actor must be readable below the guard without being threaded through",
+    );
+}
+
+/// An anonymous caller is reported as **absent**, never as a sentinel string: a
+/// query counting anonymous traffic must not also count an actor genuinely named
+/// `""` or `"anonymous"`.
+#[tokio::test]
+async fn an_unauthenticated_caller_has_no_ambient_actor() {
+    let correlation = nest_rs_core::Correlation::mint();
+
+    let seen = nest_rs_core::with_request_scope(None, correlation, None, async {
+        // No guard ran at all — the shape of every request before authentication
+        // and of every `#[public]` route reached without a credential.
+        nest_rs_core::current_actor_id()
+    })
+    .await;
+
+    assert_eq!(seen, None);
+}

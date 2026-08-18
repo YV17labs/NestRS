@@ -5,6 +5,152 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-08-18
+
+### Correlation is W3C Trace Context, it lives in the kernel, and the homemade id is gone
+
+A request, a WS message, an MCP operation, a queue job and a scheduled tick each
+run under a **W3C trace** the framework starts or continues. `trace_id` names the
+distributed operation, `span_id` names the unit of work inside it, and the pair
+is readable from anywhere the framework carries work:
+
+```rust
+let trace = nest_rs::core::current_trace_id();
+let span = nest_rs::core::current_span_id();
+// `None` for an anonymous caller — absence is the answer, not a gap.
+let actor = nest_rs::core::current_actor_id();
+```
+
+**Breaking.** `RequestId`, `current_request_id()` and `with_correlation()` are
+removed, the `X-Request-Id` and `X-Trace-Id` response headers with them, and
+`nest-rs-opentelemetry` no longer has an `http` feature. No shims.
+
+- **The standard replaced a duplicate, and the argument is recorded.** The old
+  `request_id` answered exactly the question `trace-id` answers, so the framework
+  carried two identifiers for one thing. Three defences were offered and the
+  specification retires all three: a forgeable inbound id is answered by the
+  spec's own *restart trace* mutation, not by a second identifier; the standard
+  needs 16 random bytes and a `format!`, not an SDK; and a trace id sorts by time
+  if you choose bytes that do — ours are a UUID v7's, so the value is a
+  conformant trace id **and** an ordered UUID whose right-most 7 bytes still
+  satisfy the `random-trace-id` flag. The deciding fact was the ecosystem's:
+  OpenTelemetry's conventions have no request-id concept, only
+  `http.request.header.x-request-id` — a *captured* header. It is now recorded as
+  exactly that, behind a trusted peer, and never decides what a request is called.
+- **`traceparent` is gated on `NESTRS_HTTP__TRUSTED_PROXIES`**, the same list
+  `X-Forwarded-For` is weighed against. It used to be honoured from **any**
+  caller, so a public client could file its requests into a trace of its choosing
+  and set `sampled` on traffic it generated — the denial-of-service surface the
+  specification names. From an untrusted peer the trace is now restarted, which
+  is what the spec defines a front gate to do, and the caller's claim is kept on
+  the span so nothing is lost.
+- **The request side is implemented to the letter**: version `ff` refused,
+  version `00` exactly 55 characters, a higher version still read as far as this
+  one understands, all-zero trace and parent ids refused, lower-case hex only,
+  and `tracestate` forwarded **verbatim** wherever the trace is continued — a
+  MUST whose breakage is invisible to us and fatal to whichever vendor's routing
+  rides in it. The response carries `traceresponse`, the working group's form.
+- **A queue job is a child of the enqueue.** `traceparent` and `tracestate`
+  travel in the wire envelope, so a worker running minutes later in another
+  binary appears **under** the request that enqueued it rather than beside it.
+  The parent/child relation is what a flat id could not express.
+- **`actor_id` is unchanged in spirit and now reachable.** You still declare it
+  once on your principal; `current_actor_id()` reads it back anywhere the
+  framework carries work, and answers `None` — never a sentinel — for an
+  anonymous caller. It remains an **audit** identity, never an authorization
+  input.
+
+### A unit of work ends when its answer ends, not when its handler returns
+
+A streaming response — `#[sse]`, a download, anything built over a `Stream` —
+runs after its handler returned, on the connection task, and used to emit under
+no span and no ambient context at all. Every event it logged was attributable to
+nothing, and `current_trace_id()` answered `None` inside the developer's own
+stream.
+
+- **The HTTP edge carries the request into that gap**, re-installing it around
+  every body poll, and does so **whatever `NESTRS_HTTP__ACCESS_LOG` is set to**: a
+  config flag is a weaker condition than a crate, and a primitive true for short
+  responses and false for long ones reads as present exactly where a long
+  operation needs it.
+- **The framing is unchanged, and that is load-bearing.** The wrapper forwards
+  `size_hint`, so a fixed-length response still declares `Content-Length`. A body
+  counter written over a byte stream turns every response in the framework
+  `Transfer-Encoding: chunked`, silently, and is invisible to any assertion made
+  before the response is written — so it is now read off the wire by a test.
+- **Three more edges were in the same position** and are closed with it: a
+  graphql-ws subscription socket, a WebSocket connection's `on_connect` /
+  `on_disconnect` hooks, and the GraphQL dataloader's spawned batches, which
+  carried the span but not the ambient context — so their events *looked*
+  correlated while every accessor inside answered `None`.
+- **A socket inherits identity, never resources.** A connection that outlives its
+  upgrade takes the trace and the actor and opens its own scope per message; it
+  does not pin the upgrade's.
+
+### The observability stack enriches spans; it no longer owns any
+
+`nest-rs-opentelemetry` mints no identifier: its `IdGenerator` **adopts** the
+kernel's, so the exported trace and the log lines name one request by one value
+instead of two that nothing joins.
+
+**Breaking.** The `http` feature and its per-request interceptor are removed. An
+app that listed `features = ["http"]` on this crate drops the line; the umbrella's
+`http` feature no longer forwards it.
+
+- **What the interceptor did now hangs off the span constructor.** The remote
+  parent link and the sampler's verdict are seeded onto `operation_span!` at
+  `init`, so they reach **every** edge — a queue job in a headless worker as much
+  as an HTTP request — instead of the one transport band an interceptor could
+  hang from. Attached there, a job continuing a trace out of an envelope had no
+  way to say so, and its exported span carried no causal edge to the enqueue.
+- **A parent is announced remote only when it is.** A queue job's parent ran in
+  another process; a WS message's and an MCP operation's ran in this one, and
+  claiming otherwise renders a network hop that never happened.
+- **`otel.kind` is required vocabulary**, not a field a call site may add: it is
+  an argument of `operation_span!`, so an edge cannot ship unclassified and
+  export as `internal` where a messaging view would never find it.
+- **The access log belongs to `nest-rs-http`.** Method, path, status, duration,
+  client, `trace_id`, `span_id` and `actor_id` need no collector, no exporter and
+  no propagator, so none is required for a deployment to answer what it did.
+
+### The span reports the route template, and names itself for it
+
+`http.route` used to carry the path **as addressed**. A backend groups latency and
+error rates on that field, so `/users/01a0…` there is one group per identifier
+and no signal at all.
+
+- `http.route` is now the matched template (`/users/:id`); the addressed path is
+  `url.path`, which is what the conventions mean by it.
+- The exported span is named `{method} {route}` through `otel.name`, because
+  `tracing` fixes a span name to a literal and one literal for every route
+  renders a whole deployment as a single line in a trace list.
+- A request that matched nothing is named by its **method alone** — the
+  conventions' own fallback, and deliberately not the URL: naming an unmatched
+  span after its path is how one scanner fills a backend with junk.
+
+### An MCP operation is its own unit of work
+
+It used to re-enter the HTTP request's span, so under rmcp's default session mode
+every operation in a session filed under the request that opened it and "what did
+this tool call do" had no answer. Each dispatch now opens an `mcp.operation` span:
+same trace, its own span id, the request's span as its parent — the shape
+`ws.message` already had.
+
+### Also
+
+- **A WebSocket message refused for size is recorded.** The client was told and
+  the operator was not, so a cap set too low looked from the outside exactly like
+  clients that stopped sending.
+- **`nest_rs_testing::LogCapture` captures spans**, not only events —
+  `expect_span` and `spans()`. Most of what the framework promises an operator
+  lives on the operation span, and a harness that could read only events could
+  assert none of it. A field declared and never recorded is **absent** there,
+  which is what makes a `record` call nobody wired assertable at all.
+- **[Correlation](https://nestrs.dev/fundamentals/correlation/) is a page of its
+  own**, under Fundamentals rather than inside OpenTelemetry — the primitive is
+  unconditional, and documenting it in an optional section left a developer who
+  never installs an exporter with no path to it.
+
 ## [4.0.0] - 2026-08-16
 
 ### `#[entity]` — a schema serves as a subgraph, gated like everything else

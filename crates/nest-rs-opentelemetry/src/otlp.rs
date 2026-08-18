@@ -40,7 +40,11 @@ pub(crate) fn build(config: &OpenTelemetryConfig) -> Result<Exporters, OpenTelem
 
     let mut tracer_builder = SdkTracerProvider::builder()
         .with_resource(resource.clone())
-        .with_sampler(sampler);
+        .with_sampler(sampler)
+        // The framework decided this unit of work's ids before this crate was
+        // installed, so the SDK adopts them rather than minting a second pair
+        // nothing could join against. See `id_generator`.
+        .with_id_generator(crate::id_generator::AdoptFrameworkIds::default());
 
     let endpoint = config
         .otlp_endpoint

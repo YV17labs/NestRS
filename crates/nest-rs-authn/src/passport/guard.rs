@@ -56,6 +56,10 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                 // event — denials included — inherits who is calling.
                 if let Some(actor_id) = crate::PrincipalIdentity::actor_id(&principal) {
                     tracing::Span::current().record("actor_id", actor_id.as_str());
+                    // …and into the ambient context, so a service, the data
+                    // layer or a queue producer below this guard can read it
+                    // without the handler threading it down. Write-once.
+                    nest_rs_core::set_actor_id(&actor_id);
                     tracing::debug!(target: "nest_rs::authn", strategy, actor_id, "authenticated");
                 } else {
                     tracing::debug!(target: "nest_rs::authn", strategy, "authenticated");

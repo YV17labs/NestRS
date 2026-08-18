@@ -17,9 +17,8 @@ use std::time::{Duration, Instant};
 use apalis::prelude::Storage;
 use apalis_redis::{Config, RedisStorage};
 use async_trait::async_trait;
-use nest_rs_queue::{Job, JobProducer, QueueError, WIRE_FORMAT_VERSION};
+use nest_rs_queue::{Job, JobProducer, QueueError};
 use redis::aio::ConnectionManager;
-use serde_json::json;
 
 use crate::error::RedisError;
 
@@ -183,7 +182,7 @@ impl<J: Job> Queue<J> {
         // handle, so clone per call rather than force callers to hold it mut.
         let mut storage = self.storage.clone();
         storage
-            .push(envelope(payload))
+            .push(nest_rs_queue::envelope::seal(payload))
             .await
             .map_err(QueueError::backend)?;
         Ok(())
@@ -198,21 +197,11 @@ impl JobProducer for QueueConnection {
     async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError> {
         let mut storage = self.value_storage(queue);
         storage
-            .push(envelope(payload))
+            .push(nest_rs_queue::envelope::seal(payload))
             .await
             .map_err(QueueError::backend)?;
         Ok(())
     }
-}
-
-/// Wrap a user payload in the wire envelope the consumer expects. Bumping
-/// [`WIRE_FORMAT_VERSION`] lets a rolling deploy fail closed instead of
-/// misinterpreting bytes.
-fn envelope(payload: serde_json::Value) -> serde_json::Value {
-    json!({
-        "v": WIRE_FORMAT_VERSION,
-        "payload": payload,
-    })
 }
 
 /// Replace any `user:password@` userinfo with `***`. The connect diagnostics

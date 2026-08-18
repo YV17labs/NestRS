@@ -197,16 +197,38 @@ fn build_worker(
                   task_id: TaskId,
                   attempt: Attempt| {
                 let container = (*container).clone();
+                // The producer sealed its W3C trace context into the payload,
+                // because a queue is the one hop the framework crosses that is a
+                // *process* boundary rather than a task one. Continuing it here
+                // is what makes one trace span the whole chain: the HTTP request
+                // that enqueued, and this worker minutes later in another binary,
+                // are one trace and the job is a child of the enqueue. A bare
+                // payload — the raw hatch, an older producer, a foreign system —
+                // starts a trace instead; see `nest_rs_queue::envelope`.
+                let (job, inherited) = nest_rs_queue::envelope::open(job);
+                let continued_trace = inherited.is_some();
+                let correlation = inherited.unwrap_or_else(nest_rs_core::Correlation::mint);
                 // One span per job attempt; `attempt` distinguishes retries of
                 // the same task_id. `.instrument` (not an entered guard held
                 // across `.await`) keeps the span current for the whole poll.
-                let span = tracing::info_span!(
+                // Through `operation_span!` so a job declares the same canonical
+                // fields every edge does — `actor_id` included, which is what
+                // lets a job's events be attributed at all.
+                let span = nest_rs_core::operation_span!(
                     target: "nest_rs::queue",
+                    // A job is delivered *to* this process — the kind a
+                    // messaging view classifies on.
+                    kind: "consumer",
                     "process job",
+                    &correlation,
                     queue = queue_name,
                     processor = processor_name,
                     job_id = %task_id,
                     attempt = attempt.current(),
+                    // Whether this job is traceable back to what enqueued it, or
+                    // starts a trace of its own. An operator chasing a lost
+                    // request needs to tell the two apart.
+                    continued_trace,
                 );
                 async move {
                     tracing::debug!(
@@ -214,7 +236,18 @@ fn build_worker(
                         attempt = attempt.current(),
                         "job started",
                     );
-                    run_job(handler, job, container).await
+                    // The ambient context too, not just the span: a `#[process]`
+                    // body that enqueues a follow-up job must seal *this* id, not
+                    // mint a third one and break the chain.
+                    let scope =
+                        std::sync::Arc::new(nest_rs_core::RequestScope::new(container.clone()));
+                    nest_rs_core::with_request_scope(
+                        Some(scope),
+                        correlation,
+                        None,
+                        run_job(handler, job, container),
+                    )
+                    .await
                 }
                 .instrument(span)
             },

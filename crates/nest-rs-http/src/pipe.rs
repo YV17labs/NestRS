@@ -400,7 +400,8 @@ mod tests {
             .split();
 
         let err = match crate::with_request_scope(
-            test_scope(),
+            Some(test_scope()),
+            nest_rs_core::Correlation::mint(),
             Some(4),
             Valid::<Json<Greeting>>::from_request(&req, &mut body),
         )
@@ -421,7 +422,8 @@ mod tests {
             .split();
 
         let v: Valid<Json<Greeting>> = crate::with_request_scope(
-            test_scope(),
+            Some(test_scope()),
+            nest_rs_core::Correlation::mint(),
             Some(4096),
             Valid::from_request(&req, &mut body),
         )

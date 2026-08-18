@@ -82,13 +82,47 @@ impl ClientOrigin {
     pub fn of(req: &Request) -> Self {
         let scope = current_request_scope();
         let config = scope.as_ref().and_then(|s| s.root().get::<HttpConfig>());
-        let header = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok());
+        Self::of_with(
+            req,
+            config.as_deref().map_or(&[][..], |c| &c.trusted_proxies),
+        )
+    }
+
+    /// [`of`](Self::of) against an explicit list — what the transport edge
+    /// needs, because it runs *before* the request scope that `of` reads the
+    /// list off exists.
+    ///
+    /// Both entry points funnel here so the forwarding header names and the
+    /// argument order are written once: a resolution spelled twice is two
+    /// answers to "who called" the day one of them learns about `Forwarded:`.
+    pub(crate) fn of_with(req: &Request, trusted_proxies: &[IpAddr]) -> Self {
+        // With nothing declared trusted — the default deployment — no
+        // forwarding header can be believed, so none is looked up. `resolve`
+        // reaches the same answer from the peer alone; skipping the reads only
+        // spares it two header probes and two UTF-8 validations per request,
+        // and leaves the decision itself in one place.
+        let header = |name: &str| {
+            (!trusted_proxies.is_empty())
+                .then(|| req.headers().get(name)?.to_str().ok())
+                .flatten()
+        };
         Self::resolve(
             header("x-forwarded-for"),
             header("x-real-ip"),
             req.remote_addr().as_socket_addr().map(SocketAddr::ip),
-            config.as_deref().map_or(&[][..], |c| &c.trusted_proxies),
+            trusted_proxies,
         )
+    }
+
+    /// Whether the direct peer is declared infrastructure — the one fact that
+    /// decides whether *any* header this caller sent may be believed.
+    ///
+    /// Read by the correlation id's gate on `X-Request-Id`, so the deployment
+    /// cannot end up believing a header for the client's address while
+    /// disbelieving it for the id, or the reverse. `Peer` is a peer that is not
+    /// a trusted proxy; `Unknown` is no peer at all.
+    pub(crate) fn peer_is_trusted(self) -> bool {
+        matches!(self, Self::Forwarded(_) | Self::TrustedProxy(_))
     }
 
     /// The resolution itself, over plain values — the whole security argument
@@ -415,7 +449,13 @@ mod tests {
             builder = builder.provide(config);
         }
         let scope = std::sync::Arc::new(nest_rs_core::RequestScope::new(builder.build()));
-        nest_rs_core::with_request_scope(scope, None, extract(req)).await
+        nest_rs_core::with_request_scope(
+            Some(scope),
+            nest_rs_core::Correlation::mint(),
+            None,
+            extract(req),
+        )
+        .await
     }
 
     fn trusting(proxies: &[&str]) -> HttpConfig {

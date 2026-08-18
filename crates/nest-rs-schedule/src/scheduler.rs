@@ -342,6 +342,7 @@ async fn fire_inner(
     container: &Container,
     ctx: &Option<Arc<dyn JobContext>>,
 ) {
+    let started = std::time::Instant::now();
     // Isolate the fire: a panic in the user method (or the `.expect` the
     // `#[scheduled]` macro emits when the provider is missing) would otherwise
     // unwind this job's task and — since `serve` drops the `JoinError` — stop
@@ -365,6 +366,22 @@ async fn fire_inner(
     ))
     .catch_unwind()
     .await;
+    let settled = match &outcome {
+        Ok(Ok(())) => nest_rs_core::operation_log::OK,
+        Ok(Err(_)) => nest_rs_core::operation_log::ERROR,
+        Err(_) => nest_rs_core::operation_log::PANIC,
+    };
+    // One line per tick, whatever happened — the clock is not a caller, so this
+    // is the only place a tick says it ran at all. Emitted inside the scope, so
+    // it carries the trace the job's own events carry.
+    tracing::info!(
+        target: nest_rs_core::operation_log::TARGET,
+        provider = id.provider,
+        method = id.method,
+        outcome = settled,
+        duration_ms = nest_rs_core::operation_log::duration_ms(started),
+        "tick ran",
+    );
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(err)) => tracing::error!(

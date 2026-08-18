@@ -257,11 +257,63 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                     }
                     None => guarded,
                 };
-                nest_rs_core::with_request_scope(None, correlation, None, served)
-                    .instrument(span)
-                    .await
+                let line = SubscriptionLine::new(correlation.clone());
+                nest_rs_core::with_request_scope(None, correlation, None, async move {
+                    let _line = line;
+                    served.await;
+                })
+                .instrument(span)
+                .await
             })
             .into_response())
+    }
+}
+
+/// Files the subscription's line when the connection ends.
+///
+/// **On drop, not after the await**, and that distinction is the whole reason
+/// this type exists rather than a `tracing::info!` at the end of the block: a
+/// socket that is aborted — the app shutting down, the client vanishing, the
+/// connection ceiling elapsing — never completes `serve()`, so its future is
+/// dropped rather than finished. A line filed only on the graceful path reported
+/// the half that was never in doubt, and reported nothing at all in the
+/// integration suite, which is where the gap was found. HTTP's access log has
+/// always used `Drop` for the same reason.
+///
+/// The correlation is held rather than read from the ambient context: a `Drop`
+/// runs while the future is being torn down, which is not reliably inside the
+/// scope that future installed.
+struct SubscriptionLine {
+    correlation: nest_rs_core::Correlation,
+    started: std::time::Instant,
+}
+
+impl SubscriptionLine {
+    fn new(correlation: nest_rs_core::Correlation) -> Self {
+        Self {
+            correlation,
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Drop for SubscriptionLine {
+    fn drop(&mut self) {
+        nest_rs_core::RequestContinuation::new(None, self.correlation.clone(), None).enter(|| {
+            tracing::info!(
+                target: nest_rs_core::operation_log::TARGET,
+                // Always `ok`: async-graphql owns the message loop, so this crate
+                // sees no operation boundary and has no failure signal to report
+                // — the same fact the span's own comment records. A closed socket
+                // is not an error, and an aborted one is the deployment's news,
+                // not the subscription's.
+                outcome = nest_rs_core::operation_log::OK,
+                // How long it stayed open, which on a subscription is the number
+                // an operator actually reads.
+                duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
+                "subscription served",
+            );
+        });
     }
 }
 
@@ -272,6 +324,55 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
+
+    /// The line is filed from `Drop`, so two properties matter more than what it
+    /// says: it fires **once**, and it cannot panic.
+    ///
+    /// A panic inside a `Drop` that runs during an unwind aborts the process, and
+    /// this `Drop` reaches a `tokio` task-local. A socket is torn down on paths
+    /// this crate does not choose — the runtime shutting down, the connection
+    /// ceiling elapsing, a handler unwinding — so "does it work on the happy
+    /// path" is not the question.
+    #[test]
+    fn the_subscription_line_fires_once_and_cannot_panic_off_a_runtime() {
+        let logs = nest_rs_testing::LogCapture::install();
+
+        // No `#[tokio::test]`: this is the teardown case, where there may be no
+        // runtime left to reach a task-local through.
+        drop(SubscriptionLine::new(nest_rs_core::Correlation::mint()));
+
+        let served = logs.find(nest_rs_core::operation_log::TARGET, "subscription served");
+        assert_eq!(
+            served.len(),
+            1,
+            "exactly one line per connection: {served:?}"
+        );
+        assert_eq!(
+            served[0].field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::OK),
+        );
+        assert!(served[0].field("duration_ms").is_some());
+    }
+
+    /// And once inside a runtime too, since that is where it normally runs — the
+    /// two paths reach the task-local differently and only one of them is the
+    /// happy one.
+    #[tokio::test]
+    async fn the_subscription_line_fires_once_inside_a_runtime() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let correlation = nest_rs_core::Correlation::mint();
+
+        nest_rs_core::with_request_scope(None, correlation.clone(), None, async {
+            let _line = SubscriptionLine::new(correlation);
+        })
+        .await;
+
+        assert_eq!(
+            logs.find(nest_rs_core::operation_log::TARGET, "subscription served")
+                .len(),
+            1,
+        );
+    }
 
     /// A request's lazy transaction handle: `non_transactional` steps out of it
     /// onto the pool, exactly as the ORM's does.

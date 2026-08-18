@@ -60,10 +60,12 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                     // layer or a queue producer below this guard can read it
                     // without the handler threading it down. Write-once.
                     nest_rs_core::set_actor_id(&actor_id);
-                    tracing::debug!(target: "nest_rs::authn", strategy, actor_id, "authenticated");
-                } else {
-                    tracing::debug!(target: "nest_rs::authn", strategy, "authenticated");
                 }
+                // One event either way, and it names no actor: every line the
+                // console renders carries `actor_id` off the ambient context the
+                // branch above just wrote, so spelling it here would print it
+                // twice on the one line that proves who was resolved.
+                tracing::debug!(target: "nest_rs::authn", strategy, "authenticated");
                 // Publish what the credential was granted, so the authorization
                 // layer can withhold the rules it does not reach. A principal
                 // that is not scope-aware publishes nothing at all — the

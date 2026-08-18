@@ -424,7 +424,7 @@ where
         // nothing else on the path pays for a disabled access log.
         let log = self
             .access_log
-            .then(|| AccessLog::open(&req, correlation.clone(), client, user_agent));
+            .then(|| AccessLog::open(&req, client, user_agent));
 
         // Request scope + configured cap, ambient for everything inward —
         // guards, extractors, the data layer, global pipes — and for the

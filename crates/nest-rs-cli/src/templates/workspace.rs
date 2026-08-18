@@ -51,6 +51,7 @@ pub const FEATURES_CARGO: &str = r#"[package]
 name = "features"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -73,6 +74,7 @@ pub const APP_CARGO: &str = r#"[package]
 name = "{{kebab}}"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

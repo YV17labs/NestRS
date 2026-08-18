@@ -15,6 +15,7 @@ pub const CRATE_CARGO: &str = r#"[package]
 name = "migrations"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
@@ -74,6 +75,7 @@ pub const SEED_CARGO: &str = r#"[package]
 name = "seed"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]

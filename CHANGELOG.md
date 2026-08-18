@@ -162,6 +162,13 @@ same trace, its own span id, the request's span as its parent — the shape
   these pins agree and nothing read it, so `toolchain_pins_agree` now does —
   including the scaffold's toolchain file and Dockerfile, which the
   manifest-shaped scan could never see.
+- **A scaffolded project's `rust-version` is now read by the crates under it.**
+  Generated members wrote `version.workspace = true` and `edition.workspace =
+  true` but never `rust-version.workspace = true`, and cargo does not inherit
+  that key unopted: the floor the root declared was a value no crate in the
+  project resolved, so an old compiler produced a page of type errors instead of
+  one sentence naming the requirement. Both scaffold modes, and the generated
+  migration and seed crates.
 
 ## [4.0.0] - 2026-08-16
 

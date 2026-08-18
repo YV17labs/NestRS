@@ -215,9 +215,10 @@ $ nestrs run dev api
  INFO nest_rs::schedule: scheduled job (interval) provider="AudioTasks" method="enqueue_transcode" interval_ms=5000
  INFO nest_rs::schedule: scheduled job (one-shot) provider="AudioTasks" method="warmup_on_boot" delay_ms=3000
  INFO nest_rs::schedule: scheduled job (cron) provider="AudioTasks" method="heartbeat" timezone="UTC"
- INFO scheduled job{otel.kind="internal" trace_id=01a014a7409a7d60b6db79d6fb668cfe span_id=858be0eeb84fe593 provider="AudioTasks" method="warmup_on_boot"}: features::audio: audio pipeline ready to enqueue phase="warmup"
-DEBUG scheduled job{otel.kind="internal" trace_id=01a014ad48107b2189deec939630eb9e span_id=5859a403369ada9f provider="AudioTasks" method="enqueue_transcode"}: features::audio: enqueued transcode job file="track-1717405126521.mp3"
- INFO scheduled job{otel.kind="internal" trace_id=01a014ada9b87c81a3ac2d6376f7cc06 span_id=c97ff4bd2ac5f292 provider="AudioTasks" method="heartbeat"}: features::audio: audio producer heartbeat queue="audio"
+ INFO features::audio: audio pipeline ready to enqueue phase="warmup" trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+ INFO nest_rs::access: tick ran provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+DEBUG features::audio: enqueued transcode job file="track-1787069801760.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+ INFO nest_rs::access: tick ran provider="AudioTasks" method="enqueue_transcode" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
 ```
 
 The scheduler logs one line per job at boot, then stays quiet on a

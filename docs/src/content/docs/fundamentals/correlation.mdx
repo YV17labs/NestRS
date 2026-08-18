@@ -14,20 +14,12 @@ framework carries — a handler, a service under it, the data layer — and it i
 already on every event you log.
 
 ```rust title="src/features/posts/service.rs"
-use nest_rs::core::{current_actor_id, current_trace_id};
-
 impl PostService {
     pub async fn publish(&self, id: Uuid) -> Result<Post, ServiceError> {
         let post = self.repo.publish(id).await?;
-        tracing::info!(
-            target: "features::posts",
-            %id,
-            // `None` for an anonymous caller. Absence is the answer, not a gap.
-            author = ?current_actor_id(),
-            // `None` only off a unit of work — a unit test, a task you spawned.
-            trace = ?current_trace_id(),
-            "post published",
-        );
+        // No id is named here, and none should be: the line carries `trace_id`,
+        // `span_id` and `actor_id` already.
+        tracing::info!(target: "features::posts", %id, "post published");
         Ok(post)
     }
 }
@@ -50,11 +42,21 @@ The split between the first two is what lets a request that enqueues a job be
 **one trace and two spans**: the job's parent is the request's span, so "show me
 everything this request caused" answers across the process boundary.
 
-Both are on the operation span, so every `tracing` event you write inherits them
-without naming them:
+**Every log line carries them**, read from the ambient context when the event is
+emitted — so you never write one by hand, and restating one is a duplicate:
 
 ```text frame="terminal"
-INFO nest_rs::access: request served method=GET path="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16 client_ip=127.0.0.1 forwarded=false
+DEBUG features::posts: creating post title="hello" trace_id=01a01569ae687353bc034a9ee8bd8774 span_id=a3f7cc8bac648278 actor_id=01a0112ce24e75509be691162cbbab1f
+```
+
+Read them from code when you need the **value** — a `created_by` column, an
+outbound header, an audit row:
+
+```rust
+let trace_id = nest_rs::core::current_trace_id();
+let span_id = nest_rs::core::current_span_id();
+// `None` for an anonymous caller. Absence is the answer, not a gap.
+let actor_id = nest_rs::core::current_actor_id();
 ```
 
 ## Where a trace comes from

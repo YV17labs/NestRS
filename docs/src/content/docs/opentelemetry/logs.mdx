@@ -77,6 +77,103 @@ let actor_id = nest_rs::core::current_actor_id();
 column. What a caller may *do* is decided in a guard, never by branching on this
 value.
 
+## One line, one unit of work
+
+**Every log line carries the W3C trace context of the unit of work that emitted
+it, in both formats** — `trace_id`, `span_id`, and `actor_id` once a guard
+resolved a principal. That is the whole correlation mechanism: two lines belong
+to the same work when the ids match, and you join them on that.
+
+```text frame="terminal"
+DEBUG features::posts: creating post title="hello" trace_id=01a01569ae687353bc034a9ee8bd8774 span_id=a3f7cc8bac648278 actor_id=01a0112ce24e75509be691162cbbab1f
+```
+
+```json
+{"timestamp":"2026-08-18T15:07:22.601081Z","level":"DEBUG","fields":{"message":"creating post","title":"hello"},"target":"features::posts","trace_id":"01a01569ae697a718f7e41c79e0eefe6","span_id":"39d4f26e5d048754","actor_id":"01a0112ce24e75509be691162cbbab1f"}
+```
+
+This owes nothing to a collector, an exporter or this crate: the trace context is
+a kernel primitive, so a bare app logging to a terminal has it. Adding
+`nest-rs-opentelemetry` exports the same ids — it does not own them, and it does
+not change the shape of a line.
+
+### The ids are read from the context, never from the span
+
+A line carries **no span attributes and no span names**. That is the part worth
+stating, because the alternative looks harmless and is not: a service runs under
+the HTTP request's span, so rendering span state put the request's method, path,
+client address and user agent on every line the service emitted — the line stopped
+being about what the service did. Nested work made it worse, printing one
+`trace_id` per level:
+
+```text frame="terminal"
+DEBUG http.request{otel.kind="server" trace_id=01a014ec…a4 span_id=5fcb…b7 http.request.method=POST url.path="/posts" client.address=127.0.0.1}:mcp.operation{otel.kind="server" trace_id=01a014ec…a4 span_id=b0c0…72}: features::posts: creating post title="hello"
+```
+
+Reading the context instead of the scope is what makes the line self-contained,
+and it is the same read your own code does:
+
+```rust
+let trace_id = nest_rs::core::current_trace_id();
+let span_id = nest_rs::core::current_span_id();
+let actor_id = nest_rs::core::current_actor_id();
+```
+
+It also reaches further than a span stack can. A streaming body is polled after
+its handler returned; the framework re-installs the request around it, so those
+lines carry the ids too.
+
+Span structure itself is untouched — nesting is normal, and it is what the OTLP
+export builds its tree from.
+
+## Every unit of work files one line
+
+The ids relate lines to each other; they do not say what the work **was**. That
+is a separate line, one per unit of work, on the shared target `nest_rs::access`
+— and every edge files one, not just HTTP:
+
+| Edge | Message | Names |
+|---|---|---|
+| HTTP request | `request served` | method, path, status, bytes, client |
+| WS message | `message served` | event, `conn_id` |
+| WS socket open/close | `socket lifecycle` | lifecycle, `conn_id` |
+| Scheduled tick | `tick ran` | provider, method |
+| Queue job | `job ran` | queue, processor, `job_id`, attempt |
+| MCP operation | `operation served` | the JSON-RPC method |
+| GraphQL subscription | `subscription served` | the connection is the unit |
+
+Every one carries `duration_ms`, and every one but HTTP carries `outcome`
+(`ok` / `error` / `panic`) — a request has `status`, which says how it ended more
+precisely than three words could. So one query answers "what did this deployment
+do", and "what failed" is `outcome != ok` or `status >= 400`.
+
+```text frame="terminal"
+INFO nest_rs::access: request served method=GET path="/users" status=401 bytes=127 duration_ms=0.103 client_ip=127.0.0.1 forwarded=false user_agent="curl/8.14.1" trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b
+INFO nest_rs::access: tick ran provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+```
+
+**The target is the toggle.** `NESTRS_LOG=info,nest_rs::access=off` silences the
+whole family at once, which is why no edge carries a config flag for it.
+`NESTRS_HTTP__ACCESS_LOG` predates the family and stays, as an app's pinned
+config rather than a deployment's filter.
+
+### Following one operation across two processes
+
+A scheduled tick in the `api` binary enqueues a job; the `worker` binary picks it
+up ninety seconds later. One `trace_id`, two `span_id`s — the job is a child of
+the tick, across a process boundary:
+
+```text frame="terminal"
+DEBUG features::audio: enqueued transcode job file="track-1787069801760.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+ INFO nest_rs::access: tick ran provider="AudioTasks" method="enqueue_transcode" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+DEBUG features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+ INFO nest_rs::access: job ran queue="audio" processor="AudioProcessor::transcode" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+```
+
+The first two lines are the `api`'s, the last two the `worker`'s. Nothing was
+configured for that: the producer seals its trace context into the queue
+envelope, the consumer continues from it.
+
 ## Text vs JSON
 
 The console layer ships both formats. Default is `text` (pretty for dev). For
@@ -86,10 +183,15 @@ prod, set:
 NESTRS_LOG_FORMAT=json
 ```
 
-JSON keeps the **current span** — that is where `trace_id`, `span_id` and `actor_id`
-live, so a line stays attributable with no exporter configured. It drops the
-`span_list` (the full ancestry), which is the verbose half and the one an OTel
-export is genuinely better at.
+Both are the framework's own formatters, and they say the same thing: JSON puts
+`trace_id`, `span_id` and `actor_id` at the **top level** of the record, where a
+backend reads them with no field mapping, rather than nested under a `span`
+object. There is no variable that puts span state back on a line.
+
+JSON also carries `trace_flags`, the third field OpenTelemetry's log data model
+names beside the two ids. Text does not: a record joined against an export needs
+to know whether the export exists, and a human at a console never acts on a
+sampling bit.
 
 ## Source location (file:line)
 

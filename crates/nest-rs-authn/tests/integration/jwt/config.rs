@@ -132,3 +132,50 @@ fn a_secret_beside_eddsa_keys_is_ignored_and_says_so() {
          spelled so a renamed prefix still points at the right one: {event:?}",
     );
 }
+
+#[test]
+fn the_audience_opt_out_is_off_by_default_and_carries_through() {
+    // The config path's half of RFC 7519 §4.1.3: absence of an audience is not
+    // absence of the check, and the only thing that turns it off is the named
+    // field.
+    let default = JwtConfig {
+        secret: Some(STRONG_SECRET.into()),
+        ..Default::default()
+    }
+    .into_options()
+    .expect("options");
+    assert!(
+        !default.allow_any_audience,
+        "a bare config still applies the audience clause",
+    );
+
+    let opted_out = JwtConfig {
+        secret: Some(STRONG_SECRET.into()),
+        allow_any_audience: true,
+        ..Default::default()
+    }
+    .into_options()
+    .expect("options");
+    assert!(opted_out.allow_any_audience);
+}
+
+#[test]
+fn the_audience_opt_out_reads_its_env_flag() {
+    use nest_rs_config::{Config, ConfigService, Namespaced};
+
+    // The namespace comes off the config type, not a literal, so the fixture
+    // cannot mean a variable the reader does not.
+    let env = ConfigService::with_vars(JwtConfig::NAMESPACE, [("ALLOW_ANY_AUDIENCE", "true")]);
+    let config = JwtConfig::from_env(
+        &env,
+        JwtConfig {
+            secret: Some(STRONG_SECRET.into()),
+            ..Default::default()
+        },
+    )
+    .expect("from_env");
+    assert!(
+        config.allow_any_audience,
+        "the deployment can state the opt-out, and only by stating it",
+    );
+}

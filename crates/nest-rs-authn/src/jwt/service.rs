@@ -6,9 +6,11 @@ use jsonwebtoken::{
     Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode, errors::ErrorKind,
     get_current_timestamp,
 };
+use nest_rs_config::{Namespaced, var_name};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::error::AuthError;
+use crate::jwt::JwtConfig;
 
 /// Minimum HS256 shared-secret length: 256 bits (32 bytes). HMAC-SHA256 derives
 /// all its security from the secret's entropy, so a shorter secret is
@@ -45,9 +47,25 @@ pub struct JwtOptions {
     /// Clock skew tolerated when validating `exp` / `nbf`.
     pub leeway: Duration,
     /// When set, tokens must carry a matching `aud` claim.
+    ///
+    /// Leaving it unset does **not** switch the audience check off — see
+    /// [`allow_any_audience`](Self::allow_any_audience).
     pub audience: Option<String>,
     /// When set, tokens must carry a matching `iss` claim.
     pub issuer: Option<String>,
+    /// Opt out of RFC 7519 §4.1.3 — accept a token whose `aud` names a
+    /// principal this service is not. `false`, and staying `false` is the
+    /// point: the clause is *"if the principal processing the claim does not
+    /// identify itself with a value in the `aud` claim when this claim is
+    /// present, then the JWT MUST be rejected"*, and it binds a verifier that
+    /// names no audience of its own just as much as one that does. Without it,
+    /// every app sharing an issuer is a deputy for every other.
+    ///
+    /// Turn it on only for a verifier that is deliberately audience-agnostic —
+    /// a debugging proxy, an introspection endpoint — and never beside
+    /// [`audience`](Self::audience), which [`JwtService::new`] refuses as a
+    /// contradiction.
+    pub allow_any_audience: bool,
 }
 
 impl JwtOptions {
@@ -63,6 +81,7 @@ impl JwtOptions {
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
             issuer: None,
+            allow_any_audience: false,
         }
     }
 
@@ -78,6 +97,7 @@ impl JwtOptions {
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
             issuer: None,
+            allow_any_audience: false,
         }
     }
 
@@ -94,6 +114,7 @@ impl JwtOptions {
             leeway: Self::DEFAULT_LEEWAY,
             audience: None,
             issuer: None,
+            allow_any_audience: false,
         }
     }
 }
@@ -115,9 +136,13 @@ pub struct JwtService {
 
 impl JwtService {
     /// Build the service from [`JwtOptions`], deriving keys and pinning the
-    /// validation policy (`exp`/`nbf` always checked; `aud`/`iss` required only
-    /// when configured, and then also required-present so an omitting token
-    /// fails closed). Errors on unparseable PEM key material.
+    /// validation policy: `exp`/`nbf` always checked; `aud` always checked per
+    /// RFC 7519 §4.1.3 — a token carrying an audience this service is not named
+    /// in is refused whether or not one is configured — and `aud`/`iss`
+    /// additionally *required-present* when configured, so an omitting token
+    /// fails closed. Errors on unparseable PEM key material, on an HS256 secret
+    /// under 256 bits, and on the
+    /// [`allow_any_audience`](JwtOptions::allow_any_audience) contradiction.
     pub fn new(options: JwtOptions) -> Result<Self, AuthError> {
         let (encoding, decoding) = match &options.key {
             JwtKey::Hmac(secret) => {
@@ -155,6 +180,27 @@ impl JwtService {
             }
         };
 
+        // A contradiction, refused rather than resolved: one field says "only
+        // tokens for me", the other "tokens for anybody". Silently letting
+        // either win is how a deployment ends up believing the stricter one.
+        if options.allow_any_audience {
+            if options.audience.is_some() {
+                return Err(AuthError::Failed(format!(
+                    "{} contradicts {}: an audience-agnostic verifier cannot also require an audience",
+                    var_name(JwtConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
+                    var_name(JwtConfig::NAMESPACE, "AUDIENCE"),
+                )));
+            }
+            // Not the default, and not silent: an operator who opted out of RFC
+            // 7519 §4.1.3 reads it back once per boot, naming the variable that
+            // did it so the line is actionable rather than merely alarming.
+            tracing::warn!(
+                target: crate::TARGET,
+                var = %var_name(JwtConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
+                "audience validation is disabled — a token minted for another service verifies here",
+            );
+        }
+
         let mut validation = Validation::new(options.algorithm);
         // Pin expiry validation explicitly — the most security-critical claim
         // check must not ride on a library default that a future version could
@@ -162,21 +208,33 @@ impl JwtService {
         validation.validate_exp = true;
         validation.validate_nbf = true;
         validation.leeway = options.leeway.as_secs();
+        // RFC 7519 §4.1.3: "If the principal processing the claim does not
+        // identify itself with a value in the `aud` claim when this claim is
+        // present, then the JWT MUST be rejected." jsonwebtoken implements that
+        // clause under `validate_aud`, so the flag stays **on** whether or not
+        // this service names an audience — an unconfigured verifier still
+        // refuses a token minted for a sibling service by the shared issuer,
+        // which is the confused-deputy case `resource/` exists to prevent and
+        // which `ProtectedResourceModule`, being opt-in, does not cover.
+        // Turning it off here is what made "no audience configured" mean "no
+        // audience check" on the default path.
+        validation.validate_aud = !options.allow_any_audience;
         // `set_audience`/`set_issuer` only *compare* `aud`/`iss` when the token
         // carries them — a signed token omitting the claim would pass despite the
         // config promising it is mandatory. Add the claim to `required_spec_claims`
         // so an omitting token fails closed.
-        match &options.audience {
-            Some(aud) => {
-                validation.set_audience(&[aud.as_str()]);
-                validation.required_spec_claims.insert("aud".to_owned());
-            }
-            None => validation.validate_aud = false,
+        if let Some(aud) = &options.audience {
+            validation.set_audience(&[aud.as_str()]);
+            validation.required_spec_claims.insert("aud".to_owned());
         }
         if let Some(iss) = &options.issuer {
             validation.set_issuer(&[iss.as_str()]);
             validation.required_spec_claims.insert("iss".to_owned());
         }
+        // `iss` has no twin, and the asymmetry is the standard's rather than
+        // ours: RFC 7519 §4.1.1 states no clause obliging a verifier to reject a
+        // token carrying an issuer it does not name, so there is nothing here to
+        // switch on for an unconfigured verifier and nothing to opt out of.
 
         Ok(Self {
             encoding,

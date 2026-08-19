@@ -320,6 +320,27 @@ a service naming no audience of its own too.
 - `JwtOptions` and `JwtConfig` each gain the public `allow_any_audience`
   field.
 
+### Three authn gaps, each silent or fail-open, closed
+
+- **A machine principal reports its scopes.** `AuthenticatedClient` inherited
+  the trait's `scopes() → None`, which means *not scope-aware* — so every
+  `.requires_scope(…)` rule applied in full and a client registered for
+  `posts:read` satisfied rules requiring anything. It now answers `Some`,
+  always: this is the framework's own OAuth credential, so an empty registry
+  entry means *delegated nothing*, never *scope does not apply here*.
+- **The third way to refuse an OAuth callback now logs.** A forged, replayed
+  or expired transaction cookie produced no `warn` anywhere while its two
+  siblings (provider mismatch, CSRF mismatch) both did. All three now file
+  one `OAuth callback rejected` event with a constant `reason` code —
+  `invalid_transaction`, `provider_mismatch`, `csrf_state_mismatch` — so an
+  operator greps once and reads `reason` to tell them apart.
+- **The Argon2id work factor is pinned at the OWASP recommendation**
+  (m = 19 MiB, t = 2, p = 1) instead of riding `Argon2::default()`, which
+  happens to equal it today — a security-critical parameter sat on a value an
+  upstream release could lower without a line changing here. Verification
+  reads the parameters out of the stored hash, so existing credentials still
+  verify and the constants can move without invalidating a database.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

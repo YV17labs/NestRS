@@ -51,13 +51,24 @@ pub struct AuthenticatedClient<P> {
     /// The matched client's app-defined payload — what the app logs and
     /// authorizes on.
     pub payload: P,
-    /// The matched client's granted scopes.
+    /// The matched client's granted scopes — reported verbatim as this
+    /// principal's [`PrincipalIdentity::scopes`].
     pub scopes: Vec<String>,
 }
 
 impl<P> PrincipalIdentity for AuthenticatedClient<P> {
     fn actor_id(&self) -> Option<String> {
         None
+    }
+
+    /// `Some`, always — this is the framework's own OAuth credential, so it is
+    /// scope-aware by construction and an empty registry entry means *delegated
+    /// nothing*, never *scope does not apply here*. Inheriting the `None`
+    /// default conflated the two, and that is the fail-open reading: a client
+    /// registered for `posts:read` satisfied every `.requires_scope(…)` rule in
+    /// the policy, including the ones the registry never granted.
+    fn scopes(&self) -> Option<&[String]> {
+        Some(&self.scopes)
     }
 }
 
@@ -155,5 +166,29 @@ mod tests {
         let registry = [client("ci", "s3cret", &["read"])];
         let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
         assert_eq!(auth.actor_id(), None);
+    }
+
+    #[test]
+    fn machine_principal_reports_the_scopes_the_registry_granted() {
+        // The one thing `AuthnGuard` publishes as `GrantedScopes`. Returning the
+        // trait's `None` default here said "not scope-aware", which withholds
+        // nothing — so a client registered for `read` alone passed a rule
+        // requiring `write`.
+        let registry = [client("ci", "s3cret", &["read"])];
+        let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
+        assert_eq!(auth.scopes(), Some(["read".to_string()].as_slice()));
+    }
+
+    #[test]
+    fn a_client_granted_nothing_is_delegated_nothing_not_unrestricted() {
+        // `Some(&[])` and `None` are the two answers this trait separates, and
+        // this registry entry is the one that must not read as the second.
+        let registry = [client("ci", "s3cret", &[])];
+        let auth = authenticate_against_registry(&registry, "ci", "s3cret").unwrap();
+        assert_eq!(
+            auth.scopes(),
+            Some([].as_slice()),
+            "an entry granting no scope withholds every scoped rule",
+        );
     }
 }

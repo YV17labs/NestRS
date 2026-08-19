@@ -134,10 +134,10 @@ The whole conversation is legible from the console — the `101` that opened the
 socket, the connection, then a line per message, all under the upgrade's trace:
 
 ```text frame="terminal"
-INFO nest_rs::access: request served method=GET path="/ws" status=101 bytes=0 duration_ms=1.265 client_ip=127.0.0.1 forwarded=false trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
-INFO nest_rs::access: socket lifecycle lifecycle="connect" conn_id=0 duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
-INFO nest_rs::access: message served event=message conn_id=0 outcome="ok" duration_ms=0.045 trace_id=01a015e0074575729557467b3d9e2317 span_id=3398a131c2baa84a
-INFO nest_rs::access: message served event=nope conn_id=0 outcome="error" duration_ms=0.011 trace_id=01a015e0074575729557467b3d9e2317 span_id=2a3f10371aa5cbc8
+INFO nest_rs::operation: http.request method=GET path="/ws" status=101 bytes=0 duration_ms=1.265 client_ip=127.0.0.1 forwarded=false trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::operation: ws.connect conn_id=0 duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::operation: ws.message event=message conn_id=0 outcome="ok" duration_ms=0.045 trace_id=01a015e0074575729557467b3d9e2317 span_id=3398a131c2baa84a
+INFO nest_rs::operation: ws.message event=nope conn_id=0 outcome="error" duration_ms=0.011 trace_id=01a015e0074575729557467b3d9e2317 span_id=2a3f10371aa5cbc8
 ```
 
 Same `trace_id` throughout, a fresh `span_id` per message — because a connection

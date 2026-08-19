@@ -151,7 +151,7 @@ fn emit_pk_loader(model: &ResourceModel, service: &syn::Path, pk: &ResourceField
                     return ::core::result::Result::Ok(::std::collections::HashMap::new());
                 }
                 ::nest_rs_resource::tracing::debug!(
-                    target: "nest_rs::loader",
+                    target: ::nest_rs_resource::TARGET,
                     count = __keys.len(),
                     #target_label,
                 );
@@ -351,7 +351,7 @@ fn emit_fk_loaders(
                         return ::core::result::Result::Ok(__out);
                     }
                     ::nest_rs_resource::tracing::debug!(
-                        target: "nest_rs::loader",
+                        target: ::nest_rs_resource::TARGET,
                         count = __keys.len(),
                         #target_label,
                     );

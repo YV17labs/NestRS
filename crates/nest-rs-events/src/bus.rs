@@ -74,7 +74,7 @@ impl EventBus {
                 .await;
             if let Err(payload) = outcome {
                 tracing::error!(
-                    target: "nest_rs::events",
+                    target: crate::TARGET,
                     event = std::any::type_name::<E>(),
                     panic = panic_message(payload.as_ref()),
                     "event listener panicked — dispatch continues with the next listener",

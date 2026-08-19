@@ -392,7 +392,7 @@ impl Drop for UploadGuard {
         };
         let key = std::mem::take(&mut self.key);
         tracing::warn!(
-            target: "nest_rs::storage",
+            target: crate::TARGET,
             key = key.as_str(),
             "multipart upload was cancelled mid-flight; discarding its parts",
         );
@@ -405,7 +405,7 @@ impl Drop for UploadGuard {
                 handle.spawn(async move { abort_upload(&mut upload, &key).await });
             }
             Err(_) => tracing::warn!(
-                target: "nest_rs::storage",
+                target: crate::TARGET,
                 key = key.as_str(),
                 "no runtime is available to discard them; they are left for the store's \
                  lifecycle rule",
@@ -431,12 +431,12 @@ impl Drop for UploadGuard {
 async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str) {
     match upload.abort().await {
         Ok(()) => tracing::debug!(
-            target: "nest_rs::storage",
+            target: crate::TARGET,
             key,
             "discarded the parts of an interrupted multipart upload",
         ),
         Err(error) => tracing::warn!(
-            target: "nest_rs::storage",
+            target: crate::TARGET,
             key,
             error = %error,
             "multipart upload left dangling parts",

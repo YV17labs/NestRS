@@ -571,17 +571,66 @@ here because the rule is that the answer is stated rather than identical:
 **Every edge files one line per unit of work, and that is what makes the rest
 affordable.** The ids relate lines; the *identity* of the work — which route,
 which event, which job, which tool — is an **event** attribute on a line the edge
-emits once per unit, the way `nest_rs::access` does for HTTP. An edge without
+emits once per unit, the way HTTP's access log always has. An edge without
 that line leaves its work anonymous on the console, which is the state HTTP's
 access log has always prevented and the other edges lacked.
 
+**A unit of work has one canonical name, and it is `<edge>.<unit>`.** It is
+declared once in `nest_rs_core::operation_log::unit` and read three times — by
+the `operation_span!` that opens the unit, by the operation line's `name:` (the
+event's metadata identity, which an OTLP log bridge exports as `event.name`),
+and by that line's `message`. Two of the three used to be two vocabularies: the
+spans said `http.request` and `mcp.operation` while the lines said `request
+served` and `operation served`, so the set had to be learned twice and a query
+could name the wrong one. Sharing a constant is what makes them agree; the
+`units` join in `nest-rs-conformance` is what stops a fourth spelling, and it
+fails on a literal at any such site, on a namespace outside the closed edge
+vocabulary, and on a unit that opens a span but files no line.
+
+**Every string the framework interprets is a constant, and a span target is
+declared by the crate that owns the concern.** Never a literal at the call site: a typo
+there is a target carrying one event that no filter selects, and nothing says
+so. **The owning crate declares it** — `nest_rs_events::TARGET`,
+`nest_rs_seaorm::TARGET` — because a target's one job is to name *where* an
+event came from, so a central table in the kernel would mean `nest-rs-core`
+holding a name for a concern it does not know exists. **Owns, not emits**: a
+concern several crates emit on (`nest_rs::routes`, from five) is declared once
+by the crate the others already depend on, and read from there. A crate owning exactly one
+concern spells it `TARGET` at its root; a crate owning several gets a `target`
+module (`nest_rs_core::target`, `nest_rs_http::target`, and those two only).
+`operation_log::kind` holds the five `otel.kind` values the specification
+defines. A `*-macros` crate reaches the owner through **its own surface crate's**
+re-export (`::nest_rs_queue::TARGET` from `nest-rs-queue-macros`), the form
+`framework.md` sanctions — its expansion lands in crates that do not all carry
+the umbrella. Reaching a *different* sibling is the breach that rule names, and
+`nest-rs-ws-macros` has two (`::nest_rs_core::target::LAYERS`,
+`::nest_rs_http::target::ROUTES`); both predate this and are reported, not
+licensed.
+
 **One target is the family's toggle, and that is why no edge grows a config for
-it.** Every operation line is `nest_rs::access`, so `<PREFIX>_LOG` silences the
-whole family with `nest_rs::access=off` and no other spelling exists.
+it.** Every operation line is `nest_rs::operation`, so `<PREFIX>_LOG` silences
+the whole family with `nest_rs::operation=off` and no other spelling exists.
 `NESTRS_HTTP__ACCESS_LOG` stays because it predates the family and is an app's
-pinned config rather than a deployment's filter; inventing a `#[config]` — and
-the `for_root` seam that one obliges — for four more booleans would be four
-declarations of a decision the filter already makes.
+pinned config rather than a deployment's filter — it names one edge's line, not
+the family's; inventing a `#[config]` — and the `for_root` seam that one obliges
+— for four more booleans would be four declarations of a decision the filter
+already makes.
+
+**That target names the line, and it is the only one that names anything but a
+subsystem.** Every other is rooted at the crate that emits it; this one is a
+category of line crossing all of them — one per unit of work, carrying an
+`outcome` and a `duration_ms` — so a subsystem-shaped word reads as a subsystem
+and hides what it is. It was `nest_rs::access` through 5.1, which was HTTP's
+word for its own line surviving the generalisation to six edges: a clock tick
+has no caller, so nothing accesses anything.
+
+**No target may prefix another**, and that is mechanical rather than aesthetic:
+`EnvFilter` matches a directive's target with `starts_with` on the raw string,
+not on `::` segments. `nest_rs::access` prefixed `nest_rs::access_graph`, so the
+documented toggle also silenced the boot `warn` naming unreachable GraphQL
+resolvers — an operator lost a startup diagnostic with no sign of it. Derived
+and executed by the `filters` join in `nest-rs-conformance`, which walks every
+target both workspaces emit.
 
 ## Testing
 

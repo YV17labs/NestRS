@@ -51,7 +51,7 @@ pub fn burn_verify(password: &str) {
         Ok(hash) => hash,
         Err(error) => {
             tracing::error!(
-                target: "nest_rs::authn",
+                target: crate::TARGET,
                 %error,
                 "timing dummy hash failed to initialize — absent-account burn degrades to no-op",
             );

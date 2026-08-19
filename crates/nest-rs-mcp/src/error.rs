@@ -48,7 +48,7 @@ impl<T, E: Display> Opaque<T> for Result<T, E> {
     fn opaque(self) -> Result<T, McpError> {
         self.map_err(|err| {
             tracing::error!(
-                target: "nest_rs::mcp",
+                target: crate::TARGET,
                 error = %err,
                 "mcp operation failed",
             );
@@ -81,7 +81,7 @@ pub fn pipe_error(err: &PipeError) -> McpError {
 /// nobody gated.
 pub fn unresolvable_chain(label: &'static str) -> McpError {
     tracing::error!(
-        target: "nest_rs::mcp",
+        target: crate::TARGET,
         operation = label,
         reason = "no_ambient_container",
         "mcp operation declares guards but the mount carries no container",

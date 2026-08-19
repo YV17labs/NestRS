@@ -87,7 +87,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             }
             Some(Err(err)) => {
                 tracing::error!(
-                    target: "nest_rs::authz",
+                    target: crate::TARGET,
                     error = %err,
                     "ability construction failed — denying the request",
                 );
@@ -95,7 +95,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             }
             None => {
                 tracing::warn!(
-                    target: "nest_rs::authz",
+                    target: crate::TARGET,
                     actor_type = std::any::type_name::<F::Actor>(),
                     "ability guard denied: no authenticated actor and route is not public",
                 );
@@ -110,7 +110,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     async fn check_graphql(&self, _op: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
         if current_ability().is_none() {
             tracing::warn!(
-                target: "nest_rs::authz",
+                target: crate::TARGET,
                 transport = "graphql",
                 "authorization denied: no ambient ability",
             );
@@ -129,7 +129,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     ) -> Result<(), Denial> {
         if current_ability().is_none() {
             tracing::warn!(
-                target: "nest_rs::authz",
+                target: crate::TARGET,
                 transport = "ws",
                 event = %event,
                 "authorization denied: no ambient ability",

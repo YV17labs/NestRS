@@ -74,7 +74,7 @@ impl Transport for QueueWorker {
                 && !r.0.contains(&provider_id)
             {
                 ::nest_rs_core::report_inert_host!(
-                    target: "nest_rs::queue",
+                    target: nest_rs_queue::TARGET,
                     what: "#[process] method",
                     origin: entry.origin,
                     processor = entry.name,
@@ -100,7 +100,7 @@ impl Transport for QueueWorker {
             )?;
             for m in &self.methods {
                 tracing::info!(
-                    target: "nest_rs::queue",
+                    target: nest_rs_queue::TARGET,
                     processor = m.name,
                     queue = m.queue,
                     retries = m.retries,
@@ -215,11 +215,11 @@ fn build_worker(
                 // fields every edge does — `actor_id` included, which is what
                 // lets a job's events be attributed at all.
                 let span = nest_rs_core::operation_span!(
-                    target: "nest_rs::queue",
+                    target: nest_rs_queue::TARGET,
                     // A job is delivered *to* this process — the kind a
                     // messaging view classifies on.
-                    kind: "consumer",
-                    "process job",
+                    kind: nest_rs_core::operation_log::kind::CONSUMER,
+                    nest_rs_core::operation_log::unit::QUEUE_JOB,
                     &correlation,
                     queue = queue_name,
                     processor = processor_name,
@@ -242,7 +242,7 @@ fn build_worker(
                 };
                 async move {
                     tracing::debug!(
-                        target: "nest_rs::queue",
+                        target: nest_rs_queue::TARGET,
                         attempt = identity.attempt,
                         "job started",
                     );
@@ -315,7 +315,7 @@ async fn run_job(
     .await;
     // Every terminal state, one detail event and one line. The detail says
     // *why* and stays on `nest_rs::queue`; the line says the job ran, and is the
-    // family's — so `nest_rs::access` answers "what did this worker do" the same
+    // family's — so `nest_rs::operation` answers "what did this worker do" the same
     // way it answers it for a request. Neither restates the other's fields.
     let (settled, result) = match outcome {
         Ok(Ok(())) => (nest_rs_core::operation_log::OK, Ok(())),
@@ -331,7 +331,7 @@ async fn run_job(
             // one query shape finds a validation failure on any transport. Absent
             // detail emits no field rather than an empty one.
             tracing::error!(
-                target: "nest_rs::queue",
+                target: nest_rs_queue::TARGET,
                 error = %je,
                 errors = je.details.as_ref().map(tracing::field::display),
                 "job dead-lettered: non-retryable failure",
@@ -340,7 +340,7 @@ async fn run_job(
         }
         Ok(Err(je)) => {
             tracing::warn!(
-                target: "nest_rs::queue",
+                target: nest_rs_queue::TARGET,
                 error = %je,
                 "job failed; will retry within the budget",
             );
@@ -349,7 +349,7 @@ async fn run_job(
         Err(payload) => {
             let detail = panic_message(payload.as_ref()).to_owned();
             tracing::error!(
-                target: "nest_rs::queue",
+                target: nest_rs_queue::TARGET,
                 panic = %detail,
                 "job dead-lettered: handler panicked",
             );
@@ -364,14 +364,15 @@ async fn run_job(
     };
 
     tracing::info!(
+        name: nest_rs_core::operation_log::unit::QUEUE_JOB,
         target: nest_rs_core::operation_log::TARGET,
+        message = nest_rs_core::operation_log::unit::QUEUE_JOB,
         queue = identity.queue,
         processor = identity.processor,
         job_id = identity.job_id,
         attempt = identity.attempt,
         outcome = settled,
         duration_ms = nest_rs_core::operation_log::duration_ms(started),
-        "job ran",
     );
     result
 }
@@ -444,7 +445,10 @@ mod tests {
             "the panic message rides on the shared `panic` field: {event:#?}",
         );
         // The duration is on the family's line, not restated on the detail.
-        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, "job ran");
+        let ran = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_core::operation_log::unit::QUEUE_JOB,
+        );
         assert_eq!(
             ran.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::PANIC),
@@ -564,7 +568,7 @@ mod tests {
         // Success is said once, and it is the family's line that says it.
         assert!(
             logs.find("nest_rs::queue", "job ok").is_empty(),
-            "a successful job reports through `nest_rs::access`, not twice",
+            "a successful job reports through `nest_rs::operation`, not twice",
         );
         assert_eq!(
             logs.expect_one("nest_rs::queue", "job dead-lettered: non-retryable failure")
@@ -613,7 +617,10 @@ mod tests {
             "the event carries the cause the retry will hit again, got {:?}",
             event.fields,
         );
-        let ran = logs.expect_one(nest_rs_core::operation_log::TARGET, "job ran");
+        let ran = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_core::operation_log::unit::QUEUE_JOB,
+        );
         assert_eq!(
             ran.field("outcome").as_deref(),
             Some(nest_rs_core::operation_log::ERROR),

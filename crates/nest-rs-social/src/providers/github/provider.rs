@@ -46,7 +46,7 @@ impl GithubSocialProvider {
             }
             Err(err) => {
                 tracing::debug!(
-                    target: "nest_rs::social",
+                    target: crate::TARGET,
                     provider = Self::KEY,
                     error = %err,
                     "github emails endpoint unavailable; falling back to unverified profile email",

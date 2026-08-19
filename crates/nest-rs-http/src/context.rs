@@ -82,7 +82,7 @@ impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
             .filter(|r| r.principal == TypeId::of::<T>())
         {
             tracing::debug!(
-                target: "nest_rs::http",
+                target: crate::target::HTTP,
                 context_type = std::any::type_name::<T>(),
                 "public route needs the principal a rejected credential never produced — answering the deferred 401",
             );
@@ -94,7 +94,7 @@ impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
         // Rust type name belongs in the logs, not the response body — reply
         // with a bare 500 and record the detail (queryable) at `error`.
         tracing::error!(
-            target: "nest_rs::http",
+            target: crate::target::HTTP,
             context_type = std::any::type_name::<T>(),
             "missing request context — the guard or interceptor that sets it did not run on this route",
         );

@@ -183,7 +183,7 @@ mod http {
             _ => return,
         };
         tracing::error!(
-            target: "nest_rs::orm",
+            target: crate::TARGET,
             kind,
             detail = %detail,
             "service error surfaced as 500",
@@ -214,7 +214,7 @@ mod http {
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(
-                target: "nest_rs::orm",
+                target: crate::TARGET,
                 kind = "db",
                 detail = %err,
                 "crud operation failed",

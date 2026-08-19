@@ -217,7 +217,7 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
                         )
                     } else {
                         ::nest_rs_queue::tracing::warn!(
-                            target: "nest_rs::queue",
+                            target: ::nest_rs_queue::TARGET,
                             queue = #queue_str,
                             hint = "producer predates the wire envelope; drain the queue to clear legacy jobs",
                             "processed an unversioned job payload",

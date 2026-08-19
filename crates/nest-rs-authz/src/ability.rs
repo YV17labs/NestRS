@@ -24,7 +24,7 @@ pub(crate) fn warn_mask_failure(
     err: &dyn std::fmt::Display,
 ) {
     tracing::warn!(
-        target: "nest_rs::authz",
+        target: crate::TARGET,
         entity,
         action = ?action,
         reason,
@@ -377,7 +377,7 @@ fn predicate_of<E: EntityTrait>(rule: &Rule) -> Option<&Predicate<E>> {
     let predicate = rule.predicate.downcast_ref::<Predicate<E>>();
     if predicate.is_none() {
         tracing::error!(
-            target: "nest_rs::authz",
+            target: crate::TARGET,
             reason = "predicate_type_mismatch",
             "ability rule predicate does not match its keyed subject — failing closed",
         );

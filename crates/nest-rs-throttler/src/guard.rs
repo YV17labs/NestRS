@@ -71,7 +71,7 @@ impl Guard for ThrottlerGuard {
             return Ok(());
         }
         tracing::warn!(
-            target: "nest_rs::throttler",
+            target: crate::TARGET,
             key = %key,
             retry_after = decision.retry_after.as_secs(),
             "rate limit exceeded",
@@ -166,7 +166,7 @@ fn warn_shared_bucket(reason: &'static str, detail: &'static str) {
         .unwrap_or(true);
     if first_time {
         tracing::warn!(
-            target: "nest_rs::throttler",
+            target: crate::TARGET,
             reason,
             detail,
             "rate-limit keying degraded to a shared bucket",

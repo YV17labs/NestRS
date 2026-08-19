@@ -43,7 +43,7 @@ impl<T, E: Display> Opaque<T> for Result<T, E> {
     fn opaque(self) -> Result<T, WsError> {
         self.map_err(|err| {
             tracing::error!(
-                target: "nest_rs::ws",
+                target: crate::TARGET,
                 error = %err,
                 "websocket message failed",
             );

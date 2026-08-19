@@ -102,13 +102,13 @@ impl AuthError {
         // An infrastructure failure is a 500, logged at `error` — not a 401
         // challenge; the caller cannot fix it by re-authenticating.
         if let Self::Unavailable(detail) = self {
-            tracing::error!(target: "nest_rs::authn", detail = %detail, "authentication unavailable");
+            tracing::error!(target: crate::TARGET, detail = %detail, "authentication unavailable");
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(body);
         }
         if let Self::Failed(detail) = self {
-            tracing::warn!(target: "nest_rs::authn", detail = %detail, "authentication failed");
+            tracing::warn!(target: crate::TARGET, detail = %detail, "authentication failed");
         }
         Response::builder()
             .status(StatusCode::UNAUTHORIZED)

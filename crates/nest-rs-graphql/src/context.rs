@@ -189,7 +189,7 @@ impl OperationBridge {
         let op_guard = match container.get_dyn::<dyn GraphqlOperationGuard>() {
             Some(guard) => {
                 tracing::debug!(
-                    target: "nest_rs::graphql",
+                    target: crate::TARGET,
                     mode = "operation_guard",
                     "graphql operations gated",
                 );
@@ -198,7 +198,7 @@ impl OperationBridge {
             None => match container.get::<FallbackOperationGuard>() {
                 Some(factory) => {
                     tracing::debug!(
-                        target: "nest_rs::graphql",
+                        target: crate::TARGET,
                         mode = "global_guard_pool",
                         "graphql operations gated",
                     );
@@ -209,7 +209,7 @@ impl OperationBridge {
                     // posture, so an unguarded schema is its deliberate
                     // shape — but say so once at boot.
                     tracing::warn!(
-                        target: "nest_rs::graphql",
+                        target: crate::TARGET,
                         mode = "unguarded",
                         "no operation guard registered — graphql operations run unguarded",
                     );
@@ -442,7 +442,7 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
             // Unreachable unless a panic unwound past the executor: report it
             // rather than serve an empty 200.
             tracing::error!(
-                target: "nest_rs::graphql",
+                target: crate::TARGET,
                 reason = "no_response",
                 "the guarded operation produced no response",
             );

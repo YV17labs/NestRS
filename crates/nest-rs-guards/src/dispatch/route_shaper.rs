@@ -197,7 +197,7 @@ pub(super) fn log_effective_chain<L: Layer + ?Sized>(
         .map(|e| format!("{} ({})", e.name, e.source.label()))
         .collect();
     tracing::trace!(
-        target: "nest_rs::layers",
+        target: nest_rs_core::target::LAYERS,
         route,
         kind,
         chain = entries.join(", ").as_str(),
@@ -235,7 +235,7 @@ async fn apply_body_pipes(
             // would run the handler against an empty body with every global
             // pipe skipped. Fail the request instead, exactly as the sibling
             // body readers do (`nest_rs_http` `RawBody` / `Piped`).
-            tracing::warn!(target: "nest_rs::layers", error = %err, "global pipe: failed to read body");
+            tracing::warn!(target: nest_rs_core::target::LAYERS, error = %err, "global pipe: failed to read body");
             return Err(err.into());
         }
     };
@@ -245,7 +245,7 @@ async fn apply_body_pipes(
     let mut value: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(err) => {
-            tracing::debug!(target: "nest_rs::layers", error = %err, "global pipe: body is not valid JSON");
+            tracing::debug!(target: nest_rs_core::target::LAYERS, error = %err, "global pipe: body is not valid JSON");
             req.set_body(Body::from_bytes(bytes));
             return Ok(());
         }
@@ -267,7 +267,7 @@ async fn apply_body_pipes(
     // silently — fail the request instead.
     let rewritten = serde_json::to_vec(&value).map_err(|err| {
         tracing::error!(
-            target: "nest_rs::layers",
+            target: nest_rs_core::target::LAYERS,
             error = %err,
             "global pipe: failed to re-serialize the transformed body",
         );

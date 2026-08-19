@@ -225,7 +225,7 @@ fn merge_fields(
         {
             for field_name in member_fields.keys() {
                 tracing::info!(
-                    target: "nest_rs::routes",
+                    target: nest_rs_http::target::ROUTES,
                     resolver = reg.resolver_name,
                     kind = kind.as_str(),
                     field = field_name.as_str(),

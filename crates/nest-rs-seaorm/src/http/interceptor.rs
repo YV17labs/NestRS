@@ -131,14 +131,14 @@ impl Interceptor for DbContext {
 fn commit_failure(err: CommitError, observe_conflicts: bool) -> Error {
     if observe_conflicts && err.is_retryable_conflict() {
         tracing::warn!(
-            target: "nest_rs::orm",
+            target: crate::TARGET,
             error = %err,
             hint = "not retried here (handler is not replayable from the interceptor); \
                     use `retry::retry_on_conflict` at a programmatic transaction boundary",
             "serialization conflict at commit",
         );
     } else {
-        tracing::error!(target: "nest_rs::orm", error = %err, "transaction commit failed");
+        tracing::error!(target: crate::TARGET, error = %err, "transaction commit failed");
     }
     Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)
 }

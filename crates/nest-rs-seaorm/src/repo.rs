@@ -43,7 +43,7 @@ pub fn scope_for<E: EntityTrait>(action: Action) -> Condition {
             // fixes are the only two ways an ability is installed, so naming
             // both is naming the whole answer.
             tracing::warn!(
-                target: "nest_rs::orm",
+                target: crate::TARGET,
                 entity = std::any::type_name::<E>(),
                 ?action,
                 scope = ?scope,
@@ -88,7 +88,7 @@ impl<E: EntityTrait> Repo<E> {
                  `LoaderScope as dyn GraphqlBatchContext`, and worker/cron jobs through \
                  DatabaseModule's JobContext — none of those is bound on this path";
             tracing::error!(
-                target: "nest_rs::orm",
+                target: crate::TARGET,
                 entity = std::any::type_name::<E>(),
                 hint = HINT,
                 "no ambient database executor",
@@ -186,7 +186,7 @@ impl<E: EntityTrait> Repo<E> {
         E::Model: IntoActiveModel<E::ActiveModel>,
     {
         tracing::trace!(
-            target: "nest_rs::orm",
+            target: crate::TARGET,
             entity = E::default().table_name(),
             "insert unscoped",
         );

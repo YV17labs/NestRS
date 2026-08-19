@@ -200,7 +200,7 @@ where
         let Some(pk) = E::PrimaryKey::iter().next() else {
             let entity = std::any::type_name::<E>();
             tracing::error!(
-                target: "nest_rs::orm",
+                target: crate::TARGET,
                 entity,
                 "entity has no primary-key column — keyset pagination requires one",
             );

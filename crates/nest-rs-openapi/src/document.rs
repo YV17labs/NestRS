@@ -127,7 +127,7 @@ pub fn build_document(
             // — the route works, it is the *document* that cannot describe it.
             let Some(key) = openapi_path(&full) else {
                 tracing::warn!(
-                    target: "nest_rs::openapi",
+                    target: crate::TARGET,
                     controller = meta.controller,
                     handler = route.handler,
                     path = %full,
@@ -174,7 +174,7 @@ pub fn build_document(
                 && reported.ids.insert(id.clone())
             {
                 tracing::warn!(
-                    target: "nest_rs::openapi",
+                    target: crate::TARGET,
                     operation_id = id.as_str(),
                     path = key.as_str(),
                     method = route.verb.as_str(),
@@ -194,7 +194,7 @@ pub fn build_document(
                 && previous != version
             {
                 tracing::warn!(
-                    target: "nest_rs::openapi",
+                    target: crate::TARGET,
                     path = key.as_str(),
                     method = route.verb.as_str(),
                     described = version_label(version),

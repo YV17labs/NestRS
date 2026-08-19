@@ -232,7 +232,7 @@ fn fan_out(recipients: Vec<Sender<Frame>>, frame: Frame) -> (usize, usize) {
 fn warn_if_shed(event: &str, kind: &'static str, sent: usize, shed: usize) {
     if shed > 0 {
         tracing::warn!(
-            target: "nest_rs::ws",
+            target: crate::TARGET,
             event,
             kind,
             sent,

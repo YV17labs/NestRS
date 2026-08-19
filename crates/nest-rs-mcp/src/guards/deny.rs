@@ -19,7 +19,7 @@ pub(crate) fn deny_all() -> Arc<dyn McpOperationGuard> {
     // Mirrors GraphQL's unguarded-schema warning so a deny-all endpoint born of
     // a missing guard import is never silent.
     tracing::warn!(
-        target: "nest_rs::mcp",
+        target: crate::TARGET,
         mode = "deny_all",
         "no operation guard registered — mcp endpoint is deny-all",
     );
@@ -35,7 +35,7 @@ impl McpOperationGuard for DenyAllMcpGuard {
             // queried under incident. Fields carry the request coordinates; the
             // principal is unknown (that is the misconfiguration).
             tracing::warn!(
-                target: "nest_rs::mcp",
+                target: crate::TARGET,
                 method = %req.method(),
                 path = %req.uri().path(),
                 reason = "no McpOperationGuard registered",

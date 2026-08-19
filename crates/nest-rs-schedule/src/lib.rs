@@ -18,6 +18,15 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+/// This crate's span target — Cron and interval registration, and a tick that failed.
+///
+/// Declared by the crate that **owns** the concern, which is not always the only
+/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
+/// rather than spelling a second one, because a target's one job is to say
+/// **where** an event came from. A central table in the kernel would have meant
+/// `nest-rs-core` holding a name for a concern it does not know exists.
+pub const TARGET: &str = "nest_rs::schedule";
+
 mod inventory;
 mod module;
 mod scheduler;

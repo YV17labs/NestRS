@@ -50,7 +50,7 @@ fn respond(report: ProbeReport) -> Response {
             .body(body),
         Err(error) => {
             tracing::error!(
-                target: "nest_rs::health",
+                target: crate::TARGET,
                 %error,
                 "health report failed to serialize",
             );

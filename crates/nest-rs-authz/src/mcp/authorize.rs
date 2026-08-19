@@ -21,7 +21,7 @@ pub fn authorize<A: ActionMarker, S: Subject>() -> Result<(), McpError> {
         // the gate has nothing to decide against. Say so to the operator, stay
         // opaque to the model.
         tracing::error!(
-            target: "nest_rs::authz",
+            target: crate::TARGET,
             transport = "mcp",
             action = ?A::ACTION,
             subject = std::any::type_name::<S>(),

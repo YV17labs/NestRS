@@ -355,7 +355,7 @@ fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
                         .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
                     if __is_global {
                         ::nest_rs_ws::tracing::debug!(
-                            target: "nest_rs::layers",
+                            target: ::nest_rs_core::target::LAYERS,
                             layer = ::core::any::type_name::<#p>(),
                             scope = "gateway",
                             "guard declared at multiple scopes — broadest (global) wins, this scope skipped",

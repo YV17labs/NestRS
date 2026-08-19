@@ -402,7 +402,7 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
                             let __path = <#self_ty>::__nestrs_mount_path();
                             #(
                                 ::nest_rs_ws::tracing::info!(
-                                    target: "nest_rs::routes",
+                                    target: ::nest_rs_http::target::ROUTES,
                                     gateway = #gateway_name,
                                     path = __path.as_str(),
                                     event = #event_names,

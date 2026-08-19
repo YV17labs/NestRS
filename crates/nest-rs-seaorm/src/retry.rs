@@ -178,7 +178,7 @@ where
                 attempt += 1;
                 if attempt >= attempts {
                     tracing::warn!(
-                        target: "nest_rs::orm",
+                        target: crate::TARGET,
                         attempt,
                         attempts,
                         error = %err,
@@ -187,7 +187,7 @@ where
                     return Err(err);
                 }
                 tracing::warn!(
-                    target: "nest_rs::orm",
+                    target: crate::TARGET,
                     attempt,
                     attempts,
                     error = %err,

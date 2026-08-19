@@ -37,6 +37,15 @@ mod subject;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod wire_mask;
 
+/// This crate's span target.
+///
+/// Declared here, like every crate's: a target names **where** an event came
+/// from, so the crate that **owns** the concern names it and everything emitting
+/// on it reads the constant. Worth noting for this one either way — the kernel
+/// is an *optional* dependency here, so a path through it would have needed a
+/// feature gate on every denial.
+pub const TARGET: &str = "nest_rs::authz";
+
 pub use ability::{Ability, FieldSet, MalformedRuleError};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, RuleSpec};

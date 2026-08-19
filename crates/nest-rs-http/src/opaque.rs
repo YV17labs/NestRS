@@ -47,7 +47,7 @@ impl<T, E: Display> Opaque<T> for Result<T, E> {
     fn opaque(self) -> Result<T, Error> {
         self.map_err(|err| {
             tracing::error!(
-                target: "nest_rs::http",
+                target: crate::target::HTTP,
                 error = %err,
                 "request failed",
             );

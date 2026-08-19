@@ -73,7 +73,7 @@ pub fn warn_denied<A: ActionMarker, S: Subject>(
     reason: Option<&'static str>,
 ) {
     tracing::warn!(
-        target: "nest_rs::authz",
+        target: crate::TARGET,
         transport,
         event,
         action = ?A::ACTION,

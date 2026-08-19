@@ -71,7 +71,7 @@ pub fn keep_masked_item<T>(
         Ok(Some(item)) => Some(item),
         Ok(None) => {
             tracing::debug!(
-                target: "nest_rs::graphql",
+                target: crate::TARGET,
                 operation,
                 reason = "not_granted",
                 "subscription item withheld",
@@ -80,7 +80,7 @@ pub fn keep_masked_item<T>(
         }
         Err(err) => {
             tracing::warn!(
-                target: "nest_rs::graphql",
+                target: crate::TARGET,
                 operation,
                 reason = "mask_failed",
                 error = %err.message,
@@ -159,7 +159,7 @@ async fn bounded_by<F: Future<Output = ()>>(serve: F, ttl: Option<Duration>) {
     tokio::select! {
         () = serve => {}
         () = tokio::time::sleep(ttl) => tracing::info!(
-            target: "nest_rs::graphql",
+            target: crate::TARGET,
             max_connection_secs = ttl.as_secs(),
             "closing subscription socket: max lifetime reached",
         ),
@@ -235,9 +235,9 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 // message is the unit and the connection is a field. Here the
                 // connection is all there is.
                 let span = nest_rs_core::operation_span!(
-                    target: "nest_rs::graphql",
-                    kind: "server",
-                    "graphql.subscription",
+                    target: crate::TARGET,
+                    kind: nest_rs_core::operation_log::kind::SERVER,
+                    nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION,
                     &correlation,
                 );
                 let serve = GraphQLWebSocket::new(stream, executor, protocol)
@@ -301,7 +301,9 @@ impl Drop for SubscriptionLine {
     fn drop(&mut self) {
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone(), None).enter(|| {
             tracing::info!(
+                name: nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION,
                 target: nest_rs_core::operation_log::TARGET,
+                message = nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION,
                 // Always `ok`: async-graphql owns the message loop, so this crate
                 // sees no operation boundary and has no failure signal to report
                 // — the same fact the span's own comment records. A closed socket
@@ -311,7 +313,6 @@ impl Drop for SubscriptionLine {
                 // How long it stayed open, which on a subscription is the number
                 // an operator actually reads.
                 duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
-                "subscription served",
             );
         });
     }
@@ -341,7 +342,10 @@ mod tests {
         // runtime left to reach a task-local through.
         drop(SubscriptionLine::new(nest_rs_core::Correlation::mint()));
 
-        let served = logs.find(nest_rs_core::operation_log::TARGET, "subscription served");
+        let served = logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION,
+        );
         assert_eq!(
             served.len(),
             1,
@@ -368,8 +372,11 @@ mod tests {
         .await;
 
         assert_eq!(
-            logs.find(nest_rs_core::operation_log::TARGET, "subscription served")
-                .len(),
+            logs.find(
+                nest_rs_core::operation_log::TARGET,
+                nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION
+            )
+            .len(),
             1,
         );
     }

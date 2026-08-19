@@ -33,7 +33,7 @@ pub fn resolve_operation_guard(container: &Container) -> Arc<dyn McpOperationGua
             None => return deny_all(),
         },
     };
-    tracing::debug!(target: "nest_rs::mcp", mode, "mcp operations gated");
+    tracing::debug!(target: crate::TARGET, mode, "mcp operations gated");
     guard
 }
 
@@ -82,7 +82,7 @@ impl McpMount {
             // Not a style nit: an empty allowlist turns off rmcp's DNS-rebinding
             // defence, and this is the event an incident query looks for.
             tracing::warn!(
-                target: "nest_rs::mcp",
+                target: crate::TARGET,
                 reason = "host_validation_disabled",
                 "mcp host allowlist is empty — inbound Host headers are not validated",
             );
@@ -95,7 +95,7 @@ impl McpMount {
             // loopback default is correct for the local server it protects, and
             // an alarm on every dev run is an alarm nobody reads.
             tracing::debug!(
-                target: "nest_rs::mcp",
+                target: crate::TARGET,
                 allowed_hosts = ?config.allowed_hosts,
                 hint = %format!(
                     "a Host outside this list is refused with 403; set {} to this \

@@ -67,7 +67,7 @@ impl ProtectedResourceController {
                 .body(body),
             Err(error) => {
                 tracing::error!(
-                    target: "nest_rs::authn",
+                    target: crate::TARGET,
                     %error,
                     resource = self.metadata.resource(),
                     "protected resource metadata failed to serialize",

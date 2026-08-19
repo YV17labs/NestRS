@@ -68,7 +68,7 @@ impl<A: Guard, G: Guard> McpOperationGuard for McpAbilityBridge<A, G> {
                 // A downcast miss is a framework bug; run unscoped rather than
                 // panic — `Repo` fails closed, same as the anonymous path.
                 tracing::error!(
-                    target: "nest_rs::authz",
+                    target: crate::TARGET,
                     reason = "guard_capture_downcast_miss",
                     "unexpected captured operation-guard state",
                 );

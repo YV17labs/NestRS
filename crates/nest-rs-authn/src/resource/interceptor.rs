@@ -109,7 +109,7 @@ impl ResourceChallenge {
             // Logged rather than swallowed — a 401 without the pointer is a
             // conformance failure, and silence would hide it.
             Err(error) => tracing::error!(
-                target: "nest_rs::authn",
+                target: crate::TARGET,
                 %error,
                 challenge = self.metadata.challenge(),
                 "protected resource challenge is not a valid header value",
@@ -145,7 +145,7 @@ impl ResourceChallenge {
                 .collect();
             if !unadvertised.is_empty() {
                 tracing::warn!(
-                    target: "nest_rs::authn",
+                    target: crate::TARGET,
                     scopes = ?unadvertised,
                     reason = "scope_not_advertised",
                     "denied for a scope this resource does not advertise — a client following \
@@ -163,7 +163,7 @@ impl ResourceChallenge {
             // scope carrying a quote or control character reaches here — which
             // the config refuses too. Logged rather than swallowed.
             Err(error) => tracing::error!(
-                target: "nest_rs::authn",
+                target: crate::TARGET,
                 %error,
                 challenge,
                 "insufficient-scope challenge is not a valid header value",

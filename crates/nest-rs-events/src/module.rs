@@ -74,7 +74,7 @@ fn wire_listeners(
                 && !r.0.contains(&provider_id)
             {
                 ::nest_rs_core::report_inert_host!(
-                    target: "nest_rs::events",
+                    target: crate::TARGET,
                     what: "#[on_event] method",
                     origin: entry.origin,
                     listener = entry.name,
@@ -83,7 +83,7 @@ fn wire_listeners(
             }
             (entry.wire)(container, &bus);
             tracing::debug!(
-                target: "nest_rs::events",
+                target: crate::TARGET,
                 listener = entry.name,
                 "wired event listener",
             );

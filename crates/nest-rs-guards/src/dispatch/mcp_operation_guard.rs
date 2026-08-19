@@ -65,7 +65,7 @@ impl McpOperationGuard for GlobalPoolMcpGuard {
             // its own terms, not by cooperation with the builder.
             if self.pool.is_empty() {
                 tracing::warn!(
-                    target: "nest_rs::mcp",
+                    target: nest_rs_mcp::TARGET,
                     method = %req.method(),
                     path = %req.uri().path(),
                     reason = "global guard pool resolved empty",

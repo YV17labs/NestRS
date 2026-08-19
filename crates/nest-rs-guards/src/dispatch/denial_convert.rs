@@ -19,7 +19,7 @@ use nest_rs_graphql::async_graphql::{Error as GraphqlError, ErrorExtensions};
 /// floor.
 pub(crate) fn deny_http(guard: &'static str, denial: Denial) -> Response {
     tracing::warn!(
-        target: "nest_rs::layers",
+        target: nest_rs_core::target::LAYERS,
         guard,
         status = denial.http_status(),
         "guard denied the request",

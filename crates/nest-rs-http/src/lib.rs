@@ -30,6 +30,7 @@ mod scope;
 mod security_headers;
 mod shaper;
 mod sse;
+pub mod target;
 mod tls;
 mod trace_context;
 mod transport;

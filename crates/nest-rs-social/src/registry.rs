@@ -141,7 +141,7 @@ impl SocialRegistry {
                     resolved.push((entry.key, (entry.provider_type_name)(), provider));
                 }
                 None => tracing::warn!(
-                    target: "nest_rs::social",
+                    target: crate::TARGET,
                     provider = entry.key,
                     // `var_name` with `*` as the key: the glob the operator
                     // needs is the same join every real variable uses, so the
@@ -157,7 +157,7 @@ impl SocialRegistry {
 
         let keys = sorted_keys(&map);
         tracing::info!(
-            target: "nest_rs::social",
+            target: crate::TARGET,
             providers = keys.join(", "),
             count = keys.len(),
             "registered social providers",

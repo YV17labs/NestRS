@@ -107,7 +107,7 @@ impl JobContext for WorkerDbContext {
                     FinalizeOutcome::CommitFailed(err) => {
                         let retryable = err.is_retryable_conflict();
                         tracing::error!(
-                            target: "nest_rs::orm",
+                            target: crate::TARGET,
                             transport = TRANSPORT,
                             error = %err,
                             retryable,

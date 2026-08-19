@@ -101,7 +101,7 @@ where
     match err {
         Some(err) => warn_mask_failure(std::any::type_name::<E>(), action, reason, err),
         None => tracing::warn!(
-            target: "nest_rs::authz",
+            target: crate::TARGET,
             entity = std::any::type_name::<E>(),
             action = ?action,
             reason,

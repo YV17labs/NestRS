@@ -267,12 +267,12 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // every message under a span that never closes.
     under_connection(
         &wiring.connection,
-        "connect",
+        nest_rs_core::operation_log::unit::WS_CONNECT,
         conn_id,
         nest_rs_core::operation_span!(
-            target: "nest_rs::ws",
-            kind: "server",
-            "ws.connect",
+            target: crate::TARGET,
+            kind: nest_rs_core::operation_log::kind::SERVER,
+            nest_rs_core::operation_log::unit::WS_CONNECT,
             &wiring.connection,
             ws.connection_id = conn_id,
         ),
@@ -302,7 +302,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                 }
             } => {
                 tracing::info!(
-                    target: "nest_rs::ws",
+                    target: crate::TARGET,
                     conn_id,
                     "closing socket: max lifetime reached",
                 );
@@ -340,7 +340,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                     Ok(_) => {}
                     Err(err) => {
                         tracing::debug!(
-                            target: "nest_rs::ws",
+                            target: crate::TARGET,
                             conn_id,
                             error = %err,
                             "websocket read error",
@@ -358,12 +358,12 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // close; on an unwind the guard's `Drop` does the same cleanup.
     under_connection(
         &wiring.connection,
-        "disconnect",
+        nest_rs_core::operation_log::unit::WS_DISCONNECT,
         conn_id,
         nest_rs_core::operation_span!(
-            target: "nest_rs::ws",
-            kind: "server",
-            "ws.disconnect",
+            target: crate::TARGET,
+            kind: nest_rs_core::operation_log::kind::SERVER,
+            nest_rs_core::operation_log::unit::WS_DISCONNECT,
             &wiring.connection,
             ws.connection_id = conn_id,
         ),
@@ -378,7 +378,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
         && err.is_panic()
     {
         tracing::warn!(
-            target: "nest_rs::ws",
+            target: crate::TARGET,
             conn_id,
             error = %err,
             "writer task failed",
@@ -398,7 +398,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
 /// the operator greps cannot come to describe different refusals.
 fn refuse_oversize(conn_id: ConnId, bytes: usize, max_message_bytes: usize) -> String {
     tracing::debug!(
-        target: "nest_rs::ws",
+        target: crate::TARGET,
         conn_id,
         bytes,
         max_message_bytes,
@@ -420,9 +420,14 @@ fn refuse_oversize(conn_id: ConnId, bytes: usize, max_message_bytes: usize) -> S
 /// what makes `current_trace_id()` answer inside it. The span is passed in
 /// because `tracing` fixes a span's name at the macro, so the two call sites
 /// name themselves (`ws.connect` / `ws.disconnect`) and share everything else.
+///
+/// `unit` is that same canonical name again, for the line. It is a parameter
+/// rather than the line's `name:` because `name:` is baked into the callsite's
+/// `static` metadata and cannot read one — the stated asymmetry of the two
+/// lifecycle lines, and the reason they are the only two of the eight without it.
 async fn under_connection<F: std::future::Future<Output = ()>>(
     connection: &nest_rs_core::Correlation,
-    lifecycle: &'static str,
+    unit: &'static str,
     conn_id: ConnId,
     span: tracing::Span,
     hook: F,
@@ -432,14 +437,13 @@ async fn under_connection<F: std::future::Future<Output = ()>>(
         hook.await;
         // A hook is developer code that logs and writes like any handler, so the
         // socket opening and closing are units of work and owe the family's line
-        // the same way a message does. `lifecycle` rather than the span's name
-        // because `tracing` offers no way to read one back.
+        // the same way a message does. The canonical name says which of the two
+        // this is, so the `lifecycle` field that used to stand in for it is gone.
         tracing::info!(
             target: nest_rs_core::operation_log::TARGET,
-            lifecycle,
+            message = unit,
             conn_id,
             duration_ms = nest_rs_core::operation_log::duration_ms(started),
-            "socket lifecycle",
         );
     })
     .instrument(span)
@@ -483,7 +487,7 @@ async fn handle_text<G: Gateway>(
             // (`nest_rs::layers` stays the target for events *about* the layer
             // system itself, like a guard declared at two scopes.)
             tracing::warn!(
-                target: "nest_rs::ws",
+                target: crate::TARGET,
                 conn_id,
                 event = %event_ref,
                 reason = %reason,
@@ -518,9 +522,9 @@ async fn handle_text<G: Gateway>(
     // along because nothing per message re-authenticates.
     let correlation = wiring.connection.child();
     let span = nest_rs_core::operation_span!(
-        target: "nest_rs::ws",
-        kind: "server",
-        "ws.message",
+        target: crate::TARGET,
+        kind: nest_rs_core::operation_log::kind::SERVER,
+        nest_rs_core::operation_log::unit::WS_MESSAGE,
         &correlation,
         ws.event = %event,
         ws.connection_id = conn_id,
@@ -542,7 +546,9 @@ async fn handle_text<G: Gateway>(
         // under one upgrade, so the `101`'s access line names the connection and
         // says nothing about the work — this is where that is said.
         tracing::info!(
+            name: nest_rs_core::operation_log::unit::WS_MESSAGE,
             target: nest_rs_core::operation_log::TARGET,
+            message = nest_rs_core::operation_log::unit::WS_MESSAGE,
             event = %event,
             conn_id,
             outcome = match &reply {
@@ -550,7 +556,6 @@ async fn handle_text<G: Gateway>(
                 _ => nest_rs_core::operation_log::OK,
             },
             duration_ms = nest_rs_core::operation_log::duration_ms(started),
-            "message served",
         );
         reply
     })
@@ -566,7 +571,7 @@ async fn handle_text<G: Gateway>(
                     // silently; log it and degrade to an error frame, mirroring
                     // `error_frame`'s own fallback rather than dropping the reply.
                     tracing::warn!(
-                        target: "nest_rs::ws",
+                        target: crate::TARGET,
                         event = %envelope.event,
                         error = %err,
                         "failed to serialize reply",
@@ -612,18 +617,18 @@ mod tests {
 
         under_connection(
             &connection,
-            "connect",
+            nest_rs_core::operation_log::unit::WS_CONNECT,
             7,
             nest_rs_core::operation_span!(
-                target: "nest_rs::ws",
-                kind: "server",
-                "ws.connect",
+                target: crate::TARGET,
+                kind: nest_rs_core::operation_log::kind::SERVER,
+                nest_rs_core::operation_log::unit::WS_CONNECT,
                 &connection,
                 ws.connection_id = 7u64,
             ),
             async {
                 tracing::info!(
-                    target: "nest_rs::ws",
+                    target: crate::TARGET,
                     // What the hook's own code can reach — the task-local half.
                     ambient = nest_rs_core::current_trace_id().map(|id| id.to_hex()),
                     // And the span it is emitted under — the half that carries
@@ -644,7 +649,7 @@ mod tests {
         );
         assert_eq!(
             event.field("span").as_deref(),
-            Some("ws.connect"),
+            Some(nest_rs_core::operation_log::unit::WS_CONNECT),
             "the hook's events are rooted at the connection span: {:?}",
             event.fields,
         );
@@ -653,8 +658,14 @@ mod tests {
         // family's line — a hook is developer code that logs and writes like any
         // handler, and a connection nobody can see opening is a connection
         // nobody can account for.
-        let opened = logs.expect_one(nest_rs_core::operation_log::TARGET, "socket lifecycle");
-        assert_eq!(opened.field("lifecycle").as_deref(), Some("connect"));
+        let opened = logs.expect_one(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_core::operation_log::unit::WS_CONNECT,
+        );
+        assert_eq!(
+            opened.message,
+            nest_rs_core::operation_log::unit::WS_CONNECT
+        );
         assert_eq!(opened.field("conn_id").as_deref(), Some("7"));
         assert!(opened.field("duration_ms").is_some());
     }

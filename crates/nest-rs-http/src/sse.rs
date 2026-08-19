@@ -137,7 +137,7 @@ impl SseSettings {
             Some(ttl) => SSE::new(stream.take_until(async move {
                 tokio::time::sleep(ttl).await;
                 tracing::info!(
-                    target: "nest_rs::http",
+                    target: crate::target::HTTP,
                     max_connection_secs = ttl.as_secs(),
                     "closing sse stream: max lifetime reached",
                 );

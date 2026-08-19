@@ -130,7 +130,7 @@ impl WsReply {
     pub fn pipe_error(event: &str, what: &str, error: nest_rs_pipes::PipeError) -> WsReply {
         let message = format!("invalid {what} for `{event}`: {}", error.message());
         tracing::warn!(
-            target: "nest_rs::ws",
+            target: crate::TARGET,
             event,
             kind = what,
             error = error.message(),
@@ -149,7 +149,7 @@ impl WsReply {
     /// malformed input from a client is a denied dispatch like any other.
     pub fn payload_error(event: &str, error: &impl std::fmt::Display) -> WsReply {
         tracing::warn!(
-            target: "nest_rs::ws",
+            target: crate::TARGET,
             event,
             error = %error,
             "subscribe_message payload failed to deserialize",
@@ -163,7 +163,7 @@ impl WsReply {
     /// event so a client can tell a typo from an auth failure.
     pub fn unknown(event: &str) -> WsReply {
         tracing::warn!(
-            target: "nest_rs::ws",
+            target: crate::TARGET,
             event,
             "subscribe_message dispatched to an unknown event",
         );
@@ -177,7 +177,7 @@ impl WsReply {
     /// on what a failed handler puts on the wire.
     pub fn from_handler_error(event: &str, error: &impl std::fmt::Display) -> WsReply {
         tracing::warn!(
-            target: "nest_rs::ws",
+            target: crate::TARGET,
             event,
             error = %error,
             "subscribe_message handler returned Err",

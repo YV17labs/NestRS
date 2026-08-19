@@ -17,7 +17,7 @@ use poem::test::TestResponse;
 use serde_json::json;
 use uuid::Uuid;
 
-pub(crate) use features::testing::{DEV_PUBLIC_KEY, ORG_ID};
+pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
 
 pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
@@ -28,6 +28,7 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
         .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
+            audience: Some(AUDIENCE.into()),
             ..Default::default()
         })
         .build()

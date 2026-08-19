@@ -27,11 +27,35 @@ use std::path::{Path, PathBuf};
 ///
 /// `crate`/`self`/`Self`/`super` are not roots after `::`, but a `::crate`
 /// typo would be a compile error in the macro crate long before this test.
-const ALLOWED_ROOTS: &[&str] = &["std", "core", "alloc"];
+///
+/// **`alloc` is not one, and was listed for a round.** The Rust Reference's
+/// *Names → Preludes → Extern prelude* holds `core` and `std` plus whatever the
+/// consumer's manifest or `--extern` names; `alloc` is in neither, so
+/// `::alloc::vec::Vec` in an expansion fails in exactly the consumer this scan
+/// protects. No macro crate emits one today, which is why the widening was
+/// invisible — an allowlist is only as good as the day it was written against.
+const ALLOWED_ROOTS: &[&str] = &["std", "core"];
 
 /// The framework's own crates, matched by prefix: `::nest_rs_http`,
 /// `::nest_rs_resource`, and the umbrella `::nest_rs` a call site may see after
 /// [`reroot`](https://docs.rs/nest-rs-codegen).
+/// Any framework root, and **deliberately not "this crate's own surface crate"**.
+///
+/// It looks like the scan should demand the narrow form `framework.md` words —
+/// "never `::nest_rs_<sibling>::` directly" — and it must not, because that rule
+/// is about the path a *developer's crate* ends up compiling, not the one a
+/// macro writes. `nest_rs_codegen::reroot` rewrites every `::nest_rs_<concern>::`
+/// into `::nest_rs::<concern>::` at any call site that declares the umbrella,
+/// and leaves it alone at the fourteen framework crates that cannot declare it
+/// (`nest-rs` depends on them, so that edge is a cycle Cargo refuses). So the
+/// sibling form **is** the normal form in a `*-macros` source: all eleven of
+/// them emit it, and requiring otherwise would fail every crate in the tree
+/// while proving nothing.
+///
+/// What the sibling rule genuinely binds is **span targets**, where reaching
+/// another crate's constant is a concern-ownership question rather than a
+/// resolution one — and that is a per-constant fact this path scan cannot see.
+/// Stated here rather than left as an apparent gap.
 fn is_framework_root(ident: &str) -> bool {
     ident == "nest_rs" || ident.starts_with("nest_rs_")
 }

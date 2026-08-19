@@ -10,6 +10,14 @@ description = "Transport-spanning guards for NestRS — one trait, four transpor
 keywords = ["framework", "nestrs", "guards", "authorization", "middleware"]
 categories = ["web-programming", "authentication"]
 
+# The three per-edge marker traits — `GraphqlGuard`, `WsGuard`, `McpGuard` — are
+# each behind their edge's feature, and docs.rs builds default features only, so
+# the published page carried neither the traits nor the doc links naming them.
+# Three of the four markers this crate exists to declare were invisible on the
+# page a reader lands on from crates.io.
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 default = []
 # GraphQL surface: the `check_graphql` guard entry + the `/graphql` in-band

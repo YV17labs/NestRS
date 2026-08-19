@@ -70,6 +70,7 @@ pub mod interceptor;
 pub mod lifecycle;
 pub mod listener;
 pub mod module;
+pub mod prelude;
 pub mod processor;
 pub mod resolver;
 pub mod tasks;

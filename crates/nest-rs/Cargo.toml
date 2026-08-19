@@ -35,6 +35,13 @@ default = ["http", "config"]
 # Everything, for someone who does not want to pick yet — the `tokio = { features
 # = ["full"] }` of this framework. Compile time and dependency tree grow with it;
 # narrow to the capabilities you use whenever you like, the imports do not move.
+#
+# **Every capability but `testing`, which is the one deliberately left out.**
+# `nest-rs-testing` is a `--dev` install — its own docs page and README say
+# `cargo add --dev nest-rs --features testing` — so folding it in here would put
+# a test harness in every release binary of anyone who took the undecided
+# default. Asymmetry argued, not silent: a reader who reaches for `TestApp`
+# under `full` and does not find it is meeting a decision, not a hole.
 full = [
     "http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue",
     "redis", "schedule", "events", "authn", "authz", "social", "opentelemetry",

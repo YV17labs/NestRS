@@ -296,6 +296,30 @@ umbrella edge feature forwards.
   The `rate limit exceeded` warn drops the composite `key` field for
   `transport` plus per-edge fields and `retry_after`.
 
+### A token minted for another service is refused
+
+**Breaking, and security-relevant: previously-accepted tokens are now
+rejected.** A verifier with no configured audience switched jsonwebtoken's
+`aud` validation off entirely, so a token the shared issuer minted *for a
+sibling service* verified here — the confused deputy: every app sharing an
+issuer was a credential for every other. RFC 7519 §4.1.3 obliges a verifier
+to reject a token carrying an `aud` it is not named in, and that clause binds
+a service naming no audience of its own too.
+
+- **The check is now always on.** An unconfigured verifier still accepts a
+  token with no `aud` at all; what configuring `audience` adds is the other
+  direction — the claim becomes mandatory.
+- **The opt-out is named**: `allow_any_audience`
+  (`NESTRS_AUTHN__ALLOW_ANY_AUDIENCE`), off by default, reporting itself at
+  `warn` once per boot, and **refused beside `audience`** — one field says
+  "only tokens for me", the other "tokens for anybody", and silently letting
+  either win is how a deployment ends up believing the stricter one.
+- **`iss` deliberately gains no twin**: §4.1.1 states no clause obliging a
+  verifier to reject a token carrying an issuer it does not name, so there is
+  nothing to switch on and nothing to opt out of.
+- `JwtOptions` and `JwtConfig` each gain the public `allow_any_audience`
+  field.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

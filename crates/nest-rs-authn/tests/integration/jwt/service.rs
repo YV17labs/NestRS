@@ -258,3 +258,104 @@ fn eddsa_sign_and_verify_round_trip() {
     let decoded: TestClaims = jwt.verify(&token).expect("verify");
     assert_eq!(decoded.sub, "alice");
 }
+
+#[test]
+fn a_token_for_another_service_is_rejected_when_no_audience_is_configured() {
+    // The confused deputy, and the regression this file exists to hold: the
+    // default path (`AuthnModule::for_root(None)` with no audience configured)
+    // switched jsonwebtoken's `validate_aud` off, so a token the shared issuer
+    // minted *for a sibling service* verified here. RFC 7519 §4.1.3 says a
+    // principal that does not identify itself with a value in a present `aud`
+    // MUST reject the JWT — and it binds a verifier naming no audience too.
+    let secret = "no-aud-configured-secret-padded-32b";
+    let jwt = JwtService::new(JwtOptions::new(secret)).expect("service");
+    assert!(
+        JwtOptions::new(secret).audience.is_none(),
+        "the default configures no audience — the path this asserts about",
+    );
+
+    let mut for_someone_else = claims(get_current_timestamp() + 3600, None);
+    for_someone_else.aud = Some("https://billing.example".into());
+    let token = jsonwebtoken::encode(
+        &Header::new(Algorithm::HS256),
+        &for_someone_else,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .expect("encode");
+
+    assert!(
+        matches!(
+            jwt.verify::<TestClaims>(&token),
+            Err(AuthError::InvalidToken)
+        ),
+        "a validly-signed token minted for another audience must not verify here",
+    );
+}
+
+#[test]
+fn an_audience_less_token_still_verifies_when_no_audience_is_configured() {
+    // The other half of §4.1.3, and why the clause costs nothing: it fires only
+    // when the claim is *present*. A deployment that names no audience and whose
+    // issuer stamps none is untouched.
+    let jwt = service("no-aud-anywhere-secret");
+    let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
+    let decoded: TestClaims = jwt.verify(&token).expect("verify");
+    assert!(decoded.aud.is_none());
+}
+
+#[test]
+fn allow_any_audience_is_the_named_opt_out_and_reports_itself() {
+    // The permissive behaviour survives, but only as something a deployment
+    // wrote down — and it says so once per boot, naming the variable, so an
+    // operator can find who disabled the check.
+    let logs = nest_rs_testing::LogCapture::install();
+    let secret = "any-aud-opt-in-secret-padded-32-by";
+    let mut options = JwtOptions::new(secret);
+    options.allow_any_audience = true;
+    let jwt = JwtService::new(options).expect("service");
+
+    let event = logs.expect_one(
+        "nest_rs::authn",
+        "audience validation is disabled — a token minted for another service verifies here",
+    );
+    assert_eq!(event.level, "warn");
+    assert!(
+        event
+            .field("var")
+            .is_some_and(|v| v.ends_with("AUTHN__ALLOW_ANY_AUDIENCE")),
+        "the line names the variable that did it, built rather than spelled: {event:?}",
+    );
+
+    let mut foreign = claims(get_current_timestamp() + 3600, None);
+    foreign.aud = Some("https://billing.example".into());
+    let token = jsonwebtoken::encode(
+        &Header::new(Algorithm::HS256),
+        &foreign,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .expect("encode");
+    assert!(
+        jwt.verify::<TestClaims>(&token).is_ok(),
+        "the opt-out is what restores the old permissive reading",
+    );
+}
+
+#[test]
+fn allow_any_audience_beside_a_configured_audience_is_refused() {
+    // Two fields stating opposite policies. Letting either win silently is how a
+    // deployment comes to believe the stricter one is in force.
+    let mut options = JwtOptions::new("contradiction-secret-padded-to-32b");
+    options.audience = Some("api".into());
+    options.allow_any_audience = true;
+    let err = match JwtService::new(options) {
+        Ok(_) => panic!("a contradictory audience policy must not build"),
+        Err(e) => e,
+    };
+    let AuthError::Failed(msg) = &err else {
+        panic!("expected Failed, got {err:?}");
+    };
+    assert!(
+        msg.contains("ALLOW_ANY_AUDIENCE") && msg.contains("AUDIENCE"),
+        "the refusal names both variables: {msg}",
+    );
+}

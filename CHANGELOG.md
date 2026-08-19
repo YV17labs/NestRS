@@ -212,6 +212,22 @@ one line with `role`, `operation`, `outcome` and `duration_ms`.
 - The generated delegating method is now always `async` for the wrapped
   roles.
 
+### The MCP line names the wire method and what it addressed
+
+**Breaking for log consumers.** The operation line carried the rmcp Rust
+ident — `call_tool`, `initialize` — which appears in no MCP document and
+cannot be joined against a capture of the wire, and every `tools/call` was
+byte-identical. The line now carries **`method`**, the JSON-RPC method
+(`tools/call`), and **`operation`**, the tool, prompt, resource or task it
+addressed — absent where nothing is addressed, so a query for one can never
+match a method that has none.
+
+- Method strings are read from rmcp's own `ConstString` markers, so a
+  protocol rename is a compile error instead of a stale literal; the one
+  request whose method is *data* (`on_custom_request`) reads it off the wire.
+- The span gains `mcp.method.name` / `mcp.operation.name` — one seam over
+  every method, where the semantic conventions spell three per-kind keys.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

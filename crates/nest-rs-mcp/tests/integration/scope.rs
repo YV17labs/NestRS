@@ -188,6 +188,19 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         ran_under.field("parent_span_id"),
         "the operation is not a second name for the request that carried it",
     );
+    // The span says what the work was, in the conventions' dotted shape. It
+    // opened with the correlation and nothing else, so an exported trace showed
+    // one indistinguishable `mcp.operation` per call.
+    assert_eq!(
+        ran_under.field("mcp.method.name").as_deref(),
+        Some("tools/call"),
+        "{ran_under:?}",
+    );
+    assert_eq!(
+        ran_under.field("mcp.operation.name").as_deref(),
+        Some("probe_span"),
+        "{ran_under:?}",
+    );
 
     // Each operation also files the family's line. It is the only place a tool
     // call reports itself: rmcp addresses many operations over one HTTP request,
@@ -208,15 +221,31 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
         operations.len(),
     );
     assert!(
-        served.iter().all(|line| line.field("operation").is_some()),
-        "every line names which operation it was: {served:?}",
+        served.iter().all(|line| line.field("method").is_some()),
+        "every line names the JSON-RPC method a client addressed: {served:?}",
     );
-    assert!(
-        served
-            .iter()
-            .any(|line| line.field("operation").as_deref() == Some("call_tool")),
-        "the line names the JSON-RPC method a client addressed: {served:?}",
+    // The protocol's word for it, never rmcp's Rust ident: `call_tool` appears
+    // in no MCP document, and a line spelling it cannot be joined against a
+    // capture of the wire.
+    let tool_call = served
+        .iter()
+        .find(|line| line.field("method").as_deref() == Some("tools/call"))
+        .unwrap_or_else(|| panic!("the tool call files a line: {served:?}"));
+    // The half that makes the line worth reading: every `tools/call` in a
+    // deployment carries the same method, so without the tool's own name they
+    // are byte-identical and the work stays anonymous.
+    assert_eq!(
+        tool_call.field("operation").as_deref(),
+        Some("probe_span"),
+        "the line names the tool the request addressed: {served:?}",
     );
+    // And absent — not empty, not a sentinel — where the protocol addresses
+    // nothing, so a query for a named operation can never match `initialize`.
+    let handshake = served
+        .iter()
+        .find(|line| line.field("method").as_deref() == Some("initialize"))
+        .unwrap_or_else(|| panic!("the handshake files a line: {served:?}"));
+    assert_eq!(handshake.field("operation"), None, "{served:?}");
     assert!(
         served
             .iter()

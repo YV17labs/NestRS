@@ -16,8 +16,8 @@
 //! # Wiring is checked, not reflected
 //!
 //! The dependency graph is validated at boot, never resolved by reflection at
-//! runtime. `access::validate_access_graph` walks the module tree from the root and fails with a named error before any
-//! transport starts: [`AccessGraphError`] when a provider reaches across a
+//! runtime. The boot walks the module tree from the root and fails with a
+//! named error before any transport starts: [`AccessGraphError`] when a provider reaches across a
 //! module boundary no `import` covers, [`MissingDependencyError`] when a
 //! dependency no module provides would otherwise panic at first resolution. A
 //! misconfigured import is a startup error naming the fix, not a `Cannot

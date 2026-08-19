@@ -529,7 +529,7 @@ fn reachable_in_order(roots: &[TypeId], by_id: &HashMap<TypeId, &ModuleDescripto
 /// Provider keys reachable from `roots` via the module import graph plus
 /// `global`. Used at boot to seed [`ReachableProviders`] so transports can
 /// module-gate their discovery. Pure over its inputs.
-pub fn reachable_provider_ids(
+pub(crate) fn reachable_provider_ids(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
     global: &HashSet<TypeId>,

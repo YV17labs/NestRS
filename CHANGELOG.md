@@ -410,6 +410,11 @@ saying `features = ["resource"]` drops the word.
   itself instead of silently keeping the default — `LOG_FORMAT=console` gave
   a production deploy text output where it asked for JSON, with nothing
   anywhere saying why.
+- **Two boot internals leave the kernel's surface.**
+  `nest_rs_core::access::reachable_provider_ids` and
+  `container::DuplicateProvider` go `pub(crate)`, having no caller outside
+  the crate in either workspace; the unit catalogue in `operation_log` now
+  names the edge crates that own each constant.
 
 ### The documented front door is compiled
 

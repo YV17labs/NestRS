@@ -128,7 +128,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
                         "` is not registered — add it to a reachable module's \
                          `providers = [...]`",
                     ));
-                __bus.subscribe::<#event_ty, _, _>(move |__event| {
+                __bus.subscribe_named::<#event_ty, _, _>(#qualified_name, move |__event| {
                     let __provider = ::std::sync::Arc::clone(&__provider);
                     async move {
                         <#self_ty>::#method_ident(&__provider, __event).await

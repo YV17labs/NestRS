@@ -23,9 +23,10 @@ pub const TARGET: &str = "nest_rs::events";
 mod bus;
 mod inventory;
 mod module;
+pub mod unit;
 
 pub use bus::EventBus;
 pub use inventory::ListenerMethod;
-pub use module::EventsModule;
+pub use module::{EventsModule, NO_BUS_REPORT};
 
 pub use nest_rs_events_macros::listeners;

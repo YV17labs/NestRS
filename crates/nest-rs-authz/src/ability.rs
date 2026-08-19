@@ -21,16 +21,86 @@ pub(crate) fn warn_mask_failure(
     entity: &'static str,
     action: Action,
     reason: &'static str,
-    err: &dyn std::fmt::Display,
+    detail: &'static str,
+    // The edge's own two, folded in rather than filed as a second line: an edge
+    // that needs extra context on this event needs it *on* this event, and a
+    // sibling line about the same occurrence is the duplicate "one event, said
+    // once" forbids. `tracing` drops a `None`, so an edge with nothing to add
+    // passes nothing and the field is simply absent.
+    transport: Option<&'static str>,
+    event: Option<&str>,
+    err: Option<&dyn std::fmt::Display>,
 ) {
-    tracing::warn!(
-        target: crate::TARGET,
-        entity,
-        action = ?action,
-        reason,
-        error = %err,
-        "response masking failed",
-    );
+    // Two arms rather than one, because `tracing` fixes an event's fields at
+    // the macro: an absent `error` has to be a different event, and the whole
+    // point of this function is that it is the *only* place either is worded.
+    match err {
+        Some(err) => tracing::warn!(
+            target: crate::TARGET,
+            entity,
+            action = ?action,
+            reason,
+            detail,
+            transport,
+            event,
+            error = %err,
+            "response masking failed",
+        ),
+        None => tracing::warn!(
+            target: crate::TARGET,
+            entity,
+            action = ?action,
+            reason,
+            detail,
+            transport,
+            event,
+            "response masking failed",
+        ),
+    }
+}
+
+/// Why a mask fell closed, as a value an incident query groups on.
+///
+/// **`reason` is one value space across this crate**, and it was two: the gate's
+/// exits reported machine tokens (`no_class_grant`, `insufficient_scope`) while
+/// the masking exits reported whole sentences, so a query that grouped denials
+/// by `reason` returned tokens from one half and prose from the other, and
+/// `no_ambient_ability` — which [`gate::reason`](crate::gate::reason)'s own doc
+/// says "every fail-closed exit reports … the masking paths alike" — matched no
+/// mask at all. The sentence is still there; it moved to `detail`, where the
+/// throttler and the inert-host report already put theirs.
+pub(crate) mod mask_reason {
+    /// Nothing installed an ability, so nothing decided what may be shown.
+    ///
+    /// **Declared here and aliased by [`gate::reason`](crate::gate::reason)**,
+    /// not the other way round, and the direction is a compilation fact rather
+    /// than a preference: `gate` is gated behind the in-band transports while
+    /// this module is always compiled — for the same reason
+    /// [`warn_mask_failure`](super::warn_mask_failure) is, which its own doc
+    /// states. Aliasing the gated one made a feature-less build fail to find
+    /// `crate::gate`, and only the scaffold e2e — which compiles a real
+    /// generated workspace — could see it.
+    pub const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
+    /// The value could not be turned into, or read back from, JSON.
+    pub const NOT_SERIALIZABLE: &str = "not_serializable";
+    /// The wire value and the entity model could not be reconciled, so the
+    /// mask had no model to apply.
+    ///
+    /// Gated exactly like the `wire_mask` module that reaches it: a constant
+    /// nothing reads *in this build* is not the defect a constant nothing reads
+    /// at all is, but saying so with a `cfg` keeps dead-code detection working
+    /// for the ones that really would be.
+    #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+    pub const IRRECONCILABLE: &str = "irreconcilable_wire_value";
+    /// The response carried no content type, so it could not be classified as
+    /// maskable at all. HTTP's alone — it is the one edge with a content type
+    /// to be missing.
+    #[cfg(feature = "http")]
+    pub const UNCLASSIFIED_BODY: &str = "unclassified_body";
+    // `field_not_granted` is deliberately **not** here: it is a *gate*'s verdict
+    // about a grant, not a mask's failure to run, and
+    // `gate::reason::FIELD_NOT_GRANTED` already owns it. A second constant for
+    // one value is the drift this module exists to remove.
 }
 
 /// A rule whose relational predicate was malformed — [`PredicateBuilder::related`]
@@ -305,8 +375,11 @@ impl Ability {
                 warn_mask_failure(
                     std::any::type_name::<E>(),
                     action,
+                    mask_reason::NOT_SERIALIZABLE,
                     "model did not serialize",
-                    &err,
+                    None,
+                    None,
+                    Some(&err),
                 );
                 return serde_json::Value::Null;
             }

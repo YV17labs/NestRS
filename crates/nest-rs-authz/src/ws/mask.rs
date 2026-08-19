@@ -33,6 +33,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::ability::mask_reason;
+use crate::gate::transport;
 use crate::wire_mask::{MaskedWire, mask_wire_json, warn_mask_failure};
 use crate::{Action, ActionMarker, current_ability};
 
@@ -65,6 +67,7 @@ where
         return Err(mask_failure::<E>(
             event,
             action,
+            mask_reason::NO_AMBIENT_ABILITY,
             "no ambient ability — is the WS data context registered as \
              `dyn SocketContext`?",
             None,
@@ -76,6 +79,7 @@ where
             return Err(mask_failure::<E>(
                 event,
                 action,
+                mask_reason::NOT_SERIALIZABLE,
                 "message value did not serialize",
                 Some(&err),
             ));
@@ -87,6 +91,7 @@ where
         Err(err) => Err(mask_failure::<E>(
             event,
             action,
+            mask_reason::IRRECONCILABLE,
             "value could not be reconciled with the subject model",
             Some(&err),
         )),
@@ -100,22 +105,24 @@ fn mask_failure<E>(
     event: &'static str,
     action: Action,
     reason: &'static str,
+    detail: &'static str,
     err: Option<&serde_json::Error>,
 ) -> WsError
 where
     E: EntityTrait,
 {
-    match err {
-        Some(err) => warn_mask_failure(std::any::type_name::<E>(), action, reason, err),
-        None => tracing::warn!(
-            target: crate::TARGET,
-            transport = "ws",
-            event = %event,
-            entity = std::any::type_name::<E>(),
-            action = ?action,
-            reason,
-            "response masking failed",
-        ),
-    }
+    // One delegation, both arms. The `None` case hand-copied the shared event to
+    // carry this edge's two extra fields, which is the duplicate
+    // `warn_mask_failure`'s own doc forbids — so the edge's half is its own line
+    // and the shared half stays shared.
+    warn_mask_failure(
+        std::any::type_name::<E>(),
+        action,
+        reason,
+        detail,
+        Some(transport::WS),
+        Some(event),
+        err.map(|e| e as &dyn std::fmt::Display),
+    );
     denial_to_ws_error(Denial::internal("response masking failed"))
 }

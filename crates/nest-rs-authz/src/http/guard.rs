@@ -12,10 +12,28 @@ use nest_rs_ws::WsClient;
 use poem::Request;
 use serde_json::Value;
 
+use crate::gate::{Refusal, reason, transport};
 use crate::{AbilityBuilder, AbilityFactory, current_ability};
 
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::GraphqlOperationContext;
+#[cfg(feature = "mcp")]
+use nest_rs_mcp::McpOperationContext;
+
+/// The refusal every in-band entry files: no ambient ability, so nothing
+/// decided what this caller may do.
+///
+/// Through [`warn_denied`](crate::gate::warn_denied) rather than beside it. The
+/// three entries below refuse for one reason on three edges, and a 401 is the
+/// same 401 whichever installed nothing — so the line an operator greps under
+/// incident has to be the same line, with the same machine reason, or a query
+/// that finds a broken GraphQL bridge misses the identical MCP one.
+fn deny_unscoped(refusal: Refusal<'_>) {
+    crate::gate::warn_denied(Refusal {
+        reason: Some(reason::NO_AMBIENT_ABILITY),
+        ..refusal
+    });
+}
 
 /// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AppAbility>)]`.
 /// `F::Actor` is read from request extensions; its absence on a non-public
@@ -110,11 +128,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
     #[cfg(feature = "graphql")]
     async fn check_graphql(&self, _op: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
         if current_ability().is_none() {
-            tracing::warn!(
-                target: crate::TARGET,
-                transport = "graphql",
-                "authorization denied: no ambient ability",
-            );
+            deny_unscoped(Refusal::on(transport::GRAPHQL));
             return Err(Denial::unauthorized(
                 "no ambient ability — authentication did not run on the GraphQL operation",
             ));
@@ -129,14 +143,30 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         _data: &Value,
     ) -> Result<(), Denial> {
         if current_ability().is_none() {
-            tracing::warn!(
-                target: crate::TARGET,
-                transport = "ws",
-                event = %event,
-                "authorization denied: no ambient ability",
-            );
+            deny_unscoped(Refusal {
+                event: Some(event),
+                ..Refusal::on(transport::WS)
+            });
             return Err(Denial::unauthorized(
                 "no ambient ability — WS connection did not authenticate",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The MCP twin of the two above, and it was missing while both markers
+    /// were declared: a guard attested for three edges of four, so a host
+    /// binding it met `McpGuard`'s note telling it to move an *authorization*
+    /// guard onto HTTP. What contained that was the bridge running
+    /// `check_http` in band and [`crate::mcp::authorize`] re-reading the
+    /// ambient ability itself — neither of which is this check, and neither of
+    /// which a `#[use_guards(AuthzGuard)]` on a host is asking for.
+    #[cfg(feature = "mcp")]
+    async fn check_mcp(&self, _ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+        if current_ability().is_none() {
+            deny_unscoped(Refusal::on(transport::MCP));
+            return Err(Denial::unauthorized(
+                "no ambient ability — the MCP operation did not authenticate",
             ));
         }
         Ok(())
@@ -165,6 +195,14 @@ impl<F: AbilityFactory> nest_rs_guards::GraphqlGuard for AbilityGuard<F> {}
 /// And WebSocket messages, for the same reason: `check_ws_message` refuses a
 /// message whose connection never authenticated.
 impl<F: AbilityFactory> nest_rs_guards::WsGuard for AbilityGuard<F> {}
+
+/// And MCP operations: [`check_mcp`](Guard::check_mcp) refuses an operation no
+/// bridge installed an ability for. Declared so an `#[mcp]` host — or one of
+/// its `#[tool]` / `#[prompt]` operations — may bind it, which is the same
+/// symmetric `#[use_guards(AuthnGuard, AuthzGuard)]` its HTTP, GraphQL and WS
+/// siblings carry.
+#[cfg(feature = "mcp")]
+impl<F: AbilityFactory> nest_rs_guards::McpGuard for AbilityGuard<F> {}
 
 #[cfg(test)]
 mod tests {
@@ -365,10 +403,21 @@ mod tests {
         // which transport asked. A data-context that stopped installing the
         // ability would produce this same 401 on every message, so the line an
         // operator greps under incident is the one that has to carry the reason.
-        let event = logs.expect_one("nest_rs::authz", "authorization denied: no ambient ability");
+        //
+        // It is the shared denial line, not one of this guard's own: the three
+        // in-band entries refuse for one reason, and a query that finds a
+        // broken WS data context has to find the identical GraphQL and MCP
+        // conditions too.
+        let event = logs.expect_one("nest_rs::authz", "authorization denied");
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("transport").as_deref(), Some("ws"));
         assert_eq!(event.field("event").as_deref(), Some("ping"));
+        assert_eq!(
+            event.field("reason").as_deref(),
+            Some("no_ambient_ability"),
+            "{:?}",
+            event.fields,
+        );
     }
 
     #[tokio::test]

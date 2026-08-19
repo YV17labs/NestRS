@@ -8,6 +8,7 @@ use nest_rs_guards::{Denial, denial_to_http_error};
 use poem::http::StatusCode;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
 
+use crate::gate::{Refusal, transport};
 use crate::{Ability, ActionMarker, Subject};
 
 /// Enforcement plumbing for action `A` on subject `S`: 403 unless the
@@ -79,7 +80,10 @@ where
             // Through the shared emitter, not beside it: three sites wrote this
             // one event and only two carried `transport`, so an operator
             // filtering denials by transport saw every edge except this one.
-            crate::gate::warn_denied::<A, S>("http", None, Some("no_class_grant"));
+            crate::gate::warn_denied(Refusal {
+                reason: Some(crate::gate::reason::NO_CLASS_GRANT),
+                ..Refusal::of::<A, S>(transport::HTTP)
+            });
             return Err(denial_to_http_error(Denial::forbidden("forbidden")));
         }
         // A token that verified but is too narrow. The scopes ride to the edge,
@@ -88,7 +92,10 @@ where
         // authorization server for instead of retrying the same token.
         // The scopes ride on the `Denial`, and the denial line stays the shared
         // one: an event named once is an event queried once.
-        crate::gate::warn_denied::<A, S>("http", None, Some("insufficient_scope"));
+        crate::gate::warn_denied(Refusal {
+            reason: Some(crate::gate::reason::INSUFFICIENT_SCOPE),
+            ..Refusal::of::<A, S>(transport::HTTP)
+        });
         Err(denial_to_http_error(Denial::insufficient_scope(
             missing,
             "forbidden",

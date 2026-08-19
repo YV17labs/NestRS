@@ -8,6 +8,7 @@
 //! ([`current_ability`]), which [`crate::with_ability`] installs around the
 //! batch / handler.
 
+use crate::ability::mask_reason;
 use sea_orm::EntityTrait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -28,7 +29,25 @@ where
 {
     let masked = match current_ability() {
         Some(ability) => ability.mask::<E>(A::ACTION, model),
-        None => serde_json::Value::Object(Default::default()),
+        None => {
+            // Fail closed *and* say so. `warn_mask_failure`'s own doc names this
+            // branch — "HTTP, GraphQL, and the ambient `Ability::mask`" — and
+            // adds that "a fail-closed branch that forgets to log is then the
+            // visible omission". This was that branch: an empty object went out
+            // with nothing on `nest_rs::authz` to say masking had degraded, so a
+            // wire type whose fields are all optional deserialized clean and the
+            // operator had no event to find.
+            crate::ability::warn_mask_failure(
+                std::any::type_name::<E>(),
+                A::ACTION,
+                mask_reason::NO_AMBIENT_ABILITY,
+                "no ambient ability — is the transport's authz bridge installed?",
+                None,
+                None,
+                None,
+            );
+            serde_json::Value::Object(Default::default())
+        }
     };
     serde_json::from_value(masked)
 }

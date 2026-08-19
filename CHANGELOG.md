@@ -341,6 +341,41 @@ a service naming no audience of its own too.
   reads the parameters out of the stored hash, so existing credentials still
   verify and the constants can move without invalidating a database.
 
+### A denial is one event with one vocabulary, on every edge
+
+**Breaking for saved queries.** `reason` was two value spaces: gate exits
+reported machine tokens (`no_class_grant`, `insufficient_scope`) while
+masking exits reported whole English sentences, so a query grouping denials
+by `reason` returned tokens from one half and prose from the other — and
+HTTP re-typed the tokens as literals because the constant lived behind a
+feature it does not build. Every fail-closed exit in `nest-rs-authz` now
+files through one emitter, with `reason` a constant, the sentence moved to
+`detail`, and the fix moved to `remedy` — an incident groups by the first
+and reads the other two.
+
+- **A refusal is a record, not seven arguments** (`Refusal`): each site knows
+  a different three of them, and a field added to the record reaches every
+  site at once — which is the whole reason the emitter is shared.
+- **Every mask failure names its transport**, and the one silent branch
+  logs: `masked_output_ambient` sent an empty object out with nothing on
+  `nest_rs::authz` to say masking had degraded, so a wire type whose fields
+  are all optional deserialized clean and the operator had no event to find.
+- **An MCP field-grant refusal is filed as the denial it is** — same event,
+  same `reason` GraphQL files when a stripped key was selected — and it now
+  names *which* keys the grant withheld, the one thing the serde error could
+  not say. It also tells a class denial from a field grant: a row the caller
+  may not read at all produces the very same failure, and filing it as
+  `field_not_granted` carried the nullable remedy — advice that, if taken,
+  would answer a denied row with an all-null object rather than a refusal.
+  The client-visible error becomes `forbidden`, no longer internal.
+- **`AbilityGuard` gains its fourth edge.** It attested HTTP, GraphQL and WS
+  and not MCP, so `#[use_guards(AuthzGuard)]` on an `#[mcp]` host did not
+  compile — and had it been bindable, every `check_*` defaults to `Ok(())`,
+  so it would have passed every operation in silence. `check_mcp` refuses an
+  operation with no ambient ability, and the `McpGuard` marker makes the
+  symmetric `#[use_guards(AuthnGuard, AuthzGuard)]` its three siblings carry
+  bindable here too.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

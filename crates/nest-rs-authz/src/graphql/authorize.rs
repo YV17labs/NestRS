@@ -4,6 +4,7 @@
 use nest_rs_graphql::async_graphql::{Context, Result};
 
 use super::context::{ability, forbidden, insufficient_scope, unauthenticated};
+use crate::gate::{Refusal, transport};
 use crate::{ActionMarker, GateVerdict, Subject, gate};
 
 /// Class-level gate: require action `A` on subject `S`. Returns a GraphQL
@@ -42,6 +43,9 @@ pub fn authorize<A: ActionMarker, S: Subject>(ctx: &Context<'_>) -> Result<()> {
         // shape.
         GateVerdict::InsufficientScope(missing) => insufficient_scope(missing),
     };
-    crate::gate::warn_denied::<A, S>("graphql", None, verdict.reason());
+    crate::gate::warn_denied(Refusal {
+        reason: verdict.reason(),
+        ..Refusal::of::<A, S>(transport::GRAPHQL)
+    });
     Err(error)
 }

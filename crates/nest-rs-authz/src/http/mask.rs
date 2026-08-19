@@ -15,6 +15,8 @@
 //! Fails **closed**: a successful JSON body that cannot be reconciled with
 //! `S::Model` yields 500 rather than shipping data unmasked.
 
+use crate::ability::mask_reason;
+use crate::gate::transport;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -141,15 +143,14 @@ fn refuse_unclassifiable<S>(mut resp: Response, action: Action) -> Response {
         resp.set_body(body);
         return resp;
     }
-    warn_mask_failure(
-        std::any::type_name::<S>(),
+    mask_failure::<S>(
         action,
-        "response carried no content type, so it could not be classified",
-        &"set a content type on the response, or return a typed body",
-    );
-    Response::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body("response masking failed: response carried no content type")
+        mask_reason::UNCLASSIFIED_BODY,
+        "response carried no content type, so it could not be classified; set a content type on \
+         the response, or return a typed body",
+        None,
+        "response masking failed: response carried no content type",
+    )
 }
 
 /// Mask a successful JSON body: deserialize it into `S::Model`(s), run the typed
@@ -182,15 +183,13 @@ where
         Err(err) => {
             // The body is already consumed; there is nothing left to ship, so
             // fail closed rather than return an empty 200.
-            warn_mask_failure(
-                std::any::type_name::<S>(),
+            return mask_failure::<S>(
                 action,
+                mask_reason::NOT_SERIALIZABLE,
                 "response body could not be read",
-                &err,
+                Some(&err),
+                "response masking failed: could not read response body",
             );
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("response masking failed: could not read response body");
         }
     };
 
@@ -199,15 +198,13 @@ where
     let wire: Value = match serde_json::from_slice(bytes.as_ref()) {
         Ok(wire) => wire,
         Err(err) => {
-            warn_mask_failure(
-                std::any::type_name::<S>(),
+            return mask_failure::<S>(
                 action,
+                mask_reason::NOT_SERIALIZABLE,
                 "response body was not valid JSON",
-                &err,
+                Some(&err),
+                "response masking failed: body was not valid JSON",
             );
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("response masking failed: body was not valid JSON");
         }
     };
 
@@ -225,32 +222,54 @@ where
                 resp.set_body(out);
                 resp
             }
-            Err(err) => {
-                warn_mask_failure(
-                    std::any::type_name::<S>(),
-                    action,
-                    "masked body did not serialize",
-                    &err,
-                );
-                masking_failed()
-            }
-        },
-        Err(err) => {
-            warn_mask_failure(
-                std::any::type_name::<S>(),
+            Err(err) => mask_failure::<S>(
                 action,
-                "response body did not match the authorized subject type",
-                &err,
-            );
-            masking_failed()
-        }
+                mask_reason::NOT_SERIALIZABLE,
+                "masked body did not serialize",
+                Some(&err),
+                MASKING_FAILED_BODY,
+            ),
+        },
+        Err(err) => mask_failure::<S>(
+            action,
+            mask_reason::IRRECONCILABLE,
+            "response body did not match the authorized subject type",
+            Some(&err),
+            MASKING_FAILED_BODY,
+        ),
     }
 }
 
-/// The fail-closed response: a successful body that cannot be reconciled with
-/// the authorized subject type ships a 500, never unmasked data.
-fn masking_failed() -> Response {
+/// The body a fail-closed masking exit ships when the value could not be
+/// reconciled with the authorized subject type.
+const MASKING_FAILED_BODY: &str =
+    "response masking failed: body did not match the authorized subject type";
+
+/// One shape for every fail-closed masking exit: the queryable `warn` (so a
+/// branch that forgets it is the visible omission) plus the 500 that ships
+/// instead of unmasked data.
+///
+/// One delegation rather than five inline emissions, which is the shape the
+/// other three edges already have (`ws::mask::mask_failure` and its GraphQL and
+/// MCP siblings). Inline, four of the five sites passed no `transport`, so
+/// filtering masking failures by `transport = "http"` returned one of them.
+fn mask_failure<S>(
+    action: Action,
+    reason: &'static str,
+    detail: &'static str,
+    err: Option<&dyn std::fmt::Display>,
+    body: &'static str,
+) -> Response {
+    warn_mask_failure(
+        std::any::type_name::<S>(),
+        action,
+        reason,
+        detail,
+        Some(transport::HTTP),
+        None,
+        err,
+    );
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body("response masking failed: body did not match the authorized subject type")
+        .body(body)
 }

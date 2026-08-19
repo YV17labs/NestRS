@@ -106,6 +106,30 @@ default with the standard that owns it:
   server-side to point at. The error names the config field and the response
   header it would have poisoned.
 
+### The client behind a proxy is RFC 7239's answer, and disagreement is refused
+
+The transport read only `X-Forwarded-For` and `X-Real-IP`, so behind an
+RFC-conformant proxy speaking `Forwarded` every caller resolved to the
+balancer: one rate-limit bucket for the entire internet, the balancer's
+address on every access line and span, and — the peer being trusted —
+`traceparent` continued for a client the transport could not identify. All
+three headers are now read, in order `Forwarded`, `X-Forwarded-For`,
+`X-Real-IP`, gated on the same trusted-peer check.
+
+- **§6.2 `unknown` and §6.3 obfuscated nodes are skipped**: reading either as
+  a client would key a rate-limit bucket on a string a proxy chose to
+  withhold.
+- **When `Forwarded` and `X-Forwarded-For` both name a client and disagree,
+  neither is believed.** The origin degrades to the trusted proxy itself and
+  a `warn` carries both values. The common way to reach that state is a
+  proxy that appends `X-Forwarded-For` and passes unknown client headers
+  straight through — nginx's default — where a caller sending
+  `Forwarded: for=…` would outrank the genuine hop the proxy itself
+  appended, and the trusted-proxy gate cannot catch it. A "prefer RFC 7239"
+  rule is exactly that hole.
+- **Breaking:** `ClientOrigin::resolve` gains a leading `forwarded`
+  parameter.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

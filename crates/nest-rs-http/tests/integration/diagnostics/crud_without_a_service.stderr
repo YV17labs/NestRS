@@ -1,0 +1,7 @@
+error: #[crud] requires `service` — write `service = svc` (the injected `CrudService` field to delegate to)
+  --> tests/integration/diagnostics/crud_without_a_service.rs:10:1
+   |
+10 | #[crud(entity = widgets::Entity, output = Widget)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `crud` (in Nightly builds, run with -Z macro-backtrace for more info)

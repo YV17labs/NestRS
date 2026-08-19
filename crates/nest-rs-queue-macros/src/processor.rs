@@ -469,7 +469,10 @@ impl Parse for ProcessArgs {
         let queue = queue.ok_or_else(|| {
             syn::Error::new(
                 input.span(),
-                "#[process] requires a `queue = \"...\"` (or `queue = <QueueName type>`) argument",
+                format!(
+                    "{} (or a `QueueName` type)",
+                    nest_rs_codegen::missing_argument("process", "queue", "\"emails\""),
+                ),
             )
         })?;
 

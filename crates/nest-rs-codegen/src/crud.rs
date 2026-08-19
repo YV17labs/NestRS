@@ -302,17 +302,28 @@ impl Parse for CrudConfig {
             }
         }
 
+        // Three required keys, one sentence — the crate that owns the wording
+        // was itself three of the family's eight hand-written copies.
         let service = service.ok_or_else(|| {
             syn::Error::new(
                 Span::call_site(),
-                "#[crud] requires `service = <field>` (the injected CrudService to delegate to)",
+                format!(
+                    "{} (the injected `CrudService` field to delegate to)",
+                    crate::missing_argument("crud", "service", "svc"),
+                ),
             )
         })?;
         let entity = entity.ok_or_else(|| {
-            syn::Error::new(Span::call_site(), "#[crud] requires `entity = ...::Entity`")
+            syn::Error::new(
+                Span::call_site(),
+                crate::missing_argument("crud", "entity", "users::Entity"),
+            )
         })?;
         let output = output.ok_or_else(|| {
-            syn::Error::new(Span::call_site(), "#[crud] requires `output = OutputType`")
+            syn::Error::new(
+                Span::call_site(),
+                crate::missing_argument("crud", "output", "User"),
+            )
         })?;
 
         Ok(CrudConfig {

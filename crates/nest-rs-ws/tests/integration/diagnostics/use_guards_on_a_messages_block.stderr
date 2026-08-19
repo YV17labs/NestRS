@@ -1,0 +1,5 @@
+error: `#[use_guards(...)]` belongs on the gateway struct beside `#[gateway]`, not on this `#[messages]` block — the struct half declares the host's access posture, and this half declares its #[subscribe_message] / #[on_connect] / #[on_disconnect]. A layer scoped to one operation goes on that operation's method.
+  --> tests/integration/diagnostics/use_guards_on_a_messages_block.rs:13:1
+   |
+13 | #[use_guards(AllowAll)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^

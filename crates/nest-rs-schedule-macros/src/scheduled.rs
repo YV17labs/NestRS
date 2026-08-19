@@ -65,10 +65,13 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
             .iter()
             .find(|attr| is_trigger_attr(attr.path()))
         {
+            let declared = [
+                nest_rs_codegen::role_name(trigger_attr.path()),
+                nest_rs_codegen::role_name(extra.path()),
+            ];
             return syn::Error::new(
                 extra.span(),
-                "a scheduled method takes exactly one trigger — \
-                 `#[cron(...)]`, `#[every(\"...\")]`, or `#[after(\"...\")]`",
+                nest_rs_codegen::one_role_per_method("trigger", &declared, &TRIGGER_ATTRS),
             )
             .to_compile_error()
             .into();
@@ -126,8 +129,13 @@ fn reject_args(args: TokenStream) -> syn::Result<()> {
     SCHEDULED_PAIR.reject_args(&args, "the provider's scope is declared by")
 }
 
+/// The closed trigger vocabulary, read by [`is_trigger_attr`] **and** by the
+/// one-role refusal — so the set a method is checked against and the set it is
+/// told about cannot disagree.
+const TRIGGER_ATTRS: [&str; 3] = ["cron", "every", "after"];
+
 fn is_trigger_attr(path: &syn::Path) -> bool {
-    path.is_ident("cron") || path.is_ident("every") || path.is_ident("after")
+    TRIGGER_ATTRS.iter().any(|name| path.is_ident(name))
 }
 
 /// The trigger tokens, plus whatever the shared `transactional` key said.
@@ -285,8 +293,11 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> {
             let expr: Expr = stream.parse()?;
             let (transactional, tz) = parse_trailing_keys(stream, "cron", Some("tz"))?;
             let tz = tz
-                .map(|meta| require_str_lit(&meta.value, "cron", "tz", "..."))
+                .map(|meta| require_str_lit(&meta.value, "cron", "tz", "Europe/Paris"))
                 .transpose()?;
+            if let Some(name) = &tz {
+                validate_timezone_literal(name)?;
+            }
             Ok((expr, tz, transactional))
         };
     let (expr, tz, transactional) = parser.parse2(tokens)?;
@@ -308,6 +319,28 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> {
             ::nest_rs_schedule::Trigger::Cron { expr: #expr, tz: #tz_tokens }
         },
         transactional,
+    ))
+}
+
+/// The IANA name set is closed and `tz` is always a literal, so a typo is
+/// knowable here — the same fact `validate_cron_literal` acts on for the key
+/// beside it. Boot-time resolution stays in `Scheduler::configure`: it is what
+/// the *value* is finally parsed by, and a second reader is not a second
+/// authority when the first only ever refuses.
+fn validate_timezone_literal(s: &LitStr) -> syn::Result<()> {
+    let name = s.value();
+    if name.parse::<chrono_tz::Tz>().is_ok() {
+        return Ok(());
+    }
+    // Name the fact a reader can check, and point at the register rather than
+    // listing 600 names into a compiler diagnostic.
+    Err(syn::Error::new(
+        s.span(),
+        format!(
+            "`{name}` is not an IANA time zone name — `tz` takes a `Area/Location` \
+             identifier from the IANA time zone database (e.g. \"Europe/Paris\", \
+             \"America/New_York\", \"UTC\")",
+        ),
     ))
 }
 

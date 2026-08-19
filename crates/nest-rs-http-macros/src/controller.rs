@@ -255,8 +255,9 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>
     let path = path.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
-            "#[controller] requires `path = \"...\"`",
+            nest_rs_codegen::missing_argument("controller", "path", "\"/users\""),
         )
     })?;
+    nest_rs_codegen::reject_path("controller", &path)?;
     Ok((path, versions))
 }

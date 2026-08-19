@@ -66,14 +66,11 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
             if declared.is_empty() {
                 continue;
             }
-            let names: Vec<String> = declared.iter().map(|(n, _)| format!("`#[{n}]`")).collect();
+            let names: Vec<String> = declared.iter().map(|(n, _)| (*n).to_owned()).collect();
+            let accepted: Vec<&str> = HOOK_ATTRS.iter().map(|(name, _)| *name).collect();
             return syn::Error::new_spanned(
                 &method.sig,
-                format!(
-                    "a hook method declares exactly one lifecycle phase — this one declares \
-                     {}. A method that must run in two phases is two methods.",
-                    names.join(" and "),
-                ),
+                nest_rs_codegen::one_role_per_method("lifecycle phase", &names, &accepted),
             )
             .to_compile_error()
             .into();

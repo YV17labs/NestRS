@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A declaration is refused at the token that wrote it
+
+The second refusal wave: what a decorator silently accepted, deferred to a
+dependency's error, or worded for itself alone is now one sentence per
+offence, worded once in `nest_rs_codegen`, spanned at the offending token,
+with a trybuild snapshot per site — eighteen new snapshot pairs across eight
+crates.
+
+- **A mount path has a grammar, and every decorator that takes one enforces
+  it.** `#[controller]`, `#[gateway]` and `#[mcp]` refuse a path that is
+  empty, not absolute, longer than 256 characters, carrying an empty segment,
+  or spelling a character RFC 3986 §3.3 does not allow in a segment —
+  percent-encoding included, deliberately: a mount path is written, not
+  received, so `%2F` asks to mount an address the router will never match.
+  `#[mcp]` used to refuse only the empty string; the other two checked
+  nothing, so `path = "users"` compiled and mounted.
+- **`#[use_guards]` on the impl half names the struct half.** One sentence
+  from the pair itself — the struct half declares the host's access posture,
+  this half declares its operations — where GraphQL and MCP each had a drifted
+  wording of their own and `#[routes]` / `#[messages]` had *nothing*: the
+  attribute reached rustc as ``cannot find attribute `use_guards` `` with no
+  transport, reason or remedy named. `#[force_guards]` is refused the same
+  way, and a `#[crud]` impl inherits both.
+- **A missing mandatory key shows what to write.** ``#[queue] requires `name`
+  — write `name = "emails"` `` — one shape at ten sites in six crates, where
+  three verbs and three shapes had grown.
+- **A method declaring two roles is refused naming both**, on `#[hooks]`
+  lifecycle phases, `#[indicators]` probes, `#[scheduled]` triggers, and MCP
+  roles — where it closes a real defect: a method carrying both `#[tool]` and
+  `#[prompt]` compiled, and the surviving second attribute was handed to rmcp
+  as an operation nobody declared.
+- **`#[input]` names the shape it cannot take.** A tuple or unit struct used
+  to die inside `validator`'s derive — `` Unsupported shape `one unnamed
+  field` `` against a `#[derive]` line the developer never wrote. The refusal
+  now names the shape, the derive whose limit it is, and the enum/newtype
+  remedies.
+- **`#[cron(tz = …)]` is checked against the IANA time zone database at
+  compile time.** The key is always a string literal over a closed name set,
+  so a typo was the one half of the attribute still deferred to a deployment
+  failure while the expression beside it was refused at expansion.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

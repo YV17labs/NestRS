@@ -68,10 +68,14 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
                 .iter()
                 .any(|(name, _)| attr.path().is_ident(name))
         }) {
+            let declared = [
+                nest_rs_codegen::role_name(attr.path()),
+                nest_rs_codegen::role_name(extra.path()),
+            ];
+            let accepted: Vec<&str> = PROBE_ATTRS.iter().map(|(name, _)| *name).collect();
             return syn::Error::new(
                 extra.span(),
-                "an indicator method takes exactly one probe — \
-                 `#[liveness]`, `#[readiness]`, or `#[startup]`",
+                nest_rs_codegen::one_role_per_method("probe", &declared, &accepted),
             )
             .to_compile_error()
             .into();

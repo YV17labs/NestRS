@@ -1,0 +1,7 @@
+error: #[gateway] requires `path` — write `path = "/ws"`
+ --> tests/integration/diagnostics/gateway_without_a_path.rs:6:1
+  |
+6 | #[gateway]
+  | ^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `gateway` (in Nightly builds, run with -Z macro-backtrace for more info)

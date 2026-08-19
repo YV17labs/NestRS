@@ -1,0 +1,5 @@
+error: #[gateway] `path` is not a mount path: it does not begin with `/` — a mount path is absolute (RFC 3986 §3.3 `path-absolute`), so write `/ws`
+ --> tests/integration/diagnostics/gateway_path_is_not_absolute.rs:6:18
+  |
+6 | #[gateway(path = "ws")]
+  |                  ^^^^

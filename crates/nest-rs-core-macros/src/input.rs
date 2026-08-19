@@ -37,6 +37,30 @@ pub(crate) fn input(args: TokenStream, input: TokenStream) -> TokenStream {
 /// The expansion itself, over `proc_macro2` tokens so a unit test can call it —
 /// a `proc_macro::TokenStream` cannot be built outside a real macro expansion.
 /// Same split `#[crud]` uses for the same reason.
+/// One sentence for every shape `#[input]` cannot carry, naming the fact rather
+/// than the rule.
+///
+/// The fact is checkable and it is `validator`'s, not ours: its `Validate`
+/// derive answers any other shape with *"Expected struct with named fields"*.
+/// The other three derives in the bundle — `Serialize`, `Deserialize`,
+/// `JsonSchema` — all accept an enum happily, so the limit is one derive's and
+/// the sentence says which. That distinction is what keeps this a refusal
+/// rather than a guess: a reader can verify it, and if `validator` ever grows
+/// enum support the sentence is what tells them this became "not yet".
+fn refuse_shape(item: &impl quote::ToTokens, shape: &str) -> syn::Error {
+    syn::Error::new_spanned(
+        item,
+        format!(
+            "#[input] takes a struct with named fields, and this is {shape}. \
+             `#[input]` bundles `validator::Validate`, whose derive supports only \
+             that shape (`Serialize`, `Deserialize` and `JsonSchema` do not mind). \
+             For a tagged union, put `#[input]` on each variant's payload struct \
+             and derive the wire traits on the enum itself; for a newtype, give \
+             the field a name.",
+        ),
+    )
+}
+
 fn expand(args: TokenStream2, input: TokenStream2) -> TokenStream2 {
     if !args.is_empty() {
         return syn::Error::new(
@@ -51,9 +75,33 @@ fn expand(args: TokenStream2, input: TokenStream2) -> TokenStream2 {
         Err(err) => return err.to_compile_error(),
     };
     let Item::Struct(item) = item else {
-        return syn::Error::new_spanned(item, "#[input] may only be applied to a struct")
-            .to_compile_error();
+        // Name the shape the developer actually wrote. "an enum, union or other
+        // item" makes the reader check which of three they hit; the compiler
+        // already knows.
+        let shape = match &item {
+            Item::Enum(_) => "an enum",
+            Item::Union(_) => "a union",
+            Item::Type(_) => "a type alias",
+            Item::Trait(_) => "a trait",
+            Item::Fn(_) => "a function",
+            Item::Impl(_) => "an impl block",
+            Item::Mod(_) => "a module",
+            _ => "not a struct",
+        };
+        return refuse_shape(&item, shape).to_compile_error();
     };
+    // A tuple or unit struct reached the derives and was refused *inside* the
+    // expansion, by `validator`, pointing at a `#[derive(...)]` line the
+    // developer never wrote — "Unsupported shape `one unnamed field`" with no
+    // mention of `#[input]`. The shape is knowable here, so the refusal belongs
+    // here: a refusal lands at the earliest site that can see the fact.
+    if !matches!(item.fields, syn::Fields::Named(_)) {
+        let shape = match item.fields {
+            syn::Fields::Unnamed(_) => "a tuple struct",
+            _ => "a unit struct",
+        };
+        return refuse_shape(&item, shape).to_compile_error();
+    }
 
     // Routed through the surface crate, with each derive's `crate = ` override
     // set to the same path: a derive expands against the *call site's* prelude,
@@ -220,11 +268,30 @@ mod tests {
 
     #[test]
     fn the_expansion_rejects_what_it_cannot_shorten() {
-        let not_a_struct = expand(TokenStream2::new(), quote! { enum Wire { A } }).to_string();
-        assert!(
-            not_a_struct.contains("only be applied to a struct"),
-            "{not_a_struct}"
-        );
+        // Every shape the bundle cannot carry is refused *here*, naming the
+        // derive whose limit it is — a tuple struct used to reach `validator`
+        // and be refused inside the expansion, at a `#[derive(...)]` line the
+        // developer never wrote.
+        for (item, named) in [
+            (quote! { enum Wire { A } }, "this is an enum"),
+            (quote! { union U { a: u32 } }, "this is a union"),
+            (quote! { struct Slug(String); }, "this is a tuple struct"),
+            (quote! { struct Marker; }, "this is a unit struct"),
+        ] {
+            let refused = expand(TokenStream2::new(), item).to_string();
+            assert!(
+                refused.contains("struct with named fields"),
+                "the sentence states the shape it takes: {refused}"
+            );
+            assert!(
+                refused.contains("validator::Validate"),
+                "the sentence names the derive whose limit this is: {refused}"
+            );
+            assert!(
+                refused.contains(named),
+                "the sentence names the shape written: {refused}"
+            );
+        }
 
         let with_args = expand(quote! { extra }, quote! { struct S {} }).to_string();
         assert!(with_args.contains("takes no arguments"), "{with_args}");

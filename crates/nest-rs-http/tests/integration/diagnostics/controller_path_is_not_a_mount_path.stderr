@@ -1,0 +1,5 @@
+error: #[controller] `path` is not a mount path: ` ` is not allowed in a mount path — RFC 3986 §3.3 spells a segment from unreserved characters, sub-delimiters, `:` and `@`, plus percent-encoding, **which a declared mount does not take** (a mount path is written, not received: `%2F` here asks to mount an address the router will never match). `{` and `}` are this framework's addition, for a template segment.
+  --> tests/integration/diagnostics/controller_path_is_not_a_mount_path.rs:10:21
+   |
+10 | #[controller(path = "/wid gets")]
+   |                     ^^^^^^^^^^^

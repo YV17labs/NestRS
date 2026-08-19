@@ -309,9 +309,10 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     let path = path.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
-            "#[gateway] requires `path = \"...\"`",
+            nest_rs_codegen::missing_argument("gateway", "path", "\"/ws\""),
         )
     })?;
+    nest_rs_codegen::reject_path("gateway", &path)?;
     Ok(GatewayArgs {
         path,
         version,

@@ -1,0 +1,5 @@
+error: a method declares exactly one probe — this one declares `#[liveness]` and `#[readiness]`. Accepted: `#[liveness]`, `#[readiness]` or `#[startup]`. Keeping the first and dropping the second would run the method under a probe you did not write, so neither is assumed: a method that must be two is two methods.
+  --> tests/integration/diagnostics/two_probes_on_one_indicator.rs:16:5
+   |
+16 |     #[readiness]
+   |     ^

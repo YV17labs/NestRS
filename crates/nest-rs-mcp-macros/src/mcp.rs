@@ -351,14 +351,10 @@ impl ServerField {
 /// absent one — two spellings for one mount is what the framework does not
 /// ship.
 fn check_path(path: &LitStr) -> syn::Result<()> {
-    if path.value().is_empty() {
-        return Err(syn::Error::new_spanned(
-            path,
-            "#[mcp] `path` is empty — drop the argument entirely to serve the \
-             default endpoint, which is what a bare #[mcp] means",
-        ));
-    }
-    Ok(())
+    // The shared grammar refuses the empty string too, in the same words as its
+    // two siblings — this used to be the only one of three `path` keys that
+    // checked anything, and it checked one of the four ways of getting it wrong.
+    nest_rs_codegen::reject_path("mcp", path)
 }
 
 /// An optional identity argument as the `Option<&str>` tokens

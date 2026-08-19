@@ -61,7 +61,7 @@ struct SlowCommand {
 
 fn queue_config() -> QueueConfig {
     QueueConfig {
-        url: std::env::var("NESTRS_QUEUE__URL")
+        url: std::env::var(nest_rs_config::var_name("queue", "URL"))
             .unwrap_or_else(|_| "redis://redis:6379".to_string()),
         ..Default::default()
     }

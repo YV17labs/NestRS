@@ -19,7 +19,10 @@ use nest_rs_config::Environment;
 #[allow(clippy::result_large_err)]
 fn the_environment_written_into_the_cascade_aborts() {
     figment::Jail::expect_with(|jail| {
-        jail.create_file(".env", "NESTRS_ENV=development\n")?;
+        jail.create_file(
+            ".env",
+            &format!("{}=development\n", Environment::var_name()),
+        )?;
         nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Development);
         Ok(())
     });
@@ -33,8 +36,11 @@ fn the_environment_written_into_the_cascade_aborts() {
 #[allow(clippy::result_large_err)]
 fn the_environment_contradicted_by_the_cascade_aborts() {
     figment::Jail::expect_with(|jail| {
-        jail.set_env("NESTRS_ENV", "production");
-        jail.create_file(".env", "NESTRS_ENV=development\n")?;
+        jail.set_env(Environment::var_name(), "production");
+        jail.create_file(
+            ".env",
+            &format!("{}=development\n", Environment::var_name()),
+        )?;
         nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Production);
         Ok(())
     });
@@ -48,8 +54,11 @@ fn the_environment_contradicted_by_the_cascade_aborts() {
 #[allow(clippy::result_large_err)]
 fn the_environment_restated_by_the_cascade_is_tolerated() {
     figment::Jail::expect_with(|jail| {
-        jail.set_env("NESTRS_ENV", "development");
-        jail.create_file(".env", "NESTRS_ENV=development\n")?;
+        jail.set_env(Environment::var_name(), "development");
+        jail.create_file(
+            ".env",
+            &format!("{}=development\n", Environment::var_name()),
+        )?;
         nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Development);
         Ok(())
     });
@@ -142,17 +151,17 @@ fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade(
         // `Jail` restores the process env on drop, which is what makes writing
         // a deliberately broken value safe here.
         jail.set_env(
-            "NESTRS_BROKEN_VALUE",
+            "FIXTURE_BROKEN_VALUE",
             OsStr::from_bytes(&[0xff, 0xfe]).to_string_lossy(),
         );
         // `set_env` round-trips through `String`, so write the raw bytes
         // directly — the lossy form above is valid UTF-8 and would not reach
         // the branch under test.
         // SAFETY: single-threaded test, and `Jail` restores the environment.
-        unsafe { std::env::set_var("NESTRS_BROKEN_VALUE", OsStr::from_bytes(&[0xff, 0xfe])) };
+        unsafe { std::env::set_var("FIXTURE_BROKEN_VALUE", OsStr::from_bytes(&[0xff, 0xfe])) };
 
         assert_eq!(
-            nest_rs_config::env_var("NESTRS_BROKEN_VALUE"),
+            nest_rs_config::env_var("FIXTURE_BROKEN_VALUE"),
             None,
             "a value that is not a string is treated as unset",
         );
@@ -162,7 +171,7 @@ fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade(
             "environment variable is not valid UTF-8 — treated as unset, cascade suppressed",
         );
         assert_eq!(event.level, "warn");
-        assert_eq!(event.field("name").as_deref(), Some("NESTRS_BROKEN_VALUE"));
+        assert_eq!(event.field("name").as_deref(), Some("FIXTURE_BROKEN_VALUE"));
         Ok(())
     });
 }

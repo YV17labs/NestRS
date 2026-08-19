@@ -125,7 +125,20 @@ fn the_active_environment_is_read_from_the_declared_prefix() {
 #[allow(clippy::result_large_err)]
 fn a_prefix_written_into_the_cascade_aborts_without_environment_init() {
     figment::Jail::expect_with(|jail| {
-        jail.create_file(".env", "NESTRS_ENV_PREFIX=ACME\nNESTRS_WIDGET__PORT=9001\n")?;
+        // The process prefix is pinned rather than inherited: the refusal is
+        // about the file *contradicting* the process, so a shell that already
+        // exported `ACME` would make the two agree and the abort would not fire
+        // — a test that passes because the ambient environment happened to
+        // match is a test asserting nothing.
+        jail.set_env(EnvPrefix::VAR, "FIXTURE");
+        jail.create_file(
+            ".env",
+            &format!(
+                "{}=ACME\n{}=9001\n",
+                EnvPrefix::VAR,
+                nest_rs_config::var_name("widget", "PORT"),
+            ),
+        )?;
         let _ = ConfigService::for_namespace(WidgetConfig::NAMESPACE).get("PORT");
         Ok(())
     });
@@ -140,7 +153,8 @@ fn a_prefix_written_into_the_cascade_aborts_without_environment_init() {
 #[allow(clippy::result_large_err)]
 fn a_prefix_written_into_the_cascade_aborts_through_load_cascade() {
     figment::Jail::expect_with(|jail| {
-        jail.create_file(".env", "NESTRS_ENV_PREFIX=ACME\n")?;
+        jail.set_env(EnvPrefix::VAR, "FIXTURE");
+        jail.create_file(".env", &format!("{}=ACME\n", EnvPrefix::VAR))?;
         nest_rs_config::load_cascade(std::path::Path::new("."), Environment::Development);
         Ok(())
     });

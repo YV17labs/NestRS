@@ -14,7 +14,7 @@ fn storage() -> Storage {
     let mut config = StorageConfig::default();
     // Honor the documented `NESTRS_STORAGE__ENDPOINT` override; the default
     // (dev-container RustFS) stands when it is unset.
-    if let Ok(endpoint) = std::env::var("NESTRS_STORAGE__ENDPOINT") {
+    if let Ok(endpoint) = std::env::var(nest_rs_config::var_name("storage", "ENDPOINT")) {
         config.endpoint = endpoint;
     }
     Storage::new(Arc::new(config))

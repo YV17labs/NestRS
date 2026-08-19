@@ -29,7 +29,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nest_rs_redis::QueueConnection;
 
 fn redis_url() -> String {
-    std::env::var("NESTRS_QUEUE__URL").unwrap_or_else(|_| "redis://redis:6379".to_string())
+    std::env::var(nest_rs_config::var_name("queue", "URL"))
+        .unwrap_or_else(|_| "redis://redis:6379".to_string())
 }
 
 /// A key unique to this process, call site and wall-clock instant, so a rerun

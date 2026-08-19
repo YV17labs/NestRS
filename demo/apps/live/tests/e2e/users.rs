@@ -14,8 +14,8 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
 
     let bind = "127.0.0.1:13348";
     nest_rs::testing::load_project_env();
-    let url = std::env::var("NESTRS_DATABASE__URL")
-        .expect("NESTRS_DATABASE__URL must point at a reachable Postgres for this test");
+    let url = std::env::var(nest_rs::config::var_name("database", "URL"))
+        .expect("the database URL must point at a reachable Postgres for this test");
     let db = Database::connect(&url).await.expect("connect to Postgres");
 
     let org_a = Uuid::now_v7();

@@ -16,7 +16,7 @@ request.
 
 | Concern | Target | Default level |
 |---|---|---|
-| HTTP request log | `nest_rs::access` | `info` |
+| Operation log — one line per unit of work, every edge | `nest_rs::operation` | `info` |
 | HTTP span | `nest_rs::http` | `info` |
 | MCP operations | `nest_rs::mcp` | `info` |
 | Route / endpoint mounting (boot) | `nest_rs::routes` | `info` |
@@ -129,18 +129,27 @@ export builds its tree from.
 ## Every unit of work files one line
 
 The ids relate lines to each other; they do not say what the work **was**. That
-is a separate line, one per unit of work, on the shared target `nest_rs::access`
+is a separate line, one per unit of work, on the shared target `nest_rs::operation`
 — and every edge files one, not just HTTP:
 
-| Edge | Message | Names |
+| Edge | Canonical name | Names |
 |---|---|---|
-| HTTP request | `request served` | method, path, status, bytes, client |
-| WS message | `message served` | event, `conn_id` |
-| WS socket open/close | `socket lifecycle` | lifecycle, `conn_id` |
-| Scheduled tick | `tick ran` | provider, method |
-| Queue job | `job ran` | queue, processor, `job_id`, attempt |
-| MCP operation | `operation served` | the JSON-RPC method |
-| GraphQL subscription | `subscription served` | the connection is the unit |
+| HTTP request | `http.request` | method, path, status, bytes, client |
+| WS message | `ws.message` | event, `conn_id` |
+| WS socket open | `ws.connect` | `conn_id` |
+| WS socket close | `ws.disconnect` | `conn_id` |
+| Scheduled tick | `schedule.tick` | provider, method |
+| Queue job | `queue.job` | queue, processor, `job_id`, attempt |
+| MCP operation | `mcp.operation` | the JSON-RPC method |
+| GraphQL subscription | `graphql.subscription` | the connection is the unit |
+
+**The name is `<edge>.<unit>`, and it is the same string the operation's span
+carries.** It is declared once, in `nest_rs_core::operation_log::unit`, and read
+three times: by the span, by the log record's event name (what an OTLP exporter
+reports as `event.name`), and by the message a console prints. There used to be
+two vocabularies for these eight things — the spans said `http.request` while
+the lines said `request served` — so an operator learned the set twice and a
+query could pick the wrong one.
 
 Every one carries `duration_ms`, and every one but HTTP carries `outcome`
 (`ok` / `error` / `panic`) — a request has `status`, which says how it ended more
@@ -148,14 +157,24 @@ precisely than three words could. So one query answers "what did this deployment
 do", and "what failed" is `outcome != ok` or `status >= 400`.
 
 ```text frame="terminal"
-INFO nest_rs::access: request served method=GET path="/users" status=401 bytes=127 duration_ms=0.103 client_ip=127.0.0.1 forwarded=false user_agent="curl/8.14.1" trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b
-INFO nest_rs::access: tick ran provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=127 duration_ms=0.103 client_ip=127.0.0.1 forwarded=false user_agent="curl/8.14.1" trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b
+INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
 ```
 
-**The target is the toggle.** `NESTRS_LOG=info,nest_rs::access=off` silences the
+**The target is the toggle.** `NESTRS_LOG=info,nest_rs::operation=off` silences the
 whole family at once, which is why no edge carries a config flag for it.
 `NESTRS_HTTP__ACCESS_LOG` predates the family and stays, as an app's pinned
-config rather than a deployment's filter.
+config rather than a deployment's filter — it is one edge's line, not the
+family's.
+
+**It was `nest_rs::access` through 5.1**, so a filter, runbook or dashboard
+still naming the old string matches nothing. That string also matched something
+it never meant to: `EnvFilter` compares a directive's target with `starts_with`
+on the raw string rather than by `::` segment, so `nest_rs::access=off` **also**
+silenced `nest_rs::access_graph` — the boot warning naming resolvers unreachable
+from the GraphQL schema. A deployment that quieted its access log lost that
+diagnostic with nothing on the console to say so. `nest_rs::operation` prefixes
+no other target, and a test fails the day one prefixes another.
 
 ### Following one operation across two processes
 
@@ -165,9 +184,9 @@ the tick, across a process boundary:
 
 ```text frame="terminal"
 DEBUG features::audio: enqueued transcode job file="track-1787069801760.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
- INFO nest_rs::access: tick ran provider="AudioTasks" method="enqueue_transcode" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+ INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
 DEBUG features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
- INFO nest_rs::access: job ran queue="audio" processor="AudioProcessor::transcode" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+ INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
 ```
 
 The first two lines are the `api`'s, the last two the `worker`'s. Nothing was
@@ -219,10 +238,10 @@ it is live while developing and off everywhere else, or pin it explicitly with
 status, duration, client, `trace_id`, `span_id` and `actor_id` are what the transport
 knows about a request it served — no collector, no exporter and no propagator is
 involved, so none is required. It emits one event per request on
-`nest_rs::access`, at end-of-body, with byte-accurate `bytes`:
+`nest_rs::operation`, at end-of-body, with byte-accurate `bytes`:
 
 ```text frame="terminal"
-INFO nest_rs::access: request served method=GET path="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16 client_ip=127.0.0.1 forwarded=false
+INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=127 duration_ms=0.09 trace_id=01a0112ce24e75509be691162cbbab1f span_id=3f2b91c40a7e5d16 client_ip=127.0.0.1 forwarded=false
 ```
 
 `actor_id` joins the line once an authn guard resolved a principal, and is

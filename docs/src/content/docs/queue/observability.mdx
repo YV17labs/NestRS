@@ -19,12 +19,12 @@ service-level logs your `#[process]` method emits keep their own target
 | Target | What | Level |
 |---|---|---|
 | `nest_rs::queue` | Boot registration, per-job span, skipped/unversioned warnings, and the reason a job failed. | `debug` on job start, `warn` on a retryable failure, `error` on a dead-letter. |
-| `nest_rs::access` | One `job ran` line per attempt — identity, `outcome`, `duration_ms`. Shared with every other edge. | `info`. |
+| `nest_rs::operation` | One `queue.job` line per attempt — identity, `outcome`, `duration_ms`. Shared with every other edge. | `info`. |
 | `nest_rs::app` | Boot: `attached module-contributed transport transport="QueueWorker"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
 | `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
 
 Hot paths respect `RUST_LOG=info`: `job started` sits at `debug`, so a
-worker at `info` logs one `job ran` line per attempt and, on failure, one
+worker at `info` logs one `queue.job` line per attempt and, on failure, one
 event saying why — no per-poll noise.
 
 ## The per-job span
@@ -56,18 +56,18 @@ into the job envelope and the consumer continues from them — see
 ## What a job's life looks like
 
 `job started` at `debug`, then whatever the handler logs, then one
-`job ran` line on `nest_rs::access` — the same line every edge files for
+`queue.job` line on `nest_rs::operation` — the same line every edge files for
 a unit of work, carrying the job's identity, its `outcome` and its
 `duration_ms`:
 
 ```text frame="terminal"
 DEBUG features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
- INFO nest_rs::access: job ran queue="audio" processor="AudioProcessor::transcode" job_id="01M0ATJ9C2YN8NJX3GVTA911X6" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+ INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" job_id="01M0ATJ9C2YN8NJX3GVTA911X6" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
 ```
 
 A failure adds one event on `nest_rs::queue` saying **why** — at `warn`
 when the retry budget will re-run it, at `error` when the job
-dead-letters — and the `job ran` line reports `outcome="error"` (or
+dead-letters — and the `queue.job` line reports `outcome="error"` (or
 `outcome="panic"`) beside it. The two never restate each other: the
 detail carries the cause, the line carries the timing and the identity.
 
@@ -115,7 +115,7 @@ RUST_LOG=info,nest_rs::queue=debug nestrs run dev worker
 ```
 
 `info` everywhere, `debug` on the queue path: adds the `job started`
-line per poll on top of the `job ran` line and any failure detail.
+line per poll on top of the `queue.job` line and any failure detail.
 
 ```bash
 RUST_LOG=nest_rs::queue=warn nestrs run dev worker

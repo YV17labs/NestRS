@@ -306,7 +306,7 @@ $ nestrs run dev worker
  INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
  INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
  INFO features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
- INFO nest_rs::access: job ran queue="audio" processor="AudioProcessor::transcode" job_id="01M0ATJ9C2YN8NJX3GVTA911X6" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+ INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" job_id="01M0ATJ9C2YN8NJX3GVTA911X6" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
 ```
 
 The last two lines share the job's `trace_id`, and it is the producer's — see [Observability](/queue/observability/) for the

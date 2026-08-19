@@ -63,7 +63,7 @@ config survives adopting or dropping the observability stack.
 | `COMPRESSION` | negotiate response compression from `Accept-Encoding` — default `false` (leave it to the proxy unless the app terminates responses) |
 | `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h), `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
 | `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`, `0` ⇒ none sent |
-| `ACCESS_LOG` | emit one access-log event per request on `nest_rs::access` — default `true`. Owned by the HTTP transport, so it needs no observability crate; `trace_id` joins the line only when one is mounted |
+| `ACCESS_LOG` | emit one access-log event per request on `nest_rs::operation` — default `true`. Owned by the HTTP transport, so it needs no observability crate; `trace_id` joins the line only when one is mounted |
 | `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/) and the trace context; an unparseable entry aborts the boot |
 
 ## `database` — `NESTRS_DATABASE__*`

@@ -746,8 +746,14 @@ const fn unhex(byte: u8) -> Option<u8> {
 /// invisible to every messaging view. Required means a new edge cannot ship
 /// unclassified.
 ///
-/// The caller supplies the target, the span name and whatever its own edge
-/// knows. Targets follow the table in `CLAUDE.md`: `nest_rs::<concern>`.
+/// **All three of the caller's slots are constants, and none may be a literal.**
+/// The target is the owning crate's (`nest_rs_http::target::HTTP`), the kind is
+/// one of [`operation_log::kind`](crate::operation_log::kind), and the name is
+/// one of [`operation_log::unit`](crate::operation_log::unit) — the same
+/// constant the edge's operation line reads for its `name:` and its message,
+/// which is what stops one unit of work from having two spellings. The `units`
+/// join in `nest-rs-conformance` fails on a literal at any of the three, and it
+/// reads this example too.
 ///
 /// The [`Correlation`] is a **required positional argument** rather than read
 /// from the ambient context, for two reasons that both bite: an edge opens its
@@ -757,11 +763,18 @@ const fn unhex(byte: u8) -> Option<u8> {
 ///
 /// ```
 /// # use nest_rs_core::{Correlation, operation_span};
+/// use nest_rs_core::operation_log::{kind, unit};
+///
+/// // An edge reads its own crate's — `nest_rs_http::target::HTTP` at the real
+/// // call site. The kernel cannot name it from inside its own doctest, and a
+/// // target is declared exactly once per crate, so the declaration stands in.
+/// const TARGET: &str = "nest_rs::http";
+///
 /// let correlation = Correlation::mint();
 /// let span = operation_span!(
-///     target: "nest_rs::http",
-///     kind: "server",
-///     "http.request",
+///     target: TARGET,
+///     kind: kind::SERVER,
+///     unit::HTTP_REQUEST,
 ///     &correlation,
 ///     http.request.method = "GET",
 /// );

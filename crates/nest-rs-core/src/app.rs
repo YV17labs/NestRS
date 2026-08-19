@@ -147,7 +147,7 @@ impl App {
         let App { container } = self;
 
         tracing::info!(
-            target: "nest_rs::app",
+            target: crate::target::APP,
             version = env!("CARGO_PKG_VERSION"),
             "nestrs starting",
         );
@@ -156,7 +156,7 @@ impl App {
         for contribution in DiscoveryService::new(&container).meta::<TransportContribution>() {
             let transport = (contribution.meta.build)(&container)?;
             tracing::info!(
-                target: "nest_rs::app",
+                target: crate::target::APP,
                 transport = contribution.meta.name,
                 "attached module-contributed transport",
             );
@@ -187,14 +187,14 @@ impl App {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     if first_err.is_none() {
-                        tracing::error!(target: "nest_rs::app", error = %e, "transport failed; shutting down");
+                        tracing::error!(target: crate::target::APP, error = %e, "transport failed; shutting down");
                         first_err = Some(e);
                         cancel.cancel();
                     }
                 }
                 Err(join_err) => {
                     if first_err.is_none() {
-                        tracing::error!(target: "nest_rs::app", error = %join_err, "transport task panicked; shutting down");
+                        tracing::error!(target: crate::target::APP, error = %join_err, "transport task panicked; shutting down");
                         first_err = Some(anyhow!(join_err));
                         cancel.cancel();
                     }
@@ -469,23 +469,23 @@ fn spawn_shutdown_signal(cancel: CancellationToken) {
             let mut sigterm = match signal(SignalKind::terminate()) {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!(target: "nest_rs::app", error = %e, "failed to install SIGTERM handler");
+                    tracing::warn!(target: crate::target::APP, error = %e, "failed to install SIGTERM handler");
                     return;
                 }
             };
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => tracing::info!(target: "nest_rs::app", signal = "SIGINT", "shutdown signal received"),
-                _ = sigterm.recv()          => tracing::info!(target: "nest_rs::app", signal = "SIGTERM", "shutdown signal received"),
+                _ = tokio::signal::ctrl_c() => tracing::info!(target: crate::target::APP, signal = "SIGINT", "shutdown signal received"),
+                _ = sigterm.recv()          => tracing::info!(target: crate::target::APP, signal = "SIGTERM", "shutdown signal received"),
             }
         }
         #[cfg(not(unix))]
         {
             match tokio::signal::ctrl_c().await {
                 Ok(()) => {
-                    tracing::info!(target: "nest_rs::app", signal = "ctrl-c", "shutdown signal received")
+                    tracing::info!(target: crate::target::APP, signal = "ctrl-c", "shutdown signal received")
                 }
                 Err(e) => {
-                    tracing::warn!(target: "nest_rs::app", error = %e, "failed to install ctrl-c handler");
+                    tracing::warn!(target: crate::target::APP, error = %e, "failed to install ctrl-c handler");
                     return;
                 }
             }

@@ -89,7 +89,7 @@ fn hooks_for(phase: LifecyclePhase) -> Vec<&'static LifecycleHook> {
 /// share this target.
 fn report_inert_hook(hook: &LifecycleHook, phase: LifecyclePhase) {
     crate::report_inert_host!(
-        target: "nest_rs::lifecycle",
+        target: crate::target::LIFECYCLE,
         what: "lifecycle hook",
         origin: hook.origin,
         phase = ::tracing::field::debug(phase),
@@ -106,7 +106,7 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
             continue;
         }
         tracing::debug!(
-            target: "nest_rs::lifecycle",
+            target: crate::target::LIFECYCLE,
             ?phase,
             provider = hook.provider,
             method = hook.method,
@@ -132,7 +132,7 @@ pub(crate) async fn run_phase_lenient(container: &Container, phase: LifecyclePha
         }
         if let Err(err) = (hook.run)(container).await {
             tracing::error!(
-                target: "nest_rs::lifecycle",
+                target: crate::target::LIFECYCLE,
                 ?phase,
                 provider = hook.provider,
                 method = hook.method,

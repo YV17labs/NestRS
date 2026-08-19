@@ -212,7 +212,7 @@ where
                     continue;
                 }
                 tracing::info!(
-                    target: "nest_rs::layers",
+                    target: crate::target::LAYERS,
                     layer = entry.name,
                     scope = entry.source.label(),
                     route = route_label,
@@ -263,7 +263,7 @@ fn report_redundant_scope(
         .unwrap_or(true);
     if first_time {
         tracing::debug!(
-            target: "nest_rs::layers",
+            target: crate::target::LAYERS,
             layer = short_type_name(name),
             kept = existing.label(),
             skipped = skipped.label(),

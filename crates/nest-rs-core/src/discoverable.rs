@@ -212,7 +212,7 @@ pub fn is_framework_owned(origin: &str) -> bool {
 ///
 /// ```ignore
 /// report_inert_host!(
-///     target: "nest_rs::schedule",
+///     target: crate::target::LIFECYCLE,
 ///     what: "scheduled method",
 ///     origin: entry.origin,
 ///     provider = entry.provider,
@@ -221,7 +221,7 @@ pub fn is_framework_owned(origin: &str) -> bool {
 /// ```
 #[macro_export]
 macro_rules! report_inert_host {
-    (target: $target:literal, what: $what:literal, origin: $origin:expr $(, $field:ident = $value:expr)* $(,)?) => {{
+    (target: $target:expr, what: $what:literal, origin: $origin:expr $(, $field:ident = $value:expr)* $(,)?) => {{
         let __origin = $origin;
         if $crate::is_framework_owned(__origin) {
             ::tracing::debug!(

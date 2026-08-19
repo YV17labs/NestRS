@@ -11,7 +11,7 @@ use crate::container::ContainerBuilder;
 #[doc(hidden)]
 pub fn __module_registered(name: &'static str) {
     tracing::info!(
-        target: "nest_rs::module",
+        target: crate::target::MODULE,
         module = name,
         "module dependencies initialized",
     );

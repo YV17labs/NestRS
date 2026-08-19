@@ -19,6 +19,14 @@ categories = ["development-tools::debugging", "asynchronous"]
 # mount a per-request interceptor, which reached one edge. What it did now hangs
 # off the framework's span constructor, so a headless worker gets it too — and
 # nothing here compiles poem or nest-rs-http any more.
+#
+# That sentence was false for as long as `nest-rs-http`, `nest-rs-interceptors`
+# and `poem` stayed in `[dependencies]` as `optional` with no `dep:` reference:
+# Cargo synthesises a public implicit feature per such entry, so
+# `--features poem` built poem and the comment above described the opposite of
+# what the manifest allowed. `tokio` and `async-trait` were the same shape
+# without the feature — dependencies no source file named. All five are gone;
+# what remains is what `src/` actually reaches.
 default = ["otlp"]
 otlp = [
     "dep:opentelemetry",
@@ -36,14 +44,9 @@ otlp = [
 # though it is one of `nest-rs-core`'s default features.
 nest-rs-core = { workspace = true, features = ["logging"] }
 nest-rs-config.workspace = true
-nest-rs-http = { workspace = true, optional = true }
-nest-rs-interceptors = { workspace = true, optional = true }
-poem = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tokio.workspace = true
 thiserror.workspace = true
-async-trait.workspace = true
 
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }

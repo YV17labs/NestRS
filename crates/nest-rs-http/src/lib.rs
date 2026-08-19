@@ -7,6 +7,7 @@
 #![warn(missing_docs)]
 
 mod access_log;
+mod allow;
 mod boot_check;
 mod client_ip;
 mod config;
@@ -38,6 +39,7 @@ mod transport;
 pub mod unit;
 mod versioning;
 
+pub use allow::{AllowedMethods, MethodTable};
 pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
 pub use client_ip::{ClientIp, ClientOrigin};
 pub use config::HttpConfig;

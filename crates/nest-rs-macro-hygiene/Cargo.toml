@@ -36,8 +36,11 @@ nest-rs = { path = "../nest-rs", default-features = false, features = [
     "http",
     "mcp",
     "queue",
-    "resource",
     "schedule",
+    # `#[wire_enum]` — the one decorator of `nest-rs-resource` this crate can
+    # exercise (`#[expose]` needs a real entity, which a zero-dep crate cannot
+    # hold). It rides `seaorm`, the single feature that activates both halves.
+    "seaorm",
     "ws",
 ] }
 

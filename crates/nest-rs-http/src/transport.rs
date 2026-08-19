@@ -250,8 +250,8 @@ impl HttpTransport {
         // Install the per-request cap as a request-data entry — the `RawBody`
         // extractor reads it back from the extensions.
         http = http.max_body_bytes(cfg.max_body_bytes.unwrap_or(crate::RawBody::DEFAULT_LIMIT));
-        if let Some(secs) = cfg.request_timeout_secs {
-            http = http.request_timeout(std::time::Duration::from_secs(secs));
+        if let Some(timeout) = cfg.request_timeout {
+            http = http.request_timeout(timeout);
         }
         http = http.fail_secure_strict(cfg.fail_secure_strict);
         http = http.security_headers(cfg.security_headers.clone());
@@ -318,8 +318,9 @@ impl HttpTransport {
     }
 
     /// Abort any request that runs longer than `timeout`, answering the client
-    /// with `504 Gateway Timeout`. Bounds connection hold time against slow or
-    /// stuck handlers. Without this call no timeout is enforced.
+    /// with `503 Service Unavailable` and a `Retry-After`. Bounds connection
+    /// hold time against slow or stuck handlers. Without this call no timeout is
+    /// enforced.
     pub fn request_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.request_timeout = Some(timeout);
         self
@@ -698,25 +699,21 @@ impl Transport for HttpTransport {
         // fuse into ONE layer (`EdgeEndpoint`) instead of one boxed wrap
         // each: same semantics and relative order (scope outermost, body cap
         // before the timer, the timer bounding guards/interceptors/handler,
-        // headers stamped on the way out — so a `413`/`504` still carries
+        // headers stamped on the way out — so a `413`/`503` still carries
         // them), a single dispatch on the hot path. CORS / compression stay
         // poem middlewares outside it; a preflight is answered before any of
         // this runs, and without the timer.
         let mut edge_headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
         for (name, value) in self.security_headers.headers(self.tls.is_some()) {
-            // Values are boot-validated (HTTP-S4) and names are static, so a
-            // failure here is a framework bug, not a config error — log it
-            // loudly rather than silently drop a security header.
-            match (
-                HeaderName::from_bytes(name.as_bytes()),
-                HeaderValue::from_str(&value),
-            ) {
-                (Ok(header_name), Ok(header_value)) => {
-                    edge_headers.push((header_name, header_value));
-                }
-                _ => tracing::error!(
+            // Values are boot-validated (HTTP-S4) and the names are the `http`
+            // crate's own constants, so a failure here is a framework bug, not
+            // a config error — log it loudly rather than silently drop a
+            // security header.
+            match HeaderValue::from_str(&value) {
+                Ok(header_value) => edge_headers.push((name, header_value)),
+                Err(_) => tracing::error!(
                     target: crate::target::HTTP,
-                    header = name,
+                    header = name.as_str(),
                     "failed to construct a security header despite boot validation",
                 ),
             }
@@ -727,7 +724,7 @@ impl Transport for HttpTransport {
         // Transport-edge error boundary — outermost, so it normalizes
         // whatever escapes the whole stack. Any `>= 400` response poem
         // rendered as raw `text/plain` (an unmounted-route 404, a 413, a 405,
-        // an extractor's bad-path-id 400, a timeout 504) is lifted onto the
+        // an extractor's bad-path-id 400, a timeout 503) is lifted onto the
         // single RFC-9457 `application/problem+json` envelope; a response
         // already in `problem+json` (a `ServiceError`, a `ProblemDetails`, a
         // guard denial, a domain exception filter) passes through untouched.

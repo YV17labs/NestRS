@@ -69,6 +69,43 @@ that mounts it, so what is served and what is advertised cannot drift —
   method through poem directly, so `PUT /graphql` still answers a bare `405`;
   `MethodTable` is public as the drop-in for it.
 
+### A timeout is the origin's own 503, and every header the framework knows is emitted or argued
+
+**Breaking, wire and API.** Four corrections on the HTTP edge, each aligning a
+default with the standard that owns it:
+
+- **An overrun handler answers `503 Service Unavailable` with `Retry-After`,
+  not `504`.** RFC 9110 §15.6.5 scopes `504 Gateway Timeout` to a server
+  acting as a gateway or proxy; this transport is the origin, and a `504`
+  invites exactly the wrong retry — a load balancer reading it as "that
+  node's upstream is flaky, try another one" re-runs a handler that will
+  overrun again. The delay is whole seconds rounded up, minimum 1, because
+  `Retry-After: 0` reads as "retry immediately", the one instruction a server
+  shedding load must not give.
+- **`HttpConfig::request_timeout_secs: Option<u64>` becomes
+  `request_timeout: Option<Duration>`**, read through the framework's shared
+  seconds grammar — so `NESTRS_HTTP__REQUEST_TIMEOUT_SECS=0` now means *no
+  timeout*, the family's sentinel, instead of zero seconds. And
+  `max_body_bytes = 0` fails the boot naming the field, instead of rejecting
+  every bodied request, the same floor its MCP and WS siblings already have.
+- **The security-header family is closed: each member is emitted by default,
+  or configurable with its default argued.** Three new defaults —
+  `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Cross-Origin-Opener-Policy: same-origin`,
+  `Cross-Origin-Resource-Policy: same-origin` — and three settable but
+  deliberately off, each with its reason recorded: `Content-Security-Policy`
+  (an API framework cannot know a page's sources),
+  `Cross-Origin-Embedder-Policy` (breaks embeds to buy an isolation nothing
+  here uses), `Permissions-Policy` (a default would be a guess about pages
+  the framework does not serve). One table drives validation and emission,
+  so a member cannot arrive validated but unemitted.
+  `SecurityHeadersConfig::headers` now returns `HeaderName`s.
+- **CORS refuses `*` beside credentials on all four lists**, not just
+  `origins`: `*` is a valid `tchar`, so nothing else refuses it — the header
+  is emitted, every browser drops the response, and there is nothing
+  server-side to point at. The error names the config field and the response
+  header it would have poisoned.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

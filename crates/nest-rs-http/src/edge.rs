@@ -20,7 +20,7 @@
 //!   endpoint and no allocation when the path is already canonical.
 //! - The request scope is installed before anything inward can resolve
 //!   `#[injectable(scope = request)]` providers via [`Scoped`](crate::Scoped).
-//! - A `413` (body cap) and a `504` (timeout) are produced *inside* the
+//! - A `413` (body cap) and a `503` (timeout) are produced *inside* the
 //!   header stamp, so they carry the security headers — as they did when the
 //!   `SetHeader` middleware wrapped those layers.
 //! - An `Err` escaping the inner tree propagates *without* headers, exactly
@@ -72,9 +72,40 @@ fn matched_route(result: &Result<Response>) -> Option<&str> {
     pattern.map(|PathPattern(pattern)| &**pattern)
 }
 
-/// A bare status-only response — the edge's own rejections (`413`, `504`).
+/// A bare status-only response — the edge's own rejections (`413`, `503`).
 fn bare(status: StatusCode) -> Response {
     Response::builder().status(status).finish()
+}
+
+/// What a request that outran its budget is answered with.
+///
+/// **`503`, not `504`, and the difference is which server is speaking.** RFC
+/// 9110 §15.6.5 scopes `504 Gateway Timeout` to a server "acting as a gateway
+/// or proxy" that did not get a timely response *from an upstream server it
+/// needed to access*. This transport is the origin: the handler that overran is
+/// this server's own work, there is no upstream, and a `504` invites exactly the
+/// wrong retry — a client SDK or a load balancer reading it as "that node's
+/// upstream is flaky, try another one" retries a handler that will overrun
+/// again.
+///
+/// RFC 9110 §15.6.4 is the origin server's own sentence: `503` is "currently
+/// unable to handle the request due to a temporary overload", it is explicitly
+/// temporary, and it is the status the same section pairs with `Retry-After` to
+/// say how long. The budget is what that value says — waiting less than it means
+/// the attempt that just overran may still be running.
+fn timed_out(timeout: Duration) -> Response {
+    // Whole seconds, rounded up, and never `0`: RFC 9110 §10.2.3 takes either a
+    // delay in seconds or an HTTP-date, and `Retry-After: 0` reads as "retry
+    // immediately", which is the one instruction a server shedding load must
+    // not give.
+    let seconds = timeout
+        .as_secs()
+        .saturating_add(u64::from(timeout.subsec_nanos() > 0))
+        .max(1);
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(poem::http::header::RETRY_AFTER, seconds)
+        .finish()
 }
 
 /// What a body that outran the cap fails the *stream* with.
@@ -375,7 +406,7 @@ where
                         Ok(result) => result,
                         Err(_) => {
                             tracing::warn!(target: crate::target::HTTP, ?timeout, "request timed out");
-                            return Ok(self.finish(bare(StatusCode::GATEWAY_TIMEOUT)));
+                            return Ok(self.finish(timed_out(timeout)));
                         }
                     },
                 }
@@ -662,12 +693,37 @@ mod tests {
         resp.assert_status_is_ok();
     }
 
+    // RFC 9110 §15.6.5 scopes `504` to a gateway or proxy, and this transport is
+    // the origin — so the overrun is a `503` with the `Retry-After` §15.6.4
+    // pairs with it. A `504` here is what makes a retrying client re-run a
+    // handler that will overrun again.
     #[tokio::test]
-    async fn overrunning_handler_answers_504_with_headers() {
+    async fn overrunning_handler_answers_503_with_a_retry_after_and_headers() {
         let ep = edge(slow, Some(Duration::from_millis(20)), None, nosniff());
         let resp = TestClient::new(ep).get("/").send().await;
-        resp.assert_status(StatusCode::GATEWAY_TIMEOUT);
+        resp.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+        // Sub-second budgets round up to the smallest delay the header can
+        // state; `0` would read as "retry immediately".
+        resp.assert_header(poem::http::header::RETRY_AFTER, "1");
         resp.assert_header("x-content-type-options", "nosniff");
+    }
+
+    #[test]
+    fn the_retry_after_a_timeout_states_is_the_budget_that_ran_out() {
+        let value = |secs: u64, nanos: u32| {
+            timed_out(Duration::new(secs, nanos))
+                .headers()
+                .get(poem::http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        assert_eq!(value(30, 0).as_deref(), Some("30"));
+        assert_eq!(value(0, 500_000_000).as_deref(), Some("1"), "never zero");
+        assert_eq!(
+            value(30, 1).as_deref(),
+            Some("31"),
+            "rounded up — a client that waits less may collide with the attempt",
+        );
     }
 
     #[tokio::test]

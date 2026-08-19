@@ -57,8 +57,11 @@ nest-rs-guards = { path = "../nest-rs-guards", features = ["ws"] }
 # Snapshot-tests the macro compile diagnostics (tests/integration/diagnostics/).
 trybuild.workspace = true
 # A denial that fails closed but logs nothing passes every reply assertion —
-# `LogCapture` covers the other half of the dispatch contract.
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `LogCapture` covers the other half of the dispatch contract. `ws` adds the
+# socket driver: everything above `Gateway::dispatch` — the upgrade, the
+# resolved `WsConfig`, the lifetime ceiling, the writer task, the registry
+# entry's cleanup, the close frames — exists only inside a real connection.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["ws"] }
 
 [lints]
 workspace = true

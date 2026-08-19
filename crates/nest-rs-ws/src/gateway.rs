@@ -7,7 +7,7 @@ use nest_rs_core::{Container, RequestScope};
 use nest_rs_pipes::PipeError;
 use tracing::Instrument;
 
-use poem::web::websocket::{Message, WebSocket, WebSocketConfig};
+use poem::web::websocket::{CloseCode, Message, WebSocket, WebSocketConfig};
 use poem::{Endpoint, FromRequest, IntoResponse, Request, Response};
 
 use crate::WsReply;
@@ -237,12 +237,16 @@ async fn serve_connection<G: Gateway, N: 'static>(
     let (outbox, mut rx) =
         tokio::sync::mpsc::channel::<crate::server::Frame>(crate::server::OUTBOX_CAPACITY);
 
+    // The task hands the `Sink` back when the outbox closes: the connection's
+    // last act is a Close frame, and it has to be written *after* every reply
+    // already queued — which is exactly what "the writer has finished" means.
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
             if sink.send(Message::Text(frame.to_string())).await.is_err() {
                 break;
             }
         }
+        sink
     });
 
     let conn_id = server.connect(outbox.clone());
@@ -288,7 +292,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
         .max_lifetime
         .map(|ttl| Box::pin(tokio::time::sleep(ttl)));
 
-    loop {
+    let closure = loop {
         tokio::select! {
             // Deadline arm: armed only when a ceiling is configured — otherwise
             // a `pending()` future that never resolves, leaving the read loop
@@ -303,23 +307,32 @@ async fn serve_connection<G: Gateway, N: 'static>(
                 tracing::info!(
                     target: crate::TARGET,
                     conn_id,
+                    close_code = u16::from(CloseCode::Away),
                     "closing socket: max lifetime reached",
                 );
-                break;
+                break Closure::Server(CloseCode::Away, LIFETIME_REACHED);
             }
             message = stream.next() => {
-                let Some(message) = message else { break };
+                let Some(message) = message else { break Closure::PeerGone };
                 match message {
                     Ok(Message::Text(text)) => {
-                        // Belt-and-suspenders: the protocol-layer cap
-                        // (`WebSocketConfig`) already refuses oversize frames
-                        // while reading; this second check covers the boundary
-                        // exactly at the limit and keeps the reply symmetric.
+                        // The boundary case the protocol-layer cap lets through
+                        // (`WebSocketConfig` refuses *past* the limit while
+                        // reading, which is what bounds buffering — WS-I1). The
+                        // whole text is in hand, so framing is intact and the
+                        // socket survives: the client is answered in band, in
+                        // the envelope grammar it already parses. Its twin —
+                        // the same message class refused by the protocol layer —
+                        // arrives as a read error instead, with the framing gone
+                        // mid-message, and that one can only end the socket.
+                        // One class, two layers, and the answer follows what the
+                        // *connection* can still do rather than what the message
+                        // was.
                         if text.len() > limits.max_message_bytes {
                             let frame =
                                 refuse_oversize(conn_id, text.len(), limits.max_message_bytes);
                             if outbox.try_send(frame.into()).is_err() {
-                                break;
+                                break stalled_outbox(conn_id);
                             }
                             continue;
                         }
@@ -331,25 +344,45 @@ async fn serve_connection<G: Gateway, N: 'static>(
                             // A full outbox means the peer is not draining —
                             // disconnect it rather than buffer without bound.
                             if outbox.try_send(reply.into()).is_err() {
-                                break;
+                                break stalled_outbox(conn_id);
                             }
                         }
                     }
-                    Ok(Message::Close(_)) => break,
-                    Ok(_) => {}
+                    // RFC 6455 §5.6 makes Binary a first-class data frame; this
+                    // gateway's contract is a JSON text envelope, so it is
+                    // refused — and *said*, at both ends. Dropping it was the
+                    // one arm that answered nothing and logged nothing, which is
+                    // indistinguishable from a handler that hung. Framing is
+                    // intact, so the socket survives and the refusal travels in
+                    // band; §7.4.1's 1003 (a text-only endpoint **MAY** close on
+                    // a binary message) is the other conformant answer, and the
+                    // in-band one is taken for the same reason the oversize
+                    // boundary above takes it.
+                    Ok(Message::Binary(data)) => {
+                        let frame = refuse_binary(conn_id, data.len());
+                        if outbox.try_send(frame.into()).is_err() {
+                            break stalled_outbox(conn_id);
+                        }
+                    }
+                    Ok(Message::Close(_)) => break Closure::Echo,
+                    // Answered by the protocol layer itself — tungstenite queues
+                    // a Pong before a Ping ever reaches this loop — so there is
+                    // nothing here to do and nothing being dropped.
+                    Ok(Message::Ping(_) | Message::Pong(_)) => {}
                     Err(err) => {
                         tracing::debug!(
                             target: crate::TARGET,
                             conn_id,
                             error = %err,
+                            close_code = u16::from(CloseCode::Error),
                             "websocket read error",
                         );
-                        break;
+                        break Closure::Server(CloseCode::Error, READ_FAILED);
                     }
                 }
             }
         }
-    }
+    };
 
     // Fire `on_disconnect` while still registered, then drop the guard to
     // remove the entry. Dropping it *before* awaiting the writer releases the
@@ -371,16 +404,131 @@ async fn serve_connection<G: Gateway, N: 'static>(
     .await;
     drop(registry_guard);
     drop(outbox);
-    // A `JoinError` from the writer means it panicked (it is never aborted);
-    // surface that rather than swallow it. A normal cancellation carries none.
-    if let Err(err) = writer.await
-        && err.is_panic()
+    match writer.await {
+        // Every queued reply is on the wire and the `Sink` is back, so the
+        // Close frame lands last — the ordering §5.5.1 describes.
+        Ok(sink) => close_socket(sink, closure, conn_id).await,
+        // A `JoinError` from the writer means it panicked (it is never aborted);
+        // surface that rather than swallow it. A normal cancellation carries none.
+        Err(err) => {
+            if err.is_panic() {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    conn_id,
+                    error = %err,
+                    "writer task failed",
+                );
+            }
+            // The `Sink` went down with the task, so there is nothing left to
+            // close through and the peer reads 1006 — which is what §7.4.1
+            // defines a crashed endpoint to be.
+        }
+    }
+}
+
+/// The one server-initiated close that used to say nothing.
+///
+/// Its two siblings — the lifetime ceiling and the read error — each log with a
+/// `close_code`, and [`Closure`]'s own doc gives the reason: without it "a
+/// deliberate close indistinguishable from a broken pipe". A peer that stopped
+/// draining is exactly the case an operator needs told apart from a network
+/// fault, since it is the client's fault and it repeats.
+fn stalled_outbox(conn_id: u64) -> Closure {
+    tracing::warn!(
+        target: crate::TARGET,
+        conn_id,
+        close_code = u16::from(CloseCode::Policy),
+        "closing socket: the peer stopped draining and the outbox is full",
+    );
+    Closure::Server(CloseCode::Policy, OUTBOX_STALLED)
+}
+
+/// Why the socket is ending, and — when the server is the one ending it — the
+/// RFC 6455 §7.4.1 status code the peer is told it in.
+///
+/// Every server-initiated termination used to drop the `Sink`, so the peer read
+/// **1006 Abnormal Closure**, which §7.4.1 reserves for a connection "closed
+/// without sending or receiving a Close frame" — a network fault. That makes a
+/// deliberate close indistinguishable from a broken pipe, so a client retries
+/// identically against both and never learns what it has to do differently. For
+/// the socket-lifetime ceiling that difference is the whole point of the
+/// ceiling: what it asks for is a fresh upgrade, and with it a fresh authn/authz
+/// check (see [`WsConfig`](crate::WsConfig)).
+enum Closure {
+    /// The peer sent a Close, and §5.5.1 obliges the endpoint that *receives*
+    /// one to send one back. The protocol layer has already queued that echo —
+    /// tungstenite buffers the reply when it decodes the frame — so what this
+    /// arm owes is the flush that puts it on the wire, which nothing did while
+    /// the writer task simply dropped the `Sink`. Writing a second Close here
+    /// would be refused rather than merged (`SendAfterClosing`).
+    Echo,
+    /// The stream ended without a Close frame: the peer is already gone, so
+    /// there is nobody to tell and 1006 is the honest answer — §7.4.1 defines
+    /// that case as exactly this one.
+    PeerGone,
+    /// The server ended it, under the code §7.4.1 defines for the cause.
+    Server(CloseCode, &'static str),
+}
+
+/// §7.4.1 **1001 Going Away**, and not 1008 Policy Violation, which is the other
+/// candidate. 1008 is defined for an endpoint terminating "because it **has
+/// received a message** that violates its policy" — nothing the peer sent
+/// reaches this ceiling, a clock does, so 1008 would name a cause that did not
+/// happen. 1001 is the RFC's code for an endpoint that is deliberately ending a
+/// connection it will no longer serve, and it is the one a client answers by
+/// reconnecting — which is precisely the remedy: re-upgrade, and be
+/// re-authenticated on the way in.
+const LIFETIME_REACHED: &str = "connection lifetime reached, re-upgrade to continue";
+
+/// §7.4.1 **1008 Policy Violation** — its "generic status code … when there is
+/// no other more suitable" clause. A peer that will not drain a bounded outbox
+/// is shed rather than buffered without bound, which is a policy of this
+/// server's, not a fault of the connection's.
+const OUTBOX_STALLED: &str = "outbox full, the client is not draining its messages";
+
+/// §7.4.1 **1011 Internal Error** — "an unexpected condition that prevented it
+/// from fulfilling the request". The read failed and poem hands the cause on as
+/// an opaque [`std::io::Error`] (it stringifies every tungstenite variant that
+/// is not itself I/O), so the protocol-layer message cap — which surfaces
+/// *here*, as a read error — cannot be told apart from a framing fault. 1009
+/// would be the precise code for the first and a false statement about the
+/// second, and a code the peer cannot check is worse than the generic one.
+const READ_FAILED: &str = "the connection could not be read";
+
+/// Put the Close frame on the wire, then flush.
+///
+/// Both halves matter and neither substitutes for the other: the frame is what
+/// carries the §7.4.1 code, and the flush is what reaches the peer — including
+/// for [`Closure::Echo`], where the frame is the one the protocol layer queued
+/// on our behalf and nothing had ever driven out.
+///
+/// Best-effort by construction: a peer that has already gone cannot be told
+/// anything, so a failure here is `debug`, the level its siblings on the
+/// client-shaped paths use.
+async fn close_socket(
+    mut sink: futures_util::stream::SplitSink<poem::web::websocket::WebSocketStream, Message>,
+    closure: Closure,
+    conn_id: ConnId,
+) {
+    if let Closure::Server(code, reason) = closure
+        && let Err(err) = sink
+            .send(Message::Close(Some((code, reason.to_string()))))
+            .await
     {
-        tracing::warn!(
+        tracing::debug!(
             target: crate::TARGET,
             conn_id,
             error = %err,
-            "writer task failed",
+            "websocket close frame undelivered",
+        );
+        return;
+    }
+    if let Err(err) = SinkExt::close(&mut sink).await {
+        tracing::debug!(
+            target: crate::TARGET,
+            conn_id,
+            error = %err,
+            "websocket close handshake unfinished",
         );
     }
 }
@@ -406,6 +554,28 @@ fn refuse_oversize(conn_id: ConnId, bytes: usize, max_message_bytes: usize) -> S
     error_frame("error", &crate::WsError::new("message too large"))
 }
 
+/// Refuse a Binary frame, and say so.
+///
+/// RFC 6455 §5.6 makes Binary a first-class data frame, so a client is entitled
+/// to send one; this gateway's contract is a JSON text envelope, so it cannot
+/// route it. Refusing is right — refusing *silently* is what this arm did, and
+/// from the client's side a dropped frame and a handler that never answered are
+/// the same observation. `debug` rather than `warn`, for `refuse_oversize`'s
+/// reason: a frame in the wrong format is a client-shaped error, not a security
+/// denial.
+fn refuse_binary(conn_id: ConnId, bytes: usize) -> String {
+    tracing::debug!(
+        target: crate::TARGET,
+        conn_id,
+        bytes,
+        "websocket message refused: binary frames carry no envelope",
+    );
+    error_frame(
+        "error",
+        &crate::WsError::new("binary frames are not supported"),
+    )
+}
+
 /// Run one connection-lifecycle hook — `on_connect` / `on_disconnect` — under
 /// the connection's identity.
 ///
@@ -423,7 +593,9 @@ fn refuse_oversize(conn_id: ConnId, bytes: usize, max_message_bytes: usize) -> S
 /// `unit` is that same canonical name again, for the line. It is a parameter
 /// rather than the line's `name:` because `name:` is baked into the callsite's
 /// `static` metadata and cannot read one — the stated asymmetry of the two
-/// lifecycle lines, and the reason they are the only two of the eight without it.
+/// lifecycle lines, and the reason they are the only two of the eight without
+/// it. That is the *only* field of the family they lack: `outcome` is recorded
+/// like every sibling's, at the one value a hook can report.
 async fn under_connection<F: std::future::Future<Output = ()>>(
     connection: &nest_rs_core::Correlation,
     unit: &'static str,
@@ -442,6 +614,14 @@ async fn under_connection<F: std::future::Future<Output = ()>>(
             target: nest_rs_core::operation_log::TARGET,
             message = unit,
             conn_id,
+            // Always `ok`, and stated rather than omitted: a lifecycle hook
+            // returns `()`, so there is no failure signal for this line to
+            // report — a hook that panics unwinds the connection task and is the
+            // socket's own close, not this unit's outcome. `graphql.subscription`
+            // records the same constant for the same reason. Leaving it off
+            // instead was the one field of the family these two lines dropped,
+            // and a cross-edge `outcome != ok` query silently skipped them.
+            outcome = nest_rs_core::operation_log::OK,
             duration_ms = nest_rs_core::operation_log::duration_ms(started),
         );
     })
@@ -806,5 +986,37 @@ mod tests {
         .expect("an echo reply");
         assert!(frame.contains("hi"), "{frame}");
         logs.expect_none("nest_rs::ws", "websocket message denied by a guard");
+    }
+
+    /// The stalled-outbox close reports, like its two `Closure::Server`
+    /// siblings — without it a peer that stopped draining was indistinguishable
+    /// from a broken pipe, which is the state [`Closure`]'s own doc says the
+    /// close codes exist to end.
+    ///
+    /// **This pins the event, not the path.** Driving a real socket into a full
+    /// outbox needs a client that connects and never reads; what makes the two
+    /// agree here is that `stalled_outbox` is the only producer of
+    /// `Closure::Server(CloseCode::Policy, OUTBOX_STALLED)` and all three
+    /// `try_send` failures route through it.
+    #[test]
+    fn a_peer_that_stops_draining_is_closed_with_a_reason() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let closure = stalled_outbox(7);
+
+        assert!(matches!(
+            closure,
+            Closure::Server(CloseCode::Policy, OUTBOX_STALLED)
+        ));
+        let event = logs.expect_one(
+            crate::TARGET,
+            "closing socket: the peer stopped draining and the outbox is full",
+        );
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("conn_id").as_deref(), Some("7"));
+        assert_eq!(
+            event.field("close_code").as_deref(),
+            Some(u16::from(CloseCode::Policy).to_string().as_str()),
+            "the code the peer is actually sent, per RFC 6455 §7.4.1",
+        );
     }
 }

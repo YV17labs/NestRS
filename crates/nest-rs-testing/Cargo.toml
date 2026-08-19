@@ -19,6 +19,11 @@ orm = ["dep:sea-orm", "dep:sea-orm-migration"]
 # The graphql-ws subscription driver (`TestApp::graphql_socket`). Gated because a
 # headless app's suite should not link a GraphQL schema to assert on a queue.
 graphql = ["dep:nest-rs-graphql", "dep:async-graphql"]
+# The WebSocket driver (`TestAppBuilder::build_ws`). Gated for `graphql`'s
+# reason and one more: this is the only driver that binds a real port, so a
+# suite that never opens a socket should not link a client or turn poem's
+# non-default `websocket` feature on for the whole build.
+ws = ["dep:tokio-tungstenite", "dep:futures-util", "poem/websocket"]
 
 [dependencies]
 nest-rs-core.workspace = true
@@ -53,6 +58,13 @@ serde_json.workspace = true
 # event, a warning filed under the wrong target).
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Behind `ws`: a real WebSocket client. The upgrade, the lifetime ceiling and
+# the writer task only exist above a socket, so unlike `GraphqlSocket` — which
+# runs the protocol engine in process — this driver has to bind one. Already in
+# the graph as poem's own websocket backend, so the feature adds no new crate.
+tokio-tungstenite = { workspace = true, optional = true }
+# `SinkExt`/`StreamExt` to drive that client.
+futures-util = { workspace = true, optional = true }
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }

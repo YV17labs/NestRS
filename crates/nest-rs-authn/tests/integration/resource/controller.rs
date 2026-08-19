@@ -280,7 +280,7 @@ async fn a_deployment_that_cannot_name_itself_fails_boot() {
 
     let err = boot_error::<Incomplete>("an unnamed resource must not boot").await;
     assert!(
-        format!("{err:#}").contains("NESTRS_AUTHN__RESOURCE"),
+        format!("{err:#}").contains(&nest_rs_config::var_name("authn", "RESOURCE")),
         "the boot failure must name the variable: {err:#}",
     );
 }
@@ -298,5 +298,8 @@ async fn an_unbound_audience_fails_boot() {
 
     let err = boot_error::<Unbound>("an unbound audience must not boot").await;
     let text = format!("{err:#}");
-    assert!(text.contains("NESTRS_AUTHN__AUDIENCE"), "got: {text}");
+    assert!(
+        text.contains(&nest_rs_config::var_name("authn", "AUDIENCE")),
+        "got: {text}",
+    );
 }

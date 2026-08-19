@@ -1,0 +1,20 @@
+# Framework variables spelled as a literal where they must be built.
+#
+# **Empty, and that is the state to keep.** The rule is a hard "no" in
+# `CLAUDE.md` and had no join, so it was held by discipline alone: under
+# `NESTRS_ENV_PREFIX=ACME` seventy tests across fifteen crates failed, and the
+# ones that did not fail passed by asserting a name nobody sets. The production
+# code was clean throughout — every error message named its variable correctly —
+# so all of it was suites checking a spelling the framework had already stopped
+# using.
+#
+# What made the wrong thing easy was `ConfigService::with_vars` taking
+# fully-qualified names: the caller re-performed a join the reader owns, and the
+# shorter spelling was the wrong one. It takes the bare `<KEY>` now, so a fixture
+# cannot mean something the reader does not.
+#
+# Three exclusions, each stated in the join rather than here: the CLI (links no
+# `nest-rs-*` crate, so its mirror is forced), the templates and diagnostics
+# fixtures (the generated project's source, with its own scan), and
+# `tests/integration/env_prefix.rs` — the one suite whose subject *is* the
+# prefix, which must write the old name to prove it inert.

@@ -341,12 +341,12 @@ fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
         "a subscription socket is bounded unless the deployment says otherwise",
     );
 
-    let env = ConfigService::with_vars("graphql", [("NESTRS_GRAPHQL__MAX_CONNECTION_SECS", "0")]);
+    let env = ConfigService::with_vars("graphql", [("MAX_CONNECTION_SECS", "0")]);
     let disabled = GraphqlConfig::from_env(&env, GraphqlConfig::default())
         .expect("`0` is the unlimited sentinel, not an error");
     assert_eq!(disabled.max_connection, None);
 
-    let env = ConfigService::with_vars("graphql", [("NESTRS_GRAPHQL__MAX_CONNECTION_SECS", "30")]);
+    let env = ConfigService::with_vars("graphql", [("MAX_CONNECTION_SECS", "30")]);
     let pinned = GraphqlConfig::from_env(&env, GraphqlConfig::default())
         .expect("a whole-second ceiling resolves");
     assert_eq!(pinned.max_connection, Some(Duration::from_secs(30)));

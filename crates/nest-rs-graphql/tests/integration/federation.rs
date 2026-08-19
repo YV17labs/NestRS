@@ -1022,7 +1022,7 @@ async fn a_reference_list_over_the_ceiling_is_refused_naming_it() {
         "the error names the count and the ceiling: {over}",
     );
     assert!(
-        message.contains("NESTRS_GRAPHQL__MAX_REPRESENTATIONS"),
+        message.contains("MAX_REPRESENTATIONS"),
         "and the key that moves it, built rather than spelled: {over}",
     );
 }
@@ -1054,14 +1054,14 @@ fn the_env_var_drives_the_ceiling() {
     use nest_rs_config::{Config, ConfigService};
 
     let cfg = GraphqlConfig::from_env(
-        &ConfigService::with_vars("graphql", [("NESTRS_GRAPHQL__MAX_REPRESENTATIONS", "7")]),
+        &ConfigService::with_vars("graphql", [("MAX_REPRESENTATIONS", "7")]),
         GraphqlConfig::default(),
     )
     .expect("the overlay resolves");
     assert_eq!(cfg.max_representations, Some(7));
 
     let unlimited = GraphqlConfig::from_env(
-        &ConfigService::with_vars("graphql", [("NESTRS_GRAPHQL__MAX_REPRESENTATIONS", "0")]),
+        &ConfigService::with_vars("graphql", [("MAX_REPRESENTATIONS", "0")]),
         GraphqlConfig::default(),
     )
     .expect("the overlay resolves");

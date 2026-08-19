@@ -183,7 +183,7 @@ fn global_prefix_is_picked_up_from_nestrs_http_global_prefix_env() {
     // sync (it scopes env to one thread) so the tokio runtime is opened
     // *inside* the closure.
     figment::Jail::expect_with(|jail| {
-        jail.set_env("NESTRS_HTTP__GLOBAL_PREFIX", "/api");
+        jail.set_env(nest_rs_config::var_name("http", "GLOBAL_PREFIX"), "/api");
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async {
             let client = boot_with_env_config().await;

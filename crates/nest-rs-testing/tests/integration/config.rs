@@ -3,6 +3,7 @@
 //! the dual-path rule the framework promises — verify a config **pinned in
 //! code** still lets the environment override it **per field**.
 
+use nest_rs_config::var_name;
 use std::sync::Arc;
 
 use nest_rs_config::{Config, ConfigModule, ConfigService, MapSource, config};
@@ -66,8 +67,8 @@ fn from_env_maps_each_namespaced_var_from_its_source() {
     let service = ConfigService::with_source(
         "demoapp",
         Arc::new(MapSource::from_iter([
-            ("NESTRS_DEMOAPP__URL", "postgres://from-env/app"),
-            ("NESTRS_DEMOAPP__MAX_CONNECTIONS", "7"),
+            (var_name("demoapp", "URL"), "postgres://from-env/app"),
+            (var_name("demoapp", "MAX_CONNECTIONS"), "7"),
         ])),
     );
     let cfg = DemoConfig::from_env(&service, Default::default()).expect("reads from the source");
@@ -152,7 +153,7 @@ fn a_pinned_config_still_lets_the_environment_override_each_field() {
     // already be running one).
     let mut seen: Option<(String, u32)> = None;
     figment::Jail::expect_with(|jail| {
-        jail.set_env("NESTRS_DEMOAPP__URL", "postgres://from-deployment/app");
+        jail.set_env(var_name("demoapp", "URL"), "postgres://from-deployment/app");
         seen = Some(
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()

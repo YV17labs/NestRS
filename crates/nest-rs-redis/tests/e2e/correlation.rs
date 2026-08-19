@@ -33,9 +33,17 @@ struct Observed {
     actor_id: Option<String>,
 }
 
-/// A process-wide static because the container owns the provider and the
-/// assertion runs outside it.
-static SEEN: Mutex<Option<Observed>> = Mutex::new(None);
+/// What each job reported, keyed by the `seq` it carried.
+///
+/// A map rather than one slot, and the queue is the reason: its name is a
+/// compile-time literal, so every run of this test shares one Redis queue with
+/// every run before it — including runs that were killed mid-job and left work
+/// in `:active`. A single slot recorded whichever job the consumer happened to
+/// reach first, which on a dirty queue is a *previous* run's, carrying that
+/// run's trace and this run's actor (the literal is the same every time). The
+/// result was a failure that read exactly like a broken propagation and was
+/// not one.
+static SEEN: Mutex<Vec<(usize, Observed)>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraceCommand {
@@ -54,12 +62,17 @@ impl CorrelationProcessor {
     /// Reports the ambient id rather than asserting on it: the handler body is
     /// the only place that can answer what the consumer installed.
     #[process(queue = CorrelationQueue, retries = 0)]
-    async fn record(&self, _job: TraceCommand) -> anyhow::Result<()> {
-        *SEEN.lock().expect("probe lock") = nest_rs_core::current_trace_id().map(|id| Observed {
-            trace_id: id.to_hex(),
-            span_id: nest_rs_core::current_span_id().map(|span| span.to_hex()),
-            actor_id: nest_rs_core::current_actor_id(),
-        });
+    async fn record(&self, job: TraceCommand) -> anyhow::Result<()> {
+        if let Some(id) = nest_rs_core::current_trace_id() {
+            SEEN.lock().expect("probe lock").push((
+                job.seq,
+                Observed {
+                    trace_id: id.to_hex(),
+                    span_id: nest_rs_core::current_span_id().map(|span| span.to_hex()),
+                    actor_id: nest_rs_core::current_actor_id(),
+                },
+            ));
+        }
         Ok(())
     }
 }
@@ -69,7 +82,7 @@ impl CorrelationProcessor {
 /// suite would fail on connect instead of measuring anything.
 fn queue_config() -> QueueConfig {
     QueueConfig {
-        url: std::env::var("NESTRS_QUEUE__URL")
+        url: std::env::var(nest_rs_config::var_name("queue", "URL"))
             .unwrap_or_else(|_| "redis://redis:6379".to_string()),
         ..Default::default()
     }
@@ -100,29 +113,38 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
         .await
         .expect("connect");
     let correlation = nest_rs_core::Correlation::mint();
-    nest_rs_core::with_request_scope(None, correlation.clone(), None, async {
+    // This run's own marker, so a job left behind by an earlier run cannot be
+    // mistaken for it — see `SEEN`.
+    let seq = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock after 1970")
+        .subsec_nanos() as usize;
+    nest_rs_core::with_request_scope(None, correlation.clone(), async {
         // Exactly what an authenticated HTTP handler's guard did before it
         // reached the service that enqueues.
         nest_rs_core::set_actor_id("alice-42");
-        conn.push_to::<CorrelationQueue>(TraceCommand { seq: 0 })
+        conn.push_to::<CorrelationQueue>(TraceCommand { seq })
             .await
             .expect("enqueue");
     })
     .await;
 
+    let observed = |seq: usize| {
+        SEEN.lock()
+            .expect("probe lock")
+            .iter()
+            .find(|(s, _)| *s == seq)
+            .map(|(_, o)| o.clone())
+    };
     for _ in 0..100 {
-        if SEEN.lock().expect("probe lock").is_some() {
+        if observed(seq).is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     worker.shutdown().await.expect("clean shutdown");
 
-    let seen = SEEN
-        .lock()
-        .expect("probe lock")
-        .clone()
-        .expect("the job ran and reported what it was running under");
+    let seen = observed(seq).expect("the job ran and reported what it was running under");
 
     assert_eq!(
         seen.trace_id,

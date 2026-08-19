@@ -1,7 +1,9 @@
 //! `nestrs g resource` — the CRUD slice, its guarded HTTP form, and the columns
 //! it has to declare in lockstep with `g migration`.
 
-use crate::harness::{run_ok, write_fake_app, write_fake_migrations_crate, write_fake_workspace};
+use crate::harness::{
+    run_ok, scaffolded_var, write_fake_app, write_fake_migrations_crate, write_fake_workspace,
+};
 use std::fs;
 
 #[test]
@@ -96,7 +98,11 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
     assert!(src.join("identity/claims.rs").is_file());
 
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
-    assert!(env.contains("NESTRS_AUTHN__SECRET"));
+    // Built through the CLI's own mirror, never spelled: the generator writes
+    // the name under whatever `NESTRS_ENV_PREFIX` the process declares, so a
+    // literal here asserts the default prefix rather than the generator.
+    let secret = scaffolded_var("authn", "SECRET");
+    assert!(env.contains(&secret), "the .env must name {secret}: {env}");
 }
 
 // Same obligation on the bootstrap path: `g resource` scaffolds the adapter when

@@ -351,13 +351,43 @@ impl Parse for ProviderBinding {
 impl Parse for ModuleArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut args = ModuleArgs::default();
+        let mut seen: Vec<String> = Vec::new();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
-            input.parse::<Token![=]>()?;
+            // Judged **before** the value shape is parsed. Reading `= [` first
+            // meant the shared unknown-key sentence was reachable only when the
+            // wrong key happened to take a bracketed value: `#[module(exports =
+            // [Foo])]` named the key, `#[module(porviders = Foo)]` answered
+            // `expected square brackets` — and the snapshot pinned the reachable
+            // half, so the join read green over a refusal that fired on one
+            // value shape.
+            let name = key.to_string();
+            if !matches!(name.as_str(), "imports" | "providers") {
+                return Err(syn::Error::new(
+                    key.span(),
+                    nest_rs_codegen::unknown_argument("module", &name, &["imports", "providers"]),
+                ));
+            }
+            // Refused rather than merged. The repeat is legible here — two
+            // `providers = [...]` lists concatenate — so nothing is *dropped*,
+            // which is why `duplicate_argument`'s own reasoning does not apply
+            // verbatim. What applies is that every other member of the
+            // `key = value` family refuses it, and a grammar the framework
+            // interprets accepting a spelling its siblings reject is the
+            // asymmetry a shared sentence exists to remove: one list is what a
+            // reader can see whole.
+            nest_rs_codegen::once(seen.contains(&name), &key, "module", &name)?;
+            seen.push(name.clone());
+            if input.parse::<Token![=]>().is_err() {
+                return Err(syn::Error::new(
+                    key.span(),
+                    nest_rs_codegen::needs_a_value("module", &name),
+                ));
+            }
             let content;
             bracketed!(content in input);
 
-            match key.to_string().as_str() {
+            match name.as_str() {
                 "imports" => {
                     let exprs: Punctuated<Expr, Token![,]> =
                         Punctuated::parse_terminated(&content)?;
@@ -368,14 +398,10 @@ impl Parse for ModuleArgs {
                         Punctuated::parse_terminated(&content)?;
                     args.providers.extend(bindings);
                 }
-                other => {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        format!(
-                            "unknown #[module] key `{other}` (expected `imports` or `providers`)"
-                        ),
-                    ));
-                }
+                // Unreachable: the key was judged above, before anything read
+                // the value. Kept as an exhaustive arm rather than a wildcard so
+                // adding a key here without adding it there does not compile.
+                other => unreachable!("`{other}` was refused before the value was read"),
             }
 
             if !input.is_empty() {

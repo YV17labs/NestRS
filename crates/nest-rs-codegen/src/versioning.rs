@@ -54,7 +54,7 @@ pub fn is_valid_version(raw: &str) -> bool {
 /// Parse a declared version, in either accepted spelling: `version = "1"` or
 /// `version = ["1", "2"]`.
 ///
-/// `#[controller]`, `#[version]` and `#[gateway]` all come through here, so the two cannot
+/// `#[controller]`, `#[version]` and `#[gateway]` all come through here, so the three cannot
 /// word "what a version may look like" differently — and it is worth stating
 /// once, because a declared version is spliced straight into a URL path.
 ///
@@ -64,13 +64,16 @@ pub fn is_valid_version(raw: &str) -> bool {
 /// mounting `/va%2Fb/posts`; what it adds beyond the grammar is the list shape
 /// and the duplicate check.
 pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitStr>> {
+    // `decorator` arrives as `"#[controller]"`; the shared sentence brackets the
+    // name itself, so it is handed the bare word.
+    let attr = decorator.trim_start_matches("#[").trim_end_matches(']');
     let literals = match value {
         Expr::Array(array) => array
             .elems
             .iter()
-            .map(crate::attrs::expr_str)
+            .map(|elem| crate::args::require_str_lit(elem, attr, "version", "1"))
             .collect::<syn::Result<Vec<_>>>()?,
-        other => vec![crate::attrs::expr_str(other)?],
+        other => vec![crate::args::require_str_lit(other, attr, "version", "1")?],
     };
     if literals.is_empty() {
         return Err(syn::Error::new_spanned(

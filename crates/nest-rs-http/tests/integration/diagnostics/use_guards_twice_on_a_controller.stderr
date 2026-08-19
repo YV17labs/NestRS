@@ -1,0 +1,5 @@
+error: at most one `#[use_guards(...)]` is allowed; list every guard in it
+  --> tests/integration/diagnostics/use_guards_twice_on_a_controller.rs:15:1
+   |
+15 | #[use_guards(FirstGuard)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^

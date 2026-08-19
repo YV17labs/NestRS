@@ -81,9 +81,12 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         if method.sig.asyncness.is_none() {
-            return syn::Error::new_spanned(&method.sig, "#[on_event] methods must be `async fn`")
-                .to_compile_error()
-                .into();
+            return syn::Error::new_spanned(
+                &method.sig,
+                nest_rs_codegen::must_be_async("#[on_event]"),
+            )
+            .to_compile_error()
+            .into();
         }
 
         if !matches!(method.sig.output, ReturnType::Default) {

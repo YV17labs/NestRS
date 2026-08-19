@@ -14,8 +14,9 @@
 //! ```ignore
 //! const POSTURE: PostureRules = PostureRules {
 //!     operation: "#[subscribe_message]",
+//!     transport: "WebSockets",
 //!     public_means: "no gate and no mask — the guards bound beside it still run",
-//!     bind_unsupported: "`bind = Service` is not available on WebSockets — …",
+//!     bind_unsupported_because: "a message takes one payload value, not the …",
 //! };
 //!
 //! let posture = POSTURE.take(method)?;
@@ -30,6 +31,46 @@ use syn::punctuated::Punctuated;
 use syn::{ImplItemFn, Meta, Path, Token};
 
 use crate::attrs::take_flag_attr;
+
+/// The sentence every site prints for a second `#[authorize(...)]`.
+///
+/// One rule, one wording, `site` apart — it was worded three times and one of
+/// the three said "per route" where the others said "per operation", which is
+/// the drift a shared sentence exists to stop rather than a difference anyone
+/// decided.
+pub fn at_most_one_authorize(site: &str) -> String {
+    format!("at most one `#[authorize(...)]` per {site}")
+}
+
+/// Why `id_arg` cannot be expressed anywhere but GraphQL.
+///
+/// One constant rather than a per-site `because`, because the fact is not the
+/// site's: `id_arg` renames the argument **GraphQL's `bind` synthesises**, so a
+/// transport without `bind` has nothing for it to rename. A site that grows a
+/// binding of its own gets its own sentence then, not before.
+pub const ID_ARG_UNSUPPORTED_BECAUSE: &str = "it renames the argument GraphQL's `bind = Service` synthesises, and no other \
+     transport synthesises one";
+
+/// The sentence a site prints for an `#[authorize(...)]` key it cannot express.
+///
+/// **One helper for all three keys**, because `CLAUDE.md` says so in the
+/// sentence this replaces two functions with: *"Refusals are shared, not per
+/// key. One helper, one sentence, every key it covers, one trybuild snapshot
+/// per site. Per-key refusals multiply with the matrix, and what multiplies is
+/// what gets skipped."* There were two — `unmasked_unsupported` and
+/// `bind_unsupported`, each with its key baked into its `format!` — and the
+/// third key, `id_arg`, got neither. It was refused at exactly one of the three
+/// sites that cannot express it, through `bind_unsupported`, which printed
+/// *"`bind = Service` is not available on HTTP — and neither is `id_arg`…"* to a
+/// developer who had never written `bind`. The `because` slot was carrying a
+/// subject the template had already fixed.
+///
+/// `key` is spelled **as the grammar spells it** — `unmasked`, `bind = Service`,
+/// `id_arg = argument` — so one sentence serves a bare flag and a `key = value`
+/// alike.
+pub fn posture_key_unsupported(key: &str, site: &str, because: &str) -> String {
+    format!("`{key}` is not available on {site} — {because}")
+}
 
 /// What an operation declared about who may call it.
 pub enum Posture {
@@ -66,13 +107,17 @@ impl Posture {
 pub struct PostureRules {
     /// The operation attribute as written — `"#[tool]"`, `"#[subscribe_message]"`.
     pub operation: &'static str,
+    /// The transport as an operator reads it — `"MCP"`, `"WebSockets"`. Spliced
+    /// into the shared refusals so the sentence names where it is refused.
+    pub transport: &'static str,
     /// What `#[public]` means on this transport, spliced into the
     /// mandatory-posture refusal so the developer reads the actual alternative
     /// rather than a generic one.
     pub public_means: &'static str,
-    /// What to say when `bind = Service` is written on a transport that cannot
-    /// express it. Stated rather than silently parsed and ignored.
-    pub bind_unsupported: &'static str,
+    /// Why `bind = Service` cannot be expressed here — the half after the dash;
+    /// [`posture_key_unsupported`] words the rest. Stated rather than silently parsed
+    /// and ignored.
+    pub bind_unsupported_because: &'static str,
 }
 
 impl PostureRules {
@@ -83,7 +128,7 @@ impl PostureRules {
     /// the whole reason this returns `Posture` rather than `Option<Posture>`.
     pub fn take(&self, method: &mut ImplItemFn) -> syn::Result<Posture> {
         let spec = self.take_authorize(method)?;
-        let public = take_flag_attr(&mut method.attrs, "public");
+        let public = take_flag_attr(&mut method.attrs, "public")?;
         match (spec, public) {
             (Some(_), true) => Err(syn::Error::new_spanned(
                 &method.sig.ident,
@@ -120,7 +165,7 @@ impl PostureRules {
         if method.attrs.iter().any(|a| a.path().is_ident("authorize")) {
             return Err(syn::Error::new_spanned(
                 &attr,
-                "at most one `#[authorize(...)]` per operation",
+                at_most_one_authorize("operation"),
             ));
         }
 
@@ -141,8 +186,29 @@ impl PostureRules {
             match meta {
                 Meta::Path(path) if path.is_ident("unmasked") => unmasked = true,
                 Meta::Path(path) => positional.push(path.clone()),
+                // **Both of GraphQL's keys, by name.** `bind` was refused here
+                // and `id_arg` fell through to `malformed()`, which names the
+                // grammar and not the key — the silence the whole family exists
+                // to close, at the two sites that had no snapshot to notice.
                 Meta::NameValue(value) if value.path.is_ident("bind") => {
-                    return Err(syn::Error::new_spanned(value, self.bind_unsupported));
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        posture_key_unsupported(
+                            "bind = Service",
+                            self.transport,
+                            self.bind_unsupported_because,
+                        ),
+                    ));
+                }
+                Meta::NameValue(value) if value.path.is_ident("id_arg") => {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        posture_key_unsupported(
+                            "id_arg = argument",
+                            self.transport,
+                            ID_ARG_UNSUPPORTED_BECAUSE,
+                        ),
+                    ));
                 }
                 other => return Err(syn::Error::new_spanned(other, malformed())),
             }
@@ -166,8 +232,9 @@ mod tests {
 
     const RULES: PostureRules = PostureRules {
         operation: "#[subscribe_message]",
+        transport: "WebSockets",
         public_means: "no gate and no mask",
-        bind_unsupported: "`bind = Service` is not available here",
+        bind_unsupported_because: "a message takes one payload value",
     };
 
     fn method(tokens: proc_macro2::TokenStream) -> ImplItemFn {

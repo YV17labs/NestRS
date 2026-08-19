@@ -1,0 +1,5 @@
+error: at most one `#[authorize(...)]` per route
+  --> tests/integration/diagnostics/authorize_twice_on_a_route.rs:22:5
+   |
+22 |     #[authorize(Read, users::Entity)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

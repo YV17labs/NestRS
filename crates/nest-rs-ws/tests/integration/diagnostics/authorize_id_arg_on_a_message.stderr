@@ -1,0 +1,5 @@
+error: `id_arg = argument` is not available on WebSockets — it renames the argument GraphQL's `bind = Service` synthesises, and no other transport synthesises one
+  --> tests/integration/diagnostics/authorize_id_arg_on_a_message.rs:24:25
+   |
+24 |     #[authorize(Update, id_arg = subject_id)]
+   |                         ^^^^^^^^^^^^^^^^^^^

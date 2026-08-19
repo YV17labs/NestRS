@@ -29,10 +29,10 @@ const POSTURE: PostureRules = PostureRules {
     public_means: "no gate and no mask — the guards bound on the gateway and beside \
                    the message still run, and the connection's upgrade already \
                    authenticated it",
-    bind_unsupported: "`bind = Service` is not available on WebSockets — a message takes one \
-                       payload value, not the named id argument the binding reads. Keep \
-                       `#[authorize(Action, Entity)]` and load the subject in the body with \
-                       the service's `access`",
+    transport: "WebSockets",
+    bind_unsupported_because: "a message takes one payload value, not the named id argument \
+                               the binding reads. Keep `#[authorize(Action, Entity)]` and load \
+                               the subject in the body with the service's `access`",
 };
 
 /// Split a `#[subscribe_message]` payload argument into (type to deserialize
@@ -86,14 +86,22 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        if take_flag_attr(&mut method.attrs, "on_connect") {
+        let is_on_connect = match take_flag_attr(&mut method.attrs, "on_connect") {
+            Ok(flag) => flag,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        if is_on_connect {
             on_connect = Some(match hook_override("on_connect", method) {
                 Ok(tokens) => tokens,
                 Err(err) => return err.to_compile_error().into(),
             });
             continue;
         }
-        if take_flag_attr(&mut method.attrs, "on_disconnect") {
+        let is_on_disconnect = match take_flag_attr(&mut method.attrs, "on_disconnect") {
+            Ok(flag) => flag,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        if is_on_disconnect {
             on_disconnect = Some(match hook_override("on_disconnect", method) {
                 Ok(tokens) => tokens,
                 Err(err) => return err.to_compile_error().into(),
@@ -116,14 +124,14 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
         };
         event_names.push(event.clone());
 
-        if let Err(err) = reject_http_only_layers(&method.attrs, "WebSockets", "gateway") {
+        if let Err(err) = reject_http_only_layers(&method.attrs, "WebSockets", "message") {
             return err.to_compile_error().into();
         }
-        let guards = match take_path_list(&mut method.attrs, "use_guards", "entry") {
+        let guards = match take_path_list(&mut method.attrs, "use_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        let force_guards = match take_path_list(&mut method.attrs, "force_guards", "entry") {
+        let force_guards = match take_path_list(&mut method.attrs, "force_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
@@ -402,7 +410,7 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
                             let __path = <#self_ty>::__nestrs_mount_path();
                             #(
                                 ::nest_rs_ws::tracing::info!(
-                                    target: ::nest_rs_http::target::ROUTES,
+                                    target: ::nest_rs_ws::target::ROUTES,
                                     gateway = #gateway_name,
                                     path = __path.as_str(),
                                     event = #event_names,

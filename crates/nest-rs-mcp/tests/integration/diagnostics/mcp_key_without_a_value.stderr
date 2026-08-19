@@ -1,0 +1,5 @@
+error: #[mcp] `path` needs a value — write `path = ...`
+ --> tests/integration/diagnostics/mcp_key_without_a_value.rs:8:7
+  |
+8 | #[mcp(path)]
+  |       ^^^^

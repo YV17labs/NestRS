@@ -1,0 +1,5 @@
+error: `unmasked` is not available on HTTP — there is no value-level mask here to switch off. A route's response is shaped by a `RouteResponseShaper` the compiler arms from the *type* of the posture parameter `#[authorize]` emits, so what a body carries is decided by which extractor the handler declares
+  --> tests/integration/diagnostics/authorize_unmasked_on_http.rs:24:38
+   |
+24 |     #[authorize(Read, users::Entity, unmasked)]
+   |                                      ^^^^^^^^

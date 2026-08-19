@@ -1,0 +1,5 @@
+error: #[wire_enum] takes at most one `graphql`
+ --> tests/integration/diagnostics/wire_enum_duplicate_argument.rs:8:22
+  |
+8 | #[wire_enum(graphql, graphql)]
+  |                      ^^^^^^^

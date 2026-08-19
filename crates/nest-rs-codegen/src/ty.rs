@@ -164,6 +164,23 @@ pub fn nth_generic_type<'a>(ty: &'a Type, name: &str, idx: usize) -> Option<&'a 
         .nth(idx)
 }
 
+/// The sentence an orchestrator prints for a method that is not `async`.
+///
+/// The clause left behind when [`payload_arg_type`] merged this family's
+/// *argument* refusal: `#[hooks]`, `#[on_event]` and `#[indicators]` impose the
+/// identical rule and worded it three times, one noun apart. `decorator` is the
+/// attribute the reader actually wrote — the block for `#[hooks]` and
+/// `#[indicators]`, the method's own for `#[on_event]` — because that is what
+/// tells them where to look, and the sentence is what may not drift.
+///
+/// GraphQL's `#[entity]` and `#[subscription]` deliberately word their own: each
+/// carries the *reason* asyncness is required there (a router resolving a
+/// reference, a stream awaited once), which is a different sentence rather than
+/// this one spelled differently.
+pub fn must_be_async(decorator: &str) -> String {
+    format!("{decorator} methods must be `async fn`")
+}
+
 /// The single payload argument of an orchestrator method: `&self` receiver,
 /// then exactly one typed parameter.
 ///
@@ -222,12 +239,3 @@ pub fn payload_arg_type(
         )),
     }
 }
-
-/// The shared **message** for the edge rule "a resource id is a UUID v7".
-///
-/// The rule is one edge decision, but each transport rejects in its own error
-/// type — so what is genuinely shared is the wording, and that is what had
-/// drifted (`"path id must be a UUID v7"` on HTTP against `"id must be a UUID
-/// v7"` on GraphQL, for the same rejection). Each `#[crud]` builds its own
-/// `return Err(...)` around this constant.
-pub const UUID_V7_REQUIRED: &str = "id must be a UUID v7";

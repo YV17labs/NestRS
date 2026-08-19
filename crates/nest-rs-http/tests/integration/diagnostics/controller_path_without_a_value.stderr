@@ -1,0 +1,5 @@
+error: #[controller] `path` needs a value — write `path = ...`
+  --> tests/integration/diagnostics/controller_path_without_a_value.rs:13:14
+   |
+13 | #[controller(path)]
+   |              ^^^^

@@ -1,0 +1,5 @@
+error: `bind = Service` is not available on WebSockets — a message takes one payload value, not the named id argument the binding reads. Keep `#[authorize(Action, Entity)]` and load the subject in the body with the service's `access`
+  --> tests/integration/diagnostics/authorize_bind_on_a_message.rs:23:25
+   |
+23 |     #[authorize(Update, bind = ChatService)]
+   |                         ^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: #[module] takes at most one `providers`
+  --> tests/integration/diagnostics/module_duplicate_argument.rs:19:27
+   |
+19 | #[module(providers = [A], providers = [B])]
+   |                           ^^^^^^^^^

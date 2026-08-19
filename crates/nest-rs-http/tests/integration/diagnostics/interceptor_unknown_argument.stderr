@@ -1,0 +1,5 @@
+error: unknown #[interceptor] argument `order`; expected `priority`
+ --> tests/integration/diagnostics/interceptor_unknown_argument.rs:8:15
+  |
+8 | #[interceptor(order = 100)]
+  |               ^^^^^

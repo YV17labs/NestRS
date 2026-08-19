@@ -80,7 +80,7 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
         if method.sig.asyncness.is_none() {
             return syn::Error::new_spanned(
                 &method.sig,
-                "#[indicators] methods must be `async fn`",
+                nest_rs_codegen::must_be_async("#[indicators]"),
             )
             .to_compile_error()
             .into();

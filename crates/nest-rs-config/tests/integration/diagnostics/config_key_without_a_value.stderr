@@ -1,0 +1,5 @@
+error: #[config] `namespace` needs a value — write `namespace = ...`
+ --> tests/integration/diagnostics/config_key_without_a_value.rs:8:10
+  |
+8 | #[config(namespace)]
+  |          ^^^^^^^^^

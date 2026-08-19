@@ -1,8 +1,9 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::{ParseStream, Parser};
-use syn::{Ident, Token};
+use syn::parse::Parser;
+use syn::punctuated::Punctuated;
+use syn::{Expr, Meta, Token};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
@@ -139,31 +140,66 @@ enum InjectableScope {
 
 /// Parse `#[injectable(scope = singleton|request|transient)]`. Empty defaults
 /// to [`InjectableScope::Singleton`].
+///
+/// **Three cases used to reach syn rather than a sentence**, on the most-written
+/// decorator in either workspace — the struct half of all five `on_provider`
+/// pairs. `#[injectable(scope)]` died on `` expected `=` ``, which
+/// [`nest_rs_codegen::needs_a_value`] exists to replace ("a bare `expected `=``
+/// names the grammar and not the key"); and a duplicate or trailing argument
+/// died on `Parser::parse2`'s full-consumption requirement with "unexpected
+/// token", naming neither. Only the unknown-*value* case had a refusal, and it
+/// is the one that had a snapshot.
 fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
     if args.is_empty() {
         return Ok(InjectableScope::Singleton);
     }
-    let parser = |input: ParseStream| -> syn::Result<InjectableScope> {
-        let key: Ident = input.parse()?;
-        if key != "scope" {
-            return Err(syn::Error::new(
-                key.span(),
-                "expected `scope = singleton`, `scope = request`, or `scope = transient`",
+    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
+    let mut scope: Option<InjectableScope> = None;
+    for meta in &metas {
+        let Meta::NameValue(nv) = meta else {
+            return Err(nest_rs_codegen::unmatched_meta(
+                "injectable",
+                meta,
+                &["scope"],
+            ));
+        };
+        if !nv.path.is_ident("scope") {
+            return Err(nest_rs_codegen::unmatched_meta(
+                "injectable",
+                meta,
+                &["scope"],
             ));
         }
-        input.parse::<Token![=]>()?;
-        let value: Ident = input.parse()?;
-        match value.to_string().as_str() {
-            "singleton" => Ok(InjectableScope::Singleton),
-            "request" => Ok(InjectableScope::Request),
-            "transient" => Ok(InjectableScope::Transient),
-            other => Err(syn::Error::new(
-                value.span(),
-                format!(
-                    "unknown scope `{other}` (expected `singleton`, `request`, or `transient`)"
+        nest_rs_codegen::once(scope.is_some(), meta, "injectable", "scope")?;
+        let value_text = quote!(#nv).to_string();
+        let Expr::Path(path) = &nv.value else {
+            return Err(syn::Error::new_spanned(
+                &nv.value,
+                nest_rs_codegen::unknown_value(
+                    "injectable",
+                    "scope",
+                    &value_text,
+                    &["singleton", "request", "transient"],
                 ),
-            )),
-        }
-    };
-    parser.parse2(args)
+            ));
+        };
+        let value = nest_rs_codegen::key_as_written(&path.path);
+        scope = Some(match value.as_str() {
+            "singleton" => InjectableScope::Singleton,
+            "request" => InjectableScope::Request,
+            "transient" => InjectableScope::Transient,
+            other => {
+                return Err(syn::Error::new_spanned(
+                    &nv.value,
+                    nest_rs_codegen::unknown_value(
+                        "injectable",
+                        "scope",
+                        other,
+                        &["singleton", "request", "transient"],
+                    ),
+                ));
+            }
+        });
+    }
+    Ok(scope.unwrap_or(InjectableScope::Singleton))
 }

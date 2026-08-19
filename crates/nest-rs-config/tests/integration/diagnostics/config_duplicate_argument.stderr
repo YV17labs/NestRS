@@ -1,0 +1,5 @@
+error: #[config] takes at most one `namespace`
+  --> tests/integration/diagnostics/config_duplicate_argument.rs:10:33
+   |
+10 | #[config(namespace = "storage", namespace = "database")]
+   |                                 ^^^^^^^^^

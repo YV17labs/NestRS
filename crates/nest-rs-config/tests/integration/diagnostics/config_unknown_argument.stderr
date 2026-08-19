@@ -1,0 +1,5 @@
+error: unknown #[config] argument `domain`; expected `namespace` or `validate`
+ --> tests/integration/diagnostics/config_unknown_argument.rs:8:10
+  |
+8 | #[config(domain = "app")]
+  |          ^^^^^^

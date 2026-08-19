@@ -1,0 +1,5 @@
+error: unknown #[authorize] argument `service`; expected `bind` or `id_arg`
+  --> tests/integration/diagnostics/authorize_unknown_argument.rs:17:25
+   |
+17 |     #[authorize(Update, service = ArtworksService)]
+   |                         ^^^^^^^

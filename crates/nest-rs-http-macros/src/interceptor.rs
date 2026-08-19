@@ -9,8 +9,10 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use syn::parse::Parser;
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{ItemStruct, Meta, parse_macro_input};
+use syn::{ItemStruct, Meta, Token, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
@@ -21,15 +23,38 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
     if args.is_empty() {
         return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
     }
-    let meta = syn::parse::<Meta>(args)?;
+    // **The whole list, then exactly one of it.** `syn::parse::<Meta>` consumes
+    // one and reports the rest as syn's "unexpected token", which names neither
+    // the key nor the fact — so `#[interceptor(priority = 1, priority = 2)]`
+    // died on the grammar rather than on the duplicate, and the shared sentence
+    // this decorator already uses for an unknown key had no counterpart for a
+    // repeated one.
+    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(TokenStream2::from(args))?;
+    let mut metas = metas.into_iter();
+    let meta = metas.next().expect("a non-empty argument list");
+    if let Some(second) = metas.next() {
+        return Err(syn::Error::new_spanned(
+            second,
+            nest_rs_codegen::duplicate_argument("interceptor", "priority"),
+        ));
+    }
+    // Both questions through the shared helper that answers them together: a
+    // bare `#[interceptor(priority)]` is a `Meta::Path`, and so is a bare
+    // *unknown* key — one wording said "expected `priority = <integer>`" to
+    // both, which is right for the first and false for the second.
     let Meta::NameValue(nv) = meta else {
-        return Err(syn::Error::new(
-            meta.span(),
-            "expected `priority = <integer>`",
+        return Err(nest_rs_codegen::unmatched_meta(
+            "interceptor",
+            &meta,
+            &["priority"],
         ));
     };
     if !nv.path.is_ident("priority") {
-        return Err(syn::Error::new(nv.path.span(), "unknown attribute"));
+        let name = nest_rs_codegen::key_as_written(&nv.path);
+        return Err(syn::Error::new(
+            nv.path.span(),
+            nest_rs_codegen::unknown_argument("interceptor", &name, &["priority"]),
+        ));
     }
     let syn::Expr::Lit(syn::ExprLit {
         lit: syn::Lit::Int(lit),

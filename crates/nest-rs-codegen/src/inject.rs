@@ -212,10 +212,21 @@ fn parse_inject_key(attr: &syn::Attribute) -> syn::Result<Option<syn::LitStr>> {
     let mut key: Option<syn::LitStr> = None;
     attr.parse_nested_meta(|meta| {
         if meta.path.is_ident("key") {
+            crate::once(key.is_some(), &meta.path, "inject", "key")?;
+            // `meta.value()` on a bare `#[inject(key)]` is syn's `` expected `=` ``,
+            // which names the grammar and not the key — the silence
+            // `needs_a_value` exists to end.
+            if !meta.input.peek(syn::Token![=]) {
+                return Err(meta.error(crate::needs_a_value("inject", "key")));
+            }
             key = Some(meta.value()?.parse()?);
             Ok(())
         } else {
-            Err(meta.error("unknown #[inject] argument (expected `key = \"…\"`)"))
+            Err(meta.error(crate::unknown_argument(
+                "inject",
+                &crate::key_as_written(&meta.path),
+                &["key"],
+            )))
         }
     })?;
     Ok(key)

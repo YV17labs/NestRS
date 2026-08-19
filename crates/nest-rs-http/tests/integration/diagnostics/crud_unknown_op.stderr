@@ -1,0 +1,5 @@
+error: unknown #[crud] op `upsert`; expected `list`, `get`, `create`, `update` or `delete`
+  --> tests/integration/diagnostics/crud_unknown_op.rs:10:70
+   |
+10 | #[crud(service = svc, entity = OrgEntity, output = Org, ops = [list, upsert])]
+   |                                                                      ^^^^^^

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Every declaration grammar refuses the same four ways
+
+A decorator that takes `key = value` arguments owes four refusals, each a
+compile error naming the decorator, the offender and the alternatives, spanned
+at the offending token:
+
+| The offence | The sentence |
+|---|---|
+| an unknown key | ``unknown #[crud] argument `servcie`; expected `service`, … or `paginate` `` |
+| a key written bare | ``#[queue] `name` needs a value — write `name = ...` `` |
+| a key written twice | ``#[controller] takes at most one `path` `` |
+| a value outside a closed vocabulary | ``unknown #[injectable] scope `reqest`; expected `singleton`, `request` or `transient` `` |
+
+The four sentences are worded once, in `nest_rs_codegen`, and every decorator
+now reads them from there. Seven had adopted all of them and four had adopted
+none: `#[expose]`, `#[api]`, GraphQL's `#[authorize]` and `#[inject]` each took
+a repeated key and kept whichever came last in source order — on `#[api]` that
+is published prose choosing itself, on `#[authorize]` it is which service loads
+the authorized subject. A bare key on several grammars died on `syn`'s
+`` expected `=` `` with no decorator named, and a wrong value was answered five
+ways, three of which named neither the decorator nor the key.
+
+- **What was silently wrong is now a compile error.** Code that spelled a key
+  twice compiled before and does not now; what it meant was already ambiguous.
+- **Fifty-six new trybuild snapshots** pin the sentences, one per refusal per
+  decorator, across eight crates.
+- **A `grammars` join in `nest-rs-conformance` derives the population** — a
+  decorator is in it the moment a `*-macros` crate names a key set — and fails
+  the site that hand-rolls or drops a refusal, so the next decorator cannot
+  ship half of this.
+
 ### A concern lives in the crate that owns it
 
 **Breaking for Rust importers; nothing changes on the wire, in a decorator, or

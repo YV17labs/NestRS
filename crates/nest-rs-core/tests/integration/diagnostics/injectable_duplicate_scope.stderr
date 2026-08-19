@@ -1,0 +1,5 @@
+error: #[injectable] takes at most one `scope`
+  --> tests/integration/diagnostics/injectable_duplicate_scope.rs:12:31
+   |
+12 | #[injectable(scope = request, scope = transient)]
+   |                               ^^^^^^^^^^^^^^^^^

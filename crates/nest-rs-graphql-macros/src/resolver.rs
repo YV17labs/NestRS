@@ -150,8 +150,8 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
     // `TypeId` so it can't be a `providers` entry.
     let descriptor = if item.generics.params.is_empty() {
         quote! {
-            ::nest_rs_core::inventory::submit! {
-                ::nest_rs_core::ResolverDescriptor {
+            ::nest_rs_graphql::inventory::submit! {
+                ::nest_rs_graphql::ResolverDescriptor {
                     resolver: || ::core::any::TypeId::of::<#name>(),
                     name: #name_str,
                 }
@@ -203,14 +203,14 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
 /// The attribute is consumed so it never reaches the compiler as an unknown
 /// attribute. At most one per item.
 fn take_use_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    take_path_list(attrs, "use_guards", "guard")
+    take_path_list(attrs, "use_guards")
 }
 
 /// `#[force_guards(...)]` — the Layer-System opt-in that lets a per-method
 /// guard re-run even when the same `TypeId` is already in the global chain.
 /// Same shape as `#[use_guards]`.
 fn take_force_guards(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<Path>> {
-    take_path_list(attrs, "force_guards", "guard")
+    take_path_list(attrs, "force_guards")
 }
 
 /// `#[authorize(Action, Entity)]` parsed off a `#[query]`/`#[mutation]`
@@ -260,9 +260,10 @@ impl syn::parse::Parse for AuthorizeArg {
             } else if name == "id_arg" {
                 Ok(AuthorizeArg::IdArg(input.parse()?))
             } else {
+                let spelled = name.to_string();
                 Err(syn::Error::new_spanned(
                     name,
-                    "unknown `#[authorize]` option — expected `bind = Service` or `id_arg = ident`",
+                    nest_rs_codegen::unknown_argument("authorize", &spelled, &["bind", "id_arg"]),
                 ))
             }
         } else {
@@ -280,7 +281,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     if attrs.iter().any(|a| a.path().is_ident("authorize")) {
         return Err(syn::Error::new_spanned(
             &attr,
-            "at most one `#[authorize(...)]` per operation",
+            nest_rs_codegen::at_most_one_authorize("operation"),
         ));
     }
     let args: Vec<AuthorizeArg> = attr
@@ -303,8 +304,17 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     for arg in args {
         match arg {
             AuthorizeArg::Positional(p) => positional.push(p),
-            AuthorizeArg::Bind(p) => bind = Some(p),
-            AuthorizeArg::IdArg(i) => id_arg = Some(i),
+            // Refused rather than last-write-wins: `bind` decides **which
+            // service loads the authorized subject**, so dropping one of two by
+            // source order is the posture silently deciding itself.
+            AuthorizeArg::Bind(p) => {
+                nest_rs_codegen::once(bind.is_some(), &p, "authorize", "bind")?;
+                bind = Some(p);
+            }
+            AuthorizeArg::IdArg(i) => {
+                nest_rs_codegen::once(id_arg.is_some(), &i, "authorize", "id_arg")?;
+                id_arg = Some(i);
+            }
         }
     }
     if id_arg.is_some() && bind.is_none() {
@@ -841,7 +851,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             entity_refusals(&verb_attr, &method.attrs, &method.sig)?;
         }
 
-        reject_http_only_layers(&method.attrs, "GraphQL", "resolver")?;
+        reject_http_only_layers(&method.attrs, "GraphQL", "operation")?;
         let method_guards = take_use_guards(&mut method.attrs)?;
         let force_method_guards = take_force_guards(&mut method.attrs)?;
         // The operation's access posture: `#[authorize(Action, Entity)]`
@@ -849,7 +859,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         // (deliberately ungated). Exactly one is required on every
         // `#[query]`/`#[mutation]` — see the posture check below.
         let authorize_spec = take_authorize(&mut method.attrs)?;
-        let is_public = take_flag_attr(&mut method.attrs, "public");
+        let is_public = take_flag_attr(&mut method.attrs, "public")?;
         all_guard_paths.extend(method_guards.iter().cloned());
         all_guard_paths.extend(force_method_guards.iter().cloned());
         // `#[field_resolver]` skips resolver-level guards: a field resolver

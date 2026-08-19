@@ -50,7 +50,8 @@ pub struct IndicatorReport {
     /// Whether this indicator's check passed.
     pub status: IndicatorStatus,
     /// `Some` only when the check failed — a **fixed, opaque** reason
-    /// (`"check failed"` / `"timed out"`), never the indicator's own error.
+    /// (`"check failed"` / `"timed out"` / `"probe deadline exceeded"`), never
+    /// the indicator's own error.
     ///
     /// Deliberate: `/health/*` is routinely unauthenticated, and an
     /// `anyhow` chain from a connection check carries a DSN, an internal

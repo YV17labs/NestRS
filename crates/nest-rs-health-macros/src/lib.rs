@@ -20,10 +20,26 @@ mod indicators;
 /// - `#[startup]` — answer "has it finished booting?"; runs on `GET
 ///   /health/startup`.
 ///
+/// Those paths sit under the app's `HttpConfig::global_prefix` like any other
+/// controller's; a prefixed app logs one `warn` at boot naming the paths its
+/// probes actually answer on.
+///
 /// Each tagged method takes `&self` and returns `anyhow::Result<()>` (or any
 /// `Result<(), E: Into<anyhow::Error>>`). `Ok(())` reports the indicator as
-/// `up`; an error reports it as `down` and stringifies the error into the
-/// probe's JSON body.
+/// `up`; an error reports it as `down` with a **fixed, opaque** reason
+/// (`"check failed"` / `"timed out"` / `"probe deadline exceeded"`) — never
+/// your error's text. `/health/*` is routinely unauthenticated and an `anyhow`
+/// chain carries DSNs, internal hostnames and driver messages, so the full
+/// `{err:#}` goes to a `warn` on `nest_rs::health` instead, carrying
+/// `indicator` and `kind`.
+///
+/// Every indicator on a probe runs **concurrently**, under two ceilings a
+/// deployment sets through
+/// [`HealthConfig`](../nest_rs_health/struct.HealthConfig.html): a per-indicator
+/// one, whose expiry names the slow check, and a probe-wide deadline that bounds
+/// the response whatever the indicator count is. Both default inside
+/// Kubernetes' own `timeoutSeconds` default of one second, past which the
+/// kubelet scores the probe as failed with nothing logged at this end.
 ///
 /// Multiple decorated methods on the same `#[indicators]` impl block all
 /// share the provider's `#[inject]` dependencies — pool a DB ping, a Redis

@@ -7,16 +7,35 @@ use std::sync::Arc;
 
 use futures_util::FutureExt;
 use nest_rs_core::panic_message;
+use nest_rs_core::tracing::Instrument;
 use parking_lot::RwLock;
 
 type BoxedEvent = Box<dyn Any + Send>;
 type ListenerFn = Arc<dyn Fn(BoxedEvent) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
+/// What a listener registered without a declared name is filed as.
+///
+/// A value rather than the event's type name, which the line already carries as
+/// `event` — one value in two fields says nothing the first did not.
+const ANONYMOUS_LISTENER: &str = "<anonymous>";
+
+/// One registered listener, carrying the name its unit of work is filed under.
+///
+/// The name is the qualified `Provider::method` the `#[listeners]` expansion
+/// knows and the erased closure does not — without it the operation line could
+/// only ever say *some listener for this event ran*, which is the anonymity the
+/// line exists to remove.
+#[derive(Clone)]
+struct Listener {
+    name: &'static str,
+    run: ListenerFn,
+}
+
 /// Listeners are filled in once at application bootstrap and the registry is
 /// read-only thereafter, so the `RwLock` is uncontended on the emit path.
 #[derive(Default)]
 pub struct EventBus {
-    listeners: RwLock<HashMap<TypeId, Vec<ListenerFn>>>,
+    listeners: RwLock<HashMap<TypeId, Vec<Listener>>>,
 }
 
 impl EventBus {
@@ -25,14 +44,18 @@ impl EventBus {
         Self::default()
     }
 
-    /// Called by `EventsModule` at bootstrap; apps don't call it directly.
-    pub fn subscribe<E, H, Fut>(&self, listener: H)
+    /// Subscribe a listener that files its unit of work under `name`.
+    ///
+    /// The seam `#[listeners]` emits, which is the only caller that knows the
+    /// qualified `Provider::method`. Apps reach the bus through the decorator.
+    #[doc(hidden)]
+    pub fn subscribe_named<E, H, Fut>(&self, name: &'static str, listener: H)
     where
         E: Any + Send + 'static,
         H: Fn(E) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let erased: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
+        let run: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
             let event = *boxed
                 .downcast::<E>()
                 .expect("event downcasts to the type its listener subscribed for");
@@ -42,7 +65,23 @@ impl EventBus {
             .write()
             .entry(TypeId::of::<E>())
             .or_default()
-            .push(erased);
+            .push(Listener { name, run });
+    }
+
+    /// [`subscribe_named`](Self::subscribe_named) for a listener with no
+    /// declared name — a hand-built bus in a test.
+    ///
+    /// The unit is filed under `<anonymous>` rather than under the event type:
+    /// the line already carries `event`, so naming the listener after it put one
+    /// value in two fields and called something a listener that is not one.
+    #[doc(hidden)]
+    pub fn subscribe<E, H, Fut>(&self, listener: H)
+    where
+        E: Any + Send + 'static,
+        H: Fn(E) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.subscribe_named(ANONYMOUS_LISTENER, listener);
     }
 
     /// Runs each listener in registration order, awaited in turn. No-op when
@@ -68,20 +107,89 @@ impl EventBus {
         // Clone out the list so the lock is released before awaiting.
         let listeners = self.listeners.read().get(&TypeId::of::<E>()).cloned();
         let Some(listeners) = listeners else { return };
-        for listener in listeners {
-            let outcome = AssertUnwindSafe(listener(Box::new(event.clone())))
-                .catch_unwind()
-                .await;
-            if let Err(payload) = outcome {
-                tracing::error!(
-                    target: crate::TARGET,
-                    event = std::any::type_name::<E>(),
-                    panic = panic_message(payload.as_ref()),
-                    "event listener panicked — dispatch continues with the next listener",
-                );
-            }
+        let event_name = std::any::type_name::<E>();
+        // One emit is one cause, so its listeners share one trace — decided
+        // here rather than per listener, because minting inside the loop gave
+        // each listener a trace of its own whenever nothing ambient carried
+        // one, and two reactions to one fact are not two traces.
+        let cause = nest_rs_core::Correlation::inherited();
+        for Listener { name, run } in listeners {
+            dispatch_one(&cause, event_name, name, run(Box::new(event.clone()))).await;
         }
     }
+}
+
+/// One listener invocation — the edge's unit of work.
+///
+/// A listener is a **child** of whatever emitted the event: the emitter is
+/// mid-unit when it calls `emit`, so this continues that trace rather than
+/// minting one, and an event fired outside any unit simply starts one.
+///
+/// The panic is contained here rather than in `emit` so the containment and the
+/// line that reports it are the same statement — a listener that panicked still
+/// files its unit, with `outcome = panic`.
+async fn dispatch_one(
+    cause: &nest_rs_core::Correlation,
+    event: &'static str,
+    listener: &'static str,
+    fut: Pin<Box<dyn Future<Output = ()> + Send>>,
+) {
+    // A **child** of the emit, not a copy of it. `Correlation::inherited()`
+    // returns the ambient correlation *unchanged*, so filing every listener
+    // under it gave two listeners on one event one `span_id` between them, with
+    // `parent_span_id` naming the emitter's parent rather than the emitter. A
+    // span id names one unit of work; that is the whole property the ids buy.
+    let correlation = cause.child();
+    let span = nest_rs_core::operation_span!(
+        target: crate::TARGET,
+        // In-process and same-task: nothing crossed a wire to get here.
+        kind: nest_rs_core::operation_log::kind::INTERNAL,
+        crate::unit::DISPATCH,
+        &correlation,
+        event = event,
+        listener = listener,
+    );
+    // `None` scope, correlation only: a listener is not a request and holds no
+    // per-request cache, but it is work the framework carries, so
+    // `current_trace_id()` must answer inside it. One value, used twice —
+    // `scope` around the listener and `enter` around the reporting below —
+    // which is the shape `RequestContinuation` documents, rather than
+    // assembling the context a second time to re-enter it.
+    let continuation = nest_rs_core::RequestContinuation::new(None, correlation);
+    let started = std::time::Instant::now();
+    let outcome = continuation
+        .scope(AssertUnwindSafe(fut).catch_unwind())
+        .instrument(span)
+        .await;
+    let settled = match &outcome {
+        Ok(()) => nest_rs_core::operation_log::OK,
+        Err(_) => nest_rs_core::operation_log::PANIC,
+    };
+    // Both lines are filed **inside** the correlation, because they sit after
+    // the `.await` that unwound it: a line emitted out here carries no ids at
+    // all, which `nest_rs_mcp::propagate` documents having shipped once and
+    // fixed the same way. Reporting is the last thing this unit does, so it is
+    // re-entered rather than kept open.
+    continuation.enter(|| {
+        tracing::info!(
+            name: crate::unit::DISPATCH,
+            target: nest_rs_core::operation_log::TARGET,
+            message = crate::unit::DISPATCH,
+            event = event,
+            listener = listener,
+            outcome = settled,
+            duration_ms = nest_rs_core::operation_log::duration_ms(started),
+        );
+        if let Err(payload) = &outcome {
+            tracing::error!(
+                target: crate::TARGET,
+                event = event,
+                listener = listener,
+                panic = panic_message(payload.as_ref()),
+                "event listener panicked — dispatch continues with the next listener",
+            );
+        }
+    });
 }
 
 #[cfg(test)]
@@ -302,13 +410,112 @@ mod panic_containment {
         assert!(emit_returned);
     }
 
-    /// The happy path stays quiet — an `error` on every emit would be noise.
+    /// The happy path files its unit of work and nothing else — an `error` on
+    /// every emit would be noise, and no line at all would leave the listener
+    /// anonymous, which is the state the operation line exists to remove.
     #[tokio::test]
-    async fn a_healthy_dispatch_logs_no_containment_event() {
+    async fn a_healthy_dispatch_files_its_unit_and_no_containment_event() {
         let bus = EventBus::new();
-        bus.subscribe(move |_: NotifyRequested| async move {});
+        bus.subscribe_named(
+            "Notifier::on_notify_requested",
+            move |_: NotifyRequested| async move {},
+        );
         let logs = LogCapture::install();
         bus.emit(NotifyRequested { id: "ok" }).await;
-        assert!(logs.events().is_empty(), "{:#?}", logs.events());
+
+        assert!(
+            logs.find(crate::TARGET, "event listener panicked")
+                .is_empty(),
+            "a healthy dispatch reports no containment: {:#?}",
+            logs.events(),
+        );
+
+        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::DISPATCH);
+        assert_eq!(line.level, "info");
+        assert_eq!(
+            line.field("listener").as_deref(),
+            Some("Notifier::on_notify_requested"),
+            "the line names which listener ran, not merely that one did: {:#?}",
+            line.fields,
+        );
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::OK),
+        );
+        assert!(line.field("duration_ms").is_some());
+    }
+
+    /// Two listeners on one event are two units of work, so they file two
+    /// lines under two span ids inside one trace.
+    ///
+    /// Neither of the first two tests asserted an id, and that is exactly what
+    /// let `Correlation::inherited()` ship here: it returns the ambient
+    /// correlation *unchanged*, so both lines carried the emitter's `span_id`
+    /// and `parent_span_id` named the emitter's parent. A span id names one unit
+    /// of work — a line that reuses one is a line an operator cannot relate.
+    #[tokio::test]
+    async fn two_listeners_file_two_units_inside_one_trace() {
+        let bus = EventBus::new();
+        bus.subscribe_named("Notifier::first", move |_: NotifyRequested| async move {});
+        bus.subscribe_named("Notifier::second", move |_: NotifyRequested| async move {});
+        let logs = LogCapture::install();
+        bus.emit(NotifyRequested { id: "two" }).await;
+
+        let lines = logs.find(nest_rs_core::operation_log::TARGET, crate::unit::DISPATCH);
+        assert_eq!(
+            lines.len(),
+            2,
+            "one line per listener: {:#?}",
+            logs.events()
+        );
+
+        // The ids are read off the **span**, never off the line: a log line
+        // renders the ambient correlation and carries no span state, so writing
+        // them as event fields would be the duplicate CLAUDE.md forbids.
+        let units: Vec<_> = logs
+            .spans()
+            .into_iter()
+            .filter(|span| span.name == crate::unit::DISPATCH)
+            .collect();
+        assert_eq!(units.len(), 2, "one unit per listener: {units:#?}");
+
+        let traces: Vec<_> = units
+            .iter()
+            .filter_map(|s| s.fields.get("trace_id"))
+            .collect();
+        let spans: Vec<_> = units
+            .iter()
+            .filter_map(|s| s.fields.get("span_id"))
+            .collect();
+        assert_eq!(traces.len(), 2, "every unit carries its ids: {units:#?}");
+        assert_eq!(traces[0], traces[1], "one emit is one trace");
+        assert_eq!(spans.len(), 2);
+        assert_ne!(
+            spans[0], spans[1],
+            "two units of work are two span ids, not one reused: {units:#?}",
+        );
+    }
+
+    /// A panicking listener still files its unit — with `outcome = panic`, so a
+    /// containment is visible on the operation target an operator already
+    /// queries rather than only on this crate's own.
+    #[tokio::test]
+    async fn a_panicking_listener_files_its_unit_as_a_panic() {
+        let bus = EventBus::new();
+        bus.subscribe_named("Notifier::boom", move |_: NotifyRequested| async move {
+            panic!("listener exploded");
+        });
+        let logs = LogCapture::install();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        bus.emit(NotifyRequested { id: "boom" }).await;
+        std::panic::set_hook(previous);
+
+        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::DISPATCH);
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::PANIC),
+        );
+        assert_eq!(line.field("listener").as_deref(), Some("Notifier::boom"));
     }
 }

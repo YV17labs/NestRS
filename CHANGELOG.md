@@ -164,6 +164,28 @@ two ceilings a new `HealthConfig` owns:
 - `HealthModule::for_root(HealthConfig…)` is the pinning seam, with the
   composition test every `for_root` owes.
 
+### A listener invocation is a unit of work
+
+The last unused edge namespace is in use: every `#[listeners]` method files
+one `events.dispatch` line, with its own span — a name nothing emits under is
+the same defect as a span field nothing fills.
+
+- **The unit is one listener invocation, not one `emit`.** A listener is
+  developer code that logs, writes and can panic, while an `emit` is the
+  emitter's own line, already inside whatever unit the emitter is serving.
+  One emit is one cause: its listeners share one trace, and each gets its own
+  `span_id` — filing them all under the inherited correlation gave two
+  listeners on one event one `span_id` between them.
+- **A panicking listener still files, with `outcome = panic`**, and both the
+  line and the containment `error` are emitted inside the continuation, so
+  neither arrives without ids.
+- **Listeners with no bus are a boot report.** A provider listed in
+  `providers = […]` without `EventsModule` in `imports` used to boot clean
+  and react to nothing; the boot now emits one `warn` per reachable listener,
+  naming it.
+- `#[listeners]` registers through `subscribe_named`, so the line names the
+  method; the anonymous `subscribe` files as `<anonymous>`.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

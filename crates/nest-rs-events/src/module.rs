@@ -36,14 +36,40 @@ nest_rs_core::inventory::submit! {
     }
 }
 
+/// The sentence the boot files for a listener whose app registered no bus.
+///
+/// A constant rather than a literal because the test that proves this branch has
+/// to name the same event — "assert against shared constants, never a copied
+/// literal", so the report and the suite cannot drift apart.
+pub const NO_BUS_REPORT: &str = "listener declared but no event bus is registered — add `EventsModule` to the root \
+     module's `imports = [...]`";
+
 fn wire_listeners(
     container: &Container,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
+        let reachable = container.get::<ReachableProviders>();
         let Some(bus) = container.get::<EventBus>() else {
+            // Reachable listeners and no bus: every `#[on_event]` method the app
+            // declared is dead, and nothing else can see it. Nothing in the
+            // `#[listeners]` expansion makes a host depend on `EventBus`, so a
+            // provider listed in `providers = [...]` without `EventsModule` in
+            // `imports` boots clean and reacts to nothing — the reachable-set arm
+            // below never fires, because the provider *is* reachable.
+            //
+            // This is the earliest site that can see the fact, so it owes the
+            // report: a silent `Ok(())` here is a feature's whole reaction
+            // surface disappearing with no trace.
+            for entry in reachable_listeners(reachable.as_deref()) {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    listener = entry.name,
+                    origin = entry.origin,
+                    "{NO_BUS_REPORT}",
+                );
+            }
             return Ok(());
         };
-        let reachable = container.get::<ReachableProviders>();
         let order = container.get::<ProviderOrder>();
 
         // Sort before wiring. `inventory::iter` yields **link order** — stable
@@ -69,10 +95,7 @@ fn wire_listeners(
         });
 
         for entry in entries {
-            let provider_id = (entry.provider_type_id)();
-            if let Some(r) = reachable.as_ref()
-                && !r.0.contains(&provider_id)
-            {
+            if !is_reachable(reachable.as_deref(), entry) {
                 ::nest_rs_core::report_inert_host!(
                     target: crate::TARGET,
                     what: "#[on_event] method",
@@ -90,4 +113,23 @@ fn wire_listeners(
         }
         Ok(())
     })
+}
+
+/// Whether this app would wire `entry` at all — the one spelling of the
+/// reachable-set gate, read by both the no-bus report and the wiring loop.
+///
+/// One predicate rather than two, because the report speaks about exactly the
+/// population the loop wires: two spellings would let a change to the
+/// reachability rule land in one of them and leave the report describing a set
+/// the app does not have.
+fn is_reachable(reachable: Option<&ReachableProviders>, entry: &ListenerMethod) -> bool {
+    reachable.is_none_or(|r| r.0.contains(&(entry.provider_type_id)()))
+}
+
+/// The listeners this app would wire, in no particular order — the population
+/// the no-bus report speaks about.
+fn reachable_listeners(
+    reachable: Option<&ReachableProviders>,
+) -> impl Iterator<Item = &'static ListenerMethod> + '_ {
+    inventory::iter::<ListenerMethod>().filter(move |entry| is_reachable(reachable, entry))
 }

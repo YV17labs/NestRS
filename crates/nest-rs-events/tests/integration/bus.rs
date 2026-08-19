@@ -116,3 +116,41 @@ async fn emitting_an_event_with_no_listener_is_a_noop() {
         .expect("EventBus is provided");
     bus.emit(Unobserved).await;
 }
+
+/// A provider whose listeners are declared and reachable, in an app that never
+/// imported `EventsModule`. Nothing in the `#[listeners]` expansion makes the
+/// host depend on `EventBus`, so this composition boots clean and reacts to
+/// nothing — the shape the bootstrap hook has to report rather than skip.
+#[module(providers = [Ledger, PointsListeners])]
+struct BuslessModule;
+
+#[tokio::test]
+async fn listeners_with_no_event_bus_are_reported_at_boot() {
+    let logs = nest_rs_testing::LogCapture::install();
+
+    let app = App::new::<BuslessModule>().expect("boots without EventsModule");
+    app.init()
+        .await
+        .expect("a missing bus is never a boot failure");
+
+    let reported = logs.find(nest_rs_events::TARGET, nest_rs_events::NO_BUS_REPORT);
+    assert_eq!(
+        reported.len(),
+        2,
+        "one line per declared listener, naming it: {:#?}",
+        logs.events(),
+    );
+    assert!(
+        reported.iter().all(|event| event.level == "warn"),
+        "a whole feature's reaction surface being dead is a warn, not a debug",
+    );
+    let named: Vec<_> = reported
+        .iter()
+        .filter_map(|event| event.field("listener"))
+        .collect();
+    assert!(
+        named.iter().any(|name| name.contains("on_awarded"))
+            && named.iter().any(|name| name.contains("on_redeemed")),
+        "each line names the listener a developer can find, got {named:?}",
+    );
+}

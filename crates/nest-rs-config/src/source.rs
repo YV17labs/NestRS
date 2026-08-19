@@ -138,29 +138,22 @@ impl ConfigSource for EnvSource {
 /// [`ConfigService::with_source`](crate::ConfigService::with_source) to exercise
 /// config parsing **hermetically** (tests, fixtures) without mutating global
 /// process env — so the tests need no `unsafe { std::env::set_var }` and stay
-/// parallel-safe. Keys are the fully-qualified `NESTRS_<NS>__<KEY>` names.
+/// parallel-safe. Keys are the fully-qualified `<PREFIX>_<DOMAIN>__<KEY>` names.
 ///
 /// ```
 /// use std::sync::Arc;
-/// use nest_rs_config::{ConfigService, MapSource};
+/// use nest_rs_config::{ConfigService, MapSource, var_name};
 ///
-/// let source = MapSource::from_iter([("NESTRS_APP__PORT", "8080")]);
+/// // Built, never spelled: a fixture keyed on a literal reads nothing under a
+/// // deployment that renamed the prefix, and reads it as "unset".
+/// let port = var_name("app", "PORT");
+/// let source = MapSource::from_iter([(port.as_str(), "8080")]);
 /// let cfg = ConfigService::with_source("app", Arc::new(source));
 /// assert_eq!(cfg.get("PORT").as_deref(), Some("8080"));
 /// assert_eq!(cfg.get("MISSING"), None); // absent ⇒ falls back to in-code defaults
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct MapSource(HashMap<String, String>);
-
-impl MapSource {
-    /// An empty source — every lookup returns `None`, so a config falls back to
-    /// its in-code defaults. Build a populated one with
-    /// [`FromIterator`]/[`MapSource::from_iter`] (or, more ergonomically,
-    /// [`ConfigService::with_vars`](crate::ConfigService::with_vars)).
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
 
 impl<K: Into<String>, V: Into<String>> FromIterator<(K, V)> for MapSource {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
@@ -193,10 +186,10 @@ mod tests {
     #[test]
     fn env_var_prefers_real_env_over_dotenv() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_PREC__X", "from_real");
-            let map = HashMap::from([("NESTRS_PREC__X".to_owned(), "from_dotenv".to_owned())]);
+            jail.set_env("FIXTURE_PREC__X", "from_real");
+            let map = HashMap::from([("FIXTURE_PREC__X".to_owned(), "from_dotenv".to_owned())]);
             assert_eq!(
-                env_var_from("NESTRS_PREC__X", &map).as_deref(),
+                env_var_from("FIXTURE_PREC__X", &map).as_deref(),
                 Some("from_real"),
             );
             Ok(())
@@ -206,9 +199,9 @@ mod tests {
     #[test]
     fn env_var_falls_back_to_dotenv_when_real_env_absent() {
         figment::Jail::expect_with(|_| {
-            let map = HashMap::from([("NESTRS_PREC__Y".to_owned(), "from_dotenv".to_owned())]);
+            let map = HashMap::from([("FIXTURE_PREC__Y".to_owned(), "from_dotenv".to_owned())]);
             assert_eq!(
-                env_var_from("NESTRS_PREC__Y", &map).as_deref(),
+                env_var_from("FIXTURE_PREC__Y", &map).as_deref(),
                 Some("from_dotenv"),
             );
             Ok(())
@@ -218,9 +211,9 @@ mod tests {
     #[test]
     fn env_var_present_but_empty_real_env_suppresses_dotenv_fallback() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_PREC__Z", "");
-            let map = HashMap::from([("NESTRS_PREC__Z".to_owned(), "from_dotenv".to_owned())]);
-            assert_eq!(env_var_from("NESTRS_PREC__Z", &map), None);
+            jail.set_env("FIXTURE_PREC__Z", "");
+            let map = HashMap::from([("FIXTURE_PREC__Z".to_owned(), "from_dotenv".to_owned())]);
+            assert_eq!(env_var_from("FIXTURE_PREC__Z", &map), None);
             Ok(())
         });
     }
@@ -235,24 +228,24 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 ".env",
-                "NESTRS_DEPLOY__FROM_FILE=file\nNESTRS_DEPLOY__FROM_REAL=file",
+                "FIXTURE_DEPLOY__FROM_FILE=file\nFIXTURE_DEPLOY__FROM_REAL=file",
             )?;
-            jail.set_env("NESTRS_DEPLOY__FROM_REAL", "real");
+            jail.set_env("FIXTURE_DEPLOY__FROM_REAL", "real");
             crate::dotenv::load_cascade(std::path::Path::new("."), crate::Environment::Development);
 
             assert_eq!(
-                deployment_env_var("NESTRS_DEPLOY__FROM_FILE"),
+                deployment_env_var("FIXTURE_DEPLOY__FROM_FILE"),
                 None,
                 "a committed `.env` must lose to a value pinned in `for_root`",
             );
             assert_eq!(
-                deployment_env_var("NESTRS_DEPLOY__FROM_REAL").as_deref(),
+                deployment_env_var("FIXTURE_DEPLOY__FROM_REAL").as_deref(),
                 Some("real"),
                 "a real deployment variable still outranks the pin",
             );
             // The plain read is unaffected — both tiers still resolve there.
             assert_eq!(
-                EnvSource.get("NESTRS_DEPLOY__FROM_FILE").as_deref(),
+                EnvSource.get("FIXTURE_DEPLOY__FROM_FILE").as_deref(),
                 Some("file"),
             );
             Ok(())
@@ -262,13 +255,13 @@ mod tests {
     #[test]
     fn env_var_read_never_writes_the_dotenv_value_into_the_process_env() {
         figment::Jail::expect_with(|_| {
-            let map = HashMap::from([("NESTRS_PREC__ONLY_IN_MAP".to_owned(), "v".to_owned())]);
+            let map = HashMap::from([("FIXTURE_PREC__ONLY_IN_MAP".to_owned(), "v".to_owned())]);
             assert_eq!(
-                env_var_from("NESTRS_PREC__ONLY_IN_MAP", &map).as_deref(),
+                env_var_from("FIXTURE_PREC__ONLY_IN_MAP", &map).as_deref(),
                 Some("v"),
             );
             // The read resolved from the map, not by merging into the env.
-            assert!(std::env::var("NESTRS_PREC__ONLY_IN_MAP").is_err());
+            assert!(std::env::var("FIXTURE_PREC__ONLY_IN_MAP").is_err());
             Ok(())
         });
     }

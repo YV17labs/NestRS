@@ -277,7 +277,7 @@ mod tests {
             "the error must not leak the password: {rendered}",
         );
         assert!(
-            rendered.contains("NESTRS_QUEUE__CONNECT_TIMEOUT_SECS"),
+            rendered.contains(&nest_rs_config::var_name("queue", "CONNECT_TIMEOUT_SECS")),
             "the error names the knob that widens the budget: {rendered}",
         );
     }

@@ -18,10 +18,11 @@
 //! tool call. A regression that silently opened `/mcp` to anonymous callers
 //! would pass every per-transport test and fail here.
 
-use nest_rs_core::{HandlerMetadata, Layer, injectable, module};
+use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::Result as GqlResult;
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Reflector, async_trait};
 use nest_rs_mcp::{
     AllowAllMcpGuard, McpOperationGuard, ServerHandler, mcp, tool_handler, tool_router,

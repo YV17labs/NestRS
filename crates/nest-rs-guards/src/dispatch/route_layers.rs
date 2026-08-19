@@ -33,12 +33,13 @@
 //!
 //! [`RouteShaper`]: crate::dispatch::RouteShaper
 
+use nest_rs_core::Container;
 use nest_rs_core::layer_chain::{
     LayerSite, ResolvedLayer, compose_chain, dedup_bucket, resolve_global_layers,
 };
-use nest_rs_core::{Container, MappedError};
 use nest_rs_exception_filters::{ExceptionFilterErased, ExceptionFilterSpecs};
 use nest_rs_filters::{Filter, FilterChain, FilterSpecs};
+use nest_rs_http::MappedError;
 use nest_rs_interceptors::{Interceptor, InterceptorChain, InterceptorSpecs};
 use poem::endpoint::BoxEndpoint;
 use poem::{Endpoint, EndpointExt, Request, Response};
@@ -141,7 +142,7 @@ fn compose_exception_filters(
     route_label: &str,
 ) -> Vec<ResolvedLayer<dyn ExceptionFilterErased>> {
     let global = resolve_global_layers::<ExceptionFilterSpecs>(container);
-    let controller = resolve_specs(container, controller, LayerSite::Controller);
+    let controller = resolve_specs(container, controller, LayerSite::Host);
     let method = resolve_specs(container, method, LayerSite::Method);
     compose_chain::<dyn ExceptionFilterErased>(
         dedup_bucket(global),
@@ -162,7 +163,7 @@ fn compose_route_filters(
     route_label: &str,
 ) -> Vec<ResolvedLayer<dyn Filter>> {
     let global = dedup_bucket(resolve_global_layers::<FilterSpecs>(container));
-    let controller = resolve_specs(container, controller, LayerSite::Controller);
+    let controller = resolve_specs(container, controller, LayerSite::Host);
     let method = resolve_specs(container, method, LayerSite::Method);
     let chain = compose_chain::<dyn Filter>(global, controller, method, &[], route_label);
     chain
@@ -182,7 +183,7 @@ fn compose_route_interceptors(
     route_label: &str,
 ) -> Vec<ResolvedLayer<dyn Interceptor>> {
     let global = dedup_bucket(resolve_global_layers::<InterceptorSpecs>(container));
-    let controller = resolve_specs(container, controller, LayerSite::Controller);
+    let controller = resolve_specs(container, controller, LayerSite::Host);
     let method = resolve_specs(container, method, LayerSite::Method);
     let chain = compose_chain::<dyn Interceptor>(global, controller, method, &[], route_label);
     chain

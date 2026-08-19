@@ -201,12 +201,9 @@ mod tests {
         let service = ConfigService::with_vars(
             "http",
             [
-                (
-                    "NESTRS_HTTP__CORS_ORIGINS",
-                    "https://a.example,https://b.example",
-                ),
-                ("NESTRS_HTTP__CORS_METHODS", "GET,POST"),
-                ("NESTRS_HTTP__CORS_HEADERS", "content-type"),
+                ("CORS_ORIGINS", "https://a.example,https://b.example"),
+                ("CORS_METHODS", "GET,POST"),
+                ("CORS_HEADERS", "content-type"),
             ],
         );
         let cfg = CorsConfig::from_env(&service, None)
@@ -227,9 +224,9 @@ mod tests {
         let service = ConfigService::with_vars(
             "http",
             [
-                ("NESTRS_HTTP__CORS_ORIGINS", "*"),
-                ("NESTRS_HTTP__CORS_CREDENTIALS", "true"),
-                ("NESTRS_HTTP__CORS_MAX_AGE", "600"),
+                ("CORS_ORIGINS", "*"),
+                ("CORS_CREDENTIALS", "true"),
+                ("CORS_MAX_AGE", "600"),
             ],
         );
         let cfg = CorsConfig::from_env(&service, None)

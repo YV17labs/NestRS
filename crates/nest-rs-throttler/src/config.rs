@@ -48,7 +48,7 @@ mod tests {
             window_secs: Some(5),
         };
         let cfg = ThrottlerConfig::from_env(
-            &ConfigService::with_vars("throttler", [("NESTRS_THROTTLER__LIMIT", "120")]),
+            &ConfigService::with_vars("throttler", [("LIMIT", "120")]),
             pinned,
         )
         .expect("the overlay resolves");
@@ -59,13 +59,7 @@ mod tests {
     #[test]
     fn from_env_reads_all_fields_when_set() {
         let cfg = ThrottlerConfig::from_env(
-            &ConfigService::with_vars(
-                "throttler",
-                [
-                    ("NESTRS_THROTTLER__LIMIT", "120"),
-                    ("NESTRS_THROTTLER__WINDOW_SECS", "90"),
-                ],
-            ),
+            &ConfigService::with_vars("throttler", [("LIMIT", "120"), ("WINDOW_SECS", "90")]),
             Default::default(),
         )
         .expect("no error");

@@ -317,7 +317,7 @@ mod tests {
     fn trusted_proxies_are_parsed_from_the_env_list() {
         figment::Jail::expect_with(|jail| {
             jail.set_env(
-                "NESTRS_HTTP__TRUSTED_PROXIES",
+                nest_rs_config::var_name("http", "TRUSTED_PROXIES"),
                 "10.0.0.1, 2001:db8::1,10.0.0.2",
             );
             let env = ConfigService::for_namespace("http");
@@ -340,7 +340,10 @@ mod tests {
     #[test]
     fn an_unparseable_trusted_proxy_fails_instead_of_being_skipped() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_HTTP__TRUSTED_PROXIES", "10.0.0.1,10.0.0.oops");
+            jail.set_env(
+                nest_rs_config::var_name("http", "TRUSTED_PROXIES"),
+                "10.0.0.1,10.0.0.oops",
+            );
             let env = ConfigService::for_namespace("http");
             let err = HttpConfig::from_env(&env, Default::default())
                 .expect_err("a bad IP must abort the boot");
@@ -348,7 +351,7 @@ mod tests {
             // The variable name is derived from the reader's namespace, not
             // retyped — a `#[config]` struct read under another namespace would
             // otherwise blame a variable nobody set.
-            assert!(msg.contains("NESTRS_HTTP__TRUSTED_PROXIES"), "{msg}");
+            assert!(msg.contains("TRUSTED_PROXIES"), "{msg}");
             assert!(msg.contains("10.0.0.oops"), "{msg}");
             Ok(())
         });
@@ -358,7 +361,7 @@ mod tests {
     #[test]
     fn a_pinned_trusted_proxy_list_survives_an_unrelated_env_override() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_HTTP__PORT", "8080");
+            jail.set_env(nest_rs_config::var_name("http", "PORT"), "8080");
             let pinned = HttpConfig {
                 trusted_proxies: vec!["10.0.0.9".parse().unwrap()],
                 ..Default::default()
@@ -377,7 +380,7 @@ mod tests {
     #[test]
     fn from_env_reads_compression_flag() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_HTTP__COMPRESSION", "true");
+            jail.set_env(nest_rs_config::var_name("http", "COMPRESSION"), "true");
             let env = ConfigService::for_namespace("http");
             let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert!(cfg.compression);
@@ -400,11 +403,11 @@ mod tests {
             &ConfigService::with_vars(
                 "http",
                 [
-                    ("NESTRS_HTTP__PORT", "3555"),
-                    ("NESTRS_HTTP__GLOBAL_PREFIX", "/api"),
-                    ("NESTRS_HTTP__MAX_BODY_BYTES", "4096"),
-                    ("NESTRS_HTTP__COMPRESSION", "true"),
-                    ("NESTRS_HTTP__FAIL_SECURE_STRICT", "false"),
+                    ("PORT", "3555"),
+                    ("GLOBAL_PREFIX", "/api"),
+                    ("MAX_BODY_BYTES", "4096"),
+                    ("COMPRESSION", "true"),
+                    ("FAIL_SECURE_STRICT", "false"),
                 ],
             ),
             pinned,
@@ -453,7 +456,7 @@ mod tests {
     #[test]
     fn from_env_reads_global_prefix() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_HTTP__GLOBAL_PREFIX", "/api");
+            jail.set_env(nest_rs_config::var_name("http", "GLOBAL_PREFIX"), "/api");
             let env = ConfigService::for_namespace("http");
             let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert_eq!(cfg.global_prefix.as_deref(), Some("/api"));
@@ -466,7 +469,7 @@ mod tests {
         // `NESTRS_HTTP__GLOBAL_PREFIX=` (or whitespace) must not pin an empty
         // prefix that the transport would still try to nest under.
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_HTTP__GLOBAL_PREFIX", "   ");
+            jail.set_env(nest_rs_config::var_name("http", "GLOBAL_PREFIX"), "   ");
             let env = ConfigService::for_namespace("http");
             let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert!(cfg.global_prefix.is_none());
@@ -477,7 +480,7 @@ mod tests {
     #[test]
     fn from_env_reads_max_body_bytes() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_HTTP__MAX_BODY_BYTES", "1024");
+            jail.set_env(nest_rs_config::var_name("http", "MAX_BODY_BYTES"), "1024");
             let env = ConfigService::for_namespace("http");
             let cfg = HttpConfig::from_env(&env, Default::default()).expect("env parses");
             assert_eq!(cfg.max_body_bytes, Some(1024));
@@ -488,7 +491,7 @@ mod tests {
     #[test]
     fn from_env_rejects_unparseable_max_body_bytes() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_HTTP__MAX_BODY_BYTES", "huge");
+            jail.set_env(nest_rs_config::var_name("http", "MAX_BODY_BYTES"), "huge");
             let env = ConfigService::for_namespace("http");
             assert!(
                 HttpConfig::from_env(&env, Default::default()).is_err(),

@@ -219,7 +219,7 @@ fn build_worker(
                     // A job is delivered *to* this process — the kind a
                     // messaging view classifies on.
                     kind: nest_rs_core::operation_log::kind::CONSUMER,
-                    nest_rs_core::operation_log::unit::QUEUE_JOB,
+                    nest_rs_queue::unit::JOB,
                     &correlation,
                     queue = queue_name,
                     processor = processor_name,
@@ -254,7 +254,6 @@ fn build_worker(
                     nest_rs_core::with_request_scope(
                         Some(scope),
                         correlation,
-                        None,
                         run_job(handler, job, container, identity),
                     )
                     .await
@@ -364,9 +363,9 @@ async fn run_job(
     };
 
     tracing::info!(
-        name: nest_rs_core::operation_log::unit::QUEUE_JOB,
+        name: nest_rs_queue::unit::JOB,
         target: nest_rs_core::operation_log::TARGET,
-        message = nest_rs_core::operation_log::unit::QUEUE_JOB,
+        message = nest_rs_queue::unit::JOB,
         queue = identity.queue,
         processor = identity.processor,
         job_id = identity.job_id,
@@ -447,7 +446,7 @@ mod tests {
         // The duration is on the family's line, not restated on the detail.
         let ran = logs.expect_one(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_core::operation_log::unit::QUEUE_JOB,
+            nest_rs_queue::unit::JOB,
         );
         assert_eq!(
             ran.field("outcome").as_deref(),
@@ -619,7 +618,7 @@ mod tests {
         );
         let ran = logs.expect_one(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_core::operation_log::unit::QUEUE_JOB,
+            nest_rs_queue::unit::JOB,
         );
         assert_eq!(
             ran.field("outcome").as_deref(),

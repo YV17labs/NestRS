@@ -314,8 +314,8 @@ guards; it tells them to relax.
 
 The Layer System dedups every layer by
 [`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html) across
-the three scopes. When the same guard is declared at several levels, the
-**broadest scope wins**; narrower declarations log a `debug` line at boot
+the three sites. When the same guard is declared at several levels, the
+**broadest site wins**; narrower declarations log a `debug` line at boot
 (deduped once on `nest_rs::layers`) but never re-execute.
 
 ```rust title="apps/blog/src/main.rs"

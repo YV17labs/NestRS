@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### A concern lives in the crate that owns it
+
+**Breaking for Rust importers; nothing changes on the wire, in a decorator, or
+in a filter directive.** A cluster of kernel exports moved to the edge that owns
+them, and the two strings every crate had re-typed moved into the kernel:
+
+| Was | Is |
+|---|---|
+| `nest_rs_core::operation_log::unit::HTTP_REQUEST`, … | `nest_rs_http::unit::REQUEST`, `nest_rs_ws::unit::{MESSAGE, CONNECT, DISCONNECT}`, `nest_rs_queue::unit::JOB`, `nest_rs_schedule::unit::TICK`, `nest_rs_mcp::unit::OPERATION`, `nest_rs_graphql::unit::SUBSCRIPTION` |
+| `nest_rs_core::{HandlerMetadata, MappedError, Public}` | `nest_rs_http::{HandlerMetadata, MappedError, Public}` |
+| `nest_rs_core::current_body_limit`, and the body-limit argument on `with_request_scope` / `RequestContinuation` | `nest_rs_http::current_body_limit`; the HTTP edge carries its own limit around body polls |
+| `AppBuilder::strict_resolver_membership()` | `GraphqlConfig::strict_resolver_membership` — a real config field, env-settable and pinnable through `GraphqlModule::for_root` |
+| `UnreachableResolversError`, in the kernel | `OrphanResolver`, in `nest-rs-graphql`; the boot `warn` files on `nest_rs::graphql` |
+
+- **The unit names go where the span targets went last release.** A unit name
+  says which edge did the work, and the kernel does not know the edges exist.
+  The `<edge>.<unit>` grammar stays `nest_rs_core::operation_log`'s; the names
+  do not — the same split as targets, held by the same conformance join.
+- **`HandlerMetadata` reads a `poem::Request` and marks a `poem::Response`** —
+  two types the kernel cannot name — and the other edges resolve posture at
+  compile time, so the "transport-agnostic" contract had one implementor and no
+  second candidate for as long as it existed.
+- **A capability's knob was sitting on the kernel's seam.** The body limit is
+  HTTP's and the orphan-resolver policy is GraphQL's; each now lives with its
+  owner, and the GraphQL one becomes a config a deployment can set rather than
+  a builder method only code could call.
+- **What moved *in* is what everyone had re-typed.** `nest_rs_core::parse_bool`
+  is the one truthy/falsy vocabulary for every framework boolean variable — it
+  sat behind the `logging` Cargo feature, so the crate reading every
+  `<PREFIX>_<NS>__<KEY>` boolean had respelled it. And
+  `nest_rs_core::UUID_V7_REQUIRED` is the one sentence the three id gates word
+  (`#[crud]`'s, HTTP `Bind`'s, GraphQL `bind`'s) — two of the three had already
+  drifted apart.
+- **The kernel's access exports now match the family.** `ScopeViolationError`
+  joins its six siblings — it was the one boot error a caller could not name as
+  `nest_rs_core::…` — and the three graph validators went `pub(crate)`, having
+  no caller outside the crate in either workspace.
+- **A contained panic is logged under one field name.** The downcast ladder was
+  already shared in `nest_rs_core::panic`; the field it lands in is now declared
+  beside it and held by a `nest-rs-conformance` join across the three seams
+  that catch — the scheduler, the event bus, the queue consumer.
+
+### Two config types reading one variable is a boot error
+
+`ConfigService` now records which type each resolved variable was read for, and
+the second type to read the same name fails its resolve with
+`ConfigError::ContestedVariable` — naming the variable, the owner and the
+claimant. Several types sharing a *domain* stays deliberate (`nest-rs-authn`
+ships three `authn` configs); two types sharing a *variable* meant a deployment
+setting it configured whichever happened to read it, both silently — their key
+sets disjoint by accident of the current fields, a fact about today rather than
+a property anything held.
+
+The recording sits on the reader rather than on the type: `HttpConfig`
+delegates ten of its keys to sub-structs that are not `Config`s, and nothing
+that inspects types can see those reads. The free `env_var` stays outside the
+registry deliberately — it is the documented spelling for a cross-namespace
+borrow, and what an unowned read should claim is an owner question, recorded in
+the module doc rather than silently decided.
+
 ### The operation-log target is `nest_rs::operation`
 
 **Breaking for operators; nothing to change in Rust.** The one line every edge

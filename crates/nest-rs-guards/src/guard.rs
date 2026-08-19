@@ -63,7 +63,7 @@ impl PrincipalClaim {
 ///
 /// `Guard` extends [`Layer`] (priority + name + dedup-by-TypeId). The
 /// `#[public]` marker is NOT a framework skip: it attaches the
-/// [`Public`](nest_rs_core::Public) data to the request and each guard
+/// [`Public`](nest_rs_http::Public) data to the request and each guard
 /// decides whether to honor it. An `AbilityGuard` may want to apply
 /// visitor rules on public routes; an `AuthnGuard` may want to skip
 /// rejection when no token is present. Both are policy decisions the

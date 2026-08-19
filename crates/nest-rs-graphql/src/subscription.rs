@@ -237,7 +237,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                 let span = nest_rs_core::operation_span!(
                     target: crate::TARGET,
                     kind: nest_rs_core::operation_log::kind::SERVER,
-                    nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION,
+                    crate::unit::SUBSCRIPTION,
                     &correlation,
                 );
                 let serve = GraphQLWebSocket::new(stream, executor, protocol)
@@ -258,7 +258,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                     None => guarded,
                 };
                 let line = SubscriptionLine::new(correlation.clone());
-                nest_rs_core::with_request_scope(None, correlation, None, async move {
+                nest_rs_core::with_request_scope(None, correlation, async move {
                     let _line = line;
                     served.await;
                 })
@@ -299,11 +299,11 @@ impl SubscriptionLine {
 
 impl Drop for SubscriptionLine {
     fn drop(&mut self) {
-        nest_rs_core::RequestContinuation::new(None, self.correlation.clone(), None).enter(|| {
+        nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
             tracing::info!(
-                name: nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION,
+                name: crate::unit::SUBSCRIPTION,
                 target: nest_rs_core::operation_log::TARGET,
-                message = nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION,
+                message = crate::unit::SUBSCRIPTION,
                 // Always `ok`: async-graphql owns the message loop, so this crate
                 // sees no operation boundary and has no failure signal to report
                 // — the same fact the span's own comment records. A closed socket
@@ -344,7 +344,7 @@ mod tests {
 
         let served = logs.find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION,
+            crate::unit::SUBSCRIPTION,
         );
         assert_eq!(
             served.len(),
@@ -366,7 +366,7 @@ mod tests {
         let logs = nest_rs_testing::LogCapture::install();
         let correlation = nest_rs_core::Correlation::mint();
 
-        nest_rs_core::with_request_scope(None, correlation.clone(), None, async {
+        nest_rs_core::with_request_scope(None, correlation.clone(), async {
             let _line = SubscriptionLine::new(correlation);
         })
         .await;
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(
             logs.find(
                 nest_rs_core::operation_log::TARGET,
-                nest_rs_core::operation_log::unit::GRAPHQL_SUBSCRIPTION
+                crate::unit::SUBSCRIPTION
             )
             .len(),
             1,
@@ -428,10 +428,9 @@ mod tests {
     #[tokio::test]
     async fn a_socket_runs_in_the_upgrades_trace() {
         let upgrade = Correlation::mint();
-        let captured = nest_rs_core::with_request_scope(None, upgrade.clone(), None, async {
-            socket_correlation()
-        })
-        .await;
+        let captured =
+            nest_rs_core::with_request_scope(None, upgrade.clone(), async { socket_correlation() })
+                .await;
 
         assert_eq!(captured.trace_id(), upgrade.trace_id());
     }
@@ -440,7 +439,7 @@ mod tests {
     /// upgrade's guard resolved is the only answer there will ever be.
     #[tokio::test]
     async fn a_socket_runs_under_the_upgrades_actor() {
-        let captured = nest_rs_core::with_request_scope(None, Correlation::mint(), None, async {
+        let captured = nest_rs_core::with_request_scope(None, Correlation::mint(), async {
             nest_rs_core::set_actor_id("alice-42");
             socket_correlation()
         })

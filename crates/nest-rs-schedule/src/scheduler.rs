@@ -320,7 +320,7 @@ async fn fire(id: JobId, task: Task, container: &Container, ctx: &Option<Arc<dyn
         target: crate::TARGET,
         // No caller and no wire: the clock is not a producer.
         kind: nest_rs_core::operation_log::kind::INTERNAL,
-        nest_rs_core::operation_log::unit::SCHEDULE_TICK,
+        crate::unit::TICK,
         &correlation,
         provider = id.provider,
         method = id.method,
@@ -329,7 +329,6 @@ async fn fire(id: JobId, task: Task, container: &Container, ctx: &Option<Arc<dyn
     nest_rs_core::with_request_scope(
         Some(scope),
         correlation,
-        None,
         fire_inner(id, task, container, ctx),
     )
     .instrument(span)
@@ -375,9 +374,9 @@ async fn fire_inner(
     // is the only place a tick says it ran at all. Emitted inside the scope, so
     // it carries the trace the job's own events carry.
     tracing::info!(
-        name: nest_rs_core::operation_log::unit::SCHEDULE_TICK,
+        name: crate::unit::TICK,
         target: nest_rs_core::operation_log::TARGET,
-        message = nest_rs_core::operation_log::unit::SCHEDULE_TICK,
+        message = crate::unit::TICK,
         provider = id.provider,
         method = id.method,
         outcome = settled,

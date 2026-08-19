@@ -6,8 +6,9 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{HandlerMetadata, Layer, injectable, module};
+use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Ctx, Reflector, async_trait, controller, routes};
 use nest_rs_testing::TestApp;
 use poem::Request;

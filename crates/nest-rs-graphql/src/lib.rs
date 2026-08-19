@@ -50,6 +50,7 @@ mod operation;
 mod resolver;
 mod scope;
 mod subscription;
+pub mod unit;
 
 pub use config::GraphqlConfig;
 /// Per-operation seam the endpoint runs around every request. Implemented by
@@ -73,7 +74,7 @@ pub use opaque::Opaque;
 pub use operation::GraphqlOperationContext;
 pub use resolver::{
     GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
-    GraphqlSubscriptionObject,
+    GraphqlSubscriptionObject, ResolverDescriptor,
 };
 /// Resolver-side accessor for `#[injectable(scope = request)]` providers — the
 /// GraphQL mirror of `nest_rs_http::Scoped<T>`. Reachable in resolver bodies,

@@ -9,12 +9,14 @@
 //! and the operator gets no sign that it did.
 //!
 //! That shipped. `nest_rs::access` carried the one line every edge files per
-//! unit of work, and `nest_rs::access_graph` carries the boot `warn` naming
+//! unit of work, and `nest_rs::access_graph` carried the boot `warn` naming
 //! resolvers unreachable from the GraphQL schema. The toggle the docs handed
 //! out — `<PREFIX>_LOG=info,nest_rs::access=off` — silenced both, so quieting
 //! the access log cost a startup diagnostic with nothing on the console to say
 //! so. Renaming the family's target to `nest_rs::operation` closed that pair;
-//! this join is what stops the next one.
+//! neither old name survives (that warn is `nest_rs::graphql`'s, filed by the
+//! crate that owns the resolver registry). This join is what stops the next
+//! one.
 //!
 //! Members are derived, never listed: every target spelled at a `tracing`
 //! emission site under `crates/` and `demo/`. The pair, not the target, is the
@@ -82,7 +84,7 @@ fn emitted_targets(root: &Path) -> (BTreeMap<String, BTreeSet<String>>, BTreeSet
     // next prefix pair gets introduced without anyone seeing it.
     for (target, krate, _) in declared_targets() {
         scan.found
-            .entry(target)
+            .entry((*target).to_owned())
             .or_default()
             .insert(format!("crates/{krate}"));
     }

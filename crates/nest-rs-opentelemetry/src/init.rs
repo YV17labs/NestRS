@@ -49,11 +49,13 @@ impl OpenTelemetry {
         if initialized() {
             return;
         }
-        let filter = std::env::var(nest_rs_core::EnvPrefix::var("LOG"))
-            .ok()
-            .and_then(|spec| EnvFilter::try_new(&spec).ok())
-            .or_else(|| EnvFilter::try_from_default_env().ok())
-            .unwrap_or_else(|| EnvFilter::new("warn"));
+        let filter = std::env::var(nest_rs_core::EnvPrefix::var(
+            nest_rs_core::logging::var::FILTER,
+        ))
+        .ok()
+        .and_then(|spec| EnvFilter::try_new(&spec).ok())
+        .or_else(|| EnvFilter::try_from_default_env().ok())
+        .unwrap_or_else(|| EnvFilter::new("warn"));
         let _ = Registry::default()
             .with(filter)
             .with(console_layer(LogFormat::Text, false))

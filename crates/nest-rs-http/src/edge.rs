@@ -426,22 +426,26 @@ where
             .access_log
             .then(|| AccessLog::open(&req, client, user_agent));
 
-        // Request scope + configured cap, ambient for everything inward —
-        // guards, extractors, the data layer, global pipes — and for the
-        // response body afterwards. Assembled here rather than inside `handle`
-        // because a streaming body outlives that future, and what it continues
-        // is *this* request, not a reconstruction of it.
+        // Request scope, ambient for everything inward — guards, extractors, the
+        // data layer, global pipes — and for the response body afterwards.
+        // Assembled here rather than inside `handle` because a streaming body
+        // outlives that future, and what it continues is *this* request, not a
+        // reconstruction of it.
         let scope = match &self.shared_scope {
             Some(shared) => Arc::clone(shared),
             None => Arc::new(RequestScope::new(self.container.clone())),
         };
-        let continuation =
-            RequestContinuation::new(Some(scope), correlation.clone(), self.body_limit);
+        let continuation = RequestContinuation::new(Some(scope), correlation.clone());
 
-        let result = self
-            .handle(req, &continuation)
-            .instrument(span.clone())
-            .await;
+        // The configured cap is installed *inside* the continuation and is not
+        // part of it: a whole-body cap is this transport's, and its two readers
+        // are extractors, which have run by the time a streaming body is
+        // written. See `raw_body::with_body_limit`.
+        let result = crate::raw_body::with_body_limit(
+            self.body_limit,
+            self.handle(req, &continuation).instrument(span.clone()),
+        )
+        .await;
         // Read here, before anything renders an `Err` into a `Response`: poem's
         // router attaches the matched template to whichever of the two came back,
         // and rendering builds a fresh response that carries none of it. This is

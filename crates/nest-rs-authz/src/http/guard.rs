@@ -4,8 +4,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{HandlerMetadata, Layer, injectable};
+use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
+use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Reflector, async_trait};
 use nest_rs_ws::WsClient;
 use poem::Request;
@@ -169,7 +170,7 @@ impl<F: AbilityFactory> nest_rs_guards::WsGuard for AbilityGuard<F> {}
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs_core::Public;
+    use nest_rs_http::Public;
 
     use super::*;
     use crate::{Ability, AbilityBuilder, Action, with_ability};

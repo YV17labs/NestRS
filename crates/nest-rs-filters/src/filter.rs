@@ -100,7 +100,7 @@ where
                 // The handler failed; this response only shapes the client
                 // answer. Tag it so the ambient transaction rolls back even
                 // when the mapped status reads as success.
-                resp.extensions_mut().insert(nest_rs_core::MappedError);
+                resp.extensions_mut().insert(nest_rs_http::MappedError);
                 Ok(resp)
             }
         }
@@ -158,7 +158,7 @@ where
                     let mut resp = entry.layer.as_ref().filter(&snapshot, err).await;
                     // Same tag as `FilterEndpoint`: the handler failed, the
                     // mapped status must not bless its writes.
-                    resp.extensions_mut().insert(nest_rs_core::MappedError);
+                    resp.extensions_mut().insert(nest_rs_http::MappedError);
                     Ok(resp)
                 }
             };
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(
             resp.extensions()
-                .get::<nest_rs_core::MappedError>()
+                .get::<nest_rs_http::MappedError>()
                 .is_none()
         );
     }
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
         assert!(
             resp.extensions()
-                .get::<nest_rs_core::MappedError>()
+                .get::<nest_rs_http::MappedError>()
                 .is_some(),
             "a mapped error response must carry the rollback tag",
         );
@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         assert!(
             resp.extensions()
-                .get::<nest_rs_core::MappedError>()
+                .get::<nest_rs_http::MappedError>()
                 .is_none()
         );
     }
@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
         assert!(
             resp.extensions()
-                .get::<nest_rs_core::MappedError>()
+                .get::<nest_rs_http::MappedError>()
                 .is_some(),
             "a mapped error response must carry the rollback tag",
         );

@@ -81,7 +81,7 @@ async fn the_innermost_filter_maps_and_outer_filters_never_see_the_error() {
     );
     assert!(
         resp.extensions()
-            .get::<nest_rs_core::MappedError>()
+            .get::<nest_rs_http::MappedError>()
             .is_some(),
         "a mapped error response carries the rollback tag",
     );
@@ -114,7 +114,7 @@ async fn a_successful_handler_passes_through_every_filter_unmapped() {
     );
     assert!(
         resp.extensions()
-            .get::<nest_rs_core::MappedError>()
+            .get::<nest_rs_http::MappedError>()
             .is_none(),
         "an unmapped success is never tagged for rollback",
     );

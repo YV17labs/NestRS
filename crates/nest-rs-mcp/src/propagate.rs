@@ -136,7 +136,7 @@ impl<H> PropagatingHandler<H> {
         let operation = nest_rs_core::operation_span!(
             target: crate::TARGET,
             kind: nest_rs_core::operation_log::kind::SERVER,
-            nest_rs_core::operation_log::unit::MCP_OPERATION,
+            crate::unit::OPERATION,
             &correlation,
         );
 
@@ -144,7 +144,7 @@ impl<H> PropagatingHandler<H> {
         // scope installation are the same future, and this runs on every MCP
         // operation.
         let scoped: BoxFuture<'_, OperationOutcome> = Box::pin(async move {
-            nest_rs_core::with_request_scope(scope, correlation, None, inner)
+            nest_rs_core::with_request_scope(scope, correlation, inner)
                 .await
                 .map(OperationValue::new)
         });
@@ -178,11 +178,11 @@ impl<H> PropagatingHandler<H> {
             // context carries no ids at all — which is exactly what it did until a
             // capture of real output showed the gap. Outside is still the right
             // depth: here the guard's verdict and the whole duration are known.
-            nest_rs_core::RequestContinuation::new(None, reported, None).enter(|| {
+            nest_rs_core::RequestContinuation::new(None, reported).enter(|| {
                 tracing::info!(
-                    name: nest_rs_core::operation_log::unit::MCP_OPERATION,
+                    name: crate::unit::OPERATION,
                     target: nest_rs_core::operation_log::TARGET,
-                    message = nest_rs_core::operation_log::unit::MCP_OPERATION,
+                    message = crate::unit::OPERATION,
                     // The JSON-RPC method this operation was, which is what a
                     // client addressed. Not `mcp.method`: a dotted field name is
                     // ambiguous to `tracing`'s parser beside a bare-ident value.
@@ -254,7 +254,7 @@ macro_rules! notification_method {
                 let McpAmbient { scope, span, correlation, .. } =
                     McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
                 let started = std::time::Instant::now();
-                nest_rs_core::with_request_scope(scope, correlation, None, async move {
+                nest_rs_core::with_request_scope(scope, correlation, async move {
                     self.inner.$name($($arg,)* context).await;
                     // A notification is dispatched work, so it files the family's
                     // line like every other unit — the same message as a request
@@ -265,9 +265,9 @@ macro_rules! notification_method {
                     // notification handler returns `()`, so it has no failure
                     // channel, and had it unwound this line would not be reached.
                     tracing::info!(
-                        name: nest_rs_core::operation_log::unit::MCP_OPERATION,
+                        name: crate::unit::OPERATION,
                         target: nest_rs_core::operation_log::TARGET,
-                        message = nest_rs_core::operation_log::unit::MCP_OPERATION,
+                        message = crate::unit::OPERATION,
                         operation = stringify!($name),
                         outcome = nest_rs_core::operation_log::OK,
                         duration_ms = nest_rs_core::operation_log::duration_ms(started),

@@ -1,13 +1,15 @@
 //! Layer System — the unified vocabulary for cross-cutting concerns.
 //!
 //! A *layer* is any cross-cutting concern that wraps a handler. There are
-//! four canonical [`LayerKind`]s:
+//! five canonical [`LayerKind`]s, one per sub-trait crate:
 //!
 //! - [`LayerKind::Guard`] — gates access.
 //! - [`LayerKind::Interceptor`] — wraps handler execution (logging, txn,
 //!   response shaping, request preprocessing).
 //! - [`LayerKind::Pipe`] — input transform / validation.
-//! - [`LayerKind::ExceptionFilter`] — maps thrown errors to responses.
+//! - [`LayerKind::Filter`] — maps an `Err` escaping the handler to a response.
+//! - [`LayerKind::ExceptionFilter`] — maps a **typed** thrown error, closest to
+//!   the handler.
 //!
 //! The execution order across kinds is fixed by the framework. On a routed
 //! HTTP request: Guard → Pipe → scoped Interceptor → handler, with the
@@ -19,21 +21,28 @@
 //! tiebreaker; priority orders entries *within* a site, never across sites.
 //!
 //! See `nest_rs_guards`, `nest_rs_pipes`, `nest_rs_interceptors`,
-//! `nest_rs_filters`, `nest_rs_exception_filters` for the sub-traits — one
-//! crate per [`LayerKind`].
+//! `nest_rs_filters`, `nest_rs_exception_filters` for the sub-traits — five
+//! crates, and one [`LayerKind`] each.
 
 use std::sync::Arc;
 
-/// What kind of layer this is — one of the four canonical roles. Drives
-/// the fixed execution order across kinds; intra-kind order comes from
-/// declaration plus [`Layer::priority`].
+/// What kind of layer this is — one role per sub-trait, and the vocabulary the
+/// fixed execution order across kinds is written in.
 ///
-/// Each sub-trait corresponds to exactly one variant — the kind is
-/// determined by the trait, not by an instance method, so there is no
-/// runtime ambiguity about what role a layer plays.
+/// **Vocabulary, not state.** The framework constructs no value of this type and
+/// matches on none: a layer's kind is decided by the sub-trait it implements, so
+/// there is no `kind()` to override and nothing to keep in step at runtime. What
+/// it is for is naming a slot in prose and in a doc link — `nest-rs-pipes` points
+/// at [`Pipe`](Self::Pipe) to say where a global pipe runs.
 ///
-/// Pre-handler request shaping has no dedicated variant: it is expressed
-/// as an [`Interceptor`](../../nest_rs_interceptors/trait.Interceptor.html).
+/// **Five, and it shipped as four.** `Filter` had no variant while
+/// `nest-rs-filters` shipped a `Layer` sub-trait like its four siblings, under a
+/// module doc that reads "one crate per `LayerKind`" beside a list of five
+/// crates. A vocabulary missing a member is worse than none: the reader counts
+/// the list, finds four, and concludes the fifth family is something else.
+///
+/// Pre-handler request shaping has no dedicated variant: it is expressed as an
+/// `Interceptor`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LayerKind {
@@ -43,7 +52,9 @@ pub enum LayerKind {
     Interceptor,
     /// Input transform / validation.
     Pipe,
-    /// Maps thrown errors to responses.
+    /// Maps an `Err` escaping the handler to a response.
+    Filter,
+    /// Maps a **typed** thrown error to a response, closest to the handler.
     ExceptionFilter,
 }
 
@@ -61,10 +72,15 @@ pub enum LayerKind {
 pub enum LayerSite {
     /// `App::builder().use_*_global(...)`.
     Global,
-    /// `#[module(layers = ...)]`.
-    Module,
-    /// `#[use_*]` on a controller/resolver/gateway struct.
-    Controller,
+    /// `#[use_*]` on the **host** struct — a controller, resolver, gateway or
+    /// `#[mcp]` host.
+    ///
+    /// Named for the role every edge shares rather than for HTTP's word for it:
+    /// this variant is what a guard declared on an `#[mcp]` host or a
+    /// `#[resolver]` is reported under, and `controller` named a decorator
+    /// their file does not contain. `framework.md` already calls the struct half
+    /// of every pair the host.
+    Host,
     /// `#[use_*]` beside an individual handler/method.
     Method,
 }
@@ -74,19 +90,23 @@ impl LayerSite {
     pub fn label(self) -> &'static str {
         match self {
             Self::Global => "global",
-            Self::Module => "module",
-            Self::Controller => "controller",
+            Self::Host => "host",
             Self::Method => "method",
         }
     }
 }
 
-/// Common metadata for every layer kind. Sub-traits ([`Guard`](../../nest_rs_guards/trait.Guard.html),
-/// [`Interceptor`](../../nest_rs_interceptors/trait.Interceptor.html),
-/// [`Filter`](../../nest_rs_filters/trait.Filter.html),
-/// [`GlobalPipe`](../../nest_rs_pipes/trait.GlobalPipe.html),
-/// [`ExceptionFilter`](../../nest_rs_exception_filters/trait.ExceptionFilter.html))
-/// extend this to pick up [`Layer::priority`] and a dedup-friendly identity.
+/// Common metadata for every layer kind. Sub-traits — `Guard`, `Interceptor`,
+/// `Filter`, `GlobalPipe`, `ExceptionFilter` — extend this to pick up
+/// [`Layer::priority`] and a dedup-friendly identity.
+///
+/// Named rather than linked, and it is a limit rather than a preference:
+/// rustdoc resolves an intra-doc link only against the dependency graph, and
+/// this crate sits *below* all five, so it cannot have one. The hand-rolled
+/// relative URLs that stood here (`../../nest_rs_guards/trait.Guard.html`)
+/// resolved under a workspace-wide `cargo doc` and 404'd on docs.rs, where each
+/// crate is published under its own root — a dead link on this crate's
+/// most-read page.
 ///
 /// The layer's [`LayerKind`] is determined by its sub-trait — there is no
 /// `kind()` method to override.

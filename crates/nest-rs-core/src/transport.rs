@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::container::Container;
 
 /// Anything that accepts inbound requests on behalf of the app — an HTTP
-/// server, MCP-over-stdio loop, gRPC server, ….
+/// server, a scheduler, a queue worker, gRPC server, ….
 ///
 /// Lifecycle only: protocol-level concerns (message patterns, retries, ack
 /// semantics) live in the transport's own crate.

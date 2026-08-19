@@ -18,9 +18,10 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nest_rs_core::{Layer, MappedError, injectable, module};
+use nest_rs_core::{Layer, injectable, module};
 use nest_rs_filters::{Filter, RequestSnapshot, filter};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
+use nest_rs_http::MappedError;
 use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;

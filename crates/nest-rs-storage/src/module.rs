@@ -33,7 +33,8 @@ impl StorageModule {
     }
 }
 
-/// [`DynamicModule`] returned by [`StorageModule::for_root`]: resolves
+/// [`DynamicModule`](nest_rs_core::DynamicModule) returned by
+/// [`StorageModule::for_root`]: resolves
 /// [`StorageConfig`] (env over the pinned base), then brings the base
 /// [`StorageModule`] wiring. The factory is queued first, so it wins over — and
 /// skips — the plain env factory the base module queues.

@@ -18,8 +18,13 @@ publish = false
 syn = { workspace = true, features = ["visit"] }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
+
 # The umbrella's `[features]` table is read with a TOML parser for the reason the
-# rest is read with `syn`: a wrapped list is what a line scan gets wrong.
+# rest is read with `syn`: a wrapped list is what a line scan gets wrong. Its one
+# reader is the `umbrella` join, so it is a dev edge — nothing under `src/` names
+# it, and a normal dependency would put a TOML parser in the graph of anything
+# that ever links this crate.
+[dev-dependencies]
 toml_edit = { workspace = true }
 
 [lints]

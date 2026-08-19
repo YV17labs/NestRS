@@ -11,14 +11,14 @@
 //! wrap inside it via `route_layers`.
 //!
 //! Note: `#[public]` is NOT a framework-level skip — the macro attaches
-//! a [`Public`](nest_rs_core::Public) marker via the same metadata
+//! a [`Public`](nest_rs_http::Public) marker via the same metadata
 //! mechanism as `#[meta(...)]`, and individual guards decide whether to
 //! honor it.
 //!
 //! ## GraphQL — inline chain call, composed once per site
 //!
 //! The `#[operations]` macro emits a call to `run_layered_graphql_chain` at
-//! the start of every handler method, beside a `static` [`GraphqlChainCell`]
+//! the start of every handler method, beside a `static` `SiteChainCell`
 //! that memoizes the composed chain per container — GraphQL has no mount seam
 //! to bake a shaper into, so the site is its own. WS has no inline runner: the
 //! `#[messages]` macro composes its per-event guard table at gateway

@@ -26,7 +26,12 @@ pub enum Environment {
 
 impl Environment {
     /// Call at the top of `main`, before anything that reads the environment
-    /// outside the DI graph. Idempotent with `ConfigModule::for_root`.
+    /// outside the DI graph. **Not** what
+    /// `ConfigModule::for_root` does: that import registers an [`Environment`] and
+    /// deliberately publishes nothing, so an app that drops this call keeps the
+    /// typed reads and loses the process-env merge every non-config consumer
+    /// depends on — `<PREFIX>_LOG*`, `OpenTelemetry::init`, a `migrate` binary, and
+    /// [`Environment::declared`]. Calling it twice is harmless.
     ///
     /// Two effects, both one-shot:
     ///
@@ -196,7 +201,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "CASCADE_INIT_A=base\nCASCADE_INIT_B=base")?;
             jail.create_file(".env.development", "CASCADE_INIT_B=dev")?;
-            jail.set_env("NESTRS_ENV", "development");
+            jail.set_env(Environment::var_name(), "development");
             jail.set_env("CASCADE_INIT_C", "from_real_env");
             jail.create_file(".env.development.local", "CASCADE_INIT_C=from_file")?;
 

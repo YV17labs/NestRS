@@ -17,6 +17,34 @@ pub trait Namespaced {
     const NAMESPACE: &'static str;
 }
 
+/// Read `C`'s namespace over `base`, recording which variables it claimed.
+///
+/// The seam every path into `from_env` takes, and it exists because there are
+/// **three**: [`Config::resolve`] for a `for_root` pin and for a bare
+/// `for_feature` import, and a discovery registry reading a plugin's own
+/// namespace — `architecture.md`'s third row, which `nest-rs-social` takes and
+/// which claimed nothing while the recording sat on `resolve` alone. A registry
+/// that must tell *unconfigured* from *invalid* cannot call `resolve` (it
+/// validates after its own check), so the claim had to move below the
+/// validation rather than the registry move above it.
+///
+/// **A free function, not a trait method with a default body**, and that
+/// distinction is the whole guarantee. [`Config`] is hand-implemented by every
+/// `#[config]` author — the decorator emits only [`Namespaced`] — so writing
+/// `fn read` beside their own `from_env` withdrew that type from the claim
+/// registry silently, with the boot green and no diagnostic anywhere.
+/// `framework.md` names that shape and calls it a shipped defect: *"A refusal
+/// that reads a missing marker is fillable"* — here it was worse, a *present*
+/// default the checked party could replace. It stays `pub` — `nest-rs-social`'s
+/// registry is the third caller — because what had to go is the *override*, not
+/// the reachability: a free function cannot be replaced by the type it checks.
+pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
+    let (value, claim) = crate::service::claiming::<C, _>(|| C::from_env(env, base));
+    let value = value?;
+    claim?;
+    Ok(value)
+}
+
 /// A namespaced configuration type.
 ///
 /// [`from_env`](Self::from_env) is the **explicit** field-by-field overlay of
@@ -67,6 +95,10 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     /// when the call site supplied one, on [`defaults`](Self::defaults)
     /// otherwise, then validated. The single entry point
     /// `ConfigModule::provide_feature` calls.
+    ///
+    /// The precedence a pin buys is narrower than a pin looks: a pinned base is
+    /// deliberate, so only the *deployment* tier outranks it, while an unpinned
+    /// base is a default the `.env` cascade outranks too.
     fn resolve(pinned: Option<Self>) -> Result<Self> {
         let env = ConfigService::for_namespace(Self::NAMESPACE);
         // A pinned base is deliberate, so only the deployment tier outranks it;
@@ -75,7 +107,7 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
             Some(pinned) => (env.over_pinned(), pinned),
             None => (env, Self::defaults()),
         };
-        let config = Self::from_env(&env, base)?;
+        let config = read(&env, base)?;
         // Tagged with the namespace here rather than through a blanket `From`:
         // the namespace is what tells an operator *which* config failed when
         // several are loaded, and only this call site knows it.
@@ -98,6 +130,7 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
 mod tests {
     use super::*;
     use crate::ConfigError;
+    use crate::service::var_name;
 
     // Hand-written impl: the macro emits ::nest_rs_config::Config which a crate
     // cannot resolve against itself. End-to-end wiring is covered in nest-rs-testing.
@@ -132,9 +165,9 @@ mod tests {
     #[test]
     fn load_maps_each_field_from_its_variable() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_TESTDB__URL", "postgres://localhost/app");
-            jail.set_env("NESTRS_TESTDB__MAX_CONNECTIONS", "5");
-            let cfg = DbCfg::load().expect("config loads from NESTRS_TESTDB__*");
+            jail.set_env(var_name("testdb", "URL"), "postgres://localhost/app");
+            jail.set_env(var_name("testdb", "MAX_CONNECTIONS"), "5");
+            let cfg = DbCfg::load().expect("config loads from its namespace");
             assert_eq!(
                 cfg,
                 DbCfg {
@@ -149,7 +182,7 @@ mod tests {
     #[test]
     fn load_falls_back_to_defaults_when_unset() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_TESTDB__URL", "postgres://localhost/app");
+            jail.set_env(var_name("testdb", "URL"), "postgres://localhost/app");
             let cfg = DbCfg::load().expect("config loads with defaults");
             assert_eq!(cfg.max_connections, 10);
             Ok(())
@@ -198,7 +231,11 @@ mod tests {
     #[test]
     fn a_committed_dotenv_file_loses_to_a_for_root_pin() {
         figment::Jail::expect_with(|jail| {
-            jail.create_file(".env", "NESTRS_PINFILE__PORT=3555")?;
+            // Built, not spelled: a `.env` line is a variable name like any
+            // other, and a literal one is read by nobody under a renamed prefix
+            // — which reads as "the cascade lost", i.e. as this test passing for
+            // the wrong reason.
+            jail.create_file(".env", &format!("{}=3555", var_name("pinfile", "PORT")))?;
             crate::dotenv::load_cascade(std::path::Path::new("."), crate::Environment::Development);
 
             assert_eq!(
@@ -222,7 +259,7 @@ mod tests {
     #[test]
     fn a_real_deployment_variable_outranks_a_for_root_pin() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_PINDEPLOY__PORT", "3555");
+            jail.set_env(var_name("pindeploy", "PORT"), "3555");
 
             assert_eq!(
                 PinnedVsDeployCfg::resolve(Some(PinnedVsDeployCfg { port: 8080 }))
@@ -238,7 +275,7 @@ mod tests {
     #[test]
     fn load_validates_on_the_way_in() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_TESTDB__MAX_CONNECTIONS", "0");
+            jail.set_env(var_name("testdb", "MAX_CONNECTIONS"), "0");
             let err = DbCfg::load().expect_err("max_connections = 0 violates min = 1");
             assert!(matches!(err, ConfigError::Validation { .. }));
             Ok(())
@@ -248,10 +285,10 @@ mod tests {
     #[test]
     fn load_fails_loudly_on_an_unparseable_value() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_TESTDB__MAX_CONNECTIONS", "lots");
+            jail.set_env(var_name("testdb", "MAX_CONNECTIONS"), "lots");
             let err = DbCfg::load().expect_err("non-numeric must abort the boot");
             assert!(
-                matches!(err, ConfigError::Parse { ref var, .. } if var == "NESTRS_TESTDB__MAX_CONNECTIONS")
+                matches!(err, ConfigError::Parse { ref var, .. } if *var == var_name("testdb", "MAX_CONNECTIONS"))
             );
             Ok(())
         });

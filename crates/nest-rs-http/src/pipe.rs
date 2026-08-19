@@ -185,12 +185,6 @@ where
 mod tests {
     use super::*;
 
-    fn test_scope() -> std::sync::Arc<nest_rs_core::RequestScope> {
-        std::sync::Arc::new(nest_rs_core::RequestScope::new(
-            nest_rs_core::Container::builder().build(),
-        ))
-    }
-
     #[tokio::test]
     async fn reject_emits_a_problem_json_400_with_the_message() {
         let err = PipeError::new("not a uuid");
@@ -399,9 +393,7 @@ mod tests {
             .body(Body::from_json(&payload).expect("body serializes"))
             .split();
 
-        let err = match crate::with_request_scope(
-            Some(test_scope()),
-            nest_rs_core::Correlation::mint(),
+        let err = match crate::raw_body::with_body_limit(
             Some(4),
             Valid::<Json<Greeting>>::from_request(&req, &mut body),
         )
@@ -421,14 +413,10 @@ mod tests {
             .body(Body::from_json(&payload).expect("body serializes"))
             .split();
 
-        let v: Valid<Json<Greeting>> = crate::with_request_scope(
-            Some(test_scope()),
-            nest_rs_core::Correlation::mint(),
-            Some(4096),
-            Valid::from_request(&req, &mut body),
-        )
-        .await
-        .expect("body fits under the cap");
+        let v: Valid<Json<Greeting>> =
+            crate::raw_body::with_body_limit(Some(4096), Valid::from_request(&req, &mut body))
+                .await
+                .expect("body fits under the cap");
         assert_eq!(v.into_inner(), payload);
     }
 

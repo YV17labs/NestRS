@@ -46,6 +46,34 @@ use crate::env_prefix::EnvPrefix;
 use crate::request_scope::current_request_ctx;
 use crate::trace_context::Correlation;
 
+/// The tails of the framework-wide logging variables, joined with the
+/// deployment's prefix by [`EnvPrefix::var`](crate::EnvPrefix::var).
+///
+/// Declared because `EnvPrefix::var` builds the *prefix* and leaves the name to
+/// its caller, so nothing held these: `LOG`, `LOG_FORMAT` and
+/// `LOG_SOURCE_LOCATION` were re-typed at seven sites in three crates, and this
+/// family has **two** subscribers that must agree — the kernel's fallback logger
+/// and `nest-rs-opentelemetry`'s. A rename in one of them changes behaviour in
+/// that one alone, and `EnvPrefix::var("LOG_FORMATT")` compiles and reads
+/// nothing, forever.
+///
+/// The precedent is one crate over and states the rule: `Environment::var_name`
+/// is public "because a harness that must decide the environment before the
+/// framework does has to name the same variable, **and a second literal there is
+/// exactly how a rename half-lands**".
+///
+/// `nest-rs-cli` keeps its own spelling in the scaffold templates, and that is
+/// forced rather than excused — it links no `nest-rs-*` crate, the same reason
+/// it mirrors `var_name`.
+pub mod var {
+    /// `<PREFIX>_LOG` — the `EnvFilter` directive the process logs under.
+    pub const FILTER: &str = "LOG";
+    /// `<PREFIX>_LOG_FORMAT` — `text` or `json`.
+    pub const FORMAT: &str = "LOG_FORMAT";
+    /// `<PREFIX>_LOG_SOURCE_LOCATION` — whether a line carries file and line.
+    pub const SOURCE_LOCATION: &str = "LOG_SOURCE_LOCATION";
+}
+
 /// Shape of the console log layer's output.
 ///
 /// **The grammar of `<PREFIX>_LOG_FORMAT` is worded here and nowhere else.** It
@@ -93,23 +121,10 @@ impl LogFormat {
     }
 }
 
-/// Canonical env-flag grammar for every framework boolean var: `1`/`true`/`yes`/
-/// `on` ⇒ `true`, `0`/`false`/`no`/`off` ⇒ `false`, anything else ⇒ `None`.
-/// Case-insensitive, trimmed. The caller applies its own default for the
-/// unrecognized and absent cases — source location defaults off, an access log
-/// defaults on — which keeps the truthy/falsy vocabulary in one place.
-pub fn parse_bool(raw: &str) -> Option<bool> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
-
-/// [`parse_bool`] against a named variable, `false` when it is unset or
+/// [`parse_bool`](crate::parse_bool) against a named variable, `false` when it is unset or
 /// unrecognized.
 fn bool_from_env(name: &str) -> bool {
-    std::env::var(name).ok().and_then(|v| parse_bool(&v)) == Some(true)
+    std::env::var(name).ok().and_then(|v| crate::parse_bool(&v)) == Some(true)
 }
 
 /// SGR sequences, spelled out rather than pulled from a colour crate:
@@ -267,7 +282,6 @@ impl Visit for FixedWidthDurations<'_> {
 /// `file:line` is [`source_location`](Self::new) — the one knob both console
 /// sites actually set. ANSI still follows the writer, so a layer with colour
 /// disabled stays plain.
-
 #[derive(Clone, Copy, Debug)]
 pub struct TextFormat {
     source_location: bool,
@@ -350,9 +364,14 @@ where
 /// `level`, `fields`, `target`, `filename`, `line_number` — so a pipeline
 /// reading this output keeps reading it.
 ///
-/// One line is deliberately not like the others: the HTTP **access log** is
-/// filed after the request's context has been left behind (it is nobody's child
-/// event), so its ids arrive as its own event fields and land inside `fields`.
+/// **Every line's ids are top-level, with no exception**, and the paragraph that
+/// used to record one here described a shape that was removed on purpose: the
+/// HTTP operation line writes no `trace_id`, `span_id` or `actor_id` of its own
+/// (`nest_rs_http::access_log` says so at the emit site), because the formatter
+/// reads them off the ambient correlation and spelling them as event fields
+/// would print them twice in text and put them in two positions in this
+/// envelope. The request's context is re-entered around that line for exactly
+/// that reason.
 #[derive(Clone, Copy, Debug)]
 pub struct JsonFormat {
     source_location: bool,
@@ -555,7 +574,7 @@ impl Visit for EventSource {
 /// unparseable directive is a config error that aborts boot, never a silent
 /// downgrade to the default.
 fn filter_from_env() -> Result<EnvFilter> {
-    let log_var = EnvPrefix::var("LOG");
+    let log_var = EnvPrefix::var(var::FILTER);
     let (var, spec) = match std::env::var(&log_var) {
         Ok(v) => (log_var.as_str(), v),
         Err(_) => match std::env::var("RUST_LOG") {
@@ -575,11 +594,11 @@ pub(crate) fn init_fallback() -> Result<()> {
         return Ok(());
     }
     let filter = filter_from_env()?;
-    let source_location = bool_from_env(&EnvPrefix::var("LOG_SOURCE_LOCATION"));
+    let source_location = bool_from_env(&EnvPrefix::var(var::SOURCE_LOCATION));
     let builder = tracing_subscriber::fmt().with_env_filter(filter);
     // A lost race against a concurrent install is the "already set" case —
     // the fallback steps aside; it never unseats another subscriber.
-    let format = std::env::var(EnvPrefix::var("LOG_FORMAT")).ok();
+    let format = std::env::var(EnvPrefix::var(var::FORMAT)).ok();
     let _ = match LogFormat::resolve(format.as_deref()) {
         // Both branches are the framework's own `FormatEvent`; [`TextFormat`]
         // carries the argument for why, and for why `with_file` /
@@ -674,7 +693,7 @@ mod tests {
         let correlation = Correlation::mint();
         let trace_id = correlation.trace_id().to_string();
         let span_id = correlation.span_id().to_string();
-        with_request_scope(None, correlation, None, async {
+        with_request_scope(None, correlation, async {
             set_actor_id(actor);
             tracing::subscriber::with_default(Registry::default().with(layer), emit_service_event);
         })
@@ -700,15 +719,26 @@ mod tests {
         render(layer, captured, actor).await
     }
 
+    /// The canonical name of a unit of work belongs to the crate that owns the
+    /// edge, so the kernel cannot name one — see `operation_log`. These are
+    /// formatter tests, so the name is a **fixture**: a namespace outside the
+    /// closed edge vocabulary, deliberately, because copying a real one
+    /// (`schedule.tick`) is not standing in for it — it is the same string,
+    /// asserted from a file that cannot see the constant, which is the copied
+    /// literal `CLAUDE.md` forbids wearing a fixture's name. The `units` join
+    /// reads no `#[cfg(test)]` emission, so nothing here joins the vocabulary
+    /// either way.
+    const FIXTURE_UNIT: &str = "fixture.line";
+
     /// One operation line, the shape every edge files through
     /// [`operation_log`](crate::operation_log) — a duration and a plain `f64`
     /// beside it, so a formatter that pads too widely is caught by the same
     /// event.
     fn emit_operation_line(duration: f64) {
         tracing::info!(
-            name: crate::operation_log::unit::SCHEDULE_TICK,
+            name: FIXTURE_UNIT,
             target: crate::operation_log::TARGET,
-            message = crate::operation_log::unit::SCHEDULE_TICK,
+            message = FIXTURE_UNIT,
             method = "close_idle_views",
             outcome = crate::operation_log::OK,
             duration_ms = duration,
@@ -770,7 +800,7 @@ mod tests {
             line.contains(&format!(
                 "{}: {}",
                 crate::operation_log::TARGET,
-                crate::operation_log::unit::SCHEDULE_TICK
+                FIXTURE_UNIT
             )),
             "{line}",
         );
@@ -1012,25 +1042,55 @@ mod tests {
         assert!(EnvFilter::try_new("foo=notalevel").is_err());
     }
 
-    /// The documented family toggle silences the family and **nothing else**.
+    /// `EnvFilter` matches a directive against an event's target with
+    /// `starts_with` on the **raw string**, not on `::` segments.
     ///
-    /// `EnvFilter` compares a directive's target to an event's with
-    /// `starts_with` on the raw string, not on `::` segments, so a target that
-    /// prefixes another switches that one off too. This is the behaviour the
-    /// `filters` join in `nest-rs-conformance` rests on, asserted here because
-    /// it is a property of `tracing-subscriber` rather than of our tree — a
-    /// version that ever matched by segment would make the join's whole subject
-    /// disappear, silently.
+    /// This is a property of `tracing-subscriber`, not of our tree, and the
+    /// `filters` join in `nest-rs-conformance` rests entirely on it: if a
+    /// version ever matched by segment, that join's whole subject would
+    /// disappear with nothing to say so. It shipped as a defect once —
+    /// `nest_rs::access`, the family's target through 5.1, prefixed
+    /// `nest_rs::access_graph`, so the toggle the docs handed operators also
+    /// took away a boot diagnostic.
     ///
-    /// The neighbour is `nest_rs::access_graph`, which is not a fixture: it
-    /// carries the boot `warn` naming resolvers unreachable from the GraphQL
-    /// schema, and the family's target was `nest_rs::access` through 5.1 — so
-    /// the toggle the docs handed operators also took that diagnostic away,
-    /// with nothing on the console to say it had. Its real message is asserted
-    /// by the graphql suite; a fixture sentence is used here so that this test
-    /// covers the *filter* and cannot stand in for that coverage.
+    /// **Proving it needs a strict extension.** A directive that is a *prefix*
+    /// of the event's target must silence it; two targets that merely share the
+    /// `nest_rs::` root prove nothing, because they are silenced apart under
+    /// either matching rule — which is what the previous version of this test
+    /// compared, so it could not fail on the behaviour it names. `nest_rs::op`
+    /// is deliberately not a target anything declares: it exists to be a strict
+    /// prefix of one that is.
     #[test]
-    fn the_family_toggle_silences_the_family_and_not_a_target_it_prefixes() {
+    fn a_directive_matches_a_target_by_raw_prefix_not_by_segment() {
+        let family = crate::operation_log::TARGET;
+        let prefix = &family[..family.len() - 5];
+        assert!(
+            family.starts_with(prefix) && prefix != family,
+            "the fixture must be a strict prefix of a real target: {prefix} / {family}",
+        );
+
+        let captured = Captured::default();
+        let subscriber = Registry::default()
+            .with(EnvFilter::new(format!("info,{prefix}=off")))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .event_format(TextFormat::new(false))
+                    .with_ansi(false)
+                    .with_writer(captured.clone()),
+            );
+        tracing::subscriber::with_default(subscriber, || emit_operation_line(0.5));
+
+        assert!(
+            captured.take().is_empty(),
+            "`{prefix}=off` must silence `{family}` — a segment matcher would let it \
+             through, and the `filters` join would be checking a property nothing has",
+        );
+    }
+
+    /// And the documented family toggle silences the family and **nothing
+    /// else** — the other half, and the one an operator relies on.
+    #[test]
+    fn the_family_toggle_leaves_a_target_it_does_not_prefix_alone() {
         let captured = Captured::default();
         let subscriber = Registry::default()
             .with(EnvFilter::new(format!(
@@ -1047,21 +1107,17 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             emit_operation_line(0.5);
             tracing::warn!(
-                target: crate::target::ACCESS_GRAPH,
-                resolver = "PostResolver",
+                target: crate::target::APP,
+                phase = "boot",
                 "a neighbour the family toggle must leave alone",
             );
         });
 
         let out = captured.take();
-        assert!(
-            !out.contains(crate::operation_log::unit::SCHEDULE_TICK),
-            "the family is off: {out}",
-        );
+        assert!(!out.contains(FIXTURE_UNIT), "the family is off: {out}");
         assert!(
             out.contains("a neighbour the family toggle must leave alone"),
-            "a target the family's merely prefixes is not the family's to \
-             silence: {out}",
+            "a target the family does not prefix is not the family's to silence: {out}",
         );
     }
 }

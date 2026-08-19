@@ -441,7 +441,7 @@ impl ServerHandler for CompositeHandler {
     // --- completion & logging --------------------------------------------------
 
     /// A host with nothing to complete answers `Ok` with an empty list rather
-    /// than *not-found*, so [`route`](CompositeHandler::route) cannot tell it
+    /// than *not-found*, so `route` cannot tell it
     /// apart from a real answer: the first **non-empty** completion wins, and an
     /// empty one is kept only as the fallback.
     ///
@@ -557,7 +557,7 @@ impl ServerHandler for CompositeHandler {
     }
 
     /// One endpoint negotiates one version, so it may only advertise what
-    /// **every** host on the path implements — [`common_protocol_versions`],
+    /// **every** host on the path implements — `common_protocol_versions`,
     /// the same computation the boot check verdicts on. An empty intersection is
     /// refused at boot, so falling back to the primary host's list is a guard
     /// rail rather than a live case.

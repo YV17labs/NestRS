@@ -11,7 +11,8 @@ use poem::http::StatusCode;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
 
 /// Resolves a provider of type `T` from the current request's
-/// [`RequestScope`] the transport edge installed. Rejects with `500` if the
+/// [`RequestScope`](nest_rs_core::RequestScope) the transport edge installed.
+/// Rejects with `500` if the
 /// scope is absent (a transport wiring bug) or if no provider is registered
 /// for `T`.
 pub struct Scoped<T>(pub Arc<T>);
@@ -86,7 +87,6 @@ mod tests {
         let scoped: Scoped<Marker> = crate::with_request_scope(
             Some(scope),
             nest_rs_core::Correlation::mint(),
-            None,
             Scoped::from_request(&req, &mut body),
         )
         .await
@@ -123,7 +123,6 @@ mod tests {
         let err = match crate::with_request_scope(
             Some(scope),
             nest_rs_core::Correlation::mint(),
-            None,
             Scoped::<Marker>::from_request(&req, &mut body),
         )
         .await

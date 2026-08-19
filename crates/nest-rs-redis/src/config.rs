@@ -142,7 +142,7 @@ mod tests {
             ..Default::default()
         };
         let cfg = QueueConfig::from_env(
-            &ConfigService::with_vars("queue", [("NESTRS_QUEUE__URL", "redis://from-env:6379/")]),
+            &ConfigService::with_vars("queue", [("URL", "redis://from-env:6379/")]),
             pinned,
         )
         .expect("the overlay resolves");
@@ -177,7 +177,7 @@ mod tests {
         for env in [Environment::Staging, Environment::Production] {
             let err = resolve_url(None, env).expect_err("must abort");
             assert!(
-                err.to_string().contains("NESTRS_QUEUE__URL"),
+                err.to_string().contains("URL"),
                 "the error names the variable: {err}",
             );
             assert!(
@@ -198,8 +198,8 @@ mod tests {
             &ConfigService::with_vars(
                 "queue",
                 [
-                    ("NESTRS_QUEUE__URL", "redis://redis:6379"),
-                    ("NESTRS_QUEUE__SHUTDOWN_TIMEOUT_SECS", "5"),
+                    ("URL", "redis://redis:6379"),
+                    ("SHUTDOWN_TIMEOUT_SECS", "5"),
                 ],
             ),
             Default::default(),
@@ -221,10 +221,7 @@ mod tests {
         let cfg = QueueConfig::from_env(
             &ConfigService::with_vars(
                 "queue",
-                [
-                    ("NESTRS_QUEUE__URL", "redis://redis:6379"),
-                    ("NESTRS_QUEUE__CONNECT_TIMEOUT_SECS", "3"),
-                ],
+                [("URL", "redis://redis:6379"), ("CONNECT_TIMEOUT_SECS", "3")],
             ),
             Default::default(),
         )
@@ -237,17 +234,13 @@ mod tests {
         let err = QueueConfig::from_env(
             &ConfigService::with_vars(
                 "queue",
-                [
-                    ("NESTRS_QUEUE__URL", "redis://redis:6379"),
-                    ("NESTRS_QUEUE__CONNECT_TIMEOUT_SECS", "0"),
-                ],
+                [("URL", "redis://redis:6379"), ("CONNECT_TIMEOUT_SECS", "0")],
             ),
             Default::default(),
         )
         .expect_err("zero must abort boot");
         assert!(
-            err.to_string()
-                .contains("NESTRS_QUEUE__CONNECT_TIMEOUT_SECS"),
+            err.to_string().contains("CONNECT_TIMEOUT_SECS"),
             "the error names the variable: {err}",
         );
     }
@@ -268,10 +261,7 @@ mod tests {
     #[test]
     fn from_env_picks_up_a_custom_url() {
         let cfg = QueueConfig::from_env(
-            &ConfigService::with_vars(
-                "queue",
-                [("NESTRS_QUEUE__URL", "redis://redis.staging:6379/2")],
-            ),
+            &ConfigService::with_vars("queue", [("URL", "redis://redis.staging:6379/2")]),
             Default::default(),
         )
         .expect("ok");

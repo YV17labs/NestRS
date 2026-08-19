@@ -161,7 +161,7 @@ impl Ability {
     /// a principal at all? On HTTP that is the route's own posture (a
     /// non-`#[public]` route never reaches the visitor branch); on GraphQL,
     /// where the single `/graphql` endpoint is `#[public]` and posture is
-    /// declared per operation, [`graphql::authorize`](crate::graphql::authorize)
+    /// declared per operation, `graphql::authorize`
     /// reads this so a `define_visitor` grant cannot satisfy an
     /// `#[authorize(...)]` operation.
     ///

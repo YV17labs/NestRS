@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use nest_rs_config::{ConfigService, env_var};
 use nest_rs_core::EnvPrefix;
+use nest_rs_core::logging::var;
 
 /// The OTel SDK's own metric export period, restated so it is a named,
 /// documented default rather than a number buried in a dependency.
@@ -10,11 +11,13 @@ pub const DEFAULT_METRIC_INTERVAL: Duration = Duration::from_secs(60);
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///
 /// Env vars: the console layer reads the framework-wide logging family
-/// (`NESTRS_LOG`, `NESTRS_LOG_FORMAT`, `NESTRS_LOG_SOURCE_LOCATION` — the same
-/// variables nest-rs-core's fallback logger honours); everything OTel-specific
-/// lives under the `NESTRS_OPENTELEMETRY__` prefix
-/// (`NESTRS_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,SERVICE_ENVIRONMENT,
-/// SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO,METRIC_INTERVAL_SECS}`).
+/// (`<PREFIX>_LOG`, `<PREFIX>_LOG_FORMAT`, `<PREFIX>_LOG_SOURCE_LOCATION` — the
+/// same [`logging::var`](nest_rs_core::logging::var) names nest-rs-core's
+/// fallback logger honours); everything OTel-specific lives under this crate's
+/// namespace (`<PREFIX>_OPENTELEMETRY__{SERVICE_NAME,SERVICE_VERSION,
+/// SERVICE_ENVIRONMENT,SERVICE_INSTANCE_ID,OTLP_ENDPOINT,SAMPLE_RATIO,
+/// METRIC_INTERVAL_SECS}`). `<PREFIX>` is the deployment's, not a fixture —
+/// see [`EnvPrefix`].
 /// OTel exporter is wired only when `otlp_endpoint` is set; otherwise the
 /// subscriber stays console-only.
 #[derive(Clone, Debug)]
@@ -80,7 +83,8 @@ fn warn_unparseable(name: &str, raw: &str) {
 /// build-profile default, whichever subscriber ends up mounted. Re-exported
 /// rather than aliased so `nest_rs_opentelemetry::LogFormat` keeps naming the
 /// type a caller already writes.
-pub use nest_rs_core::logging::{LogFormat, parse_bool};
+pub use nest_rs_core::logging::LogFormat;
+pub use nest_rs_core::parse_bool;
 
 impl OpenTelemetryConfig {
     /// Config with framework defaults and the given `service.name`. `log_format`
@@ -127,15 +131,15 @@ impl OpenTelemetryConfig {
         // The console layer answers to the framework-wide logging family
         // (`<PREFIX>_LOG*`, owned by nest-rs-core's fallback logger) — an app's
         // log config survives adopting or dropping this crate unchanged.
-        if let Some(v) = env_var(&EnvPrefix::var("LOG")).or_else(|| env_var("RUST_LOG")) {
+        if let Some(v) = env_var(&EnvPrefix::var(var::FILTER)).or_else(|| env_var("RUST_LOG")) {
             cfg.log_filter = v;
         }
-        if let Some(raw) = env_var(&EnvPrefix::var("LOG_FORMAT"))
+        if let Some(raw) = env_var(&EnvPrefix::var(var::FORMAT))
             && let Some(fmt) = LogFormat::parse(&raw)
         {
             cfg.log_format = fmt;
         }
-        if let Some(raw) = env_var(&EnvPrefix::var("LOG_SOURCE_LOCATION")) {
+        if let Some(raw) = env_var(&EnvPrefix::var(var::SOURCE_LOCATION)) {
             cfg.log_source_location = parse_bool(&raw).unwrap_or(false);
         }
 
@@ -224,6 +228,7 @@ impl OpenTelemetryConfig {
 #[allow(clippy::result_large_err)]
 mod tests {
     use super::*;
+    use nest_rs_config::var_name;
 
     #[test]
     fn defaults_sample_everything() {
@@ -341,15 +346,18 @@ mod tests {
     #[test]
     fn from_env_overrides_each_field_when_set() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_NAME", "override-svc");
-            jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_VERSION", "9.9.9");
-            jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT", "prod");
-            jail.set_env("NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID", "pinned-1");
-            jail.set_env("NESTRS_LOG", "debug,hyper=warn");
-            jail.set_env("NESTRS_LOG_FORMAT", "json");
-            jail.set_env("NESTRS_LOG_SOURCE_LOCATION", "true");
-            jail.set_env("NESTRS_OPENTELEMETRY__OTLP_ENDPOINT", "http://otel:4318");
-            jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "0.25");
+            jail.set_env(var_name("opentelemetry", "SERVICE_NAME"), "override-svc");
+            jail.set_env(var_name("opentelemetry", "SERVICE_VERSION"), "9.9.9");
+            jail.set_env(var_name("opentelemetry", "SERVICE_ENVIRONMENT"), "prod");
+            jail.set_env(var_name("opentelemetry", "SERVICE_INSTANCE_ID"), "pinned-1");
+            jail.set_env(EnvPrefix::var(var::FILTER), "debug,hyper=warn");
+            jail.set_env(EnvPrefix::var(var::FORMAT), "json");
+            jail.set_env(EnvPrefix::var(var::SOURCE_LOCATION), "true");
+            jail.set_env(
+                var_name("opentelemetry", "OTLP_ENDPOINT"),
+                "http://otel:4318",
+            );
+            jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "0.25");
 
             let cfg = OpenTelemetryConfig::from_env("default-svc");
             assert_eq!(cfg.service_name, "override-svc");
@@ -376,12 +384,13 @@ mod tests {
             Ok(())
         });
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_LOG", "debug");
+            jail.set_env(EnvPrefix::var(var::FILTER), "debug");
             jail.set_env("RUST_LOG", "warn");
             assert_eq!(
                 OpenTelemetryConfig::from_env("svc").log_filter,
                 "debug",
-                "NESTRS_LOG wins over RUST_LOG"
+                "{} wins over RUST_LOG",
+                EnvPrefix::var(var::FILTER),
             );
             Ok(())
         });
@@ -408,7 +417,7 @@ mod tests {
         );
 
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS", "5");
+            jail.set_env(var_name("opentelemetry", "METRIC_INTERVAL_SECS"), "5");
             assert_eq!(
                 OpenTelemetryConfig::from_env("svc").metric_interval,
                 Duration::from_secs(5),
@@ -423,7 +432,7 @@ mod tests {
     fn a_zero_or_unparseable_metric_interval_keeps_the_default() {
         for raw in ["0", "", "soon"] {
             figment::Jail::expect_with(|jail| {
-                jail.set_env("NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS", raw);
+                jail.set_env(var_name("opentelemetry", "METRIC_INTERVAL_SECS"), raw);
                 assert_eq!(
                     OpenTelemetryConfig::from_env("svc").metric_interval,
                     DEFAULT_METRIC_INTERVAL,
@@ -443,12 +452,12 @@ mod tests {
     #[test]
     fn from_env_clamps_ratio_outside_zero_to_one() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "2.5");
+            jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "2.5");
             assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 1.0);
             Ok(())
         });
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "-0.5");
+            jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "-0.5");
             assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 0.0);
             Ok(())
         });
@@ -457,8 +466,8 @@ mod tests {
     #[test]
     fn from_env_ignores_unparseable_ratio_and_log_format() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env("NESTRS_OPENTELEMETRY__SAMPLE_RATIO", "not-a-number");
-            jail.set_env("NESTRS_LOG_FORMAT", "console");
+            jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "not-a-number");
+            jail.set_env(EnvPrefix::var(var::FORMAT), "console");
             // Both stick to defaults — never panic on bad input.
             let cfg = OpenTelemetryConfig::from_env("svc");
             assert_eq!(cfg.trace_sample_ratio, 1.0);

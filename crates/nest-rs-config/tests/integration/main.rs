@@ -8,3 +8,4 @@
 mod diagnostics;
 mod dotenv;
 mod env_prefix;
+mod service;

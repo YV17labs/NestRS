@@ -10,6 +10,7 @@ mod edges;
 mod events;
 mod filters;
 mod guards;
+mod panics;
 mod seams;
 mod shapes;
 mod targets;

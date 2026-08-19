@@ -161,7 +161,7 @@ fn compose(
     bucket: GlobalBucket,
 ) -> Arc<[ResolvedLayer<dyn Guard>]> {
     let global = dedup_bucket(resolve_global_guards(container));
-    let provider = resolve_specs(container, &sources.provider, LayerSite::Controller);
+    let provider = resolve_specs(container, &sources.provider, LayerSite::Host);
     let method = resolve_specs(container, &sources.method, LayerSite::Method);
 
     let mut chain =

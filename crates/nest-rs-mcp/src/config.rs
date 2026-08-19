@@ -174,7 +174,8 @@ mod tests {
         let rendered = format!("{:?}", McpConfig::default());
         assert!(
             !rendered.contains("allowed_origins"),
-            "origin belongs to NESTRS_HTTP__CORS_ORIGINS: {rendered}",
+            "origin belongs to {}: {rendered}",
+            nest_rs_config::var_name("http", "CORS_ORIGINS"),
         );
     }
 
@@ -184,7 +185,7 @@ mod tests {
     fn env_overlays_the_pinned_base_per_field() {
         let pinned = McpConfig::default().with_allowed_hosts(["mcp.example.com"]);
         let cfg = McpConfig::from_env(
-            &ConfigService::with_vars("mcp", [("NESTRS_MCP__JSON_RESPONSE", "true")]),
+            &ConfigService::with_vars("mcp", [("JSON_RESPONSE", "true")]),
             pinned,
         )
         .expect("no error");
@@ -202,10 +203,7 @@ mod tests {
         let cfg = McpConfig::from_env(
             &ConfigService::with_vars(
                 "mcp",
-                [(
-                    "NESTRS_MCP__ALLOWED_HOSTS",
-                    "mcp.example.com, mcp.example.com:8443",
-                )],
+                [("ALLOWED_HOSTS", "mcp.example.com, mcp.example.com:8443")],
             ),
             McpConfig::default(),
         )
@@ -220,7 +218,7 @@ mod tests {
     #[test]
     fn zero_seconds_turns_an_sse_duration_off() {
         let cfg = McpConfig::from_env(
-            &ConfigService::with_vars("mcp", [("NESTRS_MCP__SSE_KEEP_ALIVE_SECS", "0")]),
+            &ConfigService::with_vars("mcp", [("SSE_KEEP_ALIVE_SECS", "0")]),
             McpConfig::default(),
         )
         .expect("no error");
@@ -232,7 +230,7 @@ mod tests {
     #[test]
     fn an_unparseable_value_is_a_boot_error() {
         let err = McpConfig::from_env(
-            &ConfigService::with_vars("mcp", [("NESTRS_MCP__MAX_REQUEST_BODY_BYTES", "huge")]),
+            &ConfigService::with_vars("mcp", [("MAX_REQUEST_BODY_BYTES", "huge")]),
             McpConfig::default(),
         )
         .expect_err("a set-but-unparseable value fails boot");

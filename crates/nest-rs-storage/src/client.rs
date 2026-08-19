@@ -256,7 +256,7 @@ impl Storage {
     /// returning, because S3 bills the parts of an interrupted multipart upload
     /// until something removes them. So does **not returning at all**: a request
     /// timeout or a client disconnect drops this future mid-part, and
-    /// [`UploadGuard`] is what turns that into an abort rather than into parts
+    /// `UploadGuard` is what turns that into an abort rather than into parts
     /// nobody will ever collect.
     pub async fn put_stream<S>(&self, key: &str, content_type: &str, stream: S) -> Result<()>
     where
@@ -613,7 +613,10 @@ mod tests {
                 matches!(err, StorageError::PlaintextEndpoint { .. }),
                 "got {err:?}",
             );
-            assert!(err.to_string().contains("NESTRS_STORAGE__ALLOW_HTTP"));
+            assert!(
+                err.to_string()
+                    .contains(&nest_rs_config::var_name("storage", "ALLOW_HTTP"))
+            );
         }
     }
 

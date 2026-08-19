@@ -31,7 +31,7 @@ use crate::registry::PipeSpecs;
 /// lazily would only delay surfacing a broken chain to the first request),
 /// dedups by `TypeId`, runs every layer in declaration order. No `#[public]`
 /// skip — guards decide what `#[public]` means for them via the
-/// [`Public`](nest_rs_core::Public) marker attached as request data.
+/// [`Public`](nest_rs_http::Public) marker attached as request data.
 ///
 /// Generic over the inner endpoint on purpose: the chains themselves stay
 /// erased (`dyn Guard` / `dyn GlobalPipe` — composition is a mount-time,
@@ -150,7 +150,7 @@ fn resolve_guards(
     force_guards: &[TypeId],
 ) -> Vec<ResolvedLayer<dyn Guard>> {
     let global = resolve_global_guards(container);
-    let controller = resolve_specs(container, controller_guards, LayerSite::Controller);
+    let controller = resolve_specs(container, controller_guards, LayerSite::Host);
     let method = resolve_specs(container, method_guards, LayerSite::Method);
     let chain = compose_chain::<dyn Guard>(
         dedup_bucket(global),
@@ -176,7 +176,7 @@ fn resolve_pipes(
     method_pipes: &[ScopedPipeSpec],
 ) -> Vec<ResolvedLayer<dyn GlobalPipe>> {
     let global = resolve_global_layers::<PipeSpecs>(container);
-    let controller = resolve_specs(container, controller_pipes, LayerSite::Controller);
+    let controller = resolve_specs(container, controller_pipes, LayerSite::Host);
     let method = resolve_specs(container, method_pipes, LayerSite::Method);
     let chain =
         compose_chain::<dyn GlobalPipe>(dedup_bucket(global), controller, method, &[], route_label);

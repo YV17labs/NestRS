@@ -60,10 +60,40 @@ impl DynamicModule for GraphqlSetup {
 
 fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuilder {
     let log_path = options.path.clone();
-    // Marks the schema as composed in this app so the boot runs the
-    // resolver-membership check (skipped when resolvers link but no schema
-    // mounts).
-    let builder = builder.provide(nest_rs_core::ResolverSchemaActive);
+    // Resolver membership. A `#[resolver]` composes into the schema from a
+    // link-time registry, so one listed in no reachable module's `providers`
+    // is filtered out of the schema rather than failing the boot — leftover
+    // code that vanishes silently. Reported here, in the crate that owns the
+    // registry and the schema, and only when a schema actually mounts: an app
+    // that links resolvers transitively and imports no `GraphqlModule` composes
+    // nothing, so it has nothing to be missing.
+    let strict = options.strict_resolver_membership;
+    let builder = builder.provide_meta(HttpBootCheck::new(move |container| {
+        let unreachable = crate::resolver::unreachable_resolvers(container);
+        if unreachable.is_empty() {
+            return Ok(());
+        }
+        if strict {
+            let var = nest_rs_config::var_name("graphql", "STRICT_RESOLVER_MEMBERSHIP");
+            return Err(format!(
+                "strict resolver-membership check failed: {unreachable:?} linked into the \
+                 binary but in no reachable module. Add each to a reachable feature module's \
+                 `#[module(providers = [...])]`, or clear \
+                 `GraphqlConfig::strict_resolver_membership` (`{var}=false`) if the link is \
+                 intentional — a workspace shipping several apps over one feature library \
+                 legitimately links resolvers a given binary does not serve."
+            ));
+        }
+        for resolver in unreachable {
+            tracing::warn!(
+                target: crate::TARGET,
+                resolver,
+                hint = "add it to a feature module's `#[module(providers = [...])]` if you meant to expose it",
+                "unreachable resolver skipped from the GraphQL schema",
+            );
+        }
+        Ok(())
+    }));
     // Merging is what this transport does, so the one failure mode merging adds
     // — two contributions claiming one addressable name — is a boot error here,
     // as it already is on HTTP and MCP. It runs at `configure`, before the
@@ -156,7 +186,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             // an `AuthnGuard` admits an anonymous request through to the
             // resolver gates (GraphQL errors in a 200, not a blanket HTTP
             // 401) while a present bearer is still verified.
-            let method = poem::EndpointExt::data(method, ::nest_rs_core::Public);
+            let method = poem::EndpointExt::data(method, ::nest_rs_http::Public);
             route.nest(options.path.as_str(), method)
         })
         .exempt(),

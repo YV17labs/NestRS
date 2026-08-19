@@ -129,6 +129,20 @@ pub struct GraphqlConfig {
     /// rather than let it read as *off*. `None` and `Some(0)` therefore mean the
     /// same thing on this one, pinned in code exactly as through the variable.
     pub max_representations: Option<usize>,
+    /// Promote the default unreachable-resolver `warn` into a boot failure.
+    ///
+    /// A `#[resolver]` composes into the schema from a link-time registry, so
+    /// listing it in a module's `providers = [...]` is what brings its injected
+    /// dependencies under the access contract — and one that is listed nowhere
+    /// is filtered out of the schema instead of failing the boot. The default
+    /// names it at `warn`; this makes it fatal, for apps where a forgotten
+    /// `providers` entry should not reach a deployment.
+    ///
+    /// Default `false`, because a workspace shipping several binaries over one
+    /// feature library legitimately links resolvers a given app does not serve.
+    ///
+    /// Read from `NESTRS_GRAPHQL__STRICT_RESOLVER_MEMBERSHIP`.
+    pub strict_resolver_membership: bool,
 }
 
 impl Default for GraphqlConfig {
@@ -145,6 +159,7 @@ impl Default for GraphqlConfig {
             max_connection: Some(Duration::from_secs(DEFAULT_MAX_CONNECTION_SECS)),
             federation: false,
             max_representations: Some(DEFAULT_MAX_REPRESENTATIONS),
+            strict_resolver_membership: false,
         }
     }
 }
@@ -167,6 +182,8 @@ impl Config for GraphqlConfig {
             max_connection: env.seconds("MAX_CONNECTION_SECS", d.max_connection)?,
             federation: env.flag("FEDERATION", d.federation)?,
             max_representations: env.count("MAX_REPRESENTATIONS", d.max_representations)?,
+            strict_resolver_membership: env
+                .flag("STRICT_RESOLVER_MEMBERSHIP", d.strict_resolver_membership)?,
         })
     }
 }
@@ -203,7 +220,7 @@ mod tests {
             ..Default::default()
         };
         let cfg = GraphqlConfig::from_env(
-            &ConfigService::with_vars("graphql", [("NESTRS_GRAPHQL__MAX_DEPTH", "9")]),
+            &ConfigService::with_vars("graphql", [("MAX_DEPTH", "9")]),
             pinned,
         )
         .expect("the overlay resolves");
@@ -270,12 +287,12 @@ mod tests {
         let service = ConfigService::with_vars(
             "graphql",
             [
-                ("NESTRS_GRAPHQL__PATH", "/api/graphql"),
-                ("NESTRS_GRAPHQL__PLAYGROUND", "true"),
-                ("NESTRS_GRAPHQL__SCHEMA_PATH", "./schema-out.graphql"),
-                ("NESTRS_GRAPHQL__EMIT_SDL", "true"),
-                ("NESTRS_GRAPHQL__MAX_DEPTH", "15"),
-                ("NESTRS_GRAPHQL__MAX_COMPLEXITY", "2000"),
+                ("PATH", "/api/graphql"),
+                ("PLAYGROUND", "true"),
+                ("SCHEMA_PATH", "./schema-out.graphql"),
+                ("EMIT_SDL", "true"),
+                ("MAX_DEPTH", "15"),
+                ("MAX_COMPLEXITY", "2000"),
             ],
         );
         let cfg = GraphqlConfig::from_env(&service, Default::default()).expect("ok");

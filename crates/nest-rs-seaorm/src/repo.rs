@@ -198,7 +198,7 @@ impl<E: EntityTrait> Repo<E> {
     /// [`DbErr::RecordNotUpdated`], so a caller cannot mutate by id past its
     /// scope.
     ///
-    /// Runs [`ActiveModelBehavior`] — see [`scoped_save`](Self::scoped_save).
+    /// Runs [`ActiveModelBehavior`] — see `scoped_save`.
     pub async fn update<A>(active: A) -> Result<E::Model, DbErr>
     where
         A: ActiveModelTrait<Entity = E> + ActiveModelBehavior + Send,
@@ -254,7 +254,7 @@ impl<E: EntityTrait> Repo<E> {
     /// gated by `condition_for(Delete)` ANDed with the primary key. Idempotent
     /// when the row is already tombstoned. Hard purge stays on [`Self::delete`].
     ///
-    /// Goes through [`scoped_save`](Self::scoped_save), so a tombstone also
+    /// Goes through `scoped_save`, so a tombstone also
     /// moves `updated_at` — a scaffolded resource declares `soft_delete` and
     /// `timestamps` together, and a delete that left the audit column behind
     /// would be the same silent freeze one method over.

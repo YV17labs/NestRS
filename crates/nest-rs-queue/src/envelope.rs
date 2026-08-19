@@ -178,7 +178,7 @@ mod tests {
         // No scope: nothing under test resolves a provider, and the installer's
         // `Option` is what lets a caller say so instead of building an empty
         // container to satisfy a signature.
-        nest_rs_core::with_request_scope(None, correlation, None, fut)
+        nest_rs_core::with_request_scope(None, correlation, fut)
     }
 
     /// The whole point of the boundary crossing: the consumer runs inside the

@@ -803,6 +803,24 @@ impl ContainerBuilder {
             .collect()
     }
 
+    /// Every unkeyed `TypeId` registered as a **request-scoped or transient**
+    /// factory — the providers that exist only inside a `RequestScope`.
+    ///
+    /// Separate from [`registered_ids`](Self::registered_ids), which unions them
+    /// with the singletons, because the access graph has one question that turns
+    /// on the difference: a singleton may not inject one of these. That union is
+    /// what made the case invisible — the dependency was "registered", so the
+    /// missing-dependency check waved it through while the register phase, whose
+    /// readiness gate reads `providers` alone, could never build the singleton
+    /// and dropped it.
+    pub(crate) fn scoped_or_transient_ids(&self) -> HashSet<TypeId> {
+        self.scoped
+            .keys()
+            .copied()
+            .chain(self.transient.keys().copied())
+            .collect()
+    }
+
     /// Keyed provider identities registered so far. Snapshotted alongside
     /// [`provider_ids`](Self::provider_ids) after the factory phase to form the
     /// **global keyed** set for the access-graph keyed check — a keyed

@@ -30,7 +30,7 @@ mod module;
 mod service;
 mod source;
 
-pub use config::{Config, Namespaced};
+pub use config::{Config, Namespaced, read};
 pub use dotenv::load_cascade;
 pub use environment::Environment;
 pub use error::{ConfigError, Result};

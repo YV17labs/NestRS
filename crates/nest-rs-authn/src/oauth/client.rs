@@ -77,6 +77,17 @@ struct Transaction {
     exp: u64,
 }
 
+/// Low-cardinality `reason` codes for the three ways a callback is refused —
+/// what an incident query groups on. Constants rather than call-site literals so
+/// the set is greppable and a typo cannot silently create a fourth.
+const REASON_INVALID_TRANSACTION: &str = "invalid_transaction";
+const REASON_PROVIDER_MISMATCH: &str = "provider_mismatch";
+const REASON_CSRF_STATE_MISMATCH: &str = "csrf_state_mismatch";
+
+/// The one message every callback refusal is filed under, so an operator greps
+/// once and reads `reason` to tell the three apart.
+const CALLBACK_REJECTED: &str = "OAuth callback rejected";
+
 /// A transient Authorization-Code (PKCE) client built per flow from an
 /// [`OAuth2Config`]. Its HTTP backend refuses redirects (anti-SSRF) and carries
 /// a fixed user-agent; see [`new`](Self::new).
@@ -180,15 +191,32 @@ impl OAuth2Client {
         state: &str,
         code: &str,
     ) -> Result<TokenSet, AuthError> {
-        let tx: Transaction = jwt.verify(transaction)?;
+        // A transaction cookie that does not verify is a forged or replayed
+        // handshake, and it is this crate's third way to refuse a callback — so
+        // it files the same `warn` its two siblings below do. Nothing else
+        // would: `JwtService` keeps its typed decode reason at `debug` because
+        // on the *strategy* path `AuthnGuard` emits the single `warn`, and this
+        // path has no guard above it — the error `?`s out through
+        // `AuthError::render`, which logs only `Failed`/`Unavailable`. So a
+        // forged cookie left no `warn` anywhere. The `debug` stays where it is;
+        // one event per refusal, said at the site that knows what was refused.
+        let tx: Transaction = jwt.verify(transaction).inspect_err(|error| {
+            tracing::warn!(
+                target: crate::TARGET,
+                reason = REASON_INVALID_TRANSACTION,
+                token_reason = error.reason(),
+                provider,
+                "{CALLBACK_REJECTED}",
+            );
+        })?;
         // Provider binding first: a transaction replayed on another provider's
         // callback is rejected before its CSRF value is ever compared.
         if tx.provider != provider {
             tracing::warn!(
                 target: crate::TARGET,
-                reason = "provider_mismatch",
+                reason = REASON_PROVIDER_MISMATCH,
                 expected = provider,
-                "OAuth callback rejected",
+                "{CALLBACK_REJECTED}",
             );
             return Err(AuthError::Failed("OAuth provider mismatch".into()));
         }
@@ -197,8 +225,9 @@ impl OAuth2Client {
         if !bool::from(tx.csrf.as_bytes().ct_eq(state.as_bytes())) {
             tracing::warn!(
                 target: crate::TARGET,
-                reason = "csrf_state_mismatch",
-                "OAuth callback rejected"
+                reason = REASON_CSRF_STATE_MISMATCH,
+                provider,
+                "{CALLBACK_REJECTED}",
             );
             return Err(AuthError::Failed("OAuth state mismatch".into()));
         }

@@ -12,7 +12,7 @@
 //! `demo/` included — because a member asserted from another crate is asserted,
 //! and a per-crate view manufactures holes that get closed with duplicate tests.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use nest_rs_conformance::baseline;
@@ -21,7 +21,7 @@ use nest_rs_conformance::sources::{
 };
 use proc_macro2::{TokenStream, TokenTree};
 use syn::visit::Visit;
-use syn::{Attribute, ItemFn, ItemMod, LitStr, Macro};
+use syn::{Attribute, Expr, ItemConst, ItemFn, ItemMod, LitStr, Macro, Path as SynPath};
 
 const BASELINE: &str = "events-baseline.txt";
 
@@ -205,16 +205,74 @@ impl Emissions {
     }
 }
 
+/// Every `const NAME: &str = "…"` the workspace declares, by bare name.
+///
+/// **Why the join has to know these.** Two rules meet here and used to
+/// contradict each other: *every string the framework interprets is a constant*
+/// says a message worth asserting should not be a call-site literal, while this
+/// join read only literals — so the moment an event's sentence was hoisted into
+/// a constant, both the emission and the assertion became identifiers and the
+/// cell read as an uncovered hole. The scan resolves the name on both sides
+/// instead, and neither rule has to give.
+///
+/// Collision is possible in principle (two crates, one constant name) and the
+/// honest statement of the risk is narrower than "the length guard bounds it":
+/// [`is_asserted`] answers `true` on an exact `corpus.contains(message)`
+/// **before** any guard, so a name shadowing a *different* sentence would widen
+/// the corpus on the one branch the guard does not cover. What actually bounds
+/// it is the baseline: it only ever shrinks, so a collision that closed a cell
+/// leaves a stale line and fails the join rather than passing it. The map is
+/// bare-name and last-writer-wins over an unordered walk, which is what makes
+/// that the load-bearing half.
+fn const_strings(root: &Path) -> BTreeMap<String, String> {
+    struct Consts(BTreeMap<String, String>);
+    impl<'ast> Visit<'ast> for Consts {
+        fn visit_item_const(&mut self, node: &'ast ItemConst) {
+            if let Expr::Lit(lit) = node.expr.as_ref()
+                && let syn::Lit::Str(text) = &lit.lit
+            {
+                self.0
+                    .insert(node.ident.to_string(), normalize(&text.value()));
+            }
+            syn::visit::visit_item_const(self, node);
+        }
+    }
+
+    let mut sources = rust_files(&root.join("crates"));
+    sources.extend(rust_files(&root.join("demo")));
+    let mut scan = Consts(BTreeMap::new());
+    for path in sources {
+        if let Some(file) = parsed(&path) {
+            scan.visit_file(&file);
+        }
+    }
+    scan.0
+}
+
+/// The sentence behind a message that is exactly one `{IDENT}` interpolation.
+///
+/// `tracing::warn!(…, "{NO_BUS_REPORT}")` renders the constant, so that — not
+/// the eight characters of the format string — is what a console shows and what
+/// a suite has to name.
+fn resolve_interpolation(message: &str, consts: &BTreeMap<String, String>) -> Option<String> {
+    let name = message.strip_prefix('{')?.strip_suffix('}')?;
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+        return None;
+    }
+    consts.get(name).cloned()
+}
+
 /// Every string a suite spells. `require_test` is what separates the two uses of
 /// one visitor: a file under `tests/` is a suite whole, while a file under
 /// `src/` is a suite only inside its `#[cfg(test)]` items.
-struct Asserted {
+struct Asserted<'a> {
     out: BTreeSet<String>,
     require_test: bool,
     in_test: bool,
+    consts: &'a BTreeMap<String, String>,
 }
 
-impl<'ast> Visit<'ast> for Asserted {
+impl<'ast> Visit<'ast> for Asserted<'_> {
     fn visit_item_mod(&mut self, node: &'ast ItemMod) {
         let outer = self.in_test;
         self.in_test |= is_cfg_test(&node.attrs);
@@ -245,6 +303,22 @@ impl<'ast> Visit<'ast> for Asserted {
             self.out.insert(normalize(&node.value()));
         }
     }
+
+    /// A suite naming `nest_rs_events::NO_BUS_REPORT` is asserting that
+    /// sentence as surely as one spelling it out — and it is the form the rules
+    /// prefer, since "assert against shared constants, never a copied literal"
+    /// is what stops a test and its subject drifting apart. Only the last
+    /// segment is read, so the same constant reached through a re-export, a
+    /// `use`, or `crate::` counts once.
+    fn visit_path(&mut self, node: &'ast SynPath) {
+        if (!self.require_test || self.in_test)
+            && let Some(last) = node.segments.last()
+            && let Some(text) = self.consts.get(&last.ident.to_string())
+        {
+            self.out.insert(text.clone());
+        }
+        syn::visit::visit_path(self, node);
+    }
 }
 
 fn emitted_events(root: &Path) -> Vec<Event> {
@@ -265,7 +339,7 @@ fn emitted_events(root: &Path) -> Vec<Event> {
     scan.events
 }
 
-fn asserted_strings(root: &Path) -> BTreeSet<String> {
+fn asserted_strings(root: &Path, consts: &BTreeMap<String, String>) -> BTreeSet<String> {
     let mut sources = rust_files(&root.join("crates"));
     sources.extend(rust_files(&root.join("demo")));
 
@@ -278,6 +352,7 @@ fn asserted_strings(root: &Path) -> BTreeSet<String> {
             out: BTreeSet::new(),
             require_test: !relative(&path, root).contains("/tests/"),
             in_test: false,
+            consts,
         };
         scan.visit_file(&file);
         out.extend(scan.out);
@@ -321,10 +396,19 @@ fn is_asserted(event: &Event, corpus: &BTreeSet<String>) -> bool {
 #[test]
 fn every_warn_plus_event_is_read_by_a_test() {
     let root = repo_root();
-    let events = emitted_events(&root);
+    let consts = const_strings(&root);
+    let mut events = emitted_events(&root);
+    // Resolve a `"{CONST}"` message to the sentence it renders, so an event
+    // whose wording was hoisted into a constant is judged on what a console
+    // actually shows rather than on the format string.
+    for event in &mut events {
+        if let Some(resolved) = resolve_interpolation(&event.message, &consts) {
+            event.message = resolved;
+        }
+    }
     baseline::floor(events.len(), FLOOR, "warn+ events");
 
-    let corpus = asserted_strings(&root);
+    let corpus = asserted_strings(&root, &consts);
     let holes: BTreeSet<String> = events
         .iter()
         .filter(|e| !is_asserted(e, &corpus))

@@ -114,9 +114,55 @@ impl Capability {
             .replace('-', "_")
     }
 
+    /// The cell this capability owes, keyed on the **crate** rather than the
+    /// feature.
+    ///
+    /// One feature may activate two crates — `seaorm` activates
+    /// `nest-rs-seaorm` and `nest-rs-resource`, because `#[expose]` expands to
+    /// the one and `#[crud]` to the other, so a feature per crate would have to
+    /// imply the other and Cargo rejects that as a cycle. Keyed on the feature,
+    /// both crates wrote the same cell: holes union, so nothing is hidden while
+    /// both are open — but the day one crate gains a boot test the cell closes
+    /// for the other too, silently. The crate is what owes a witness, so the
+    /// crate is what the cell names.
     fn cell(&self, column: &str) -> String {
-        format!("{} :: {column}", self.feature)
+        format!("{} :: {column}", self.krate)
     }
+}
+
+/// Every umbrella feature that is not a capability and not an aggregate.
+///
+/// **A feature that ships no crate of its own can still ship a surface**, and
+/// that is the class this column exists for. `redis-throttler` forwards
+/// `nest-rs-redis/throttler`: it activates no `dep:`, so [`capabilities`] does
+/// not see it — yet `nest_rs::redis::RedisThrottlerModule` exists in no build
+/// without it, and the manifest's own comment calls it a capability. Owing it
+/// the whole checklist would be wrong (it needs no second `pub use`; `redis`
+/// already re-exports the module, and no second crate is pulled), but owing it
+/// **nothing** left a real surface a reader cannot discover.
+///
+/// So it owes exactly one thing: an `## Install` line naming it, because that
+/// is the difference between a feature a developer can find and one they cannot.
+///
+/// `default` and `full` are excluded: they activate nothing of their own and
+/// are documented as aggregates, which is the same reason [`capabilities`]
+/// skips them.
+fn sub_features(root: &Path, capabilities: &[Capability]) -> BTreeSet<String> {
+    let manifest =
+        read(&root.join("crates/nest-rs/Cargo.toml")).expect("the umbrella has a manifest");
+    let doc: toml_edit::DocumentMut = manifest
+        .parse()
+        .expect("the umbrella manifest is valid TOML");
+    let owned: BTreeSet<&str> = capabilities.iter().map(|c| c.feature.as_str()).collect();
+    let Some(features) = doc.get("features").and_then(|f| f.as_table()) else {
+        return BTreeSet::new();
+    };
+    features
+        .iter()
+        .map(|(name, _)| name.to_owned())
+        .filter(|name| !owned.contains(name.as_str()))
+        .filter(|name| name != "default" && name != "full")
+        .collect()
 }
 
 /// Every capability the umbrella declares, from its `[features]` table.
@@ -142,15 +188,19 @@ fn capabilities(root: &Path) -> Vec<Capability> {
             let Some(text) = entry.as_str() else {
                 continue;
             };
-            // `dep:nest-rs-x` activates the crate; `nest-rs-x?/y` only forwards a
-            // feature to a crate some *other* capability activates, so it never
-            // makes this feature the owner.
+            // `dep:nest-rs-x` activates the crate outright.
             if let Some(krate) = text.strip_prefix("dep:") {
                 out.push(Capability {
                     feature: feature.to_owned(),
                     krate: krate.to_owned(),
                 });
+                continue;
             }
+            // `nest-rs-x/y` and `nest-rs-x?/y` both only forward a feature to a
+            // crate some *other* capability activates, so neither makes this
+            // feature the owner of a crate. What a strong forward **can** make
+            // is a surface reachable only under this feature — see
+            // [`sub_features`], which is the column that asks about those.
         }
     }
     out
@@ -365,6 +415,13 @@ fn every_umbrella_capability_carries_its_witnesses() {
     let hygiene = hygiene_attrs(&root);
 
     let mut holes = BTreeSet::new();
+    // A feature that ships a surface without shipping a crate owes one thing:
+    // being findable. See [`sub_features`].
+    for feature in sub_features(&root, &capabilities) {
+        if !installs.contains(&feature) {
+            holes.insert(format!("{feature} :: docs ## Install"));
+        }
+    }
     for cap in &capabilities {
         let concern = cap.concern();
         // The re-export must exist, be `pub`, and be gated on **this**
@@ -422,12 +479,15 @@ fn every_umbrella_capability_carries_its_witnesses() {
     // owed nothing. All four happen to be applied today, which is exactly why
     // the hole was invisible; a fifth added tomorrow would have joined nothing.
     //
-    // One cell per decorator, and reported under the feature that ships it so a
-    // reader can act on the row — `core` for the four the umbrella carries with
-    // no feature of its own.
-    let owning_feature: BTreeMap<String, String> = capabilities
+    // One cell per decorator, reported under the **crate** that ships it, like
+    // every other column — one key scheme per baseline, so a reader is not
+    // matching two spellings of the same subject down one file. The surface
+    // crate rather than the `*-macros` one, because that is what a reader
+    // enables and what the other columns name; `nest-rs-core` for the four the
+    // umbrella carries with no feature of its own.
+    let owning_crate: BTreeMap<String, String> = capabilities
         .iter()
-        .map(|cap| (format!("{}-macros", cap.krate), cap.feature.clone()))
+        .map(|cap| (format!("{}-macros", cap.krate), cap.krate.clone()))
         .collect();
     for dir in crate_dirs() {
         let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
@@ -436,14 +496,13 @@ fn every_umbrella_capability_carries_its_witnesses() {
         if !name.ends_with("-macros") {
             continue;
         }
-        let feature = owning_feature.get(name).cloned().unwrap_or_else(|| {
-            name.trim_start_matches("nest-rs-")
-                .trim_end_matches("-macros")
-                .to_owned()
-        });
+        let owner = owning_crate
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.trim_end_matches("-macros").to_owned());
         for decorator in exported_decorators(&dir) {
             if !hygiene.contains(&decorator) {
-                holes.insert(format!("{feature} :: macro-hygiene applies #[{decorator}]"));
+                holes.insert(format!("{owner} :: macro-hygiene applies #[{decorator}]"));
             }
         }
     }

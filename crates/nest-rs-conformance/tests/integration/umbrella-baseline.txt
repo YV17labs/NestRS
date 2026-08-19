@@ -50,10 +50,10 @@
 #   guard's `Drop` flushes (`framework.md`, "One recorded exception"). A boot
 #   test would install a process-global tracer, which is a decision about the
 #   test binary rather than about the capability.
-graphql :: macro-hygiene applies #[crud]
-http :: macro-hygiene applies #[crud]
-resource :: macro-hygiene applies #[expose]
-database :: own crate boots the documented wiring
-opentelemetry :: own crate boots the documented wiring
-resource :: own crate boots the documented wiring
-worker :: own crate boots the documented wiring
+nest-rs-graphql :: macro-hygiene applies #[crud]
+nest-rs-http :: macro-hygiene applies #[crud]
+nest-rs-resource :: macro-hygiene applies #[expose]
+nest-rs-database :: own crate boots the documented wiring
+nest-rs-opentelemetry :: own crate boots the documented wiring
+nest-rs-resource :: own crate boots the documented wiring
+nest-rs-worker :: own crate boots the documented wiring

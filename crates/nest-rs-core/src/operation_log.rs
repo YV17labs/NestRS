@@ -45,7 +45,8 @@
 //! `nest_rs_http::unit::REQUEST`, `nest_rs_ws::unit::{CONNECT, DISCONNECT,
 //! MESSAGE}`, `nest_rs_queue::unit::JOB` (declared by the contract crate,
 //! emitted by whichever backend runs the job), `nest_rs_schedule::unit::TICK`,
-//! `nest_rs_mcp::unit::OPERATION`, `nest_rs_graphql::unit::SUBSCRIPTION`. The
+//! `nest_rs_mcp::unit::OPERATION`, `nest_rs_graphql::unit::{OPERATION,
+//! SUBSCRIPTION}`, `nest_rs_events::unit::DISPATCH`. The
 //! `units` join in `nest-rs-conformance` is what holds the grammar over all of
 //! them, deriving its population from the source rather than from a list here.
 //!
@@ -67,9 +68,12 @@
 //!
 //! **The namespace is the closed edge vocabulary** (`architecture.md`), which is
 //! what stops a new transport from inventing a seventh word: `grpc.call` fails
-//! the join until `grpc` is opened as an edge deliberately. `events` is unused
-//! because an event listener files no operation line today, and a name nothing
-//! emits under is the same defect as a span field nothing fills.
+//! the join until `grpc` is opened as an edge deliberately. All seven are in
+//! use: `events` was the last to be unused, and a name nothing emits under is
+//! the same defect as a span field nothing fills — which is why the listener,
+//! not the `emit`, became its unit. A listener is developer code that logs,
+//! writes and can panic; an `emit` is a line inside whatever unit the emitter
+//! was already serving.
 
 use std::time::Instant;
 

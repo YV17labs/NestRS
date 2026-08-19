@@ -320,7 +320,7 @@ type DynamicImportSite = (TypeId, usize);
 /// boot as a fatal wiring error rather than a silent last-write-wins. (Keyed
 /// providers keep the documented last-write-wins and are not collected here.)
 #[derive(Clone, Copy)]
-pub struct DuplicateProvider {
+pub(crate) struct DuplicateProvider {
     /// Type name of the doubly-registered provider.
     pub type_name: &'static str,
 }

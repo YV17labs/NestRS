@@ -1,0 +1,5 @@
+error: `#[use_guards(...)]` belongs on the resolver struct beside `#[resolver]`, not on this `#[operations]` block — the struct half declares the host's access posture, and this half declares its #[query] / #[mutation] / #[subscription] / #[entity] / #[field_resolver]. A layer scoped to one operation goes on that operation's method.
+  --> tests/integration/diagnostics/use_guards_on_an_operations_block.rs:14:1
+   |
+14 | #[use_guards(AllowAll)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^

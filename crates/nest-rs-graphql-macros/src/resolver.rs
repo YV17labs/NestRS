@@ -612,16 +612,16 @@ fn layered_resolver_chain(
     }
 }
 
-/// The role an operation attribute declares, as it is written — used only to
-/// name both halves when a method carries two.
-fn attr_role(attr: &Attribute) -> String {
-    let ident = attr
-        .path()
-        .get_ident()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "?".to_owned());
-    format!("#[{ident}]")
-}
+/// The closed role vocabulary, read by the verb predicate **and** by the
+/// one-role refusal — so the set a method is checked against and the set it is
+/// told about cannot disagree.
+const ROLE_ATTRS: [&str; 5] = [
+    "query",
+    "mutation",
+    "subscription",
+    "entity",
+    "field_resolver",
+];
 
 /// What an `#[entity]` owes beyond what a `#[query]` owes, refused at its own
 /// span rather than inside async-graphql's derive.
@@ -760,13 +760,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // placement here with a redirect message — the impl-form has no other
     // role for it (the struct-form parses and exposes it via
     // `__nestrs_resolver_guard_specs()`).
-    if let Some(attr) = item.attrs.iter().find(|a| a.path().is_ident("use_guards")) {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "put `#[use_guards(...)]` on the resolver's `struct`, not its `impl` block — \
-             uniform with `#[controller]` and `#[gateway]`",
-        ));
-    }
+    GRAPHQL_PAIR.reject_host_layers(&item.attrs)?;
     reject_http_only_layers(&item.attrs, "GraphQL", "resolver")?;
 
     let query_obj = format_ident!("__{}Query", base);
@@ -794,13 +788,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             continue;
         };
 
-        let is_verb = |a: &Attribute| {
-            a.path().is_ident("query")
-                || a.path().is_ident("mutation")
-                || a.path().is_ident("subscription")
-                || a.path().is_ident("entity")
-                || a.path().is_ident("field_resolver")
-        };
+        let is_verb = |a: &Attribute| ROLE_ATTRS.iter().any(|name| a.path().is_ident(name));
         let verb_idx = method.attrs.iter().position(&is_verb);
         let Some(idx) = verb_idx else { continue };
 
@@ -826,23 +814,27 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         // other root has one. Silently keeping the first attribute would mount
         // the operation under a role the developer did not write.
         if let Some(second) = method.attrs.iter().find(|a| is_verb(a)) {
-            let first = attr_role(&verb_attr);
-            let second_role = attr_role(second);
+            let first = nest_rs_codegen::role_name(verb_attr.path());
+            let second_role = nest_rs_codegen::role_name(second.path());
             // The `_entities` clause only when one of the two *is* `#[entity]`:
             // explaining `#[query]` + `#[mutation]` with the federation root is
             // an answer to a question the developer did not ask.
-            let why = if first == "#[entity]" || second_role == "#[entity]" {
+            let why = if first == "entity" || second_role == "entity" {
                 " An entity resolver is a `Query`-root field — the router reaches it through \
                   `_entities`, which the `Mutation` and `Subscription` roots do not have."
             } else {
                 ""
             };
+            // Wraps the shared sentence rather than replacing it: the
+            // `_entities` clause is content the other four sites have nothing
+            // to say, and the module's own convention is that a site with more
+            // to say wraps.
+            let declared = [first, second_role];
             return Err(syn::Error::new_spanned(
                 second,
                 format!(
-                    "a method declares one role, and this one declares `{first}` and \
-                     `{second_role}`.{why} Keeping the first and dropping the second would mount \
-                     the operation under a role you did not write, so neither is assumed"
+                    "{}{why}",
+                    nest_rs_codegen::one_role_per_method("role", &declared, &ROLE_ATTRS),
                 ),
             ));
         }
@@ -927,8 +919,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 (Some(_), true) => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
-                        "`#[authorize(...)]` and `#[public]` contradict — an operation is \
-                         gated or public, not both",
+                        nest_rs_codegen::posture_contradiction(),
                     ));
                 }
                 (Some(_), false) if !sig_returns_result(&method.sig) => {
@@ -953,12 +944,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 (None, false) => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
-                        "every `#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]` declares its \
-                         access posture: \
-                         `#[authorize(Action, Entity)]` (class-level gate + automatic response \
-                         masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` \
-                         (no `#[authorize]` gate and no response mask — `#[use_guards]` \
-                         guards still run)",
+                        nest_rs_codegen::posture_required(
+                            "`#[query]`/`#[mutation]`/`#[subscription]`/`#[entity]`",
+                            "no `#[authorize]` gate and no response mask — `#[use_guards]` \
+                             guards still run",
+                        ),
                     ));
                 }
                 _ => {}
@@ -1127,7 +1117,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // `#[use_guards]` chain runs through the same chain helper.
             let needs_global = sig_returns_result(&sig);
             let role_label = if is_entity {
-                "entity"
+                ENTITY_ROLE
             } else {
                 root_kind.label()
             };
@@ -1279,10 +1269,52 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     )
                 });
             }
-            let delegating = quote! {
-                #(#deleg_attrs)*
-                #entity_attr
-                #gsig { #checks #gate #bind_prelude #(#pipe_prelude)* #body }
+            // One operation line per dispatched field, and the span it is filed
+            // under — the unit of work this edge opens. Emitted here, where
+            // `#[operations]` composes every role's chain, so a query, a
+            // mutation, an entity and a field resolver all get it rather than
+            // whichever one asked.
+            //
+            // A subscription is the one role left out, and deliberately: its
+            // unit is the connection, filed by `graphql.subscription` when the
+            // socket ends. Wrapping it here would file a second line naming the
+            // *subscribe*, which is not the work.
+            let delegating = if root_kind == RootKind::Subscription {
+                quote! {
+                    #(#deleg_attrs)*
+                    #entity_attr
+                    #gsig { #checks #gate #bind_prelude #(#pipe_prelude)* #body }
+                }
+            } else {
+                let role_lit = LitStr::new(role_label, proc_macro2::Span::call_site());
+                // A bare-return operation has no failure channel, so `ok` there
+                // is honest rather than assumed — the same reading the
+                // subscription line's `outcome` takes.
+                let succeeded = if needs_global {
+                    quote!(::core::result::Result::is_ok)
+                } else {
+                    quote!(|_| true)
+                };
+                // The wrapper is `async` whatever the developer's method is: the
+                // unit is awaited, and the body it wraps already had to be —
+                // every emitted guard chain awaits. The developer's own method
+                // keeps its signature; `#call` decides whether to await it.
+                let mut gsig = gsig;
+                gsig.asyncness = Some(syn::token::Async(proc_macro2::Span::call_site()));
+                quote! {
+                    #(#deleg_attrs)*
+                    #entity_attr
+                    #gsig {
+                        let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(#gctx);
+                        ::nest_rs_graphql::run_operation(
+                            #role_lit,
+                            __operation.name(),
+                            #succeeded,
+                            async move { #checks #gate #bind_prelude #(#pipe_prelude)* #body },
+                        )
+                        .await
+                    }
+                }
             };
             match root_kind {
                 RootKind::Query => query_methods.push(delegating),
@@ -1499,7 +1531,6 @@ fn field_method(
         }
     }
 
-    let asyncness = &sig.asyncness;
     let generics = &sig.generics;
     let where_clause = &sig.generics.where_clause;
     let output = &sig.output;
@@ -1523,17 +1554,42 @@ fn field_method(
         false,
         false,
     );
+    // A field resolver is a dispatched unit of work like any other role — it
+    // runs its own guard chain, hits its own services and has its own duration —
+    // so it files the same line. `#[operations]` is where every role's chain is
+    // composed, and this is that seam for the `#[ComplexObject]` half.
+    let role_lit = LitStr::new(FIELD_ROLE, proc_macro2::Span::call_site());
+    let succeeded = if sig_returns_result(sig) {
+        quote!(::core::result::Result::is_ok)
+    } else {
+        // A bare-return field resolver cannot report a failure, so `ok` is what
+        // it knows rather than what it assumes.
+        quote!(|_| true)
+    };
+    // Always `async`, whatever the developer's method is — see the root
+    // operation's wrapper. `#await_tok` still follows the inner method's own
+    // spelling.
     let method = quote! {
         #(#deleg_attrs)*
-        #asyncness fn #method_name #generics (
+        async fn #method_name #generics (
             &self,
             __ctx: &::nest_rs_graphql::async_graphql::Context<'_>
             #(, #gql_args)*
         ) #output #where_clause {
-            #checks
-            let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
-            #(#dep_bindings)*
-            <#self_ty>::from_container(__container).#method_name(self #(, #call_args)*) #await_tok
+            let __operation = ::nest_rs_graphql::GraphqlOperationContext::field(__ctx);
+            ::nest_rs_graphql::run_operation(
+                #role_lit,
+                __operation.name(),
+                #succeeded,
+                async move {
+                    #checks
+                    let __container = __ctx.data_unchecked::<::nest_rs_core::Container>();
+                    #(#dep_bindings)*
+                    <#self_ty>::from_container(__container)
+                        .#method_name(self #(, #call_args)*) #await_tok
+                },
+            )
+            .await
         }
     };
     Ok((parent_ty, method, injected_deps))
@@ -1625,6 +1681,15 @@ impl RootKind {
         }
     }
 }
+
+/// The role word an `#[entity]` files under — async-graphql's `_entities`
+/// resolves it, so it is neither of the three [`RootKind`] words.
+const ENTITY_ROLE: &str = "entity";
+
+/// The role word a `#[field_resolver]` files under. Beside [`RootKind::label`]
+/// rather than inline at its emitter, so the four words a line's `role` can take
+/// are one list.
+const FIELD_ROLE: &str = "field";
 
 fn root_object(
     obj: &Ident,

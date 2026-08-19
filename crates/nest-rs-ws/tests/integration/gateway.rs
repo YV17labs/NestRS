@@ -531,8 +531,8 @@ struct VersionedModule;
 /// `500 no upgrade` is that same extractor accepting the *whole* handshake —
 /// method, `Upgrade`, `Connection`, `Sec-WebSocket-Version`, `Sec-WebSocket-Key`
 /// — and finding no hyper upgrade seam, which is exactly as far as an in-process
-/// `TestClient` reaches. The real-socket witness needs a WS client crate and
-/// lives in the demo's `live` app e2e suite.
+/// `TestClient` reaches. Past that seam is `nest_rs_testing::ws`, which binds a
+/// real port; the socket-driven witnesses are at the end of this file.
 async fn upgrade_status(app: &TestApp, path: &str) -> StatusCode {
     app.http()
         .get(path)
@@ -744,4 +744,279 @@ async fn one_path_and_one_version_shared_by_two_gateways_still_fails_boot() {
         message.contains("/v1/twin"),
         "…at the address they actually collide on: {message}",
     );
+}
+
+// ── Above `dispatch`: the connection itself ─────────────────────────────────
+//
+// Everything up to here calls `Gateway::dispatch` directly, which is the whole
+// of the message table and none of the socket. The upgrade, the `WsConfig` it
+// resolves, the socket-lifetime ceiling, the per-message cap, the writer task,
+// the registry entry's cleanup and every Close frame the server sends live in
+// the connection task `on_upgrade` spawns, and none of them had a witness in
+// this workspace. `nest_rs_testing::ws` binds a real port so they do.
+
+use nest_rs_testing::{CloseCode, LogCapture, WsFrame};
+use nest_rs_ws::{WsConfig, WsServer};
+use std::time::Duration;
+
+/// A read budget for asserting *absence*, so a test does not pay the driver's
+/// full timeout to prove a socket stayed quiet.
+const QUIET: Duration = Duration::from_millis(150);
+
+#[gateway(path = "/socket")]
+pub struct SocketGateway;
+
+#[messages]
+impl SocketGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+}
+
+#[module(imports = [WsModule], providers = [SocketGateway])]
+struct SocketModule;
+
+/// The round trip nothing asserted: a real handshake, the connection task, the
+/// writer half, and back. Below it, the three `nest_rs::operation` lines the
+/// edge owes — a socket that opens, serves and closes with nothing on the
+/// console is work no operator can account for.
+#[tokio::test]
+async fn a_message_round_trips_over_a_real_upgrade() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<SocketModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+    let server = app
+        .container()
+        .get::<WsServer>()
+        .expect("WsModule provides the registry");
+
+    let mut socket = app.socket("/socket").connect().await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    let reply = socket.next_envelope().await;
+    assert_eq!(reply["event"], "echo");
+    assert_eq!(reply["data"], "hi");
+    assert_eq!(
+        server.connection_count(),
+        1,
+        "the upgrade registered the connection",
+    );
+
+    // §5.5.1: an endpoint that *receives* a Close must send one back. The
+    // protocol layer queues that echo when it decodes the frame — and nothing
+    // ever flushed it, because the writer task simply dropped the `Sink`, so
+    // the client read 1006 on a close it had itself requested.
+    let echo = socket
+        .close(CloseCode::Normal, "done")
+        .await
+        .expect("§5.5.1: a received Close is answered with one");
+    assert_eq!(
+        echo.0,
+        CloseCode::Normal,
+        "the peer's own status comes back"
+    );
+
+    // The registry entry goes with the connection: `RegistryGuard`'s `Drop`
+    // runs before the echo reaches the wire, so observing the echo is enough
+    // to observe the cleanup.
+    assert_eq!(server.connection_count(), 0, "the entry did not outlive it");
+
+    for unit in [
+        nest_rs_ws::unit::CONNECT,
+        nest_rs_ws::unit::MESSAGE,
+        nest_rs_ws::unit::DISCONNECT,
+    ] {
+        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, unit);
+        assert_eq!(line.message, unit);
+        assert!(
+            line.field("conn_id").is_some(),
+            "{unit} names the connection: {:?}",
+            line.fields,
+        );
+        assert!(
+            line.field("duration_ms").is_some(),
+            "{unit} is timed: {:?}",
+            line.fields,
+        );
+    }
+    let message = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE,
+    );
+    assert_eq!(message.field("event").as_deref(), Some("echo"));
+    assert_eq!(
+        message.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        max_connection: Some(Duration::from_millis(200)),
+        ..WsConfig::default()
+    })],
+    providers = [SocketGateway],
+)]
+struct CeilingModule;
+
+/// The ceiling is a security control — it forces a re-upgrade so `exp` is
+/// checked again — and a client that cannot tell it from a dropped connection
+/// retries blindly and never re-authenticates. It closed by dropping the
+/// `Sink`, so the peer read **1006**, which §7.4.1 reserves for a connection
+/// closed with no Close frame at all: a network fault.
+#[tokio::test]
+async fn the_lifetime_ceiling_closes_with_going_away() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<CeilingModule>()
+        .build_ws()
+        .await
+        .expect("a pinned ceiling boots");
+
+    let mut socket = app.socket("/socket").connect().await;
+    let (code, reason) = socket.expect_close().await;
+    assert_eq!(
+        code,
+        CloseCode::Away,
+        "§7.4.1 1001: the server is deliberately ending a socket it will no longer serve",
+    );
+    assert!(
+        !reason.is_empty(),
+        "the peer is told what to do about it, not only that it happened",
+    );
+
+    // The operator's half of the same event, so a close on the wire and a line
+    // in the log cannot come to describe different closes.
+    let closing = logs.expect_one("nest_rs::ws", "closing socket: max lifetime reached");
+    assert_eq!(
+        closing.field("close_code").as_deref(),
+        Some(u16::from(CloseCode::Away).to_string().as_str()),
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[module(
+    imports = [WsModule, WsModule::for_root(WsConfig {
+        max_message_bytes: 64,
+        ..WsConfig::default()
+    })],
+    providers = [SocketGateway],
+)]
+struct CappedModule;
+
+/// The per-message cap is enforced at the protocol layer, so an oversize frame
+/// is refused *while reading* (WS-I1) — and the refusal surfaces as a read
+/// error, with the framing gone mid-message. The socket cannot continue, so it
+/// ends; what changed is that it now ends by *saying so*.
+#[tokio::test]
+async fn a_message_past_the_cap_closes_the_socket_instead_of_vanishing() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<CappedModule>()
+        .build_ws()
+        .await
+        .expect("a pinned message cap boots");
+
+    let mut socket = app.socket("/socket").connect().await;
+    socket
+        .send("echo", serde_json::json!("x".repeat(512)))
+        .await;
+
+    let (code, reason) = socket.expect_close().await;
+    assert_eq!(
+        code,
+        CloseCode::Error,
+        "§7.4.1 1011: poem hands the cause on as an opaque `io::Error`, so the cap cannot be \
+         claimed as the reason — a code the peer cannot check would be worse than the generic one",
+    );
+    assert!(!reason.is_empty());
+
+    let read = logs.expect_one("nest_rs::ws", "websocket read error");
+    assert!(
+        read.field("error")
+            .is_some_and(|e| e.contains("Space limit")),
+        "…while the operator's line does name the size that did it: {:?}",
+        read.fields,
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// RFC 6455 §5.6 makes Binary a first-class data frame, so a client is entitled
+/// to send one. This gateway's contract is a JSON text envelope, so refusing it
+/// is right — refusing it with no reply and no log at any level is the silent
+/// failure `CLAUDE.md` forbids, and from the client's side it is
+/// indistinguishable from a handler that never answered.
+#[tokio::test]
+async fn a_binary_frame_is_refused_in_band_and_the_socket_survives() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<SocketModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+
+    let mut socket = app.socket("/socket").connect().await;
+    socket.send_binary(vec![0x00, 0x01, 0x02]).await;
+
+    let refusal = socket.next_envelope().await;
+    assert_eq!(refusal["event"], "error");
+    assert!(
+        refusal["data"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("binary")),
+        "the client is told what was wrong with the frame: {refusal}",
+    );
+
+    let event = logs.expect_one(
+        "nest_rs::ws",
+        "websocket message refused: binary frames carry no envelope",
+    );
+    assert_eq!(event.field("bytes").as_deref(), Some("3"));
+
+    // Framing is intact, so the refusal is in band and the connection lives —
+    // the same answer the oversize boundary gives, for the same reason.
+    socket.send("echo", serde_json::json!("still here")).await;
+    assert_eq!(socket.next_envelope().await["data"], "still here");
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// An unrouted event answers and keeps the socket open — the frame is the
+/// answer, and nothing follows it. Proves the driver's silence assertion is
+/// real, and pins the one arm of the loop that must *not* close.
+#[tokio::test]
+async fn an_unknown_event_answers_once_and_leaves_the_socket_open() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<SocketModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port");
+
+    let mut socket = app.socket("/socket").connect().await;
+    socket.send("nope", serde_json::Value::Null).await;
+    let frame = socket.next_envelope().await;
+    assert!(
+        frame["data"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("unknown")),
+        "{frame}",
+    );
+    socket.expect_silence(QUIET).await;
+    assert!(
+        !matches!(
+            socket.next_frame_within(QUIET).await,
+            Some(WsFrame::Close(_)),
+        ),
+        "an unrouted event is a client typo, not a reason to end the connection",
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
 }

@@ -98,6 +98,13 @@ http-body-util = "0.1"
 bytes = "1.12"
 futures-util = "0.3"
 
+# The WebSocket client `nest-rs-testing`'s `ws` driver drives a real upgrade
+# with — the one request-carrying edge whose protocol *is* the socket, so no
+# in-process engine can stand in for it. Not a new crate in the build: poem's
+# own `websocket` feature already compiles this exact version, which is why the
+# requirement tracks poem's rather than floating ahead of it.
+tokio-tungstenite = "0.30"
+
 async-trait = "0.1"
 
 # No lock poisoning, so the framework's hot-path locks need no `.unwrap()` —

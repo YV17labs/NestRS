@@ -31,6 +31,12 @@ pub mod graphql;
 #[cfg(feature = "graphql")]
 pub use graphql::{GraphqlSocket, GraphqlSocketBuilder};
 
+/// Driving a WS gateway over a real upgrade (feature `ws`).
+#[cfg(feature = "ws")]
+pub mod ws;
+#[cfg(feature = "ws")]
+pub use ws::{CloseCode, WsApp, WsFrame, WsSocket, WsSocketBuilder};
+
 pub use app::{TestApp, TestAppBuilder};
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};

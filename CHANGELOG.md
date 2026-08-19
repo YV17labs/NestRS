@@ -228,6 +228,41 @@ match a method that has none.
 - The span gains `mcp.method.name` / `mcp.operation.name` — one seam over
   every method, where the semantic conventions spell three per-kind keys.
 
+### A socket ends with the code that says why
+
+Every server-side termination dropped the `Sink`, so the peer read **1006
+Abnormal Closure** — a deliberate close indistinguishable from a broken pipe,
+against which a client retries identically and never learns what to do
+differently. The gateway now writes a Close frame, **after flushing every
+reply already queued**, with the RFC 6455 code the cause earns:
+
+| Cause | Code |
+|---|---|
+| connection lifetime ceiling | `1001 Away`, reason `re-upgrade to continue` — nothing the peer sent reaches this ceiling, a clock does, so not `1008` |
+| outbox full | `1008 Policy` |
+| read failure | `1011 Error` |
+| peer's own Close | echoed, then flushed — a second Close would be refused, not merged |
+
+- **A Binary frame is refused in band** instead of silently dropped: an
+  `error` envelope answers it and the socket survives, `1003` being the other
+  conformant answer and deliberately not this one.
+- The connect/disconnect lines gain `outcome = ok` — the one field of the
+  family those two dropped, so a cross-edge `outcome != ok` query silently
+  skipped them.
+
+### `nest_rs_testing` drives a real upgrade
+
+New `ws` feature: `TestAppBuilder::build_ws()` boots the app's own configured
+transport on a reserved port and hands back a `WsApp`, whose
+`socket(path).bearer(token).connect()` yields a `WsSocket` — `send`,
+`next_envelope`, `expect_silence`, `expect_close`, `close`. `expect_close`
+panics on a socket that ends without a Close frame: "the connection went
+away" is never an acceptable pass. The client is `tokio-tungstenite` at the
+exact version poem's own `websocket` feature already compiles, so nothing new
+enters the build. The WS suites — the framework's own gateway tests included
+— now assert close codes and reasons off the wire instead of accepting any
+termination.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

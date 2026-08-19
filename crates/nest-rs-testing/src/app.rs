@@ -256,6 +256,25 @@ impl TestAppBuilder {
         })
     }
 
+    /// Boot the app on a **real** local port and hand back a socket driver.
+    ///
+    /// The counterpart to [`build`](Self::build) for the one edge `TestClient`
+    /// cannot reach: a WS upgrade produces a connection task, and everything
+    /// the gateway does above `dispatch` — the resolved `WsConfig`, the
+    /// lifetime ceiling, the writer task, the per-message request scope — only
+    /// exists inside it. Same transport either way: the one the app's own
+    /// `HttpModule::for_root(cfg)` describes, so the global prefix and the rest
+    /// match what ships.
+    #[cfg(feature = "ws")]
+    pub async fn build_ws(self) -> Result<crate::ws::WsApp> {
+        let app = self.inner.build().await?;
+        let transport = match self.http {
+            Some(explicit) => explicit,
+            None => http_from_config(app.container())?.unwrap_or_default(),
+        };
+        crate::ws::serve(HeadlessApp::new(app), transport).await
+    }
+
     /// Boot without an HTTP surface, for queue workers / schedulers. The
     /// four-phase build (including the access-graph check) still runs. Drive
     /// non-HTTP transports through [`HeadlessApp::spawn_transport`].

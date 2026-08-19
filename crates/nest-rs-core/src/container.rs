@@ -402,7 +402,7 @@ impl ContainerBuilder {
         match key.name {
             None => self.duplicates.push(DuplicateProvider { type_name }),
             Some(name) => tracing::warn!(
-                target: "nest_rs::container",
+                target: crate::target::CONTAINER,
                 provider = type_name,
                 key = name,
                 "keyed provider override",
@@ -426,7 +426,7 @@ impl ContainerBuilder {
     fn warn_if_cross_kind_singleton(&self, id: TypeId, type_name: &'static str) {
         if self.transient.contains_key(&id) {
             tracing::warn!(
-                target: "nest_rs::container",
+                target: crate::target::CONTAINER,
                 provider = type_name,
                 existing_kind = "transient",
                 new_kind = "singleton",
@@ -441,7 +441,7 @@ impl ContainerBuilder {
     fn warn_if_cross_kind_transient(&self, id: TypeId, type_name: &'static str) {
         if self.providers.contains_key(&ProviderKey::of(id)) {
             tracing::warn!(
-                target: "nest_rs::container",
+                target: crate::target::CONTAINER,
                 provider = type_name,
                 existing_kind = "singleton",
                 new_kind = "transient",
@@ -720,7 +720,7 @@ impl ContainerBuilder {
         let id = TypeId::of::<T>();
         if self.scoped.contains_key(&id) {
             tracing::warn!(
-                target: "nest_rs::container",
+                target: crate::target::CONTAINER,
                 provider = std::any::type_name::<T>(),
                 kind = "request_scoped",
                 "provider override",
@@ -751,7 +751,7 @@ impl ContainerBuilder {
         let id = TypeId::of::<T>();
         if self.transient.contains_key(&id) {
             tracing::warn!(
-                target: "nest_rs::container",
+                target: crate::target::CONTAINER,
                 provider = std::any::type_name::<T>(),
                 kind = "transient",
                 "provider override",

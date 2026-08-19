@@ -87,6 +87,7 @@ mod opaque;
 pub mod operation_log;
 pub mod panic;
 pub mod request_scope;
+pub mod target;
 pub mod trace_context;
 pub mod transport;
 

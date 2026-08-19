@@ -36,7 +36,8 @@ use anyhow::Result;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::format::{JsonFields, Writer};
+use tracing_subscriber::field::VisitOutput;
+use tracing_subscriber::fmt::format::{DefaultVisitor, JsonFields, Writer};
 use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
@@ -165,6 +166,66 @@ fn with_current_correlation(write: impl FnOnce(&Correlation) -> fmt::Result) -> 
     current_request_ctx(|ctx| write(&ctx.correlation)).unwrap_or(Ok(()))
 }
 
+/// Render an event's own fields, with the operation line's `duration_ms` padded
+/// to every digit of its resolution.
+///
+/// A duration is a **column**: an operator reads a screen of
+/// [`operation_log::TARGET`](crate::operation_log::TARGET) lines down the page,
+/// and `0.04` beside `0.043` is the same number to a machine but two widths to a
+/// human, so the whole column has to be re-parsed by eye. Padding to
+/// [`DURATION_DECIMALS`](crate::operation_log::DURATION_DECIMALS) is what makes
+/// it scannable, and it is honest because that is the resolution the formula
+/// already rounds to.
+///
+/// **JSON does not pad**, the third recorded asymmetry beside `trace_flags` and
+/// `parent_span_id`: trailing zeros are a reader's affordance, and the record is
+/// read by a machine that would have to strip them to get the number back.
+///
+/// The visitor delegates to tracing-subscriber's own [`DefaultVisitor`] rather
+/// than reimplementing it — ANSI escaping, the `log.*` skip and the quoting rules
+/// stay theirs, and one field is intercepted on the way through. That is also why
+/// [`TextFormat`] renders fields here instead of through the layer's
+/// `FormatFields`: routing through it would make the padding depend on every
+/// mount site passing a matching `fmt_fields`, and this format already owns every
+/// other choice on the line.
+fn write_event_fields(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt::Result {
+    let mut visitor = FixedWidthDurations(DefaultVisitor::new(writer.by_ref(), true));
+    event.record(&mut visitor);
+    visitor.0.finish()
+}
+
+/// See [`write_event_fields`]. Only `record_f64` decides anything; the other
+/// methods forward, and the ones left to `Visit`'s defaults land on
+/// [`DefaultVisitor::record_debug`] exactly as they would have without the
+/// wrapper.
+struct FixedWidthDurations<'a>(DefaultVisitor<'a>);
+
+impl Visit for FixedWidthDurations<'_> {
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        if field.name() == crate::operation_log::DURATION_MS {
+            let decimals = crate::operation_log::DURATION_DECIMALS;
+            // `Arguments` debug-prints as it displays, which is how
+            // `DefaultVisitor` renders a value it has already formatted itself.
+            self.0
+                .record_debug(field, &format_args!("{value:.decimals$}"));
+        } else {
+            self.0.record_f64(field, value);
+        }
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.0.record_str(field, value);
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.0.record_error(field, value);
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.0.record_debug(field, value);
+    }
+}
+
 /// The console format for **text** output.
 ///
 /// A line is `timestamp level target: message fields`, then the **W3C Trace
@@ -206,6 +267,7 @@ fn with_current_correlation(write: impl FnOnce(&Correlation) -> fmt::Result) -> 
 /// `file:line` is [`source_location`](Self::new) — the one knob both console
 /// sites actually set. ANSI still follows the writer, so a layer with colour
 /// disabled stays plain.
+
 #[derive(Clone, Copy, Debug)]
 pub struct TextFormat {
     source_location: bool,
@@ -227,7 +289,7 @@ where
 {
     fn format_event(
         &self,
-        ctx: &FmtContext<'_, S, N>,
+        _ctx: &FmtContext<'_, S, N>,
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
@@ -258,7 +320,7 @@ where
             writer.write_char(' ')?;
         }
 
-        ctx.format_fields(writer.by_ref(), event)?;
+        write_event_fields(&mut writer, event)?;
 
         with_current_correlation(|correlation| {
             write!(
@@ -540,6 +602,7 @@ mod tests {
     use std::io;
     use std::sync::{Arc, Mutex};
 
+    use tracing_subscriber::Layer;
     use tracing_subscriber::Registry;
     use tracing_subscriber::fmt::MakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
@@ -635,6 +698,97 @@ mod tests {
             .event_format(JsonFormat::new(source_location))
             .with_writer(captured.clone());
         render(layer, captured, actor).await
+    }
+
+    /// One operation line, the shape every edge files through
+    /// [`operation_log`](crate::operation_log) — a duration and a plain `f64`
+    /// beside it, so a formatter that pads too widely is caught by the same
+    /// event.
+    fn emit_operation_line(duration: f64) {
+        tracing::info!(
+            name: crate::operation_log::unit::SCHEDULE_TICK,
+            target: crate::operation_log::TARGET,
+            message = crate::operation_log::unit::SCHEDULE_TICK,
+            method = "close_idle_views",
+            outcome = crate::operation_log::OK,
+            duration_ms = duration,
+            backlog_ratio = 0.5,
+        );
+    }
+
+    fn render_operation_line(format: LogFormat, duration: f64) -> String {
+        let captured = Captured::default();
+        let subscriber = match format {
+            LogFormat::Text => Registry::default().with(
+                tracing_subscriber::fmt::layer()
+                    .event_format(TextFormat::new(false))
+                    .with_ansi(false)
+                    .with_writer(captured.clone())
+                    .boxed(),
+            ),
+            LogFormat::Json => Registry::default().with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .event_format(JsonFormat::new(false))
+                    .with_writer(captured.clone())
+                    .boxed(),
+            ),
+        };
+        tracing::subscriber::with_default(subscriber, || emit_operation_line(duration));
+        captured.take()
+    }
+
+    /// The console reads a duration as a **column**, so the digits after the
+    /// point cannot come and go with the value: `0.04` and `0.043` are one number
+    /// each but two widths, and a screen of ticks is re-parsed by eye.
+    #[test]
+    fn the_console_pads_a_duration_to_the_resolution_the_formula_measures() {
+        for (duration, rendered) in [
+            (0.0, "0.000"),
+            (0.04, "0.040"),
+            (0.1, "0.100"),
+            (12.0, "12.000"),
+            (43.783, "43.783"),
+        ] {
+            let line = render_operation_line(LogFormat::Text, duration);
+            assert!(
+                line.contains(&format!("duration_ms={rendered} ")),
+                "{duration} rendered wider or narrower than its peers: {line}",
+            );
+        }
+    }
+
+    /// Padding is this one field's, not every float's — a formatter that widened
+    /// `f64` as a class would rewrite an app's own numbers on the way past.
+    #[test]
+    fn no_other_number_on_the_line_is_padded() {
+        let line = render_operation_line(LogFormat::Text, 0.04);
+
+        assert!(line.contains("backlog_ratio=0.5\n"), "{line}");
+        assert!(line.contains(r#"outcome="ok""#), "{line}");
+        assert!(
+            line.contains(&format!(
+                "{}: {}",
+                crate::operation_log::TARGET,
+                crate::operation_log::unit::SCHEDULE_TICK
+            )),
+            "{line}",
+        );
+    }
+
+    /// The recorded asymmetry: trailing zeros are a reader's affordance, so the
+    /// machine-read record keeps a JSON **number** that needs no stripping.
+    #[test]
+    fn the_json_record_keeps_the_duration_as_a_number() {
+        let line = render_operation_line(LogFormat::Json, 0.04);
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(line.trim()).unwrap_or_else(|err| panic!("{err}\n{line}"));
+        assert_eq!(
+            parsed["fields"]["duration_ms"].as_f64(),
+            Some(0.04),
+            "{line}"
+        );
     }
 
     /// The requirement in one test: a service line says what the service did and
@@ -856,5 +1010,58 @@ mod tests {
         // The boot path maps this to an error naming the variable — a set-but-
         // unparseable filter must abort, not degrade to `info`.
         assert!(EnvFilter::try_new("foo=notalevel").is_err());
+    }
+
+    /// The documented family toggle silences the family and **nothing else**.
+    ///
+    /// `EnvFilter` compares a directive's target to an event's with
+    /// `starts_with` on the raw string, not on `::` segments, so a target that
+    /// prefixes another switches that one off too. This is the behaviour the
+    /// `filters` join in `nest-rs-conformance` rests on, asserted here because
+    /// it is a property of `tracing-subscriber` rather than of our tree — a
+    /// version that ever matched by segment would make the join's whole subject
+    /// disappear, silently.
+    ///
+    /// The neighbour is `nest_rs::access_graph`, which is not a fixture: it
+    /// carries the boot `warn` naming resolvers unreachable from the GraphQL
+    /// schema, and the family's target was `nest_rs::access` through 5.1 — so
+    /// the toggle the docs handed operators also took that diagnostic away,
+    /// with nothing on the console to say it had. Its real message is asserted
+    /// by the graphql suite; a fixture sentence is used here so that this test
+    /// covers the *filter* and cannot stand in for that coverage.
+    #[test]
+    fn the_family_toggle_silences_the_family_and_not_a_target_it_prefixes() {
+        let captured = Captured::default();
+        let subscriber = Registry::default()
+            .with(EnvFilter::new(format!(
+                "info,{}=off",
+                crate::operation_log::TARGET
+            )))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .event_format(TextFormat::new(false))
+                    .with_ansi(false)
+                    .with_writer(captured.clone()),
+            );
+
+        tracing::subscriber::with_default(subscriber, || {
+            emit_operation_line(0.5);
+            tracing::warn!(
+                target: crate::target::ACCESS_GRAPH,
+                resolver = "PostResolver",
+                "a neighbour the family toggle must leave alone",
+            );
+        });
+
+        let out = captured.take();
+        assert!(
+            !out.contains(crate::operation_log::unit::SCHEDULE_TICK),
+            "the family is off: {out}",
+        );
+        assert!(
+            out.contains("a neighbour the family toggle must leave alone"),
+            "a target the family's merely prefixes is not the family's to \
+             silence: {out}",
+        );
     }
 }

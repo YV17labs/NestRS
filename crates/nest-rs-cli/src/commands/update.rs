@@ -76,14 +76,14 @@ fn run_crates_io_install(force: bool) -> CliResult<()> {
     if force {
         cmd.arg("--force");
     }
-    cmd.arg(CRATE_NAME);
+    cmd.arg("--locked").arg(CRATE_NAME);
 
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
     let status = cmd.status().map_err(CliError::Io)?;
     if !status.success() {
         return Err(CliError::Anyhow(anyhow::anyhow!(
-            "cargo install failed — try manually: cargo install {CRATE_NAME}"
+            "cargo install failed — try manually: cargo install --locked {CRATE_NAME}"
         )));
     }
 

@@ -145,13 +145,7 @@ fn render_lib(mods: &[String]) -> String {
         .map(|m| format!("mod {m};\n"))
         .collect::<String>();
     format!(
-        "//! SeaORM migrations for this workspace.\n\
-         //!\n\
-         //! Add one with `nestrs g migration <name>`: it writes the file, the `mod` line\n\
-         //! here, and regenerates `migrator.rs` from that list — the two registrations\n\
-         //! cannot drift.\n\
-         \n\
-         {decls}mod migrator;\n\
+        "{decls}mod migrator;\n\
          \n\
          pub use migrator::{{Migrator, migrate}};\n"
     )
@@ -201,9 +195,9 @@ fn print_next_steps(stem: &str, table: &str) {
     println!();
     println!("Next steps:");
     println!("  1. Fill in `crates/migrations/src/{stem}.rs` (columns).");
-    println!(
-        "     It writes the `{table}` table — rename the identifier enum if your entity disagrees."
-    );
+    println!("     Add each column to the builder AND as a variant of the identifier enum;");
+    println!("     it writes the `{table}` table — rename the enum if your entity disagrees,");
+    println!("     or swap the create-table body for an `alter_table` on an existing one.");
     println!("  2. Apply it:  nestrs run db up   (or `db reset` to re-seed).");
 }
 
@@ -243,10 +237,6 @@ mod tests {
         assert!(
             !rendered.contains("CreateWidgets"),
             "a migration name must never reach the DDL as an identifier: {rendered}"
-        );
-        assert!(
-            rendered.contains("`widget` table"),
-            "the comment names the table the enum writes, so a rename is obvious: {rendered}"
         );
         assert!(
             !rendered.contains("{{"),

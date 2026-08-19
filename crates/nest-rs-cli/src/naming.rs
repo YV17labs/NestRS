@@ -4,6 +4,9 @@
 //! kebab/snake/pascal forms, the singular entity name (`users` → `User`),
 //! the CRUD form names, and the per-transport module names.
 
+use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
 /// The transports a feature can expose. Drives adapter folder names,
 /// module struct names, and the access-graph imports a generator wires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,8 +88,64 @@ pub struct Names {
     pub singular: String,
 }
 
-/// Reject path segments that would escape the features workspace, and names
-/// whose derived kebab form would not be a valid crate/package identifier.
+/// The architecture rules this CLI ships — the *same bytes* `shared::AGENTS_BODY`
+/// embeds and `.claude/rules/architecture.md` symlinks. Read here so the
+/// refusal below and the rule a generated project is handed cannot disagree:
+/// there is one copy, and it is the one on the build's side.
+static ARCHITECTURE_RULES: &str = include_str!("templates/architecture.md");
+
+/// The structural vocabulary, word → the category that claims it, **derived**
+/// from [`ARCHITECTURE_RULES`] rather than transcribed.
+///
+/// The rules file states it as one fenced block under *Reserved vocabulary*,
+/// one row per category, continuation rows indented — so a row's first token is
+/// its category when the line starts flush, and every other token is a word.
+/// `events` is claimed twice (a pluralized role folder and an edge); the first
+/// row to name it wins, which is the order the file reads in.
+static RESERVED: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLock::new(|| {
+    let mut out = BTreeMap::new();
+    let block = ARCHITECTURE_RULES
+        .split_once("## Reserved vocabulary")
+        .and_then(|(_, rest)| rest.split_once("```"))
+        .and_then(|(_, rest)| rest.split_once("```"))
+        .map(|(block, _)| block)
+        .unwrap_or_default();
+
+    let mut category = "";
+    for line in block.lines().filter(|line| !line.trim().is_empty()) {
+        let mut words = line.split_whitespace();
+        if !line.starts_with(char::is_whitespace)
+            && let Some(head) = words.next()
+        {
+            category = head;
+        }
+        for word in words {
+            out.entry(word).or_insert(category);
+        }
+    }
+    out
+});
+
+/// The category claiming `word`, or `None` when the layout has no meaning for
+/// it. Test-visible so the derivation is asserted rather than assumed.
+fn reserved_category(word: &str) -> Option<&'static str> {
+    RESERVED.get(word).copied()
+}
+
+/// How a category's words are already spent, in the sentence a refusal reads.
+fn reserved_role(category: &str, word: &str) -> String {
+    match category {
+        "structure" => "a workspace directory".to_string(),
+        "roles" => format!("the name of a role file (`{word}.rs`)"),
+        "plurals" => format!("the name of a pluralized role folder (`{word}/`)"),
+        "edges" => format!("the name of a transport adapter folder (`{word}/`)"),
+        _ => "part of the structural vocabulary".to_string(),
+    }
+}
+
+/// Reject path segments that would escape the features workspace, names whose
+/// derived kebab form would not be a valid crate/package identifier, and names
+/// the layout has already spent.
 pub fn validate_feature_name(raw: &str) -> Result<(), String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -100,8 +159,29 @@ pub fn validate_feature_name(raw: &str) -> Result<(), String> {
     }
     // The derived kebab is the crate/package/module name, so it must be a valid
     // identifier — otherwise the scaffold fails the next `cargo check` (CLI-I6).
-    validate_derived_kebab(&to_kebab(trimmed))?;
+    let kebab = to_kebab(trimmed);
+    validate_derived_kebab(&kebab)?;
+    validate_not_reserved(&kebab)?;
     Ok(())
+}
+
+/// Refuse a name the structural vocabulary has already spent.
+///
+/// *A module may not take a name from the structural vocabulary* — the rule the
+/// CLI ships. Without this the generators wrote `ModuleModule` in `module.rs`,
+/// `ServiceService` in `service.rs`, and an `HttpModule` in the features crate
+/// colliding by name with `nest_rs::http::HttpModule` at every composition root
+/// that imports both — three ambiguities no later error message can untangle.
+fn validate_not_reserved(kebab: &str) -> Result<(), String> {
+    let Some(category) = reserved_category(kebab) else {
+        return Ok(());
+    };
+    Err(format!(
+        "`{kebab}` is reserved — the layout already spends it as {}, so a module of that name \
+         makes every path that mentions it ambiguous. Pick the domain word instead: a module \
+         about desktop applications is `programs`, not `apps`.",
+        reserved_role(category, kebab),
+    ))
 }
 
 /// A derived kebab name must be a valid crate/package name: start with a
@@ -388,6 +468,36 @@ fn singularize(pascal: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The scrape is silent when it fails: a heading rename or a fence moved in
+    /// `architecture.md` yields an empty map, and every reserved word is then
+    /// quietly accepted as a module name. Asserted per category rather than as
+    /// a count, so the derivation this file claims is the one that runs.
+    #[test]
+    fn derives_every_reserved_category_from_the_rules_file() {
+        for (word, category) in [
+            ("apps", "structure"),
+            ("crates", "structure"),
+            ("service", "roles"),
+            ("module", "roles"),
+            ("entity", "roles"),
+            ("services", "plurals"),
+            ("dtos", "plurals"),
+            ("http", "edges"),
+            ("graphql", "edges"),
+        ] {
+            assert_eq!(
+                reserved_category(word),
+                Some(category),
+                "`{word}` must be scraped from architecture.md as {category}",
+            );
+        }
+        // `events` is claimed twice; the first row to name it wins.
+        assert_eq!(reserved_category("events"), Some("plurals"));
+        assert_eq!(reserved_category("programs"), None);
+        assert!(validate_not_reserved("apps").is_err());
+        assert!(validate_not_reserved("programs").is_ok());
+    }
 
     #[test]
     fn rejects_path_traversal_feature_names() {

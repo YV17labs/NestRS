@@ -205,10 +205,12 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 ///
 /// Booting the app *root* here was the trap: the moment a resource is wired the
 /// way `g resource` instructs, the root imports `DatabaseModule`, the
-/// connection opens during `build()`, and the suite that `test.just`, this
-/// file's own header and `/testing/integration-tests/` all define as the
-/// infrastructure-free one fails with a 30 s pool timeout. Booting the feature
-/// module keeps the promise no matter what the app grows into.
+/// connection opens during `build()`, and the suite that `test.just` and
+/// `/testing/integration-tests/` both define as the infrastructure-free one
+/// fails with a 30 s pool timeout. Booting the feature module keeps the promise
+/// no matter what the app grows into — and the emitted file says so, because
+/// the developer who later adds a database is the one who has to know why this
+/// suite boots a feature rather than the root.
 pub const SMOKE: &str = r#"//! In-process smoke test — boots the feature's own module through `TestApp`,
 //! no live infra, so it belongs to the `integration` suite and runs on every
 //! `nestrs run test unit`. Tests needing a database, queue or object store go
@@ -327,6 +329,25 @@ all.
 | `crates/features` | feature | the framework, substrates |
 | a substrate (`crates/<name>`) | util | third parties only — **never** the framework, never features |
 | `crates/migrations`, `crates/seed` | tooling | binaries, outside the graph |
+
+## Database — migrations and seed
+
+`nestrs g migration <name>` writes the file, its `mod` line in
+`crates/migrations/src/lib.rs`, and regenerates `migrator.rs` from that list —
+the two registrations cannot drift, and neither is written by hand.
+
+**The `DeriveIden` enum in a migration names the table, not the migration.**
+`DeriveIden` snake-cases it straight into the DDL, so it must agree with the
+entity's `#[sea_orm(table_name = "...")]` or the entity reads a table nothing
+created. The scaffolded body creates a table with the house columns
+(`created_at` / `updated_at` / `deleted_at`, matching what `#[expose(...,
+soft_delete, timestamps)]` expects); swap it for an `alter_table` to change an
+existing one. Every column you add goes in **twice** — once in the builder, once
+as a variant of that enum.
+
+`crates/seed/` runs on `nestrs run db seed`, and `nestrs run db reset` runs it
+against a database that may already hold rows — so every insert there is
+idempotent (find-or-create, or `ON CONFLICT DO NOTHING`).
 "#;
 
 /// `CLAUDE.md`, which is *only* a pointer at `AGENTS.md`.
@@ -377,6 +398,52 @@ pub static AGENTS_BODY: &str = concat!(
     "\n",
     include_str!("architecture.md"),
     r#"
+## Access posture — declared per operation, never inferred
+
+Every route, query, message and tool declares its posture, and an operation that
+declares none is flagged at boot. There are two declarations, and the answer
+picks between them — not the caller:
+
+- `#[authorize(Action, Entity)]` — the class-level gate **plus** automatic
+  field-level masking of the value returned. Reach for it whenever the answer is
+  entity data, and return the `#[expose]`d wire type (wrapped in `Json<T>` where
+  the transport needs it) so the mask has a shape to work on.
+- `#[public]` — no gate and no mask. It says *this operation* has no entity to
+  gate; it does not say the caller is unauthenticated.
+
+**Rows are ability-scoped, and the guards are what install the scope.** `Repo`
+filters every read by the caller's ambient `Ability`; with none installed a read
+denies every row rather than returning them unscoped. So a scaffolded adapter is
+not "open" — it answers nothing until it is wired, which is the fail-secure half
+of the design. Before an operation serves real rows: swap `#[public]` for
+`#[authorize]`, bind `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct, and
+import the edge's authz module in that adapter's `module.rs` —
+`AuthzHttpModule`, `AuthzGraphqlModule`, `AuthzWsModule`, `AuthzMcpModule`.
+`nestrs g auth` writes all of them, and `nestrs g <edge>` on a `g resource` port
+emits the wiring already done.
+
+Two edges answer differently, by design. A **scheduled** tick is system work:
+`DatabaseModule`'s job context installs the executor with no ability, so `Repo`
+runs unscoped and there is nothing to declare. **MCP** gates at the endpoint,
+through the app's `dyn McpOperationGuard`, else the global guard pool, else
+deny-all — so an `/mcp` endpoint with no bridge registered answers 401 to every
+tool call.
+
+**`AppAbility` is the whole policy, and it grants nothing until you say so.** A
+freshly scaffolded resource answers 403 on every route until a rule names its
+entity:
+
+```rust
+ab.can(Action::Read, post::Entity);
+ab.can(Action::Manage, post::Entity)
+    .when(|p| p.eq(post::Column::AuthorId, actor.sub));
+```
+
+`define` answers for an authenticated actor; `define_visitor` answers for a
+caller with no token, on a `#[public]` route only — a `#[public]` route reached
+*with* a valid token uses `define`. `nestrs g resource` prints the lines to paste
+for the resource it just generated.
+
 ## Errors
 
 **`thiserror` in a library, `anyhow` at the binary's entry point.** A service
@@ -392,7 +459,7 @@ Every module's config is settable **both** ways: from the environment and
 pinned in code. A field that only exists in one of the two is incomplete.
 
 **Never spell a variable name as a literal** — not in a message, not in a
-check, not in a doc comment. `{{env_prefix_var}}` is set on the process and
+check, not in a test. `{{env_prefix_var}}` is set on the process and
 renames every framework variable at once, so a name typed by hand points at
 nothing the day it changes, and the compiler never notices. Build it
 (`nest_rs_config::var_name`, `EnvPrefix::var`) or name the setting in words.
@@ -425,6 +492,14 @@ never `#[ignore]`). Inside a suite the module tree mirrors `src/`, and
 `main.rs` holds the `mod` list and shared fixtures — no test function.
 Unit tests stay in `#[cfg(test)] mod tests` in the file under test.
 
+The scaffolded `tests/integration/main.rs` boots the **feature's own** module
+through `TestApp`, never the app root: the root grows every transport and
+connection the app serves, and the moment it imports `DatabaseModule` a suite
+defined as infrastructure-free waits 30 s for a pool. Assert on the composed app
+in `tests/e2e/main.rs` instead — scaffolded empty, and where a test boots against
+a throwaway database with `nest_rs::testing`'s `EphemeralDatabase` (feature
+`orm`) before driving it through `TestApp` the same way.
+
 ## Commands
 
 `nestrs run` is the single front door: `dev`, `start`, `build`, `lint`,
@@ -433,19 +508,15 @@ the `{{env_prefix}}_` prefix.
 "#
 );
 
-/// The `e2e` suite, scaffolded empty for every app in either layout.
+/// The `e2e` suite, scaffolded **literally empty** for every app in either
+/// layout — it exists so the two filtersets resolve, and a suite with no tests
+/// yet has nothing to say that its own header would not be guessing at.
+///
 /// `nestrs run test unit` filters on `not binary(e2e)` and `test e2e` on
 /// `binary(e2e)` — nextest rejects a filterset naming a binary the workspace
 /// does not have, so the suite has to exist from day one for either command to
-/// run at all.
-pub const E2E: &str = r#"//! End-to-end suite — the tests that need live infrastructure (Postgres,
-//! Redis, object storage). `nestrs run test e2e` runs exactly this binary and
-//! `nestrs run test unit` excludes it, so the fast suite never needs a
-//! database up.
-//!
-//! Boot the app against a throwaway database with `nest_rs::testing`'s
-//! `EphemeralDatabase` (feature `orm`), then drive it through `TestApp` the
-//! same way `tests/integration/main.rs` does without one.
-//!
-//! No tests yet — `nestrs run test e2e` passes an empty suite.
-"#;
+/// run at all. What belongs in it — the tests needing live Postgres, Redis or
+/// object storage, booted against a throwaway database through
+/// `nest_rs::testing`'s `EphemeralDatabase` — is stated in the generated
+/// `AGENTS.md`.
+pub const E2E: &str = "";

@@ -47,7 +47,7 @@ fn generate_resource_creates_crud_slice_and_deps() {
     // (dotted vs inline) follows whatever the manifest already used — but the
     // set is what the page copies, and `authn` is the one it had missed:
     // `g resource` bootstraps the auth adapter, so the resource pulls it in.
-    for feature in ["seaorm", "http", "resource", "authz", "authn"] {
+    for feature in ["seaorm", "http", "authz", "authn"] {
         let quoted = format!("\"{feature}\"");
         assert!(
             features_cargo.contains(&quoted),

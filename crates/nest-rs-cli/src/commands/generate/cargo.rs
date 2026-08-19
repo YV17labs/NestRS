@@ -47,7 +47,13 @@ impl Dep {
 }
 
 pub(super) const SEAORM: Dep = nest_rs(&["seaorm", "http"]);
-pub(super) const RESOURCE: Dep = nest_rs(&["resource"]);
+// `#[expose]` and `#[wire_enum]` ride `seaorm`, which is the one feature that
+// activates both `nest-rs-resource` and `nest-rs-seaorm`. They cannot be two
+// features: `#[expose]` emits twelve `::nest_rs_seaorm::` paths and `#[crud]`
+// emits `::nest_rs_resource::`, so each half's expansion names the other's
+// crate — two features that must imply each other, which Cargo rejects as a
+// cycle. `cargo add nest-rs --features resource` could not compile `#[expose]`.
+pub(super) const RESOURCE: Dep = nest_rs(&["seaorm"]);
 pub(super) const GRAPHQL: Dep = nest_rs(&["graphql"]);
 pub(super) const WS: Dep = nest_rs(&["ws"]);
 pub(super) const SCHEDULE: Dep = nest_rs(&["schedule"]);

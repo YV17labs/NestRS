@@ -111,13 +111,13 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
                     let contents = format!("{default}\n");
                     tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
                         Ok(()) => tracing::info!(
-                            target: nest_rs_http::target::ROUTES,
+                            target: crate::TARGET,
                             path = %dest.display(),
                             bytes = contents.len(),
                             "wrote OpenAPI document",
                         ),
                         Err(err) => tracing::warn!(
-                            target: nest_rs_http::target::ROUTES,
+                            target: crate::TARGET,
                             path = %dest.display(),
                             error = %err,
                             "failed to write OpenAPI document",

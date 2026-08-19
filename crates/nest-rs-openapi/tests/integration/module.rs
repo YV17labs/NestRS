@@ -492,7 +492,7 @@ async fn a_document_emit_that_cannot_write_warns_and_still_serves() {
     // The blocking pool runs on its own threads; give it a moment to land.
     for _ in 0..200 {
         if !logs
-            .find("nest_rs::routes", "failed to write OpenAPI document")
+            .find(nest_rs_openapi::TARGET, "failed to write OpenAPI document")
             .is_empty()
         {
             break;
@@ -500,7 +500,7 @@ async fn a_document_emit_that_cannot_write_warns_and_still_serves() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
 
-    let event = logs.expect_one("nest_rs::routes", "failed to write OpenAPI document");
+    let event = logs.expect_one(nest_rs_openapi::TARGET, "failed to write OpenAPI document");
     assert_eq!(event.level, "warn");
     assert_eq!(
         event.field("path").as_deref(),
@@ -515,7 +515,7 @@ async fn a_document_emit_that_cannot_write_warns_and_still_serves() {
         event.fields,
     );
     assert!(
-        logs.find("nest_rs::routes", "wrote OpenAPI document")
+        logs.find(nest_rs_openapi::TARGET, "wrote OpenAPI document")
             .is_empty(),
         "the success line and the failure line are exclusive: {:#?}",
         logs.events(),

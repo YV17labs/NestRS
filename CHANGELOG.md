@@ -186,6 +186,32 @@ the same defect as a span field nothing fills.
 - `#[listeners]` registers through `subscribe_named`, so the line names the
   method; the anonymous `subscribe` files as `<anonymous>`.
 
+### Every dispatched GraphQL field files its own line
+
+Every query and mutation in a deployment was the same line — `POST /graphql
+200` — and which field was slow, which one failed, and which one the caller
+was refused at were all unanswerable from the console. `#[operations]` now
+runs every `#[query]`, `#[mutation]`, `#[entity]` and `#[field_resolver]`
+body through a `graphql.operation` unit: its own span under the request's,
+one line with `role`, `operation`, `outcome` and `duration_ms`.
+
+- **A failing resolver files `outcome = error`** — a GraphQL error is
+  answered with a `200`, so the HTTP line alone reports a request that failed
+  as one that succeeded.
+- **`#[subscription]` is deliberately excluded**: its unit is the connection,
+  filed as `graphql.subscription` when the socket ends; wrapping it here
+  would file a second line naming the *subscribe*, which is not the work.
+- **`operation` is the wire field name**, not the Rust ident — async-graphql
+  renames `list_users` to `listUsers` on the wire, and a line naming the
+  ident cannot be joined against a capture of the request that produced it.
+- **The span deviates from the OTel GraphQL conventions where they cannot
+  carry this, and says so**: `graphql.operation.role` carries a superset of
+  the conventions' `operation.type` enum (`entity`, `field`), and
+  `graphql.document` is deliberately absent — it is the caller's query text,
+  which carries their literals.
+- The generated delegating method is now always `async` for the wrapped
+  roles.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

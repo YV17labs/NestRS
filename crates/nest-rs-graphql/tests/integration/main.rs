@@ -8,6 +8,7 @@ mod global_pipe;
 mod guard;
 mod layer_pool;
 mod limits;
+mod operation;
 mod pipe;
 mod read_only;
 mod resolver;

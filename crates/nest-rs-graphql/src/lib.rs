@@ -72,6 +72,10 @@ pub use opaque::Opaque;
 /// What a `Guard::check_graphql` is handed: one operation, whichever of the two
 /// sites async-graphql exposes it at.
 pub use operation::GraphqlOperationContext;
+// Hidden: the per-field unit of work `#[operations]` wraps every query,
+// mutation, entity and field resolver in. A resolver body never calls it.
+#[doc(hidden)]
+pub use operation::run_operation;
 pub use resolver::{
     GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
     GraphqlSubscriptionObject, ResolverDescriptor,

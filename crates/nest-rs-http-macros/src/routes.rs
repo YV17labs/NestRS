@@ -66,7 +66,9 @@ struct RouteHandler {
 
 /// Handlers grouped by path in first-seen order. Several verbs may share a
 /// path (`GET` + `POST /users`), and poem rejects two `.at(path, ..)` for the
-/// same path, so they must collapse into one `RouteMethod` (`get(h1).post(h2)`).
+/// same path, so they must collapse into one method table
+/// (`MethodTable::new().get(h1).post(h2)`), which is also what carries the verb
+/// set to the `Allow` header a `405` owes.
 type RoutesByPath = Vec<(LitStr, Vec<RouteHandler>)>;
 
 pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -84,6 +86,12 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
+    // Silent here until now: `use_guards` is no standalone attribute macro, so
+    // it reached rustc as `cannot find attribute` with no transport, reason or
+    // remedy named.
+    if let Err(err) = crate::controller::HTTP_PAIR.reject_host_layers(&item.attrs) {
+        return err.to_compile_error().into();
+    }
     let self_ty = item.self_ty.clone();
 
     // Default OpenAPI tag — routes group by controller unless `#[api(tags(...))]` overrides.
@@ -791,8 +799,15 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     // controller declaring `version = ["1", "2"]` mounts the same handlers at
     // two prefixes, and a `#[version]`-narrowed verb drops out of the versions
     // it does not serve. Each verb is therefore added conditionally, and the
-    // path is claimed only if at least one verb survived — an empty
-    // `RouteMethod` at a path answers `405`, which is a worse lie than `404`.
+    // path is claimed only if at least one verb survived — an empty method
+    // table at a path answers `405`, which is a worse lie than `404`.
+    //
+    // The table is a `MethodTable` rather than poem's `RouteMethod` because the
+    // verb set is the answer a `405` owes (RFC 9110 §15.5.6, a MUST): it is
+    // known here, at the declaration, and used to be dropped at the mount. The
+    // registering call is what records it, so the served set and the advertised
+    // `Allow` cannot drift — including under `#[version]`, where which verbs
+    // survive is decided at mount time.
     let route_entries: Vec<TokenStream2> = routes_by_path
         .iter()
         .map(|(path, handlers)| {
@@ -818,19 +833,19 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
                     quote! {
                         if #serves {
                             __method = __method.#verb(#ep);
-                            __any = true;
                         }
                     }
                 })
                 .collect();
             quote! {
                 {
-                    let mut __method = ::nest_rs_http::poem::RouteMethod::new();
-                    let mut __any = false;
+                    let mut __method = ::nest_rs_http::MethodTable::new();
                     #(#arms)*
-                    if __any {
-                        __route = __route
-                            .at(::nest_rs_http::join_path(&__prefix, #path), __method);
+                    if !__method.is_empty() {
+                        __route = __route.at(
+                            ::nest_rs_http::join_path(&__prefix, #path),
+                            __method.into_endpoint(),
+                        );
                     }
                 }
             }

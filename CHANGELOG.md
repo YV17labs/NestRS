@@ -48,6 +48,27 @@ crates.
   so a typo was the one half of the attribute still deferred to a deployment
   failure while the expression beside it was refused at expansion.
 
+### A 405 names what the route serves
+
+RFC 9110 §15.5.6 makes `Allow` on a `405` a MUST, and the framework computed
+the verb set at the declaration and discarded it at the mount — so poem's
+`MethodNotAllowedError` rendered a bare status. `#[routes]` now registers
+through `nest_rs_http::MethodTable`, which records each verb in the same call
+that mounts it, so what is served and what is advertised cannot drift —
+`#[version]`-narrowed routes included, each version advertising its own set.
+
+- **`HEAD` is advertised whenever `GET` is** — poem answers an unregistered
+  `HEAD` by re-dispatching to the `GET` endpoint, so it is served. **`OPTIONS`
+  never is**: serving it would put an unguarded method-listing endpoint at
+  every route, so it is an owner question rather than a default.
+- **Only poem's own refusal is rewritten.** A handler that deliberately
+  answers `405` is stating something about its own resource and keeps its
+  response; an unrouted path stays a bare `404` — inventing an `Allow` there
+  would turn every probe into a confirmation that something is there.
+- **Self-mounting crates are the reported gap.** `nest-rs-graphql` routes by
+  method through poem directly, so `PUT /graphql` still answers a bare `405`;
+  `MethodTable` is public as the drop-in for it.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

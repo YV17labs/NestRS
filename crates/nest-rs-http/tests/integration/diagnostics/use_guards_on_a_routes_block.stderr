@@ -1,0 +1,5 @@
+error: `#[use_guards(...)]` belongs on the controller struct beside `#[controller]`, not on this `#[routes]` block — the struct half declares the host's access posture, and this half declares its #[get] / #[post] / #[put] / #[patch] / #[delete]. A layer scoped to one operation goes on that operation's method.
+  --> tests/integration/diagnostics/use_guards_on_a_routes_block.rs:16:1
+   |
+16 | #[use_guards(AllowAll)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^

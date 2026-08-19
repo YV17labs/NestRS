@@ -1,5 +1,6 @@
 //! Integration tests mirroring `src/` (see CLAUDE.md) — one binary, one module per concern.
 
+mod allow;
 mod body_limit;
 mod compression;
 mod controller;

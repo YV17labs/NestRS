@@ -61,9 +61,9 @@ Real env always wins over the `.env` cascade.
 | `server_header` | `NESTRS_HTTP__SERVER_HEADER` (`true`/`false`) | `false` | `HttpConfig { server_header: true, ..Default::default() }` |
 | `global_prefix` | `NESTRS_HTTP__GLOBAL_PREFIX` | unset ⇒ no prefix | `HttpConfig::default().with_global_prefix("/api")` |
 | `max_body_bytes` | `NESTRS_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
-| `request_timeout_secs` | `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (seconds) | `30` | `HttpConfig { request_timeout_secs: Some(15), ..Default::default() }` |
+| `request_timeout` | `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
 | `fail_secure_strict` | `NESTRS_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
-| `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__FRAME_OPTIONS`, `__HSTS`, `__CONTENT_TYPE_OPTIONS` | on (safe values) | `HttpConfig { security_headers: SecurityHeadersConfig { enabled: false, ..Default::default() }, ..Default::default() }` |
+| `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: SecurityHeadersConfig { enabled: false, ..Default::default() }, ..Default::default() }` |
 | `compression` | `NESTRS_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
 
 See [Compression](/http/compression/) for what the flag negotiates and when to leave it off.
@@ -243,14 +243,25 @@ everything else.
 
 ## Request timeout
 
-`request_timeout_secs` bounds how long one request may run. A handler
-that exceeds it is aborted and the client gets `504 Gateway Timeout`, so a
-slow or stuck request can't tie up a connection indefinitely. Default
-`30`; set `None` (env unset with the field pinned to `None`) to disable:
+`request_timeout` bounds how long one request may run, so a slow or stuck
+request can't tie up a connection indefinitely. Default `30` seconds;
+`NESTRS_HTTP__REQUEST_TIMEOUT_SECS=0` turns it off — the framework-wide
+spelling every duration ceiling uses, so `0` never means "zero seconds":
 
 ```bash title=".env.production" frame="terminal"
 NESTRS_HTTP__REQUEST_TIMEOUT_SECS=15
+NESTRS_HTTP__REQUEST_TIMEOUT_SECS=0    # no timeout at all
 ```
+
+A handler that exceeds it is aborted and the client gets **`503 Service
+Unavailable`** with a `Retry-After` naming the budget — not `504`. RFC 9110
+§15.6.5 scopes `504 Gateway Timeout` to a server "acting as a gateway or
+proxy" whose *upstream* was slow; this transport is the origin, and the
+handler that overran is its own work. The distinction is not cosmetic: a
+client SDK or a load balancer that retries a `504` on another node is acting
+on "that node's upstream is flaky", and re-runs a handler that will overrun
+again. §15.6.4 is the origin's own sentence — explicitly temporary, and
+paired with `Retry-After`.
 
 ## Default security headers
 
@@ -259,18 +270,39 @@ to remember them:
 
 - `X-Content-Type-Options: nosniff` — defeats MIME sniffing.
 - `X-Frame-Options: DENY` — no framing (clickjacking).
+- `Referrer-Policy: strict-origin-when-cross-origin` — a cross-origin
+  request carries the origin, never the path or the query. It matters here
+  and not only in theory: `nest-rs-social` redirects through URLs carrying
+  `state`, and the Swagger UI at `GET /api` is a real page whose outbound
+  links would otherwise name the API paths a reader was browsing.
+- `Cross-Origin-Opener-Policy: same-origin` — a document this server serves
+  keeps no `window` reference back to a cross-origin opener.
+- `Cross-Origin-Resource-Policy: same-origin` — a *no-cors* cross-origin
+  load of a response from this server is blocked. It does not touch CORS
+  requests, which is why an API can carry it; set `cross-origin` on a server
+  whose images or downloads are meant to be embedded elsewhere.
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains` —
   emitted **only when TLS is active** (HSTS over plain HTTP is
   meaningless and a footgun on localhost).
+
+Three more are **settable and off by default**, each because a default would
+be the framework guessing about a document it does not serve:
+
+| Header | Field / env | Why it ships off |
+|---|---|---|
+| `Content-Security-Policy` | `content_security_policy` / `__CONTENT_SECURITY_POLICY` | A policy strict enough to be worth having (`default-src 'none'`) breaks the Swagger UI and every page an app serves; one loose enough to ship safely states nothing. The sources are the app's. |
+| `Cross-Origin-Embedder-Policy` | `cross_origin_embedder_policy` / `__CROSS_ORIGIN_EMBEDDER_POLICY` | `require-corp` is how a *page* opts into cross-origin isolation, and it breaks every cross-origin subresource that does not carry CORP. |
+| `Permissions-Policy` | `permissions_policy` / `__PERMISSIONS_POLICY` | It governs camera / geolocation / payment in a document; a restrictive guess silently disables a feature the app's own front end asked for. |
 
 Every value is tunable through the dual path. Disable the whole set with
 the master switch, or drop one header by setting its value to an empty
 string:
 
 ```bash title=".env" frame="terminal"
-NESTRS_HTTP__SECURITY_HEADERS=false          # all off
-NESTRS_HTTP__FRAME_OPTIONS=SAMEORIGIN        # override one value
-NESTRS_HTTP__HSTS=                           # empty ⇒ drop just HSTS
+NESTRS_HTTP__SECURITY_HEADERS=false                    # all off
+NESTRS_HTTP__FRAME_OPTIONS=SAMEORIGIN                  # override one value
+NESTRS_HTTP__HSTS=                                     # empty ⇒ drop just HSTS
+NESTRS_HTTP__CONTENT_SECURITY_POLICY="default-src 'self'"
 ```
 
 ```rust

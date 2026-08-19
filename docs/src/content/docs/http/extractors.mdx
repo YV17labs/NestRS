@@ -196,10 +196,11 @@ forwarding header when that peer is a proxy you listed:
    `0.0.0.0`, `forwarded = false`. The extractor never fails.
 2. The peer is **not** in `NESTRS_HTTP__TRUSTED_PROXIES` ⇒ that peer is the
    client, `forwarded = false`, and the headers are not read.
-3. The peer **is** a trusted proxy ⇒ the client is the **rightmost**
-   `X-Forwarded-For` hop that is not itself a trusted proxy, then `X-Real-IP`;
-   `forwarded = true`. Hops parse as a bare IP, `IP:port`, or a bracketed IPv6
-   (`[ip]`, `[ip]:port` per RFC 7239).
+3. The peer **is** a trusted proxy ⇒ the client is the **rightmost** hop that
+   is not itself a trusted proxy, read from `Forwarded` (RFC 7239) first, then
+   `X-Forwarded-For`, then `X-Real-IP`; `forwarded = true`. Hops parse as a bare
+   IP, `IP:port`, or a bracketed IPv6 (`[ip]`, `[ip]:port`); a `Forwarded`
+   node of `unknown` or an obfuscated `_id` names no address and is skipped.
 
 With no trusted proxy configured — the default — step 2 always wins, so
 `forwarded` stays `false` and a header a caller sets changes nothing.
@@ -218,7 +219,7 @@ the left of it. Keying on the leftmost hop is the spoofable rule.
 Treat the result as **observational** (logging, geolocation hints, sampling
 keys), never as an authn or authz input. The peer is trustworthy; the hop behind
 it is only as trustworthy as the proxy that wrote it — list an ingress here only
-if it strips and rewrites the client's own `X-Forwarded-For`.
+if it strips and rewrites the client's own forwarding headers.
 
 The [throttler](/rate-limiting/) resolves the client through this same
 mechanism, from this same list, so a request is never rate-limited as one

@@ -146,9 +146,12 @@ let claims: Claims = self.jwt.verify(token)?;
 ```
 
 The verification path runs `Validation::leeway`, checks `nbf`, and
-matches `aud` only when `JwtConfig::audience` is set — otherwise the
-audience check is disabled. Invalid signatures and expired tokens hit
-`tracing::warn!` under `nest_rs::authn`.
+applies RFC 7519 §4.1.3 to `aud` **always**: a token carrying an audience
+this service is not named in is rejected whether or not
+`JwtConfig::audience` is set. Setting it adds the other direction — the
+claim becomes mandatory, so a token omitting `aud` is rejected too.
+Invalid signatures and expired tokens hit `tracing::warn!` under
+`nest_rs::authn`.
 
 ## Configuration
 
@@ -162,7 +165,10 @@ passed to `AuthnModule::for_root(config)`.
 | `private_key` | `NESTRS_AUTHN__PRIVATE_KEY` | EdDSA PEM, issuer only |
 | `public_key` | `NESTRS_AUTHN__PUBLIC_KEY` | EdDSA PEM, verifier needs it |
 | `leeway_secs` | `NESTRS_AUTHN__LEEWAY_SECS` | Clock skew, default 30 |
-| `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — unset disables the check |
+| `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
+| `issuer` | `NESTRS_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
+| `expires_in_secs` | `NESTRS_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default 3600 |
+| `allow_any_audience` | `NESTRS_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`. Refused beside `audience`; `warn`s once per boot |
 
 `JwtConfig::into_options` walks the three key fields and chooses a
 mode:

@@ -95,7 +95,8 @@ $ curl -s http://localhost:3000/health/ready | jq
 
 When one indicator drops, the response moves to `503` and the
 indicator migrates from `info` to `error` with a **fixed** reason —
-`"check failed"`, or `"timed out"`. Never the indicator's own error: the
+`"check failed"`, `"timed out"`, or `"probe deadline exceeded"`.
+Never the indicator's own error: the
 probe is routinely unauthenticated and a connection error carries a DSN or
 an internal hostname. The real cause goes to the log, `warn` on
 `nest_rs::health` (see [Indicators](/health/indicators/)).
@@ -125,6 +126,51 @@ status maps from that one bit: `200` for `up`, `503` for `down`.
 The shape is Terminus-style on purpose — keys you can grep in JSON
 logs without walking a list, and a vocabulary (`status`, `info`,
 `error`, `details`) operators already know.
+</Aside>
+
+## Configuration
+
+Two ceilings bound a probe response, read from `NESTRS_HEALTH__*` or
+pinned through `HealthModule::for_root` — dual-path, like every other
+module's config. The kubelet's `timeoutSeconds` defaults to **1**, and a
+probe that has not answered by then is scored a *failure*; on a liveness
+probe, that is a restart.
+
+| Key | Meaning |
+|---|---|
+| `INDICATOR_TIMEOUT_MS` | ceiling on **one** indicator; expiry reports it `down` and names it in a `warn` — default `750` |
+| `PROBE_DEADLINE_MS` | ceiling on the **whole** response, whatever the indicator count; what answered is reported, the rest are `down` — default `900` |
+
+Milliseconds, not seconds: the only interval that matters here is one
+*inside* the orchestrator's second. `0` is refused at boot on both — an
+unbounded probe is what these fields exist to prevent, and a zero one
+fails every poll.
+
+Indicators run **concurrently**, so a probe costs the slowest check
+rather than their sum, and adding a fifth indicator does not move the
+response's worst case.
+
+```rust title="apps/api/src/module.rs"
+use std::time::Duration;
+use nest_rs::core::module;
+use nest_rs::health::{HealthConfig, HealthModule};
+
+#[module(imports = [
+    HealthModule::for_root(
+        HealthConfig::default().with_probe_deadline(Duration::from_millis(400)),
+    ),
+])]
+pub struct ApiModule;
+```
+
+<Aside type="caution">
+**The probe paths follow `global_prefix`.** A probe path is a contract
+with your orchestrator, but the routes are ordinary controller routes:
+under `NESTRS_HTTP__GLOBAL_PREFIX=/api/v1` the kubelet must call
+`GET /api/v1/health/live`, and a manifest written from the unqualified
+path gets a `404` — which reads as a failed probe. A prefixed app logs
+one `warn` at boot naming the exact paths its probes answer on; point the
+manifest at those.
 </Aside>
 
 ## Going further

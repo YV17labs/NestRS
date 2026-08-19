@@ -19,10 +19,10 @@ just wires the endpoints.
 ## Install
 
 ```bash frame="terminal"
-cargo add nest-rs --features resource,seaorm
+cargo add nest-rs --features seaorm
 ```
 
-`#[expose]` is `nest-rs-resource`; `seaorm` supplies the model it decorates and implies `resource` on its own. Name `resource` alone when you want `#[wire_enum]` on a plain enum and no ORM.
+`#[expose]` lives in `nest-rs-resource` and `seaorm` supplies the model it decorates — one feature activates both crates, because neither half stands alone: `#[expose]` expands to `nest_rs::seaorm` paths and `#[crud]` expands to `nest_rs::resource` ones, so a feature per crate would have to imply the other and Cargo rejects that as a cycle. `#[wire_enum]` rides the same feature for the same reason.
 
 ## A full REST CRUD, 22 lines
 

@@ -84,7 +84,7 @@ auto-resolve through dataloaders when the relation field carries `#[expose]`
 REST/OpenAPI adopters can compile without pulling in GraphQL:
 
 ```bash frame="terminal"
-cargo add nest-rs --features http,seaorm,resource,authz
+cargo add nest-rs --features http,seaorm,authz
 ```
 
 ```rust title="src/posts/entity.rs"
@@ -100,7 +100,7 @@ pub struct Model {
 GraphQL surface when you need it:
 
 ```bash frame="terminal"
-cargo add nest-rs --features resource,graphql
+cargo add nest-rs --features seaorm,graphql
 ```
 
 ```rust

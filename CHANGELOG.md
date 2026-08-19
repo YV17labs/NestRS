@@ -376,6 +376,29 @@ and reads the other two.
   symmetric `#[use_guards(AuthnGuard, AuthzGuard)]` its three siblings carry
   bindable here too.
 
+### The umbrella matrix pulls what its decorators emit
+
+**Breaking: the `resource` feature is gone.** `#[expose]` expands to
+`::nest_rs_seaorm::` paths and `#[crud]` to `::nest_rs_resource::` paths, so
+two separate features would each have to imply the other — a cycle Cargo
+rejects. `seaorm` now activates `nest-rs-resource` directly; a manifest
+saying `features = ["resource"]` drops the word.
+
+- **`seaorm` and `graphql` imply `authz` strongly.** `#[crud]` emits
+  `::nest_rs_authz::…` unconditionally and a GraphQL posture is mandatory, so
+  `cargo add nest-rs --features http,seaorm` plus `#[crud]` was `E0433:
+  cannot find authz in nest_rs` — an error inside a macro expansion, blamed
+  on the attribute, whose natural remedy is exactly the second manifest line
+  the umbrella rule forbids.
+- **`redis-throttler` is a feature that finally exists.** `nest-rs-redis`
+  gated `RedisThrottler` behind its own feature and nothing in the umbrella
+  forwarded to it, so `nest_rs::redis::RedisThrottlerModule` existed in *no*
+  umbrella build — `demo/` enables every feature and still could not name the
+  type. Kept separate from `redis` so a producer/consumer app that never
+  rate-limits does not compile the throttler.
+- The `nest-rs-macro-hygiene` witness swaps `resource` for `seaorm`, keeping
+  the one-dependency proof standing.
+
 ### Also
 
 - **`nest-rs-opentelemetry` loses five dependencies and gains a voice.**

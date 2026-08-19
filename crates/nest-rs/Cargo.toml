@@ -44,9 +44,10 @@ default = ["http", "config"]
 # under `full` and does not find it is meeting a decision, not a hole.
 full = [
     "http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue",
-    "redis", "schedule", "events", "authn", "authz", "social", "opentelemetry",
+    "redis", "redis-throttler", "schedule", "events", "authn", "authz",
+    "social", "opentelemetry",
     "openapi", "health", "throttler", "server-timing", "guards", "pipes",
-    "interceptors", "filters", "exception-filters", "resource", "worker",
+    "interceptors", "filters", "exception-filters", "worker",
     "storage",
 ]
 
@@ -69,23 +70,40 @@ database = ["dep:nest-rs-database"]
 # `nest-rs-testing?/orm` carries `EphemeralDatabase`: a suite that tests against
 # a real schema needs it, and "which extra feature turns the fixture on" is not
 # a question the app should have to answer.
+# `authz` is not optional here even though `#[authorize]` is: `#[crud]` emits
+# `::nest_rs_authz::http::Authorize<::nest_rs_authz::Read, _>` and an
+# `::nest_rs_authz::Action` on *every* operation it generates, whether or not the
+# developer writes a posture attribute. `nest-rs-seaorm` already depends on the
+# crate, so it was compiled and only the umbrella's `pub use` was gated out —
+# `cargo add nest-rs --features http,seaorm` + `#[crud]` was
+# `E0433: cannot find `authz` in `nest_rs``, blamed on the attribute. That is the
+# defect this matrix exists to prevent, so the feature carries what the
+# expansion names.
 seaorm = [
     "dep:nest-rs-seaorm",
+    "dep:nest-rs-resource",
     "database",
-    "resource",
+    "authz",
     "nest-rs-testing?/orm",
 ]
 # `#[resolver]` names the guard chain and the pipe fold unconditionally
 # (`resolver.rs`), so `graphql` owns them rather than inheriting them from a
 # feature the developer might not enable.
+# `authz` is strong, not `?`: a GraphQL posture is **mandatory**, so
+# `#[operations]` emits `::nest_rs_authz::graphql::{authorize, masked_value_for}`
+# on every operation it expands, and `#[expose(..., graphql)]` emits
+# `::nest_rs_authz::masked_output_ambient` in the relation loader. Under the weak
+# form the crate stayed off and `::nest_rs::authz` did not resolve.
 graphql = [
     "dep:nest-rs-graphql",
     "http",
+    "authz",
     "nest-rs-guards/graphql",
     "nest-rs-testing?/graphql",
     "nest-rs-seaorm?/graphql",
     "nest-rs-authz?/graphql",
     "nest-rs-resource?/graphql",
+    "nest-rs-throttler?/graphql",
 ]
 # `#[messages]` names `GuardAsWsMessageCheck` and the per-message chain runner,
 # both behind guards' `ws`. The gateway reuses the HTTP guards at the upgrade, so
@@ -97,9 +115,11 @@ ws = [
     "dep:nest-rs-ws",
     "http",
     "nest-rs-guards/ws",
+    "nest-rs-testing?/ws",
     "nest-rs-seaorm?/ws",
     "nest-rs-authz?/http",
     "nest-rs-authz?/ws",
+    "nest-rs-throttler?/ws",
 ]
 # `#[mcp]` mounts through `HttpEndpointMeta` and resolves its operation guard
 # against the global pool, which guards' `mcp` feature seeds.
@@ -109,11 +129,24 @@ mcp = [
     "nest-rs-guards/mcp",
     "nest-rs-seaorm?/mcp",
     "nest-rs-authz?/mcp",
+    "nest-rs-throttler?/mcp",
 ]
 # `#[processor]` folds pipes over the job payload and reaches the worker-context
 # seam; neither is a crate a `#[process]` method names.
 queue = ["dep:nest-rs-queue", "worker", "pipes"]
 redis = ["dep:nest-rs-redis", "queue"]
+# The cross-process rate-limit store. A capability the umbrella could not reach:
+# `nest-rs-redis` gated `RedisThrottler` behind its own `throttler` feature and
+# nothing here forwarded to it, so `nest_rs::redis::RedisThrottlerModule` existed
+# in no umbrella build — `demo/` enables all 28 features and still could not name
+# the type. The only way in was a second `nest-rs-redis` manifest line, which is
+# the thing *The umbrella is the front door* forbids: "A capability that cannot
+# hold 'one dependency' is reported, never absorbed into prose."
+#
+# Its own feature rather than a widening of `redis`, because the two Redis uses
+# are independent: a producer/consumer app that never rate-limits should not
+# compile `nest-rs-throttler`, which is the split `nest-rs-redis` already made.
+redis-throttler = ["redis", "throttler", "nest-rs-redis/throttler"]
 schedule = ["dep:nest-rs-schedule"]
 events = ["dep:nest-rs-events"]
 authn = ["dep:nest-rs-authn"]
@@ -126,6 +159,10 @@ social = ["dep:nest-rs-social", "authn"]
 opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-testing?/opentelemetry"]
 openapi = ["dep:nest-rs-openapi", "http"]
 health = ["dep:nest-rs-health", "http", "nest-rs-seaorm?/health"]
+# HTTP only, deliberately: `ThrottlerGuard` checks all four request-carrying
+# edges, and each of the other three rides its own transport feature above
+# (`nest-rs-throttler?/graphql`, `?/ws`, `?/mcp`) — weakly, so this stays the
+# one dependency an HTTP-only app pays for.
 throttler = ["dep:nest-rs-throttler", "http"]
 server-timing = ["dep:nest-rs-server-timing", "http"]
 testing = ["dep:nest-rs-testing"]
@@ -139,7 +176,6 @@ pipes = ["dep:nest-rs-pipes"]
 interceptors = ["dep:nest-rs-interceptors"]
 filters = ["dep:nest-rs-filters"]
 exception-filters = ["dep:nest-rs-exception-filters"]
-resource = ["dep:nest-rs-resource"]
 worker = ["dep:nest-rs-worker"]
 storage = ["dep:nest-rs-storage"]
 

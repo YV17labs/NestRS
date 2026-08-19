@@ -84,7 +84,7 @@ async fn compression_off_never_encodes_even_when_accepted() {
 #[tokio::test]
 async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
     // The compression layer runs inside the error boundary, so it stamps
-    // `Content-Encoding: gzip` on the timeout's `Ok(504)` before the boundary
+    // `Content-Encoding: gzip` on the timeout's `Ok(503)` before the boundary
     // rewrites the body into (uncompressed) problem+json. The rewrite must drop
     // the stale encoding, or a browser (which always sends Accept-Encoding)
     // hits ERR_CONTENT_DECODING_FAILED.
@@ -95,9 +95,12 @@ async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
         .header(header::ACCEPT_ENCODING, "gzip")
         .send()
         .await;
-    assert_eq!(resp.0.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(resp.0.status(), StatusCode::SERVICE_UNAVAILABLE);
+    // The `Retry-After` the origin's own status is paired with (RFC 9110
+    // §15.6.4) has to survive the rewrite into problem+json.
+    resp.assert_header(header::RETRY_AFTER, "1");
 
-    // A `504` is what the client sees; it says nothing about which ceiling
+    // A `503` is what the client sees; it says nothing about which ceiling
     // fired. The event carries the configured `timeout`, which is the
     // difference between "this handler is slow" and "the deployment's
     // `NESTRS_HTTP__TIMEOUT` is too tight" — and a burst of these is the first
@@ -113,5 +116,5 @@ async fn a_timeout_under_compression_ships_a_decodable_problem_body() {
     // The body is the real, uncompressed problem+json — parseable as-is.
     let bytes = resp.0.into_body().into_bytes().await.expect("body");
     let problem: serde_json::Value = serde_json::from_slice(&bytes).expect("problem+json body");
-    assert_eq!(problem["status"], 504);
+    assert_eq!(problem["status"], 503);
 }

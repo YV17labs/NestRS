@@ -19,6 +19,8 @@ const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 /// Default keep-alive comment interval on a `#[sse]` stream: 15 seconds, under
 /// the 30–60 s idle timeout common to proxies and browsers.
 const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
+/// Default wall-clock budget for one request.
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 /// HTTP transport options resolved at boot. Every field is settable both via
 /// `NESTRS_HTTP__*` env vars (read by [`Config::from_env`]) and via the pinned
@@ -69,20 +71,43 @@ pub struct HttpConfig {
     /// per-route [`RawBody::extract_with_limit`](crate::RawBody::extract_with_limit)
     /// can pin a *tighter* cap under this ceiling. `None` ⇒ the default (2 MiB).
     /// Read from `NESTRS_HTTP__MAX_BODY_BYTES`.
+    ///
+    /// `0` **fails the boot**, like its two nearest siblings
+    /// (`NESTRS_MCP__MAX_REQUEST_BODY_BYTES`, `NESTRS_WS__MAX_MESSAGE_BYTES`):
+    /// a zero-byte cap rejects every request that carries a body, which is a
+    /// deployment nobody types on purpose and which reads as an outage rather
+    /// than as a misconfiguration. Turning the cap *off* is not spelled here at
+    /// all — the transport falls back to the 2 MiB default for `None`, so the
+    /// ceiling always exists.
+    #[validate(range(min = 1, message = "must be at least 1 byte"))]
     pub max_body_bytes: Option<usize>,
     /// Wall-clock budget for a single request. A handler exceeding it is
-    /// aborted and the client gets `504 Gateway Timeout`, bounding how long a
-    /// slow/stuck request ties up a connection. `None` ⇒ no timeout. Read from
-    /// `NESTRS_HTTP__REQUEST_TIMEOUT_SECS`. Default `30`.
-    pub request_timeout_secs: Option<u64>,
+    /// aborted and the client gets `503 Service Unavailable` with a
+    /// `Retry-After`, bounding how long a slow/stuck request ties up a
+    /// connection. `None` ⇒ no timeout. Read from
+    /// `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (whole seconds; `0` ⇒ no timeout);
+    /// defaults to 30 seconds.
+    ///
+    /// **The `0` spelling is the framework's shared one**, not this field's:
+    /// [`ConfigService::seconds`] is where every duration ceiling reads its off
+    /// state, and the reason it is shared is that four crates each reading `0`
+    /// their own way is four chances for one of them to read it as *zero
+    /// seconds* — which here would time every request out before its handler
+    /// ran. Reading it through `parse` did exactly that, and left `None` (no
+    /// timeout at all) reachable from the pinned struct and from no value of
+    /// the variable, which is the dual-path rule broken in the one direction a
+    /// deployment cannot work around.
+    pub request_timeout: Option<Duration>,
     /// `true` (the default) fails boot when global guards are registered and
     /// an endpoint the transport cannot shape (an imperative `mount(...)`)
     /// would bypass the guard pool; `false` downgrades to a `warn`. Read from
     /// `NESTRS_HTTP__FAIL_SECURE_STRICT`.
     pub fail_secure_strict: bool,
-    /// Default security response headers (`nosniff`, `X-Frame-Options`, HSTS
-    /// under TLS). On by default; tune via `NESTRS_HTTP__SECURITY_HEADERS`,
-    /// `__FRAME_OPTIONS`, `__HSTS`, `__CONTENT_TYPE_OPTIONS`.
+    /// Default security response headers (`nosniff`, `X-Frame-Options`,
+    /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS). On by
+    /// default; tune via `NESTRS_HTTP__SECURITY_HEADERS` (the master switch)
+    /// and one key per header — see [`SecurityHeadersConfig`], which also
+    /// carries the argument for the three members that ship off.
     pub security_headers: SecurityHeadersConfig,
     /// Negotiate response compression (gzip / deflate / brotli / zstd) from the
     /// request's `Accept-Encoding`. Off by default — leave it to the reverse
@@ -101,10 +126,10 @@ pub struct HttpConfig {
     /// the correlation id — that is minted and echoed on every request either
     /// way, because it is what everything else is filed under.
     pub access_log: bool,
-    /// Reverse proxies whose `X-Forwarded-For` / `X-Real-IP` this deployment
-    /// believes. Empty by default — with no entry the framework reads neither
-    /// header and every caller is identified by its transport peer, which is
-    /// the only value a client cannot forge.
+    /// Reverse proxies whose `Forwarded` / `X-Forwarded-For` / `X-Real-IP` this
+    /// deployment believes. Empty by default — with no entry the framework
+    /// reads none of the three and every caller is identified by its transport
+    /// peer, which is the only value a client cannot forge.
     ///
     /// Name the balancer here (`NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2`)
     /// and both [`ClientIp`](crate::ClientIp) and the throttler's rate-limit
@@ -151,7 +176,7 @@ impl Default for HttpConfig {
             server_header: false,
             global_prefix: None,
             max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
-            request_timeout_secs: Some(30),
+            request_timeout: Some(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)),
             fail_secure_strict: true,
             security_headers: SecurityHeadersConfig::default(),
             compression: false,
@@ -230,9 +255,7 @@ impl Config for HttpConfig {
             server_header: env.flag("SERVER_HEADER", base.server_header)?,
             global_prefix,
             max_body_bytes: env.parse("MAX_BODY_BYTES")?.or(base.max_body_bytes),
-            request_timeout_secs: env
-                .parse("REQUEST_TIMEOUT_SECS")?
-                .or(base.request_timeout_secs),
+            request_timeout: env.seconds("REQUEST_TIMEOUT_SECS", base.request_timeout)?,
             fail_secure_strict: env.flag("FAIL_SECURE_STRICT", base.fail_secure_strict)?,
             security_headers: SecurityHeadersConfig::from_env(env, base.security_headers)?,
             compression: env.flag("COMPRESSION", base.compression)?,
@@ -486,6 +509,59 @@ mod tests {
             assert_eq!(cfg.max_body_bytes, Some(1024));
             Ok(())
         });
+    }
+
+    // `0` used to install a zero-byte cap, so every request carrying a body
+    // answered `413` — an outage that reads like a framework bug. Its two
+    // nearest siblings (`McpConfig::max_request_body_bytes`,
+    // `WsConfig::max_message_bytes`) have refused it all along.
+    #[test]
+    fn a_zero_body_cap_fails_the_boot_rather_than_rejecting_every_request() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(nest_rs_config::var_name("http", "MAX_BODY_BYTES"), "0");
+            let err = HttpConfig::resolve(None).expect_err("a zero-byte cap must abort the boot");
+            let msg = err.to_string();
+            assert!(msg.contains("max_body_bytes"), "{msg}");
+            Ok(())
+        });
+    }
+
+    // The shared `0` ⇒ off spelling, which this field did not have: `0` read as
+    // *zero seconds* timed every request out before its handler ran, and `None`
+    // — no budget at all — was reachable from the pinned struct and from no
+    // value of the variable.
+    #[test]
+    fn a_zero_request_timeout_turns_the_budget_off_rather_than_zeroing_it() {
+        let cfg = HttpConfig::from_env(
+            &ConfigService::with_vars("http", [("REQUEST_TIMEOUT_SECS", "0")]),
+            Default::default(),
+        )
+        .expect("the overlay resolves");
+        assert_eq!(cfg.request_timeout, None, "`0` is the off sentinel");
+    }
+
+    #[test]
+    fn the_request_timeout_reads_whole_seconds_over_a_pinned_base() {
+        let pinned = HttpConfig {
+            request_timeout: Some(Duration::from_secs(5)),
+            ..Default::default()
+        };
+        assert_eq!(
+            HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned.clone())
+                .expect("the overlay resolves")
+                .request_timeout,
+            Some(Duration::from_secs(5)),
+            "nothing in the env ⇒ the pin is the answer",
+        );
+        assert_eq!(
+            HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("REQUEST_TIMEOUT_SECS", "15")]),
+                pinned,
+            )
+            .expect("the overlay resolves")
+            .request_timeout,
+            Some(Duration::from_secs(15)),
+        );
     }
 
     #[test]

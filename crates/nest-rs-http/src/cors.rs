@@ -29,7 +29,60 @@ pub struct CorsConfig {
     pub max_age: Option<Duration>,
 }
 
+/// The wildcard, as the four lists spell it.
+const WILDCARD: &str = "*";
+
+/// The four lists a `*` may appear in, paired with the response header each one
+/// renders into. One table, so the refusal below is worded once and a fifth list
+/// joins it by growing this array rather than by copying a check.
+type WildcardList<'a> = (&'a str, &'a str, &'a [String]);
+
 impl CorsConfig {
+    /// Every list where `*` is a literal once the request's credentials mode is
+    /// `include` — WHATWG Fetch, *CORS protocol*.
+    ///
+    /// The rule is one rule and it binds four headers, not one:
+    /// `Access-Control-Allow-Origin`, `-Headers`, `-Methods` and
+    /// `-Expose-Headers` all lose their wildcard meaning for a credentialed
+    /// request, and `*` is read as the literal origin / header name / method
+    /// named `*`. `*` is a valid `tchar`, so nothing refuses it: the header is
+    /// emitted, every browser drops the response, and there is nothing
+    /// server-side to point at. Only the origin list was checked here, and the
+    /// other three were accepted in silence.
+    fn wildcard_lists(&self) -> [WildcardList<'_>; 4] {
+        [
+            ("origins", "Access-Control-Allow-Origin", &self.origins),
+            ("headers", "Access-Control-Allow-Headers", &self.headers),
+            ("methods", "Access-Control-Allow-Methods", &self.methods),
+            (
+                "exposed_headers",
+                "Access-Control-Expose-Headers",
+                &self.exposed_headers,
+            ),
+        ]
+    }
+
+    /// One check, one sentence, four lists. A per-key refusal multiplies with
+    /// the table and what multiplies is what gets skipped — which is how three
+    /// of these four came to be unchecked.
+    fn reject_wildcards_with_credentials(&self) -> Result<()> {
+        if !self.credentials {
+            return Ok(());
+        }
+        for (field, header, values) in self.wildcard_lists() {
+            if values.iter().any(|value| value == WILDCARD) {
+                anyhow::bail!(
+                    "invalid CORS config: `{WILDCARD}` in `{field}` with `credentials` — for a \
+                     request whose credentials mode is `include`, WHATWG Fetch reads \
+                     `{WILDCARD}` in `{header}` as that literal value rather than as a \
+                     wildcard, so the response is emitted and no browser honours it; list the \
+                     values explicitly or turn `credentials` off",
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Overlay the `NESTRS_HTTP__CORS_*` keys onto `base` (the policy pinned in
     /// code, if any). Returns `Ok(None)` when neither the environment nor `base`
     /// supplies an origin — no origins means no CORS layer.
@@ -62,9 +115,7 @@ impl CorsConfig {
     /// Translate to poem's middleware. `origins: ["*"]` becomes the
     /// wildcard; explicit origins map one-to-one.
     pub fn into_middleware(self) -> Result<Cors> {
-        if self.credentials && self.origins.iter().any(|origin| origin == "*") {
-            anyhow::bail!("invalid CORS config: wildcard origin with credentials is not permitted");
-        }
+        self.reject_wildcards_with_credentials()?;
         let mut cors = Cors::new();
         for origin in &self.origins {
             cors = cors.allow_origin(origin);
@@ -187,6 +238,57 @@ mod tests {
         let err = err_string(cfg.into_middleware());
         assert!(err.contains("invalid header name"), "got: {err}");
         assert!(err.contains("expose-list"), "must name the list: {err}");
+    }
+
+    // WHATWG Fetch's credentials rule binds four lists, not one. Each is
+    // asserted on its own: a shared check that silently stopped covering one of
+    // them would still pass a test that only ever looked at `origins`.
+    #[test]
+    fn credentials_refuse_a_wildcard_in_every_list_the_rule_binds() {
+        /// One case: the field a `*` is planted in, the header it renders
+        /// into, and the plant itself.
+        type Case = (&'static str, &'static str, fn(&mut CorsConfig));
+        let cases: [Case; 4] = [
+            ("origins", "Access-Control-Allow-Origin", |c| {
+                c.origins = vec![WILDCARD.into()]
+            }),
+            ("headers", "Access-Control-Allow-Headers", |c| {
+                c.headers = vec![WILDCARD.into()]
+            }),
+            ("methods", "Access-Control-Allow-Methods", |c| {
+                c.methods = vec![WILDCARD.into()]
+            }),
+            ("exposed_headers", "Access-Control-Expose-Headers", |c| {
+                c.exposed_headers = vec![WILDCARD.into()]
+            }),
+        ];
+        for (field, header, wildcard) in cases {
+            let mut cfg = CorsConfig {
+                origins: vec!["https://app.example.com".into()],
+                credentials: true,
+                ..Default::default()
+            };
+            wildcard(&mut cfg);
+            let err = err_string(cfg.into_middleware());
+            assert!(err.contains(field), "must name the list: {err}");
+            assert!(err.contains(header), "must name the header: {err}");
+        }
+    }
+
+    // The refusal is about the *pair*: a wildcard without credentials is the
+    // ordinary public-API policy and must keep building.
+    #[test]
+    fn a_wildcard_without_credentials_still_builds() {
+        CorsConfig {
+            origins: vec![WILDCARD.into()],
+            headers: vec![WILDCARD.into()],
+            methods: vec![WILDCARD.into()],
+            exposed_headers: vec![WILDCARD.into()],
+            credentials: false,
+            ..Default::default()
+        }
+        .into_middleware()
+        .expect("a wildcard policy with no credentials is legal");
     }
 
     #[test]

@@ -11,7 +11,7 @@ use features::authz::AuthzHttpModule;
 use features::identity::Role;
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
-use features::testing::{DEV_PUBLIC_KEY, token};
+use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, token};
 use features::users::{ActiveModel as UserActive, UserRole};
 use nest_rs::authn::JwtConfig;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
@@ -61,6 +61,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
         .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
+            audience: Some(AUDIENCE.into()),
             ..Default::default()
         })
         .build()

@@ -18,8 +18,6 @@ nest-rs.workspace = true
 # Enables `features::testing` (dev keypair, org id, token minting) for e2e.
 features = { workspace = true, features = ["test-support"] }
 uuid.workspace = true
-futures-util.workspace = true
-tokio-tungstenite.workspace = true
 sea-orm.workspace = true
 serde_json.workspace = true
 

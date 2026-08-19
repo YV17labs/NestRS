@@ -1,10 +1,10 @@
-use futures_util::{SinkExt, StreamExt};
-use nest_rs::http::HttpTransport;
 use nest_rs::http::poem::http::StatusCode;
-use serde_json::json;
-use tokio_tungstenite::tungstenite::Message;
+use nest_rs::testing::CloseCode;
+use serde_json::{Value, json};
 
 use super::harness::*;
+
+const QUIET: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[tokio::test]
 async fn gateway_endpoint_is_mounted() {
@@ -16,49 +16,25 @@ async fn gateway_endpoint_is_mounted() {
 
 #[tokio::test]
 async fn gateway_echoes_messages_over_a_real_socket() {
-    let bind = "127.0.0.1:13344";
-
-    let app = boot_builder()
-        .build_headless()
-        .await
-        .expect("LiveModule boots headless");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves");
-    let token = test_token().await;
-
-    let mut socket = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
+    let app = serve().await;
+    let mut socket = open(&app, "/ws").await;
 
     socket
-        .send(Message::Text(
-            json!({ "event": "message", "data": { "author": "ada", "text": "hello" } })
-                .to_string()
-                .into(),
-        ))
-        .await
-        .expect("send message");
-    let echoed = next_json(&mut socket).await;
+        .send("message", json!({ "author": "ada", "text": "hello" }))
+        .await;
+    let echoed = socket.next_envelope().await;
     assert_eq!(echoed["event"], "message");
     assert_eq!(echoed["data"]["author"], "ada");
     assert_eq!(echoed["data"]["text"], "hello");
 
-    socket
-        .send(Message::Text(
-            json!({ "event": "history" }).to_string().into(),
-        ))
-        .await
-        .expect("send history");
-    let history = next_json(&mut socket).await;
+    socket.send("history", Value::Null).await;
+    let history = socket.next_envelope().await;
     assert_eq!(history["event"], "history");
     assert_eq!(history["data"].as_array().expect("array").len(), 1);
     assert_eq!(history["data"][0]["text"], "hello");
 
-    socket
-        .send(Message::Text(json!({ "event": "nope" }).to_string().into()))
-        .await
-        .expect("send unknown");
-    let unknown = next_json(&mut socket).await;
+    socket.send("nope", Value::Null).await;
+    let unknown = socket.next_envelope().await;
     assert!(
         unknown["data"]["error"]
             .as_str()
@@ -66,39 +42,22 @@ async fn gateway_echoes_messages_over_a_real_socket() {
             .contains("unknown event")
     );
 
-    socket.close(None).await.ok();
-    handle.shutdown().await.expect("transport shuts down");
+    socket.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
 }
 
 #[tokio::test]
 async fn a_request_scoped_provider_is_reachable_per_message_over_ws() {
-    let bind = "127.0.0.1:13357";
+    let app = serve().await;
+    let mut socket = open(&app, "/ws").await;
 
-    let app = boot_builder()
-        .build_headless()
-        .await
-        .expect("LiveModule boots headless");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves");
-    let token = test_token().await;
-
-    let mut socket = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
-
-    socket
-        .send(Message::Text(json!({ "event": "seq" }).to_string().into()))
-        .await
-        .expect("send first seq");
-    let first = next_json(&mut socket).await;
+    socket.send("seq", Value::Null).await;
+    let first = socket.next_envelope().await;
     assert_eq!(first["event"], "seq");
     let first_seq = first["data"].as_u64().expect("seq is a number");
 
-    socket
-        .send(Message::Text(json!({ "event": "seq" }).to_string().into()))
-        .await
-        .expect("send second seq");
-    let second = next_json(&mut socket).await;
+    socket.send("seq", Value::Null).await;
+    let second = socket.next_envelope().await;
     let second_seq = second["data"].as_u64().expect("seq is a number");
 
     assert_ne!(
@@ -106,76 +65,44 @@ async fn a_request_scoped_provider_is_reachable_per_message_over_ws() {
         "each WS message must build its own request-scoped RequestSeq (per-message scope)",
     );
 
-    socket.close(None).await.ok();
-    handle.shutdown().await.expect("transport shuts down");
+    socket.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
 }
 
 #[tokio::test]
 async fn a_message_is_broadcast_to_every_connected_client() {
-    let bind = "127.0.0.1:13345";
-
-    let app = boot_builder()
-        .build_headless()
-        .await
-        .expect("LiveModule boots headless");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves");
-    let token = test_token().await;
-
-    let mut alice = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
-    let mut bob = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
+    let app = serve().await;
+    let mut alice = open(&app, "/ws").await;
+    let mut bob = open(&app, "/ws").await;
 
     alice
-        .send(Message::Text(
-            json!({ "event": "message", "data": { "author": "alice", "text": "hi all" } })
-                .to_string()
-                .into(),
-        ))
-        .await
-        .expect("alice sends");
+        .send("message", json!({ "author": "alice", "text": "hi all" }))
+        .await;
 
-    let to_alice = next_json(&mut alice).await;
-    let to_bob = next_json(&mut bob).await;
+    let to_alice = alice.next_envelope().await;
+    let to_bob = bob.next_envelope().await;
     for frame in [&to_alice, &to_bob] {
         assert_eq!(frame["event"], "message");
         assert_eq!(frame["data"]["author"], "alice");
         assert_eq!(frame["data"]["text"], "hi all");
     }
 
-    alice.close(None).await.ok();
-    bob.close(None).await.ok();
-    handle.shutdown().await.expect("transport shuts down");
+    alice.close(CloseCode::Normal, "done").await;
+    bob.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
 }
 
 #[tokio::test]
 async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned_author() {
-    let bind = "127.0.0.1:13346";
-
-    let app = boot_builder()
-        .build_headless()
-        .await
-        .expect("LiveModule boots headless");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves");
-    let token = test_token().await;
-
-    let mut alice = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
+    let app = serve().await;
+    let mut alice = open(&app, "/ws").await;
     wait_for_presence(&mut alice, 1).await;
-    let mut bob = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
+    let mut bob = open(&app, "/ws").await;
     wait_for_presence(&mut alice, 2).await;
 
-    bob.send(Message::Text(
-        json!({ "event": "message", "data": { "author": "banned", "text": "hi" } })
-            .to_string()
-            .into(),
-    ))
-    .await
-    .expect("bob sends");
-    let denied = next_json(&mut bob).await;
+    bob.send("message", json!({ "author": "banned", "text": "hi" }))
+        .await;
+    let denied = bob.next_envelope().await;
     assert_eq!(denied["event"], "message");
     assert!(
         denied["data"]["error"]
@@ -184,121 +111,71 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
             .contains("not allowed")
     );
 
-    bob.close(None).await.ok();
+    bob.close(CloseCode::Normal, "done").await;
     wait_for_presence(&mut alice, 1).await;
 
-    alice.close(None).await.ok();
-    handle.shutdown().await.expect("transport shuts down");
+    alice.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
 }
 
 #[tokio::test]
 async fn namespaced_gateways_isolate_their_broadcasts() {
-    let bind = "127.0.0.1:13347";
+    let app = serve().await;
+    let mut chat = open(&app, "/ws").await;
+    let mut notify = open(&app, "/notify").await;
 
-    let app = boot_builder()
-        .build_headless()
-        .await
-        .expect("LiveModule boots headless");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves");
-    let token = test_token().await;
+    chat.send("message", json!({ "author": "ada", "text": "hi" }))
+        .await;
+    assert_eq!(chat.next_envelope().await["event"], "message");
+    notify.expect_silence(QUIET).await;
 
-    let mut chat = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
-    let mut notify = connect_with_retry(&format!("ws://{bind}/notify"), &token).await;
+    notify.send("ping", Value::Null).await;
+    assert_eq!(notify.next_envelope().await["event"], "pong");
+    chat.expect_silence(QUIET).await;
 
-    chat.send(Message::Text(
-        json!({ "event": "message", "data": { "author": "ada", "text": "hi" } })
-            .to_string()
-            .into(),
-    ))
-    .await
-    .expect("chat sends");
-    assert_eq!(next_json(&mut chat).await["event"], "message");
-    assert_no_frame(&mut notify).await;
-
-    notify
-        .send(Message::Text(json!({ "event": "ping" }).to_string().into()))
-        .await
-        .expect("notify sends");
-    assert_eq!(next_json(&mut notify).await["event"], "pong");
-    assert_no_frame(&mut chat).await;
-
-    chat.close(None).await.ok();
-    notify.close(None).await.ok();
-    handle.shutdown().await.expect("transport shuts down");
+    chat.close(CloseCode::Normal, "done").await;
+    notify.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
 }
 
 #[tokio::test]
 async fn an_oversized_message_is_rejected_and_closes_the_socket() {
-    let bind = "127.0.0.1:13355";
-
-    let app = boot_builder()
-        .build_headless()
-        .await
-        .expect("LiveModule boots headless");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves");
-    let token = test_token().await;
-
-    let mut socket = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
+    let app = serve().await;
+    let mut socket = open(&app, "/ws").await;
 
     let oversized = "x".repeat(128 * 1024);
-    let huge =
-        json!({ "event": "message", "data": { "author": "ada", "text": oversized } }).to_string();
-    assert!(huge.len() > 64 * 1024, "payload must exceed the 64 KiB cap");
+    socket
+        .send("message", json!({ "author": "ada", "text": oversized }))
+        .await;
 
-    let _ = socket.send(Message::Text(huge.into())).await;
+    let (code, _) = socket.expect_close().await;
+    assert_eq!(
+        code,
+        CloseCode::Error,
+        "an over-cap message ends the socket with a status, never a bare drop",
+    );
 
-    loop {
-        match tokio::time::timeout(std::time::Duration::from_secs(2), socket.next()).await {
-            Ok(None) | Ok(Some(Err(_))) | Ok(Some(Ok(Message::Close(_)))) => break,
-            Err(_) => panic!("the socket must close after an over-cap message, not stay open"),
-            Ok(Some(Ok(Message::Text(t)))) => {
-                panic!("an over-cap message must not be echoed, got {t}")
-            }
-            Ok(Some(Ok(_))) => continue,
-        }
-    }
-
-    handle.shutdown().await.expect("transport shuts down");
+    app.shutdown().await.expect("transport shuts down");
 }
 
 #[tokio::test]
 async fn the_socket_lifetime_ceiling_closes_the_socket() {
-    let bind = "127.0.0.1:13356";
-
     let app = boot_builder()
         .provide(
             nest_rs::ws::WsConfig::default().with_max_connection(std::time::Duration::from_secs(1)),
         )
-        .build_headless()
+        .build_ws()
         .await
-        .expect("LiveModule boots headless");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves");
-    let token = test_token().await;
+        .expect("LiveModule serves on a real port");
+    let mut socket = open(&app, "/ws").await;
 
-    let mut socket = connect_with_retry(&format!("ws://{bind}/ws"), &token).await;
-
-    let closed = tokio::time::timeout(std::time::Duration::from_secs(6), async {
-        loop {
-            match socket.next().await {
-                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                Some(Ok(_)) => continue,
-            }
-        }
-    })
-    .await;
-    assert!(
-        closed.is_ok(),
-        "the socket-lifetime ceiling must close the socket after it elapses",
+    let (code, reason) = socket.expect_close().await;
+    assert_eq!(
+        code,
+        CloseCode::Away,
+        "the ceiling asks the client to re-upgrade, so it says so",
     );
+    assert!(reason.contains("re-upgrade"), "{reason}");
 
-    handle.shutdown().await.expect("transport shuts down");
+    app.shutdown().await.expect("transport shuts down");
 }

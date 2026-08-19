@@ -2509,14 +2509,12 @@ version = "5.1.0"
 dependencies = [
  "anyhow",
  "features",
- "futures-util",
  "nest-rs",
  "parking_lot",
  "sea-orm",
  "serde",
  "serde_json",
  "tokio",
- "tokio-tungstenite 0.30.0",
  "tracing",
  "uuid",
 ]
@@ -2898,6 +2896,8 @@ name = "nest-rs-health"
 version = "5.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
+ "nest-rs-config",
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-health-macros",
@@ -3011,7 +3011,6 @@ dependencies = [
 name = "nest-rs-opentelemetry"
 version = "5.1.0"
 dependencies = [
- "async-trait",
  "nest-rs-config",
  "nest-rs-core",
  "opentelemetry",
@@ -3020,7 +3019,6 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "thiserror 2.0.19",
- "tokio",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -3075,6 +3073,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-queue",
+ "nest-rs-throttler",
  "redis",
  "serde",
  "serde_json",
@@ -3135,6 +3134,7 @@ dependencies = [
 name = "nest-rs-schedule-macros"
 version = "5.1.0"
 dependencies = [
+ "chrono-tz",
  "croner",
  "nest-rs-codegen",
  "proc-macro2",
@@ -3223,6 +3223,7 @@ version = "5.1.0"
 dependencies = [
  "anyhow",
  "async-graphql",
+ "futures-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-exception-filters",
@@ -3237,6 +3238,7 @@ dependencies = [
  "sea-orm-migration",
  "serde_json",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
@@ -3250,10 +3252,14 @@ dependencies = [
  "async-trait",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-graphql",
  "nest-rs-guards",
  "nest-rs-http",
+ "nest-rs-mcp",
+ "nest-rs-ws",
  "parking_lot",
  "poem",
+ "serde_json",
  "tracing",
  "validator",
 ]

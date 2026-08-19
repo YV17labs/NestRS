@@ -18,6 +18,7 @@ async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
         .provide_arc(db.connection())
         .provide(JwtConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
+            audience: Some(AUDIENCE.into()),
             ..Default::default()
         })
         .build()

@@ -1,9 +1,7 @@
 use features::Role;
-use futures_util::SinkExt;
-use nest_rs::http::HttpTransport;
 use nest_rs::http::poem::http::StatusCode;
-use serde_json::json;
-use tokio_tungstenite::tungstenite::Message;
+use nest_rs::testing::CloseCode;
+use serde_json::Value;
 use uuid::Uuid;
 
 use super::harness::*;
@@ -12,7 +10,6 @@ use super::harness::*;
 async fn users_list_over_ws_is_org_scoped_and_email_masked() {
     use sea_orm::{ConnectionTrait, Database};
 
-    let bind = "127.0.0.1:13348";
     nest_rs::testing::load_project_env();
     let url = std::env::var(nest_rs::config::var_name("database", "URL"))
         .expect("the database URL must point at a reachable Postgres for this test");
@@ -36,23 +33,14 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
     .expect("seed users");
 
     let app = boot_builder()
-        .build_headless()
+        .build_ws()
         .await
-        .expect("LiveModule boots headless");
-    let handle = app
-        .spawn_transport(HttpTransport::new().bind(bind))
-        .await
-        .expect("HTTP transport serves");
+        .expect("LiveModule serves on a real port");
 
     let token = token_for_org(org_a, Role::User).await;
-    let mut socket = connect_with_retry(&format!("ws://{bind}/users"), &token).await;
-    socket
-        .send(Message::Text(
-            json!({ "event": "users.list" }).to_string().into(),
-        ))
-        .await
-        .expect("request users.list");
-    let reply = next_json(&mut socket).await;
+    let mut socket = app.socket("/users").bearer(&token).connect().await;
+    socket.send("users.list", Value::Null).await;
+    let reply = socket.next_envelope().await;
 
     assert_eq!(reply["event"], "users.list");
     let rows = reply["data"].as_array().expect("a list of users");
@@ -66,8 +54,8 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
         );
     }
 
-    socket.close(None).await.ok();
-    handle.shutdown().await.expect("transport shuts down");
+    socket.close(CloseCode::Normal, "done").await;
+    app.shutdown().await.expect("transport shuts down");
 
     db.execute_unprepared(&format!(
         "DELETE FROM \"user\" WHERE org_id IN ('{org_a}', '{org_b}')"

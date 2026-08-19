@@ -107,7 +107,7 @@ mod tests {
     #[tokio::test]
     async fn from_context_shares_one_instance_within_an_operation() {
         let scope = Arc::new(RequestScope::new(scoped_container()));
-        nest_rs_core::with_request_scope(Some(scope), Correlation::mint(), None, async {
+        nest_rs_core::with_request_scope(Some(scope), Correlation::mint(), async {
             let a = Scoped::<Probe>::from_context().expect("scope installed");
             let b = Scoped::<Probe>::from_context().expect("scope installed");
             // One `Probe` per operation: two reads resolve the same cached Arc.
@@ -123,7 +123,6 @@ mod tests {
         let first = nest_rs_core::with_request_scope(
             Some(Arc::new(RequestScope::new(container.clone()))),
             Correlation::mint(),
-            None,
             async {
                 Scoped::<Probe>::from_context()
                     .expect("scope installed")
@@ -135,7 +134,6 @@ mod tests {
         let second = nest_rs_core::with_request_scope(
             Some(Arc::new(RequestScope::new(container))),
             Correlation::mint(),
-            None,
             async {
                 Scoped::<Probe>::from_context()
                     .expect("scope installed")

@@ -16,7 +16,7 @@
 
 use std::any::Any;
 
-use nest_rs_core::HandlerMetadata;
+use crate::metadata::HandlerMetadata;
 use poem::Request;
 
 /// Reads per-handler `#[meta(...)]` metadata off the live request by type.

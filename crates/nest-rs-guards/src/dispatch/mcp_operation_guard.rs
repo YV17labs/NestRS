@@ -14,7 +14,7 @@
 //! exactly that reason (`dispatch/mcp_chain.rs`).
 //!
 //! **Two deliberate differences from the GraphQL twin.** `/mcp` carries no
-//! [`Public`](nest_rs_core::Public) marker, so a pooled `AuthnGuard` refuses an
+//! [`Public`](nest_rs_http::Public) marker, so a pooled `AuthnGuard` refuses an
 //! unauthenticated tool call instead of admitting it to a resolver-level gate.
 //! And `use_guards_global` seeds this fallback **only for a non-empty pool** —
 //! MCP's no-guard default is closed, so an empty pool must leave `/mcp`

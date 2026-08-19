@@ -112,7 +112,7 @@ async fn a_mapped_error_2xx_rolls_back_the_handlers_writes() {
         );
 
         let mut resp = StatusCode::OK.into_response();
-        resp.extensions_mut().insert(nest_rs_core::MappedError);
+        resp.extensions_mut().insert(nest_rs_http::MappedError);
         resp
     });
 

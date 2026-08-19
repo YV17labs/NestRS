@@ -153,7 +153,7 @@ mod an_unguarded_schema_announces_itself {
 /// the remedy because the fix is one line in a `#[module(providers = [...])]`.
 mod a_resolver_no_module_lists {
     use nest_rs_core::module;
-    use nest_rs_graphql::{GraphqlModule, operations, resolver};
+    use nest_rs_graphql::{GraphqlConfig, GraphqlModule, operations, resolver};
     use nest_rs_testing::{LogCapture, TestApp};
 
     #[resolver]
@@ -184,6 +184,16 @@ mod a_resolver_no_module_lists {
     #[module(imports = [GraphqlModule::for_root(None)], providers = [ListedResolver])]
     struct PartialModule;
 
+    // The same hole, under an app that asked for it to be fatal.
+    #[module(
+        imports = [GraphqlModule::for_root(GraphqlConfig {
+            strict_resolver_membership: true,
+            ..GraphqlConfig::default()
+        })],
+        providers = [ListedResolver],
+    )]
+    struct StrictModule;
+
     #[tokio::test]
     async fn is_reported_at_warn_with_the_line_that_would_fix_it() {
         let logs = LogCapture::install();
@@ -207,7 +217,7 @@ mod a_resolver_no_module_lists {
         // `inventory` is link-time, so every resolver in this test binary is a
         // candidate; what matters is that ours is named.
         let reported = logs.find(
-            "nest_rs::access_graph",
+            nest_rs_graphql::TARGET,
             "unreachable resolver skipped from the GraphQL schema",
         );
         let ours = reported
@@ -225,6 +235,25 @@ mod a_resolver_no_module_lists {
                 .iter()
                 .any(|event| event.field("resolver").as_deref() == Some("ListedResolver")),
             "a listed resolver is never reported: {reported:#?}",
+        );
+    }
+
+    /// `strict_resolver_membership` promotes that warn to a boot failure, for an
+    /// app where a forgotten `providers` entry must not reach a deployment.
+    #[tokio::test]
+    async fn is_a_boot_failure_when_the_app_asked_for_one() {
+        let err = TestApp::for_module::<StrictModule>()
+            .await
+            .err()
+            .expect("strict membership refuses the boot");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("OrphanResolver"),
+            "the boot names the resolver it refused over: {message}",
+        );
+        assert!(
+            message.contains("providers"),
+            "and carries the same remedy the warn does: {message}",
         );
     }
 }

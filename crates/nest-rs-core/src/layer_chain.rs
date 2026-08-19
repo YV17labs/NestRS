@@ -93,6 +93,7 @@ pub trait GlobalSpecs: Any + Send + Sync {
 /// drift. A spec whose provider is not registered is skipped (the fail-secure
 /// boot check in [`check_specs_resolvable`] is what turns that into a boot
 /// failure); an unregistered family yields an empty chain.
+#[doc(hidden)]
 pub fn resolve_global_layers<S: GlobalSpecs>(
     container: &Container,
 ) -> Vec<ResolvedLayer<S::Layer>> {
@@ -153,7 +154,7 @@ pub struct ResolvedLayer<L: ?Sized> {
     pub type_id: TypeId,
     /// The layer type's name, as logged when the shaper mounts it.
     pub name: &'static str,
-    /// The site the surviving instance came from (global, controller, method).
+    /// The site the surviving instance came from (global, host, method).
     pub source: LayerSite,
     /// The resolved layer instance to run.
     pub layer: Arc<L>,
@@ -176,7 +177,7 @@ impl<L: ?Sized> Clone for ResolvedLayer<L> {
 ///
 /// 1. Dedup by `TypeId` — the broadest site wins; a narrower-scope duplicate
 ///    is deduped and reported once per process at `debug` (see
-///    `report_redundant_scope`), not `warn` (fail-secure: the layer still
+///    [`report_redundant_site`]), not `warn` (fail-secure: the layer still
 ///    runs exactly once).
 /// 2. The broadest-site rule is bypassed for any `TypeId` listed in
 ///    `force` — those entries always survive even if the same `TypeId`
@@ -184,13 +185,21 @@ impl<L: ?Sized> Clone for ResolvedLayer<L> {
 /// 3. Stable sort by [`Layer::priority`] only — declaration order survives
 ///    when priorities tie (the common case). No "category" ordering: the
 ///    framework runs one kind per chain.
+///
+/// `chain` names the dispatch site this chain belongs to, and it is deliberately
+/// not called `route`: four of the callers have none. HTTP passes a route, WS a
+/// message name, the two transport-edge pools the word `transport`, and the
+/// guard registry a bare label — so a field called `route` carried a message
+/// name on the one structured field an operator greps when a layer did not run
+/// where they expected. Same correction as [`LayerSite::Host`], on the other
+/// half of the same event.
 #[doc(hidden)]
 pub fn compose_chain<L>(
     global: Vec<ResolvedLayer<L>>,
-    controller: Vec<ResolvedLayer<L>>,
+    host: Vec<ResolvedLayer<L>>,
     method: Vec<ResolvedLayer<L>>,
     force: &[TypeId],
-    route_label: &str,
+    chain: &str,
 ) -> Vec<ResolvedLayer<L>>
 where
     L: Layer + ?Sized,
@@ -198,25 +207,29 @@ where
     let mut entries: Vec<ResolvedLayer<L>> = Vec::new();
     let mut seen: Vec<(TypeId, LayerSite)> = Vec::new();
 
-    for source in [LayerSite::Global, LayerSite::Controller, LayerSite::Method] {
+    for source in [LayerSite::Global, LayerSite::Host, LayerSite::Method] {
         let bucket = match source {
             LayerSite::Global => &global,
-            LayerSite::Controller => &controller,
+            LayerSite::Host => &host,
             _ => &method,
         };
         for entry in bucket {
             let forced = force.contains(&entry.type_id);
             if let Some((_, existing)) = seen.iter().find(|(tid, _)| *tid == entry.type_id) {
                 if !forced {
-                    report_redundant_scope(entry.type_id, *existing, entry.source, entry.name);
+                    report_redundant_site(entry.type_id, *existing, entry.source, entry.name);
                     continue;
                 }
                 tracing::info!(
                     target: crate::target::LAYERS,
-                    layer = entry.name,
-                    scope = entry.source.label(),
-                    route = route_label,
-                    "layer forced to re-run despite being declared at a broader scope",
+                    // Shortened exactly as the dedup line below shortens it: one
+                    // field name, one rendering, or a grep for
+                    // `layer="AuthnGuard"` finds one of the two lines about that
+                    // layer and misses the other.
+                    layer = short_type_name(entry.name),
+                    site = entry.source.label(),
+                    chain,
+                    "layer forced to re-run despite being declared at a broader site",
                 );
             }
             seen.push((entry.type_id, entry.source));
@@ -231,19 +244,25 @@ where
     entries
 }
 
-/// Report a redundant multi-scope declaration **once per process**.
+/// Report a redundant multi-site declaration **once per process**.
+///
+/// *Site*, not *scope*, everywhere it is observable — the field, the message and
+/// this name. [`LayerSite`] spends a paragraph explaining that `scope` is the
+/// wrong word here (it belongs to request-scoped DI resolution) and every
+/// artifact of the type then used it, on the one structured field an operator
+/// greps when a guard did not run where they expected.
 ///
 /// `compose_chain` runs per route, so a layer declared at both a broad scope
-/// (e.g. `global`) and a narrower one (e.g. `controller`) would otherwise warn
+/// (e.g. `global`) and a narrower one (e.g. the host struct) would otherwise warn
 /// on every route of that controller — a process-global structural fact spam-
 /// emitted as if it were a per-request event. Dedup by `(layer, scope-pair)`
 /// so it surfaces a single line at boot. Level is `debug`: it is informative
-/// (the controller/method declaration was skipped because a broader scope
+/// (the host/method declaration was skipped because a broader site
 /// already covers it) yet fail-secure (broadest wins, the layer still runs
 /// exactly once), so it stays out of `warn` — a config lint, not an actionable
 /// security event, kept off `warn` to avoid alert fatigue. `#[force_*]` opts a
 /// duplicate back into re-running (logged at `info`).
-fn report_redundant_scope(
+fn report_redundant_site(
     type_id: TypeId,
     existing: LayerSite,
     skipped: LayerSite,
@@ -267,7 +286,7 @@ fn report_redundant_scope(
             layer = short_type_name(name),
             kept = existing.label(),
             skipped = skipped.label(),
-            hint = "broadest scope wins; use `#[force_*]` to re-run",
+            hint = "broadest site wins; use `#[force_*]` to re-run",
             "redundant layer declaration deduped",
         );
     }

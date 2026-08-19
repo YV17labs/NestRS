@@ -58,7 +58,7 @@ pub type CaptureFn = fn(&Request) -> Option<Box<dyn ResponseShaping>>;
 ///
 /// Both arms below answer `select()`; the inherent one is reachable only when
 /// its bound holds, and inherent methods win over trait methods at the same
-/// autoref step. So [`shaper_of!`] answers `Some` exactly when
+/// autoref step. So [`shaper_of`](crate::shaper_of) answers `Some` exactly when
 /// `T: RouteResponseShaper`, decided after name resolution — the property the
 /// old path-segment scan could not have.
 pub struct ShaperProbe<T>(PhantomData<fn() -> T>);

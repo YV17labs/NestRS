@@ -1,7 +1,17 @@
 # Guard capability sites missing a witness. **It only shrinks.**
 #
-# Three cells of twenty-five, all one column: no `boot_validate_*` runs over the
-# chain that marker guards.
+# Five cells of forty, all one column: no `boot_validate_*` runs over the chain
+# that marker guards.
+#
+# **Five rather than three because the keying changed, not because the debt
+# grew.** A site is now `(crate, decorator, marker)` — the unit `framework.md`
+# actually names, "each underlin[ing] the decorator the guard was written
+# under, with a snapshot of its own" — so the two in-band edges each split in
+# half: `#[resolver]`/`#[operations]` and `#[mcp]`/`#[tools]` are two decorators
+# emitting one marker at two scopes, and the argument below is the same for
+# each. Under the old key either half could have grown a validator and closed
+# the pair; the same key let one snapshot close both, which is what the two new
+# `..._on_an_operation` / `..._on_a_tool_operation` snapshots answer.
 #
 # A misordered chain — an authorization-phase guard ahead of the authentication-
 # phase one whose principal it reads — fails **closed**: the ability guard finds
@@ -14,7 +24,7 @@
 # calling `boot_validate_guards` over `#[gateway]`'s own specs) — that chain is
 # an HTTP `GET`, so it runs `check_http`, the entry the check is written about.
 #
-# ── The two in-band edges: the site does not exist at boot (2 cells)
+# ── The two in-band edges: the site does not exist at boot (4 cells)
 # `#[operations]` and `#[tools]` compose through `SiteChainCell` on the **first
 # dispatch that reaches the site**, after every boot check has run, and nothing
 # at boot enumerates the sites. Closing these is not a call to add but a
@@ -22,8 +32,10 @@
 # — submitted by both macro crates and walked once at boot against
 # `ReachableProviders`. Owner question, recorded in `.claude/rules/framework.md`
 # under *Two residues*; the fix belongs to both edges at once.
-nest-rs-graphql emits GraphqlGuard :: a boot-time phase validation of the chain it composes
-nest-rs-mcp emits McpGuard :: a boot-time phase validation of the chain it composes
+nest-rs-graphql #[operations] emits GraphqlGuard :: a boot-time phase validation of the chain it composes
+nest-rs-graphql #[resolver] emits GraphqlGuard :: a boot-time phase validation of the chain it composes
+nest-rs-mcp #[mcp] emits McpGuard :: a boot-time phase validation of the chain it composes
+nest-rs-mcp #[tools] emits McpGuard :: a boot-time phase validation of the chain it composes
 #
 # ── WS per message: the check would be wrong there (1 cell)
 # This one was closed for a day and is back, which is the honest outcome. A
@@ -44,4 +56,4 @@ nest-rs-mcp emits McpGuard :: a boot-time phase validation of the chain it compo
 # it honest needs a per-message notion of what "produces" means — a design
 # question, not a patch, and the second silent defect in one round is the signal
 # to stop patching. Raised as an owner question.
-nest-rs-ws emits WsGuard :: a boot-time phase validation of the chain it composes
+nest-rs-ws #[messages] emits WsGuard :: a boot-time phase validation of the chain it composes

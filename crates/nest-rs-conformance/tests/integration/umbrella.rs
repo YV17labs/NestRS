@@ -11,7 +11,7 @@
 //! `dep:nest-rs-<y>`. That is what separates the twenty-eight capabilities from
 //! `default` and `full`, which activate nothing of their own.
 //!
-//! Four columns, and each is owed by a derived subset rather than by all
+//! Six columns, and each is owed by a derived subset rather than by all
 //! twenty-eight:
 //!
 //! - **the re-export**, owed by every capability — `pub use nest_rs_<y> as <y>`,
@@ -24,14 +24,54 @@
 //!   `cargo add nest-rs-<x>` instead. Only the second was implemented once, and
 //!   a negative check alone passes vacuously — an empty README corpus reported
 //!   zero holes, which is the shape a scan reading the wrong directory takes;
-//! - **the expansion witness**, owed only by a capability that *ships
-//!   decorators* — derived by asking whether `crates/nest-rs-<y>-macros` exists,
-//!   which is exactly the ten of twenty-eight `nest-rs-macro-hygiene` enables.
+//! - **the expansion witness**, keyed per **decorator** rather than per
+//!   capability — every `#[proc_macro_attribute]` any `crates/*-macros` crate
+//!   exports owes a use site in `nest-rs-macro-hygiene`, which is 27 cells over
+//!   a population of 11 macro crates. Two of those crates
+//!   (`nest-rs-core-macros`, `nest-rs-config-macros`) are not capabilities at
+//!   all, which is the point: the obligation is the decorator's, and asking it
+//!   of the ten capabilities that ship one would have let a crate add a
+//!   twenty-eighth decorator with nothing to fill;
+//! - **the composition witness**, a boot executed in the owning crate — see
+//!   below for why it is this join's column and not the seams join's.
 //!
-//! The fifth obligation — a boot executed in the owning crate — is the seams
-//! join's whole subject, and a cell it already reports is closed. Writing it
-//! twice is the "no second test for an occupied cell" clause being broken by the
-//! very suite that exists to state it.
+//! **Requirement 4 is stated, not joined, and here is why.** `CLAUDE.md`'s
+//! *Shipping a new capability* has five numbered items; this join carries
+//! columns for 1, 2, 3 and 5. The fourth — "any derive the decorator emits
+//! routed through the surface crate **with its `crate = ` override**, so the
+//! use site declares neither the crate nor a version to keep aligned" — is
+//! covered by two witnesses that live where the derives do, and a column here
+//! would be a third reader of the same fact:
+//!
+//! - the **rooting** half is executed by
+//!   `nest-rs-macro-hygiene/tests/integration/emissions.rs`, which reads every
+//!   `*-macros` source and fails on a path rooted outside the framework —
+//!   exhaustive over decorators, which a compile witness cannot be;
+//! - the **override** half is per decorator, because a `crate = ` attribute's
+//!   spelling is the derive's own (`#[serde(crate = "…")]`,
+//!   `#[validate(crate = …)]`, `#[schemars(crate = "…")]` are three grammars),
+//!   so it is pinned beside each emission — `nest-rs-core-macros`'s
+//!   `the_public_rustdoc_names_everything_the_expansion_appends` is the model,
+//!   and it exists because the published page showed the call-site form for a
+//!   release while the expansion had long been rooted.
+//!
+//! Stated rather than left out: a join that recites a five-item rule and covers
+//! four is exactly the silence *The ask names a site; the design answers the
+//! family* forbids — "a member left unstated is the silence these rules exist
+//! to forbid".
+//!
+//! **The composition column is this join's, not the seams join's.** It used to
+//! delegate: "the fifth obligation is the seams join's whole subject, and a cell
+//! it already reports is closed". That join derives its population from
+//! `pub fn for_root` declarations — fourteen of them — while this one derives
+//! twenty-eight capabilities, so **sixteen capabilities owned no cell at all**.
+//! `CLAUDE.md` states the obligation under *Shipping a new capability*, whose
+//! subject is a feature in the matrix; "every `for_root` seam has one" is the
+//! *bar*, not the population. A capability with no `for_root` still ships
+//! documented wiring, and a boot is still the only thing that proves the access
+//! graph, the resolved config and the mounted routes at once. The seams join
+//! keeps the sharper question — is the seam *itself* exercised — and this one
+//! asks whether the capability boots at all.
 //!
 //! **One limit of the expansion column, reported rather than papered over**:
 //! `nest-rs-macro-hygiene` turns its ten features on in a single build, so a
@@ -40,13 +80,13 @@
 //! cannot prove that use site would still compile alone. Splitting the witness
 //! per feature is an owner decision, not something to infer from here.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    crate_dirs, exported_decorators, files_with_extension, idents, parsed, read, repo_root,
-    rust_files,
+    crate_dirs, executed_tokens, exported_decorators, files_with_extension, parsed, path_roots,
+    read, repo_root, rust_files, spells_path,
 };
 use syn::{Item, UseTree};
 
@@ -117,7 +157,7 @@ fn capabilities(root: &Path) -> Vec<Capability> {
 }
 
 /// The concerns the umbrella re-exports at its root, as `<crate> as <alias>`.
-fn reexports(root: &Path) -> BTreeSet<(String, String)> {
+fn reexports(root: &Path) -> BTreeSet<(String, String, Option<String>)> {
     let Some(ast) = parsed(&root.join("crates/nest-rs/src/lib.rs")) else {
         return BTreeSet::new();
     };
@@ -133,7 +173,27 @@ fn reexports(root: &Path) -> BTreeSet<(String, String)> {
             let UseTree::Rename(rename) = &use_item.tree else {
                 return None;
             };
-            Some((rename.ident.to_string(), rename.rename.to_string()))
+            // **`pub`, and gated on the *right* feature.** The column's sentence
+            // is that the re-export "is what makes `::nest_rs::<y>::` resolve
+            // inside a macro expansion", and neither half of that is true
+            // without these two. A dropped `pub` at least trips
+            // `unused_imports`; a re-export gated on the **wrong** feature
+            // produces no diagnostic in any build — it simply is not there when
+            // the expansion needs it, which is `E0433` inside a macro, blamed on
+            // the attribute. That is the failure *Shipping a new capability*
+            // step 1 exists to prevent, and the cell was closed regardless.
+            if !matches!(use_item.vis, syn::Visibility::Public(_)) {
+                return None;
+            }
+            let gate = use_item.attrs.iter().find_map(|attr| {
+                let text = quote::ToTokens::to_token_stream(attr).to_string();
+                let at = text.find("feature")?;
+                text[at..]
+                    .split('"')
+                    .nth(1)
+                    .map(std::string::ToString::to_string)
+            });
+            Some((rename.ident.to_string(), rename.rename.to_string(), gate))
         })
         .collect()
 }
@@ -207,19 +267,86 @@ fn readmes(root: &Path) -> Vec<(String, String)> {
     out
 }
 
-/// Every identifier `nest-rs-macro-hygiene`'s use sites spell.
-fn hygiene_idents(root: &Path) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    for path in rust_files(&root.join("crates/nest-rs-macro-hygiene/src")) {
-        let Ok(text) = read(&path) else {
-            continue;
-        };
-        let Ok(tokens) = text.parse::<proc_macro2::TokenStream>() else {
-            continue;
-        };
-        out.extend(idents(tokens));
+/// Every decorator `nest-rs-macro-hygiene` actually **applies**.
+///
+/// Attributes, not identifiers, and that is the whole correction: the scan read
+/// every ident in the crate's sources, so the `mod resolver;` line in its
+/// `lib.rs` filled the `#[resolver]` cell. Gutting `src/resolver.rs` of the
+/// attribute left the file, the module and this cell exactly as they were —
+/// which is the shape `edges.rs` records having fixed in itself
+/// (`"authorize.rs".is_file()` closed a cell for a day), and `testing.md`
+/// clause 3 asks for a cell that fails when the behaviour goes.
+fn hygiene_attrs(root: &Path) -> BTreeSet<String> {
+    #[derive(Default)]
+    struct Applied(BTreeSet<String>);
+
+    impl<'ast> syn::visit::Visit<'ast> for Applied {
+        fn visit_attribute(&mut self, node: &'ast syn::Attribute) {
+            if let Some(last) = node.path().segments.last() {
+                self.0.insert(last.ident.to_string());
+            }
+            syn::visit::visit_attribute(self, node);
+        }
     }
-    out
+
+    let mut applied = Applied::default();
+    for path in rust_files(&root.join("crates/nest-rs-macro-hygiene/src")) {
+        if let Some(ast) = parsed(&path) {
+            syn::visit::Visit::visit_file(&mut applied, &ast);
+        }
+    }
+    applied.0
+}
+
+/// Whether a token stream actually boots an app.
+fn is_boot(tokens: &proc_macro2::TokenStream) -> bool {
+    spells_path(tokens, "TestApp", "for_module")
+        || spells_path(tokens, "TestApp", "builder")
+        || spells_path(tokens, "TestApp", "new")
+        || spells_path(tokens, "App", "builder")
+        || spells_path(tokens, "App", "new")
+}
+
+/// Whether a capability's documented wiring is booted anywhere that runs.
+///
+/// Two homes, and `framework.md` names both: the capability's own `tests/` —
+/// "a test in the home crate's `tests/`" — **or `nest-rs-testing` for
+/// cross-crate wiring**, which is where the five layer families legitimately
+/// live, since a guard pool is only observable through a transport none of them
+/// owns. A boot there counts only when the same executed file also names the
+/// capability's crate: an app that boots without ever mentioning `nest_rs_pipes`
+/// witnesses nothing about pipes.
+///
+/// Executed, never merely mentioned: `executed_tokens` is what separates a
+/// `tests/` target and a `#[cfg(test)]` item from a doc example or a `use`, and
+/// the distinction is the one `guards.rs` records having got wrong.
+fn boots(root: &Path, krate: &str) -> bool {
+    let dir = root.join("crates").join(krate);
+    let mut own = rust_files(&dir.join("tests"));
+    own.extend(rust_files(&dir.join("src")));
+    if own
+        .iter()
+        .flat_map(|path| executed_tokens(path, root))
+        .any(|tokens| is_boot(&tokens))
+    {
+        return true;
+    }
+
+    // Both halves read the **executed** tokens. The naming half was a raw
+    // `String::contains` over the file, so a `//!` line or a `// TODO:` naming
+    // a capability closed its composition cell — the identical defect this join
+    // corrected one column over, where "the `mod resolver;` line in its `lib.rs`
+    // filled the `#[resolver]` cell".
+    let module = krate.replace('-', "_");
+    rust_files(&root.join("crates/nest-rs-testing/tests"))
+        .iter()
+        .any(|path| {
+            let executed = executed_tokens(path, root);
+            executed.iter().any(is_boot)
+                && executed
+                    .iter()
+                    .any(|tokens| path_roots(tokens).contains(&module))
+        })
 }
 
 #[test]
@@ -235,12 +362,20 @@ fn every_umbrella_capability_carries_its_witnesses() {
     let reexports = reexports(&root);
     let installs = documented_installs(&root);
     let readmes = readmes(&root);
-    let hygiene = hygiene_idents(&root);
+    let hygiene = hygiene_attrs(&root);
 
     let mut holes = BTreeSet::new();
     for cap in &capabilities {
         let concern = cap.concern();
-        if !reexports.contains(&(cap.krate.replace('-', "_"), concern.clone())) {
+        // The re-export must exist, be `pub`, and be gated on **this**
+        // capability's own feature — `nest-rs-core` is the only unconditional
+        // one, and it is not a capability.
+        let owed = (
+            cap.krate.replace('-', "_"),
+            concern.clone(),
+            Some(cap.feature.clone()),
+        );
+        if !reexports.contains(&owed) {
             holes.insert(cap.cell("pub use"));
         }
         if !installs.contains(&cap.feature) {
@@ -267,13 +402,48 @@ fn every_umbrella_capability_carries_its_witnesses() {
         if !installs_umbrella {
             holes.insert(cap.cell("README installs the umbrella"));
         }
-        // Only a capability that ships decorators owes an expansion witness; the
-        // existence of its `*-macros` crate is what says it does.
-        let macros = root.join("crates").join(format!("{}-macros", cap.krate));
-        if macros.is_dir() {
-            let decorators = exported_decorators(&macros);
-            if !decorators.is_empty() && !decorators.iter().any(|d| hygiene.contains(d)) {
-                holes.insert(cap.cell("nest-rs-macro-hygiene use site"));
+        // The composition witness: a boot executed in the capability's own
+        // crate. `CLAUDE.md` step 5 — "a test in the capability's **own crate**
+        // that boots the documented wiring … and asserts what a caller gets
+        // back" — and composition is *executed*, never merely compiled, because
+        // a boot also proves the access graph, the resolved config and the
+        // mounted routes, which compiling cannot.
+        if !boots(&root, &cap.krate) {
+            holes.insert(cap.cell("own crate boots the documented wiring"));
+        }
+    }
+
+    // **The expansion column's population is the decorators, not the
+    // capabilities.** `framework.md` states the family that way — "extend it
+    // when adding a decorator" — and a capability-keyed walk cannot reach the
+    // four every app writes: `nest-rs-core` is an *unconditional* dependency of
+    // the umbrella, so it activates no `dep:` feature, is therefore not a
+    // capability, and `#[injectable]`, `#[hooks]`, `#[module]` and `#[input]`
+    // owed nothing. All four happen to be applied today, which is exactly why
+    // the hole was invisible; a fifth added tomorrow would have joined nothing.
+    //
+    // One cell per decorator, and reported under the feature that ships it so a
+    // reader can act on the row — `core` for the four the umbrella carries with
+    // no feature of its own.
+    let owning_feature: BTreeMap<String, String> = capabilities
+        .iter()
+        .map(|cap| (format!("{}-macros", cap.krate), cap.feature.clone()))
+        .collect();
+    for dir in crate_dirs() {
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.ends_with("-macros") {
+            continue;
+        }
+        let feature = owning_feature.get(name).cloned().unwrap_or_else(|| {
+            name.trim_start_matches("nest-rs-")
+                .trim_end_matches("-macros")
+                .to_owned()
+        });
+        for decorator in exported_decorators(&dir) {
+            if !hygiene.contains(&decorator) {
+                holes.insert(format!("{feature} :: macro-hygiene applies #[{decorator}]"));
             }
         }
     }

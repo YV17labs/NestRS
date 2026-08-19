@@ -8,12 +8,12 @@
 //! Plug-in point for the Layer System: every guard is a [`Layer`](nest_rs_core::Layer), so the
 //! `#[routes]` / `#[operations]` / `#[messages]` shapers dedup by `TypeId` when
 //! the same guard is declared at multiple sites (global + controller +
-//! method) — the broadest [`LayerSite`] wins and the
+//! method) — the broadest [`LayerSite`](nest_rs_core::LayerSite) wins and the
 //! rest log a `warn`. The framework runs guards in **declaration order**;
 //! [`Layer::priority`](nest_rs_core::Layer::priority) is an opt-in tiebreaker.
 //!
 //! `#[public]` is not a framework-level skip: the macro attaches a
-//! [`Public`](nest_rs_core::Public) marker via the same metadata channel
+//! [`Public`](nest_rs_http::Public) marker via the same metadata channel
 //! as `#[meta(...)]`, and each guard decides whether to honor it. An
 //! `AbilityGuard` may still run on a public route to apply visitor rules;
 //! an `AuthnGuard` may skip rejection when no token is present.
@@ -74,7 +74,7 @@
 //! async fn live() -> &'static str { "ok" }
 //! ```
 //!
-//! The macro attaches a [`Public`](nest_rs_core::Public) marker to the
+//! The macro attaches a [`Public`](nest_rs_http::Public) marker to the
 //! route. Guards that want to honor it read it via the transport's
 //! reflector and adjust their policy.
 //!

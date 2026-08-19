@@ -48,11 +48,8 @@ where
         nest_rs_http::MaskProbe::mark();
         let Path(id) = Path::<Uuid>::from_request(req, body).await?;
         if id.get_version_num() != 7 {
-            // Same wording as the `#[crud]`-generated gate
-            // (`nest_rs_codegen::UUID_V7_REQUIRED`), which this crate cannot
-            // name: codegen is a macro-time helper, not a runtime dependency.
             return Err(Error::from_string(
-                "id must be a UUID v7",
+                nest_rs_core::UUID_V7_REQUIRED,
                 StatusCode::BAD_REQUEST,
             ));
         }

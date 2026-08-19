@@ -16,8 +16,7 @@
 //! # Wiring is checked, not reflected
 //!
 //! The dependency graph is validated at boot, never resolved by reflection at
-//! runtime. [`validate_access_graph`](crate::access::validate_access_graph)
-//! walks the module tree from the root and fails with a named error before any
+//! runtime. `access::validate_access_graph` walks the module tree from the root and fails with a named error before any
 //! transport starts: [`AccessGraphError`] when a provider reaches across a
 //! module boundary no `import` covers, [`MissingDependencyError`] when a
 //! dependency no module provides would otherwise panic at first resolution. A
@@ -75,13 +74,14 @@ pub mod container;
 pub(crate) mod cycle_guard;
 pub mod discoverable;
 pub mod discovery;
+pub mod env_flag;
 pub mod env_prefix;
+mod identifier;
 pub mod layer;
 pub mod layer_chain;
 pub mod lifecycle;
 #[cfg(feature = "logging")]
 pub mod logging;
-pub mod metadata;
 pub mod module;
 mod opaque;
 pub mod operation_log;
@@ -91,27 +91,35 @@ pub mod target;
 pub mod trace_context;
 pub mod transport;
 
+// **The boot's error types, all of them, and none of its validators.** The list
+// had six of seven errors and one of three functions, so `ScopeViolationError`
+// was the one member of the family a caller could not name as
+// `nest_rs_core::…` while `AccessError::into_anyhow` deliberately preserves the
+// downcast to its siblings — and `validate_access_graph` was documented in this
+// crate's own front page while the root did not carry it. The three validators
+// have no caller outside `src/` in either workspace and are now `pub(crate)`:
+// *No backwards-compatibility shims — no public API to preserve yet*, and
+// visibility wider than its use is a promise nobody priced.
 pub use access::{
     AccessError, AccessGraphError, ContestedDeclarationError, DuplicateProviderError,
     KeyedDependencyError, MissingDependencyError, ModuleDescriptor, ProviderDescriptor,
-    ProviderOrder, ReachableProviders, ResolverDescriptor, ResolverSchemaActive,
-    UnreachableResolversError, UnresolvedFactoryError, provider_order, validate_keyed_access_graph,
+    ProviderOrder, ReachableProviders, ScopeViolationError, UnresolvedFactoryError,
 };
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
 pub use discoverable::{Discoverable, INERT_HOST_HINT, ProviderResidency, is_framework_owned};
 pub use discovery::{Discovered, DiscoveryService};
+pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
+pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
 pub use lifecycle::{LifecycleHook, LifecyclePhase};
-pub use metadata::{HandlerMetadata, MappedError, Public};
 pub use module::{DynamicModule, Module};
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
 pub use panic::panic_message;
 pub use request_scope::{
-    RequestContinuation, RequestScope, current_body_limit, current_request_scope,
-    with_request_scope,
+    RequestContinuation, RequestScope, current_request_scope, with_request_scope,
 };
 pub use trace_context::{
     Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,

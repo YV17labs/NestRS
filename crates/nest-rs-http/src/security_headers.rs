@@ -152,17 +152,18 @@ mod tests {
 
     #[test]
     fn an_invalid_header_value_fails_boot_naming_the_var() {
-        let cfg = ConfigService::with_vars("http", [("NESTRS_HTTP__FRAME_OPTIONS", "bad\nvalue")]);
+        let cfg = ConfigService::with_vars("http", [("FRAME_OPTIONS", "bad\nvalue")]);
         let err = SecurityHeadersConfig::from_env(&cfg, Default::default()).unwrap_err();
         assert!(
-            matches!(err, ConfigError::Parse { ref var, .. } if var == "NESTRS_HTTP__FRAME_OPTIONS"),
+            matches!(err, ConfigError::Parse { ref var, .. }
+                if *var == nest_rs_config::var_name("http", "FRAME_OPTIONS")),
             "expected a Parse error naming FRAME_OPTIONS, got {err:?}",
         );
     }
 
     #[test]
     fn a_valid_override_still_loads() {
-        let cfg = ConfigService::with_vars("http", [("NESTRS_HTTP__FRAME_OPTIONS", "SAMEORIGIN")]);
+        let cfg = ConfigService::with_vars("http", [("FRAME_OPTIONS", "SAMEORIGIN")]);
         let loaded =
             SecurityHeadersConfig::from_env(&cfg, Default::default()).expect("valid value loads");
         assert_eq!(loaded.frame_options.as_deref(), Some("SAMEORIGIN"));

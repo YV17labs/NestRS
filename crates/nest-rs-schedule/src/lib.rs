@@ -31,6 +31,7 @@ mod inventory;
 mod module;
 mod scheduler;
 mod trigger;
+pub mod unit;
 
 pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;

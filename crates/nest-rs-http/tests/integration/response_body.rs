@@ -171,7 +171,7 @@ async fn a_stream_is_carried_with_the_access_log_switched_off() {
 
     logs.expect_none(
         nest_rs_core::operation_log::TARGET,
-        nest_rs_core::operation_log::unit::HTTP_REQUEST,
+        nest_rs_http::unit::REQUEST,
     );
     let events = logs.find("test::body", "streamed");
     assert!(!events.is_empty(), "the stream ran");

@@ -30,6 +30,7 @@ mod inventory;
 mod processor;
 mod producer;
 mod queue_name;
+pub mod unit;
 
 // The wire envelope, both halves. `pub` because a backend crate
 // (`nest-rs-redis`, or a third-party one) is what pushes and drains, so it is

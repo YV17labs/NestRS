@@ -11,13 +11,28 @@
 //!
 //! Members are derived from the emissions themselves: every
 //! `guard_capability_bounds(…, ::nest_rs_guards::<Marker>)` in a `*-macros`
-//! crate is one binding site, and it is keyed by the **surface crate that emits
-//! it** paired with the marker. That pairing is what makes the join sharper than
-//! a per-marker one: `nest-rs-ws` emits *two* markers — `WsGuard` per message,
-//! and `HttpGuard` from the `#[gateway]` struct, whose guards run on the upgrade
-//! — so a per-marker view would see `HttpGuard` covered by HTTP's own snapshots
-//! and never ask whether the gateway site has one. It does not, and the rule
-//! already says so: "two carry a snapshot today and the gateway site does not".
+//! crate is one binding site, and it is keyed by the **decorator whose
+//! expansion emits it** paired with the marker. The decorator, because that is
+//! the unit `framework.md` names: "HTTP has **three** emitters —
+//! `#[controller]`, `#[routes]` and the `#[gateway]` struct, whose guards run on
+//! the upgrade — and each underlines the decorator the guard was written under,
+//! **with a snapshot of its own** (`unattested_guard_on_a_gateway` is the
+//! third)."
+//!
+//! **It was keyed by the crate, and that folded three pairs into three cells.**
+//! `#[controller]`/`#[routes]`, `#[resolver]`/`#[operations]` and
+//! `#[mcp]`/`#[tools]` each emit one marker from two decorators, so one snapshot
+//! closed a cell two sites owed and deleting either left it green — the
+//! defeatable shape `testing.md` clause 3 forbids. Under the decorator key two
+//! of those snapshots turned out never to have been written
+//! (`http_only_guard_on_an_operation`, `http_only_guard_on_a_tool_operation`),
+//! which is what the collapse had been hiding.
+//!
+//! Resolving decorator → emission is a **function**-level walk from `lib.rs`,
+//! not a module-level one: `nest-rs-mcp-macros/src/mcp.rs` holds the entry of
+//! both MCP decorators and only `tools` delegates on into `mcp_impl`, so a
+//! module closure would hand `#[mcp]` every marker `#[tools]` binds and put the
+//! two straight back in one cell.
 //!
 //! **The global site is a reported residue, not a member.** `use_guards_global`
 //! (`nest-rs-guards/src/builder.rs`) takes no capability bound at all, so it
@@ -47,20 +62,34 @@ use nest_rs_conformance::sources::{
     files_with_extension, flatten, parsed, read, repo_root, rust_files,
 };
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use quote::ToTokens;
 use syn::Item;
 
 const BASELINE: &str = "guards-baseline.txt";
 
-/// Five binding sites stand today — HTTP's two decorators collapse to one
-/// `(crate, marker)` cell, as do MCP's. Below this the scan is reading the wrong
-/// tree.
-const FLOOR: usize = 5;
+/// Eight binding sites stand today — two decorators per edge. Below this the
+/// scan is reading the wrong tree.
+///
+/// **It was five, and the missing three were the second emitter of HTTP,
+/// GraphQL and MCP.** Keying a site by `(crate, marker)` folded `#[controller]`
+/// into `#[routes]`, `#[resolver]` into `#[operations]` and `#[mcp]` into
+/// `#[tools]`, so one snapshot closed a cell two decorators owed and deleting
+/// either left it green — while `framework.md` says the opposite outright:
+/// "HTTP has **three** emitters … and each underlines the decorator the guard
+/// was written under, **with a snapshot of its own**." Two of those snapshots
+/// did not exist and were written when this key exposed them.
+const FLOOR: usize = 8;
 
 /// One place a decorator emits a capability bound.
 #[derive(Debug, Clone)]
 struct Site {
     /// The surface crate whose suite owes the snapshot — `nest-rs-ws`.
     krate: String,
+    /// The decorator whose expansion emits the bound — `gateway`, `messages`,
+    /// `tools`. **This is what makes a site a site**: a crate can emit one
+    /// marker from two decorators, and `framework.md` gives each its own
+    /// snapshot, "underlin[ing] the decorator the guard was written under".
+    decorator: String,
     /// The marker it emits — `HttpGuard`.
     marker: String,
     /// Whether a decorator of this crate phase-validates **the chain this
@@ -96,8 +125,109 @@ impl Site {
     }
 
     fn cell(&self, column: &str) -> String {
-        format!("{} emits {} :: {column}", self.krate, self.marker)
+        format!(
+            "{} #[{}] emits {} :: {column}",
+            self.krate, self.decorator, self.marker
+        )
     }
+}
+
+/// One function of a `*-macros` crate: what it emits, and where it delegates.
+#[derive(Default)]
+struct Function {
+    /// Capability markers this function's own body binds.
+    markers: Vec<String>,
+    /// `(module, function)` it calls — the delegation edges.
+    calls: BTreeSet<(String, String)>,
+}
+
+/// Every free function of `module`, keyed `(module, name)`.
+///
+/// **A function-level graph rather than a module-level one**, and that is the
+/// whole point of the rewrite: `mcp.rs` holds the entry of *both* MCP
+/// decorators — `mcp::mcp` and `mcp::tools` — and only the second reaches
+/// `mcp_impl`. A module-level closure would hand `#[mcp]` every marker
+/// `#[tools]` binds and put the two back in one cell, which is the collapse
+/// this join is correcting.
+fn collect_functions(
+    module: &str,
+    ast: &syn::File,
+    graph: &mut BTreeMap<(String, String), Function>,
+) {
+    for item in &ast.items {
+        let Item::Fn(f) = item else {
+            continue;
+        };
+        let tokens = f.block.to_token_stream();
+        let mut flat = Vec::new();
+        flatten(tokens.clone(), &mut flat);
+        let mut calls = BTreeSet::new();
+        for window in flat.windows(4) {
+            // `a :: b` — the two `Punct`s are how `::` reaches a token stream.
+            let [
+                TokenTree::Ident(a),
+                TokenTree::Punct(first),
+                TokenTree::Punct(second),
+                TokenTree::Ident(b),
+            ] = window
+            else {
+                continue;
+            };
+            if first.as_char() == ':' && second.as_char() == ':' {
+                calls.insert((a.to_string(), b.to_string()));
+            }
+        }
+        // A bare call inside the same module — `mcp_struct(args, item)`.
+        for window in flat.windows(2) {
+            let [TokenTree::Ident(called), TokenTree::Group(args)] = window else {
+                continue;
+            };
+            if args.delimiter() == Delimiter::Parenthesis {
+                calls.insert((module.to_owned(), called.to_string()));
+            }
+        }
+        graph.insert(
+            (module.to_owned(), f.sig.ident.to_string()),
+            Function {
+                markers: markers_bound_in(tokens),
+                calls,
+            },
+        );
+    }
+}
+
+/// Which markers each `#[proc_macro_attribute]` reaches, following delegations.
+///
+/// Roots are `lib.rs`'s attribute macros — Rust forces them to the crate root,
+/// which is why the root *is* the decorator list (`framework.md`'s one licensed
+/// exception to "`lib.rs` carries no logic").
+fn decorator_markers(
+    graph: &BTreeMap<(String, String), Function>,
+    modules: &BTreeSet<String>,
+) -> BTreeSet<(String, String)> {
+    let mut out = BTreeSet::new();
+    for (key, _) in graph.iter().filter(|((module, _), _)| module == "lib") {
+        let decorator = key.1.clone();
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![key.clone()];
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node.clone()) {
+                continue;
+            }
+            let Some(function) = graph.get(&node) else {
+                continue;
+            };
+            for marker in &function.markers {
+                out.insert((decorator.clone(), marker.clone()));
+            }
+            for (module, name) in &function.calls {
+                if modules.contains(module) {
+                    stack.push((module.clone(), name.clone()));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Every `guard_capability_bounds(…, ::nest_rs_guards::<Marker>)` call.
@@ -106,7 +236,9 @@ impl Site {
 /// invocation whose body `syn` keeps as an opaque `TokenStream`, so an
 /// expression visitor sees the call and not the argument that identifies it.
 fn binding_sites(root: &Path) -> Vec<Site> {
-    let mut markers: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut markers: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut graph: BTreeMap<(String, String), Function> = BTreeMap::new();
+    let mut modules: BTreeSet<String> = BTreeSet::new();
     /// Which marker's chain a `boot_validate_*` in `nest-rs-guards` attests.
     ///
     /// Named rather than prefix-matched: the point of the column is *which*
@@ -158,17 +290,33 @@ fn binding_sites(root: &Path) -> Vec<Site> {
                     validated.insert((surface.to_owned(), marker.to_owned()));
                 }
             }
-            for marker in markers_bound_in(tokens.clone()) {
-                markers.insert((surface.to_owned(), marker));
-            }
+            let Some(module) = file.file_stem().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Ok(ast) = syn::parse_file(&text) else {
+                continue;
+            };
+            modules.insert(module.to_owned());
+            collect_functions(module, &ast, &mut graph);
         }
+        for (decorator, marker) in decorator_markers(&graph, &modules) {
+            markers.insert((surface.to_owned(), decorator, marker));
+        }
+        graph.clear();
+        modules.clear();
     }
     markers
         .into_iter()
-        .map(|key| Site {
-            validates: validated.contains(&key),
-            krate: key.0,
-            marker: key.1,
+        .map(|(krate, decorator, marker)| Site {
+            // **Folded across the crate's files on purpose**, unlike the
+            // snapshot: a decorator pair is two item shapes in two files and
+            // the check belongs to whichever half holds the container, so
+            // `#[gateway]` declares the upgrade guards and `#[messages]`
+            // validates them.
+            validates: validated.contains(&(krate.clone(), marker.clone())),
+            krate,
+            decorator,
+            marker,
         })
         .collect()
 }
@@ -256,21 +404,24 @@ fn guard_surface(root: &Path) -> (BTreeMap<String, bool>, BTreeSet<String>) {
     (markers, entries)
 }
 
-/// Which markers each crate's trybuild snapshots refuse a guard for.
+/// Every trybuild snapshot that **refuses** a guard, as
+/// `(crate, decorator underlined, marker refused)`.
 ///
-/// The `.stderr` is the whole point: a marker named in a passing test says a
-/// guard *has* the capability, while a marker named in a snapshot is the
-/// compiler refusing one that has not. Only the second is the witness.
+/// Two discriminators, and the second is the one that was missing. The
+/// `.stderr` is the whole point of the first: a marker named in a passing test
+/// says a guard *has* the capability, while a marker named in a snapshot is the
+/// compiler refusing one that has not. The second is the decorator rustc names
+/// under `required by a bound in `__nestrs_assert_guard_capability`` — which is
+/// exactly `framework.md`'s "each underlines the decorator the guard was
+/// written under". Without it a crate's two emitters shared one cell and either
+/// snapshot closed both.
 ///
-/// The markers looked for are `declared_markers`' own keys, never a literal
-/// list: a fifth edge declares a marker, becomes a `Site`, and a hardcoded list
-/// would report its snapshot as missing however many it ships — a false hole,
-/// which under the "baseline only shrinks" discipline is closed by writing an
-/// excuse into the baseline rather than by fixing the scan.
-fn snapshotted_markers(
-    root: &Path,
-    markers: &BTreeMap<String, bool>,
-) -> BTreeSet<(String, String)> {
+/// The markers looked for are `guard_surface`'s own keys, never a literal list:
+/// a fifth edge declares a marker, becomes a `Site`, and a hardcoded list would
+/// report its snapshot as missing however many it ships — a false hole, which
+/// under the "baseline only shrinks" discipline is closed by writing an excuse
+/// into the baseline rather than by fixing the scan.
+fn snapshotted_sites(root: &Path, markers: &BTreeMap<String, bool>) -> BTreeSet<Snapshot> {
     let mut out = BTreeSet::new();
     let Ok(entries) = std::fs::read_dir(root.join("crates")) else {
         return out;
@@ -284,11 +435,82 @@ fn snapshotted_markers(
             let Ok(text) = read(&path) else {
                 continue;
             };
-            for marker in markers.keys() {
-                if text.contains(marker) {
-                    out.insert((name.to_owned(), marker.clone()));
+            // The **refused** marker, not every marker the sentence lists.
+            // A capability refusal ends with a `= note:` offering the edges the
+            // guard *does* check — HTTP's `unattested_guard_on_a_controller`
+            // names all three siblings there — so a `contains` over the whole
+            // snapshot credited `nest-rs-http` with a `WsGuard` cell off a line
+            // whose whole purpose is to say the guard belongs somewhere else.
+            // The refusal is the `error:` and the `help: the trait … is not
+            // implemented` that carries the bound; the remedy is the rest.
+            let refused: String = text
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("= note:"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for decorator in underlined_decorators(&text) {
+                for marker in markers.keys() {
+                    if refused.contains(marker) {
+                        out.insert((name.to_owned(), decorator.clone(), marker.clone()));
+                    }
                 }
             }
+        }
+    }
+    out
+}
+
+/// `(crate, decorator, marker)` — one snapshot's testimony.
+type Snapshot = (String, String, String);
+
+/// The decorator attributes a snapshot underlines beneath rustc's
+/// `required by a bound in `__nestrs_assert_guard_capability`` note.
+///
+/// Read from **that note's frame**, not from the whole snapshot. Both narrowings
+/// matter and only one is obvious:
+///
+/// - the frame, because a snapshot renders the offending `#[use_guards]` and the
+///   guard's own `struct` in other frames, and reading the file whole credited
+///   `use_guards` — inert today only because it is not a binding site;
+/// - column 1 inside it, because rustc elides intervening source lines with
+///   `...` and prints both an item-level decorator (column 1) and the
+///   method-level attribute under it (indented). Two pair halves have never
+///   *both* survived the elision — but that is rustc's rendering heuristic and
+///   not a contract, and one change to it would let a single snapshot fill both
+///   of a crate's cells again, which is the collapse this join was rekeyed to
+///   remove.
+fn underlined_decorators(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut in_frame = false;
+    for line in text.lines() {
+        if line.starts_with("note: required by a bound in `__nestrs_assert_guard_capability`") {
+            in_frame = true;
+            continue;
+        }
+        // The frame ends at the next diagnostic header. Matched on a lowercase
+        // keyword at column 0 (`note:`, `help:`, `error`, `warning`) rather than
+        // on indentation, because two things *inside* a frame also start at
+        // column 0: a rendered source line (`23 | #[routes]`) and rustc's `...`
+        // elision marker.
+        if in_frame && line.starts_with(|c: char| c.is_ascii_lowercase()) {
+            in_frame = false;
+        }
+        if !in_frame {
+            continue;
+        }
+        // A rendered source line is `NN | <source>`; take what follows the bar.
+        let Some((_, source)) = line.split_once('|') else {
+            continue;
+        };
+        let Some(rest) = source.strip_prefix(" #[") else {
+            continue;
+        };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            out.insert(name);
         }
     }
     out
@@ -301,7 +523,7 @@ fn every_guard_capability_site_carries_its_marker_and_its_snapshot() {
     baseline::floor(sites.len(), FLOOR, "guard capability binding site(s)");
 
     let (markers, entries) = guard_surface(&root);
-    let snapshots = snapshotted_markers(&root, &markers);
+    let snapshots = snapshotted_sites(&root, &markers);
 
     let mut holes = BTreeSet::new();
     let mut cells = 0usize;
@@ -324,7 +546,11 @@ fn every_guard_capability_site_carries_its_marker_and_its_snapshot() {
             ),
             (
                 "a trybuild snapshot refusing an unattested guard at this site",
-                snapshots.contains(&(site.krate.clone(), site.marker.clone())),
+                snapshots.contains(&(
+                    site.krate.clone(),
+                    site.decorator.clone(),
+                    site.marker.clone(),
+                )),
             ),
             (
                 "a boot-time phase validation of the chain it composes",

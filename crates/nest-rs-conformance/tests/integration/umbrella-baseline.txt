@@ -1,0 +1,59 @@
+# Umbrella capability × witness cells uncovered when the two columns below
+# became honest. **It only shrinks** (`testing.md` clause 2: a join lands on
+# existing code through a baseline, never through a sprint).
+#
+# ── The expansion column: `#[crud]` and `#[expose]` ──────────────────────────
+#
+# `framework.md`'s written exclusion from `nest-rs-macro-hygiene`, not a gap.
+# That crate's whole claim is one manifest line — `nest-rs`, all features, no
+# third-party dependency — and these two cannot be exercised under it:
+#
+#   `#[expose]` sits on an **entity**, and an entity cannot live in a zero-dep
+#   crate: `DeriveEntityModel` roots its expansion at the call site's `sea_orm`
+#   and offers no `crate = ` override to redirect it. That is the entity-site
+#   exception the rule states, so the exclusion is principled and permanent.
+#
+#   `#[crud]` sits on a **controller**, whose source writes nothing but `std`,
+#   `nest_rs` and `crate::` — so it has no such excuse, and it emitted
+#   `::uuid::Uuid` for three routes and one resolver argument before anything
+#   caught it. It is excluded here only because its expansion reaches the entity
+#   it decorates. Its contract is proved instead by `nest-rs-cli`'s e2e:
+#   `crud_needs_no_dependency_the_controller_does_not_name` builds a resource
+#   whose crate declares no `uuid`, which is the one tree that can observe it.
+#
+# Keyed per decorator, deliberately: keyed on the crate, any one of
+# `nest-rs-http-macros`' seven closed the column for all of them.
+#
+# ── The composition column: four capabilities that boot nowhere ─────────────
+#
+# `CLAUDE.md`'s *Shipping a new capability* step 5 asks each for an executed
+# boot in its own crate (or, for genuinely cross-crate wiring, in
+# `nest-rs-testing`). Twelve capabilities had none when this column landed;
+# eight are now covered — six through `nest-rs-testing`, which is where the
+# layer families belong, and `health` and `server-timing` gained one of their
+# own. These four remain, and they are **ranked work, not a debt to clear**:
+#
+#   `database` and `worker` ship *seams only* — a trait, a `task_local!`, an
+#   ambient-state installer. There is no module to import and no wiring to boot;
+#   what would exercise them is `nest-rs-seaorm` installing an `Executor` and a
+#   `JobContext`, which is that crate's e2e. The honest cell is probably
+#   "covered elsewhere", and deciding that is an owner call rather than a
+#   silent edit to the column.
+#
+#   `resource` needs a real entity, so its boot needs `sea-orm` and a database
+#   — the same entity-site constraint that keeps `#[expose]` out of the
+#   expansion column above. Its natural home is `nest-rs-seaorm`'s e2e.
+#
+#   `opentelemetry` is the one capability whose entry point is documented as
+#   **not** an import: `OpenTelemetry::init_with(config)` belongs to `main`
+#   because the global tracer must exist before any module registers and the
+#   guard's `Drop` flushes (`framework.md`, "One recorded exception"). A boot
+#   test would install a process-global tracer, which is a decision about the
+#   test binary rather than about the capability.
+graphql :: macro-hygiene applies #[crud]
+http :: macro-hygiene applies #[crud]
+resource :: macro-hygiene applies #[expose]
+database :: own crate boots the documented wiring
+opentelemetry :: own crate boots the documented wiring
+resource :: own crate boots the documented wiring
+worker :: own crate boots the documented wiring

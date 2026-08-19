@@ -201,10 +201,13 @@ mod tests {
     fn credential_blank_aborts_naming_its_variable() {
         // STORAGE-ST1: outside dev/test `Config::defaults` drops the sentinel, so
         // an unset variable arrives here blank and must abort by name.
-        let err = resolve_credential(String::new(), "NESTRS_STORAGE__SECRET_KEY")
-            .expect_err("must abort");
+        let err = resolve_credential(
+            String::new(),
+            &nest_rs_config::var_name("storage", "SECRET_KEY"),
+        )
+        .expect_err("must abort");
         assert!(
-            err.to_string().contains("NESTRS_STORAGE__SECRET_KEY"),
+            err.to_string().contains("SECRET_KEY"),
             "the error names the variable: {err}",
         );
         assert!(
@@ -229,17 +232,17 @@ mod tests {
         let err = resolve_endpoint(
             "http://minio.internal:9000".into(),
             false,
-            "NESTRS_STORAGE__ENDPOINT",
-            "NESTRS_STORAGE__ALLOW_HTTP",
+            &nest_rs_config::var_name("storage", "ENDPOINT"),
+            &nest_rs_config::var_name("storage", "ALLOW_HTTP"),
         )
         .expect_err("plaintext + allow_http=false must abort boot");
         let rendered = err.to_string();
         assert!(
-            rendered.contains("NESTRS_STORAGE__ENDPOINT"),
+            rendered.contains("ENDPOINT"),
             "the error names the offending variable: {rendered}",
         );
         assert!(
-            rendered.contains("NESTRS_STORAGE__ALLOW_HTTP"),
+            rendered.contains("ALLOW_HTTP"),
             "and the opt-in that would allow it: {rendered}",
         );
         // Case-insensitive and whitespace-tolerant — a scheme is not a shibboleth.
@@ -273,15 +276,12 @@ mod tests {
         let err = StorageConfig::from_env(
             &ConfigService::with_vars(
                 "storage",
-                [
-                    ("NESTRS_STORAGE__ENDPOINT", "http://minio:9000"),
-                    ("NESTRS_STORAGE__ALLOW_HTTP", "false"),
-                ],
+                [("ENDPOINT", "http://minio:9000"), ("ALLOW_HTTP", "false")],
             ),
             StorageConfig::default(),
         )
         .expect_err("the resolved config must not carry a plaintext endpoint");
-        assert!(err.to_string().contains("NESTRS_STORAGE__ENDPOINT"));
+        assert!(err.to_string().contains("ENDPOINT"));
     }
 
     // The whole point of the overlay: a pinned bucket must not freeze the
@@ -296,8 +296,8 @@ mod tests {
             &ConfigService::with_vars(
                 "storage",
                 [
-                    ("NESTRS_STORAGE__ENDPOINT", "https://s3.example"),
-                    ("NESTRS_STORAGE__ACCESS_KEY", "AKIAREAL"),
+                    ("ENDPOINT", "https://s3.example"),
+                    ("ACCESS_KEY", "AKIAREAL"),
                 ],
             ),
             pinned,

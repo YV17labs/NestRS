@@ -133,6 +133,24 @@
 /// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::ws";
 
+/// The two targets this crate **emits on but does not own**, re-exported so
+/// `nest-rs-ws-macros` reaches them through its own surface crate.
+///
+/// `framework.md` fixes the route: "A `*-macros` crate reaches the owner through
+/// **its own surface crate's** re-export (`::nest_rs_queue::TARGET` from
+/// `nest-rs-queue-macros`) … Reaching a *different* sibling is the breach that
+/// rule names". `#[gateway]` emitted `::nest_rs_core::target::LAYERS` and
+/// `#[messages]` emitted `::nest_rs_http::target::ROUTES`, which `CLAUDE.md`
+/// records by name as the two live breaches of it. Both are correct *values* —
+/// a gateway's layer note is a layer event and its mount line is a route line —
+/// so what was wrong was the path, and this is the one line that fixes it.
+pub mod target {
+    /// Layer composition and scope resolution, owned by `nest-rs-core`.
+    pub use nest_rs_core::target::LAYERS;
+    /// Mounted addresses, owned by `nest-rs-http`, which serves the upgrade.
+    pub use nest_rs_http::target::ROUTES;
+}
+
 mod config;
 mod context;
 mod envelope;
@@ -143,6 +161,7 @@ mod namespace;
 mod opaque;
 mod scope;
 mod server;
+pub mod unit;
 
 pub use config::WsConfig;
 pub use context::{BoxFuture, Captured, SocketContext};

@@ -8,7 +8,7 @@
 //! the fail-secure net, not the full authz integration (it installs no
 //! ambient `Ability`; row scoping and masking still require the bridge).
 //!
-//! The GraphQL endpoint carries the [`Public`](nest_rs_core::Public) marker
+//! The GraphQL endpoint carries the [`Public`](nest_rs_http::Public) marker
 //! as request data, so an `AuthnGuard` in the pool admits anonymous callers
 //! (resolver-level gates still apply) while a present bearer is verified —
 //! exactly once, here.

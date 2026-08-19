@@ -93,7 +93,7 @@ mod tests {
             max_message_bytes: 999,
         };
         let cfg = WsConfig::from_env(
-            &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_MESSAGE_BYTES", "2048")]),
+            &ConfigService::with_vars("ws", [("MAX_MESSAGE_BYTES", "2048")]),
             pinned,
         )
         .expect("the overlay resolves");
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn from_env_reads_a_custom_ceiling_in_seconds() {
         let cfg = WsConfig::from_env(
-            &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_CONNECTION_SECS", "900")]),
+            &ConfigService::with_vars("ws", [("MAX_CONNECTION_SECS", "900")]),
             Default::default(),
         )
         .expect("ok");
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn from_env_treats_zero_as_unlimited() {
         let cfg = WsConfig::from_env(
-            &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_CONNECTION_SECS", "0")]),
+            &ConfigService::with_vars("ws", [("MAX_CONNECTION_SECS", "0")]),
             Default::default(),
         )
         .expect("ok");
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn from_env_reads_a_custom_message_cap() {
         let cfg = WsConfig::from_env(
-            &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_MESSAGE_BYTES", "1048576")]),
+            &ConfigService::with_vars("ws", [("MAX_MESSAGE_BYTES", "1048576")]),
             Default::default(),
         )
         .expect("ok");
@@ -167,7 +167,7 @@ mod tests {
     fn from_env_rejects_an_unparseable_ceiling() {
         assert!(
             WsConfig::from_env(
-                &ConfigService::with_vars("ws", [("NESTRS_WS__MAX_CONNECTION_SECS", "forever")]),
+                &ConfigService::with_vars("ws", [("MAX_CONNECTION_SECS", "forever")]),
                 Default::default()
             )
             .is_err(),

@@ -13,7 +13,7 @@
 //! (GET/HEAD/OPTIONS/TRACE) run on the pool; mutating methods run in a
 //! transaction committed on 2xx/3xx and rolled back otherwise — a failed
 //! mutation never half-persists, and a response tagged
-//! [`MappedError`](nest_rs_core::MappedError) (an error a filter mapped)
+//! [`MappedError`](nest_rs_http::MappedError) (an error a filter mapped)
 //! rolls back even when its status reads as success.
 //!
 //! The safe/mutating split is the HTTP **method**, which is all this layer
@@ -151,7 +151,7 @@ fn is_safe(method: &Method) -> bool {
 }
 
 /// 2xx and 3xx commit; any other status or an `Err` rolls back. A response
-/// tagged [`MappedError`](nest_rs_core::MappedError) also rolls back whatever
+/// tagged [`MappedError`](nest_rs_http::MappedError) also rolls back whatever
 /// its status: it was produced by a route-site `Filter` / `ExceptionFilter`
 /// mapping a handler **error** — the mapping shapes the client answer, it
 /// does not bless the failed handler's writes.
@@ -159,7 +159,7 @@ fn should_commit(result: &Result<Response>) -> bool {
     matches!(
         result,
         Ok(resp) if (resp.status().is_success() || resp.status().is_redirection())
-            && resp.extensions().get::<nest_rs_core::MappedError>().is_none()
+            && resp.extensions().get::<nest_rs_http::MappedError>().is_none()
     )
 }
 
@@ -223,7 +223,7 @@ mod tests {
         // a 2xx tags the response `MappedError` — the handler failed, so its
         // writes must not persist behind the mapped status.
         let mut resp = StatusCode::OK.into_response();
-        resp.extensions_mut().insert(nest_rs_core::MappedError);
+        resp.extensions_mut().insert(nest_rs_http::MappedError);
         assert!(!should_commit(&Ok(resp)));
     }
 }

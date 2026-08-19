@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{HandlerMetadata, Layer, injectable};
+use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
+use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Reflector, RejectedCredential, async_trait};
 use poem::Request;
 

@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     crate_dirs, executed_tokens, exported_decorators, idents, path_roots, read, relative,
-    repo_root, rust_files,
+    repo_root, rust_files, suite_runs_tests,
 };
 use proc_macro2::TokenStream;
 
@@ -66,9 +66,15 @@ fn crate_name(dir: &Path) -> String {
 /// A flat `tests/<x>.rs` deliberately does not count: Cargo compiles it as its
 /// own binary, which escapes the nextest gates — the reason the layout is locked.
 fn has_test_target(dir: &Path) -> bool {
-    SUITES
-        .iter()
-        .any(|suite| dir.join("tests").join(suite).join("main.rs").is_file())
+    SUITES.iter().any(|suite| {
+        let target = dir.join("tests").join(suite);
+        // The **shape** — `main.rs`, never a flat `tests/<x>.rs` — and then
+        // that something in it runs. Asking only whether `main.rs` exists left
+        // the cell green over a file truncated to zero bytes, which is a crate
+        // with a test target and no tests: exactly the state this join says it
+        // has one to rule out.
+        suite_runs_tests(&target.join("main.rs"))
+    })
 }
 
 /// Every identifier a trybuild fixture spells, workspace-wide.

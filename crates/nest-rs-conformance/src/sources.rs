@@ -86,6 +86,20 @@ pub fn read(path: &Path) -> io::Result<String> {
     fs::read_to_string(path)
 }
 
+/// The value of a top-level `pub const <name>: &str = "…";` in one file.
+///
+/// **Parsed, not grepped.** The declarations this crate reads are string
+/// constants, and a text scan reads two of them wrong: a `\`-continued literal
+/// and a `#[cfg(test)]` fixture spelling the same name. [`parsed`] exists for
+/// exactly that, and the alternative — linking the crate that declares it — is
+/// the 400-crate relink [`operation_log_target`] records measuring.
+pub fn declared_str(path: &Path, name: &str) -> Option<String> {
+    parsed(path)?.items.iter().find_map(|item| match item {
+        syn::Item::Const(konst) if konst.ident == name => as_str_lit(&konst.expr),
+        _ => None,
+    })
+}
+
 /// Every crate directory the repo's two workspaces hold.
 ///
 /// Read from the tree rather than from `cargo metadata`, and the three roots are
@@ -116,6 +130,12 @@ pub fn crate_dirs() -> Vec<PathBuf> {
 /// Rust forces `#[proc_macro_attribute]` items to the crate root, so `lib.rs` is
 /// the whole surface — the one place this join has to read, and the reason a
 /// proc-macro crate is recognised by what it contains rather than by its name.
+/// Attribute macros only, and deliberately: the framework exports 27 of them and
+/// zero derives, so a `proc_macro_derive` arm here would be a member list for a
+/// family that does not exist — and an *unjoinable* one, since the umbrella
+/// join records an applied attribute's last path segment and a derive is applied
+/// as `#[derive(X)]`, whose path is `derive`. Any derive it returned would be a
+/// cell nothing could ever fill.
 pub fn exported_decorators(dir: &Path) -> Vec<String> {
     let Some(ast) = parsed(&dir.join("src/lib.rs")) else {
         return Vec::new();
@@ -129,11 +149,6 @@ pub fn exported_decorators(dir: &Path) -> Vec<String> {
             let path = attr.path();
             if path.is_ident("proc_macro_attribute") || path.is_ident("proc_macro") {
                 out.push(f.sig.ident.to_string());
-            } else if path.is_ident("proc_macro_derive")
-                && let Meta::List(list) = &attr.meta
-                && let Some(TokenTree::Ident(name)) = list.tokens.clone().into_iter().next()
-            {
-                out.push(name.to_string());
             }
         }
     }
@@ -193,6 +208,13 @@ fn pair_from(expr: &Expr) -> Option<(String, String)> {
     }
 }
 
+/// Top-level items only, which is a stated limit rather than an oversight: a
+/// pair declared inside an inline `mod` is not joined. Its sibling
+/// [`collect_target_consts`] descends one level for the same `Item::Const`
+/// shape, and the asymmetry is the population's — a `DecoratorPair` const is
+/// written at a macro crate's top level by every one of the nine, and a tenth
+/// hidden in a `mod` would also be invisible to the `rg 'DecoratorPair'` the
+/// rule names as the human half of the check.
 pub fn declared_pairs() -> Vec<Pair> {
     let root = repo_root();
     let mut out = Vec::new();
@@ -245,8 +267,51 @@ pub fn declared_pairs() -> Vec<Pair> {
 /// Returns `(target, declaring crate directory, constant name)`. The name is
 /// what disambiguates: `nest_rs_core` declares seven, so the crate alone cannot
 /// say which of them `…::operation_log::TARGET` is.
-pub fn declared_targets() -> Vec<(String, String, String)> {
-    let root = repo_root();
+///
+/// **Walked once per test process**, because three callers want the same table:
+/// [`resolve_target`] resolves every emission site against it, `filters` merges
+/// the declarations into its population, and `edges` asks it one question per
+/// edge. Answering each by re-walking every `crates/*/src` file was four passes
+/// over the same tree inside one join — the cost the same rule is stated
+/// against in `edges`'s `framework_idents`. Leaked, deliberately: the table is
+/// the process's, and every caller compares against a borrowed `&'static str`.
+pub fn declared_targets() -> &'static [(&'static str, &'static str, &'static str)] {
+    static TABLE: std::sync::OnceLock<Vec<(&'static str, &'static str, &'static str)>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut out = Vec::new();
+        for dir in crate_dirs() {
+            let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            for file in rust_files(&dir.join("src")) {
+                let Some(ast) = parsed(&file) else {
+                    continue;
+                };
+                collect_target_consts(&ast.items, name, &mut out);
+            }
+        }
+        out.into_iter()
+            .map(|(target, krate, konst)| {
+                let leak = |s: String| &*Box::leak(s.into_boxed_str());
+                (leak(target), leak(krate), leak(konst))
+            })
+            .collect()
+    })
+}
+
+/// Every canonical unit-of-work name the framework declares.
+///
+/// The same shape [`declared_targets`] reads, for the other per-edge vocabulary:
+/// a unit name is the edge's, not the kernel's, so it is declared by the crate
+/// that owns the edge as `pub const X: &str` inside that crate's `unit` module —
+/// a `src/unit.rs` file, or an inline `mod unit`. Reading the declarations is
+/// what lets the shape and namespace checks be *derived*; the same rule was a
+/// hand-written array in `nest-rs-core` for as long as the kernel held the
+/// names, and such a list can only ever police what whoever typed it remembered.
+///
+/// Returns `(unit name, declaring crate directory, constant name)`.
+pub fn declared_units() -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for dir in crate_dirs() {
         let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
@@ -256,11 +321,39 @@ pub fn declared_targets() -> Vec<(String, String, String)> {
             let Some(ast) = parsed(&file) else {
                 continue;
             };
-            collect_target_consts(&ast.items, name, &mut out);
+            let in_unit_file = file.file_name().and_then(|n| n.to_str()) == Some("unit.rs");
+            collect_unit_consts(&ast.items, name, in_unit_file, &mut out);
         }
     }
-    let _ = root;
     out
+}
+
+/// A `pub const X: &str = "…";` inside a `unit` module — which is either the
+/// whole of a `src/unit.rs` file or an inline `mod unit`. Nowhere else, so that
+/// a name declared off the convention is reported rather than quietly accepted.
+fn collect_unit_consts(
+    items: &[Item],
+    krate: &str,
+    inside: bool,
+    out: &mut Vec<(String, String, String)>,
+) {
+    for item in items {
+        match item {
+            Item::Const(konst) if inside => {
+                if let Expr::Lit(lit) = &*konst.expr
+                    && let Lit::Str(text) = &lit.lit
+                {
+                    out.push((text.value(), krate.to_owned(), konst.ident.to_string()));
+                }
+            }
+            Item::Mod(module) if module.ident == "unit" => {
+                if let Some((_, inner)) = &module.content {
+                    collect_unit_consts(inner, krate, true, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A `pub const X: &str = "nest_rs::…";`, at an item list's top level or one
@@ -395,7 +488,7 @@ pub fn declared_target(tokens: &TokenStream, file: &str) -> Option<Named> {
 pub fn resolve_target(segments: &[String], file: &str) -> Option<&'static str> {
     let name = segments.last()?;
     let owner = declaring_crate(segments, file);
-    target_table()
+    declared_targets()
         .iter()
         .find(|(_, krate, konst)| *krate == owner && konst == name)
         .map(|(target, _, _)| *target)
@@ -415,33 +508,22 @@ fn declaring_crate(segments: &[String], file: &str) -> String {
         .to_owned()
 }
 
-/// The declared table, read once per test process.
-fn target_table() -> &'static [(&'static str, &'static str, &'static str)] {
-    static TABLE: std::sync::OnceLock<Vec<(&'static str, &'static str, &'static str)>> =
-        std::sync::OnceLock::new();
-    TABLE.get_or_init(|| {
-        declared_targets()
-            .into_iter()
-            // Leaked once, deliberately: the table is the process's, and every
-            // caller compares against a borrowed `&'static str`.
-            .map(|(target, krate, konst)| {
-                let leak = |s: String| &*Box::leak(s.into_boxed_str());
-                (leak(target), leak(krate), leak(konst))
-            })
-            .collect()
-    })
-}
-
 /// The operation log's own target, read from its declaration.
 ///
 /// Read rather than linked: this crate proves things *about* the framework and
 /// depending on it to learn one string would put the whole tree behind the test
 /// binary — 400 crates and a 100 MB relink, measured, to compare a `&str`.
+///
+/// Resolved once: it is one `&'static str` for the whole process, and the
+/// `units` join asks for it once per `info!` in both workspaces.
 pub fn operation_log_target() -> Option<&'static str> {
-    resolve_target(
-        &["operation_log".to_owned(), "TARGET".to_owned()],
-        "crates/nest-rs-core/src/operation_log.rs",
-    )
+    static TARGET: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+    *TARGET.get_or_init(|| {
+        resolve_target(
+            &["operation_log".to_owned(), "TARGET".to_owned()],
+            "crates/nest-rs-core/src/operation_log.rs",
+        )
+    })
 }
 
 /// Every `.rs` file both workspaces own, parsed, with the CLI's templates left
@@ -633,6 +715,154 @@ pub fn idents(tokens: TokenStream) -> BTreeSet<String> {
             _ => None,
         })
         .collect()
+}
+
+/// Whether a test target rooted at `main_rs` **runs anything**, following its
+/// `mod` tree the way Cargo compiles it.
+///
+/// The tree, not the directory, and that distinction is the finding: a suite's
+/// sibling files are compiled only because `main.rs` declares them, so
+/// truncating `main.rs` to zero bytes leaves a directory full of `#[test]`
+/// functions that Cargo never sees. Asking the directory said "yes" there;
+/// asking the root says "no", which is the true answer.
+///
+/// `testing.md` is what makes the walk cheap and total: "`main.rs` is the suite
+/// *root*, never a test module: `//!` + the `mod` list + the fixtures the
+/// siblings share — **no `#[test]` function lives there**". So a root with no
+/// `mod` is a suite with nothing in it, whatever the folder holds.
+pub fn suite_runs_tests(main_rs: &Path) -> bool {
+    let Some(dir) = main_rs.parent() else {
+        return false;
+    };
+    let mut pending = vec![main_rs.to_path_buf()];
+    let mut seen = BTreeSet::new();
+    while let Some(path) = pending.pop() {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let Some(ast) = parsed(&path) else {
+            continue;
+        };
+        let mut scan = TestFns::default();
+        scan.visit_file(&ast);
+        if scan.found {
+            return true;
+        }
+        // `mod x;` resolves to `x.rs` or `x/mod.rs` beside the declaring file,
+        // which for a suite root is the suite directory. An inline `mod x { … }`
+        // needs no resolution — `visit_file` already descended into it.
+        let here = path.parent().unwrap_or(dir);
+        for item in &ast.items {
+            let Item::Mod(m) = item else {
+                continue;
+            };
+            if m.content.is_some() {
+                continue;
+            }
+            let name = m.ident.to_string();
+            pending.push(here.join(format!("{name}.rs")));
+            pending.push(here.join(&name).join("mod.rs"));
+        }
+    }
+    false
+}
+
+/// Whether a path — a file, or a directory read whole — carries at least one
+/// **test function**.
+///
+/// The answer to "does this suite exist?", where `main.rs.is_file()` was the
+/// answer for a round and truncating that file to zero bytes left every cell
+/// asking it green. A suite that runs nothing is not a suite, and the whole
+/// point of the cells that ask is that something is executed.
+///
+/// `#[test]`, `#[tokio::test]` and any other attribute whose last path segment
+/// is `test` — a list of attribute spellings would be a hand-maintained set
+/// failing in the unsafe direction the day a runner adds one.
+pub fn carries_a_test(path: &Path) -> bool {
+    files_at(path).into_iter().any(|file| {
+        parsed(&file).is_some_and(|ast| {
+            let mut scan = TestFns::default();
+            scan.visit_file(&ast);
+            scan.found
+        })
+    })
+}
+
+/// Whether a path — a file, or a directory read whole — declares any **shipped
+/// item at all**: a `struct`, `enum`, `fn`, `impl`, `trait`, `const` or `type`.
+///
+/// The answer to "does this module exist?", where `is_dir()` was the answer and
+/// emptying every file inside left the cell green. A `mod`, a `use` and a doc
+/// comment are deliberately not items here: a module that only re-exports or
+/// only describes carries no implementation, which is what a cell asking for
+/// one means.
+pub fn declares_an_item(path: &Path) -> bool {
+    files_at(path).into_iter().any(|file| {
+        parsed(&file).is_some_and(|ast| {
+            ast.items.iter().any(|item| {
+                !is_cfg_test(item_attrs(item))
+                    && matches!(
+                        item,
+                        Item::Struct(_)
+                            | Item::Enum(_)
+                            | Item::Fn(_)
+                            | Item::Impl(_)
+                            | Item::Trait(_)
+                            | Item::Const(_)
+                            | Item::Type(_)
+                    )
+            })
+        })
+    })
+}
+
+/// A path taken either way: one `.rs` file, or every `.rs` file under a
+/// directory. Both callers are written as a path, and which shape it is is a
+/// fact about the layout rather than about the obligation.
+fn files_at(path: &Path) -> Vec<PathBuf> {
+    if path.is_dir() {
+        rust_files(path)
+    } else if path.is_file() {
+        vec![path.to_owned()]
+    } else {
+        Vec::new()
+    }
+}
+
+/// A top-level item's attributes. `syn` gives no uniform accessor, and the
+/// shapes a `#[cfg(test)]` legitimately sits on are few.
+fn item_attrs(item: &Item) -> &[Attribute] {
+    match item {
+        Item::Mod(i) => &i.attrs,
+        Item::Fn(i) => &i.attrs,
+        Item::Impl(i) => &i.attrs,
+        Item::Use(i) => &i.attrs,
+        Item::Struct(i) => &i.attrs,
+        Item::Enum(i) => &i.attrs,
+        Item::Const(i) => &i.attrs,
+        Item::Static(i) => &i.attrs,
+        Item::Trait(i) => &i.attrs,
+        Item::Type(i) => &i.attrs,
+        Item::Macro(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
+#[derive(Default)]
+struct TestFns {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for TestFns {
+    fn visit_item_fn(&mut self, node: &'ast ItemFn) {
+        self.found |= node.attrs.iter().any(|attr| {
+            attr.path()
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "test")
+        });
+        syn::visit::visit_item_fn(self, node);
+    }
 }
 
 /// What a `cargo nextest run` actually executes in this file, as token streams.

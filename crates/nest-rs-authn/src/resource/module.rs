@@ -236,7 +236,10 @@ mod tests {
         let err = require_audience_binding(Some(&jwt_with_audience(None)), &metadata())
             .expect_err("no audience");
         let text = err.to_string();
-        assert!(text.contains("NESTRS_AUTHN__AUDIENCE"), "got: {text}");
+        assert!(
+            text.contains(&nest_rs_config::var_name("authn", "AUDIENCE")),
+            "got: {text}",
+        );
         assert!(
             text.contains("https://api.example.com"),
             "the error must say what to set it to: {text}",

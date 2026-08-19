@@ -144,9 +144,14 @@ is a separate line, one per unit of work, on the shared target `nest_rs::operati
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |
 
 **The name is `<edge>.<unit>`, and it is the same string the operation's span
-carries.** It is declared once, in `nest_rs_core::operation_log::unit`, and read
-three times: by the span, by the log record's event name (what an OTLP exporter
-reports as `event.name`), and by the message a console prints. There used to be
+carries.** It is declared once — by the crate that owns the edge, as
+`<crate>::unit::<UNIT>` (`nest_rs_http::unit::REQUEST`,
+`nest_rs_ws::unit::MESSAGE`, `nest_rs_queue::unit::JOB`, …) — and read three
+times: by the span, by the log record's event name (what an OTLP exporter
+reports as `event.name`), and by the message a console prints. The *grammar* is
+`nest_rs_core::operation_log`'s; the names are not, for the same reason a span
+target is not — a unit name says which edge did the work, and the kernel does
+not know the edges exist. There used to be
 two vocabularies for these eight things — the spans said `http.request` while
 the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.
@@ -173,8 +178,10 @@ it never meant to: `EnvFilter` compares a directive's target with `starts_with`
 on the raw string rather than by `::` segment, so `nest_rs::access=off` **also**
 silenced `nest_rs::access_graph` — the boot warning naming resolvers unreachable
 from the GraphQL schema. A deployment that quieted its access log lost that
-diagnostic with nothing on the console to say so. `nest_rs::operation` prefixes
-no other target, and a test fails the day one prefixes another.
+diagnostic with nothing on the console to say so. Neither old name survives:
+that warning is `nest_rs::graphql`'s now, filed by the crate that owns the
+resolver registry. `nest_rs::operation` prefixes no other target, and a test
+fails the day one prefixes another.
 
 ### Following one operation across two processes
 

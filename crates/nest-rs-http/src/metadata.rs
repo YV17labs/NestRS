@@ -1,28 +1,31 @@
-//! Handler-attached metadata — the transport-agnostic seam Layers read at
-//! decision time.
+//! Handler-attached metadata — the seam a Layer reads at decision time, and
+//! the marker a mapped error leaves on the response it produced.
 //!
-//! A decorator macro (e.g. `#[meta(EXPR)]`) attaches a typed value to a
-//! handler at mount time. A Layer (Guard / Interceptor / Filter / Pipe) needs
-//! to read that value at request time *without* knowing which transport
-//! delivered the request. Each transport provides its own [`HandlerMetadata`]
-//! implementation over its native request type (HTTP's `Reflector`, a WS
-//! gateway's per-message data slot, an MCP tool's call context). Layers
-//! depend on the trait — never on a specific transport's reader — so the same
-//! Layer reads metadata identically over HTTP, GraphQL, WS, MCP, …
+//! A decorator attaches a typed value to a handler at mount time
+//! (`#[meta(EXPR)]`, `#[public]`); a Layer (Guard / Interceptor / Filter /
+//! Pipe) reads it back at request time through [`HandlerMetadata`], whose one
+//! implementor is [`Reflector`](crate::Reflector).
 //!
-//! Why this lives in core: it is the *contract* every transport needs to
-//! satisfy so Layers stay portable. Putting it elsewhere would force a Layer
-//! to either drop down to per-transport readers or pull in a transport
-//! dependency.
+//! **Why this is HTTP's and not the kernel's.** It reads a value out of a
+//! `poem::Request` and marks one on a `poem::Response` — two types the kernel
+//! cannot name — and the trait carried a promise the other edges never took
+//! up: they resolve posture at *compile* time, through the `Posture` the
+//! impl-half decorator parses, so a WS message and an MCP tool have no
+//! per-handler data slot for a Layer to consult and never needed one. It lived
+//! in `nest-rs-core` as a transport-agnostic contract with a single
+//! implementor for as long as that promise stood unread.
+//!
+//! Every reader already depends on this crate unconditionally — `nest-rs-guards`
+//! by the argument recorded in `framework.md`, and the four Layer families
+//! through it — so nothing pays a dependency for the move.
 
 use std::any::Any;
 
-/// Typed read access to whatever metadata was attached to the current
-/// handler. Each transport implements it over its native request type.
+/// Typed read access to whatever metadata was attached to the current handler.
 ///
 /// The contract is intentionally minimal: a single typed lookup. The
-/// [`is_public`](Self::is_public) default reads the framework's only
-/// universal marker; everything else is a Layer-local concern.
+/// [`is_public`](Self::is_public) default reads the framework's only universal
+/// marker; everything else is a Layer-local concern.
 pub trait HandlerMetadata {
     /// Returns the attached value of type `M`, or `None` when nothing of
     /// that type was attached at this handler. Implementations resolve by
@@ -31,7 +34,7 @@ pub trait HandlerMetadata {
     fn get<M: Any + Send + Sync>(&self) -> Option<&M>;
 
     /// Whether the handler was marked `#[public]`. Default reads the
-    /// [`Public`] marker; transports rarely override.
+    /// [`Public`] marker; implementors rarely override.
     fn is_public(&self) -> bool {
         self.get::<Public>().is_some()
     }
@@ -50,9 +53,6 @@ pub trait HandlerMetadata {
 ///     // ...standard policy...
 /// }
 /// ```
-///
-/// Lives here (not in `layer`) because it is *an example of handler
-/// metadata*, not part of the Layer vocabulary itself.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Public;
 

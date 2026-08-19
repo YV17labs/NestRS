@@ -132,10 +132,10 @@ mod tests {
         let service = ConfigService::with_vars(
             "openapi",
             [
-                ("NESTRS_OPENAPI__ENABLED", "false"),
-                ("NESTRS_OPENAPI__TITLE", "Custom API"),
-                ("NESTRS_OPENAPI__VERSION", "9.9.9"),
-                ("NESTRS_OPENAPI__DESCRIPTION", "Generated docs"),
+                ("ENABLED", "false"),
+                ("TITLE", "Custom API"),
+                ("VERSION", "9.9.9"),
+                ("DESCRIPTION", "Generated docs"),
             ],
         );
         let cfg = OpenApiConfig::from_env(&service, Default::default()).expect("ok");
@@ -147,11 +147,11 @@ mod tests {
 
     #[test]
     fn enabled_reads_boolean_spellings() {
-        let off = ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "off")]);
+        let off = ConfigService::with_vars("openapi", [("ENABLED", "off")]);
         let cfg = OpenApiConfig::from_env(&off, Default::default()).expect("ok");
         assert!(!cfg.enabled, "`off` disables the documentation endpoints");
 
-        let on = ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "true")]);
+        let on = ConfigService::with_vars("openapi", [("ENABLED", "true")]);
         let cfg = OpenApiConfig::from_env(&on, Default::default()).expect("ok");
         assert!(cfg.enabled);
     }
@@ -171,11 +171,11 @@ mod tests {
     // variable, never silently default the public docs back on.
     #[test]
     fn enabled_rejects_unparseable_value_naming_the_var() {
-        let service = ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "maybe")]);
+        let service = ConfigService::with_vars("openapi", [("ENABLED", "maybe")]);
         let err = OpenApiConfig::from_env(&service, Default::default())
             .expect_err("a non-boolean must fail, never silently default");
         assert!(
-            matches!(err, nest_rs_config::ConfigError::Parse { ref var, .. } if var == "NESTRS_OPENAPI__ENABLED"),
+            matches!(err, nest_rs_config::ConfigError::Parse { ref var, .. } if *var == nest_rs_config::var_name("openapi", "ENABLED")),
             "the error must name the offending variable",
         );
     }
@@ -195,10 +195,10 @@ mod tests {
             let logs = nest_rs_testing::LogCapture::install();
             // Read from the *process* env, not the `ConfigService` — the
             // cascade chooses which `.env` to read, so it cannot live in one.
-            jail.set_env("NESTRS_ENV", "production");
+            jail.set_env(nest_rs_config::Environment::var_name(), "production");
 
             let cfg = OpenApiConfig::from_env(
-                &ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "true")]),
+                &ConfigService::with_vars("openapi", [("ENABLED", "true")]),
                 Default::default(),
             )
             .expect("an explicit `true` is honoured, not overridden");
@@ -221,10 +221,10 @@ mod tests {
     fn docs_enabled_in_development_are_silent() {
         figment::Jail::expect_with(|jail| {
             let logs = nest_rs_testing::LogCapture::install();
-            jail.set_env("NESTRS_ENV", "development");
+            jail.set_env(nest_rs_config::Environment::var_name(), "development");
 
             let _ = OpenApiConfig::from_env(
-                &ConfigService::with_vars("openapi", [("NESTRS_OPENAPI__ENABLED", "true")]),
+                &ConfigService::with_vars("openapi", [("ENABLED", "true")]),
                 Default::default(),
             )
             .expect("ok");

@@ -1,7 +1,7 @@
 # Items of *A new edge owes the same list* that an edge does not carry.
 # **It only shrinks.**
 #
-# Five of fifty-two cells, and none of them is work. Each is an asymmetry the
+# Five of fifty-six cells, and none of them is work. Each is an asymmetry the
 # rule now states and argues, which `CLAUDE.md` accepts in place of uniformity:
 # *the rule demands that the answer be stated, not that it be identical.* They
 # stay here so the next reader does not re-derive them, and so a sixth line

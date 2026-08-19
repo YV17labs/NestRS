@@ -112,19 +112,33 @@ mod tests {
     use super::*;
 
     // The resolved value is per-process and frozen on first read, so these
-    // cover the shape rules and the default; the environment-driven paths are
-    // exercised by `nest-rs-config`'s integration suite, which owns a process
-    // per prefix.
+    // cover the shape rules and the resolution; the environment-driven paths
+    // are exercised by `nest-rs-config`'s integration suite, which owns a
+    // process per prefix.
+    //
+    // **Neither may spell `NESTRS` as the answer.** Both did, and both failed
+    // the moment the workspace was run under `NESTRS_ENV_PREFIX=ACME` — which
+    // is the run that proves a rename reaches everything, so a test that can
+    // only pass in one of the two processes is a test that blocks the proof.
+    // The property each was written for survives the rewrite, and one of them
+    // gained a property it never had: that the resolver honours a declaration.
     #[test]
-    fn an_unset_prefix_is_nestrs() {
-        assert_eq!(EnvPrefix::current(), "NESTRS");
-        assert_eq!(EnvPrefix::current(), EnvPrefix::DEFAULT);
+    fn the_prefix_resolves_to_the_declaration_or_the_default() {
+        assert_eq!(EnvPrefix::DEFAULT, "NESTRS", "the documented default");
+        match std::env::var(EnvPrefix::VAR).ok().filter(|v| !v.is_empty()) {
+            None => assert_eq!(EnvPrefix::current(), EnvPrefix::DEFAULT),
+            Some(declared) => assert_eq!(EnvPrefix::current(), declared),
+        }
     }
 
     #[test]
     fn var_joins_the_prefix_with_a_single_underscore() {
-        assert_eq!(EnvPrefix::var("ENV"), "NESTRS_ENV");
-        assert_eq!(EnvPrefix::var("LOG_FORMAT"), "NESTRS_LOG_FORMAT");
+        for name in ["ENV", "LOG_FORMAT"] {
+            assert_eq!(
+                EnvPrefix::var(name).strip_prefix(EnvPrefix::current()),
+                Some(format!("_{name}").as_str()),
+            );
+        }
     }
 
     #[test]

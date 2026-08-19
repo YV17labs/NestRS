@@ -6,8 +6,8 @@
 //! job is to name *where* an event came from, so the crate that **owns the
 //! concern** is the crate that names it: `nest_rs_events::TARGET` belongs to
 //! `nest-rs-events`, and a table here holding it would have meant the kernel
-//! carrying a name for a concern it does not know exists. The kernel owns six,
-//! and declares six.
+//! carrying a name for a concern it does not know exists. The kernel owns five,
+//! and declares five.
 //!
 //! **Owns, not emits, and the difference is real.** `nest_rs::layers` is emitted
 //! from here and from three crates above; `nest_rs::routes` from five. A shared
@@ -25,8 +25,6 @@
 //! reason it exists, and is a different thing from a concern several crates
 //! emit on.
 
-/// Boot verdicts of the access graph — a resolver no module reaches, a provider injecting what it may not.
-pub const ACCESS_GRAPH: &str = "nest_rs::access_graph";
 /// Composition root: transports attached, boot phases, shutdown.
 pub const APP: &str = "nest_rs::app";
 /// Provider registration and resolution, including shadowed bindings.
@@ -48,7 +46,7 @@ mod tests {
     /// out of the source rather than linking this crate, so a `pub` list has no
     /// reader outside these three checks — and a published array nobody calls is
     /// surface to keep in step for nothing.
-    const ALL: [&str; 6] = [ACCESS_GRAPH, APP, CONTAINER, LAYERS, LIFECYCLE, MODULE];
+    const ALL: [&str; 5] = [APP, CONTAINER, LAYERS, LIFECYCLE, MODULE];
 
     /// The shape `CLAUDE.md` fixes: `nest_rs::<concern>`, lowercase, **two**
     /// segments. A third would be a hierarchy this table does not have, and the
@@ -81,7 +79,7 @@ mod tests {
     /// `EnvFilter` matches a directive by `starts_with` on the raw string, so a
     /// target that prefixes another cannot be silenced alone — the defect
     /// `nest_rs::access` / `nest_rs::access_graph` shipped as. This crate's own
-    /// six are checked here; the `filters` join in `nest-rs-conformance` checks
+    /// five are checked here; the `filters` join in `nest-rs-conformance` checks
     /// the same property across every target both workspaces declare or spell,
     /// which is the population that can actually collide.
     #[test]

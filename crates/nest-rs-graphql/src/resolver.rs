@@ -137,6 +137,48 @@ pub enum GraphqlRootMember {
     Subscription(Box<dyn GraphqlSubscriptionObject>),
 }
 
+/// One `#[resolver]` struct linked into the binary, submitted by the struct
+/// half of the pair. A resolver self-composes into the schema regardless of any
+/// module, so module membership is what brings its injected dependencies under
+/// the access contract — and a resolver in no reachable module is filtered out
+/// of the schema silently, which [`unreachable_resolvers`] is what makes
+/// visible.
+///
+/// Distinct from [`GraphqlResolverRegistration`], which `#[operations]` submits
+/// per *root object*: a `#[resolver]` carrying no operations contributes nothing
+/// to the schema and would therefore be invisible to a walk of that registry,
+/// while still being the leftover code this warn exists to name.
+///
+/// **Internal ABI** — macro-constructed, lockstep with this crate; do not
+/// hand-construct.
+#[doc(hidden)]
+pub struct ResolverDescriptor {
+    /// `TypeId` of the `#[resolver]` struct, matched against reachable modules'
+    /// `providers = [...]` to decide whether the resolver is under the contract.
+    pub resolver: fn() -> TypeId,
+    /// The resolver type's name, surfaced in the unreachable-resolver boot warn.
+    pub name: &'static str,
+}
+
+inventory::collect!(ResolverDescriptor);
+
+/// Linked `#[resolver]` structs that live in no module reachable from the app's
+/// root, read off the [`ReachableProviders`] set the boot seeds rather than by
+/// re-walking the module registry — one reachability answer, computed once by
+/// the access graph and consumed here.
+///
+/// A container without that set means no gating happened at all (a bare
+/// `Schema::build` outside the boot flow), so nothing is reported.
+pub(crate) fn unreachable_resolvers(container: &Container) -> Vec<&'static str> {
+    let Some(reachable) = container.get::<ReachableProviders>() else {
+        return Vec::new();
+    };
+    inventory::iter::<ResolverDescriptor>()
+        .filter(|d| !reachable.0.contains(&(d.resolver)()))
+        .map(|d| d.name)
+        .collect()
+}
+
 /// One generated resolver object, submitted by `#[operations]`.
 /// `resolver_type_id` keys the entry against [`ReachableProviders`] for
 /// module-gating.

@@ -107,6 +107,7 @@ mod operation;
 mod propagate;
 mod registry;
 mod scope;
+pub mod unit;
 
 pub use composite::CompositeHandler;
 pub use config::McpConfig;

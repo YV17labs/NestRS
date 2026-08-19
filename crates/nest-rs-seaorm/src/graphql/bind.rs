@@ -26,8 +26,10 @@ fn forbidden() -> Error {
 /// program against and one it could not — while the HTTP twin answered
 /// `400 "id must be a UUID v7"` for both.
 pub fn parse_v7(id: &str) -> Result<Uuid> {
-    let invalid =
-        || Error::new("id must be a UUID v7").extend_with(|_, e| e.set("code", "INVALID_ARGUMENT"));
+    let invalid = || {
+        Error::new(nest_rs_core::UUID_V7_REQUIRED)
+            .extend_with(|_, e| e.set("code", "INVALID_ARGUMENT"))
+    };
     let parsed = Uuid::parse_str(id).map_err(|_| invalid())?;
     if parsed.get_version_num() != 7 {
         return Err(invalid());

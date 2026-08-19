@@ -94,7 +94,15 @@ where
             // Not `C::load()`: this leg must distinguish "unconfigured" (inert,
             // the line below) from "invalid", so it validates *after* that
             // check rather than inside the load.
-            let config = C::from_env(&ConfigService::for_namespace(C::NAMESPACE), C::defaults())?;
+            // `read`, not `from_env`: it is the seam that records which
+            // variables this provider claimed, so a second provider reading one
+            // of them fails the boot instead of shadowing it. Still not
+            // `C::load()` — that validates inside the load, and this leg must
+            // reach the `is_unconfigured` check first.
+            let config = nest_rs_config::read::<C>(
+                &ConfigService::for_namespace(C::NAMESPACE),
+                C::defaults(),
+            )?;
             if config.is_unconfigured() {
                 return Ok(None);
             }

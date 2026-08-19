@@ -201,7 +201,12 @@ pub fn is_framework_owned(origin: &str) -> bool {
 ///
 /// A macro and not a function, and `tracing` decides that: `target:` and the
 /// level land inside a `static` callsite initializer, so both must be const at
-/// the call site. Folding the five targets into one would move four crates'
+/// the call site. Its paths are `$crate::tracing::`, never `::tracing::` — an
+/// exported macro's expansion lands in the *caller's* crate and resolves
+/// against the caller's extern prelude, so a bare path is an `E0433` inside an
+/// expansion nobody can read the day a consumer declares no `tracing`. The
+/// kernel's other exported macro was fixed for that reason and wrote it down;
+/// this one had kept the bare form. Folding the five targets into one would move four crates'
 /// skip lines off the target the observability table assigns them.
 ///
 /// This is the shape [`INERT_HOST_HINT`] and [`is_framework_owned`] were
@@ -224,14 +229,14 @@ macro_rules! report_inert_host {
     (target: $target:expr, what: $what:literal, origin: $origin:expr $(, $field:ident = $value:expr)* $(,)?) => {{
         let __origin = $origin;
         if $crate::is_framework_owned(__origin) {
-            ::tracing::debug!(
+            $crate::tracing::debug!(
                 target: $target,
                 $($field = $value,)*
                 origin = __origin,
                 ::core::concat!("skipped ", $what, ": framework capability not imported by this app"),
             );
         } else {
-            ::tracing::warn!(
+            $crate::tracing::warn!(
                 target: $target,
                 $($field = $value,)*
                 origin = __origin,

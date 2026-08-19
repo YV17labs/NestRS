@@ -749,11 +749,11 @@ const fn unhex(byte: u8) -> Option<u8> {
 /// **All three of the caller's slots are constants, and none may be a literal.**
 /// The target is the owning crate's (`nest_rs_http::target::HTTP`), the kind is
 /// one of [`operation_log::kind`](crate::operation_log::kind), and the name is
-/// one of [`operation_log::unit`](crate::operation_log::unit) — the same
-/// constant the edge's operation line reads for its `name:` and its message,
-/// which is what stops one unit of work from having two spellings. The `units`
-/// join in `nest-rs-conformance` fails on a literal at any of the three, and it
-/// reads this example too.
+/// the owning crate's canonical unit name (`nest_rs_http::unit::REQUEST`) — the
+/// same constant the edge's operation line reads for its `name:` and its
+/// message, which is what stops one unit of work from having two spellings. The
+/// `units` join in `nest-rs-conformance` fails on a literal at any of the three,
+/// and it reads this example too.
 ///
 /// The [`Correlation`] is a **required positional argument** rather than read
 /// from the ambient context, for two reasons that both bite: an edge opens its
@@ -763,18 +763,22 @@ const fn unhex(byte: u8) -> Option<u8> {
 ///
 /// ```
 /// # use nest_rs_core::{Correlation, operation_span};
-/// use nest_rs_core::operation_log::{kind, unit};
+/// use nest_rs_core::operation_log::kind;
 ///
-/// // An edge reads its own crate's — `nest_rs_http::target::HTTP` at the real
-/// // call site. The kernel cannot name it from inside its own doctest, and a
-/// // target is declared exactly once per crate, so the declaration stands in.
+/// // An edge reads its own crate's — `nest_rs_http::target::HTTP` and
+/// // `nest_rs_http::unit::REQUEST` at the real call site. The kernel names
+/// // neither, by the rule `target` and `operation_log` both state, so the two
+/// // declarations stand in here.
 /// const TARGET: &str = "nest_rs::http";
+/// mod unit {
+///     pub const REQUEST: &str = "http.request";
+/// }
 ///
 /// let correlation = Correlation::mint();
 /// let span = operation_span!(
 ///     target: TARGET,
 ///     kind: kind::SERVER,
-///     unit::HTTP_REQUEST,
+///     unit::REQUEST,
 ///     &correlation,
 ///     http.request.method = "GET",
 /// );

@@ -361,7 +361,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
     let ran = logs
         .find(
             nest_rs_core::operation_log::TARGET,
-            nest_rs_core::operation_log::unit::SCHEDULE_TICK,
+            nest_rs_schedule::unit::TICK,
         )
         .into_iter()
         .next()

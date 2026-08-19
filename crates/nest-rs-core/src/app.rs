@@ -13,10 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::access::{
     AccessError, ContestedDeclarationError, DuplicateProviderError, ProviderOrder,
-    ReachableProviders, ResolverSchemaActive, UnreachableResolversError, UnresolvedFactoryError,
-    provider_order_from_inventory, reachable_provider_ids_from_inventory,
-    unreachable_resolvers_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
-    warn_unreachable_resolvers_from_inventory,
+    ReachableProviders, UnresolvedFactoryError, provider_order_from_inventory,
+    reachable_provider_ids_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
 };
 use crate::container::ProviderKey;
 use crate::container::{Container, ContainerBuilder, Registrar};
@@ -96,7 +94,9 @@ impl App {
         // container with the hole in it.
         check_no_queued_factories(&builder)?;
         let registered = builder.registered_ids();
-        validate_from_inventory(&roots, &global, &registered).map_err(AccessError::into_anyhow)?;
+        let deferred = builder.scoped_or_transient_ids();
+        validate_from_inventory(&roots, &global, &registered, &deferred)
+            .map_err(AccessError::into_anyhow)?;
         // Keyed providers are configured imperatively; the sync path seeds none
         // up front, so any keyed dependency here is genuinely unmet.
         validate_keyed_from_inventory(&roots, &HashSet::new())?;
@@ -104,11 +104,9 @@ impl App {
         let builder = builder
             .provide(ReachableProviders(reachable))
             .provide(ProviderOrder::new(provider_order_from_inventory(&roots)));
-        let container = builder.build();
-        if container.get::<ResolverSchemaActive>().is_some() {
-            warn_unreachable_resolvers_from_inventory(&roots);
-        }
-        Ok(Self { container })
+        Ok(Self {
+            container: builder.build(),
+        })
     }
 
     /// Start an [`AppBuilder`] for apps that must seed runtime values or build
@@ -245,7 +243,6 @@ pub struct AppBuilder {
     builder: ContainerBuilder,
     modules: Vec<ModuleHooks>,
     overrides: Vec<Registrar>,
-    strict_resolver_membership: bool,
 }
 
 impl AppBuilder {
@@ -254,7 +251,6 @@ impl AppBuilder {
             builder: Container::builder(),
             modules: Vec::new(),
             overrides: Vec::new(),
-            strict_resolver_membership: false,
         }
     }
 
@@ -300,7 +296,7 @@ impl AppBuilder {
     /// Seed module-less metadata of type `M` (the [`ContainerBuilder::provide_meta`]
     /// shortcut at the app root). Used by global builder extensions —
     /// `use_guards_global`, `use_interceptors_global`, etc. — that need to
-    /// publish a [`HttpEndpointWrap`](crate)-style descriptor without
+    /// publish a `HttpEndpointWrap`-style descriptor without
     /// owning a [`Module`].
     pub fn provide_meta<M: Any + Send + Sync>(mut self, meta: M) -> Self {
         self.builder = self.builder.provide_meta(meta);
@@ -367,15 +363,6 @@ impl AppBuilder {
         self
     }
 
-    /// Promote the default unreachable-resolver `warn` into a boot
-    /// [`UnreachableResolversError`]. Use in apps where a forgotten
-    /// `<Feature>GraphqlModule` import should be a CI gate; leave default in
-    /// apps that intentionally link broader surfaces than they expose.
-    pub fn strict_resolver_membership(mut self) -> Self {
-        self.strict_resolver_membership = true;
-        self
-    }
-
     /// Register a root module. May be called more than once; each call adds a
     /// root to the access-graph check.
     pub fn module<M: Module + 'static>(mut self) -> Self {
@@ -396,7 +383,6 @@ impl AppBuilder {
             mut builder,
             modules,
             overrides,
-            strict_resolver_membership,
         } = self;
 
         for hooks in &modules {
@@ -438,23 +424,14 @@ impl AppBuilder {
         // scoped/transient factories the declarative graph cannot see.
         check_duplicate_providers(&builder)?;
         let registered = builder.registered_ids();
-        validate_from_inventory(&roots, &global, &registered).map_err(AccessError::into_anyhow)?;
+        let deferred = builder.scoped_or_transient_ids();
+        validate_from_inventory(&roots, &global, &registered, &deferred)
+            .map_err(AccessError::into_anyhow)?;
         validate_keyed_from_inventory(&roots, &global_keyed)?;
         let reachable = reachable_provider_ids_from_inventory(&roots, &global);
         let builder = builder
             .provide(ReachableProviders(reachable))
             .provide(ProviderOrder::new(provider_order_from_inventory(&roots)));
-        if builder.contains(TypeId::of::<ResolverSchemaActive>()) {
-            if strict_resolver_membership {
-                let unreachable = unreachable_resolvers_from_inventory(&roots);
-                if !unreachable.is_empty() {
-                    return Err(UnreachableResolversError(unreachable).into());
-                }
-            } else {
-                warn_unreachable_resolvers_from_inventory(&roots);
-            }
-        }
-
         Ok(App {
             container: builder.build(),
         })

@@ -31,23 +31,55 @@ const FLOOR: usize = 100;
 
 /// The literals a macro call spells at its top level, in order. Nested groups
 /// are sigils and expressions (`?err`, `%path`), never the message.
-fn top_level_literals(tokens: &TokenStream) -> Vec<String> {
-    tokens
-        .clone()
-        .into_iter()
-        .filter_map(|t| match t {
-            TokenTree::Literal(lit) => syn::parse_str::<LitStr>(&lit.to_string())
-                .ok()
-                .map(|s| normalize(&s.value())),
-            _ => None,
-        })
-        .collect()
+///
+/// The `bool` is `true` when the literal is a **fragment** — one piece of a
+/// `concat!` whose other pieces the call site supplies — rather than the whole
+/// message. It decides which matching rule the event may take: a whole message
+/// must be asserted whole, a fragment can only ever be *inside* what a console
+/// shows. See [`is_asserted`].
+fn top_level_literals(tokens: &TokenStream) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let trees: Vec<TokenTree> = tokens.clone().into_iter().collect();
+    for (i, tree) in trees.iter().enumerate() {
+        match tree {
+            TokenTree::Literal(lit) => {
+                if let Ok(s) = syn::parse_str::<LitStr>(&lit.to_string()) {
+                    out.push((normalize(&s.value()), false));
+                }
+            }
+            // `::core::concat!("skipped ", $what, ": …")` in the message
+            // position. A macro that serves several edges from one body writes
+            // its sentence this way — `report_inert_host!` does, for five of
+            // them — and the assembled message is not a literal at any site, so
+            // a top-level-only scan saw an event with no message and dropped it.
+            // The fragments are what a suite can assert; the longest is what
+            // `is_asserted`'s length guard is about.
+            TokenTree::Group(group)
+                if i > 0
+                    && matches!(&trees[i - 1], TokenTree::Punct(p) if p.as_char() == '!')
+                    && trees[..i]
+                        .iter()
+                        .rev()
+                        .nth(1)
+                        .is_some_and(|t| matches!(t, TokenTree::Ident(id) if id == "concat")) =>
+            {
+                let mut fragments = top_level_literals(&group.stream());
+                fragments.sort_by_key(|(f, _)| std::cmp::Reverse(f.len()));
+                out.extend(fragments.into_iter().take(1).map(|(f, _)| (f, true)));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Event {
     target: String,
     message: String,
+    /// The message is one piece of a `concat!` the call site completes, so what
+    /// a console shows is longer than this. See [`is_asserted`].
+    fragment: bool,
 }
 
 impl Event {
@@ -84,6 +116,11 @@ impl<'ast> Visit<'ast> for Emissions {
             .last()
             .map(|s| s.ident.to_string())
             .unwrap_or_default();
+        // `warn!` / `error!` by name. `tracing::event!(Level::WARN, …)` is the
+        // documented alternative spelling and is **not** in this population —
+        // nothing writes one today (checked), so it is a channel rather than a
+        // hole, and it is named here because a population that loses a member
+        // silently is the one direction this join may not fail in.
         if name == "warn" || name == "error" {
             self.take(&node.tokens);
         }
@@ -93,7 +130,14 @@ impl<'ast> Visit<'ast> for Emissions {
         // emission site is outside the family: today that is one `warn` in
         // `nest-rs-queue-macros`, which is asserted but was never *required* to
         // be, and tomorrow it is whatever the next decorator writes.
-        if name == "quote" {
+        // A `macro_rules!` body is the same case as a `quote!` one: the events
+        // are the framework's, and `syn::visit` stops at the tokens.
+        // `report_inert_host!` is the live instance — one definition, two arms,
+        // five call sites across five crates, and the whole inert-discovery
+        // report `framework.md` makes mandatory. None of it was in the
+        // population: the call sites carry no literal at all, and the definition
+        // was never descended into.
+        if name == "quote" || name == "macro_rules" {
             self.take_nested(node.tokens.clone());
         }
         syn::visit::visit_macro(self, node);
@@ -113,11 +157,11 @@ impl Emissions {
         // the targets became constants, and the floor is what caught it.
         let written_as_string = matches!(named, Some(Named::Literal(_)))
             && literals.first().is_some_and(
-                |first| matches!(&named, Some(Named::Literal(t)) if normalize(t) == *first),
+                |(first, _)| matches!(&named, Some(Named::Literal(t)) if normalize(t) == *first),
             );
         let needed = usize::from(written_as_string) + 1;
         if literals.len() >= needed
-            && let Some(message) = literals.last()
+            && let Some((message, fragment)) = literals.last()
             && !message.is_empty()
         {
             self.events.push(Event {
@@ -129,6 +173,7 @@ impl Emissions {
                     _ => "(inherited)".to_owned(),
                 },
                 message: message.clone(),
+                fragment: *fragment,
             });
         }
     }
@@ -240,14 +285,37 @@ fn asserted_strings(root: &Path) -> BTreeSet<String> {
     out
 }
 
-/// A suite may assert a distinctive fragment rather than the whole sentence, and
-/// that reads the event just as well. Short fragments are not accepted: a common
-/// word would mark every event covered and the join would go quiet.
-fn is_asserted(message: &str, corpus: &BTreeSet<String>) -> bool {
-    corpus.contains(message)
-        || corpus
-            .iter()
-            .any(|lit| lit.len() >= 24 && message.contains(lit.as_str()))
+/// Whether some suite reads this event.
+///
+/// **A whole message must be asserted whole, or by a long fragment of itself.**
+/// A suite writing `logs.find(target, "…")` with a distinctive substring reads
+/// the event just as well, and the 24-character floor is what stops a common
+/// word from marking every event covered.
+///
+/// **The reverse — a corpus literal that *contains* the message — is admitted
+/// only for a `concat!` fragment**, and the narrowing is measured rather than
+/// cautious. Admitted for every event it made **nine** cells unprovable, five of
+/// them `warn`+ authorization and authentication denials, each kept green by a
+/// *different* event's assertion: `"transaction commit failed"` swallowed by
+/// `"dispatch transaction commit failed"`, `"access denied"` by
+/// `"access denied — row outside the caller's scope"`, `"authorization denied"`
+/// by `"authorization denied: no ambient ability"`. The length guard does not
+/// help there — it bounds the *corpus* literal, so it says nothing about a short
+/// message sitting inside a longer sibling's assertion.
+///
+/// What the direction earns is exactly one cell: the assembled
+/// `report_inert_host!` sentence, whose framework half is a fragment and whose
+/// middle the call site supplies, so there is no whole message to match. That is
+/// the case, and now the only case.
+fn is_asserted(event: &Event, corpus: &BTreeSet<String>) -> bool {
+    let message = event.message.as_str();
+    if corpus.contains(message) {
+        return true;
+    }
+    corpus.iter().any(|lit| {
+        lit.len() >= 24
+            && (message.contains(lit.as_str()) || (event.fragment && lit.contains(message)))
+    })
 }
 
 #[test]
@@ -259,7 +327,7 @@ fn every_warn_plus_event_is_read_by_a_test() {
     let corpus = asserted_strings(&root);
     let holes: BTreeSet<String> = events
         .iter()
-        .filter(|e| !is_asserted(&e.message, &corpus))
+        .filter(|e| !is_asserted(e, &corpus))
         .map(Event::key)
         .collect();
 

@@ -34,7 +34,7 @@ pub(crate) fn validation_error(errors: ValidationErrors) -> PipeError {
 }
 
 /// The wire-safe JSON for a `validator` failure — the field errors with every
-/// echoed input stripped, as [`validation_error`] ships them.
+/// echoed input stripped, as `validation_error` ships them.
 ///
 /// Public because the redaction is the *policy*, not an implementation detail
 /// of pipes: any layer that puts `ValidationErrors` on a wire (a service-level

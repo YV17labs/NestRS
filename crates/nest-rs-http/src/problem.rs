@@ -233,11 +233,7 @@ pub async fn normalize_error_response(resp: Response) -> Response {
     // error is tagged `MappedError` — its body is a deliberate wire contract
     // (an app's own envelope, a custom status), never a raw transport error to
     // rewrite.
-    if resp
-        .extensions()
-        .get::<nest_rs_core::MappedError>()
-        .is_some()
-    {
+    if resp.extensions().get::<crate::MappedError>().is_some() {
         return resp;
     }
     let content_type = resp
@@ -511,7 +507,7 @@ mod tests {
         // A raw poem status error renders plain text by default; the edge
         // boundary lifts it onto problem+json keyed on the status, carrying the
         // (safe) client-error message through as `detail`.
-        let raw = poem::Error::from_string("id must be a UUID v7", StatusCode::BAD_REQUEST)
+        let raw = poem::Error::from_string(nest_rs_core::UUID_V7_REQUIRED, StatusCode::BAD_REQUEST)
             .into_response();
         let resp = normalize_error_response(raw).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -524,7 +520,7 @@ mod tests {
         let bytes = resp.into_body().into_bytes().await.expect("body");
         let v: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(v["status"], 400);
-        assert_eq!(v["detail"], "id must be a UUID v7");
+        assert_eq!(v["detail"], nest_rs_core::UUID_V7_REQUIRED);
     }
 
     #[tokio::test]
@@ -565,7 +561,7 @@ mod tests {
         let mut mapped = Response::builder()
             .status(StatusCode::IM_A_TEAPOT)
             .body("edge-mapped".as_bytes().to_vec());
-        mapped.extensions_mut().insert(nest_rs_core::MappedError);
+        mapped.extensions_mut().insert(crate::MappedError);
         let resp = normalize_error_response(mapped).await;
         assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
         let bytes = resp.into_body().into_bytes().await.expect("body");

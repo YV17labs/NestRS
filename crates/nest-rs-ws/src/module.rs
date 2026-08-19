@@ -38,7 +38,8 @@ impl WsModule {
     }
 }
 
-/// [`DynamicModule`] returned by [`WsModule::for_root`]: resolves [`WsConfig`]
+/// [`DynamicModule`](nest_rs_core::DynamicModule) returned by
+/// [`WsModule::for_root`]: resolves [`WsConfig`]
 /// (env over the pinned base), then brings the base [`WsModule`] wiring (the
 /// [`WsServer`] registry). This factory is queued first, so it wins over — and
 /// skips — the plain env factory the base module queues; registering the server

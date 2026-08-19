@@ -44,7 +44,7 @@ impl Strategy for RejectWith {
 /// A request carrying the `#[public]` marker the route macro attaches.
 fn public_request() -> Request {
     let mut req = crate::request(&[]);
-    req.extensions_mut().insert(nest_rs_core::Public);
+    req.extensions_mut().insert(nest_rs_http::Public);
     req
 }
 
@@ -148,7 +148,7 @@ async fn a_successful_check_publishes_the_actor_into_the_ambient_context() {
     let guard = AuthnGuard::new(Arc::new(AuthenticateAs("ada")));
     let correlation = nest_rs_core::Correlation::mint();
 
-    let seen = nest_rs_core::with_request_scope(None, correlation, None, async {
+    let seen = nest_rs_core::with_request_scope(None, correlation, async {
         let mut req = Request::default();
         guard
             .check_http(&mut req)
@@ -172,7 +172,7 @@ async fn a_successful_check_publishes_the_actor_into_the_ambient_context() {
 async fn an_unauthenticated_caller_has_no_ambient_actor() {
     let correlation = nest_rs_core::Correlation::mint();
 
-    let seen = nest_rs_core::with_request_scope(None, correlation, None, async {
+    let seen = nest_rs_core::with_request_scope(None, correlation, async {
         // No guard ran at all — the shape of every request before authentication
         // and of every `#[public]` route reached without a credential.
         nest_rs_core::current_actor_id()

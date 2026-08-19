@@ -46,9 +46,6 @@ pub(crate) struct RequestCtx {
     /// unrelated call sites, and threading an argument through all of them is
     /// how a field ends up missing at the fourth.
     pub(crate) correlation: crate::Correlation,
-    /// The transport's byte budget for whole-body readers; `None` when the
-    /// transport enforces no cap (readers fall back to their own default).
-    body_limit: Option<usize>,
 }
 
 tokio::task_local! {
@@ -67,12 +64,6 @@ pub(crate) fn current_request_ctx<T>(read: impl FnOnce(&Arc<RequestCtx>) -> T) -
 /// `None` off the request task (or before the edge — a transport wiring bug).
 pub fn current_request_scope() -> Option<Arc<RequestScope>> {
     current_request_ctx(|ctx| ctx.scope.clone()).flatten()
-}
-
-/// The transport's configured whole-body byte cap, when one is installed.
-/// Body readers fall back to their own default on `None`.
-pub fn current_body_limit() -> Option<usize> {
-    current_request_ctx(|ctx| ctx.body_limit).flatten()
 }
 
 /// Run `fut` under an ambient request context — the transport edges' installer,
@@ -97,10 +88,9 @@ pub fn current_body_limit() -> Option<usize> {
 pub async fn with_request_scope<F: std::future::Future>(
     scope: Option<Arc<RequestScope>>,
     correlation: crate::Correlation,
-    body_limit: Option<usize>,
     fut: F,
 ) -> F::Output {
-    RequestContinuation::new(scope, correlation, body_limit)
+    RequestContinuation::new(scope, correlation)
         .scope(fut)
         .await
 }
@@ -122,7 +112,7 @@ pub async fn with_request_scope<F: std::future::Future>(
 ///
 /// [`enter`](Self::enter) is synchronous because that is the shape a body has:
 /// a `poll` is not a future, so the context is re-installed around each poll —
-/// the same thing [`tracing::Instrument`](crate::tracing::Instrument) does with
+/// the same thing [`crate::tracing::Instrument`] does with
 /// a span, for the same reason.
 ///
 /// **Identity, not resources.** What continues here is the whole ambient
@@ -131,8 +121,9 @@ pub async fn with_request_scope<F: std::future::Future>(
 /// request does. An edge whose continuation genuinely outlives the request — a
 /// WebSocket that stays open for hours after its upgrade answered `101` —
 /// inherits the [`Correlation`](crate::Correlation) alone and opens its own
-/// scope, which is why those edges install
-/// [`with_correlation`](crate::with_correlation) rather than one of these.
+/// scope — which is what a gateway does by calling [`with_request_scope`] again
+/// with the upgrade's correlation and a scope of its own, rather than
+/// continuing this one.
 #[derive(Clone)]
 pub struct RequestContinuation(Arc<RequestCtx>);
 
@@ -144,16 +135,8 @@ impl RequestContinuation {
     /// one value and uses it twice — [`scope`](Self::scope) around the handler,
     /// [`enter`](Self::enter) around the body — rather than assembling the
     /// context twice and having the two spellings drift.
-    pub fn new(
-        scope: Option<Arc<RequestScope>>,
-        correlation: crate::Correlation,
-        body_limit: Option<usize>,
-    ) -> Self {
-        Self(Arc::new(RequestCtx {
-            scope,
-            correlation,
-            body_limit,
-        }))
+    pub fn new(scope: Option<Arc<RequestScope>>, correlation: crate::Correlation) -> Self {
+        Self(Arc::new(RequestCtx { scope, correlation }))
     }
 
     /// Capture whatever context is ambient, to re-install around work that
@@ -173,10 +156,9 @@ impl RequestContinuation {
         REQUEST_CTX.scope(Arc::clone(&self.0), fut).await
     }
 
-    /// Run `f` under this context — `current_trace_id()`,
-    /// `current_actor_id()`, [`current_request_scope`] and
-    /// [`current_body_limit`] all answer exactly what they answered inside the
-    /// handler.
+    /// Run `f` under this context — `current_trace_id()`, `current_actor_id()`
+    /// and [`current_request_scope`] all answer exactly what they answered
+    /// inside the handler.
     ///
     /// Synchronous because that is the shape a response body has: a `poll` is not
     /// a future. One refcount bump per poll, which is what the `Arc` is for — a
@@ -310,20 +292,17 @@ mod tests {
         let correlation = crate::Correlation::mint();
         let trace_id = correlation.trace_id();
 
-        let continuation = with_request_scope(
-            Some(Arc::clone(&scope)),
-            correlation.clone(),
-            Some(1024),
-            async move { RequestContinuation::new(Some(scope), correlation, Some(1024)) },
-        )
-        .await;
+        let continuation =
+            with_request_scope(Some(Arc::clone(&scope)), correlation.clone(), async move {
+                RequestContinuation::new(Some(scope), correlation)
+            })
+            .await;
 
         // Off the request task entirely — exactly where a body is polled.
         assert!(crate::current_trace_id().is_none());
 
         continuation.enter(|| {
             assert_eq!(crate::current_trace_id(), Some(trace_id));
-            assert_eq!(current_body_limit(), Some(1024));
             assert!(
                 current_request_scope().is_some_and(|s| s.get::<Greeter>().is_some()),
                 "the request's own scope answers, not a fresh one",
@@ -342,9 +321,9 @@ mod tests {
     async fn a_continuation_sees_an_actor_resolved_after_it_was_built() {
         let scope = Arc::new(RequestScope::new(Container::builder().build()));
         let correlation = crate::Correlation::mint();
-        let continuation = RequestContinuation::new(Some(scope.clone()), correlation.clone(), None);
+        let continuation = RequestContinuation::new(Some(scope.clone()), correlation.clone());
 
-        with_request_scope(Some(scope), correlation, None, async {
+        with_request_scope(Some(scope), correlation, async {
             crate::set_actor_id("alice-42");
         })
         .await;

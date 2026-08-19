@@ -169,7 +169,6 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
                 nest_rs_core::with_request_scope(
                     None,
                     connection,
-                    None,
                     serve_connection(gateway, server, guards, wiring, limits, socket),
                 )
             })
@@ -267,12 +266,12 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // every message under a span that never closes.
     under_connection(
         &wiring.connection,
-        nest_rs_core::operation_log::unit::WS_CONNECT,
+        crate::unit::CONNECT,
         conn_id,
         nest_rs_core::operation_span!(
             target: crate::TARGET,
             kind: nest_rs_core::operation_log::kind::SERVER,
-            nest_rs_core::operation_log::unit::WS_CONNECT,
+            crate::unit::CONNECT,
             &wiring.connection,
             ws.connection_id = conn_id,
         ),
@@ -358,12 +357,12 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // close; on an unwind the guard's `Drop` does the same cleanup.
     under_connection(
         &wiring.connection,
-        nest_rs_core::operation_log::unit::WS_DISCONNECT,
+        crate::unit::DISCONNECT,
         conn_id,
         nest_rs_core::operation_span!(
             target: crate::TARGET,
             kind: nest_rs_core::operation_log::kind::SERVER,
-            nest_rs_core::operation_log::unit::WS_DISCONNECT,
+            crate::unit::DISCONNECT,
             &wiring.connection,
             ws.connection_id = conn_id,
         ),
@@ -433,7 +432,7 @@ async fn under_connection<F: std::future::Future<Output = ()>>(
     hook: F,
 ) {
     let started = std::time::Instant::now();
-    nest_rs_core::with_request_scope(None, connection.clone(), None, async {
+    nest_rs_core::with_request_scope(None, connection.clone(), async {
         hook.await;
         // A hook is developer code that logs and writes like any handler, so the
         // socket opening and closing are units of work and owe the family's line
@@ -524,7 +523,7 @@ async fn handle_text<G: Gateway>(
     let span = nest_rs_core::operation_span!(
         target: crate::TARGET,
         kind: nest_rs_core::operation_log::kind::SERVER,
-        nest_rs_core::operation_log::unit::WS_MESSAGE,
+        crate::unit::MESSAGE,
         &correlation,
         ws.event = %event,
         ws.connection_id = conn_id,
@@ -539,16 +538,16 @@ async fn handle_text<G: Gateway>(
         .as_ref()
         .map(|container| Arc::new(RequestScope::new(container.clone())));
     let started = std::time::Instant::now();
-    let reply = nest_rs_core::with_request_scope(scope, correlation, None, async {
+    let reply = nest_rs_core::with_request_scope(scope, correlation, async {
         let reply = dispatch.await;
         // One line per message, inside the scope so it carries the message's own
         // ids rather than the socket's. A socket can serve thousands of messages
         // under one upgrade, so the `101`'s access line names the connection and
         // says nothing about the work — this is where that is said.
         tracing::info!(
-            name: nest_rs_core::operation_log::unit::WS_MESSAGE,
+            name: crate::unit::MESSAGE,
             target: nest_rs_core::operation_log::TARGET,
-            message = nest_rs_core::operation_log::unit::WS_MESSAGE,
+            message = crate::unit::MESSAGE,
             event = %event,
             conn_id,
             outcome = match &reply {
@@ -617,12 +616,12 @@ mod tests {
 
         under_connection(
             &connection,
-            nest_rs_core::operation_log::unit::WS_CONNECT,
+            crate::unit::CONNECT,
             7,
             nest_rs_core::operation_span!(
                 target: crate::TARGET,
                 kind: nest_rs_core::operation_log::kind::SERVER,
-                nest_rs_core::operation_log::unit::WS_CONNECT,
+                crate::unit::CONNECT,
                 &connection,
                 ws.connection_id = 7u64,
             ),
@@ -649,7 +648,7 @@ mod tests {
         );
         assert_eq!(
             event.field("span").as_deref(),
-            Some(nest_rs_core::operation_log::unit::WS_CONNECT),
+            Some(crate::unit::CONNECT),
             "the hook's events are rooted at the connection span: {:?}",
             event.fields,
         );
@@ -658,14 +657,8 @@ mod tests {
         // family's line — a hook is developer code that logs and writes like any
         // handler, and a connection nobody can see opening is a connection
         // nobody can account for.
-        let opened = logs.expect_one(
-            nest_rs_core::operation_log::TARGET,
-            nest_rs_core::operation_log::unit::WS_CONNECT,
-        );
-        assert_eq!(
-            opened.message,
-            nest_rs_core::operation_log::unit::WS_CONNECT
-        );
+        let opened = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::CONNECT);
+        assert_eq!(opened.message, crate::unit::CONNECT);
         assert_eq!(opened.field("conn_id").as_deref(), Some("7"));
         assert!(opened.field("duration_ms").is_some());
     }
@@ -685,7 +678,7 @@ mod tests {
         let connection = nest_rs_core::Correlation::mint();
         let trace_id = connection.trace_id();
 
-        let frame = nest_rs_core::with_request_scope(None, connection, None, async {
+        let frame = nest_rs_core::with_request_scope(None, connection, async {
             let joined = nest_rs_core::current_trace_id();
             assert_eq!(
                 joined,

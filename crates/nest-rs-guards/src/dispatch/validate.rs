@@ -100,7 +100,7 @@ pub fn boot_validate_guards(
     label: &str,
 ) -> Result<(), String> {
     let global = resolve_global_guards(container);
-    let controller = resolve_specs(container, controller_specs, LayerSite::Controller);
+    let controller = resolve_specs(container, controller_specs, LayerSite::Host);
     let chain =
         compose_chain::<dyn Guard>(dedup_bucket(global), controller, Vec::new(), &[], label);
     validate_guard_chain(label, &chain)
@@ -158,7 +158,7 @@ mod tests {
         ResolvedLayer {
             type_id: std::any::TypeId::of::<G>(),
             name,
-            source: LayerSite::Controller,
+            source: LayerSite::Host,
             layer: Arc::new(guard) as Arc<dyn Guard>,
         }
     }

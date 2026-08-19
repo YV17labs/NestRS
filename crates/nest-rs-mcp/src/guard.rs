@@ -71,7 +71,7 @@ pub trait McpOperationGuard: Send + Sync + 'static {
 ///
 /// The fallback only ever *widens* what the app explicitly opted into: with no
 /// global pool the endpoint stays deny-all, and unlike `/graphql` the MCP mount
-/// carries no [`Public`](nest_rs_core::Public) marker, so a pooled `AuthnGuard`
+/// carries no [`Public`](nest_rs_http::Public) marker, so a pooled `AuthnGuard`
 /// still refuses an unauthenticated tool call.
 ///
 /// **Internal ABI** — a seeded fn-pointer wired by the framework crates

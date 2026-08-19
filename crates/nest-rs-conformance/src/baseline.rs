@@ -15,7 +15,7 @@ use std::fs;
 use std::path::Path;
 
 /// What a join concluded about its family, ready to be asserted on.
-pub struct Verdict {
+pub(crate) struct Verdict {
     /// Holes the baseline does not excuse — the regression.
     pub fresh: Vec<String>,
     /// Baseline lines that name a cell now filled — delete them.
@@ -23,20 +23,28 @@ pub struct Verdict {
 }
 
 impl Verdict {
-    pub fn is_clean(&self) -> bool {
+    pub(crate) fn is_clean(&self) -> bool {
         self.fresh.is_empty() && self.stale.is_empty()
     }
 
     /// The whole failure in one message: what regressed, then what to delete.
     /// Both halves at once, because fixing one and rerunning to discover the
     /// other is how a two-line chore becomes two rounds.
-    pub fn report(&self, family: &str) -> String {
+    pub(crate) fn report(&self, family: &str, line_is: &str) -> String {
         let mut out = String::new();
         if !self.fresh.is_empty() {
+            // **`line_is` again, and that is the fix.** This sentence was
+            // hardcoded as "covered by no test … Cover them where the behaviour
+            // is tested", which is right for a coverage join and backwards for a
+            // forbidden-pattern one: `env_names` reports a variable spelled as a
+            // literal, and the remedy is to delete the literal, not to write a
+            // test for it. Every caller already words what one of its lines
+            // *is*, and it was printed only on the first landing — the one run
+            // nobody ever sees again.
             out.push_str(&format!(
-                "{} {family} covered by no test:\n  {}\n\nCover them where the \
-                 behaviour is tested. The baseline records what was already \
-                 uncovered when this join landed; it never grows.\n",
+                "{} new line(s) — {family} — each one {line_is}:\n  {}\n\nThe \
+                 baseline records what was already there when this join landed; \
+                 it never grows.\n",
                 self.fresh.len(),
                 self.fresh.join("\n  "),
             ));
@@ -57,7 +65,7 @@ impl Verdict {
 ///
 /// Returns `None` when no baseline exists yet: the caller writes one and fails,
 /// so the landing is a reviewed commit rather than a silent green.
-pub fn compare(path: &Path, holes: &BTreeSet<String>) -> Option<Verdict> {
+pub(crate) fn compare(path: &Path, holes: &BTreeSet<String>) -> Option<Verdict> {
     let raw = fs::read_to_string(path).ok()?;
     let recorded: BTreeSet<String> = raw
         .lines()
@@ -72,7 +80,7 @@ pub fn compare(path: &Path, holes: &BTreeSet<String>) -> Option<Verdict> {
 }
 
 /// Write the initial baseline. Only ever called on the run that finds none.
-pub fn land(path: &Path, holes: &BTreeSet<String>) {
+pub(crate) fn land(path: &Path, holes: &BTreeSet<String>) {
     let listing = holes.iter().cloned().collect::<Vec<_>>().join("\n");
     fs::write(path, format!("{listing}\n")).expect("the baseline path is writable");
 }
@@ -120,5 +128,5 @@ pub fn gate(
             holes.len(),
         );
     };
-    assert!(verdict.is_clean(), "{}", verdict.report(family));
+    assert!(verdict.is_clean(), "{}", verdict.report(family, line_is));
 }

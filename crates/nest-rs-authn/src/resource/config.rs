@@ -228,7 +228,7 @@ mod tests {
             .into_metadata()
             .expect_err("no resource");
         assert!(
-            err.to_string().contains("NESTRS_AUTHN__RESOURCE"),
+            err.to_string().contains("RESOURCE"),
             "the boot error must be actionable: {err}",
         );
     }
@@ -243,8 +243,7 @@ mod tests {
             .into_metadata()
             .expect_err("no authorization server");
         assert!(
-            err.to_string()
-                .contains("NESTRS_AUTHN__AUTHORIZATION_SERVERS"),
+            err.to_string().contains("AUTHORIZATION_SERVERS"),
             "got: {err}",
         );
     }
@@ -301,10 +300,7 @@ mod tests {
     #[test]
     fn env_overlays_the_pinned_base_per_field() {
         let cfg = ProtectedResourceConfig::from_env(
-            &ConfigService::with_vars(
-                "authn",
-                [("NESTRS_AUTHN__SCOPES_SUPPORTED", "posts:read, posts:write")],
-            ),
+            &ConfigService::with_vars("authn", [("SCOPES_SUPPORTED", "posts:read, posts:write")]),
             valid(),
         )
         .expect("no error");

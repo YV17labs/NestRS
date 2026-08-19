@@ -136,7 +136,7 @@ fn normalize_global_prefix(raw: &str) -> Option<String> {
 /// The canonical form of a mount path: `"/x"`, with the root as `"/"`.
 ///
 /// **A mount path is compared as a string before it is served.**
-/// [`claim_exclusive_path`] and the cross-family check key on it to report a
+/// `claim_exclusive_path` and the cross-family check key on it to report a
 /// collision by owner, and `Route::nest` appends a trailing `/` internally — so
 /// `"/x"` and `"/x/"` are two distinct owners here and one key inside poem. Left
 /// raw they pass the check that exists to catch exactly that, and poem panics

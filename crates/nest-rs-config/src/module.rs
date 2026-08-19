@@ -163,127 +163,134 @@ impl DynamicModule for ConfigRootSetup {
 }
 
 #[cfg(test)]
-mod seam {
-    use nest_rs_core::{App, ContainerBuilder, DynamicModule, Module, module};
-    use validator::Validate;
-
-    use super::*;
-    use crate::ConfigService;
-
-    /// A namespace no deployment sets, so these tests read only what they pin.
-    #[derive(Clone, Default, Validate)]
-    struct SeamConfig {
-        bucket: String,
-    }
-
-    impl crate::Namespaced for SeamConfig {
-        const NAMESPACE: &'static str = "config_seam_guard";
-    }
-
-    impl Config for SeamConfig {
-        fn from_env(env: &ConfigService, base: Self) -> crate::Result<Self> {
-            Ok(Self {
-                bucket: env.get("BUCKET").unwrap_or(base.bucket),
-            })
-        }
-    }
-
-    /// Stands in for a framework module that registers its own config unpinned.
-    struct OwnerModule;
-
-    impl Module for OwnerModule {
-        fn register(builder: ContainerBuilder) -> ContainerBuilder {
-            builder
-        }
-        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-            ConfigModule::for_feature::<SeamConfig>().collect(builder)
-        }
-    }
-
-    fn pin() -> ConfigSetup<OwnerModule, SeamConfig> {
-        ConfigModule::setup(SeamConfig {
-            bucket: "pinned".into(),
-        })
-    }
-
-    #[module(imports = [OwnerModule, pin()])]
-    struct BareImportFirst;
-
-    #[module(imports = [pin(), OwnerModule])]
-    struct PinFirst;
-
-    #[module(imports = [pin(), pin()])]
-    struct TwoPins;
-
-    /// The bug this replaced: factories are first-queued-wins, so a bare import
-    /// listed above the pin — the shape you get for free when another module
-    /// imports the same one — dropped the pinned value on the floor with no
-    /// warning. Both orders must now yield the pin.
-    #[tokio::test]
-    async fn a_pin_survives_a_bare_import_listed_before_it() {
-        for (label, cfg) in [
-            ("bare import first", boot::<BareImportFirst>().await),
-            ("pin first", boot::<PinFirst>().await),
-        ] {
-            assert_eq!(
-                cfg.bucket, "pinned",
-                "{label}: import order decided the value"
-            );
-        }
-    }
-
-    /// Two pins cannot both win, and picking one by position is the silent drop
-    /// under another name — so the boot fails naming the config.
-    #[tokio::test]
-    async fn two_pinned_bases_for_one_config_fail_the_boot() {
-        let err = match App::builder().module::<TwoPins>().build().await {
-            Ok(_) => panic!("two pinned bases for one config must not boot"),
-            Err(err) => err.to_string(),
-        };
-        assert!(err.contains("contested declaration"), "{err}");
-        assert!(
-            err.contains("SeamConfig"),
-            "the failure names the config: {err}"
-        );
-        assert!(
-            err.contains("pin it once"),
-            "the config seam supplies its own remedy, not a generic one: {err}"
-        );
-    }
-
-    /// `App::new` runs `register` but never `collect`, so a queued factory would
-    /// never be built. It used to boot anyway and leave the config missing —
-    /// readable only as a `None` at first use, far from the cause.
-    #[test]
-    fn the_synchronous_boot_refuses_a_config_it_could_never_resolve() {
-        let err = match App::new::<PinFirst>() {
-            Ok(_) => panic!("App::new must not boot a container whose config never resolves"),
-            Err(err) => err.to_string(),
-        };
-        assert!(err.contains("SeamConfig"), "{err}");
-        assert!(
-            err.contains("App::builder"),
-            "the failure names the boot path that works: {err}"
-        );
-    }
-
-    async fn boot<M: Module + 'static>() -> std::sync::Arc<SeamConfig> {
-        App::builder()
-            .module::<M>()
-            .build()
-            .await
-            .expect("the module boots")
-            .container()
-            .get::<SeamConfig>()
-            .expect("the config resolves")
-    }
-}
-
-#[cfg(test)]
 // figment::Jail's fixed closure signature triggers this lint unactionably.
 #[allow(clippy::result_large_err)]
 mod tests {
+    /// The `for_root` / `for_feature` seam, exercised through a real boot.
+    ///
+    /// A nested module rather than a second file-level `#[cfg(test)] mod`:
+    /// `CLAUDE.md` fixes the shape at one per file — "`#[cfg(test)] mod tests`
+    /// in the file under test" — and a `seam::…` filter path existed nowhere
+    /// else in either workspace, so "where is this asserted?" had two answers
+    /// inside one file.
+    mod seam {
+        use nest_rs_core::{App, ContainerBuilder, DynamicModule, Module, module};
+        use validator::Validate;
+
+        use super::*;
+        use crate::ConfigService;
+
+        /// A namespace no deployment sets, so these tests read only what they pin.
+        #[derive(Clone, Default, Validate)]
+        struct SeamConfig {
+            bucket: String,
+        }
+
+        impl crate::Namespaced for SeamConfig {
+            const NAMESPACE: &'static str = "config_seam_guard";
+        }
+
+        impl Config for SeamConfig {
+            fn from_env(env: &ConfigService, base: Self) -> crate::Result<Self> {
+                Ok(Self {
+                    bucket: env.get("BUCKET").unwrap_or(base.bucket),
+                })
+            }
+        }
+
+        /// Stands in for a framework module that registers its own config unpinned.
+        struct OwnerModule;
+
+        impl Module for OwnerModule {
+            fn register(builder: ContainerBuilder) -> ContainerBuilder {
+                builder
+            }
+            fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+                ConfigModule::for_feature::<SeamConfig>().collect(builder)
+            }
+        }
+
+        fn pin() -> ConfigSetup<OwnerModule, SeamConfig> {
+            ConfigModule::setup(SeamConfig {
+                bucket: "pinned".into(),
+            })
+        }
+
+        #[module(imports = [OwnerModule, pin()])]
+        struct BareImportFirst;
+
+        #[module(imports = [pin(), OwnerModule])]
+        struct PinFirst;
+
+        #[module(imports = [pin(), pin()])]
+        struct TwoPins;
+
+        /// The bug this replaced: factories are first-queued-wins, so a bare import
+        /// listed above the pin — the shape you get for free when another module
+        /// imports the same one — dropped the pinned value on the floor with no
+        /// warning. Both orders must now yield the pin.
+        #[tokio::test]
+        async fn a_pin_survives_a_bare_import_listed_before_it() {
+            for (label, cfg) in [
+                ("bare import first", boot::<BareImportFirst>().await),
+                ("pin first", boot::<PinFirst>().await),
+            ] {
+                assert_eq!(
+                    cfg.bucket, "pinned",
+                    "{label}: import order decided the value"
+                );
+            }
+        }
+
+        /// Two pins cannot both win, and picking one by position is the silent drop
+        /// under another name — so the boot fails naming the config.
+        #[tokio::test]
+        async fn two_pinned_bases_for_one_config_fail_the_boot() {
+            let err = match App::builder().module::<TwoPins>().build().await {
+                Ok(_) => panic!("two pinned bases for one config must not boot"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("contested declaration"), "{err}");
+            assert!(
+                err.contains("SeamConfig"),
+                "the failure names the config: {err}"
+            );
+            assert!(
+                err.contains("pin it once"),
+                "the config seam supplies its own remedy, not a generic one: {err}"
+            );
+        }
+
+        /// `App::new` runs `register` but never `collect`, so a queued factory would
+        /// never be built. It used to boot anyway and leave the config missing —
+        /// readable only as a `None` at first use, far from the cause.
+        #[test]
+        fn the_synchronous_boot_refuses_a_config_it_could_never_resolve() {
+            let err = match App::new::<PinFirst>() {
+                Ok(_) => panic!("App::new must not boot a container whose config never resolves"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("SeamConfig"), "{err}");
+            assert!(
+                err.contains("App::builder"),
+                "the failure names the boot path that works: {err}"
+            );
+        }
+
+        async fn boot<M: Module + 'static>() -> std::sync::Arc<SeamConfig> {
+            App::builder()
+                .module::<M>()
+                .build()
+                .await
+                .expect("the module boots")
+                .container()
+                .get::<SeamConfig>()
+                .expect("the config resolves")
+        }
+    }
+
     use super::*;
+    use crate::service::var_name;
     use nest_rs_core::Container;
 
     /// `ConfigModule::for_root()`'s collect registers the active [`Environment`]
@@ -300,7 +307,10 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 ".env",
-                "NESTRS_FOR_ROOT_GUARD__SHOULD_STAY_UNSET=from_dotenv",
+                &format!(
+                    "{}=from_dotenv",
+                    var_name("for_root_guard", "SHOULD_STAY_UNSET"),
+                ),
             )?;
 
             let builder = ConfigModule::for_root().collect(Container::builder());
@@ -311,7 +321,7 @@ mod tests {
                 "collect registers the active Environment",
             );
             assert!(
-                std::env::var("NESTRS_FOR_ROOT_GUARD__SHOULD_STAY_UNSET").is_err(),
+                std::env::var(var_name("for_root_guard", "SHOULD_STAY_UNSET")).is_err(),
                 "importing ConfigModule::for_root() must not write the cascade into std::env",
             );
             Ok(())
@@ -323,17 +333,26 @@ mod tests {
     #[test]
     fn a_config_read_sees_the_cascade_without_publishing_it() {
         figment::Jail::expect_with(|jail| {
-            jail.create_file(".env", "NESTRS_READPATH_GUARD__URL=from_dotenv")?;
+            jail.create_file(
+                ".env",
+                &format!("{}=from_dotenv", var_name("readpath_guard", "URL")),
+            )?;
 
+            // Asserted unconditionally. It was guarded on `value.is_some()`,
+            // reasoning that "the cascade is parsed once per process, so a
+            // sibling test may have frozen it against a different working
+            // directory" — but the runner is nextest, which gives every test its
+            // own process, so the `OnceLock` is always this test's. The guard
+            // made the read half of the cell unfailable, which is worse than
+            // empty (`testing.md` clause 3).
             let value = crate::ConfigService::for_namespace("readpath_guard").get("URL");
-            // The cascade is parsed once per process, so a sibling test may have
-            // frozen it against a different working directory — assert the
-            // side-effect either way, and the value only when the read landed.
-            if value.is_some() {
-                assert_eq!(value.as_deref(), Some("from_dotenv"));
-            }
+            assert_eq!(
+                value.as_deref(),
+                Some("from_dotenv"),
+                "the read path sees the cascade",
+            );
             assert!(
-                std::env::var("NESTRS_READPATH_GUARD__URL").is_err(),
+                std::env::var(var_name("readpath_guard", "URL")).is_err(),
                 "a config read resolves through the in-crate map, never through std::env",
             );
             Ok(())

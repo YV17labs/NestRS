@@ -40,7 +40,7 @@ pub(crate) fn live_condition_for_column<C: ColumnTrait>(col: C) -> Condition {
 }
 
 /// One `#[expose(..., soft_delete)]` entity and the service it named, submitted
-/// at link time so [`SoftDeleteAudit`] can compare the entity's half against the
+/// at link time so `SoftDeleteAudit` can compare the entity's half against the
 /// service's.
 ///
 /// Every field is a fn pointer rather than a value: `table_name()`,

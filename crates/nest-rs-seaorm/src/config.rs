@@ -105,7 +105,7 @@ mod tests {
     fn env_overrides_each_field_of_a_pinned_config() {
         use nest_rs_config::ConfigService;
         let cfg = DatabaseConfig::from_env(
-            &ConfigService::with_vars("database", [("NESTRS_DATABASE__MAX_CONNECTIONS", "25")]),
+            &ConfigService::with_vars("database", [("MAX_CONNECTIONS", "25")]),
             pinned("postgres://pinned/app"),
         )
         .expect("the overlay resolves");
@@ -170,12 +170,12 @@ mod tests {
         let service = ConfigService::with_vars(
             "database",
             [
-                ("NESTRS_DATABASE__URL", "postgres://u@h/d"),
-                ("NESTRS_DATABASE__MAX_CONNECTIONS", "25"),
-                ("NESTRS_DATABASE__MIN_CONNECTIONS", "2"),
-                ("NESTRS_DATABASE__CONNECT_TIMEOUT_SECS", "12"),
-                ("NESTRS_DATABASE__SQLX_LOGGING", "true"),
-                ("NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS", "true"),
+                ("URL", "postgres://u@h/d"),
+                ("MAX_CONNECTIONS", "25"),
+                ("MIN_CONNECTIONS", "2"),
+                ("CONNECT_TIMEOUT_SECS", "12"),
+                ("SQLX_LOGGING", "true"),
+                ("OBSERVE_SERIALIZATION_CONFLICTS", "true"),
             ],
         );
         let cfg = DatabaseConfig::from_env(&service, Default::default()).expect("ok");

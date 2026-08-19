@@ -122,7 +122,7 @@ impl McpHostMeta {
     /// The tools this host declares through rmcp's `#[tool_router]`. Empty for
     /// a host that hand-writes `list_tools`/`call_tool` or keeps its router
     /// under another name: those still serve, they just contribute no
-    /// *statically* known names — see [`warn_undeclared_tools`].
+    /// *statically* known names — see `warn_undeclared_tools`.
     pub fn declared_tools(&self) -> Vec<Tool> {
         (self.tools)()
     }

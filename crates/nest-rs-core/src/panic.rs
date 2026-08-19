@@ -10,11 +10,23 @@
 
 use std::any::Any;
 
+/// The field name a contained panic is logged under.
+///
+/// Unusable at the emit site and declared anyway, for the reason
+/// [`operation_log::DURATION_MS`](crate::operation_log::DURATION_MS) is: a field
+/// name is a literal token in `tracing`'s macro grammar, so an edge spells it
+/// rather than referencing this — and the vocabulary of the line still belongs
+/// in one place. This module exists because three crates had written the same
+/// downcast ladder and **had already drifted on the fallback string and on the
+/// field name they logged it under**; the ladder and the fallback were shared
+/// and the name was left in prose, which is the half that drifts silently.
+pub const FIELD: &str = "panic";
+
 /// Best-effort message from a caught panic payload — the common `&str` /
 /// `String` shapes `panic!` / `unwrap` / `expect` produce.
 ///
-/// Log it under the field name **`panic`**, so one query reaches a contained
-/// panic whichever transport caught it.
+/// Log it under [`FIELD`], so one query reaches a contained panic whichever
+/// transport caught it.
 pub fn panic_message(payload: &(dyn Any + Send)) -> &str {
     payload
         .downcast_ref::<&'static str>()

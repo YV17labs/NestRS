@@ -9,11 +9,13 @@
 //! cross-module reach that no import covers fails the boot with an
 //! [`AccessGraphError`].
 //!
-//! Resolvers join the contract through module membership: a `#[resolver]`
-//! listed in some reachable module's `providers = [...]` is governed like any
-//! other provider; one in no reachable module is silently skipped from the
-//! schema (a `tracing::warn` at boot surfaces it so leftover code does not
-//! vanish without trace).
+//! A self-composing item joins the contract the same way — through module
+//! membership. Something listed in some reachable module's `providers = [...]`
+//! is governed like any other provider; something in no reachable module is
+//! outside the app, which [`ReachableProviders`] is what tells a transport.
+//! Whether that absence is worth a word, and in what sentence, belongs to the
+//! transport: this module answers *what is reachable* and nothing about any
+//! particular edge's registry.
 //!
 //! Runtime [`Container::get`](crate::Container::get) /
 //! [`get_dyn`](crate::Container::get_dyn) is an unchecked escape hatch by
@@ -84,24 +86,6 @@ pub struct ModuleDescriptor {
 
 inventory::collect!(ModuleDescriptor);
 
-/// One `#[resolver]` linked into the binary, submitted to the link-time
-/// registry by the macro. A resolver self-composes into the GraphQL schema
-/// regardless of any module, so module membership is what brings its injected
-/// dependencies under the access contract.
-///
-/// **Internal ABI** (see [`ProviderDescriptor`]) — macro-constructed, lockstep
-/// with `nest-rs-core`; do not hand-construct.
-#[doc(hidden)]
-pub struct ResolverDescriptor {
-    /// `TypeId` of the `#[resolver]` struct, matched against reachable modules'
-    /// `providers = [...]` to decide whether the resolver is under the contract.
-    pub resolver: fn() -> TypeId,
-    /// The resolver type's name, surfaced in the unreachable-resolver boot warn.
-    pub name: &'static str,
-}
-
-inventory::collect!(ResolverDescriptor);
-
 /// A provider depends on something its module does not import and that is not
 /// global infrastructure. Raised at boot by the access-graph validation.
 #[derive(Debug, Error)]
@@ -145,6 +129,53 @@ pub struct MissingDependencyError {
     pub dependency: &'static str,
 }
 
+/// A **singleton** provider `#[inject]`s one the container never places in the
+/// singleton map — a `#[injectable(scope = request)]` or `scope = transient`
+/// provider.
+///
+/// Raised at boot because the container cannot honour it and, before this error,
+/// did not say so: the register phase gates readiness on the singleton map, so
+/// such a provider never became ready, was classified unprovided, and was
+/// **dropped** — with everything downstream of it — while the boot returned
+/// `Ok` and emitted nothing. The symptom surfaced far away, as a service
+/// missing at its first `Container::get`, or as an inert-host `warn` offering
+/// five causes none of which was this one.
+///
+/// **The remedy names the concept, never the edge crates**, and that is the
+/// same law [`target`](crate::target) and [`operation_log`](crate::operation_log)
+/// state for themselves: the kernel holds no name for a concern it does not know
+/// exists. It listed three `Scoped<T>` paths for one round — `nest_rs_http`,
+/// `nest_rs_graphql`, `nest_rs_mcp` — copied from a prose list in
+/// `framework.md` that was itself three of four, so a developer who hit this on
+/// a WS gateway was handed three paths none of which was theirs while
+/// `nest_rs_ws::Scoped<T>` existed. Nothing compiles against a message, so the
+/// fourth would never have been added; every future edge would have inherited
+/// the same wrong remedy.
+///
+/// **The reason is worded per arm, because the two arms are not the same fact.**
+/// A request-scoped provider genuinely has no instance outside a request. A
+/// transient one does — `Container::get` opens a throwaway scope and builds it
+/// ([`Discoverable`](crate::Discoverable)'s own table says so). What is true of
+/// both, and is what this check reads, is that neither is ever in the singleton
+/// map the register phase gates readiness on.
+#[derive(Debug, Error)]
+#[error(
+    "scope violation: `{consumer}` (in module `{module}`) is a singleton and injects \
+     `{dependency}`, which is request-scoped or transient. Neither is ever placed in \
+     the singleton map a singleton's dependencies are resolved from, so there is \
+     nothing for `{consumer}` to hold once at boot. Reach it through the request \
+     boundary of the edge that dispatches the work — the `Scoped<T>` its crate \
+     exports — or make `{consumer}` request-scoped too."
+)]
+pub struct ScopeViolationError {
+    /// Module that owns the offending consumer.
+    pub module: &'static str,
+    /// The singleton provider whose `#[inject]` cannot be honoured.
+    pub consumer: &'static str,
+    /// The request-scoped or transient dependency it named.
+    pub dependency: &'static str,
+}
+
 /// The failure modes of the bare (non-keyed) access-graph pass: a cross-module
 /// reach that no import covers, or a dependency no module provides.
 #[derive(Debug, Error)]
@@ -156,6 +187,9 @@ pub enum AccessError {
     /// A provider depends on something no module provides at all.
     #[error(transparent)]
     Missing(#[from] MissingDependencyError),
+    /// A singleton injected a provider that only exists inside a request.
+    #[error(transparent)]
+    Scope(#[from] ScopeViolationError),
 }
 
 impl AccessError {
@@ -169,6 +203,7 @@ impl AccessError {
         match self {
             AccessError::CrossModule(e) => anyhow::Error::new(e),
             AccessError::Missing(e) => anyhow::Error::new(e),
+            AccessError::Scope(e) => anyhow::Error::new(e),
         }
     }
 }
@@ -255,12 +290,6 @@ pub struct KeyedDependencyError {
     pub key: &'static str,
 }
 
-/// Marker the schema-composing layer registers when an app actually composes
-/// a resolver schema. The unreachable-resolver warn only fires when this is
-/// present, so an app that links resolvers transitively but composes no
-/// schema boots silent.
-pub struct ResolverSchemaActive;
-
 /// Provider keys reachable from the app's module tree, seeded into the
 /// container so transports can module-gate their inventory: a `#[resolver]`
 /// linked into the binary but living in no reachable module is silently
@@ -311,11 +340,12 @@ impl ProviderOrder {
 ///
 /// Pure over its inputs (no link-time registry access). `roots` without a
 /// descriptor terminate a branch, making a hand-written root a no-op.
-pub fn validate_access_graph(
+pub(crate) fn validate_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
     global: &HashSet<TypeId>,
     registered: &HashSet<TypeId>,
+    scoped_or_transient: &HashSet<TypeId>,
 ) -> Result<(), AccessError> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
@@ -359,6 +389,31 @@ pub fn validate_access_graph(
         for p in desc.providers {
             let deps = (p.injects)();
             let names = (p.inject_names)();
+            // A singleton may not inject a provider that only exists inside a
+            // request. `framework.md` states the rule — "**One level deep**:
+            // request-scoped may inject singletons; never the reverse" — and
+            // nothing enforced it, so the case failed **silently**: the register
+            // phase gates readiness on the singleton map alone, so a singleton
+            // whose dependency is a scoped or transient factory never becomes
+            // ready, is classified unprovided, and is dropped along with
+            // everything downstream of it. The boot returned `Ok`, emitted
+            // nothing, and the provider was simply absent at first `get`.
+            //
+            // Checked before the presence checks below, because the dependency
+            // *is* declared and reachable — presence was never the problem.
+            let consumer_is_scoped = scoped_or_transient.contains(&(p.provides)());
+            if !consumer_is_scoped {
+                for (i, dep) in deps.iter().enumerate() {
+                    if scoped_or_transient.contains(dep) {
+                        return Err(ScopeViolationError {
+                            module: desc.name,
+                            consumer: p.name,
+                            dependency: names.get(i).copied().unwrap_or("<unnamed dependency>"),
+                        }
+                        .into());
+                    }
+                }
+            }
             for (i, dep) in deps.iter().enumerate() {
                 if global.contains(dep) || closure_keys.contains(dep) {
                     continue;
@@ -405,7 +460,7 @@ pub fn validate_access_graph(
 /// boot error naming type and key rather than a construction-time panic.
 ///
 /// Pure over its inputs. Runs after [`validate_access_graph`] at boot.
-pub fn validate_keyed_access_graph(
+pub(crate) fn validate_keyed_access_graph(
     descriptors: &[&ModuleDescriptor],
     roots: &[TypeId],
     global_keyed: &HashSet<ProviderKey>,
@@ -500,7 +555,7 @@ pub(crate) fn reachable_provider_ids_from_inventory(
 /// the roots along their `imports = [...]`, and within each module its
 /// `providers = [...]` left to right. First occurrence wins, so a diamond
 /// import ranks a provider where it is first reached. Pure over its inputs.
-pub fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
+pub(crate) fn provider_order(descriptors: &[&ModuleDescriptor], roots: &[TypeId]) -> Vec<TypeId> {
     let by_id: HashMap<TypeId, &ModuleDescriptor> =
         descriptors.iter().map(|d| ((d.module)(), *d)).collect();
     let mut seen = HashSet::new();
@@ -525,33 +580,6 @@ pub(crate) fn provider_order_from_inventory(roots: &[TypeId]) -> Vec<TypeId> {
     provider_order(&descriptors, roots)
 }
 
-/// Linked resolvers that live in no module reachable from `roots`. Returned
-/// for a boot-time `tracing::warn` — they are silently filtered from the
-/// schema, so the warn keeps leftover code visible. Pure over its inputs.
-pub fn unreachable_resolvers(
-    descriptors: &[&ModuleDescriptor],
-    roots: &[TypeId],
-    resolvers: &[&ResolverDescriptor],
-) -> Vec<&'static str> {
-    let by_id: HashMap<TypeId, &ModuleDescriptor> =
-        descriptors.iter().map(|d| ((d.module)(), *d)).collect();
-
-    let mut reachable_keys = HashSet::new();
-    for module_id in reachable(roots, &by_id) {
-        if let Some(desc) = by_id.get(&module_id) {
-            for p in desc.providers {
-                reachable_keys.insert((p.provides)());
-            }
-        }
-    }
-
-    resolvers
-        .iter()
-        .filter(|r| !reachable_keys.contains(&(r.resolver)()))
-        .map(|r| r.name)
-        .collect()
-}
-
 /// Boot-time entry point: validate the link-time module registry against the
 /// app's roots and global set. Returns the concrete [`AccessGraphError`] so a
 /// caller can downcast the boot failure to the precise cause.
@@ -559,9 +587,10 @@ pub(crate) fn validate_from_inventory(
     roots: &[TypeId],
     global: &HashSet<TypeId>,
     registered: &HashSet<TypeId>,
+    scoped_or_transient: &HashSet<TypeId>,
 ) -> Result<(), AccessError> {
     let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-    validate_access_graph(&descriptors, roots, global, registered)
+    validate_access_graph(&descriptors, roots, global, registered, scoped_or_transient)
 }
 
 /// Boot-time keyed pass over the link-time module registry — the
@@ -573,39 +602,6 @@ pub(crate) fn validate_keyed_from_inventory(
     let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
     validate_keyed_access_graph(&descriptors, roots, global_keyed)
 }
-
-/// Boot-time equivalent of [`unreachable_resolvers`] against the link-time
-/// registry; backs the default `warn` and the opt-in strict-mode boot error.
-pub(crate) fn unreachable_resolvers_from_inventory(roots: &[TypeId]) -> Vec<&'static str> {
-    let descriptors: Vec<&ModuleDescriptor> = inventory::iter::<ModuleDescriptor>().collect();
-    let resolvers: Vec<&ResolverDescriptor> = inventory::iter::<ResolverDescriptor>().collect();
-    unreachable_resolvers(&descriptors, roots, &resolvers)
-}
-
-/// Emit a `warn` for every linked-but-unreachable resolver — they are silently
-/// filtered from the schema by module-gating.
-pub(crate) fn warn_unreachable_resolvers_from_inventory(roots: &[TypeId]) {
-    for name in unreachable_resolvers_from_inventory(roots) {
-        tracing::warn!(
-            target: crate::target::ACCESS_GRAPH,
-            resolver = name,
-            hint = "add it to a feature module's `#[module(providers = [...])]` if you meant to expose it",
-            "unreachable resolver skipped from the GraphQL schema",
-        );
-    }
-}
-
-/// Opt-in strict-mode boot failure raised by
-/// [`AppBuilder::strict_resolver_membership`](crate::AppBuilder::strict_resolver_membership);
-/// the default boot emits a `warn` instead.
-#[derive(Debug, Error)]
-#[error(
-    "strict resolver-membership check failed: {0:?} linked into the binary but in no \
-     reachable module. Add each to a reachable feature module's \
-     `#[module(providers = [...])]`, or drop `strict_resolver_membership` if the link is \
-     intentional (e.g. a workspace ships multiple apps with different surfaces)."
-)]
-pub struct UnreachableResolversError(pub Vec<&'static str>);
 
 #[cfg(test)]
 mod tests {
@@ -687,6 +683,7 @@ mod tests {
             &[TypeId::of::<AppMod>()],
             &global(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("a dependency on global infrastructure is always reachable");
     }
@@ -721,6 +718,7 @@ mod tests {
             &[TypeId::of::<AppMod>()],
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("a provider may depend on another provider of the same module");
     }
@@ -752,6 +750,7 @@ mod tests {
             &[TypeId::of::<AppMod>()],
             &global(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("an imported module's provider is reachable");
     }
@@ -782,6 +781,7 @@ mod tests {
             &[&app, &billing, &users],
             &[TypeId::of::<AppMod>()],
             &global(),
+            &HashSet::new(),
             &HashSet::new(),
         )
         .expect_err("reaching an unimported module must fail");
@@ -820,6 +820,7 @@ mod tests {
         let err = validate_access_graph(
             &[&billing],
             &[TypeId::of::<BillingMod>()],
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
         )
@@ -863,6 +864,7 @@ mod tests {
             &[TypeId::of::<AppMod>()],
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("a module outside the root's import tree is not validated");
     }
@@ -874,19 +876,13 @@ mod tests {
             &[TypeId::of::<AppMod>()],
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
         )
         .expect("a root with no descriptor validates trivially");
     }
 
-    fn orgs_resolver_desc() -> ResolverDescriptor {
-        ResolverDescriptor {
-            resolver: || TypeId::of::<OrgsResolver>(),
-            name: "OrgsResolver",
-        }
-    }
-
     #[test]
-    fn listed_resolver_is_reachable() {
+    fn a_listed_provider_is_reachable() {
         let app = ModuleDescriptor {
             module: || TypeId::of::<AppMod>(),
             name: "AppModule",
@@ -902,26 +898,10 @@ mod tests {
         };
         let keys = reachable_provider_ids(&[&app], &[TypeId::of::<AppMod>()], &HashSet::new());
         assert!(keys.contains(&TypeId::of::<OrgsResolver>()));
-        let resolver = orgs_resolver_desc();
-        let leftover = unreachable_resolvers(&[&app], &[TypeId::of::<AppMod>()], &[&resolver]);
-        assert!(leftover.is_empty());
     }
 
     #[test]
-    fn unlisted_resolver_is_reported_unreachable() {
-        let app = ModuleDescriptor {
-            module: || TypeId::of::<AppMod>(),
-            name: "AppModule",
-            imports: &[],
-            providers: &[],
-        };
-        let resolver = orgs_resolver_desc();
-        let leftover = unreachable_resolvers(&[&app], &[TypeId::of::<AppMod>()], &[&resolver]);
-        assert_eq!(leftover, vec!["OrgsResolver"]);
-    }
-
-    #[test]
-    fn resolver_listed_only_in_unreachable_module_is_unreachable() {
+    fn a_provider_listed_only_in_an_unreachable_module_is_not_reachable() {
         let billing = ModuleDescriptor {
             module: || TypeId::of::<BillingMod>(),
             name: "BillingModule",
@@ -947,10 +927,6 @@ mod tests {
             &HashSet::new(),
         );
         assert!(!keys.contains(&TypeId::of::<OrgsResolver>()));
-        let resolver = orgs_resolver_desc();
-        let leftover =
-            unreachable_resolvers(&[&app, &billing], &[TypeId::of::<AppMod>()], &[&resolver]);
-        assert_eq!(leftover, vec!["OrgsResolver"]);
     }
 
     #[test]

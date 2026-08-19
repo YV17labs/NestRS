@@ -211,6 +211,6 @@ where
         // (rather than on a spawned task) is covered by the same seam. Already
         // ambient from the HTTP edge — re-installing the same id keeps an inline
         // (non-spawned) rmcp resolution on the same footing as a spawned one.
-        nest_rs_core::with_request_scope(scope, correlation, None, self.inner.call(req)).await
+        nest_rs_core::with_request_scope(scope, correlation, self.inner.call(req)).await
     }
 }

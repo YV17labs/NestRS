@@ -12,7 +12,7 @@ pub enum ConfigError {
     /// Names the offending variable so the misconfig is obvious at boot.
     #[error("invalid value for {var}: {message}")]
     Parse {
-        /// The offending `NESTRS_<NS>__<KEY>` variable name.
+        /// The offending `<PREFIX>_<DOMAIN>__<KEY>` variable name.
         var: String,
         /// Why the value was rejected.
         message: String,
@@ -35,6 +35,35 @@ pub enum ConfigError {
         /// rendered message already lists them, and a `Display` chain would
         /// print `validator`'s raw payload underneath the curated list.
         errors: ValidationErrors,
+    },
+    /// Two config types read one environment variable.
+    ///
+    /// `<PREFIX>_<DOMAIN>__<KEY>` is a flat, process-global name space, and
+    /// several types sharing a `<DOMAIN>` is deliberate — `nest-rs-authn`'s JWT,
+    /// OAuth and protected-resource configs are all `authn`, because a domain is
+    /// the operator's word for a subsystem rather than one struct's identity.
+    /// What may not be shared is a **variable**: two types reading one name means
+    /// a deployment setting it configures whichever happens to read it, both
+    /// silently, and what the operator sees is "the value I set did nothing".
+    ///
+    /// Raised at boot, from the resolved name rather than from the key: a key is
+    /// a literal in a position nothing can enumerate — read through a `const`,
+    /// through an inherent sub-struct's `from_env`, or built at the call site —
+    /// so the only place the full name is knowable is where it is actually
+    /// asked for.
+    #[error(
+        "`{var}` is read by two configuration types — `{owner}` and `{claimant}`. \
+         A `<PREFIX>_<DOMAIN>__<KEY>` variable belongs to one type: setting it would \
+         configure whichever read it, with nothing to say which. Give one of the two \
+         its own key, or its own `#[config(namespace = \"…\")]`."
+    )]
+    ContestedVariable {
+        /// The fully-qualified variable both types read.
+        var: String,
+        /// The type that claimed it first.
+        owner: &'static str,
+        /// The type that claimed it second.
+        claimant: &'static str,
     },
 }
 

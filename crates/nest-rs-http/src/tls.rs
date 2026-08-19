@@ -601,10 +601,7 @@ mod tests {
     fn from_env_overrides_the_base_when_both_halves_are_set() {
         let base = TlsConfig::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
         let cfg = TlsConfig::from_env(
-            &tls_env([
-                ("NESTRS_HTTP__TLS_CERT", "--ENV-CERT--"),
-                ("NESTRS_HTTP__TLS_KEY", "--ENV-KEY--"),
-            ]),
+            &tls_env([("TLS_CERT", "--ENV-CERT--"), ("TLS_KEY", "--ENV-KEY--")]),
             Some(base),
         )
         .expect("no error")
@@ -616,10 +613,7 @@ mod tests {
     #[test]
     fn from_env_reads_inline_pem_pair() {
         let cfg = TlsConfig::from_env(
-            &tls_env([
-                ("NESTRS_HTTP__TLS_CERT", "--CERT--"),
-                ("NESTRS_HTTP__TLS_KEY", "--KEY--"),
-            ]),
+            &tls_env([("TLS_CERT", "--CERT--"), ("TLS_KEY", "--KEY--")]),
             None,
         )
         .expect("no error")
@@ -630,7 +624,7 @@ mod tests {
 
     #[test]
     fn from_env_fails_when_only_cert_is_set() {
-        let err = TlsConfig::from_env(&tls_env([("NESTRS_HTTP__TLS_CERT", "--CERT--")]), None)
+        let err = TlsConfig::from_env(&tls_env([("TLS_CERT", "--CERT--")]), None)
             .expect_err("half-config is rejected");
         let msg = err.to_string();
         assert!(msg.contains("KEY"), "must name the missing var: {msg}");
@@ -638,7 +632,7 @@ mod tests {
 
     #[test]
     fn from_env_fails_when_only_key_is_set() {
-        let err = TlsConfig::from_env(&tls_env([("NESTRS_HTTP__TLS_KEY", "--KEY--")]), None)
+        let err = TlsConfig::from_env(&tls_env([("TLS_KEY", "--KEY--")]), None)
             .expect_err("half-config is rejected");
         let msg = err.to_string();
         assert!(msg.contains("CERT"), "must name the missing var: {msg}");
@@ -651,11 +645,7 @@ mod tests {
     fn from_env_fails_on_a_half_config_even_over_a_complete_base() {
         let base = TlsConfig::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
         assert!(
-            TlsConfig::from_env(
-                &tls_env([("NESTRS_HTTP__TLS_CERT", "--ENV-CERT--")]),
-                Some(base),
-            )
-            .is_err()
+            TlsConfig::from_env(&tls_env([("TLS_CERT", "--ENV-CERT--")]), Some(base),).is_err()
         );
     }
 
@@ -671,9 +661,9 @@ mod tests {
     fn from_env_rejects_an_unparseable_reload_interval() {
         let err = TlsConfig::from_env(
             &tls_env([
-                ("NESTRS_HTTP__TLS_CERT", "--CERT--"),
-                ("NESTRS_HTTP__TLS_KEY", "--KEY--"),
-                ("NESTRS_HTTP__TLS_RELOAD_SECS", "hourly"),
+                ("TLS_CERT", "--CERT--"),
+                ("TLS_KEY", "--KEY--"),
+                ("TLS_RELOAD_SECS", "hourly"),
             ]),
             None,
         )
@@ -689,12 +679,9 @@ mod tests {
         // The dual path: a base pinned in code still takes the deployment's
         // watch interval, per field, like every other `HttpConfig` key.
         let base = TlsConfig::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
-        let cfg = TlsConfig::from_env(
-            &tls_env([("NESTRS_HTTP__TLS_RELOAD_SECS", "5")]),
-            Some(base),
-        )
-        .expect("no error")
-        .expect("Some");
+        let cfg = TlsConfig::from_env(&tls_env([("TLS_RELOAD_SECS", "5")]), Some(base))
+            .expect("no error")
+            .expect("Some");
         assert_eq!(cfg.reload_secs, 5);
     }
 
@@ -705,10 +692,7 @@ mod tests {
             jail.create_file("cert.pem", "file-cert-bytes")?;
             jail.create_file("key.pem", "file-key-bytes")?;
             let cfg = TlsConfig::from_env(
-                &tls_env([
-                    ("NESTRS_HTTP__TLS_CERT_FILE", "cert.pem"),
-                    ("NESTRS_HTTP__TLS_KEY_FILE", "key.pem"),
-                ]),
+                &tls_env([("TLS_CERT_FILE", "cert.pem"), ("TLS_KEY_FILE", "key.pem")]),
                 None,
             )
             .expect("no error")
@@ -719,10 +703,7 @@ mod tests {
             // A pair with one half inline is not a watchable source: re-reading
             // the file half alone would pair a certificate with a stale key.
             let mixed = TlsConfig::from_env(
-                &tls_env([
-                    ("NESTRS_HTTP__TLS_CERT", "--INLINE-CERT--"),
-                    ("NESTRS_HTTP__TLS_KEY_FILE", "key.pem"),
-                ]),
+                &tls_env([("TLS_CERT", "--INLINE-CERT--"), ("TLS_KEY_FILE", "key.pem")]),
                 None,
             )
             .expect("no error")
@@ -850,10 +831,7 @@ mod tests {
             jail.create_file("cert.pem", "file-cert-bytes")?;
             jail.create_file("key.pem", "file-key-bytes")?;
             let cfg = TlsConfig::from_env(
-                &tls_env([
-                    ("NESTRS_HTTP__TLS_CERT_FILE", "cert.pem"),
-                    ("NESTRS_HTTP__TLS_KEY_FILE", "key.pem"),
-                ]),
+                &tls_env([("TLS_CERT_FILE", "cert.pem"), ("TLS_KEY_FILE", "key.pem")]),
                 None,
             )
             .expect("no error")

@@ -263,6 +263,39 @@ enters the build. The WS suites — the framework's own gateway tests included
 — now assert close codes and reasons off the wire instead of accepting any
 termination.
 
+### One throttler guard meters every edge, keyed per caller
+
+**Breaking for custom stores and for dashboards.** `ThrottlerGuard` checked
+HTTP only, and `/graphql` and `/mcp` are `Exempt` at the endpoint while a WS
+message runs after the upgrade chain returned — so a guard bound anywhere
+left the three in-band edges unmetered. It now implements `check_graphql`,
+`check_mcp` and `check_ws_message`, each behind a crate feature the matching
+umbrella edge feature forwards.
+
+- **The bucket key gains a transport segment and a caller segment.** A
+  `#[query]`, a `#[tool]` and a `#[subscribe_message]` may all be called
+  `search`; without the transport they would drain one budget between them.
+  And the in-band edges key on `actor_id` — keyed on the operation alone,
+  every caller shares one bucket and one client spending the window `429`s
+  everybody, which is the difference between a rate limiter and a
+  denial-of-service amplifier. An anonymous surface degrades to a shared
+  bucket and says so once.
+- **The wait a denial carries now reaches every caller.** It was computed by
+  the throttler, carried on the `Denial`, and read by exactly one of four
+  renderers — HTTP's `Retry-After`. GraphQL, MCP and WS now carry
+  `retryAfterSeconds` in the structured refusal detail where `reason` and
+  `requiredScopes` already ride, and a `403` never carries it. The value
+  rounds up with a floor of 1 on every edge: truncation handed every denial
+  in the final second of a window `Retry-After: 0`, an instruction to
+  hot-retry against the limit the guard just enforced.
+- **The shared-bucket dedup lock is gone from the hot path** — it serialized
+  every anonymous in-band request, a ceiling on exactly the traffic a rate
+  limiter exists to survive.
+- **Breaking:** `ThrottlerStore::hit` is `async` and the trait no longer
+  answers `trusted_proxies()` — client identity is the transport's answer.
+  The `rate limit exceeded` warn drops the composite `key` field for
+  `transport` plus per-edge fields and `retry_after`.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

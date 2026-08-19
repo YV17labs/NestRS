@@ -10,6 +10,26 @@ description = "Rate limiting for NestRS: a ThrottlerGuard reading a #[meta(Throt
 keywords = ["framework", "nestrs", "rate-limit", "throttle", "middleware"]
 categories = ["web-programming"]
 
+# The three per-edge `check_*` entries — GraphQL, MCP, WS — are each behind
+# their edge's feature, and docs.rs builds default features only. Without this
+# the published page would show a guard that checks HTTP and nothing else, which
+# is the very claim this crate stopped making.
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+# GraphQL surface: `Guard::check_graphql`, keyed on the field name. Forwards
+# `nest-rs-guards/graphql` because that feature is what makes the trait entry and
+# the `GraphqlGuard` marker exist at all.
+graphql = ["dep:nest-rs-graphql", "nest-rs-guards/graphql"]
+# MCP surface: `Guard::check_mcp`, keyed on the operation's kind and name.
+mcp = ["dep:nest-rs-mcp", "nest-rs-guards/mcp"]
+# WebSocket surface: `Guard::check_ws_message`, keyed on the event and the
+# connection. `serde_json` is the payload's type in that signature — the guard
+# never reads it (deciding access from a payload is a pipe's job, and one step
+# from deciding it *from* the payload), but the entry names the type.
+ws = ["dep:nest-rs-ws", "dep:serde_json", "nest-rs-guards/ws"]
 
 [dependencies]
 # `ThrottlerGuard` is `#[injectable]`; `ThrottlerModule` is a `DynamicModule`.
@@ -33,7 +53,20 @@ parking_lot.workspace = true
 # whose error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
 
+# Optional — one per edge whose `check_*` entry names its operation type. An
+# HTTP-only app compiles none of them.
+nest-rs-graphql = { workspace = true, optional = true }
+nest-rs-mcp = { workspace = true, optional = true }
+nest-rs-ws = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
 [dev-dependencies]
+# Self dev-dependency: turn on every edge for this crate's own test targets,
+# the shape `nest-rs-authz` already uses. Without it `cargo nextest run
+# --workspace` builds this crate with `default = []`, so the three per-edge
+# suites would compile away and never run. Dev-deps do not propagate, so no
+# consumer gains an edge from this.
+nest-rs-throttler = { path = ".", features = ["graphql", "mcp", "ws"] }
 # The wiring suite boots a real app: `#[routes]` wraps each verb in poem's own
 # `#[handler]`, and a rate-limited controller is the shape the docs describe.
 tokio = { workspace = true, features = ["macros", "rt"] }
@@ -43,6 +76,18 @@ nest-rs-interceptors.workspace = true
 # route's own `#[meta(Throttle)]`. Path-only (intra-workspace dev-edge), per the
 # manifest rule.
 nest-rs-testing = { path = "../nest-rs-testing" }
+# The per-edge suites declare the real thing rather than calling `check_*` by
+# hand: a `#[resolver]`, an `#[mcp]` host and a `#[gateway]`, each binding the
+# guard where a developer would. That is also the only witness the capability
+# markers have — an unattested binding is a compile error at the `#[use_guards]`
+# line. Path-only (intra-workspace dev-edge), per the manifest rule.
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+nest-rs-ws = { path = "../nest-rs-ws" }
+# A crate defining a `#[resolver]` needs `async-graphql` as a direct dep: the
+# generated `#[Object]` names `async_graphql::` paths at the call site.
+async-graphql.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -181,6 +181,28 @@ fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Val
     if !scopes.is_empty() {
         data.insert("requiredScopes".to_owned(), serde_json::json!(scopes));
     }
+    // The wait, on every edge that has somewhere to put it.
+    //
+    // It was computed by the throttler, carried on the `Denial`, and read by
+    // exactly one of four renderers: HTTP turned it into `Retry-After`
+    // (RFC 6585 §4) and GraphQL, MCP and WS dropped it — so a throttled caller
+    // on those three had no backoff signal and hot-retried into the limit,
+    // which is the load the limiter exists to shed. Those three have no status
+    // line and no standard header, but they do have this map: it is where
+    // `reason` and `requiredScopes` already ride, so a client parses one shape
+    // for every structured refusal detail rather than three.
+    //
+    // Seconds, matching `Retry-After`'s delay-seconds form, so the four edges
+    // report one number in one unit.
+    if let Denial::RateLimited {
+        retry_after_secs, ..
+    } = denial
+    {
+        data.insert(
+            "retryAfterSeconds".to_owned(),
+            serde_json::Value::from(*retry_after_secs),
+        );
+    }
     data
 }
 
@@ -306,5 +328,44 @@ mod tests {
         );
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert!(json.get("detail").is_none(), "no detail on a 500 denial");
+    }
+
+    /// All four edges report the wait, in one unit.
+    ///
+    /// HTTP turns it into `Retry-After` (RFC 6585 §4); the other three have no
+    /// status line and no standard header, so it rides the structured map where
+    /// `reason` and `requiredScopes` already do. It was computed and dropped on
+    /// three of four, which left a throttled caller hot-retrying into the limit
+    /// the limiter exists to shed.
+    #[test]
+    fn every_edge_reports_the_wait_a_rate_limit_denial_carries() {
+        let data = structured_reason(&Denial::rate_limited(42, "too many requests"));
+        assert_eq!(data["reason"], "rate_limited");
+        assert_eq!(
+            data["retryAfterSeconds"], 42,
+            "the in-band edges carry the wait: {data:?}",
+        );
+
+        // Only a rate limit has one — a 403 carrying `retryAfterSeconds` would
+        // tell a client to retry something that will never succeed.
+        let forbidden = structured_reason(&Denial::forbidden("nope"));
+        assert!(
+            forbidden.get("retryAfterSeconds").is_none(),
+            "only a rate limit names a wait: {forbidden:?}",
+        );
+    }
+
+    /// The HTTP half of the same denial, so the two are pinned together: one
+    /// number, one unit, four edges.
+    #[tokio::test]
+    async fn the_http_edge_reports_the_same_wait_as_a_header() {
+        let resp = denial_to_http_response(Denial::rate_limited(42, "too many requests"));
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers()
+                .get(header::RETRY_AFTER)
+                .map(|v| v.as_bytes()),
+            Some(b"42".as_slice()),
+        );
     }
 }

@@ -1,7 +1,10 @@
 //! [`ThrottlerGuard`] — rate-limiting guard.
 
+use std::fmt::{self, Write as _};
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, Guard};
@@ -9,16 +12,106 @@ use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{ClientOrigin, Reflector, async_trait};
 use poem::{PathPattern, Request};
 
+#[cfg(feature = "graphql")]
+use nest_rs_graphql::GraphqlOperationContext;
+#[cfg(feature = "mcp")]
+use nest_rs_mcp::McpOperationContext;
+#[cfg(feature = "ws")]
+use nest_rs_ws::WsClient;
+
 use crate::rate::Throttle;
 use crate::store::ThrottlerStore;
 
-/// Reads the route's `#[meta(Throttle::...)]` via the [`Reflector`], falling
-/// back to the module default; rejects with `429` + `Retry-After`.
+/// The edge a bucket belongs to — the leading segment of every key, and the
+/// `transport` field on every denial.
 ///
-/// Binding scope chooses *which* routes are measured, never what the guard
-/// reads: `#[use_guards(ThrottlerGuard)]` measures one controller or route,
-/// `use_guards_global` measures every route the pool reaches — the ones
-/// carrying no `#[meta(Throttle)]` at the module default.
+/// One store serves all four edges and the units they address share a namespace
+/// of bare names: a `#[query]`, a `#[tool]` and a `#[subscribe_message]` may all
+/// be called `search`. Without this segment they would drain one budget between
+/// them, so a client could exhaust a tool's window by spamming a socket.
+mod transport {
+    pub(super) const HTTP: &str = "http";
+    #[cfg(feature = "graphql")]
+    pub(super) const GRAPHQL: &str = "graphql";
+    #[cfg(feature = "mcp")]
+    pub(super) const MCP: &str = "mcp";
+    #[cfg(feature = "ws")]
+    pub(super) const WS: &str = "ws";
+}
+
+/// U+001F (unit separator) joins the parts of a bucket key. It can appear in
+/// none of them — a route pattern, a GraphQL field, an MCP operation name, a WS
+/// event, an IP, a connection id — so a composite key never collides across the
+/// join.
+const KEY_SEPARATOR: char = '\u{1f}';
+
+/// The sentence a throttled caller reads, whichever edge refused it. One
+/// vocabulary across an HTTP body, a GraphQL error frame, an MCP error and a WS
+/// error frame, because a client speaking two of them must not read two.
+const RATE_LIMITED_MESSAGE: &str = "Too Many Requests";
+
+/// The key `parts` address, joined by [`KEY_SEPARATOR`].
+fn bucket_key(parts: &[&dyn fmt::Display]) -> String {
+    let mut key = String::new();
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            key.push(KEY_SEPARATOR);
+        }
+        // Writing to a `String` cannot fail; `fmt::Write` still returns a
+        // `Result`, and this is a hot path that owes no `expect`.
+        let _ = write!(key, "{part}");
+    }
+    key
+}
+
+/// The wait a caller is told to observe, in whole seconds — **rounded up, and
+/// never `0`**.
+///
+/// Both stores compute a sub-second remainder (the in-memory one from
+/// `window - elapsed`, the Redis one from the key's real TTL), so truncating
+/// hands every denial in the final second of a window `Retry-After: 0`. RFC 9110
+/// §10.2.3 reads that as "retry immediately", which turns the refusal into an
+/// instruction to hot-retry against the limit the guard just enforced — the load
+/// it exists to shed. `nest_rs_http`'s shed-load `503` states the same rule for
+/// the same reason; this is the throttler's half of it.
+///
+/// Read once here and used twice — the denial the caller receives and the
+/// `warn` the operator reads — so the header and the log line cannot disagree.
+fn retry_after_secs(retry_after: Duration) -> u32 {
+    let secs = retry_after
+        .as_secs()
+        .saturating_add(u64::from(retry_after.subsec_nanos() > 0))
+        .max(1);
+    u32::try_from(secs).unwrap_or(u32::MAX)
+}
+
+/// The refusal every edge returns, so the wait and the sentence a caller reads
+/// cannot drift between transports.
+fn rate_limited(retry_after: Duration) -> Denial {
+    Denial::rate_limited(retry_after_secs(retry_after), RATE_LIMITED_MESSAGE)
+}
+
+/// Counts one unit of work against a limit and refuses the caller over it —
+/// `429` + `Retry-After` on HTTP, the edge's own error frame elsewhere.
+///
+/// **All four request-carrying edges.** The bucket is the unit the edge
+/// *addresses*, joined with the caller that edge can see: the matched route
+/// pattern and the client address on HTTP, the field name on GraphQL, the tool
+/// or prompt on MCP, the event and the connection on WS. Three of them are not
+/// reachable through the HTTP chain at all — `/graphql` and `/mcp` are
+/// [`EdgePosture::Exempt`](nest_rs_http::EdgePosture), and a WS message runs
+/// after the upgrade has returned — so a guard that only checked HTTP left them
+/// unmetered at every binding scope.
+///
+/// **Only HTTP carries per-unit metadata**, so `#[meta(Throttle::...)]`
+/// overrides the module default there and nowhere else: a GraphQL field, an MCP
+/// operation and a WS message have no route data to hang one on, and each counts
+/// against [`ThrottlerConfig`](crate::ThrottlerConfig)'s limit.
+///
+/// Binding scope chooses *which* units are measured, never what the guard
+/// reads: `#[use_guards(ThrottlerGuard)]` measures one host or one operation,
+/// `use_guards_global` measures everything the pool reaches — the units carrying
+/// no `#[meta(Throttle)]` at the module default.
 ///
 /// Injects the store as `Arc<dyn ThrottlerStore>`, so **one** guard serves
 /// every backend: [`InMemoryThrottler`](crate::InMemoryThrottler) by default,
@@ -63,32 +156,183 @@ impl Guard for ThrottlerGuard {
             .data::<PathPattern>()
             .map(|pattern| pattern.0.as_ref())
             .unwrap_or_else(|| req.uri().path());
-        // U+001F (unit separator) can appear in neither a route pattern nor an
-        // IP, so the composite key never collides across the join.
-        let key = format!("{route}\u{1f}{ip}");
+        let key = bucket_key(&[&transport::HTTP, &route, &ip]);
 
         let decision = self.throttler.hit(&key, limit).await;
         if decision.allowed {
             return Ok(());
         }
+        // Route and client as two fields, never the composite store key: an
+        // operator filtering 429s by client address should not have to split a
+        // value on U+001F, and "never hand-format columns" is the rule.
         tracing::warn!(
             target: crate::TARGET,
-            key = %key,
-            retry_after = decision.retry_after.as_secs(),
+            transport = transport::HTTP,
+            route = %route,
+            client = %ip,
+            retry_after = retry_after_secs(decision.retry_after),
             "rate limit exceeded",
         );
-        Err(Denial::rate_limited(
-            decision.retry_after.as_secs() as u32,
-            "Too Many Requests",
-        ))
+        Err(rate_limited(decision.retry_after))
+    }
+
+    /// GraphQL's unit is the **field**: one document may carry several, and the
+    /// per-operation chain reaches this site once per field resolved. `/graphql`
+    /// is `Exempt`, so nothing an HTTP-scope binding does reaches them.
+    ///
+    /// **The caller half is the actor, and it is read rather than invented.**
+    /// The peer address is not reachable here — it lives on the poem `Request`,
+    /// which no `GraphqlContextSeed` forwards — but the *principal* is: the
+    /// operation runs inside the request scope the edge installed, so
+    /// [`current_actor_id`](nest_rs_core::current_actor_id) answers for every
+    /// authenticated caller.
+    ///
+    /// That distinction is the whole security property. Keyed on the field
+    /// alone, every caller shares one bucket, and one client spending the
+    /// window `429`s everybody — a limiter that is a denial-of-service
+    /// amplifier rather than a defence. Keyed on the actor, a caller can only
+    /// exhaust their own.
+    ///
+    /// An **anonymous** caller has no actor, and then the shared bucket is the
+    /// honest answer rather than a chosen one — so it is reported, once per
+    /// process, and only when it actually happens. The per-address half for
+    /// that traffic is this same guard in `use_guards_global`, where `/graphql`
+    /// is one HTTP request keyed on its client.
+    #[cfg(feature = "graphql")]
+    async fn check_graphql(&self, operation: &GraphqlOperationContext<'_>) -> Result<(), Denial> {
+        let field = operation.name();
+        static SEEN: AtomicBool = AtomicBool::new(false);
+        let caller = caller_bucket(
+            &SEEN,
+            "graphql_anonymous_operation_shares_a_bucket",
+            "an anonymous GraphQL operation has no actor to key on, so every anonymous caller \
+             shares one bucket per field; bind ThrottlerGuard in use_guards_global as well, so \
+             the /graphql request itself is metered per client address",
+        );
+        let key = bucket_key(&[&transport::GRAPHQL, &field, &caller]);
+
+        let decision = self
+            .throttler
+            .hit(&key, self.throttler.default_limit())
+            .await;
+        if decision.allowed {
+            return Ok(());
+        }
+        tracing::warn!(
+            target: crate::TARGET,
+            transport = transport::GRAPHQL,
+            operation = %field,
+            retry_after = retry_after_secs(decision.retry_after),
+            "rate limit exceeded",
+        );
+        Err(rate_limited(decision.retry_after))
+    }
+
+    /// MCP's unit is the **operation** — the tool or prompt the client named.
+    /// The kind leads the name because the protocol namespaces them separately:
+    /// a `#[tool]` and a `#[prompt]` may share a name and are two addresses.
+    ///
+    /// The caller half is the actor, read the same way and for the same reason
+    /// as GraphQL's. The operation does run on a task rmcp spawned — but
+    /// `nest_rs_mcp::propagate` installs the request scope *across* that spawn,
+    /// so the correlation and its actor survive it. "The request is gone" was
+    /// true of the peer address and not of the principal, and keying on neither
+    /// made the limiter a shared kill switch.
+    #[cfg(feature = "mcp")]
+    async fn check_mcp(&self, ctx: &McpOperationContext<'_>) -> Result<(), Denial> {
+        let kind = ctx.kind();
+        let name = ctx.name();
+        static SEEN: AtomicBool = AtomicBool::new(false);
+        let caller = caller_bucket(
+            &SEEN,
+            "mcp_anonymous_operation_shares_a_bucket",
+            "an anonymous MCP operation has no actor to key on, so every anonymous caller shares \
+             one bucket per operation; bind ThrottlerGuard in use_guards_global as well, so the \
+             /mcp request itself is metered per client address",
+        );
+        let key = bucket_key(&[&transport::MCP, &kind, &name, &caller]);
+
+        let decision = self
+            .throttler
+            .hit(&key, self.throttler.default_limit())
+            .await;
+        if decision.allowed {
+            return Ok(());
+        }
+        tracing::warn!(
+            target: crate::TARGET,
+            transport = transport::MCP,
+            kind = %kind,
+            operation = %name,
+            retry_after = retry_after_secs(decision.retry_after),
+            "rate limit exceeded",
+        );
+        Err(rate_limited(decision.retry_after))
+    }
+
+    /// WS's unit is the **event**, and the connection is the caller half this
+    /// site really can see — no invention required, but no address either: a
+    /// message is dispatched long after the upgrade's task-locals unwound, so
+    /// the peer that keyed the `GET` is gone by then.
+    ///
+    /// A reconnect therefore opens a fresh bucket. That is bounded rather than
+    /// open: the upgrade *is* an HTTP `GET`, so the same guard on the
+    /// `#[gateway]` struct meters connection attempts per address, and this
+    /// entry meters the traffic inside one connection — the flood the upgrade
+    /// cannot see.
+    #[cfg(feature = "ws")]
+    async fn check_ws_message(
+        &self,
+        client: &WsClient,
+        event: &str,
+        _data: &serde_json::Value,
+    ) -> Result<(), Denial> {
+        let connection = client.id();
+        let key = bucket_key(&[&transport::WS, &event, &connection]);
+
+        let decision = self
+            .throttler
+            .hit(&key, self.throttler.default_limit())
+            .await;
+        if decision.allowed {
+            return Ok(());
+        }
+        tracing::warn!(
+            target: crate::TARGET,
+            transport = transport::WS,
+            event = %event,
+            client = %connection,
+            retry_after = retry_after_secs(decision.retry_after),
+            "rate limit exceeded",
+        );
+        Err(rate_limited(decision.retry_after))
     }
 }
 
-/// HTTP, and only HTTP: the bucket is keyed on the matched route pattern, which
-/// no other edge has. Binding this beside a `#[query]` or a
-/// `#[subscribe_message]` is the mistake the markers exist to refuse — it is the
-/// original one, and it throttled nothing.
+/// `ThrottlerGuard` checks HTTP requests: [`check_http`](Guard::check_http)
+/// counts one request against its route's bucket. Declared so a
+/// `#[controller]`, a `#[routes]` verb or a `#[gateway]` struct may bind it.
 impl nest_rs_guards::HttpGuard for ThrottlerGuard {}
+
+/// …and GraphQL operations, keyed on the field
+/// ([`check_graphql`](Guard::check_graphql)). Declared so a `#[resolver]` or a
+/// single `#[query]` may bind it — the binding that once compiled and throttled
+/// nothing.
+#[cfg(feature = "graphql")]
+impl nest_rs_guards::GraphqlGuard for ThrottlerGuard {}
+
+/// …and MCP operations, keyed on the tool or prompt
+/// ([`check_mcp`](Guard::check_mcp)). Declared so an `#[mcp]` host or a single
+/// `#[tool]` may bind it.
+#[cfg(feature = "mcp")]
+impl nest_rs_guards::McpGuard for ThrottlerGuard {}
+
+/// …and WS messages, keyed on the event and the connection
+/// ([`check_ws_message`](Guard::check_ws_message)). Declared so a
+/// `#[subscribe_message]` may bind it; on the `#[gateway]` struct the marker
+/// required is `HttpGuard`, because those guards run on the upgrade.
+#[cfg(feature = "ws")]
+impl nest_rs_guards::WsGuard for ThrottlerGuard {}
 
 /// The identity a rate-limit bucket is keyed on.
 ///
@@ -125,7 +369,9 @@ impl From<ClientOrigin> for ClientId {
             // The peer is a trusted proxy that forwarded no client address: it
             // is still an address, but everyone behind it shares this bucket.
             ClientOrigin::TrustedProxy(ip) => {
+                static SEEN: AtomicBool = AtomicBool::new(false);
                 warn_shared_bucket(
+                    &SEEN,
                     "trusted_proxy_without_forwarded_for",
                     "the direct peer is a trusted proxy but sent no usable X-Forwarded-For — \
                      every caller behind it shares one rate-limit bucket; make the proxy forward \
@@ -134,7 +380,9 @@ impl From<ClientOrigin> for ClientId {
                 Self::Ip(ip)
             }
             ClientOrigin::Unknown => {
+                static SEEN: AtomicBool = AtomicBool::new(false);
                 warn_shared_bucket(
+                    &SEEN,
                     "no_peer_address",
                     "no peer address (unix socket, or a proxy that hides it) — every caller \
                      shares one rate-limit bucket, so a single client can exhaust the budget for \
@@ -146,26 +394,54 @@ impl From<ClientOrigin> for ClientId {
     }
 }
 
+/// The caller half of an in-band bucket key: the authenticated principal, or a
+/// reported fallback when there is none.
+///
+/// **This is the difference between a rate limiter and a denial-of-service
+/// amplifier.** Keyed on the operation alone, every caller shares one bucket and
+/// one client spending the window `429`s everybody. The peer address is not
+/// reachable at an in-band site — it lives on the poem `Request` — but the
+/// *actor* is: `nest_rs_mcp::propagate` and the GraphQL edge both install the
+/// request scope around the operation, so `current_actor_id()` answers for
+/// every authenticated caller.
+///
+/// An anonymous caller has none, and then the shared bucket is the honest answer
+/// rather than a chosen one — reported once per process, and only when it
+/// actually happens. The per-address half for that traffic is the same guard in
+/// `use_guards_global`, where the carrying HTTP request is keyed on its client.
+fn caller_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static str) -> String {
+    match nest_rs_core::current_actor_id() {
+        Some(actor) => actor,
+        None => {
+            warn_shared_bucket(seen, reason, detail);
+            ANONYMOUS_CALLER.to_owned()
+        }
+    }
+}
+
+/// What an unauthenticated caller is keyed as.
+///
+/// A named value rather than an empty string: `""` would be indistinguishable
+/// from an actor named that, which is the sentinel `current_actor_id` refuses to
+/// return for the same reason.
+const ANONYMOUS_CALLER: &str = "<anonymous>";
+
 /// Report a keying degradation **once per process**, at `warn`.
 ///
 /// Both degradations are misconfigurations that stay invisible until an outage:
 /// the throttler keeps answering, it just stops distinguishing callers. They are
 /// a structural fact of the deployment, not a per-request event, so this dedups
-/// by reason rather than spamming a line per request.
-fn warn_shared_bucket(reason: &'static str, detail: &'static str) {
-    use std::collections::HashSet;
-    use std::sync::{LazyLock, Mutex};
-
-    static SEEN: LazyLock<Mutex<HashSet<&'static str>>> =
-        LazyLock::new(|| Mutex::new(HashSet::new()));
-
-    // On a poisoned lock, emit: a duplicate diagnostic is harmless, a swallowed
-    // one hides the misconfiguration this exists to surface.
-    let first_time = SEEN
-        .lock()
-        .map(|mut seen| seen.insert(reason))
-        .unwrap_or(true);
-    if first_time {
+/// rather than spamming a line per request.
+///
+/// The dedup is one flag per reason, supplied by the call site, rather than a
+/// set of reasons behind a process-wide `Mutex`. The reasons are a closed set of
+/// four `&'static str`s that never grows at runtime, so the set could only ever
+/// answer what a `bool` answers — while the lock sat on the anonymous in-band
+/// path, which is every request on an unauthenticated GraphQL or MCP surface.
+/// Serializing all of them through one mutex is a ceiling on exactly the traffic
+/// a rate limiter exists to survive.
+fn warn_shared_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static str) {
+    if !seen.swap(true, Ordering::Relaxed) {
         tracing::warn!(
             target: crate::TARGET,
             reason,

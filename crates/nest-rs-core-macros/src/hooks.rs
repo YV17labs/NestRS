@@ -44,20 +44,49 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let phase = method.attrs.iter().enumerate().find_map(|(idx, attr)| {
-            HOOK_ATTRS
-                .iter()
-                .find(|(name, _)| attr.path().is_ident(name))
-                .map(|(_, variant)| (idx, *variant))
-        });
-        let Some((idx, phase)) = phase else { continue };
-        method.attrs.remove(idx);
+        // **Every phase attribute, not the first**, and each taken through
+        // `take_flag_attr` so an argument on one is a named compile error rather
+        // than something dropped. Two silences lived here: `#[on_module_init(order = 2)]`
+        // was accepted and its argument discarded, and a method carrying two
+        // phase attributes took the first and left the second on the emitted
+        // item — where it surfaced as rustc's "cannot find attribute
+        // `on_module_destroy` in this scope", a sentence pointing at the
+        // framework's own vocabulary as if it did not exist. `#[scheduled]` and
+        // `#[indicators]` both refuse their second by name; this is the third
+        // member of that family.
+        let mut declared: Vec<(&str, &str)> = Vec::new();
+        for (name, variant) in HOOK_ATTRS {
+            match nest_rs_codegen::take_flag_attr(&mut method.attrs, name) {
+                Ok(true) => declared.push((name, variant)),
+                Ok(false) => {}
+                Err(err) => return err.to_compile_error().into(),
+            }
+        }
+        let [(_, phase)] = declared.as_slice() else {
+            if declared.is_empty() {
+                continue;
+            }
+            let names: Vec<String> = declared.iter().map(|(n, _)| format!("`#[{n}]`")).collect();
+            return syn::Error::new_spanned(
+                &method.sig,
+                format!(
+                    "a hook method declares exactly one lifecycle phase — this one declares \
+                     {}. A method that must run in two phases is two methods.",
+                    names.join(" and "),
+                ),
+            )
+            .to_compile_error()
+            .into();
+        };
         let phase_variant = format_ident!("{}", phase);
 
         if method.sig.asyncness.is_none() {
-            return syn::Error::new_spanned(&method.sig, "#[hooks] methods must be `async fn`")
-                .to_compile_error()
-                .into();
+            return syn::Error::new_spanned(
+                &method.sig,
+                nest_rs_codegen::must_be_async("#[hooks]"),
+            )
+            .to_compile_error()
+            .into();
         }
 
         let method_name = method.sig.ident.clone();

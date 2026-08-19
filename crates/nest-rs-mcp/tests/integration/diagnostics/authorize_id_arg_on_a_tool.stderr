@@ -1,0 +1,43 @@
+error: `id_arg = argument` is not available on MCP — it renames the argument GraphQL's `bind = Service` synthesises, and no other transport synthesises one
+  --> tests/integration/diagnostics/authorize_id_arg_on_a_tool.rs:25:25
+   |
+25 |     #[authorize(Update, id_arg = subject_id)]
+   |                         ^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `DemoTool: McpHost` is not satisfied
+  --> tests/integration/diagnostics/authorize_id_arg_on_a_tool.rs:18:1
+   |
+18 | #[mcp(path = "/demo")]
+   | ^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `ServerHandler` is not implemented for `DemoTool`
+  --> tests/integration/diagnostics/authorize_id_arg_on_a_tool.rs:20:1
+   |
+20 | struct DemoTool;
+   | ^^^^^^^^^^^^^^^
+help: the following other types implement trait `ServerHandler`
+  --> $CARGO/rmcp-$VERSION/src/handler/server.rs
+   |
+   |         impl<T: ServerHandler> ServerHandler for $wrapper<T> {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |         |
+   |         `Arc<T>`
+   |         `Box<T>`
+...
+   | impl_server_handler_for_wrapper!(Box);
+   | ------------------------------------- in this macro invocation
+   | impl_server_handler_for_wrapper!(Arc);
+   | ------------------------------------- in this macro invocation
+   |
+  ::: src/composite.rs
+   |
+   | impl ServerHandler for CompositeHandler {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CompositeHandler`
+   |
+  ::: src/propagate.rs
+   |
+   | impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PropagatingHandler<H>`
+   = note: required for `DemoTool` to implement `McpHost`
+   = note: required for the cast from `Arc<DemoTool>` to `Arc<(dyn McpHost + 'static)>`
+   = note: this error originates in the attribute macro `mcp` which comes from the expansion of the macro `impl_server_handler_for_wrapper` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -108,7 +108,7 @@ the option and the accepted set, at the line and column you typed it:
 
 ```console
 $ cargo check -p features
-error: unknown #[crud] option `servcie` (expected `service`, `entity`, `output`, `create`, `update`, `ops`, `paginate`)
+error: unknown #[crud] argument `servcie`; expected `service`, `entity`, `output`, `create`, `update`, `ops` or `paginate`
   --> crates/features/src/orgs/http/controller.rs:17:5
    |
 17 |     servcie = svc,

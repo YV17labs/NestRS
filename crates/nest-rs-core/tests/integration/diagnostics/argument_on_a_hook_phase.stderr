@@ -1,0 +1,5 @@
+error: `#[on_module_init]` takes no arguments — it is a flag, and what it declares is its presence
+  --> tests/integration/diagnostics/argument_on_a_hook_phase.rs:17:5
+   |
+17 |     #[on_module_init(order = 2)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

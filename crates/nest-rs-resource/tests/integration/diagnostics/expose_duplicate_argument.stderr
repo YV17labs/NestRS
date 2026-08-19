@@ -1,0 +1,5 @@
+error: #[expose] takes at most one `name`
+ --> tests/integration/diagnostics/expose_duplicate_argument.rs:8:25
+  |
+8 | #[expose(name = "Post", name = "Article")]
+  |                         ^^^^

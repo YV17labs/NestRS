@@ -1,0 +1,43 @@
+error: `bind = Service` is not available on MCP — an operation takes one `Parameters<T>` struct, not the named id argument the binding reads. Keep `#[authorize(Action, Entity)]` and bind in the body with the service's `access`
+  --> tests/integration/diagnostics/authorize_bind_on_a_tool.rs:19:25
+   |
+19 |     #[authorize(Update, bind = DemoService)]
+   |                         ^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `DemoTool: McpHost` is not satisfied
+  --> tests/integration/diagnostics/authorize_bind_on_a_tool.rs:12:1
+   |
+12 | #[mcp(path = "/demo")]
+   | ^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `ServerHandler` is not implemented for `DemoTool`
+  --> tests/integration/diagnostics/authorize_bind_on_a_tool.rs:14:1
+   |
+14 | struct DemoTool;
+   | ^^^^^^^^^^^^^^^
+help: the following other types implement trait `ServerHandler`
+  --> $CARGO/rmcp-$VERSION/src/handler/server.rs
+   |
+   |         impl<T: ServerHandler> ServerHandler for $wrapper<T> {
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |         |
+   |         `Arc<T>`
+   |         `Box<T>`
+...
+   | impl_server_handler_for_wrapper!(Box);
+   | ------------------------------------- in this macro invocation
+   | impl_server_handler_for_wrapper!(Arc);
+   | ------------------------------------- in this macro invocation
+   |
+  ::: src/composite.rs
+   |
+   | impl ServerHandler for CompositeHandler {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `CompositeHandler`
+   |
+  ::: src/propagate.rs
+   |
+   | impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PropagatingHandler<H>`
+   = note: required for `DemoTool` to implement `McpHost`
+   = note: required for the cast from `Arc<DemoTool>` to `Arc<(dyn McpHost + 'static)>`
+   = note: this error originates in the attribute macro `mcp` which comes from the expansion of the macro `impl_server_handler_for_wrapper` (in Nightly builds, run with -Z macro-backtrace for more info)

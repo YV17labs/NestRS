@@ -104,10 +104,16 @@ fn parse_args(args: TokenStream2) -> syn::Result<bool> {
     let mut graphql = false;
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("graphql") {
+            nest_rs_codegen::once(graphql, &meta.path, "wire_enum", "graphql")?;
             graphql = true;
             Ok(())
         } else {
-            Err(meta.error("unknown #[wire_enum(...)] option (expected `graphql`)"))
+            let name = nest_rs_codegen::key_as_written(&meta.path);
+            Err(meta.error(nest_rs_codegen::unknown_argument(
+                "wire_enum",
+                &name,
+                &["graphql"],
+            )))
         }
     });
     syn::parse::Parser::parse2(parser, args)?;

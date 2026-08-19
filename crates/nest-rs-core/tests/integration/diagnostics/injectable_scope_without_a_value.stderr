@@ -1,0 +1,5 @@
+error: #[injectable] `scope` needs a value — write `scope = ...`
+ --> tests/integration/diagnostics/injectable_scope_without_a_value.rs:9:14
+  |
+9 | #[injectable(scope)]
+  |              ^^^^^

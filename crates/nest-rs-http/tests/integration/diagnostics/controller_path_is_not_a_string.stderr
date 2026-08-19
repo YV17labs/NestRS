@@ -1,0 +1,5 @@
+error: #[controller] `path` must be a string literal, e.g. `path = "/users"`
+  --> tests/integration/diagnostics/controller_path_is_not_a_string.rs:11:21
+   |
+11 | #[controller(path = 42)]
+   |                     ^^

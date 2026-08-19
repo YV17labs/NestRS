@@ -1,0 +1,5 @@
+error: #[expose] `name` needs a value — write `name = ...`
+ --> tests/integration/diagnostics/expose_key_without_a_value.rs:8:10
+  |
+8 | #[expose(name)]
+  |          ^^^^

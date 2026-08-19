@@ -1,0 +1,5 @@
+error: #[crud] `ops = []` declares nothing — drop the argument to generate the default set, or list the operations you want
+  --> tests/integration/diagnostics/crud_ops_is_empty.rs:13:57
+   |
+13 | #[crud(service = svc, entity = OrgEntity, output = Org, ops = [])]
+   |                                                         ^^^

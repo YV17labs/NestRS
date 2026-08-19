@@ -1,0 +1,5 @@
+error: #[module] `providers` needs a value — write `providers = ...`
+ --> tests/integration/diagnostics/module_key_without_a_value.rs:8:10
+  |
+8 | #[module(providers)]
+  |          ^^^^^^^^^

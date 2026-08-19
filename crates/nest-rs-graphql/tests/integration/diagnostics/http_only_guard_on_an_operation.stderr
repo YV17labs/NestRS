@@ -1,0 +1,33 @@
+error[E0277]: the `?` operator can only be used in an async block that returns `Result` or `Option` (or another type that implements `FromResidual`)
+  --> tests/integration/diagnostics/http_only_guard_on_an_operation.rs:33:13
+   |
+33 | #[operations]
+   | ------------^
+   | |           |
+   | |           cannot use the `?` operator in an async block that returns `i32`
+   | this function should return `Result` or `Option` to accept `?`
+   |
+   = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `HttpOnlyGuard` does not check GraphQL operations
+  --> tests/integration/diagnostics/http_only_guard_on_an_operation.rs:36:18
+   |
+36 |     #[use_guards(HttpOnlyGuard)]
+   |                  ^^^^^^^^^^^^^ this guard has no `check_graphql`
+   |
+help: the trait `GraphqlGuard` is not implemented for `HttpOnlyGuard`
+  --> tests/integration/diagnostics/http_only_guard_on_an_operation.rs:19:1
+   |
+19 | struct HttpOnlyGuard;
+   | ^^^^^^^^^^^^^^^^^^^^
+   = note: a guard bound on a resolver runs `Guard::check_graphql`, whose default is `Ok(())` — binding one that does not override it passes every operation silently
+   = note: override `check_graphql`, then declare `impl GraphqlGuard for HttpOnlyGuard {}`; or bind this guard on an HTTP `#[controller]` / `#[routes]` instead
+note: required by a bound in `__nestrs_assert_guard_capability`
+  --> tests/integration/diagnostics/http_only_guard_on_an_operation.rs:33:1
+   |
+33 | #[operations]
+   | ^^^^^^^^^^^^^ required by this bound in `__nestrs_assert_guard_capability`
+...
+36 |     #[use_guards(HttpOnlyGuard)]
+   |                  ------------- required by a bound in this function
+   = note: this error originates in the attribute macro `operations` (in Nightly builds, run with -Z macro-backtrace for more info)

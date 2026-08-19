@@ -1,0 +1,5 @@
+error: #[interceptor] takes at most one `priority`
+ --> tests/integration/diagnostics/interceptor_duplicate_priority.rs:8:29
+  |
+8 | #[interceptor(priority = 1, priority = 2)]
+  |                             ^^^^^^^^^^^^

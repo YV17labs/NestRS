@@ -1,0 +1,34 @@
+# Ways of writing a decorator's arguments wrong that the decorator does not
+# name. **It only shrinks.**
+#
+# Two cells of fifty-six, and neither is work: at both, a *bare key* is not a
+# mistake, so there is nothing to refuse. `CLAUDE.md` is explicit that this is
+# the right shape — "Cannot is not the same as not yet… A site where the thing
+# is possible but unbuilt is an owner question, raised as one; writing its
+# refusal instead ships a false statement inside the compiler."
+#
+# The join landed with 24 filled cells and 32 holes. Twenty-two closed by
+# writing the missing snapshot; eight by teaching the decorator a refusal it had
+# never had. `#[expose]`, `#[api]`, GraphQL's `#[authorize]` and `#[inject]` each
+# accepted a repeated key and dropped one of the two declarations by source
+# order — on `#[api]` that is published prose, which `CLAUDE.md` mandates the
+# attribute *instead of* a doc comment for; on `#[authorize]` it is which service
+# loads the authorized subject. `#[config]`, `#[queue]`, `#[inject]` and
+# `#[interceptor]` each let a bare key die on syn's `expected =`, which names the
+# grammar and not the key.
+#
+# ── `#[authorize]`: a bare ident is a positional argument (1 cell)
+# `#[authorize(Read, users::Entity)]` — the action and the entity are written
+# bare, and `AuthorizeArg::parse` reads an ident *without* a following `=` as one
+# of them. So the grammar has no bare-key position that is a mistake. Its two
+# real keys, `bind` and `id_arg`, are both `key = value`, both refuse a repeat,
+# and both have a snapshot.
+nest-rs-graphql-macros #[authorize] :: a snapshot pinning the bare-key refusal
+#
+# ── `#[wire_enum]`: its one key *is* a flag (1 cell)
+# `#[wire_enum(graphql)]` is the whole grammar, and `graphql` takes no value by
+# design — "Kept explicit rather than inferred from the crate feature, because a
+# Cargo feature is additive across a workspace". A bare key is therefore the
+# correct spelling rather than an error, and a refusal here would refuse the only
+# thing the decorator accepts.
+nest-rs-resource-macros #[wire_enum] :: a snapshot pinning the bare-key refusal

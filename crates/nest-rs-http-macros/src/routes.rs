@@ -6,12 +6,14 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
-use syn::{Attribute, Expr, FnArg, ImplItem, LitStr, Path, ReturnType, Token, Type, parse_quote};
+use syn::{
+    Attribute, Expr, FnArg, ImplItem, LitStr, Meta, Path, ReturnType, Token, Type, parse_quote,
+};
 
 use nest_rs_codegen::{
-    expr_str, force_guard_typeids, guard_capability_bounds, impl_self_ident,
-    injected_methods_with_layers, layer_deps, mixed_site_ident, normalize_forwarded_args,
-    nth_generic_type, scoped_specs, take_flag_attr, take_path_list,
+    force_guard_typeids, guard_capability_bounds, impl_self_ident, injected_methods_with_layers,
+    layer_deps, mixed_site_ident, normalize_forwarded_args, nth_generic_type, require_str_lit,
+    scoped_specs, take_flag_attr, take_path_list,
 };
 
 use crate::attr::opt_str;
@@ -85,7 +87,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     let self_ty = item.self_ty.clone();
 
     // Default OpenAPI tag — routes group by controller unless `#[api(tags(...))]` overrides.
-    let ctrl_name = match impl_self_ident(&self_ty, "routes") {
+    let ctrl_name = match impl_self_ident(&self_ty, "#[routes]") {
         Ok(name) => name,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -208,7 +210,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
             ReturnType::Type(_, ty) => quote! { #ty },
         };
 
-        let guards = match take_path_list(&mut method.attrs, "use_guards", "entry") {
+        let guards = match take_path_list(&mut method.attrs, "use_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
@@ -220,30 +222,33 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
         // `ThrottlerGuard` here, or a controller-level one via the runtime call
         // emitted below.
         let method_throttled = guards.iter().any(guard_path_is_throttler);
-        let force_guards = match take_path_list(&mut method.attrs, "force_guards", "entry") {
+        let force_guards = match take_path_list(&mut method.attrs, "force_guards") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        let filters = match take_path_list(&mut method.attrs, "use_filters", "entry") {
+        let filters = match take_path_list(&mut method.attrs, "use_filters") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        let interceptors = match take_path_list(&mut method.attrs, "use_interceptors", "entry") {
+        let interceptors = match take_path_list(&mut method.attrs, "use_interceptors") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
-        let method_pipes = match take_path_list(&mut method.attrs, "use_pipes", "entry") {
+        let method_pipes = match take_path_list(&mut method.attrs, "use_pipes") {
             Ok(paths) => paths,
             Err(err) => return err.to_compile_error().into(),
         };
         let method_exception_filters =
-            match take_path_list(&mut method.attrs, "use_exception_filters", "entry") {
+            match take_path_list(&mut method.attrs, "use_exception_filters") {
                 Ok(paths) => paths,
                 Err(err) => return err.to_compile_error().into(),
             };
         // `#[public]` marks the route as publicly reachable; global guards still
         // run and decide whether to admit anonymous callers.
-        let is_public = take_flag_attr(&mut method.attrs, "public");
+        let is_public = match take_flag_attr(&mut method.attrs, "public") {
+            Ok(flag) => flag,
+            Err(err) => return err.to_compile_error().into(),
+        };
         if is_public && let Some(spec) = &authorize {
             return syn::Error::new_spanned(
                 &spec.action,
@@ -261,17 +266,26 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
             Err(err) => return err.to_compile_error().into(),
         };
         // `#[no_pipes]` opts out of every global pipe for this route.
-        let no_pipes = take_flag_attr(&mut method.attrs, "no_pipes");
+        let no_pipes = match take_flag_attr(&mut method.attrs, "no_pipes") {
+            Ok(flag) => flag,
+            Err(err) => return err.to_compile_error().into(),
+        };
         // Internal marker the `#[crud]` macro stamps on its write ops (create /
         // update / delete) — their write-error mapper can surface a `409` on a
         // uniqueness violation, so the document advertises that response. Always
         // stripped here so it never reaches the compiler.
-        let may_conflict = take_flag_attr(&mut method.attrs, "crud_write");
+        let may_conflict = match take_flag_attr(&mut method.attrs, "crud_write") {
+            Ok(flag) => flag,
+            Err(err) => return err.to_compile_error().into(),
+        };
         // The same kind of marker, for the `Location` a `#[crud]` create sends
         // with its `201`. Stamped by the generated handler because only it knows
         // it built the header; `#[redirect]` is added to it below, since a
         // redirect's whole response *is* a `Location`.
-        let mut sets_location = take_flag_attr(&mut method.attrs, "crud_location");
+        let mut sets_location = match take_flag_attr(&mut method.attrs, "crud_location") {
+            Ok(flag) => flag,
+            Err(err) => return err.to_compile_error().into(),
+        };
 
         // Drained after the `use_*` attributes so error spans for a misuse of
         // a response decorator point past the layers — and *before* emitting
@@ -946,22 +960,81 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     if attrs.iter().any(|a| a.path().is_ident("authorize")) {
         return Err(syn::Error::new_spanned(
             &attr,
-            "at most one `#[authorize(...)]` per route",
+            nest_rs_codegen::at_most_one_authorize("route"),
         ));
     }
-    let paths: Vec<Path> = attr
-        .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?
+    // Parsed as `Meta`, not as `Path`, so a key this edge cannot express is
+    // *reachable*. `Punctuated::<Path, _>` died on the `=` of
+    // `bind = Service` with syn's `expected \`,\``, which names neither the key
+    // nor the reason — the silence `unmasked` was already lifted out of
+    // `PostureRules` to end, with its sibling left behind.
+    let metas: Vec<Meta> = attr
+        .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+        .map_err(|_| malformed_authorize(&attr))?
         .into_iter()
         .collect();
-    let [action, entity] = <[Path; 2]>::try_from(paths).map_err(|_| {
-        syn::Error::new_spanned(
-            &attr,
-            "expected `#[authorize(Action, Entity)]` — e.g. \
-             `#[authorize(Read, users::Entity)]`. Bind the subject with a \
-             `Bind<Service, Action>` parameter when the route loads one",
-        )
-    })?;
+    // GraphQL's two, refused by name and with the fact that makes them
+    // GraphQL's: they synthesise an id argument and an `Authorized<A, E>` proof,
+    // which no other transport can express.
+    for meta in &metas {
+        let Meta::NameValue(nv) = meta else {
+            continue;
+        };
+        if nv.path.is_ident("bind") {
+            return Err(syn::Error::new_spanned(
+                meta,
+                nest_rs_codegen::posture_key_unsupported(
+                    "bind = Service",
+                    "HTTP",
+                    "a route's subject is loaded by a `Bind<Service, Action>` parameter, which \
+                     the handler declares and the compiler arms — so the binding is a *type* \
+                     here, not an argument to this attribute",
+                ),
+            ));
+        }
+        if nv.path.is_ident("id_arg") {
+            return Err(syn::Error::new_spanned(
+                meta,
+                nest_rs_codegen::posture_key_unsupported(
+                    "id_arg = argument",
+                    "HTTP",
+                    nest_rs_codegen::ID_ARG_UNSUPPORTED_BECAUSE,
+                ),
+            ));
+        }
+    }
+    let paths: Vec<Path> = metas
+        .into_iter()
+        .map(|meta| match meta {
+            Meta::Path(path) => Ok(path),
+            other => Err(syn::Error::new_spanned(other, malformed_authorize(&attr))),
+        })
+        .collect::<syn::Result<_>>()?;
+    if let Some(unmasked) = paths.iter().find(|p| p.is_ident("unmasked")) {
+        return Err(syn::Error::new_spanned(
+            unmasked,
+            nest_rs_codegen::posture_key_unsupported(
+                "unmasked",
+                "HTTP",
+                "there is no value-level mask here to switch off. A route's response is \
+                 shaped by a `RouteResponseShaper` the compiler arms from the *type* of \
+                 the posture parameter `#[authorize]` emits, so what a body carries is \
+                 decided by which extractor the handler declares",
+            ),
+        ));
+    }
+    let [action, entity] = <[Path; 2]>::try_from(paths).map_err(|_| malformed_authorize(&attr))?;
     Ok(Some(AuthorizeSpec { action, entity }))
+}
+
+/// The shape refusal, worded once: three arms reach it.
+fn malformed_authorize(attr: &Attribute) -> syn::Error {
+    syn::Error::new_spanned(
+        attr,
+        "expected `#[authorize(Action, Entity)]` — e.g. \
+         `#[authorize(Read, users::Entity)]`. Bind the subject with a \
+         `Bind<Service, Action>` parameter when the route loads one",
+    )
 }
 
 /// The extractor `#[authorize(Action, Entity)]` desugars to — the same
@@ -1195,7 +1268,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     // adjust their own policy.
     if *is_public {
         expr = quote! {
-            ::nest_rs_http::poem::EndpointExt::data(#expr, ::nest_rs_core::Public)
+            ::nest_rs_http::poem::EndpointExt::data(#expr, ::nest_rs_http::Public)
         };
     }
 
@@ -1245,6 +1318,12 @@ const API_KEYS: &str = "#[api] accepts `summary = \"...\"`, `description = \"...
 
 /// Parse `#[api(...)]` straight into [`ApiMeta`].
 ///
+/// **A repeated key is refused**, and on this decorator that matters more than
+/// on most: `CLAUDE.md` mandates `#[api(summary = …, description = …)]` *instead
+/// of* a doc comment — "Prose the framework compiles into behaviour is declared
+/// as an argument, never as a doc comment" — so a dropped `description` is
+/// published prose silently replaced by source order.
+///
 /// Hand-rolled rather than routed through `syn::Meta`: a `Meta::NameValue` holds
 /// an **expression**, and `response = Vec<Post>` is a *type* — read as an
 /// expression it is a chain of comparisons, so the whole attribute failed with
@@ -1259,28 +1338,54 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                 .map_err(|_| syn::Error::new(input.span(), API_KEYS))?;
             match key.to_string().as_str() {
                 "summary" => {
+                    nest_rs_codegen::once(out.summary.is_some(), &key, "api", "summary")?;
                     input.parse::<Token![=]>()?;
-                    out.summary = Some(expr_str(&input.parse::<Expr>()?)?);
+                    out.summary = Some(require_str_lit(
+                        &input.parse::<Expr>()?,
+                        "api",
+                        "summary",
+                        "List users",
+                    )?);
                 }
                 "description" => {
+                    nest_rs_codegen::once(out.description.is_some(), &key, "api", "description")?;
                     input.parse::<Token![=]>()?;
-                    out.description = Some(expr_str(&input.parse::<Expr>()?)?);
+                    out.description = Some(require_str_lit(
+                        &input.parse::<Expr>()?,
+                        "api",
+                        "description",
+                        "…",
+                    )?);
                 }
                 "response" => {
+                    nest_rs_codegen::once(out.response.is_some(), &key, "api", "response")?;
                     input.parse::<Token![=]>()?;
                     out.response = Some(input.parse()?);
                 }
                 "multipart" => {
+                    nest_rs_codegen::once(out.multipart.is_some(), &key, "api", "multipart")?;
                     input.parse::<Token![=]>()?;
                     out.multipart = Some(input.parse()?);
                 }
                 "response_content_type" => {
+                    nest_rs_codegen::once(
+                        out.response_content_type.is_some(),
+                        &key,
+                        "api",
+                        "response_content_type",
+                    )?;
                     input.parse::<Token![=]>()?;
-                    let lit = expr_str(&input.parse::<Expr>()?)?;
+                    let lit = require_str_lit(
+                        &input.parse::<Expr>()?,
+                        "api",
+                        "response_content_type",
+                        "text/csv",
+                    )?;
                     check_media_type(&lit)?;
                     out.response_content_type = Some(lit);
                 }
                 "tags" => {
+                    nest_rs_codegen::once(!out.tags.is_empty(), &key, "api", "tags")?;
                     let content;
                     syn::parenthesized!(content in input);
                     out.tags = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?

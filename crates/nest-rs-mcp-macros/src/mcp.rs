@@ -6,9 +6,9 @@ use syn::punctuated::Punctuated;
 use syn::{Expr, ItemStruct, LitStr, Meta, Token};
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, InjectableBody, build_injectable_body, expr_str, from_container_method,
+    DecoratorPair, Edge, InjectableBody, build_injectable_body, from_container_method,
     guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    reject_http_only_layers, scoped_specs, take_path_list,
+    reject_http_only_layers, require_str_lit, scoped_specs, take_path_list,
 };
 
 /// The MCP edge's pair. Naming the sibling is the whole point of the split: the
@@ -57,7 +57,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     // model as `#[controller] struct` + `#[resolver] struct` + `#[gateway]
     // struct`. Stored here so the impl-form macro folds them into every
     // operation's chain at runtime through `__nestrs_mcp_host_guard_specs()`.
-    let guards = match take_path_list(&mut item.attrs, "use_guards", "guard") {
+    let guards = match take_path_list(&mut item.attrs, "use_guards") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -211,12 +211,29 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut parsed = McpArgs::default();
     for meta in metas {
+        // Accepting a repeat drops one of two declarations and source order
+        // decides which — here that is the path a host joins, i.e. which peers
+        // share its endpoint, and the identity a client is told it reached.
+        let once = |taken: bool, meta: &Meta, key: &str| -> syn::Result<()> {
+            nest_rs_codegen::once(taken, meta, "mcp", key)
+        };
         match meta {
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                parsed.path = Some(expr_str(&nv.value)?)
+                once(parsed.path.is_some(), &Meta::NameValue(nv.clone()), "path")?;
+                parsed.path = Some(require_str_lit(&nv.value, "mcp", "path", "/mcp")?)
             }
-            Meta::NameValue(nv) if nv.path.is_ident("name") => parsed.name = Some(nv.value),
-            Meta::NameValue(nv) if nv.path.is_ident("title") => parsed.title = Some(nv.value),
+            Meta::NameValue(nv) if nv.path.is_ident("name") => {
+                once(parsed.name.is_some(), &Meta::NameValue(nv.clone()), "name")?;
+                parsed.name = Some(nv.value)
+            }
+            Meta::NameValue(nv) if nv.path.is_ident("title") => {
+                once(
+                    parsed.title.is_some(),
+                    &Meta::NameValue(nv.clone()),
+                    "title",
+                )?;
+                parsed.title = Some(nv.value)
+            }
             // Two different answers, and telling them apart is the point. A key
             // naming a field of the server's identity is a key that *exists* —
             // it is declared by the app, and the sentence says where. Anything
@@ -224,7 +241,7 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
             other => {
                 return Err(match server_field(&other) {
                     Some(field) => syn::Error::new_spanned(&other, field.refusal()),
-                    None => syn::Error::new_spanned(&other, UNKNOWN_ARGUMENT),
+                    None => nest_rs_codegen::unmatched_meta("mcp", &other, &ACCEPTED_KEYS),
                 });
             }
         }
@@ -236,9 +253,10 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
 }
 
 /// The keys that remain once every one this decorator refuses has named its own
-/// owner — so a key reaching this sentence is one nothing in the framework has a
-/// home for, which is the only case a list of spellings actually helps.
-const UNKNOWN_ARGUMENT: &str = "#[mcp] accepts `path`, `name` and `title`, all optional";
+/// owner — so a key reaching the shared unknown-argument sentence is one nothing
+/// in the framework has a home for, which is the only case a list of spellings
+/// actually helps.
+const ACCEPTED_KEYS: [&str; 3] = ["path", "name", "title"];
 
 /// Where a host's own prose goes, for the fields whose per-operation twin is
 /// what a developer reaching for them usually meant. A server-level field
@@ -356,7 +374,7 @@ fn opt_str(expr: Option<&Expr>) -> TokenStream2 {
 mod tests {
     use std::path::Path;
 
-    use super::{SERVER_FIELDS, UNKNOWN_ARGUMENT};
+    use super::{ACCEPTED_KEYS, SERVER_FIELDS};
 
     /// The identity a host declares for *itself* — the pair
     /// `McpIdentity::declared` takes, and the only builders the scan below may
@@ -382,7 +400,7 @@ mod tests {
                 field.key,
             );
             assert!(
-                !UNKNOWN_ARGUMENT.contains(field.key),
+                !ACCEPTED_KEYS.contains(&field.key),
                 "`{}` is refused by name, so the accepted-key list must not offer it",
                 field.key,
             );

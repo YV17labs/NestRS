@@ -12,7 +12,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{ImplItem, ItemImpl, parse_quote};
 
-use nest_rs_codegen::{Paginate, UUID_V7_REQUIRED, impl_self_ident, parse_crud_args};
+use nest_rs_codegen::{Paginate, impl_self_ident, parse_crud_args};
 
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     // `#[crud]` is the generated spelling of the impl half, so it answers a wrong
@@ -54,12 +54,15 @@ pub(crate) fn crud(args: TokenStream2, mut item: ItemImpl) -> syn::Result<TokenS
         .unwrap_or_else(|| "Resource".to_owned());
 
     // Reject non-UUID-v7 ids before loading — validation half of route-model
-    // binding. The wording is shared with the GraphQL `#[crud]` so one edge rule
-    // reads identically whichever transport refused it.
+    // binding. The sentence is `nest_rs_core::UUID_V7_REQUIRED`, emitted as a
+    // **path** rather than interpolated: the two runtime sites that enforce the
+    // same rule (`Bind<S, A>` and the GraphQL `bind` helper) cannot depend on a
+    // macro-time crate, so a value baked in here would be a wording only this
+    // one could read.
     let id_v7_check: TokenStream2 = quote! {
         if __id.0.get_version_num() != 7 {
             return ::core::result::Result::Err(::nest_rs_http::poem::Error::from_string(
-                #UUID_V7_REQUIRED,
+                ::nest_rs_core::UUID_V7_REQUIRED,
                 ::nest_rs_http::poem::http::StatusCode::BAD_REQUEST,
             ));
         }

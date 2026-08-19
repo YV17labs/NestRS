@@ -1,0 +1,5 @@
+error: #[crud] takes at most one `entity`
+  --> tests/integration/diagnostics/crud_duplicate_argument.rs:12:43
+   |
+12 | #[crud(service = svc, entity = OrgEntity, entity = OtherEntity, output = Org)]
+   |                                           ^^^^^^

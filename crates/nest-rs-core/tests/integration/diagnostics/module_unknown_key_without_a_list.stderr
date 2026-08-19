@@ -1,0 +1,5 @@
+error: unknown #[module] argument `porviders`; expected `imports` or `providers`
+  --> tests/integration/diagnostics/module_unknown_key_without_a_list.rs:11:10
+   |
+11 | #[module(porviders = Foo)]
+   |          ^^^^^^^^^

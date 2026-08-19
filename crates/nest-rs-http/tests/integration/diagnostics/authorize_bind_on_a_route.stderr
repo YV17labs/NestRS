@@ -1,0 +1,5 @@
+error: `bind = Service` is not available on HTTP — a route's subject is loaded by a `Bind<Service, Action>` parameter, which the handler declares and the compiler arms — so the binding is a *type* here, not an argument to this attribute
+  --> tests/integration/diagnostics/authorize_bind_on_a_route.rs:24:25
+   |
+24 |     #[authorize(Update, bind = UsersService)]
+   |                         ^^^^^^^^^^^^^^^^^^^

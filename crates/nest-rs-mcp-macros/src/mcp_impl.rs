@@ -80,10 +80,10 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    PipeWrapper, Posture, PostureRules, expr_str, force_guard_typeids, forwarded_arg_idents,
-    generic_args, guard_capability_bounds, impl_self_ident, layer_deps, normalize_forwarded_args,
-    nth_generic_type, pipe_wrapper, reject_http_only_layers, scoped_specs, snake_case,
-    take_path_list, type_label,
+    PipeWrapper, Posture, PostureRules, force_guard_typeids, forwarded_arg_idents, generic_args,
+    guard_capability_bounds, impl_self_ident, layer_deps, normalize_forwarded_args,
+    nth_generic_type, pipe_wrapper, reject_http_only_layers, require_str_lit, scoped_specs,
+    snake_case, take_path_list, type_label,
 };
 
 /// The decorated methods of one authored `impl`, already partitioned by the
@@ -218,12 +218,17 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     }
 
     let self_ty = item.self_ty.clone();
-    let base = impl_self_ident(&self_ty, "#[mcp]")?;
+    // **`#[tools]`, because this file is `#[tools]`' expansion.** The pair
+    // split exists so "the compiler can tell the reader which decorator it is
+    // looking at" (`CLAUDE.md`, *No decorator on two item shapes*); three
+    // sentences here named the decorator on the *struct* and gave that back by
+    // hand.
+    let base = impl_self_ident(&self_ty, "#[tools]")?;
     let operations = take_operations(&mut item, &base)?;
     if operations.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.self_ty,
-            "#[mcp] on an impl with no #[tool] or #[prompt] method has nothing to \
+            "#[tools] on an impl with no #[tool] or #[prompt] method has nothing to \
              mount — drop the decorator, or mark the methods it should serve",
         ));
     }
@@ -620,8 +625,8 @@ fn take_operation(
             ),
         ));
     }
-    let guards = take_path_list(&mut method.attrs, "use_guards", "guard")?;
-    let force_guards = take_path_list(&mut method.attrs, "force_guards", "guard")?;
+    let guards = take_path_list(&mut method.attrs, "use_guards")?;
+    let force_guards = take_path_list(&mut method.attrs, "force_guards")?;
     let posture = posture_rules(role).take(method)?;
 
     // The developer's method keeps its own patterns — this normalizes a clone, so
@@ -732,7 +737,9 @@ fn doc_comment(attrs: &[Attribute]) -> Option<String> {
         .iter()
         .filter(|attr| attr.path().is_ident("doc"))
         .filter_map(|attr| match &attr.meta {
-            Meta::NameValue(value) => expr_str(&value.value).ok(),
+            Meta::NameValue(value) => {
+                require_str_lit(&value.value, "tool", "description", "…").ok()
+            }
             _ => None,
         })
         .map(|literal| literal.value().trim().to_owned())
@@ -750,10 +757,11 @@ fn posture_rules(role: Role) -> PostureRules {
         operation: role.attr(),
         public_means: "no gate and no mask — `#[use_guards]` guards still run, and the \
                        endpoint's own operation guard still authenticated the request",
-        bind_unsupported: "`bind = Service` is not available on MCP — an operation takes one \
-                           `Parameters<T>` struct, not the named id argument the binding reads. \
-                           Keep `#[authorize(Action, Entity)]` and bind in the body with the \
-                           service's `access`",
+        transport: "MCP",
+        bind_unsupported_because: "an operation takes one `Parameters<T>` struct, not the named \
+                                   id argument the binding reads. Keep \
+                                   `#[authorize(Action, Entity)]` and bind in the body with the \
+                                   service's `access`",
     }
 }
 
@@ -811,7 +819,7 @@ fn piped_args(sig: &Signature) -> syn::Result<Vec<PipedArg>> {
 fn unsupported(entry: &ImplItem) -> syn::Error {
     syn::Error::new_spanned(
         entry,
-        "#[mcp] serves only #[tool] and #[prompt] methods — move anything else to \
+        "#[tools] serves only #[tool] and #[prompt] methods — move anything else to \
          a plain `impl` block beside it",
     )
 }

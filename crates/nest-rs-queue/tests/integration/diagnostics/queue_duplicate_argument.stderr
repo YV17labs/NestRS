@@ -1,0 +1,5 @@
+error: #[queue] takes at most one `name`
+  --> tests/integration/diagnostics/queue_duplicate_argument.rs:17:29
+   |
+17 | #[queue(name = "transcode", name = "transcode-v2", job = TranscodeCommand)]
+   |                             ^^^^

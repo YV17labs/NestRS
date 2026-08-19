@@ -1,0 +1,5 @@
+error: #[interceptor] `priority` needs a value — write `priority = ...`
+ --> tests/integration/diagnostics/interceptor_key_without_a_value.rs:8:15
+  |
+8 | #[interceptor(priority)]
+  |               ^^^^^^^^

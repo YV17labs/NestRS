@@ -51,14 +51,37 @@ impl Parse for QueueArgs {
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
+            // The key is judged before the `=`, so a bare `#[queue(name)]`
+            // names the key rather than dying on syn's `` expected `=` `` — and
+            // a bare *unknown* key still reads as unknown rather than as
+            // missing a value.
+            let spelled = key.to_string();
+            if !matches!(spelled.as_str(), "name" | "job") {
+                return Err(syn::Error::new(
+                    key.span(),
+                    nest_rs_codegen::unknown_argument("queue", &spelled, &["name", "job"]),
+                ));
+            }
+            if !input.peek(Token![=]) {
+                return Err(syn::Error::new(
+                    key.span(),
+                    nest_rs_codegen::needs_a_value("queue", &spelled),
+                ));
+            }
             input.parse::<Token![=]>()?;
             match key.to_string().as_str() {
-                "name" => name = Some(input.parse()?),
-                "job" => job = Some(input.parse()?),
+                "name" => {
+                    nest_rs_codegen::once(name.is_some(), &key, "queue", &key.to_string())?;
+                    name = Some(input.parse()?);
+                }
+                "job" => {
+                    nest_rs_codegen::once(job.is_some(), &key, "queue", &key.to_string())?;
+                    job = Some(input.parse()?);
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown #[queue] key `{other}` (expected `name` or `job`)"),
+                        nest_rs_codegen::unknown_argument("queue", other, &["name", "job"]),
                     ));
                 }
             }

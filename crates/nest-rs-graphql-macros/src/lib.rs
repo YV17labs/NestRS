@@ -36,7 +36,7 @@ mod resolver;
 ///     pub fn __nestrs_injected() -> Vec<TypeId> { /* inject keys + guards */ }
 ///     pub fn __nestrs_resolver_guard_specs() -> Vec<ScopedGuardSpec> { /* … */ }
 /// }
-/// ::nest_rs_core::inventory::submit! { ::nest_rs_core::ResolverDescriptor { … } }
+/// ::nest_rs_graphql::inventory::submit! { ::nest_rs_graphql::ResolverDescriptor { … } }
 /// ```
 #[proc_macro_attribute]
 pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {

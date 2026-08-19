@@ -31,12 +31,15 @@ mod ty;
 pub mod versioning;
 
 pub use args::{
-    duplicate_argument, needs_a_value, parse_named_str_arg, require_str_lit, unknown_argument,
+    duplicate_argument, key_as_written, needs_a_value, once, require_str_lit, unknown_argument,
+    unknown_value, unmatched_meta,
 };
-pub use attrs::{expr_str, reject_http_only_layers, take_flag_attr, take_path_list};
+pub use attrs::{reject_http_only_layers, take_flag_attr, take_path_list};
 pub use capability::guard_capability_bounds;
 pub use casing::{pascal_case, snake_case};
-pub use crud::{CrudConfig, Paginate, parse_crud_args, singular_of};
+pub use crud::{
+    CrudConfig, CrudOp, GeneratedOps, OpsSelection, Paginate, parse_crud_args, singular_of,
+};
 pub use inject::{
     InjectableBody, LayerDeps, build_injectable_body, dependencies_method, dependency_names_method,
     forwarded_arg_idents, forwarded_idents, from_container_method, from_scope_method,
@@ -46,11 +49,14 @@ pub use inject::{
 };
 pub use job::{TRANSACTIONAL, job_argument_needs_a_value, job_transaction, transactional_value};
 pub use pair::{DecoratorPair, parse_provider_host, provider_residency};
-pub use posture::{Posture, PostureRules};
+pub use posture::{
+    ID_ARG_UNSUPPORTED_BECAUSE, Posture, PostureRules, at_most_one_authorize,
+    posture_key_unsupported,
+};
 pub use root::reroot;
 pub use specs::{force_guard_typeids, scoped_specs};
 pub use ty::{
-    PipeWrapper, UUID_V7_REQUIRED, generic_args, impl_self_ident, last_segment_ident,
+    PipeWrapper, generic_args, impl_self_ident, last_segment_ident, must_be_async,
     nth_generic_type, payload_arg_type, pipe_wrapper, type_label,
 };
 pub use versioning::{Edge, VersionAnswer};

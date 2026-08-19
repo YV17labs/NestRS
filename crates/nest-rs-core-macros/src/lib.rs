@@ -43,9 +43,9 @@ mod module;
 /// }
 ///
 /// impl ::nest_rs_core::Discoverable for Foo {
-///     fn dependencies() -> &'static [TypeId] { /* required #[inject] keys */ }
-///     fn dependency_names() -> &'static [&'static str] { /* … */ }
-///     fn optional_dependencies() -> &'static [TypeId] { /* Option<Arc<…>> keys */ }
+///     fn dependencies() -> Vec<TypeId> { /* required #[inject] keys */ }
+///     fn dependency_names() -> Vec<&'static str> { /* … */ }
+///     fn optional_dependencies() -> Vec<TypeId> { /* Option<Arc<…>> keys */ }
 ///     fn injected() -> Vec<TypeId> { /* every #[inject] key, for the access graph */ }
 ///     fn register(b: ContainerBuilder) -> ContainerBuilder {
 ///         b.provide(Self::from_container(&b.snapshot()))   // singleton: eager value
@@ -129,7 +129,11 @@ pub fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Imports register first, then providers register via a fixpoint pass — each
 /// declares its dependencies through `Discoverable::dependencies` and the
 /// macro registers whatever is resolvable, repeating until done. A provider
-/// whose dependencies never resolve (missing or cyclic) panics at boot.
+/// whose dependencies never resolve fails the boot — a **missing** dependency is
+/// deferred to the access-graph check and surfaces as a named
+/// `MissingDependencyError` / `AccessGraphError` through the same `Result` every
+/// other wiring failure takes, and only a true provider **cycle**, invisible to
+/// that graph, still panics.
 ///
 /// # Expands to
 ///
@@ -165,12 +169,18 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(module::module(args, input).into()).into()
 }
 
-/// `#[input]` — the wire-DTO shorthand. Appends
-/// `#[derive(::serde::Serialize, ::serde::Deserialize, ::validator::Validate,
-/// ::schemars::JsonSchema)]` and `#[serde(deny_unknown_fields)]` so an unknown
-/// field on the wire (e.g. `is_admin: true`) is rejected at parse time instead
-/// of silently dropped, and the DTO documents itself in the OpenAPI document
-/// without a second derive to remember.
+/// `#[input]` — the wire-DTO shorthand. Appends `Serialize`, `Deserialize`,
+/// `Validate` and `JsonSchema`, each **routed through the framework** rather
+/// than named at the call site, plus `#[serde(deny_unknown_fields)]` so an
+/// unknown field on the wire (e.g. `is_admin: true`) is rejected at parse time
+/// instead of silently dropped, and the DTO documents itself in the OpenAPI
+/// document without a second derive to remember.
+///
+/// The routing is the whole point and it used to be missing from this page: a
+/// derive expands against the **call site's** prelude, so a derive path rooted
+/// there would oblige the DTO's crate to declare `serde`, `validator` and
+/// `schemars` — the three manifest lines this decorator exists to absorb. Each
+/// derive therefore carries its `crate = ` override to the same framework path.
 ///
 /// `Serialize` is in the list because a wire DTO travels both ways: the same
 /// type is returned as `Json<T>` from a handler. Adding a manual
@@ -183,8 +193,15 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 /// existing `#[derive(...)]`):
 ///
 /// ```ignore
-/// #[derive(::serde::Serialize, ::serde::Deserialize, ::validator::Validate, ::schemars::JsonSchema)]
-/// #[serde(deny_unknown_fields)]
+/// #[derive(
+///     ::nest_rs::core::serde::Serialize,
+///     ::nest_rs::core::serde::Deserialize,
+///     ::nest_rs::core::validator::Validate,
+///     ::nest_rs::core::schemars::JsonSchema,
+/// )]
+/// #[serde(crate = "::nest_rs::core::serde", deny_unknown_fields)]
+/// #[validate(crate = ::nest_rs::core::validator)]
+/// #[schemars(crate = "::nest_rs::core::schemars")]
 /// struct CreateUser { /* … */ }
 /// ```
 #[proc_macro_attribute]

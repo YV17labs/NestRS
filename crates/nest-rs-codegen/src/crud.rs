@@ -1,6 +1,13 @@
 //! Shared parser for `#[crud(...)]`, consumed by the HTTP and GraphQL CRUD
-//! generators. The grammar is the same on both surfaces; each generator reads
-//! the fields it cares about (REST consumes `guards`; GraphQL ignores them).
+//! generators.
+//!
+//! The grammar is the same on both surfaces, and it is the *whole* grammar on
+//! both: every key [`CrudConfig`] carries is read by each generator. The
+//! sentence here used to promise otherwise — "REST consumes `guards`; GraphQL
+//! ignores them", about a `guards` key that has never existed — and the second
+//! half is the shape `CLAUDE.md` bans, written as though it were the design. A
+//! key one surface cannot honour is a compile error naming the fact, never a
+//! field quietly dropped.
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::parse::{Parse, ParseStream};
@@ -23,10 +30,15 @@ pub enum Paginate {
 /// additionally require an input type (`create = ` / `update = `).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum CrudOp {
+    /// `GET /` — the collection, bounded by [`Paginate`].
     List,
+    /// `GET /{id}` — one resource by primary key.
     Get,
+    /// `POST /` — needs `create = <InputType>` and `Creatable`.
     Create,
+    /// `PATCH /{id}` — needs `update = <InputType>` and `Updatable`.
     Update,
+    /// `DELETE /{id}` — needs `Deletable`.
     Delete,
 }
 
@@ -45,10 +57,15 @@ pub enum OpsSelection {
 /// generate, borrowing it for the emit) so a generator never re-reaches into
 /// `CrudConfig` nor re-asserts the "type is present" invariant.
 pub struct GeneratedOps<'a> {
+    /// Generate the collection read.
     pub list: bool,
+    /// Generate the by-id read.
     pub get: bool,
+    /// The create-input type when the op is generated, `None` when it is not.
     pub create: Option<&'a Path>,
+    /// The update-input type when the op is generated, `None` when it is not.
     pub update: Option<&'a Path>,
+    /// Generate the delete.
     pub delete: bool,
 }
 
@@ -135,6 +152,25 @@ fn resolve_write_op<'a>(
     Ok(if wanted { ty } else { None })
 }
 
+/// Every key `#[crud]` takes, in declaration order — the list the unknown-key
+/// refusal reads, so adding a key cannot leave the sentence behind.
+const KEYS: [&str; 7] = [
+    "service", "entity", "output", "create", "update", "ops", "paginate",
+];
+
+/// Refuse a bare key. `expected `=`` is syn's, and it names the grammar rather
+/// than the key the developer wrote — the third of the three refusals a
+/// `key = value` grammar owes, worded once in `nest_rs_codegen::args`.
+fn value_for(input: ParseStream, key: &Ident) -> syn::Result<()> {
+    if input.parse::<Token![=]>().is_err() {
+        return Err(syn::Error::new(
+            key.span(),
+            crate::needs_a_value("crud", &key.to_string()),
+        ));
+    }
+    Ok(())
+}
+
 impl Parse for CrudConfig {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut service = None;
@@ -144,33 +180,45 @@ impl Parse for CrudConfig {
         let mut update = None;
         let mut ops = OpsSelection::Default;
         let mut paginate = Paginate::Cursor;
+        let mut paginate_declared = false;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             match key.to_string().as_str() {
                 "service" => {
-                    input.parse::<Token![=]>()?;
+                    crate::once(service.is_some(), &key, "crud", &key.to_string())?;
+                    value_for(input, &key)?;
                     service = Some(input.parse()?);
                 }
                 "entity" => {
-                    input.parse::<Token![=]>()?;
+                    crate::once(entity.is_some(), &key, "crud", &key.to_string())?;
+                    value_for(input, &key)?;
                     entity = Some(input.parse()?);
                 }
                 "output" => {
-                    input.parse::<Token![=]>()?;
+                    crate::once(output.is_some(), &key, "crud", &key.to_string())?;
+                    value_for(input, &key)?;
                     output = Some(input.parse()?);
                 }
                 "create" => {
-                    input.parse::<Token![=]>()?;
+                    crate::once(create.is_some(), &key, "crud", &key.to_string())?;
+                    value_for(input, &key)?;
                     create = Some(input.parse()?);
                 }
                 "update" => {
-                    input.parse::<Token![=]>()?;
+                    crate::once(update.is_some(), &key, "crud", &key.to_string())?;
+                    value_for(input, &key)?;
                     update = Some(input.parse()?);
                 }
                 "ops" => {
+                    if !matches!(ops, OpsSelection::Default) {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            crate::duplicate_argument("crud", "ops"),
+                        ));
+                    }
                     let ops_span = key.span();
-                    input.parse::<Token![=]>()?;
+                    value_for(input, &key)?;
                     let content;
                     syn::bracketed!(content in input);
                     let idents = content.parse_terminated(Ident::parse, Token![,])?;
@@ -185,27 +233,57 @@ impl Parse for CrudConfig {
                             other => {
                                 return Err(syn::Error::new(
                                     id.span(),
-                                    format!(
-                                        "unknown #[crud] op `{other}` (expected `list`, `get`, \
-                                         `create`, `update`, `delete`)"
+                                    crate::unknown_value(
+                                        "crud",
+                                        "op",
+                                        other,
+                                        &["list", "get", "create", "update", "delete"],
                                     ),
                                 ));
                             }
                         };
                         selected.push(op);
                     }
+                    if selected.is_empty() {
+                        // The same answer `version = []` gives, and it had the
+                        // other one: an empty list generated a `#[crud]` block
+                        // with no operations in it and said nothing, while the
+                        // field's own doc calls an unbounded list "an explicit
+                        // opt-out, never the silent default".
+                        return Err(syn::Error::new(
+                            ops_span,
+                            "#[crud] `ops = []` declares nothing — drop the argument to \
+                             generate the default set, or list the operations you want",
+                        ));
+                    }
                     ops = OpsSelection::Explicit(selected, ops_span);
                 }
                 "paginate" => {
-                    input.parse::<Token![=]>()?;
+                    // The one arm whose slot is not an `Option`, which is why it
+                    // was the one with no refusal. A dropped second declaration
+                    // here reverses `paginate = none` — the explicit opt-out
+                    // into an unbounded list — in either direction.
+                    if paginate_declared {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            crate::duplicate_argument("crud", "paginate"),
+                        ));
+                    }
+                    paginate_declared = true;
+                    value_for(input, &key)?;
                     let mode: Ident = input.parse()?;
                     paginate = match mode.to_string().as_str() {
                         "cursor" => Paginate::Cursor,
                         "none" => Paginate::None,
-                        _ => {
+                        other => {
                             return Err(syn::Error::new(
                                 mode.span(),
-                                "expected `cursor` or `none`",
+                                crate::unknown_value(
+                                    "crud",
+                                    "paginate",
+                                    other,
+                                    &["cursor", "none"],
+                                ),
                             ));
                         }
                     };
@@ -213,10 +291,7 @@ impl Parse for CrudConfig {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!(
-                            "unknown #[crud] option `{other}` (expected `service`, `entity`, \
-                             `output`, `create`, `update`, `ops`, `paginate`)"
-                        ),
+                        crate::unknown_argument("crud", other, &KEYS),
                     ));
                 }
             }

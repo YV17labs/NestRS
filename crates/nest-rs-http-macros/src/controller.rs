@@ -10,9 +10,9 @@ use syn::punctuated::Punctuated;
 use syn::{LitStr, Meta, Token};
 
 use nest_rs_codegen::{
-    DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
+    DecoratorPair, InjectableBody, build_injectable_body, from_container_method,
     guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    scoped_specs, take_path_list,
+    require_str_lit, scoped_specs, take_path_list,
 };
 
 /// The HTTP edge's pair. Read by `#[controller]` here and by `#[routes]` /
@@ -37,24 +37,23 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // Inert class-level attributes consumed here; each must sit below `#[controller]`.
-    let interceptors = match take_path_list(&mut item.attrs, "use_interceptors", "entry") {
+    let interceptors = match take_path_list(&mut item.attrs, "use_interceptors") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
-    let guards = match take_path_list(&mut item.attrs, "use_guards", "entry") {
+    let guards = match take_path_list(&mut item.attrs, "use_guards") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
-    let filters = match take_path_list(&mut item.attrs, "use_filters", "entry") {
+    let filters = match take_path_list(&mut item.attrs, "use_filters") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
-    let pipes = match take_path_list(&mut item.attrs, "use_pipes", "entry") {
+    let pipes = match take_path_list(&mut item.attrs, "use_pipes") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
-    let exception_filters = match take_path_list(&mut item.attrs, "use_exception_filters", "entry")
-    {
+    let exception_filters = match take_path_list(&mut item.attrs, "use_exception_filters") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -212,9 +211,6 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Parse `#[controller(path = "...", version = "1")]` — `path` required,
-/// `version` optional and either one literal or a list. Order-independent;
-/// unknown keys rejected.
 fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>)> {
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut path = None;
@@ -226,31 +222,32 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>
             // the controller at an address the developer never wrote — while
             // `version = ["1", "1"]` was already refused, which is the same
             // question asked in the other spelling.
+            // The shared sentence, with the remedy appended where there is one
+            // — never a second base wording. Both keys asked "declared twice?"
+            // in this decorator's own words while `namespace` next door asked it
+            // in `nest_rs_codegen::once`'s, so one grammar had two answers.
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                if path.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        &nv,
-                        "#[controller] declares `path` twice — keep one",
-                    ));
-                }
-                path = Some(expr_str(&nv.value)?);
+                nest_rs_codegen::once(path.is_some(), &nv, "controller", "path")?;
+                path = Some(require_str_lit(&nv.value, "controller", "path", "/users")?);
             }
             Meta::NameValue(nv) if nv.path.is_ident("version") => {
                 if !versions.is_empty() {
                     return Err(syn::Error::new_spanned(
                         &nv,
-                        "#[controller] declares `version` twice — to serve several, write one \
-                         `version = [\"1\", \"2\"]`",
+                        format!(
+                            "{} — to serve several, write one `version = [\"1\", \"2\"]`",
+                            nest_rs_codegen::duplicate_argument("controller", "version"),
+                        ),
                     ));
                 }
                 versions =
                     nest_rs_codegen::versioning::parse_version_list(&nv.value, "#[controller]")?;
             }
             other => {
-                return Err(syn::Error::new_spanned(
-                    other,
-                    "#[controller] accepts `path = \"...\"` and an optional `version = \"...\"` \
-                     (or `version = [\"1\", \"2\"]` to serve several)",
+                return Err(nest_rs_codegen::unmatched_meta(
+                    "controller",
+                    &other,
+                    &["path", "version"],
                 ));
             }
         }

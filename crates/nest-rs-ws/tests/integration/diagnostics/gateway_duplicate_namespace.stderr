@@ -1,0 +1,5 @@
+error: #[gateway] takes at most one `namespace`
+  --> tests/integration/diagnostics/gateway_duplicate_namespace.rs:13:43
+   |
+13 | #[gateway(path = "/ws", namespace = Chat, namespace = Presence)]
+   |                                           ^^^^^^^^^^^^^^^^^^^^

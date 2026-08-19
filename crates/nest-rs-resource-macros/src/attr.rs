@@ -86,12 +86,6 @@ impl ResourceField {
     }
 }
 
-/// Emit `#[graphql(complexity = …)]` for a field, with an optional fallback
-/// string expression when the user did not pin one. Shared by `dto::emit`
-/// (scalar wire fields), `relations::emit_belongs_to_method` (no fallback —
-/// async-graphql's `1 + child_complexity` already matches the runtime cost),
-/// and `relations::emit_has_many_method` (the unbounded-fanout penalty default).
-/// Centralising the attribute path here keeps a future rename localised.
 pub(crate) fn complexity_attr(user: &Option<Expr>, default: Option<&str>) -> TokenStream2 {
     if let Some(expr) = user {
         return quote! { #[graphql(complexity = #expr)] };
@@ -138,29 +132,57 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     let mut graphql = false;
     let mut soft_delete = false;
     let mut timestamps = false;
+    // A repeat is refused here for the reason `args.rs` states once: "Accepting
+    // the repeat means dropping one of two declarations, and which one it drops
+    // is source order." On this decorator that is the **wire**:
+    // `#[expose(name = "User", name = "Account")]` compiled, and the DTO and the
+    // OpenAPI schema took whichever came last.
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
+            nest_rs_codegen::once(name.is_some(), &meta.path, "expose", "name")?;
+            // A bare `#[expose(name)]` reaches `meta.value()` as syn's
+            // `` expected `=` ``, which names the grammar and not the key.
+            if !meta.input.peek(syn::Token![=]) {
+                return Err(meta.error(nest_rs_codegen::needs_a_value("expose", "name")));
+            }
             name = Some(meta.value()?.parse::<LitStr>()?.value());
             Ok(())
         } else if meta.path.is_ident("service") {
+            nest_rs_codegen::once(service.is_some(), &meta.path, "expose", "service")?;
+            if !meta.input.peek(syn::Token![=]) {
+                return Err(meta.error(nest_rs_codegen::needs_a_value("expose", "service")));
+            }
             service = Some(meta.value()?.parse::<Path>()?);
             Ok(())
         } else if meta.path.is_ident("complex") {
+            nest_rs_codegen::once(complex, &meta.path, "expose", "complex")?;
             complex = true;
             Ok(())
         } else if meta.path.is_ident("graphql") {
+            nest_rs_codegen::once(graphql, &meta.path, "expose", "graphql")?;
             graphql = true;
             Ok(())
         } else if meta.path.is_ident("soft_delete") {
+            nest_rs_codegen::once(soft_delete, &meta.path, "expose", "soft_delete")?;
             soft_delete = true;
             Ok(())
         } else if meta.path.is_ident("timestamps") {
+            nest_rs_codegen::once(timestamps, &meta.path, "expose", "timestamps")?;
             timestamps = true;
             Ok(())
         } else {
-            Err(meta.error(
-                "unknown #[expose(...)] option (expected `name = \"...\"`, `service = …`, `graphql`, `soft_delete`, `timestamps`, or `complex`)",
-            ))
+            Err(meta.error(nest_rs_codegen::unknown_argument(
+                "expose",
+                &nest_rs_codegen::key_as_written(&meta.path),
+                &[
+                    "name",
+                    "service",
+                    "graphql",
+                    "soft_delete",
+                    "timestamps",
+                    "complex",
+                ],
+            )))
         }
     });
     syn::parse::Parser::parse2(parser, args)?;
@@ -253,7 +275,15 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                         } else if k == "update" {
                             in_update = true;
                         } else {
-                            return Err(syn::Error::new(k.span(), "expected `create` or `update`"));
+                            return Err(syn::Error::new(
+                                k.span(),
+                                nest_rs_codegen::unknown_value(
+                                    "expose",
+                                    "input",
+                                    &k.to_string(),
+                                    &["create", "update"],
+                                ),
+                            ));
                         }
                     }
                 } else if m.path.is_ident("validate") {
@@ -282,9 +312,11 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     }
                     via = Some(lit);
                 } else {
-                    return Err(m.error(
-                        "unknown #[expose(...)] field option (expected `input(...)`, `validate(...)`, `complexity = ...`, or `via = \"...\"`)",
-                    ));
+                    return Err(m.error(nest_rs_codegen::unknown_argument(
+                        "expose",
+                        &nest_rs_codegen::key_as_written(&m.path),
+                        &["input", "validate", "complexity", "via"],
+                    )));
                 }
                 Ok(())
             })?;

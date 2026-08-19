@@ -1,0 +1,5 @@
+error: #[authorize] takes at most one `bind`
+  --> tests/integration/diagnostics/authorize_duplicate_bind.rs:18:56
+   |
+18 |     #[authorize(Update, bind = ArtworksService, bind = PostsService)]
+   |                                                        ^^^^^^^^^^^^

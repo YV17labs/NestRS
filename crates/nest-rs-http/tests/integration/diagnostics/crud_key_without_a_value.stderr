@@ -1,0 +1,5 @@
+error: #[crud] `entity` needs a value — write `entity = ...`
+  --> tests/integration/diagnostics/crud_key_without_a_value.rs:13:23
+   |
+13 | #[crud(service = svc, entity)]
+   |                       ^^^^^^

@@ -1,0 +1,5 @@
+error: a hook method declares exactly one lifecycle phase — this one declares `#[on_module_init]` and `#[on_module_destroy]`. A method that must run in two phases is two methods.
+  --> tests/integration/diagnostics/hooks_declaring_two_phases.rs:20:5
+   |
+20 |     async fn both(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^

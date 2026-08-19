@@ -10,9 +10,9 @@ use syn::punctuated::Punctuated;
 use syn::{LitStr, Meta, Path, Token};
 
 use nest_rs_codegen::{
-    DecoratorPair, InjectableBody, build_injectable_body, expr_str, from_container_method,
+    DecoratorPair, InjectableBody, build_injectable_body, from_container_method,
     guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    reject_http_only_layers, scoped_specs, take_path_list,
+    reject_http_only_layers, require_str_lit, scoped_specs, take_path_list,
 };
 
 /// The WS edge's pair, read by both halves so their wrong-shape diagnostics name
@@ -48,7 +48,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     // `@UseGuards` analog on the struct — run on the WS upgrade.
-    let guards = match take_path_list(&mut item.attrs, "use_guards", "entry") {
+    let guards = match take_path_list(&mut item.attrs, "use_guards") {
         Ok(paths) => paths,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -247,10 +247,6 @@ struct GatewayArgs {
 
 /// Parse `#[gateway(path = "/ws", version = "1", namespace = ChatNs)]` — `path`
 /// required, the other two optional. Order-independent; unknown keys rejected.
-///
-/// `version` is spelled and parsed exactly as `#[controller]`'s, deliberately: a
-/// gateway's mount is a path a client selects, so the declaration a developer
-/// writes for it must not be a second dialect of the one they already know.
 fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut path = None;
@@ -258,14 +254,12 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     let mut namespace = None;
     for meta in metas {
         match meta {
+            // The shared sentence. This decorator had three keys and two
+            // wordings for one question: `namespace` went through
+            // `nest_rs_codegen::once` and the other two around it.
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                if path.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        &nv,
-                        "#[gateway] declares `path` twice — keep one",
-                    ));
-                }
-                path = Some(expr_str(&nv.value)?);
+                nest_rs_codegen::once(path.is_some(), &nv, "gateway", "path")?;
+                path = Some(require_str_lit(&nv.value, "gateway", "path", "/ws")?);
             }
             // Through `#[controller]`'s own parser, which is what the doc
             // comment above already claims. Taking it through a bare
@@ -277,8 +271,10 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
                 if version.is_some() {
                     return Err(syn::Error::new_spanned(
                         &nv,
-                        "#[gateway] declares `version` twice — a gateway owns one mount, so it \
-                         carries one version",
+                        format!(
+                            "{} — a gateway owns one mount, so it carries one version",
+                            nest_rs_codegen::duplicate_argument("gateway", "version"),
+                        ),
                     ));
                 }
                 let declared =
@@ -294,13 +290,18 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
                 version = declared.into_iter().next();
             }
             Meta::NameValue(nv) if nv.path.is_ident("namespace") => {
+                // The third key, and the one that had no refusal: a gateway's
+                // namespace decides which `WsServer<N>` it fans out on, so a
+                // dropped second declaration is which sockets a broadcast
+                // reaches — decided by source order.
+                nest_rs_codegen::once(namespace.is_some(), &nv, "gateway", "namespace")?;
                 namespace = Some(expr_path(&nv.value)?)
             }
             other => {
-                return Err(syn::Error::new_spanned(
-                    other,
-                    "#[gateway] accepts `path = \"...\"`, an optional `version = \"...\"` and an \
-                     optional `namespace = MarkerType`",
+                return Err(nest_rs_codegen::unmatched_meta(
+                    "gateway",
+                    &other,
+                    &["path", "version", "namespace"],
                 ));
             }
         }
@@ -355,7 +356,7 @@ fn guard_layers(paths: &[Path]) -> Vec<TokenStream2> {
                         .is_some_and(|__specs| __specs.0.iter().any(|__s| __s.type_id == __type_id));
                     if __is_global {
                         ::nest_rs_ws::tracing::debug!(
-                            target: ::nest_rs_core::target::LAYERS,
+                            target: ::nest_rs_ws::target::LAYERS,
                             layer = ::core::any::type_name::<#p>(),
                             scope = "gateway",
                             "guard declared at multiple scopes — broadest (global) wins, this scope skipped",

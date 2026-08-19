@@ -231,13 +231,7 @@ fn parse_trailing_keys(
     let metas: Punctuated<Meta, Token![,]> = Punctuated::parse_terminated(stream)?;
     for meta in metas {
         let path = meta.path().clone();
-        // `get_ident` is `None` for a multi-segment path (`a::b`), and defaulting
-        // made the refusal name the empty string — a sentence that refuses
-        // without saying what it refused.
-        let name = path
-            .get_ident()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| quote!(#path).to_string().replace(' ', ""));
+        let name = nest_rs_codegen::key_as_written(&path);
         let known = name == TRANSACTIONAL || extra == Some(name.as_str());
         if !known {
             let mut accepted = Vec::new();

@@ -1,0 +1,5 @@
+error: unknown #[crud] paginate `pages`; expected `cursor` or `none`
+  --> tests/integration/diagnostics/crud_unknown_paginate.rs:10:68
+   |
+10 | #[crud(service = svc, entity = OrgEntity, output = Org, paginate = pages)]
+   |                                                                    ^^^^^

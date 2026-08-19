@@ -1,0 +1,5 @@
+error: `#[public]` takes no arguments — it is a flag, and what it declares is its presence
+  --> tests/integration/diagnostics/argument_on_public.rs:23:5
+   |
+23 |     #[public(read_only)]
+   |     ^^^^^^^^^^^^^^^^^^^^

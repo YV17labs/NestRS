@@ -130,6 +130,40 @@ three headers are now read, in order `Forwarded`, `X-Forwarded-For`,
 - **Breaking:** `ClientOrigin::resolve` gains a leading `forwarded`
   parameter.
 
+### A health probe answers inside the kubelet's second
+
+**Breaking for slow indicators.** Indicators ran serially, each under a
+hardcoded five-second ceiling — four of them were a twenty-second worst case
+against a kubelet whose `timeoutSeconds` defaults to **1**. They now run
+concurrently, so a probe costs the slowest check rather than the sum, under
+two ceilings a new `HealthConfig` owns:
+
+| | Default | Meaning |
+|---|---|---|
+| `NESTRS_HEALTH__INDICATOR_TIMEOUT_MS` | `750` | one check's ceiling — expiry reports it `down` |
+| `NESTRS_HEALTH__PROBE_DEADLINE_MS` | `900` | the whole response's ceiling |
+
+- **Milliseconds, deviating from the framework's `*_SECS` grammar on
+  purpose**: a grammar that cannot express a value inside one second cannot
+  express the only interval that matters here. And **`0` is refused at boot**
+  rather than meaning unlimited — here *off* is the defect, since a hung pool
+  would hang the probe and the kubelet reads that as a dead process.
+- **An unanswered indicator reports `"probe deadline exceeded"`**, the third
+  fixed reason beside `"check failed"` and `"timed out"`; the real error goes
+  to a `warn` on `nest_rs::health`, never to the caller.
+- **Concurrency is `FuturesUnordered`, deliberately not `spawn`**: the
+  operation span and the trace context are task-locals, and a spawned check
+  would file its `warn` under no unit of work at all. The report body stays
+  name-ordered, not completion-ordered.
+- **A prefixed app says where its probes went.** Under
+  `NESTRS_HTTP__GLOBAL_PREFIX=/api/v1` the kubelet must call
+  `/api/v1/health/live`; a manifest written from the docs gets a `404`, the
+  kubelet reads that as a failed probe, and on a liveness probe that is
+  `CrashLoopBackOff` caused by documentation. The boot now logs one `warn`
+  naming the real paths.
+- `HealthModule::for_root(HealthConfig…)` is the pinning seam, with the
+  composition test every `for_root` owes.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

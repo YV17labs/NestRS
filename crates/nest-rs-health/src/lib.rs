@@ -1,10 +1,27 @@
 //! Liveness/readiness/startup probes for nestrs apps.
 //!
-//! Importing [`HealthModule`] mounts three routes on the HTTP transport
-//! (`GET /health/live`, `GET /health/ready`, `GET /health/startup`). Each
-//! route runs every [`HealthIndicator`] registered for its [`ProbeKind`]
-//! against the assembled container and returns `200` with a JSON body when
-//! all are `up`, `503` when any is `down`.
+//! Importing [`HealthModule`] mounts three routes on the HTTP transport —
+//! `GET /health/live`, `GET /health/ready`, `GET /health/startup`. Each route
+//! runs every [`HealthIndicator`] registered for its [`ProbeKind`] against the
+//! assembled container and returns `200` with a JSON body when all are `up`,
+//! `503` when any is `down`.
+//!
+//! **Those paths are the mounted ones, not necessarily the served ones.** A
+//! probe route is an ordinary controller, so it sits under
+//! `HttpConfig::global_prefix` like every other: an app with
+//! `NESTRS_HTTP__GLOBAL_PREFIX=/api/v1` serves `GET /api/v1/health/live`, and a
+//! Kubernetes manifest written from the unqualified path above gets a `404` —
+//! which the kubelet scores as a failed probe. Exempting the mount is not this
+//! crate's to give (the transport nests the whole assembled tree, self-mounts
+//! included, inside the prefix), so what it does instead is refuse to let the
+//! difference be silent: a prefixed app logs one `warn` at boot naming the
+//! exact paths its probes answer on. Point the manifest at those.
+//!
+//! **Both ceilings on a probe are configurable** — see [`HealthConfig`]. The
+//! indicators run concurrently under a per-indicator ceiling and a probe-wide
+//! deadline, both defaulting inside Kubernetes' own `timeoutSeconds` default of
+//! one second, so a slow check answers `503` with a log line rather than
+//! silently outliving the kubelet's deadline.
 //!
 //! Indicators are declared with the `#[indicators]` decorator on an
 //! `#[injectable]` provider's `impl` block — see the [`indicators`] macro
@@ -25,13 +42,15 @@
 /// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::health";
 
+mod config;
 mod controller;
 mod indicator;
 mod module;
 mod service;
 
+pub use config::HealthConfig;
 pub use controller::HealthController;
 pub use indicator::{HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport};
-pub use module::HealthModule;
+pub use module::{HealthModule, HealthSetup};
 pub use nest_rs_health_macros::indicators;
 pub use service::HealthService;

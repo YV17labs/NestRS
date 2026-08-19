@@ -12,12 +12,17 @@ categories = ["web-programming"]
 
 
 [dependencies]
+nest-rs-config.workspace = true
 nest-rs-core.workspace = true
 nest-rs-guards.workspace = true
 nest-rs-health-macros.workspace = true
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 poem.workspace = true
+# The indicators of one probe run concurrently on the probe's own task — never
+# `spawn`, which would file their events under no unit of work — so the join is
+# `FuturesUnordered` rather than a task set.
+futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
@@ -30,7 +35,10 @@ tracing.workspace = true
 # Pins the wording of the `on_provider` wrong-shape diagnostic: the rule is
 # that it names the sibling decorator, and only a snapshot keeps it there.
 trybuild.workspace = true
-tokio.workspace = true
+# `test-util` (not part of tokio's `full`) pauses time, so "four checks cost one
+# interval, not four" is asserted on a virtual clock instead of a wall-clock
+# margin that flakes on a loaded runner.
+tokio = { workspace = true, features = ["test-util"] }
 # A probe's contract has two halves: the body an operator can read off an open
 # port, and the log line carrying what the body deliberately withholds. Path-only
 # (intra-workspace dev-edge), per the manifest rule.

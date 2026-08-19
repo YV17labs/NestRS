@@ -1,15 +1,27 @@
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use nest_rs_core::{Container, ReachableProviders, injectable, inventory};
 
+use crate::config::HealthConfig;
 use crate::indicator::{HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport};
 
-/// Per-indicator wall-clock ceiling. An indicator that probes a dead peer (a
-/// hung TCP connect, a stalled query) would otherwise block the public
-/// `/health/ready` response indefinitely — a slow indicator must report `Down`,
-/// not hang the whole probe (HEALTH-I7).
-const INDICATOR_TIMEOUT: Duration = Duration::from_secs(5);
+/// The reason a body carries for a check that failed. Fixed and opaque:
+/// `/health/*` is routinely unauthenticated, so an `anyhow` chain — a DSN, an
+/// internal hostname, a driver message — never reaches it. The chain goes to
+/// the `warn` instead.
+const REASON_FAILED: &str = "check failed";
+
+/// The reason a body carries for an indicator that outran its own ceiling.
+const REASON_TIMED_OUT: &str = "timed out";
+
+/// The reason a body carries for an indicator that had not answered when the
+/// **probe** deadline elapsed. Distinct from [`REASON_TIMED_OUT`] because the
+/// two say different things to whoever reads the body: one indicator was slow,
+/// or the response as a whole ran out of time. Both are constants, so neither
+/// can carry anything the caller did not already know.
+const REASON_DEADLINE: &str = "probe deadline exceeded";
 
 /// Aggregates every reachable [`HealthIndicator`] submitted via `#[indicators]`
 /// into a per-probe [`ProbeReport`]. Apps don't usually touch this directly —
@@ -28,6 +40,11 @@ pub struct HealthService {
     ///
     /// [1]: nest_rs_core::LifecyclePhase::OnApplicationBootstrap
     container: OnceLock<Container>,
+    /// Resolved at the same phase, from the same container. Absent means the
+    /// service was built without `ConfigModule` (a hand-built container in a
+    /// test), and the defaults stand — a probe never runs unbounded because a
+    /// config failed to resolve.
+    config: OnceLock<Arc<HealthConfig>>,
 }
 
 impl HealthService {
@@ -35,13 +52,30 @@ impl HealthService {
         // `Container` is a cheap `Arc` handle, so the clone is for the report's
         // borrow, not a second container.
         if self.container.set(container.clone()).is_ok() {
+            if let Some(config) = container.get::<HealthConfig>() {
+                let _ = self.config.set(config);
+            }
             report_unreachable_indicators(&container);
+            // Inside the once-guard with it, and for the same reason: both are
+            // startup facts about this app's wiring, and `init()` is re-runnable
+            // (a suite may drive the phases again). Said twice, a boot notice
+            // reads as two apps.
+            crate::controller::report_prefixed_probe_paths(&container);
         }
     }
 
-    /// Run every reachable indicator for `kind` and aggregate their results
-    /// into a [`ProbeReport`]. Reports `up` if called before bootstrap wires
-    /// the container, so a probe racing startup does not flap.
+    /// Run every reachable indicator for `kind` **concurrently** and aggregate
+    /// their results into a [`ProbeReport`]. Reports `up` if called before
+    /// bootstrap wires the container, so a probe racing startup does not flap.
+    ///
+    /// **Two ceilings, and they answer different questions.** The per-indicator
+    /// one names the slow check in a `warn` and reports it `down` on its own.
+    /// The probe deadline bounds the response *whatever the indicator count is*
+    /// — the reason the run is concurrent in the first place: serially, four
+    /// indicators at a five-second ceiling were a twenty-second worst case
+    /// against a kubelet whose `timeoutSeconds` defaults to **1**, and a
+    /// kubelet that gives up scores the probe as failed with nothing logged at
+    /// this end, because the ceiling it outlived had not fired yet.
     pub async fn probe(&self, kind: ProbeKind) -> ProbeReport {
         let Some(container) = self.container.get() else {
             // Called before bootstrap — no indicators can run; report `up`
@@ -50,37 +84,100 @@ impl HealthService {
         };
 
         let reachable = container.get::<ReachableProviders>();
-        let mut reports: Vec<IndicatorReport> = Vec::new();
-
-        for entry in inventory::iter::<HealthIndicator>() {
-            if entry.kind != kind {
-                continue;
-            }
-            let provider_id = (entry.provider_type_id)();
-            if let Some(r) = reachable.as_ref()
-                && !r.0.contains(&provider_id)
-            {
-                // Silent here on purpose: `report_unreachable_indicators` named
-                // it at boot, so repeating per probe would be the same event
-                // said twice — once per request, in production.
-                continue;
-            }
-
-            let (status, error) =
-                run_with_timeout(entry.name, kind, (entry.run)(container), INDICATOR_TIMEOUT).await;
-            reports.push(IndicatorReport {
-                name: entry.name,
-                status,
-                error,
-            });
+        let entries: Vec<&'static HealthIndicator> = inventory::iter::<HealthIndicator>()
+            .filter(|entry| entry.kind == kind)
+            // Silent here on purpose: `report_unreachable_indicators` named it
+            // at boot, so repeating per probe would be the same event said
+            // twice — once per request, in production.
+            .filter(|entry| {
+                reachable
+                    .as_ref()
+                    .is_none_or(|r| r.0.contains(&(entry.provider_type_id)()))
+            })
+            .collect();
+        if entries.is_empty() {
+            return ProbeReport::empty_up();
         }
 
-        if reports.is_empty() {
-            ProbeReport::empty_up()
-        } else {
-            ProbeReport::from_indicators(reports)
+        let config = self.config.get().cloned().unwrap_or_default();
+        run_indicators(&entries, container, kind, &config).await
+    }
+}
+
+/// Run `entries` concurrently under both ceilings and fold them into a report.
+///
+/// Extracted from [`HealthService::probe`] for the reason `run_with_timeout` is:
+/// `inventory` is process-wide, so a fixture submitted to exercise the deadline
+/// would join every other probe in the suite. Here the entries are handed in.
+async fn run_indicators(
+    entries: &[&HealthIndicator],
+    container: &Container,
+    kind: ProbeKind,
+    config: &HealthConfig,
+) -> ProbeReport {
+    let indicator_timeout = config.indicator_timeout();
+    // Every indicator is an independent `&self` check and nothing orders them,
+    // so the probe's cost is the slowest one rather than their sum. They run on
+    // **this** task rather than through `spawn`: the operation span and the
+    // request's trace context are task-locals, and a spawned check would file
+    // its `warn` under no unit of work at all.
+    let mut running: FuturesUnordered<_> = entries
+        .iter()
+        .enumerate()
+        .map(|(slot, entry)| async move {
+            let outcome =
+                run_with_timeout(entry.name, kind, (entry.run)(container), indicator_timeout).await;
+            (slot, outcome)
+        })
+        .collect();
+
+    let deadline = tokio::time::Instant::now() + config.probe_deadline();
+    let mut outcomes: Vec<Option<(IndicatorStatus, Option<String>)>> = vec![None; entries.len()];
+    // The drained stream is the only termination condition: how many checks
+    // are outstanding is a property of `outcomes`, so counting them in
+    // lock-step with the writes would be a second spelling of the same fact —
+    // and the one the deadline `warn` reports.
+    loop {
+        match tokio::time::timeout_at(deadline, running.next()).await {
+            Ok(Some((slot, outcome))) => outcomes[slot] = Some(outcome),
+            Ok(None) => break,
+            Err(_elapsed) => {
+                // The probe's own half of HEALTH-I7, and the one the body
+                // cannot say: which probe ran out of time, against what
+                // deadline, and how many checks never answered. An operator
+                // reading a flapping `503` has nothing else.
+                let unanswered = outcomes.iter().filter(|slot| slot.is_none()).count();
+                tracing::warn!(
+                    target: crate::TARGET,
+                    ?kind,
+                    deadline_ms = config.probe_deadline_ms,
+                    answered = outcomes.len() - unanswered,
+                    unanswered,
+                    "health probe deadline exceeded",
+                );
+                break;
+            }
         }
     }
+
+    // Folded in `entries` order into `BTreeMap`s keyed by name, so the body an
+    // operator diffs between two calls is ordered by the indicator's name and
+    // never by which check happened to finish first.
+    ProbeReport::from_indicators(
+        entries
+            .iter()
+            .zip(outcomes)
+            .map(|(entry, outcome)| {
+                let (status, error) =
+                    outcome.unwrap_or((IndicatorStatus::Down, Some(REASON_DEADLINE.to_owned())));
+                IndicatorReport {
+                    name: entry.name,
+                    status,
+                    error,
+                }
+            })
+            .collect(),
+    )
 }
 
 /// Name the linked-but-unreachable indicators **once, at boot** — the same
@@ -141,17 +238,17 @@ async fn run_with_timeout(
                 error = %detail,
                 "health indicator failed",
             );
-            (IndicatorStatus::Down, Some("check failed".into()))
+            (IndicatorStatus::Down, Some(REASON_FAILED.to_owned()))
         }
         Err(_elapsed) => {
             tracing::warn!(
                 target: crate::TARGET,
                 indicator = name,
                 ?kind,
-                timeout_secs = timeout.as_secs(),
+                timeout_ms = timeout.as_millis(),
                 "health indicator timed out",
             );
-            (IndicatorStatus::Down, Some("timed out".into()))
+            (IndicatorStatus::Down, Some(REASON_TIMED_OUT.to_owned()))
         }
     }
 }
@@ -163,6 +260,7 @@ mod tests {
     //! hook but without booting an app.
 
     use super::*;
+    use crate::indicator::IndicatorRun;
     use nest_rs_core::Container;
 
     #[tokio::test]
@@ -181,7 +279,7 @@ mod tests {
         assert_eq!(status, IndicatorStatus::Down);
         assert_eq!(
             error.as_deref(),
-            Some("timed out"),
+            Some(REASON_TIMED_OUT),
             "a timed-out indicator reports Down with an opaque reason",
         );
 
@@ -190,10 +288,10 @@ mod tests {
         // indicator hung, on which probe, and against what ceiling exists only
         // here, and an operator diagnosing a flapping readiness check has
         // nothing else to read.
-        let event = logs.expect_one("nest_rs::health", "health indicator timed out");
+        let event = logs.expect_one(crate::TARGET, "health indicator timed out");
         assert_eq!(event.level, "warn");
         assert_eq!(event.field("indicator").as_deref(), Some("hang"));
-        assert_eq!(event.field("timeout_secs").as_deref(), Some("0"));
+        assert_eq!(event.field("timeout_ms").as_deref(), Some("10"));
         assert!(
             event.field("kind").is_some_and(|k| k.contains("Readiness")),
             "the event names the probe that hung, got {:?}",
@@ -222,7 +320,7 @@ mod tests {
         });
 
         let skipped = logs.find(
-            "nest_rs::health",
+            crate::TARGET,
             "skipped indicator: framework capability not imported by this app",
         );
         assert_eq!(skipped.len(), 1, "one line: {:#?}", logs.events());
@@ -306,7 +404,7 @@ mod tests {
         assert_eq!(down.status, IndicatorStatus::Down);
         assert_eq!(
             down.error.as_deref(),
-            Some("check failed"),
+            Some(REASON_FAILED),
             "public probe responses must not leak indicator internals",
         );
         assert_eq!(report.details.len(), 2);
@@ -332,12 +430,12 @@ mod tests {
         assert_eq!(status, IndicatorStatus::Down);
         assert_eq!(
             error.as_deref(),
-            Some("check failed"),
+            Some(REASON_FAILED),
             "an unauthenticated probe body carries a fixed reason, never a DSN \
              or a hostname the anyhow chain picked up",
         );
 
-        let event = logs.expect_one("nest_rs::health", "health indicator failed");
+        let event = logs.expect_one(crate::TARGET, "health indicator failed");
         assert_eq!(event.level, "warn");
         assert_eq!(
             event.field("error").as_deref(),
@@ -368,7 +466,7 @@ mod tests {
         svc.install_container(container);
 
         let skipped = logs.find(
-            "nest_rs::health",
+            crate::TARGET,
             "skipped indicator: no instance of the provider in this app's container",
         );
         assert_eq!(skipped.len(), 1, "one line at boot: {:#?}", logs.events());
@@ -382,13 +480,140 @@ mod tests {
         assert_eq!(report.status, IndicatorStatus::Up);
         assert_eq!(
             logs.find(
-                "nest_rs::health",
+                crate::TARGET,
                 "skipped indicator: no instance of the provider in this app's container",
             )
             .len(),
             1,
             "probing must not repeat the boot notice: {:#?}",
             logs.events(),
+        );
+    }
+
+    /// One indicator entry, built by hand rather than submitted: `inventory` is
+    /// process-wide, so a fixture for these tests would run on every other
+    /// probe in this file.
+    fn entry(name: &'static str, run: crate::indicator::IndicatorRun) -> HealthIndicator {
+        HealthIndicator {
+            origin: "features::probes::fixture",
+            name,
+            kind: ProbeKind::Readiness,
+            provider_type_id: || std::any::TypeId::of::<UpHost>(),
+            run,
+        }
+    }
+
+    /// Four indicators, each sleeping the same interval, cost **one** interval
+    /// rather than four. Serially they were the sum, which is how four checks
+    /// at a five-second ceiling became a twenty-second worst case against a
+    /// kubelet deadline that defaults to one second. Time is paused, so the
+    /// assertion is on the virtual clock and cannot flake on a loaded runner.
+    #[tokio::test(start_paused = true)]
+    async fn indicators_run_concurrently_so_the_probe_costs_the_slowest_one() {
+        let container = Container::builder().build();
+        let config = HealthConfig::default()
+            .with_indicator_timeout(Duration::from_secs(30))
+            .with_probe_deadline(Duration::from_secs(60));
+        let slow: IndicatorRun = |_| {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                Ok(())
+            })
+        };
+        let entries = [
+            entry("a", slow),
+            entry("b", slow),
+            entry("c", slow),
+            entry("d", slow),
+        ];
+        let entries: Vec<&HealthIndicator> = entries.iter().collect();
+
+        let started = tokio::time::Instant::now();
+        let report = run_indicators(&entries, &container, ProbeKind::Readiness, &config).await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(report.status, IndicatorStatus::Up);
+        assert_eq!(report.details.len(), 4);
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "four 5s checks must cost one interval, not four — took {elapsed:?}",
+        );
+    }
+
+    /// The probe deadline bounds the response whatever the per-indicator
+    /// ceiling says, and what did answer is still reported. Without it a probe
+    /// outlives the kubelet's `timeoutSeconds` — scored a failure, with no
+    /// `health indicator timed out` line, because the per-indicator ceiling has
+    /// not fired yet.
+    #[tokio::test(start_paused = true)]
+    async fn the_probe_deadline_bounds_a_check_that_would_outlive_the_kubelet() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let container = Container::builder().build();
+        // The ceiling deliberately far above the deadline: this is the shape
+        // that used to answer nothing at all.
+        let config = HealthConfig::default()
+            .with_indicator_timeout(Duration::from_secs(300))
+            .with_probe_deadline(Duration::from_millis(900));
+        let entries = [
+            entry("fast", |_| Box::pin(async { Ok(()) })),
+            entry("hang", |_| {
+                Box::pin(std::future::pending::<anyhow::Result<()>>())
+            }),
+        ];
+        let entries: Vec<&HealthIndicator> = entries.iter().collect();
+
+        let started = tokio::time::Instant::now();
+        let report = run_indicators(&entries, &container, ProbeKind::Readiness, &config).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the response is bounded by the deadline, not by the indicator ceiling",
+        );
+
+        assert_eq!(report.status, IndicatorStatus::Down);
+        assert!(
+            report.info.contains_key("fast"),
+            "what answered is still reported: {report:#?}",
+        );
+        let hung = report
+            .error
+            .get("hang")
+            .expect("the unanswered check is down");
+        assert_eq!(
+            hung.error.as_deref(),
+            Some(REASON_DEADLINE),
+            "a fixed, opaque reason — an unauthenticated body carries nothing else",
+        );
+
+        let event = logs.expect_one(crate::TARGET, "health probe deadline exceeded");
+        assert_eq!(event.level, "warn");
+        assert_eq!(event.field("deadline_ms").as_deref(), Some("900"));
+        assert_eq!(event.field("answered").as_deref(), Some("1"));
+        assert_eq!(event.field("unanswered").as_deref(), Some("1"));
+    }
+
+    /// The body's key order is the indicators' names, whatever order they
+    /// finished in — an operator diffing two probe responses reads a stable
+    /// document rather than a reshuffle.
+    #[tokio::test(start_paused = true)]
+    async fn the_report_is_ordered_by_name_not_by_completion() {
+        let container = Container::builder().build();
+        let config = HealthConfig::default().with_probe_deadline(Duration::from_secs(60));
+        let entries = [
+            entry("zulu", |_| Box::pin(async { Ok(()) })),
+            entry("alpha", |_| {
+                Box::pin(async {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    Ok(())
+                })
+            }),
+        ];
+        let entries: Vec<&HealthIndicator> = entries.iter().collect();
+
+        let report = run_indicators(&entries, &container, ProbeKind::Readiness, &config).await;
+        let body = serde_json::to_string(&report).expect("the report serializes");
+        assert!(
+            body.find("\"alpha\"") < body.find("\"zulu\""),
+            "keys are name-ordered even though `zulu` finished first: {body}",
         );
     }
 

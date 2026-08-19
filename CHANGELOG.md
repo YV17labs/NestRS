@@ -415,6 +415,9 @@ saying `features = ["resource"]` drops the word.
   `container::DuplicateProvider` go `pub(crate)`, having no caller outside
   the crate in either workspace; the unit catalogue in `operation_log` now
   names the edge crates that own each constant.
+- **The OpenAPI document lines file under `nest_rs::openapi`**, not
+  `nest_rs::routes` — a target's one job is to say where an event came from,
+  and the write happens in `nest-rs-openapi`.
 
 ### The documented front door is compiled
 

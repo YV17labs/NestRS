@@ -3241,10 +3241,13 @@ version = "5.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
+ "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-interceptors",
+ "nest-rs-testing",
  "parking_lot",
  "poem",
+ "tokio",
 ]
 
 [[package]]

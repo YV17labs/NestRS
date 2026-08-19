@@ -20,5 +20,15 @@ async-trait.workspace = true
 # Per-request entry accumulator lock — poison-free locking.
 parking_lot.workspace = true
 
+# The composition witness boots an app and reads the header back off a route.
+# `nest-rs-guards` is there because `#[routes]` expands into the per-route layer
+# chain unconditionally — the dependency a *consumer* gets through the umbrella,
+# and which a workspace crate names directly. Path-only intra-workspace dev
+# edges, per the manifest rule.
+[dev-dependencies]
+nest-rs-guards = { path = "../nest-rs-guards" }
+nest-rs-testing = { path = "../nest-rs-testing" }
+tokio.workspace = true
+
 [lints]
 workspace = true

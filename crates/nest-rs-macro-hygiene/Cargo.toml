@@ -17,9 +17,17 @@ publish = false
 # crate — the rule is broken and this crate stops compiling. That failure is
 # the point.
 #
-# The features are exactly the capabilities exercised below. A capability that
-# needs a satellite the developer would otherwise have to name is a hole in the
-# umbrella's feature matrix, and it surfaces here before it reaches a user.
+# The features are exactly the capabilities exercised below.
+#
+# **What this proves and what it does not.** It proves that the decorators in
+# `src/` need no dependency but the umbrella — a bare third-party path in any
+# expansion fails to resolve here, because nothing third-party is in this
+# crate's extern prelude. It does **not** prove each capability pulls its own
+# satellites: all ten features build as one union, so a satellite `queue`
+# forgot is still supplied by `http` and nothing fails. Splitting the witness
+# per feature is what would close that, and it is an owner question rather than
+# an edit — `nest-rs-conformance`'s umbrella join records the same limit beside
+# the column it fills.
 nest-rs = { path = "../nest-rs", default-features = false, features = [
     "config",
     "events",

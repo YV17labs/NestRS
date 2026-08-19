@@ -112,10 +112,17 @@ pub mod prelude {
         App, AppBuilder, Container, ContainerBuilder, Module, hooks, injectable, module,
     };
 
+    // `#[input]` is `nest-rs-core`'s and every edge re-exports it, which is the
+    // statement that it belongs to none of them. It sat inside the `http` block
+    // for a while, so `--no-default-features --features queue` left a job
+    // payload with no `#[input]` and the remedy a developer reaches for pulls
+    // the whole HTTP stack into a headless worker.
+    pub use nest_rs_core::input;
+
     #[cfg(feature = "http")]
     pub use nest_rs_http::{
         ClientIp, Ctx, HttpConfig, HttpModule, RawBody, Reflector, Scoped, Valid, controller,
-        http_code, input, interceptor, redirect, response_header, routes,
+        http_code, interceptor, redirect, response_header, routes,
     };
 
     // `Json`/`Path`/`Query` are `poem` extractors re-exported through
@@ -132,13 +139,13 @@ pub mod prelude {
     pub use nest_rs_events::listeners;
 
     #[cfg(feature = "graphql")]
-    pub use nest_rs_graphql::{dataloader, resolver};
+    pub use nest_rs_graphql::{dataloader, operations, resolver};
 
     #[cfg(feature = "health")]
     pub use nest_rs_health::indicators;
 
     #[cfg(feature = "mcp")]
-    pub use nest_rs_mcp::mcp;
+    pub use nest_rs_mcp::{mcp, tools};
 
     #[cfg(feature = "queue")]
     pub use nest_rs_queue::{processor, queue};

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The documented front door is compiled
+
+- **`use nest_rs::prelude::*` now has a reader, and it had drifted where
+  nothing looked.** `#[resolver]` and `#[mcp]` were re-exported without their
+  impl halves `#[operations]` and `#[tools]`, so the documented import gave the
+  struct half of two decorator pairs and an unresolved attribute on the other —
+  whose natural remedy is exactly the second manifest line the umbrella rule
+  forbids. The witness lives in `nest-rs-macro-hygiene`, which now *applies*
+  every prelude decorator rather than merely importing it, because a glob
+  import cannot fail on a name it does not find.
+- **`#[input]` leaves the prelude's `http` block.** It is `nest-rs-core`'s and
+  every edge re-exports it, which is the statement that it belongs to none of
+  them; behind `http` it left a `--features queue` worker's job payload with no
+  `#[input]` and a remedy that pulls the whole HTTP stack into a headless
+  binary.
+- **`nest-rs-guards` documents all its features on docs.rs.** The three
+  per-edge marker traits are feature-gated and docs.rs builds default features
+  only, so the published page carried neither the traits nor the links naming
+  them.
+- **`full` states its one exception.** It pulls every capability but `testing`,
+  which is a `--dev` install; folding it in would put a test harness in every
+  release binary of anyone who took the undecided default. Asymmetry argued in
+  the manifest, not silent.
+- **Two capabilities gained their composition witness.** `nest-rs-server-timing`
+  and `nest-rs-health` each boot the documented wiring in their own crate and
+  read the result back — the header off a route, the probe off the controller —
+  instead of leaning on `demo/` to prove it.
+
 ### Every declaration grammar refuses the same four ways
 
 A decorator that takes `key = value` arguments owes four refusals, each a

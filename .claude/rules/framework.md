@@ -623,10 +623,11 @@ line whose proof you cannot run is a line you have not done.
 15. **`nest_rs::<edge>` span target**, level per layer, ≥1 structured field per
     event — **and one `nest_rs::operation` line per unit of work**, through
     `nest_rs_core::operation_log`. The target is a constant from
-    `nest_rs_core::target`, never a string; the unit's name is a constant from
-    `operation_log::unit`, spelled `<edge>.<unit>` and read by the span, the
-    line's `name:` and its `message` alike; the span's kind is a constant from
-    `operation_log::kind`. The `units` join fails on a literal at any of them. A log line renders no span state, so the span's
+    `nest_rs_core::target`, never a string; the unit's name is a constant the
+    **edge's own crate** declares in its `src/unit.rs` — the kernel holds none,
+    for the reason `operation_log`'s module doc gives — spelled `<edge>.<unit>`
+    and read by the span, the line's `name:` and its `message` alike; the span's
+    kind is a constant from `operation_log::kind`. The `units` join fails on a literal at any of them. A log line renders no span state, so the span's
     attributes say nothing on the console: the line is where the work is named
     (which route, which event, which job, which tool), and an edge without one
     leaves its work anonymous. It carries the edge's own identity fields plus
@@ -825,8 +826,11 @@ name order; init failure aborts boot, shutdown is best-effort.
   framework primitives — never define one in an app.**
 - **`nest-rs-schedule`** — `#[scheduled]` orchestrator; methods tagged
   with exactly one of `#[every]` / `#[cron]` (optional `tz`) /
-  `#[after]`. Literals validated at compile time; presets/timezones at
-  boot. `Scheduler` is a `Transport` via `TransportContribution`.
+  `#[after]`. Literals validated at compile time — **`tz` included**: it is
+  always a string literal over the closed IANA name set, so both of `#[cron]`'s
+  keys are refused at the line that wrote them rather than one of them at the
+  boot. `CronExpression` presets are paths, so they are the one thing that still
+  resolves at boot. `Scheduler` is a `Transport` via `TransportContribution`.
 - **`nest-rs-queue` + `nest-rs-redis`** — backend-agnostic queue contract
   (`Job`/`Processor`/`ProcessMethod` + `#[processor]` + inventory seam)
   with Redis first-class (on `apalis`). Crate names follow the

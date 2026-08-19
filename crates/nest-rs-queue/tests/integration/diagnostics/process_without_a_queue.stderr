@@ -1,0 +1,5 @@
+error: #[process] requires `queue` — write `queue = "emails"` (or a `QueueName` type)
+  --> tests/integration/diagnostics/process_without_a_queue.rs:18:15
+   |
+18 |     #[process()]
+   |               ^

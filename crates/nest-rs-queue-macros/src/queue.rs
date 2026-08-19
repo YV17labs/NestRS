@@ -93,13 +93,16 @@ impl Parse for QueueArgs {
         let name = name.ok_or_else(|| {
             syn::Error::new(
                 input.span(),
-                "#[queue] requires a `name = \"...\"` argument",
+                nest_rs_codegen::missing_argument("queue", "name", "\"emails\""),
             )
         })?;
         let job = job.ok_or_else(|| {
             syn::Error::new(
                 input.span(),
-                "#[queue] requires a `job = <PayloadType>` argument naming the queue's payload",
+                format!(
+                    "{} (the type this queue's jobs carry)",
+                    nest_rs_codegen::missing_argument("queue", "job", "<PayloadType>"),
+                ),
             )
         })?;
 

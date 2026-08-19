@@ -1,4 +1,4 @@
-error: a hook method declares exactly one lifecycle phase — this one declares `#[on_module_init]` and `#[on_module_destroy]`. A method that must run in two phases is two methods.
+error: a method declares exactly one lifecycle phase — this one declares `#[on_module_init]` and `#[on_module_destroy]`. Accepted: `#[on_module_init]`, `#[on_application_bootstrap]`, `#[on_module_destroy]`, `#[before_application_shutdown]` or `#[on_application_shutdown]`. Keeping the first and dropping the second would run the method under a lifecycle phase you did not write, so neither is assumed: a method that must be two is two methods.
   --> tests/integration/diagnostics/hooks_declaring_two_phases.rs:20:5
    |
 20 |     async fn both(&self) {}

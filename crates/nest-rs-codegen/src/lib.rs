@@ -19,6 +19,7 @@ mod casing;
 mod crud;
 mod inject;
 mod job;
+mod mount;
 mod pair;
 mod posture;
 mod root;
@@ -31,8 +32,8 @@ mod ty;
 pub mod versioning;
 
 pub use args::{
-    duplicate_argument, key_as_written, needs_a_value, once, require_str_lit, unknown_argument,
-    unknown_value, unmatched_meta,
+    duplicate_argument, key_as_written, missing_argument, needs_a_value, once, one_role_per_method,
+    require_str_lit, role_name, unknown_argument, unknown_value, unmatched_meta,
 };
 pub use attrs::{reject_http_only_layers, take_flag_attr, take_path_list};
 pub use capability::guard_capability_bounds;
@@ -48,10 +49,11 @@ pub use inject::{
     mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
 };
 pub use job::{TRANSACTIONAL, job_argument_needs_a_value, job_transaction, transactional_value};
+pub use mount::reject_path;
 pub use pair::{DecoratorPair, parse_provider_host, provider_residency};
 pub use posture::{
     ID_ARG_UNSUPPORTED_BECAUSE, Posture, PostureRules, at_most_one_authorize,
-    posture_key_unsupported,
+    posture_contradiction, posture_key_unsupported, posture_required,
 };
 pub use root::reroot;
 pub use specs::{force_guard_typeids, scoped_specs};

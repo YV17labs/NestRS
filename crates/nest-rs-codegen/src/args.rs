@@ -124,6 +124,85 @@ pub fn unknown_value(attr: &str, what: &str, name: &str, expected: &[&str]) -> S
     )
 }
 
+/// The sentence a decorator prints for a **required** argument that was not
+/// written at all.
+///
+/// The fifth refusal a `key = value` grammar owes, and the last one to be
+/// worded here. It was live at eight sites in six crates in three verbs
+/// (`requires` / `needs` / `is required`) and three shapes (`requires <key>`,
+/// `requires a <key> argument`, `<key> is required`) — and six of the eight were
+/// spanned at `Span::call_site()`, so the caret landed on the item rather than
+/// on the declaration that is short a key. That is the same drift
+/// [`unknown_argument`] was extracted to end, one refusal over.
+///
+/// `example` is a value the key actually takes, because "requires `path`" tells
+/// a reader which key and not what to write there; every sibling in this module
+/// carries one for the same reason.
+pub fn missing_argument(attr: &str, key: &str, example: &str) -> String {
+    format!("#[{attr}] requires `{key}` — write `{key} = {example}`")
+}
+
+/// The bare identifier an attribute was written with, for a refusal that quotes
+/// it back — `?` when the path is not a bare ident, because a refusal naming
+/// nothing is worse than one naming the shape.
+///
+/// Here rather than in each orchestrator: five of them extracted this by hand
+/// and three disagreed on the fallback, so a non-ident path was quoted back as
+/// `#[?]` at one site and as an empty `#[]` at two others.
+pub fn role_name(path: &syn::Path) -> String {
+    path.get_ident()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "?".to_owned())
+}
+
+/// The sentence an orchestrator prints for a method that declares two of the
+/// roles it collects.
+///
+/// Five orchestrators impose this identical rule — `#[hooks]`, `#[indicators]`,
+/// `#[scheduled]`, `#[operations]`, `#[tools]` — and it was worded four ways
+/// plus one silence. The four disagreed on *what* they name: two listed the
+/// alternatives and never said which two the method wrote, one said what was
+/// written and never listed the alternatives. A reader wants both, so the
+/// shared sentence carries both.
+///
+/// The silence was MCP's, and it was the one with a consequence rather than a
+/// wording: `#[tools]` took the **first** role attribute with a `find_map` and
+/// removed only that one, leaving the second on the re-emitted method for rmcp
+/// to route as an operation nobody declared.
+///
+/// `noun` is what the family is called at this site — a phase, a probe, a
+/// trigger, a role — because that is the word the developer just wrote and the
+/// one they will search for.
+///
+/// Both lists are named **bare** and bracketed here, so `#[..]` is written in
+/// one place rather than at each of the five call sites — where the hand-rolled
+/// spelling had already drifted three ways.
+pub fn one_role_per_method(noun: &str, declared: &[String], accepted: &[&str]) -> String {
+    // `and`, not the `or` [`expected_list`] joins with: the method declared
+    // both of these, and reading it back as a choice describes the opposite of
+    // what happened.
+    let written = declared
+        .iter()
+        .map(|name| format!("`#[{name}]`"))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    let bracketed: Vec<String> = accepted.iter().map(|name| format!("#[{name}]")).collect();
+    format!(
+        "a method declares exactly one {noun} — this one declares {written}. Accepted: {}. \
+         Keeping the first and dropping the second would run the method under a {noun} \
+         you did not write, so neither is assumed: a method that must be two is two \
+         methods.",
+        expected_list(
+            bracketed
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .as_slice(),
+            "none",
+        ),
+    )
+}
+
 /// The refusal a `Punctuated<Meta, _>` grammar owes for a `Meta` none of its
 /// arms matched.
 ///

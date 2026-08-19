@@ -21,6 +21,13 @@ nest-rs-codegen.workspace = true
 # Validate a `cron(...)` string literal at macro-expansion time, so a bad
 # expression is a compile error rather than a boot-time surprise.
 croner.workspace = true
+# The same argument for the sibling key in the same attribute. `tz` is always a
+# `LitStr` — `require_str_lit` enforces it — and the IANA name set is closed, so
+# `Europe/Pariz` is knowable at expansion. Leaving it to `Scheduler::configure`
+# made one of two keys in one attribute a deployment failure instead of a line
+# the compiler underlines. "A refusal lands at the earliest site that can see
+# the fact."
+chrono-tz.workspace = true
 
 [lints]
 workspace = true

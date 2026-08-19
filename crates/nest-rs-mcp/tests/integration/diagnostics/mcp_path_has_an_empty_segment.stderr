@@ -1,0 +1,5 @@
+error: #[mcp] `path` is not a mount path: it contains an empty segment (`//`) — that addresses the same resource as the single-slash spelling, and only one of the two is normalized
+ --> tests/integration/diagnostics/mcp_path_has_an_empty_segment.rs:7:14
+  |
+7 | #[mcp(path = "//tools")]
+  |              ^^^^^^^^^

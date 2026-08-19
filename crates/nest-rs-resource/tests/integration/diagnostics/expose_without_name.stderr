@@ -1,4 +1,4 @@
-error: #[expose(name = "...")] is required (the wire DTO / OpenAPI schema name)
+error: #[expose] requires `name` — write `name = "User"` (the wire DTO and OpenAPI schema name)
   --> tests/integration/diagnostics/expose_without_name.rs:10:12
    |
 10 | pub struct Model {

@@ -1,0 +1,8 @@
+error: #[input] takes a struct with named fields, and this is an enum. `#[input]` bundles `validator::Validate`, whose derive supports only that shape (`Serialize`, `Deserialize` and `JsonSchema` do not mind). For a tagged union, put `#[input]` on each variant's payload struct and derive the wire traits on the enum itself; for a newtype, give the field a name.
+  --> tests/integration/diagnostics/input_on_an_enum.rs:9:1
+   |
+ 9 | / pub enum Command {
+10 | |     Start,
+11 | |     Stop { after: u32 },
+12 | | }
+   | |_^

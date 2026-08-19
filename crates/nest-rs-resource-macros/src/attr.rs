@@ -190,7 +190,10 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     let name = name.ok_or_else(|| {
         syn::Error::new_spanned(
             &item.ident,
-            "#[expose(name = \"...\")] is required (the wire DTO / OpenAPI schema name)",
+            format!(
+                "{} (the wire DTO and OpenAPI schema name)",
+                nest_rs_codegen::missing_argument("expose", "name", "\"User\""),
+            ),
         )
     })?;
     let name_ident = format_ident!("{}", name);

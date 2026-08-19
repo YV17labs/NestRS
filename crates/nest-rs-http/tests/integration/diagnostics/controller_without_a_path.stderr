@@ -1,0 +1,7 @@
+error: #[controller] requires `path` — write `path = "/users"`
+ --> tests/integration/diagnostics/controller_without_a_path.rs:8:1
+  |
+8 | #[controller]
+  | ^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `controller` (in Nightly builds, run with -Z macro-backtrace for more info)

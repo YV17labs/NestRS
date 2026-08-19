@@ -1,0 +1,5 @@
+error: unknown #[controller] argument `prefix`; expected `path` or `version`
+ --> tests/integration/diagnostics/controller_unknown_key.rs:9:33
+  |
+9 | #[controller(path = "/widgets", prefix = "/v1")]
+  |                                 ^^^^^^^^^^^^^^

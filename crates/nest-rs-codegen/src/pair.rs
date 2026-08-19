@@ -53,6 +53,49 @@ pub struct DecoratorPair {
 }
 
 impl DecoratorPair {
+    /// Refuse a host-scope layer written on the impl half, naming the struct
+    /// half it belongs on.
+    ///
+    /// **The sentence must not enumerate the siblings**, and that is the whole
+    /// reason this is here. Two edges worded it themselves and had already
+    /// drifted in *content*, not merely in phrasing: MCP's named
+    /// `#[controller]`, `#[resolver]` and `#[gateway]`, GraphQL's named
+    /// `#[controller]` and `#[gateway]` — so a resolver author was told the
+    /// uniformity spanned two edges when it spanned four, and every edge added
+    /// later would have inherited a list that was wrong the day it landed. The
+    /// pair already knows its own two nouns; a reader needs those, not a roll
+    /// call.
+    ///
+    /// The other two edges said nothing at all. `#[use_guards]` is not a
+    /// standalone attribute macro anywhere in the tree — it exists only as text
+    /// a host decorator consumes — so on a `#[routes]` or `#[messages]` impl it
+    /// reached rustc as `cannot find attribute `use_guards` in this scope`,
+    /// which is verbatim the failure `attrs.rs` cites as the reason
+    /// `HTTP_ONLY_LAYERS` is a constant: no transport named, no reason, no
+    /// remedy.
+    pub fn reject_host_layers(&self, attrs: &[syn::Attribute]) -> syn::Result<()> {
+        const HOST_SCOPE: [&str; 2] = ["use_guards", "force_guards"];
+        for attr in attrs {
+            let Some(name) = HOST_SCOPE.iter().find(|name| attr.path().is_ident(name)) else {
+                continue;
+            };
+            return Err(syn::Error::new_spanned(
+                attr,
+                format!(
+                    "`#[{name}(...)]` belongs on the {subject} beside `{host}`, not on \
+                     this `{operations}` block — the struct half declares the host's \
+                     access posture, and this half declares its {collects}. A layer \
+                     scoped to one operation goes on that operation's method.",
+                    subject = self.subject,
+                    host = self.host,
+                    operations = self.operations,
+                    collects = self.collects,
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// A pair whose struct half is the generic `#[injectable]` — a queue
     /// processor, a scheduled-task host, an event-listener host. There is no
     /// edge-specific struct decorator to name, but reaching for the impl half on

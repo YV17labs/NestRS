@@ -1,0 +1,5 @@
+error: `#[use_guards(...)]` belongs on the host struct beside `#[mcp]`, not on this `#[tools]` block — the struct half declares the host's access posture, and this half declares its #[tool] / #[prompt]. A layer scoped to one operation goes on that operation's method.
+  --> tests/integration/diagnostics/use_guards_on_a_tools_block.rs:17:1
+   |
+17 | #[use_guards(AllowAll)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^

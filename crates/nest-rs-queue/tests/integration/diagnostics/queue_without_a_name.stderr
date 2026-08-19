@@ -1,0 +1,7 @@
+error: #[queue] requires `name` — write `name = "emails"`
+ --> tests/integration/diagnostics/queue_without_a_name.rs:7:1
+  |
+7 | #[queue(job = Payload)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `queue` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -106,7 +106,7 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     let lit = namespace.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
-            "#[config] needs a namespace: `#[config(namespace = \"database\")]`",
+            nest_rs_codegen::missing_argument("config", "namespace", "\"database\""),
         )
     })?;
     validate_namespace(&lit)?;

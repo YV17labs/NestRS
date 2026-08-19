@@ -62,6 +62,9 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
+    if let Err(err) = crate::gateway::WS_PAIR.reject_host_layers(&item.attrs) {
+        return err.to_compile_error().into();
+    }
     let self_ty = item.self_ty.clone();
 
     // Gateway struct name — logged as a structured field beside each mounted

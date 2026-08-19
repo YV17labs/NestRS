@@ -5,15 +5,16 @@
 //! to the app at boot.
 //!
 //! Triggers are validated **at compile time** (string literals) or **at
-//! boot** (`CronExpression` presets, IANA timezones); a bad value fails the
-//! boot naming the offending job.
+//! boot** (`CronExpression` presets); a bad value fails the boot naming the
+//! offending job. `#[cron]`'s `tz` is in the first group with its expression:
+//! it is always a literal over the closed IANA name set, so both keys of that
+//! one attribute are refused at the line that wrote them.
 
 // Opts OUT of the workspace `unsafe_code = "forbid"` lint (no `[lints]
-// workspace = true` in Cargo.toml): its integration test
-// (`tests/integration/end_to_end.rs`)
-// needs `unsafe { std::env::set_var }` for setup, and a Cargo `[lints]` forbid
-// also covers test targets and can't be overridden. This lib-level forbid keeps
-// the production guarantee (the lib itself has no `unsafe`) without breaking the
+// workspace = true` in Cargo.toml): `tests/integration/module.rs` needs
+// `unsafe { std::env::set_var }` for setup, and a Cargo `[lints]` forbid also
+// covers test targets and can't be overridden. This lib-level forbid keeps the
+// production guarantee (the lib itself has no `unsafe`) without breaking the
 // integration test.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

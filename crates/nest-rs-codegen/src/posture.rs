@@ -51,6 +51,35 @@ pub fn at_most_one_authorize(site: &str) -> String {
 pub const ID_ARG_UNSUPPORTED_BECAUSE: &str = "it renames the argument GraphQL's `bind = Service` synthesises, and no other \
      transport synthesises one";
 
+/// The sentence an edge prints when an operation declares both postures.
+///
+/// Free-standing beside [`at_most_one_authorize`] and
+/// [`posture_key_unsupported`], because the seam for *wording without parsing*
+/// is what this family needed: `framework.md` argues that two of four edges
+/// parse their own posture — GraphQL's `bind = Service` and `id_arg`, HTTP's
+/// optional posture — and both arguments are about the parser's **signature**.
+/// Neither reaches this sentence, which contains no `bind`, no `id_arg` and no
+/// optionality, and which GraphQL had retyped byte for byte.
+pub fn posture_contradiction() -> &'static str {
+    "`#[authorize(...)]` and `#[public]` contradict — an operation is gated or public, not both"
+}
+
+/// The sentence an edge prints for an operation with no posture at all.
+///
+/// `operation` names what the edge calls one and `public_means` says what
+/// `#[public]` costs there — the two axes that genuinely differ. Everything
+/// else is one wording, for [`posture_contradiction`]'s reason. It is
+/// `framework.md`'s *"the one item on this list that is load-bearing on its
+/// own"*, so three spellings of it was the worst place in the framework to have
+/// three.
+pub fn posture_required(operation: &str, public_means: &str) -> String {
+    format!(
+        "every {operation} declares its access posture: `#[authorize(Action, Entity)]` \
+         (class-level gate + automatic response masking — e.g. \
+         `#[authorize(Read, users::Entity)]`) or `#[public]` ({public_means})"
+    )
+}
+
 /// The sentence a site prints for an `#[authorize(...)]` key it cannot express.
 ///
 /// **One helper for all three keys**, because `CLAUDE.md` says so in the
@@ -132,21 +161,13 @@ impl PostureRules {
         match (spec, public) {
             (Some(_), true) => Err(syn::Error::new_spanned(
                 &method.sig.ident,
-                "`#[authorize(...)]` and `#[public]` contradict — an operation is gated \
-                 or public, not both",
+                posture_contradiction(),
             )),
             (Some(posture), false) => Ok(posture),
             (None, true) => Ok(Posture::Public),
             (None, false) => Err(syn::Error::new_spanned(
                 &method.sig.ident,
-                format!(
-                    "every {operation} declares its access posture: \
-                     `#[authorize(Action, Entity)]` (class-level gate + automatic response \
-                     masking — e.g. `#[authorize(Read, users::Entity)]`) or `#[public]` \
-                     ({public_means})",
-                    operation = self.operation,
-                    public_means = self.public_means,
-                ),
+                posture_required(self.operation, self.public_means),
             )),
         }
     }

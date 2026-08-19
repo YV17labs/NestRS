@@ -107,28 +107,50 @@ impl Operations {
 }
 
 /// Which router a decorated method belongs to.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Role {
     Tool,
     Prompt,
 }
 
 impl Role {
+    /// Every role, paired with the bare attribute name that declares it.
+    ///
+    /// **One table, three readers** — the predicate, the diagnostic that quotes
+    /// the attribute back, and the one-role refusal's accepted set. It shipped
+    /// as a fourth copy beside three hand-spelled `is_ident("tool")` /
+    /// `"#[tool]"` matches, with a doc claiming the coupling that would have
+    /// prevented them: a constant nothing reads is a constant that drifts, and
+    /// one whose doc asserts it is read is worse, because the next reader
+    /// believes the check already exists.
+    /// Both spellings sit on one line per role — the bare name a path matches
+    /// and the bracketed form a diagnostic quotes — so the two cannot drift
+    /// apart the way three separate `match` arms did.
+    const ALL: [(Self, &'static str, &'static str); 2] = [
+        (Self::Tool, "tool", "#[tool]"),
+        (Self::Prompt, "prompt", "#[prompt]"),
+    ];
+
+    /// The bare attribute names, for the refusal that lists what is accepted.
+    fn names() -> [&'static str; 2] {
+        [Self::ALL[0].1, Self::ALL[1].1]
+    }
+
     /// The role an attribute gives a method, if it gives one.
     fn from_attr(attr: &Attribute) -> Option<Self> {
-        match () {
-            () if attr.path().is_ident("tool") => Some(Self::Tool),
-            () if attr.path().is_ident("prompt") => Some(Self::Prompt),
-            _ => None,
-        }
+        Self::ALL
+            .iter()
+            .find(|(_, name, _)| attr.path().is_ident(name))
+            .map(|(role, _, _)| *role)
     }
 
     /// The attribute a reader wrote, for a diagnostic that quotes it back.
     fn attr(self) -> &'static str {
-        match self {
-            Self::Tool => "#[tool]",
-            Self::Prompt => "#[prompt]",
-        }
+        Self::ALL
+            .iter()
+            .find(|(role, _, _)| *role == self)
+            .map(|(_, _, bracketed)| *bracketed)
+            .unwrap_or_default()
     }
 
     /// The `McpOperationKind` variant this role reports to a guard.
@@ -209,13 +231,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // same way; a hand-written `impl ServerHandler` (the escape hatch a host
     // with no `#[tools]` block takes) is what the shared sentence redirects to.
     reject_http_only_layers(&item.attrs, "MCP", "host")?;
-    if let Some(attr) = item.attrs.iter().find(|a| a.path().is_ident("use_guards")) {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "put `#[use_guards(...)]` on the host's `struct`, not its `impl` block — \
-             uniform with `#[controller]`, `#[resolver]` and `#[gateway]`",
-        ));
-    }
+    crate::mcp::MCP_PAIR.reject_host_layers(&item.attrs)?;
 
     let self_ty = item.self_ty.clone();
     // **`#[tools]`, because this file is `#[tools]`' expansion.** The pair
@@ -562,6 +578,7 @@ fn result_ok_type(sig: &Signature) -> Option<&Type> {
     nth_generic_type(ty, "Result", 0)
 }
 
+/// An attribute's bare identifier, for a refusal that names what was written.
 /// Partition the decorated methods by role, taking each one's layer declarations
 /// off the authored method as it goes.
 ///
@@ -575,12 +592,28 @@ fn take_operations(item: &mut ItemImpl, base: &syn::Ident) -> syn::Result<Operat
         let ImplItem::Fn(method) = entry else {
             return Err(unsupported(entry));
         };
-        let Some((index, role)) = method
+        // **Every role attribute, not the first.** `find_map` took the first and
+        // `take_operation` removed only that one, so a method carrying both
+        // `#[tool]` and `#[prompt]` left the second on the re-emitted item for
+        // rmcp to route as an operation nobody declared. The four sibling
+        // orchestrators all refuse their second by name; this was the silence.
+        let roles: Vec<(usize, Role)> = method
             .attrs
             .iter()
             .enumerate()
-            .find_map(|(index, attr)| Role::from_attr(attr).map(|role| (index, role)))
-        else {
+            .filter_map(|(index, attr)| Role::from_attr(attr).map(|role| (index, role)))
+            .collect();
+        if let [(first, _), (second, _), ..] = roles.as_slice() {
+            let declared = [
+                nest_rs_codegen::role_name(method.attrs[*first].path()),
+                nest_rs_codegen::role_name(method.attrs[*second].path()),
+            ];
+            return Err(syn::Error::new_spanned(
+                &method.attrs[*second],
+                nest_rs_codegen::one_role_per_method("role", &declared, &Role::names()),
+            ));
+        }
+        let Some((index, role)) = roles.into_iter().next() else {
             // Helpers belong beside the struct: left here they would move into
             // the generated module, where a reader would not look for them.
             return Err(unsupported(entry));

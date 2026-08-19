@@ -192,7 +192,7 @@ fn validate_canonical_uri(uri: &str) -> Result<(), AuthError> {
     }
     if uri.len() > 1 && uri.ends_with('/') {
         tracing::warn!(
-            target: "nest_rs::authn",
+            target: crate::TARGET,
             uri,
             "resource URI ends in a trailing slash; clients are told to prefer the form without one",
         );

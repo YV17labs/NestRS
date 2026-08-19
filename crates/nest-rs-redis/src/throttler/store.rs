@@ -108,7 +108,7 @@ impl ThrottlerStore for RedisThrottler {
             // target), asking the client to retry after the window.
             Err(error) => {
                 tracing::warn!(
-                    target: "nest_rs::throttler",
+                    target: nest_rs_throttler::TARGET,
                     key = %key,
                     error = %error,
                     "redis throttler unavailable; denying (fail-closed)",

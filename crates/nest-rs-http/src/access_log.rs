@@ -1,4 +1,9 @@
-//! One structured event per request, on `nest_rs::access`.
+//! One structured event per request, on `nest_rs::operation`.
+//!
+//! The file keeps its name: it implements `NESTRS_HTTP__ACCESS_LOG`, and an
+//! access log is precisely what one edge's per-request line is. What the rename
+//! took away is the *family's* target wearing this edge's word — see
+//! [`operation_log::TARGET`](nest_rs_core::operation_log::TARGET).
 //!
 //! # Why the transport owns this
 //!
@@ -81,7 +86,9 @@ impl AccessLog {
     /// business making on an operator's behalf.
     pub(crate) fn emit(self, status: u16, bytes: u64) {
         tracing::info!(
+            name: nest_rs_core::operation_log::unit::HTTP_REQUEST,
             target: nest_rs_core::operation_log::TARGET,
+            message = nest_rs_core::operation_log::unit::HTTP_REQUEST,
             method = %self.method,
             path = self.uri.path(),
             status,
@@ -93,7 +100,6 @@ impl AccessLog {
             // tell them apart is reading a number it should not trust.
             forwarded = self.client.forwarded,
             user_agent = self.user_agent.as_deref(),
-            "request served",
         );
     }
 

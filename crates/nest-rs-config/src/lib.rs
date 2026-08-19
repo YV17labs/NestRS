@@ -9,8 +9,18 @@
 //! `<PREFIX>` is `NESTRS` out of the box. A deployment that wants its own brand
 //! on its variables sets `NESTRS_ENV_PREFIX=ACME` on the process, and every name
 //! here follows, `ACME_DATABASE__URL` through `ACME_ENV`.
+
 #![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]
+
+/// This crate's span target — The `.env` cascade, resolved namespaces, and refused values.
+///
+/// Declared by the crate that **owns** the concern, which is not always the only
+/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
+/// rather than spelling a second one, because a target's one job is to say
+/// **where** an event came from. A central table in the kernel would have meant
+/// `nest-rs-core` holding a name for a concern it does not know exists.
+pub const TARGET: &str = "nest_rs::config";
 
 mod config;
 mod dotenv;

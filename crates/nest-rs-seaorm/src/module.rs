@@ -71,7 +71,7 @@ async fn connect(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> 
         );
     }
     tracing::info!(
-        target: "nest_rs::orm",
+        target: crate::TARGET,
         max_connections = ?config.max_connections,
         "connecting to database"
     );

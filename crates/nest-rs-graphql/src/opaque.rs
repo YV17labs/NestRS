@@ -43,7 +43,7 @@ impl<T, E: Display> Opaque<T> for Result<T, E> {
     fn opaque(self) -> Result<T, GraphqlError> {
         self.map_err(|err| {
             tracing::error!(
-                target: "nest_rs::graphql",
+                target: crate::TARGET,
                 error = %err,
                 "graphql operation failed",
             );

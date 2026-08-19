@@ -195,7 +195,10 @@ async fn a_tool_body_runs_under_its_own_operation_span_in_the_requests_trace() {
     // call reports itself: rmcp addresses many operations over one HTTP request,
     // so the endpoint's access line names the session and says nothing about the
     // work.
-    let served = logs.find(nest_rs_core::operation_log::TARGET, "operation served");
+    let served = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_core::operation_log::unit::MCP_OPERATION,
+    );
     // At least one line per operation span, and possibly more: a **notification**
     // is dispatched work and files a line, but opens no `mcp.operation` span of
     // its own — it runs under the request's. So the counts are not equal, and

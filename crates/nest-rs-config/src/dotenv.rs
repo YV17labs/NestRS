@@ -129,7 +129,7 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
         Err(e) => {
             tracing::warn!(
-                target: "nest_rs::config",
+                target: crate::TARGET,
                 path = %path.display(),
                 error = %e,
                 "skipping unreadable .env file",
@@ -161,7 +161,7 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
     // user expects is quietly absent.
     if skipped > 0 {
         tracing::warn!(
-            target: "nest_rs::config",
+            target: crate::TARGET,
             path = %path.display(),
             skipped,
             "skipped malformed .env lines",

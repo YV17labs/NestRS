@@ -98,7 +98,7 @@ impl OpenTelemetry {
             mark_initialized();
 
             tracing::info!(
-                target: "nest_rs::opentelemetry",
+                target: crate::TARGET,
                 service = %config.service_name,
                 mode = "otlp",
                 endpoint = config.otlp_endpoint.as_deref().unwrap_or("<none>"),
@@ -124,7 +124,7 @@ impl OpenTelemetry {
                 .map_err(|e| OpenTelemetryError::Init(e.to_string()))?;
             mark_initialized();
             tracing::info!(
-                target: "nest_rs::opentelemetry",
+                target: crate::TARGET,
                 service = %config.service_name,
                 mode = "console",
                 log_format = ?config.log_format,

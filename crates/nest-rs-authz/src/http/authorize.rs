@@ -55,7 +55,7 @@ where
             // A wiring bug, and the response body is an opaque problem+json: log
             // it or the developer sees a 500 with nothing to grep for.
             tracing::error!(
-                target: "nest_rs::authz",
+                target: crate::TARGET,
                 action = ?A::ACTION,
                 subject = std::any::type_name::<S>(),
                 path = %req.original_uri().path(),

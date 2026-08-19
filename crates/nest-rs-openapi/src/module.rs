@@ -81,7 +81,7 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
     // the self-mount by returning the builder untouched.
     if !options.enabled {
         tracing::info!(
-            target: "nest_rs::routes",
+            target: nest_rs_http::target::ROUTES,
             docs_path = DOCS_PATH,
             spec_path = SPEC_PATH,
             "openapi documentation disabled",
@@ -111,13 +111,13 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
                     let contents = format!("{default}\n");
                     tokio::task::spawn_blocking(move || match std::fs::write(&dest, &contents) {
                         Ok(()) => tracing::info!(
-                            target: "nest_rs::routes",
+                            target: nest_rs_http::target::ROUTES,
                             path = %dest.display(),
                             bytes = contents.len(),
                             "wrote OpenAPI document",
                         ),
                         Err(err) => tracing::warn!(
-                            target: "nest_rs::routes",
+                            target: nest_rs_http::target::ROUTES,
                             path = %dest.display(),
                             error = %err,
                             "failed to write OpenAPI document",

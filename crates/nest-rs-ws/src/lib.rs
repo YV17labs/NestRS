@@ -124,6 +124,15 @@
 //! per message without `nest-rs-ws` depending on the ORM or authz.
 #![warn(missing_docs)]
 
+/// This crate's span target — The WebSocket edge: upgrades, connections, message dispatch.
+///
+/// Declared by the crate that **owns** the concern, which is not always the only
+/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
+/// rather than spelling a second one, because a target's one job is to say
+/// **where** an event came from. A central table in the kernel would have meant
+/// `nest-rs-core` holding a name for a concern it does not know exists.
+pub const TARGET: &str = "nest_rs::ws";
+
 mod config;
 mod context;
 mod envelope;

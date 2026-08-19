@@ -158,7 +158,7 @@ where
         let resp = resp?;
         if marked && resp.status().is_success() {
             tracing::error!(
-                target: "nest_rs::http",
+                target: crate::target::HTTP,
                 route = route,
                 "a masking extractor ran but no response shaper armed on this route — \
                  declare it as a handler parameter (a nested or hand-rolled extractor \

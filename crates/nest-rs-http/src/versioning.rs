@@ -410,7 +410,7 @@ impl<E> VersionedEndpoint<E> {
         // heuristic missed the second and left it reachable two ways.
         if self.selector.is_versioned(path) {
             tracing::debug!(
-                target: "nest_rs::http",
+                target: crate::target::HTTP,
                 path = path,
                 strategy = self.selector.strategy.as_str(),
                 "refused a URI-versioned path under a non-URI versioning strategy",
@@ -422,7 +422,7 @@ impl<E> VersionedEndpoint<E> {
             Requested::Stated(raw) if is_valid_version(raw) => (Some(raw), true),
             Requested::Stated(raw) => {
                 tracing::warn!(
-                    target: "nest_rs::http",
+                    target: crate::target::HTTP,
                     strategy = self.selector.strategy.as_str(),
                     length = raw.len(),
                     "rejected a malformed API version",
@@ -435,7 +435,7 @@ impl<E> VersionedEndpoint<E> {
             // decided which controller answered.
             Requested::Malformed => {
                 tracing::warn!(
-                    target: "nest_rs::http",
+                    target: crate::target::HTTP,
                     strategy = self.selector.strategy.as_str(),
                     reason = "not valid text",
                     "rejected a malformed API version",
@@ -467,7 +467,7 @@ impl<E> VersionedEndpoint<E> {
             // version's body — the silent fallback this strategy exists to
             // avoid.
             tracing::debug!(
-                target: "nest_rs::http",
+                target: crate::target::HTTP,
                 path = path,
                 "no route serves the requested API version",
             );

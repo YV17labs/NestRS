@@ -77,7 +77,7 @@ impl QueueConnection {
                 Ok(Ok(conn)) => {
                     if attempts > 1 {
                         tracing::info!(
-                            target: "nest_rs::queue",
+                            target: nest_rs_queue::TARGET,
                             endpoint = %endpoint,
                             attempts,
                             "connected to the queue backend after retrying",
@@ -87,7 +87,7 @@ impl QueueConnection {
                 }
                 Ok(Err(error)) => {
                     tracing::warn!(
-                        target: "nest_rs::queue",
+                        target: nest_rs_queue::TARGET,
                         endpoint = %endpoint,
                         attempt = attempts,
                         error = %error,
@@ -99,7 +99,7 @@ impl QueueConnection {
                 // or a black-holed port is as legible as a refused connection.
                 Err(_elapsed) => {
                     tracing::warn!(
-                        target: "nest_rs::queue",
+                        target: nest_rs_queue::TARGET,
                         endpoint = %endpoint,
                         attempt = attempts,
                         timeout_secs = budget.as_secs(),

@@ -62,7 +62,7 @@ impl JwtConfig {
         ) {
             (Some(secret), Some(private), Some(public)) if !secret.trim().is_empty() => {
                 tracing::warn!(
-                    target: "nest_rs::authn",
+                    target: crate::TARGET,
                     secret_present = true,
                     eddsa_present = true,
                     secret_var = %var_name("authn", "SECRET"),

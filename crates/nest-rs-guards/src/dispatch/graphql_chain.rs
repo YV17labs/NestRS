@@ -102,7 +102,7 @@ async fn run_chain(
             // Structural floor mirroring `deny_http`: every denial visible at
             // warn+ regardless of what the individual guard logged.
             tracing::warn!(
-                target: "nest_rs::layers",
+                target: nest_rs_core::target::LAYERS,
                 guard = entry.name,
                 route = route_label,
                 status = denial.http_status(),

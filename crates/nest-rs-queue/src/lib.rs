@@ -13,7 +13,17 @@
 //! the `QueueWorker` transport, the activation modules). A third-party
 //! `nest-rs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
 //! directly — see this crate's README for the extension contract.
+
 #![warn(missing_docs)]
+
+/// This crate's span target — Job registration, retries, dead-letters and the reason each failed.
+///
+/// Declared by the crate that **owns** the concern, which is not always the only
+/// crate emitting on it: a sibling and a `*-macros` expansion read this constant
+/// rather than spelling a second one, because a target's one job is to say
+/// **where** an event came from. A central table in the kernel would have meant
+/// `nest-rs-core` holding a name for a concern it does not know exists.
+pub const TARGET: &str = "nest_rs::queue";
 
 mod error;
 mod inventory;

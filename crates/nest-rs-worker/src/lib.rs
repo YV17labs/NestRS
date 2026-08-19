@@ -16,4 +16,8 @@
 
 pub mod context;
 
+/// This crate's span target, at the root like every other crate's — the module
+/// it is declared in is an implementation detail of where the emission lives.
+pub use context::TARGET;
+
 pub use context::{JobContext, JobSettlement, JobTransaction, Unhonoured, run_in_job_context};

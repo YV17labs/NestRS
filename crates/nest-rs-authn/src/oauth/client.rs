@@ -185,7 +185,7 @@ impl OAuth2Client {
         // callback is rejected before its CSRF value is ever compared.
         if tx.provider != provider {
             tracing::warn!(
-                target: "nest_rs::authn",
+                target: crate::TARGET,
                 reason = "provider_mismatch",
                 expected = provider,
                 "OAuth callback rejected",
@@ -196,7 +196,7 @@ impl OAuth2Client {
         // mismatch reads as "not equal" via `subtle`'s slice `ct_eq`.
         if !bool::from(tx.csrf.as_bytes().ct_eq(state.as_bytes())) {
             tracing::warn!(
-                target: "nest_rs::authn",
+                target: crate::TARGET,
                 reason = "csrf_state_mismatch",
                 "OAuth callback rejected"
             );

@@ -5,6 +5,127 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### The operation-log target is `nest_rs::operation`
+
+**Breaking for operators; nothing to change in Rust.** The one line every edge
+files per unit of work moved from `nest_rs::access` to `nest_rs::operation`:
+
+```text
+ INFO nest_rs::operation: tick ran provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+```
+
+| | |
+|---|---|
+| Old | `nest_rs::access` |
+| New | `nest_rs::operation` |
+| Change | `NESTRS_LOG` / `RUST_LOG` directives, log-router rules, dashboard and alert queries |
+
+The Rust surface is unaffected — the target has always been read from
+`nest_rs_core::operation_log::TARGET`, so any code importing it follows with no
+edit. What breaks is every place the string was typed by hand: a filter
+directive, a runbook, a saved search, a dashboard panel. A stale
+`nest_rs::access` directive now matches nothing and fails silently, so grep for
+it rather than waiting for a quiet console to be noticed.
+
+- **The old name was HTTP's word for HTTP's line.** It survived the
+  generalisation to six edges in 5.1, where it stopped being true of five of
+  them: a scheduled tick has no caller, so nothing accesses anything. Every
+  other framework target names a subsystem and is rooted at the crate that emits
+  it; this one names a *category of line* that crosses all of them — exactly one
+  per unit of work, carrying an `outcome` and a `duration_ms` — and a
+  subsystem-shaped word hid that. `operation` is the word the operation span,
+  the MCP edge's `operation served` and the owning `operation_log` module
+  already used.
+- **`nest_rs::access` was also silencing a target nobody meant to silence, and
+  the rename fixes it.** `EnvFilter` compares a directive's target to an event's
+  with `starts_with` on the raw string rather than by `::` segment, so
+  `nest_rs::access` matched `nest_rs::access_graph` too — the boot `warn` naming
+  resolvers unreachable from the GraphQL schema. The documented toggle,
+  `NESTRS_LOG=info,nest_rs::access=off`, therefore took that startup diagnostic
+  away as well, with nothing on the console to say it had. Anyone who ran that
+  directive was missing those warnings; `nest_rs::operation=off` silences the
+  operation log and nothing else.
+- **The property is now executed, not just intended.** A join in
+  `nest-rs-conformance` derives every `tracing` target both workspaces emit and
+  fails when one is a prefix of another, and `nest-rs-core` asserts the
+  `EnvFilter` behaviour the join rests on.
+- **`NESTRS_HTTP__ACCESS_LOG` is unchanged and stays correct.** It toggles one
+  edge's per-request line — which is what an access log is — rather than the
+  family, and it is an app's pinned config rather than a deployment's filter.
+  `nest-rs-http`'s `access_log.rs` keeps its name for the same reason.
+
+### One canonical name per unit of work
+
+**Breaking for operators.** The message on an operation line is now the unit's
+canonical name — the same string its span carries — instead of a sentence
+written per edge:
+
+| Edge | Was | Is |
+|---|---|---|
+| HTTP request | `request served` | `http.request` |
+| WS message | `message served` | `ws.message` |
+| WS socket open/close | `socket lifecycle` + `lifecycle="connect"` | `ws.connect` / `ws.disconnect` |
+| Scheduled tick | `tick ran` | `schedule.tick` |
+| Queue job | `job ran` | `queue.job` |
+| MCP operation | `operation served` | `mcp.operation` |
+| GraphQL subscription | `subscription served` | `graphql.subscription` |
+
+```text
+ INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+ INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+```
+
+Reading which kind of work a line reports no longer means inferring it from
+which fields happen to be present.
+
+- **There were two vocabularies for the same eight things.** Four edges already
+  named their span `http.request`, `ws.message`, `mcp.operation`,
+  `graphql.subscription`; the other two had drifted to prose (`"scheduled job"`,
+  `"process job"`), and every line invented a third wording. `nest-rs-ws` had
+  already hit the wall and left the workaround in a comment — "`lifecycle`
+  rather than the span's name because `tracing` offers no way to read one back".
+  Now there is one name, `<edge>.<unit>`, declared in
+  `nest_rs_core::operation_log::unit`.
+- **It is also the log record's event name.** Each line sets `name:`, which
+  `opentelemetry-appender-tracing` maps to the exported `event.name`. That field
+  used to carry `event crates/nest-rs-mcp/src/propagate.rs:183` — a source path,
+  one value per call site. Nothing here depends on the exporter: the constants
+  are `&'static str` in the kernel and an app that exports nothing pays nothing.
+- **The namespace comes from the closed edge vocabulary**, so a new transport
+  cannot invent a seventh word without opening the edge deliberately.
+- **`lifecycle` is gone from the WS lifecycle line** — `ws.connect` and
+  `ws.disconnect` say it.
+- **A join in `nest-rs-conformance` derives every naming site and refuses a
+  literal at any of them**, and it reads **doctests** as well as items. It did
+  not, and the one example teaching the grammar — `operation_span!`'s own — was
+  therefore the one site spelling all three slots as literals, with nothing
+  failing. `syn` lowers `///` to `#[doc = "…"]`, so an example is a string
+  literal to a macro visitor; it is now parsed back into code and walked, since
+  an example is what a developer copies.
+
+### Every span target and span kind is a constant
+
+230 call sites that spelled `target: "nest_rs::orm"` now name a constant, so a
+typo is a compile error instead of a target carrying one event that no filter
+selects. `operation_log::kind` does the same for the five `otel.kind` values.
+
+- **The crate that *owns* the concern declares it** — `nest_rs_events::TARGET`,
+  `nest_rs_seaorm::TARGET`, `nest_rs_ws::TARGET` — and everything emitting on it
+  reads that constant, a sibling crate and a `*-macros` expansion included.
+  Owning is not emitting: `nest_rs::routes` is filed from six crates and
+  `nest_rs::queue` from a macro expansion rather than from `nest-rs-queue`
+  itself. A target's one job is to name *where* an event came from, so a central
+  table in the kernel would have meant `nest-rs-core` carrying a name for a
+  concern it does not know exists.
+- **A crate owning several concerns gets a `target` module**, and there are
+  exactly two: `nest_rs_core::target` (six) and `nest_rs_http::target` (the
+  transport and its route table).
+- **`report_inert_host!` now takes an expression** rather than a literal target.
+- Nothing an application writes is affected: an app's own `tracing::info!` on
+  its own target is untouched, and only the framework's own family is policed.
+
 ## [5.1.0] - 2026-08-18
 
 ### Every log line carries the trace context of the unit of work that emitted it

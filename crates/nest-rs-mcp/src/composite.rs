@@ -187,7 +187,7 @@ impl CompositeHandler {
     /// — say so rather than hand back a list that looks complete.
     fn warn_cursor(&self, host: &MountedHost, method: &str) {
         tracing::warn!(
-            target: "nest_rs::mcp",
+            target: crate::TARGET,
             path = &*self.path,
             host = host.name,
             method,

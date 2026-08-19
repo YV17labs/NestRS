@@ -100,7 +100,7 @@ impl RelatedPredicate {
         let (Some(from_col), Some(to_col)) = (unary_iden(&def.from_col), unary_iden(&def.to_col))
         else {
             tracing::error!(
-                target: "nest_rs::authz",
+                target: crate::TARGET,
                 reason = "composite_key",
                 "invalid ability relation predicate — denying all rows",
             );
@@ -377,7 +377,7 @@ impl<E: EntityTrait> PredicateBuilder<E> {
         let expected = R::default().table_ref();
         if def.to_tbl.sea_orm_table() != expected.sea_orm_table() {
             tracing::error!(
-                target: "nest_rs::authz",
+                target: crate::TARGET,
                 related = std::any::type_name::<R>(),
                 reason = "relation_table_mismatch",
                 "invalid ability relation predicate — denying all rows",
@@ -386,7 +386,7 @@ impl<E: EntityTrait> PredicateBuilder<E> {
         }
         if def.from_col.arity() != 1 || def.to_col.arity() != 1 {
             tracing::error!(
-                target: "nest_rs::authz",
+                target: crate::TARGET,
                 related = std::any::type_name::<R>(),
                 reason = "composite_key",
                 "invalid ability relation predicate — denying all rows",

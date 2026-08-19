@@ -621,15 +621,23 @@ line whose proof you cannot run is a line you have not done.
 14. **A mount** — a `Transport` via `TransportContribution`, or an HTTP self-mount
     declaring its `EdgePosture`.
 15. **`nest_rs::<edge>` span target**, level per layer, ≥1 structured field per
-    event — **and one `nest_rs::access` line per unit of work**, through
-    `nest_rs_core::operation_log`. A log line renders no span state, so the span's
+    event — **and one `nest_rs::operation` line per unit of work**, through
+    `nest_rs_core::operation_log`. The target is a constant from
+    `nest_rs_core::target`, never a string; the unit's name is a constant from
+    `operation_log::unit`, spelled `<edge>.<unit>` and read by the span, the
+    line's `name:` and its `message` alike; the span's kind is a constant from
+    `operation_log::kind`. The `units` join fails on a literal at any of them. A log line renders no span state, so the span's
     attributes say nothing on the console: the line is where the work is named
     (which route, which event, which job, which tool), and an edge without one
     leaves its work anonymous. It carries the edge's own identity fields plus
     `outcome` and `duration_ms`, its field names are **flat** (a dotted name is
     ambiguous to `tracing` beside a path target), and it takes no config toggle —
     the shared target is the family's, so one filter directive silences all of
-    them.
+    them. `duration_ms` is the one field the **text** console pads — to
+    `operation_log::DURATION_DECIMALS`, the resolution the formula already rounds
+    to — because a duration is read as a column and a width that moves with the
+    value is re-parsed by eye every line. JSON keeps the bare number: trailing
+    zeros are the reader's affordance, not the machine's.
 16. **Four witnesses** — an `integration` suite covering guards / pipes / scope /
     posture; a driver in `nest-rs-testing` if the protocol needs one; an adapter
     in `demo/` (`<feature>/<edge>/`); and a use site in `nest-rs-macro-hygiene`

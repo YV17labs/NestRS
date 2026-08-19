@@ -127,7 +127,7 @@ impl LoaderExtensionFactory {
 fn reachable_seeds(container: &Container) -> Arc<[LoaderSeed]> {
     let Some(reachable) = container.get::<ReachableProviders>() else {
         tracing::warn!(
-            target: "nest_rs::graphql",
+            target: crate::TARGET,
             hint = "build the schema via App::builder/App::new or seed ReachableProviders",
             "loaders skipped: no ReachableProviders seeded"
         );
@@ -162,7 +162,7 @@ fn warn_unreachable_loaders(container: &Container) {
         .count();
     if skipped > 0 {
         tracing::warn!(
-            target: "nest_rs::graphql",
+            target: crate::TARGET,
             count = skipped,
             hint = "import the modules that provide these loaders; relation fields backed by them error at query time",
             "dataloaders linked but unreachable",
@@ -189,7 +189,7 @@ fn warn_missing_batch_context(container: &Container, seeded: usize) {
         return;
     }
     tracing::warn!(
-        target: "nest_rs::graphql",
+        target: crate::TARGET,
         loaders = seeded,
         hint = HINT,
         "dataloaders seeded with no batch context",

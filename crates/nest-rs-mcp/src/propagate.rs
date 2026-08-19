@@ -32,7 +32,7 @@
 //!
 //! The last column is why notifications are not a special case: they commit
 //! nothing and run no guard, but they *are* dispatched work, so an operator asking
-//! `nest_rs::access` what this endpoint did gets them too.
+//! `nest_rs::operation` what this endpoint did gets them too.
 //!
 //! The span is in that table for the same reason the scope is: it is ambient
 //! request state, and everything dispatched here runs on a task the request did
@@ -134,9 +134,9 @@ impl<H> PropagatingHandler<H> {
         // whole duration are known — is outside it.
         let reported = correlation.clone();
         let operation = nest_rs_core::operation_span!(
-            target: "nest_rs::mcp",
-            kind: "server",
-            "mcp.operation",
+            target: crate::TARGET,
+            kind: nest_rs_core::operation_log::kind::SERVER,
+            nest_rs_core::operation_log::unit::MCP_OPERATION,
             &correlation,
         );
 
@@ -180,7 +180,9 @@ impl<H> PropagatingHandler<H> {
             // depth: here the guard's verdict and the whole duration are known.
             nest_rs_core::RequestContinuation::new(None, reported, None).enter(|| {
                 tracing::info!(
+                    name: nest_rs_core::operation_log::unit::MCP_OPERATION,
                     target: nest_rs_core::operation_log::TARGET,
+                    message = nest_rs_core::operation_log::unit::MCP_OPERATION,
                     // The JSON-RPC method this operation was, which is what a
                     // client addressed. Not `mcp.method`: a dotted field name is
                     // ambiguous to `tracing`'s parser beside a bare-ident value.
@@ -191,7 +193,6 @@ impl<H> PropagatingHandler<H> {
                         nest_rs_core::operation_log::ERROR
                     },
                     duration_ms = nest_rs_core::operation_log::duration_ms(started),
-                    "operation served",
                 );
             });
             settled
@@ -264,11 +265,12 @@ macro_rules! notification_method {
                     // notification handler returns `()`, so it has no failure
                     // channel, and had it unwound this line would not be reached.
                     tracing::info!(
+                        name: nest_rs_core::operation_log::unit::MCP_OPERATION,
                         target: nest_rs_core::operation_log::TARGET,
+                        message = nest_rs_core::operation_log::unit::MCP_OPERATION,
                         operation = stringify!($name),
                         outcome = nest_rs_core::operation_log::OK,
                         duration_ms = nest_rs_core::operation_log::duration_ms(started),
-                        "operation served",
                     );
                 })
                 .instrument(span)

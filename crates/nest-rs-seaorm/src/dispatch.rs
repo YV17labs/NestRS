@@ -67,7 +67,7 @@ pub(crate) async fn with_data_context<T>(
 ) -> T {
     let Some(snapshot) = captured.downcast_ref::<RequestSnapshot>() else {
         tracing::error!(
-            target: "nest_rs::orm",
+            target: crate::TARGET,
             transport = transport,
             reason = "data_context_downcast_miss",
             "unexpected captured data context",
@@ -102,7 +102,7 @@ pub(crate) async fn with_data_context<T>(
         FinalizeOutcome::Poisoned { .. } => internal_error(),
         FinalizeOutcome::CommitFailed(err) => {
             tracing::error!(
-                target: "nest_rs::orm",
+                target: crate::TARGET,
                 transport = transport,
                 error = %err,
                 "dispatch transaction commit failed"

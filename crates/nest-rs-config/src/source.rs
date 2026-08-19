@@ -43,7 +43,7 @@ fn env_var_from(name: &str, dotenv: &HashMap<String, String>) -> Option<String> 
         // a mistake than a deliberate unset — never swallow it silently.
         Err(env::VarError::NotUnicode(_)) => {
             tracing::warn!(
-                target: "nest_rs::config",
+                target: crate::TARGET,
                 name,
                 "environment variable is not valid UTF-8 — treated as unset, cascade suppressed",
             );

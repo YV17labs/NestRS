@@ -464,7 +464,7 @@ impl Transport for HttpTransport {
                         None => (path.clone(), None),
                     };
                     tracing::info!(
-                        target: "nest_rs::routes",
+                        target: crate::target::ROUTES,
                         controller = d.meta.controller,
                         method = r.verb.as_str(),
                         path = logged.as_str(),
@@ -513,7 +513,7 @@ impl Transport for HttpTransport {
 
         if !unguarded.is_empty() {
             tracing::warn!(
-                target: "nest_rs::layers",
+                target: nest_rs_core::target::LAYERS,
                 count = unguarded.len(),
                 routes = unguarded.join(", ").as_str(),
                 hint = "bind a guard or mark them #[public]",
@@ -586,7 +586,7 @@ impl Transport for HttpTransport {
                 )?;
             }
             tracing::info!(
-                target: "nest_rs::routes",
+                target: crate::target::ROUTES,
                 kind = d.meta.label(),
                 path = d.meta.path(),
                 "mounted endpoint",
@@ -614,7 +614,7 @@ impl Transport for HttpTransport {
         }
         if !unguarded_edges.is_empty() {
             tracing::warn!(
-                target: "nest_rs::layers",
+                target: nest_rs_core::target::LAYERS,
                 count = unguarded_edges.len(),
                 endpoints = unguarded_edges.join(", ").as_str(),
                 hint = "register a global guard pool or gate the gateway with #[use_guards]",
@@ -640,7 +640,7 @@ impl Transport for HttpTransport {
                 );
             }
             tracing::warn!(
-                target: "nest_rs::http",
+                target: crate::target::HTTP,
                 paths = paths.join(", ").as_str(),
                 hint = "route through a #[controller] or guard explicitly",
                 "imperative mounts bypass the global guard pool",
@@ -715,7 +715,7 @@ impl Transport for HttpTransport {
                     edge_headers.push((header_name, header_value));
                 }
                 _ => tracing::error!(
-                    target: "nest_rs::http",
+                    target: crate::target::HTTP,
                     header = name,
                     "failed to construct a security header despite boot validation",
                 ),
@@ -845,11 +845,11 @@ impl Transport for HttpTransport {
                 let stream = tls
                     .into_rustls_stream()
                     .context("the configured TLS material cannot serve")?;
-                tracing::debug!(target: "nest_rs::http", addr = %bind, tls = true, "transport listening");
+                tracing::debug!(target: crate::target::HTTP, addr = %bind, tls = true, "transport listening");
                 TcpListener::bind(bind).rustls(stream).boxed()
             }
             None => {
-                tracing::debug!(target: "nest_rs::http", addr = %bind, tls = false, "transport listening");
+                tracing::debug!(target: crate::target::HTTP, addr = %bind, tls = false, "transport listening");
                 TcpListener::bind(bind).boxed()
             }
         };

@@ -115,13 +115,13 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 let sdl = crate::resolver::render_sdl(&schema, &options);
                 match std::fs::write(dest, &sdl) {
                     Ok(()) => tracing::info!(
-                        target: "nest_rs::graphql",
+                        target: crate::TARGET,
                         path = %dest.display(),
                         bytes = sdl.len(),
                         "wrote GraphQL SDL"
                     ),
                     Err(err) => tracing::warn!(
-                        target: "nest_rs::graphql",
+                        target: crate::TARGET,
                         path = %dest.display(),
                         error = %err,
                         "failed to write GraphQL SDL"

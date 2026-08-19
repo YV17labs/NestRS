@@ -100,7 +100,7 @@ impl DynamicModule for ProtectedResourceSetup {
                 .into_metadata()
                 .map_err(anyhow::Error::new)?;
             tracing::debug!(
-                target: "nest_rs::authn",
+                target: crate::TARGET,
                 resource = metadata.resource(),
                 authorization_servers = metadata.authorization_servers().len(),
                 "protected resource metadata resolved",
@@ -144,7 +144,7 @@ fn require_audience_binding(
     }
     if audience != metadata.resource() {
         tracing::warn!(
-            target: "nest_rs::authn",
+            target: crate::TARGET,
             audience,
             resource = metadata.resource(),
             "token audience differs from the advertised resource identifier — a client \

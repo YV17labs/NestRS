@@ -272,7 +272,7 @@ fn map_decode_error(err: jsonwebtoken::errors::Error) -> AuthError {
     // authentication failure with strategy + route context; this stays `debug`
     // so the typed decode reason is available without double-counting denials.
     if !matches!(mapped, AuthError::Expired) {
-        tracing::debug!(target: "nest_rs::authn", error = %err, "JWT verification failed");
+        tracing::debug!(target: crate::TARGET, error = %err, "JWT verification failed");
     }
     mapped
 }

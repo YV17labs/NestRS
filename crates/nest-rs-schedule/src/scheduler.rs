@@ -165,7 +165,7 @@ impl Transport for Scheduler {
                 && !r.0.contains(&provider_id)
             {
                 ::nest_rs_core::report_inert_host!(
-                    target: "nest_rs::schedule",
+                    target: crate::TARGET,
                     what: "scheduled method",
                     origin: entry.origin,
                     provider = entry.provider,
@@ -186,21 +186,21 @@ impl Transport for Scheduler {
         for job in &self.jobs {
             match job {
                 Job::Interval { id, period, .. } => tracing::info!(
-                    target: "nest_rs::schedule",
+                    target: crate::TARGET,
                     provider = id.provider,
                     method = id.method,
                     interval_ms = period.as_millis() as u64,
                     "scheduled job (interval)",
                 ),
                 Job::Timeout { id, delay, .. } => tracing::info!(
-                    target: "nest_rs::schedule",
+                    target: crate::TARGET,
                     provider = id.provider,
                     method = id.method,
                     delay_ms = delay.as_millis() as u64,
                     "scheduled job (one-shot)",
                 ),
                 Job::Cron { id, tz, .. } => tracing::info!(
-                    target: "nest_rs::schedule",
+                    target: crate::TARGET,
                     provider = id.provider,
                     method = id.method,
                     timezone = tz.map(|t| t.name()).unwrap_or("UTC"),
@@ -277,7 +277,7 @@ async fn run_job(
                 Some(d) => d,
                 None => {
                     tracing::warn!(
-                        target: "nest_rs::schedule",
+                        target: crate::TARGET,
                         provider = id.provider,
                         method = id.method,
                         "cron job has no future occurrence; it will not run again",
@@ -317,10 +317,10 @@ async fn fire(id: JobId, task: Task, container: &Container, ctx: &Option<Arc<dyn
     // picks it up files under the tick that caused it.
     let correlation = nest_rs_core::Correlation::mint();
     let span = nest_rs_core::operation_span!(
-        target: "nest_rs::schedule",
+        target: crate::TARGET,
         // No caller and no wire: the clock is not a producer.
-        kind: "internal",
-        "scheduled job",
+        kind: nest_rs_core::operation_log::kind::INTERNAL,
+        nest_rs_core::operation_log::unit::SCHEDULE_TICK,
         &correlation,
         provider = id.provider,
         method = id.method,
@@ -375,17 +375,18 @@ async fn fire_inner(
     // is the only place a tick says it ran at all. Emitted inside the scope, so
     // it carries the trace the job's own events carry.
     tracing::info!(
+        name: nest_rs_core::operation_log::unit::SCHEDULE_TICK,
         target: nest_rs_core::operation_log::TARGET,
+        message = nest_rs_core::operation_log::unit::SCHEDULE_TICK,
         provider = id.provider,
         method = id.method,
         outcome = settled,
         duration_ms = nest_rs_core::operation_log::duration_ms(started),
-        "tick ran",
     );
     match outcome {
         Ok(Ok(())) => {}
         Ok(Err(err)) => tracing::error!(
-            target: "nest_rs::schedule",
+            target: crate::TARGET,
             provider = id.provider,
             method = id.method,
             error = %err,
@@ -398,7 +399,7 @@ async fn fire_inner(
             "scheduled job failed",
         ),
         Err(panic) => tracing::error!(
-            target: "nest_rs::schedule",
+            target: crate::TARGET,
             provider = id.provider,
             method = id.method,
             // `panic.as_ref()`, never `&panic`: a `Box<dyn Any + Send>` is itself

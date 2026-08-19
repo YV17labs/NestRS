@@ -89,7 +89,7 @@ pub struct HttpConfig {
     /// proxy in most deployments; flip on with `NESTRS_HTTP__COMPRESSION=true`
     /// when the app terminates responses directly.
     pub compression: bool,
-    /// Emit one access event per request on `nest_rs::access` — method, path,
+    /// Emit one access event per request on `nest_rs::operation` — method, path,
     /// status, byte-exact size, duration, client, `trace_id` and `span_id`, plus
     /// `actor_id` once an authn guard resolved a principal. **On by default**,
     /// and read from `NESTRS_HTTP__ACCESS_LOG`.

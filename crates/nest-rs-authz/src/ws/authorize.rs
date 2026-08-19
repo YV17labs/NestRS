@@ -25,7 +25,7 @@ pub fn authorize<A: ActionMarker, S: Subject>(event: &'static str) -> Result<(),
         // nothing to decide against. Say so to the operator, stay terse to the
         // client.
         tracing::error!(
-            target: "nest_rs::authz",
+            target: crate::TARGET,
             transport = "ws",
             event = %event,
             action = ?A::ACTION,

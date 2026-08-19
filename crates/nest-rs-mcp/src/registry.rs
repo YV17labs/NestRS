@@ -391,7 +391,7 @@ fn mount(container: &Container, route: Route, path: &str) -> Route {
     for (position, host) in hosts.iter().enumerate() {
         let names: Vec<Cow<'static, str>> = declared_names(host).collect();
         tracing::info!(
-            target: "nest_rs::routes",
+            target: nest_rs_http::target::ROUTES,
             kind = MCP_LABEL,
             path,
             host = host.host(),
@@ -498,7 +498,7 @@ fn warn_undeclared_tools(path: &str, hosts: &[ResolvedHost]) {
         return;
     }
     tracing::warn!(
-        target: "nest_rs::mcp",
+        target: crate::TARGET,
         path,
         hosts = opaque.join(", ").as_str(),
         reason = "tools_not_statically_declared",
@@ -555,7 +555,7 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
         // rmcp's `ServerInfo::new` leaves the **SDK's** build identity in place,
         // so this endpoint tells every client it is `rmcp`, at rmcp's version.
         tracing::warn!(
-            target: "nest_rs::mcp",
+            target: crate::TARGET,
             path,
             hosts = names.as_str(),
             reports_as = reported.name.as_str(),
@@ -570,7 +570,7 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
         // Each host named itself, so the endpoint answers with whichever one
         // registered first — a function of `imports = [..]` order.
         tracing::warn!(
-            target: "nest_rs::mcp",
+            target: crate::TARGET,
             path,
             hosts = names.as_str(),
             reports_as = reported.name.as_str(),
@@ -675,7 +675,7 @@ fn check_protocol_versions(path: &str, hosts: &[ResolvedHost]) -> Result<(), Str
     }
 
     tracing::warn!(
-        target: "nest_rs::mcp",
+        target: crate::TARGET,
         path,
         hosts = names().as_str(),
         reason = "protocol_version_disagreement",

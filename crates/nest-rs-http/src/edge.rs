@@ -374,7 +374,7 @@ where
                     None => match tokio::time::timeout(timeout, &mut inner).await {
                         Ok(result) => result,
                         Err(_) => {
-                            tracing::warn!(target: "nest_rs::http", ?timeout, "request timed out");
+                            tracing::warn!(target: crate::target::HTTP, ?timeout, "request timed out");
                             return Ok(self.finish(bare(StatusCode::GATEWAY_TIMEOUT)));
                         }
                     },

@@ -348,7 +348,7 @@ impl Watcher {
             let (cert, key) = self.next_settled().await;
             if let Err(error) = validate_pair(&cert, &key) {
                 tracing::warn!(
-                    target: "nest_rs::http",
+                    target: crate::target::HTTP,
                     cert = %self.cert_path.display(),
                     key = %self.key_path.display(),
                     error = format!("{error:#}"),
@@ -357,7 +357,7 @@ impl Watcher {
                 continue;
             }
             tracing::info!(
-                target: "nest_rs::http",
+                target: crate::target::HTTP,
                 cert = %self.cert_path.display(),
                 key = %self.key_path.display(),
                 "tls certificate renewed on disk",
@@ -374,7 +374,7 @@ impl Watcher {
             Ok(bytes) => Some(bytes),
             Err(error) => {
                 tracing::warn!(
-                    target: "nest_rs::http",
+                    target: crate::target::HTTP,
                     path = %path.display(),
                     error = %error,
                     "tls material could not be re-read; keeping the certificate in use",

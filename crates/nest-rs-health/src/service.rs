@@ -112,7 +112,7 @@ fn report_unreachable_indicators(container: &Container) {
 /// lifecycle runner makes, from the same place.
 fn report_inert_indicator(entry: &HealthIndicator) {
     ::nest_rs_core::report_inert_host!(
-        target: "nest_rs::health",
+        target: crate::TARGET,
         what: "indicator",
         origin: entry.origin,
         indicator = entry.name,
@@ -135,7 +135,7 @@ async fn run_with_timeout(
         Ok(Err(err)) => {
             let detail = format!("{err:#}");
             tracing::warn!(
-                target: "nest_rs::health",
+                target: crate::TARGET,
                 indicator = name,
                 ?kind,
                 error = %detail,
@@ -145,7 +145,7 @@ async fn run_with_timeout(
         }
         Err(_elapsed) => {
             tracing::warn!(
-                target: "nest_rs::health",
+                target: crate::TARGET,
                 indicator = name,
                 ?kind,
                 timeout_secs = timeout.as_secs(),

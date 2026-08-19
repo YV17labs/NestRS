@@ -359,7 +359,10 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
     // ended — a clock has no caller, so this is the only place a tick reports
     // itself at all.
     let ran = logs
-        .find(nest_rs_core::operation_log::TARGET, "tick ran")
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_core::operation_log::unit::SCHEDULE_TICK,
+        )
         .into_iter()
         .next()
         .expect("every tick files one line, panic included");

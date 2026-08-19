@@ -65,7 +65,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                 // console renders carries `actor_id` off the ambient context the
                 // branch above just wrote, so spelling it here would print it
                 // twice on the one line that proves who was resolved.
-                tracing::debug!(target: "nest_rs::authn", strategy, "authenticated");
+                tracing::debug!(target: crate::TARGET, strategy, "authenticated");
                 // Publish what the credential was granted, so the authorization
                 // layer can withhold the rules it does not reach. A principal
                 // that is not scope-aware publishes nothing at all — the
@@ -84,7 +84,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
             // authenticated session for the duration of the outage.
             Err(error @ AuthError::Unavailable(_)) => {
                 tracing::error!(
-                    target: "nest_rs::authn",
+                    target: crate::TARGET,
                     strategy,
                     reason = error.reason(),
                     error = %error,
@@ -97,12 +97,12 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
             // expired token probing a public endpoint must leave a queryable
             // trace, not a `debug` line.
             Err(AuthError::MissingCredentials) if is_public => {
-                tracing::debug!(target: "nest_rs::authn", strategy, "anonymous request on a public route");
+                tracing::debug!(target: crate::TARGET, strategy, "anonymous request on a public route");
                 Ok(())
             }
             Err(error) if is_public => {
                 tracing::warn!(
-                    target: "nest_rs::authn",
+                    target: crate::TARGET,
                     strategy,
                     reason = error.reason(),
                     error = %error,
@@ -120,7 +120,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
             }
             Err(error) => {
                 tracing::warn!(
-                    target: "nest_rs::authn",
+                    target: crate::TARGET,
                     strategy,
                     reason = error.reason(),
                     error = %error,

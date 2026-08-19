@@ -228,6 +228,311 @@ pub fn declared_pairs() -> Vec<Pair> {
     out
 }
 
+/// Every span target the framework declares, read out of the declaration.
+///
+/// **Derived, never listed**, which is this crate's whole posture and was worth
+/// insisting on here: the alternative was a `match` naming every crate plus a
+/// path dev-dependency on each, and a crate added later joins the check only
+/// when someone remembers both. It also cost the test binary 400 crates and a
+/// 100 MB relink to read twenty `&'static str`s.
+///
+/// The convention the framework now follows is what makes this mechanical: a
+/// crate owning one concern writes `pub const TARGET` at its root, a crate
+/// owning several writes a `pub mod target` of them. Both are `Item::Const`
+/// with a string literal, so both are read the same way — the same shape
+/// [`declared_pairs`] reads for decorator pairs.
+///
+/// Returns `(target, declaring crate directory, constant name)`. The name is
+/// what disambiguates: `nest_rs_core` declares seven, so the crate alone cannot
+/// say which of them `…::operation_log::TARGET` is.
+pub fn declared_targets() -> Vec<(String, String, String)> {
+    let root = repo_root();
+    let mut out = Vec::new();
+    for dir in crate_dirs() {
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        for file in rust_files(&dir.join("src")) {
+            let Some(ast) = parsed(&file) else {
+                continue;
+            };
+            collect_target_consts(&ast.items, name, &mut out);
+        }
+    }
+    let _ = root;
+    out
+}
+
+/// A `pub const X: &str = "nest_rs::…";`, at an item list's top level or one
+/// `mod target` down. Only those two depths, because those are the two shapes
+/// the convention permits — a target declared anywhere else is meant to be
+/// invisible here, so that it is reported rather than quietly accepted.
+fn collect_target_consts(items: &[Item], krate: &str, out: &mut Vec<(String, String, String)>) {
+    for item in items {
+        match item {
+            Item::Const(konst) => {
+                if let Expr::Lit(lit) = &*konst.expr
+                    && let Lit::Str(text) = &lit.lit
+                    && text.value().starts_with("nest_rs::")
+                {
+                    out.push((text.value(), krate.to_owned(), konst.ident.to_string()));
+                }
+            }
+            Item::Mod(module) if module.ident == "target" => {
+                if let Some((_, inner)) = &module.content {
+                    collect_target_consts(inner, krate, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// How a site spelled a value the framework interprets — a `target:`, a unit
+/// name, a span kind.
+///
+/// One enum rather than one per join: the three that read these token streams
+/// asked the same question and answered it in three shapes, and the shapes had
+/// already drifted (one held the identifier, another the resolved value).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Named {
+    /// A path. The payload is the last segment — the constant's name.
+    Path(String),
+    /// A string literal.
+    Literal(String),
+}
+
+/// A macro invocation's tokens, flattened at the **top level only**.
+///
+/// Deliberately not [`flatten`], which descends into groups: a `target:` inside
+/// a nested group is not the macro's target, and reading one as if it were is
+/// how a join comes to believe a fixture is an emission.
+pub fn top_level(tokens: &TokenStream) -> Vec<TokenTree> {
+    tokens.clone().into_iter().collect()
+}
+
+/// The index just past `key <punct>` at the top level, if present.
+pub fn value_after(tokens: &[TokenTree], key: &str, punct: char) -> Option<usize> {
+    tokens
+        .windows(2)
+        .position(|w| match (&w[0], &w[1]) {
+            (TokenTree::Ident(i), TokenTree::Punct(p)) => i == key && p.as_char() == punct,
+            _ => false,
+        })
+        .map(|at| at + 2)
+}
+
+/// The index just past the value at `at`, and the comma after it.
+///
+/// A value is one literal or a `::`-joined path, so this **walks** it rather
+/// than assuming a width — assuming one is how a fixed offset came to read the
+/// middle of `operation_log::kind::SERVER`.
+pub fn past_value(tokens: &[TokenTree], at: usize) -> usize {
+    let mut i = at;
+    while let Some(t) = tokens.get(i) {
+        match t {
+            TokenTree::Ident(_) => i += 1,
+            TokenTree::Punct(p) if p.as_char() == ':' => i += 1,
+            TokenTree::Literal(_) if i == at => i += 1,
+            _ => break,
+        }
+    }
+    match tokens.get(i) {
+        Some(TokenTree::Punct(p)) if p.as_char() == ',' => i + 1,
+        _ => i,
+    }
+}
+
+/// Read the token at `at` as a literal or a path, with the path's segments.
+pub fn named_at(tokens: &[TokenTree], at: usize) -> Option<(Named, Vec<String>)> {
+    match tokens.get(at)? {
+        TokenTree::Literal(lit) => syn::parse_str::<syn::LitStr>(&lit.to_string())
+            .ok()
+            .map(|s| (Named::Literal(s.value()), Vec::new())),
+        TokenTree::Ident(_) => {
+            let segments: Vec<String> = tokens[at..]
+                .iter()
+                .take_while(|t| {
+                    matches!(t, TokenTree::Ident(_))
+                        || matches!(t, TokenTree::Punct(p) if p.as_char() == ':')
+                })
+                .filter_map(|t| match t {
+                    TokenTree::Ident(i) => Some(i.to_string()),
+                    _ => None,
+                })
+                .collect();
+            let last = segments.last()?.clone();
+            Some((Named::Path(last), segments))
+        }
+        _ => None,
+    }
+}
+
+/// The `target:` a macro call declares, whether spelled as a literal or — as
+/// every framework site now does — as a constant.
+///
+/// Worded once because it was worded three times: `filters`, `units` and
+/// `events` each walked this grammar, differing only in what they returned, and
+/// a correction to one left the others answering the old way in silence.
+pub fn declared_target(tokens: &TokenStream, file: &str) -> Option<Named> {
+    let flat = top_level(tokens);
+    let at = value_after(&flat, "target", ':')?;
+    match named_at(&flat, at)? {
+        (Named::Literal(text), _) => Some(Named::Literal(text)),
+        (Named::Path(_), segments) => Some(match resolve_target(&segments, file) {
+            Some(value) => Named::Literal(value.to_owned()),
+            None => Named::Path(segments.join("::")),
+        }),
+    }
+}
+
+/// Resolve a constant path to the target string it names.
+///
+/// The key is **(declaring crate, constant name)**, which is unique:
+/// `nest-rs-core` declares seven targets, so the crate alone cannot say which
+/// of them `…::operation_log::TARGET` is, and `TARGET` alone cannot say which
+/// crate's it is now that every crate has one.
+pub fn resolve_target(segments: &[String], file: &str) -> Option<&'static str> {
+    let name = segments.last()?;
+    let owner = declaring_crate(segments, file);
+    target_table()
+        .iter()
+        .find(|(_, krate, konst)| *krate == owner && konst == name)
+        .map(|(target, _, _)| *target)
+}
+
+/// Which crate a constant belongs to: the one its path names, or — for
+/// `crate::…` and a bare name — the one the file lives in.
+fn declaring_crate(segments: &[String], file: &str) -> String {
+    for segment in segments.iter().rev().skip(1) {
+        if let Some(krate) = segment.strip_prefix("nest_rs_") {
+            return format!("nest-rs-{}", krate.replace('_', "-"));
+        }
+    }
+    file.strip_prefix("crates/")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The declared table, read once per test process.
+fn target_table() -> &'static [(&'static str, &'static str, &'static str)] {
+    static TABLE: std::sync::OnceLock<Vec<(&'static str, &'static str, &'static str)>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        declared_targets()
+            .into_iter()
+            // Leaked once, deliberately: the table is the process's, and every
+            // caller compares against a borrowed `&'static str`.
+            .map(|(target, krate, konst)| {
+                let leak = |s: String| &*Box::leak(s.into_boxed_str());
+                (leak(target), leak(krate), leak(konst))
+            })
+            .collect()
+    })
+}
+
+/// The operation log's own target, read from its declaration.
+///
+/// Read rather than linked: this crate proves things *about* the framework and
+/// depending on it to learn one string would put the whole tree behind the test
+/// binary — 400 crates and a 100 MB relink, measured, to compare a `&str`.
+pub fn operation_log_target() -> Option<&'static str> {
+    resolve_target(
+        &["operation_log".to_owned(), "TARGET".to_owned()],
+        "crates/nest-rs-core/src/operation_log.rs",
+    )
+}
+
+/// Every `.rs` file both workspaces own, parsed, with the CLI's templates left
+/// out — their targets carry handlebars placeholders and become real ones under
+/// a scaffolded tree's own root.
+///
+/// The skip is the load-bearing half and it was written three times in three
+/// wordings; a fourth join would have copied whichever it sat next to.
+pub fn each_source(root: &Path, mut visit: impl FnMut(&str, &syn::File)) {
+    let mut sources = rust_files(&root.join("crates"));
+    sources.extend(rust_files(&root.join("demo")));
+    for path in sources {
+        let rel = relative(&path, root);
+        if rel.contains("cli/src/templates/") {
+            continue;
+        }
+        if let Some(ast) = parsed(&path) {
+            visit(&rel, &ast);
+        }
+    }
+}
+
+/// Every fenced code block in this file's doc comments, parsed as Rust.
+///
+/// **A join that reads only items is blind exactly where a developer copies
+/// from.** `syn` lowers `///` to `#[doc = "…"]`, so a macro invocation inside a
+/// doctest is one string literal and `visit_macro` never descends into it: the
+/// canonical `operation_span!` example taught all three of the literal forms the
+/// `units` join forbids, for as long as that was true, and nothing failed. An
+/// example is code the compiler runs and the reader imitates, so it is scanned
+/// as code.
+///
+/// Rustdoc's hidden lines (`# …`) are code and are kept. A block that does not
+/// parse is **dropped, never reported**: the same fences hold `text`, JSON and
+/// shell, and this is a reader for what an example *does*, not a linter for what
+/// it says. The converse is the known looseness — prose that happens to parse as
+/// an expression is walked as if it were code, which costs nothing to a join
+/// keyed on a macro name and would matter to one keyed on an identifier.
+pub fn doctests(ast: &syn::File) -> Vec<syn::File> {
+    let mut text = DocText::default();
+    text.visit_file(ast);
+
+    let mut out = Vec::new();
+    let mut open: Option<String> = None;
+    for line in text.0.lines() {
+        // `syn` hands back the comment's text with the space after `///` intact.
+        let body = line.strip_prefix(' ').unwrap_or(line);
+        if body.trim_start().starts_with("```") {
+            match open.take() {
+                Some(block) => out.extend(parse_doctest(&block)),
+                None => open = Some(String::new()),
+            }
+            continue;
+        }
+        if let Some(block) = open.as_mut() {
+            let code = match body {
+                "#" => "",
+                _ if body.starts_with("##") => &body[1..],
+                _ => body.strip_prefix("# ").unwrap_or(body),
+            };
+            block.push_str(code);
+            block.push('\n');
+        }
+    }
+    out
+}
+
+/// A doctest is items or statements, and which one is the author's business.
+fn parse_doctest(code: &str) -> Option<syn::File> {
+    syn::parse_file(code)
+        .ok()
+        .or_else(|| syn::parse_file(&format!("fn __doctest() {{\n{code}\n}}")).ok())
+}
+
+/// Every `#[doc]` string in a file, in source order.
+#[derive(Default)]
+struct DocText(String);
+
+impl<'ast> Visit<'ast> for DocText {
+    fn visit_attribute(&mut self, node: &'ast Attribute) {
+        if let Meta::NameValue(pair) = &node.meta
+            && pair.path.is_ident("doc")
+            && let Expr::Lit(literal) = &pair.value
+            && let Lit::Str(text) = &literal.lit
+        {
+            self.0.push_str(&text.value());
+            self.0.push('\n');
+        }
+    }
+}
+
 /// Whether an item is behind `#[cfg(test)]`.
 ///
 /// Shared rather than per join: it separates the two things a `src/` file holds

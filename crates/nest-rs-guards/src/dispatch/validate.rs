@@ -76,7 +76,7 @@ pub fn validate_guard_chain(label: &str, chain: &[ResolvedLayer<dyn Guard>]) -> 
             }
             None => {
                 tracing::warn!(
-                    target: "nest_rs::layers",
+                    target: nest_rs_core::target::LAYERS,
                     route = label,
                     guard = entry.name,
                     expected = expected.type_name,

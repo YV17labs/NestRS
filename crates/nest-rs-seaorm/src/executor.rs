@@ -263,7 +263,7 @@ impl LazyTransaction {
                 let opened = escaped.is_opened();
                 drop(escaped);
                 tracing::error!(
-                    target: "nest_rs::orm",
+                    target: crate::TARGET,
                     transport,
                     opened,
                     outcome = escaped_outcome,
@@ -285,7 +285,7 @@ impl LazyTransaction {
             // land and did not.
             if let Some(retryable) = poisoned {
                 tracing::error!(
-                    target: "nest_rs::orm",
+                    target: crate::TARGET,
                     transport,
                     outcome = "fail",
                     retryable,
@@ -301,7 +301,7 @@ impl LazyTransaction {
             Err(escaped) => {
                 drop(escaped);
                 tracing::error!(
-                    target: "nest_rs::orm",
+                    target: crate::TARGET,
                     transport,
                     opened = true,
                     outcome = escaped_outcome,
@@ -317,14 +317,14 @@ impl LazyTransaction {
         if let Some(retryable) = poisoned {
             if let Err(err) = txn.rollback().await {
                 tracing::error!(
-                    target: "nest_rs::orm",
+                    target: crate::TARGET,
                     transport,
                     error = %err,
                     "poisoned transaction rollback failed"
                 );
             }
             tracing::error!(
-                target: "nest_rs::orm",
+                target: crate::TARGET,
                 transport,
                 outcome = "rollback_and_fail",
                 // The same bit `CommitFailed` reports: without it a `40001` a
@@ -344,7 +344,7 @@ impl LazyTransaction {
         } else {
             if let Err(err) = txn.rollback().await {
                 tracing::error!(
-                    target: "nest_rs::orm",
+                    target: crate::TARGET,
                     transport,
                     error = %err,
                     "transaction rollback failed"
@@ -403,7 +403,7 @@ impl Drop for AbandonedDuringSettle {
 /// The one wording, for the two guards that can raise it.
 fn report_abandoned(transport: &'static str) {
     tracing::warn!(
-        target: "nest_rs::orm",
+        target: crate::TARGET,
         transport,
         outcome = "abandoned",
         "transaction abandoned without settling; its locks are held until the \
@@ -588,7 +588,7 @@ pub fn current_executor() -> Option<Executor> {
         Some(executor) => Some(executor.clone()),
         None => {
             tracing::error!(
-                target: "nest_rs::orm",
+                target: crate::TARGET,
                 reason = "executor_downcast_miss",
                 "ambient executor is not a SeaORM Executor"
             );

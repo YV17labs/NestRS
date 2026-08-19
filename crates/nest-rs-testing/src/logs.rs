@@ -336,6 +336,10 @@ mod tests {
     #[test]
     fn captures_target_level_message_and_fields() {
         let logs = LogCapture::install();
+        // A literal, and it must stay one: this is a *fixture* standing in for
+        // an ORM event, not an emission. `nest-rs-testing` does not depend on
+        // `nest-rs-seaorm` and should not grow the dependency to spell a string
+        // the capture is only ever asked to match verbatim.
         tracing::warn!(target: "nest_rs::orm", entity = "post", action = 3, "denying all rows");
         tracing::debug!(target: "nest_rs::orm", "listing rows");
 

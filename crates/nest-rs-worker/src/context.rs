@@ -5,6 +5,14 @@
 //! `WorkerDbContext` install an executor so a job's `Repo` calls join a
 //! connection without injecting one. With nothing bound a job runs bare.
 
+/// This crate's span target.
+///
+/// Declared here, like every crate's: a target names **where** an event came
+/// from, so the crate that **owns** the concern names it and everything emitting
+/// on it reads the constant. Re-exported at the root as `nest_rs_worker::TARGET`,
+/// which is the path callers use.
+pub const TARGET: &str = "nest_rs::worker";
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -197,7 +205,7 @@ pub async fn run_in_job_context<T: Send>(
                     // context in a *scheduled* job must not be misattributed
                     // to the queue concern.
                     tracing::error!(
-                        target: "nest_rs::worker",
+                        target: TARGET,
                         job_context = ::std::any::type_name::<dyn JobContext>(),
                         "job context returned without running the job to completion; failing this job",
                     );

@@ -52,7 +52,7 @@ impl GraphqlFederationGuard for GlobalPoolFederationGuard {
                     // logged, and this is the one site whose route label a
                     // reader would otherwise have to infer.
                     tracing::warn!(
-                        target: "nest_rs::layers",
+                        target: nest_rs_core::target::LAYERS,
                         guard = name,
                         route = "POST /graphql (federation)",
                         field = operation.name(),

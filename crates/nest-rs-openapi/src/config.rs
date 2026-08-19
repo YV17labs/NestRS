@@ -77,7 +77,7 @@ impl Config for OpenApiConfig {
         let enabled = env.flag("ENABLED", d.enabled)?;
         if enabled && !docs_default_enabled(environment) {
             tracing::warn!(
-                target: "nest_rs::openapi",
+                target: crate::TARGET,
                 environment = environment.as_str(),
                 "OpenAPI documentation endpoints are enabled and public outside a dev profile",
             );

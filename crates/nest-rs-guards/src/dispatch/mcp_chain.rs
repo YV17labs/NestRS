@@ -78,7 +78,7 @@ pub async fn run_layered_mcp_chain(
             // the operation are separate fields — an incident query asks "what
             // was refused on this tool", and a joined label cannot answer it.
             tracing::warn!(
-                target: "nest_rs::layers",
+                target: nest_rs_core::target::LAYERS,
                 guard = entry.name,
                 host = ctx.host(),
                 kind = ctx.kind().as_str(),

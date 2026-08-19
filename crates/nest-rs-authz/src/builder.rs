@@ -226,7 +226,7 @@ where
             // nothing for the client to go ask for either way.
             if !self.inverted {
                 tracing::debug!(
-                    target: "nest_rs::authz",
+                    target: crate::TARGET,
                     action = ?self.action,
                     subject = std::any::type_name::<E>(),
                     scopes = ?missing,

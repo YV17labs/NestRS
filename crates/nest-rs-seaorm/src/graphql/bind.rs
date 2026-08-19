@@ -41,7 +41,7 @@ pub fn parse_v7(id: &str) -> Result<Uuid> {
 /// `ServiceError` logs once as it renders.
 fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
     tracing::error!(
-        target: "nest_rs::orm",
+        target: crate::TARGET,
         service,
         error = %err,
         "by-id access load failed",

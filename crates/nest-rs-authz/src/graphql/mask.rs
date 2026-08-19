@@ -217,7 +217,7 @@ fn refused_selection(
         return None;
     }
     tracing::warn!(
-        target: "nest_rs::authz",
+        target: crate::TARGET,
         transport = "graphql",
         entity,
         action = ?action,

@@ -17,7 +17,7 @@ use std::path::Path;
 
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    is_cfg_test, normalize, parsed, relative, repo_root, rust_files,
+    Named, declared_target, is_cfg_test, normalize, parsed, relative, repo_root, rust_files,
 };
 use proc_macro2::{TokenStream, TokenTree};
 use syn::visit::Visit;
@@ -44,20 +44,6 @@ fn top_level_literals(tokens: &TokenStream) -> Vec<String> {
         .collect()
 }
 
-fn declared_target(tokens: &TokenStream) -> Option<String> {
-    let flat: Vec<TokenTree> = tokens.clone().into_iter().collect();
-    flat.windows(3).find_map(|w| match (&w[0], &w[1], &w[2]) {
-        (TokenTree::Ident(i), TokenTree::Punct(p), TokenTree::Literal(lit))
-            if i == "target" && p.as_char() == ':' =>
-        {
-            syn::parse_str::<LitStr>(&lit.to_string())
-                .ok()
-                .map(|s| s.value())
-        }
-        _ => None,
-    })
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Event {
     target: String,
@@ -72,6 +58,7 @@ impl Event {
 
 #[derive(Default)]
 struct Emissions {
+    file: String,
     events: Vec<Event>,
 }
 
@@ -118,17 +105,29 @@ impl Emissions {
     /// one at the call site.
     fn take(&mut self, tokens: &TokenStream) {
         let literals = top_level_literals(tokens);
-        let target = declared_target(tokens);
-        // With a `target:`, the first literal is that target; a call carrying
-        // nothing else spells its message as a shared constant, and the call
-        // site has no string to compare.
-        let needed = if target.is_some() { 2 } else { 1 };
+        let named = declared_target(tokens, &self.file);
+        // A target spelled as a **literal** occupies the first slot, so the
+        // message is the second; a constant occupies none, and the message is
+        // the only literal there is. Keying this off "did it resolve" instead of
+        // "was it written as a string" dropped two thirds of this family the day
+        // the targets became constants, and the floor is what caught it.
+        let written_as_string = matches!(named, Some(Named::Literal(_)))
+            && literals.first().is_some_and(
+                |first| matches!(&named, Some(Named::Literal(t)) if normalize(t) == *first),
+            );
+        let needed = usize::from(written_as_string) + 1;
         if literals.len() >= needed
             && let Some(message) = literals.last()
             && !message.is_empty()
         {
             self.events.push(Event {
-                target: target.unwrap_or_else(|| "(inherited)".to_owned()),
+                target: match named {
+                    Some(Named::Literal(target)) => target,
+                    // A constant the table could not place, or no `target:` at
+                    // all: the call inherits its module's, which this join
+                    // records as such rather than guessing.
+                    _ => "(inherited)".to_owned(),
+                },
                 message: message.clone(),
             });
         }
@@ -213,8 +212,9 @@ fn emitted_events(root: &Path) -> Vec<Event> {
         if rel.contains("/tests/") || rel.contains("cli/src/templates/") {
             continue;
         }
-        if let Some(file) = parsed(&path) {
-            scan.visit_file(&file);
+        if let Some(file_ast) = parsed(&path) {
+            scan.file = rel;
+            scan.visit_file(&file_ast);
         }
     }
     scan.events

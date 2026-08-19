@@ -55,7 +55,7 @@ impl OperationValue {
             Ok(value) => Ok(*value),
             Err(_) => {
                 tracing::error!(
-                    target: "nest_rs::mcp",
+                    target: crate::TARGET,
                     expected = type_name::<T>(),
                     reason = "operation_value_downcast_miss",
                     "mcp operation wrapper returned a foreign value",

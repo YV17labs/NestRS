@@ -8,7 +8,8 @@
 //! delegate here — one masking semantics for every transport, so the two
 //! can't drift apart.
 
-#[cfg(feature = "graphql")]
+use crate::ability::mask_reason;
+#[cfg(any(feature = "graphql", feature = "mcp"))]
 use std::collections::BTreeSet;
 
 use nest_rs_resource::WireModelDefaults;
@@ -17,7 +18,7 @@ use serde::Serialize;
 use serde::de::{Deserialize, DeserializeOwned};
 use serde_json::Value;
 
-#[cfg(feature = "graphql")]
+#[cfg(any(feature = "graphql", feature = "mcp"))]
 use crate::FieldSet;
 use crate::{Ability, Action};
 
@@ -76,8 +77,11 @@ where
             warn_mask_failure(
                 std::any::type_name::<S>(),
                 action,
+                mask_reason::IRRECONCILABLE,
                 "wire value could not be reconciled with the entity model",
-                &err,
+                None,
+                None,
+                Some(&err),
             );
             Err(MaskReplyError::Irreconcilable(err))
         }
@@ -166,12 +170,17 @@ where
 /// What [`mask_wire_detail`] found: the rows that survived, still carrying
 /// their original keys, and which keys the mask took off at least one of them.
 ///
-/// The GraphQL wrapper needs all three because it hands the result back as a
-/// *typed* value, not as JSON bytes: a key the mask removes cannot be
-/// represented in a non-null schema field, so it has to decide between refusing
-/// the operation (the client selected that field) and returning the surviving
-/// rows untouched (it did not, so the field is never serialized).
-#[cfg(feature = "graphql")]
+/// Both typed-value edges need it, for one fact read two ways: a key the mask
+/// removes cannot be represented in a non-null schema field. GraphQL decides
+/// between refusing the operation (the client selected that field) and
+/// returning the surviving rows untouched (it did not, so the field is never
+/// serialized); MCP, having no selection set, always refuses — and asks only
+/// *which* keys, so the refusal it files can name them.
+#[cfg(any(feature = "graphql", feature = "mcp"))]
+// MCP asks only *which* keys went missing; `kept` and `dropped_rows` answer
+// GraphQL's second question — whether the surviving value can be handed back as
+// it stands — so a build without that edge reads neither.
+#[cfg_attr(not(feature = "graphql"), allow(dead_code))]
 pub(crate) struct MaskedDetail {
     /// Surviving rows with their original keys — same row set as
     /// [`mask_wire_json`] produces, without the field-level stripping.
@@ -193,7 +202,7 @@ pub(crate) struct MaskedDetail {
 /// row's rules exactly once ([`Ability::evaluate`], the same scan `mask_many`
 /// makes) and takes ownership of the wire value rather than cloning rows out of
 /// it.
-#[cfg(feature = "graphql")]
+#[cfg(any(feature = "graphql", feature = "mcp"))]
 pub(crate) fn mask_wire_detail<S>(
     ability: &Ability,
     action: Action,
@@ -291,7 +300,7 @@ where
 /// [`Ability::mask`] retains) and the entity's statically exposed columns (what
 /// [`retain_static_keys`] retains). Change either rule and this reads the
 /// change — it holds no copy of its own.
-#[cfg(feature = "graphql")]
+#[cfg(any(feature = "graphql", feature = "mcp"))]
 fn collect_removed(
     granted: &FieldSet,
     exposed: Option<&'static [&'static str]>,

@@ -492,6 +492,9 @@ async fn a_json_media_type_is_masked_however_it_is_spelled() {
 /// entity already gets.
 #[tokio::test]
 async fn a_body_with_no_declared_media_type_fails_closed() {
+    // Thread-local: `#[tokio::test]` is a current-thread runtime, so the
+    // route's task runs on this thread.
+    let logs = nest_rs_testing::LogCapture::install();
     let app = boot().await;
     let resp = app
         .http()
@@ -504,6 +507,25 @@ async fn a_body_with_no_declared_media_type_fails_closed() {
     assert!(
         !body.contains("secret") && !body.contains("s1"),
         "and it ships none of the entity on the way out: {body}",
+    );
+
+    // The 500 is the same 500 a panicking handler gives, so the event is what
+    // separates "this route is broken" from "this route was refused a body it
+    // could not classify". Every fail-closed masking exit files this one line —
+    // which is what makes a branch that forgets it the visible omission — and
+    // nothing read it until a refusal that was never a masking failure stopped
+    // standing in for it.
+    let event = logs.expect_one("nest_rs::authz", "response masking failed");
+    assert_eq!(event.level, "warn");
+    assert!(
+        event.field("entity").is_some_and(|e| e.contains("widget")),
+        "the event names the entity the shaper was armed for, got {:?}",
+        event.fields,
+    );
+    assert!(
+        event.field("reason").is_some(),
+        "…and which step of the mask refused, got {:?}",
+        event.fields,
     );
 }
 

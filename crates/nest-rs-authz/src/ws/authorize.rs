@@ -4,6 +4,7 @@
 use nest_rs_guards::{Denial, denial_to_ws_error};
 use nest_rs_ws::WsError;
 
+use crate::gate::{Refusal, reason, transport};
 use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};
 
 /// Class-level gate: require action `A` on subject `S`, against the **ambient**
@@ -26,11 +27,11 @@ pub fn authorize<A: ActionMarker, S: Subject>(event: &'static str) -> Result<(),
         // client.
         tracing::error!(
             target: crate::TARGET,
-            transport = "ws",
+            transport = transport::WS,
             event = %event,
             action = ?A::ACTION,
             subject = std::any::type_name::<S>(),
-            reason = "no_ambient_ability",
+            reason = reason::NO_AMBIENT_ABILITY,
             "authorization denied",
         );
         return Err(denial_to_ws_error(Denial::internal(
@@ -48,6 +49,10 @@ pub fn authorize<A: ActionMarker, S: Subject>(event: &'static str) -> Result<(),
             Denial::insufficient_scope(missing.clone(), "insufficient scope")
         }
     };
-    crate::gate::warn_denied::<A, S>("ws", Some(event), verdict.reason());
+    crate::gate::warn_denied(Refusal {
+        event: Some(event),
+        reason: verdict.reason(),
+        ..Refusal::of::<A, S>(transport::WS)
+    });
     Err(denial_to_ws_error(denial))
 }

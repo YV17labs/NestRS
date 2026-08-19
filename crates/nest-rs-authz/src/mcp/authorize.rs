@@ -4,6 +4,7 @@
 use nest_rs_guards::{Denial, denial_to_mcp_error};
 use nest_rs_mcp::McpError;
 
+use crate::gate::{Refusal, reason, transport};
 use crate::{ActionMarker, GateVerdict, Subject, current_ability, gate};
 
 /// Class-level gate: require action `A` on subject `S`, against the **ambient**
@@ -22,10 +23,10 @@ pub fn authorize<A: ActionMarker, S: Subject>() -> Result<(), McpError> {
         // opaque to the model.
         tracing::error!(
             target: crate::TARGET,
-            transport = "mcp",
+            transport = transport::MCP,
             action = ?A::ACTION,
             subject = std::any::type_name::<S>(),
-            reason = "no_ambient_ability",
+            reason = reason::NO_AMBIENT_ABILITY,
             "authorization denied",
         );
         return Err(denial_to_mcp_error(Denial::internal(
@@ -43,6 +44,9 @@ pub fn authorize<A: ActionMarker, S: Subject>() -> Result<(), McpError> {
             Denial::insufficient_scope(missing.clone(), "insufficient scope")
         }
     };
-    crate::gate::warn_denied::<A, S>("mcp", None, verdict.reason());
+    crate::gate::warn_denied(Refusal {
+        reason: verdict.reason(),
+        ..Refusal::of::<A, S>(transport::MCP)
+    });
     Err(denial_to_mcp_error(denial))
 }

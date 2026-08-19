@@ -13,6 +13,8 @@ use serde::de::DeserializeOwned;
 
 use super::ability;
 use super::context::forbidden_fields;
+use crate::ability::mask_reason;
+use crate::gate::{Refusal, reason, transport};
 use crate::wire_mask::{MaskedWire, mask_wire_detail, mask_wire_json, warn_mask_failure};
 use crate::{Ability, Action, ActionMarker};
 
@@ -50,8 +52,14 @@ where
 {
     let ability = ability(ctx)?;
     let action = A::ACTION;
-    let wire = serde_json::to_value(&item)
-        .map_err(|err| mask_failure::<E>(action, "subscription item did not serialize", &err))?;
+    let wire = serde_json::to_value(&item).map_err(|err| {
+        mask_failure::<E>(
+            action,
+            mask_reason::NOT_SERIALIZABLE,
+            "subscription item did not serialize",
+            &err,
+        )
+    })?;
     // A scalar item (a counter, an id) is nothing entity-shaped: there is no row
     // to evaluate and no field to strip, so it passes exactly as it does on the
     // query path.
@@ -61,6 +69,7 @@ where
     let model = crate::wire_mask::wire_to_model::<E>(&wire).map_err(|err| {
         mask_failure::<E>(
             action,
+            mask_reason::IRRECONCILABLE,
             "subscription item could not be reconciled with the subject model",
             &err,
         )
@@ -130,8 +139,14 @@ where
 {
     let ability = ability(ctx)?;
     let action = A::ACTION;
-    let wire = serde_json::to_value(&value)
-        .map_err(|err| mask_failure::<E>(action, "resolver value did not serialize", &err))?;
+    let wire = serde_json::to_value(&value).map_err(|err| {
+        mask_failure::<E>(
+            action,
+            mask_reason::NOT_SERIALIZABLE,
+            "resolver value did not serialize",
+            &err,
+        )
+    })?;
     match mask_wire_json::<E>(&ability, action, &wire) {
         Ok(MaskedWire::Passthrough) => Ok(value),
         Ok(MaskedWire::Masked(masked)) => match serde_json::from_value(masked) {
@@ -142,6 +157,7 @@ where
         },
         Err(err) => Err(mask_failure::<E>(
             action,
+            mask_reason::IRRECONCILABLE,
             "value could not be reconciled with the subject model",
             &err,
         )),
@@ -167,6 +183,7 @@ where
     let detail = mask_wire_detail::<E>(ability, action, wire).map_err(|err| {
         mask_failure::<E>(
             action,
+            mask_reason::IRRECONCILABLE,
             "value could not be reconciled with the subject model",
             &err,
         )
@@ -187,6 +204,7 @@ where
     serde_json::from_value(detail.kept).map_err(|err| {
         mask_failure::<E>(
             action,
+            mask_reason::IRRECONCILABLE,
             "masked value did not match the authorized subject type",
             &err,
         )
@@ -201,6 +219,12 @@ where
 /// answer this identically, and a second copy of "which removed key did the
 /// client select?" is exactly the kind of divergence that turns into a leak on
 /// one path and not the other.
+///
+/// The refusal is filed as a **denial**, through the emitter every gate refusal
+/// uses, because that is what it is: this caller asked for a column this caller
+/// may not read. MCP reaches the same decision without a selection set to weigh
+/// it against, and files the same event — one message and one `reason` value,
+/// so an incident query by `reason` returns both edges or neither.
 fn refused_selection(
     ctx: &Context<'_>,
     action: Action,
@@ -216,17 +240,16 @@ fn refused_selection(
     if refused.is_empty() {
         return None;
     }
-    tracing::warn!(
-        target: crate::TARGET,
-        transport = "graphql",
-        entity,
-        action = ?action,
-        // A tracing field must be a scalar, so the log keeps the joined form;
-        // the wire keeps the list.
-        fields = %refused.join(","),
-        reason = "field_not_granted",
-        "authorization denied",
-    );
+    // A tracing field must be a scalar, so the log keeps the joined form; the
+    // wire keeps the list.
+    let joined = refused.join(",");
+    crate::gate::warn_denied(Refusal {
+        subject: Some(entity),
+        action: Some(action),
+        fields: Some(&joined),
+        reason: Some(reason::FIELD_NOT_GRANTED),
+        ..Refusal::on(transport::GRAPHQL)
+    });
     let refused: Vec<String> = refused.into_iter().map(str::to_owned).collect();
     Some(forbidden_fields(&refused))
 }
@@ -234,8 +257,21 @@ fn refused_selection(
 /// One shape for every fail-closed masking exit: the queryable `warn` (so a
 /// branch that forgets it is the visible omission) plus the opaque client
 /// error, which never names the column or the reason.
-fn mask_failure<E>(action: Action, reason: &'static str, err: &serde_json::Error) -> Error {
-    warn_mask_failure(std::any::type_name::<E>(), action, reason, err);
+fn mask_failure<E>(
+    action: Action,
+    reason: &'static str,
+    detail: &'static str,
+    err: &serde_json::Error,
+) -> Error {
+    warn_mask_failure(
+        std::any::type_name::<E>(),
+        action,
+        reason,
+        detail,
+        Some(transport::GRAPHQL),
+        None,
+        Some(&err),
+    );
     Error::new("response masking failed: value did not match the authorized subject type")
 }
 

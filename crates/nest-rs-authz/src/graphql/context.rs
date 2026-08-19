@@ -32,6 +32,18 @@ nest_rs_graphql::inventory::submit! {
 /// guard chain was not applied to `/graphql`, a wiring bug not a client error.
 pub fn ability(ctx: &Context<'_>) -> Result<Arc<Ability>> {
     ctx.data_opt::<Arc<Ability>>().cloned().ok_or_else(|| {
+        // Say so to the operator, exactly as the other three edges do. Every
+        // GraphQL fail-closed exit funnels through here — the gate and both
+        // `masked_*_for` — so without this line a broken `AuthzGraphqlModule`
+        // showed up only as error frames in client responses, with nothing on
+        // `nest_rs::authz` to find. HTTP, WS and MCP each log this at `error`
+        // with a machine reason; this was the fourth.
+        tracing::error!(
+            target: crate::TARGET,
+            transport = crate::gate::transport::GRAPHQL,
+            reason = crate::gate::reason::NO_AMBIENT_ABILITY,
+            "authorization denied",
+        );
         Error::new("missing request `Ability` — is the GraphQL auth bridge installed on /graphql?")
     })
 }

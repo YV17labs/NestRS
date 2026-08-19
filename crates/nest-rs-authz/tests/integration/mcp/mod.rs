@@ -2,6 +2,7 @@
 
 mod authorize;
 mod bridge;
+mod guard;
 mod mask;
 
 use nest_rs_core::{Layer, Module, injectable};

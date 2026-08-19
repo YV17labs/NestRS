@@ -178,6 +178,17 @@ need one, the code is wrong — rename it, split it, or move the decision
 into `CLAUDE.md` where decisions live. This binds the whole workspace:
 `apps/`, `crates/`, tests, `build.rs`.
 
+**It binds `demo/` and stops there** — it is *this* paragraph, and the next one
+is a different rule with a wider reach. A scaffolded project is not
+demonstration code: it is the developer's own repository, and the framework has
+no standing to impose its house aesthetic on it. So a CLI template may carry a
+comment, and the `// SECURITY:` block above a generated `#[public]` route is the
+case that decides it — that note is the framework teaching at the one line where
+the developer will change the posture, and moving it to a file they may never
+open makes the scaffold less safe, not shorter. The rule the templates *do* owe
+is the one below — **that** paragraph names them, and this one does not. Read
+the two as one and you get a rule neither states.
+
 **Prose the framework compiles into behaviour is declared as an argument,
 never as a doc comment.** A `#[tool]` / `#[prompt]` description is the
 sentence a language model reads to choose the operation, so it cannot
@@ -576,8 +587,9 @@ that line leaves its work anonymous on the console, which is the state HTTP's
 access log has always prevented and the other edges lacked.
 
 **A unit of work has one canonical name, and it is `<edge>.<unit>`.** It is
-declared once in `nest_rs_core::operation_log::unit` and read three times — by
-the `operation_span!` that opens the unit, by the operation line's `name:` (the
+declared once by **the crate that owns the edge**, as `<crate>::unit::<UNIT>`
+(`nest_rs_http::unit::REQUEST`, `nest_rs_ws::unit::MESSAGE`, …), and read three
+times — by the `operation_span!` that opens the unit, by the operation line's `name:` (the
 event's metadata identity, which an OTLP log bridge exports as `event.name`),
 and by that line's `message`. Two of the three used to be two vocabularies: the
 spans said `http.request` and `mcp.operation` while the lines said `request
@@ -598,14 +610,19 @@ concern several crates emit on (`nest_rs::routes`, from five) is declared once
 by the crate the others already depend on, and read from there. A crate owning exactly one
 concern spells it `TARGET` at its root; a crate owning several gets a `target`
 module (`nest_rs_core::target`, `nest_rs_http::target`, and those two only).
-`operation_log::kind` holds the five `otel.kind` values the specification
-defines. A `*-macros` crate reaches the owner through **its own surface crate's**
+`operation_log::kind` holds the three `otel.kind` values this framework emits
+— `server`, `consumer`, `internal`. The specification defines five; nothing here
+opens a span for an outbound call or for handing work to a queue, and a constant
+nothing fills is the same defect as a span field nothing records, so the other
+two are added by whichever edge first needs one. A `*-macros` crate reaches the owner through **its own surface crate's**
 re-export (`::nest_rs_queue::TARGET` from `nest-rs-queue-macros`), the form
 `framework.md` sanctions — its expansion lands in crates that do not all carry
-the umbrella. Reaching a *different* sibling is the breach that rule names, and
-`nest-rs-ws-macros` has two (`::nest_rs_core::target::LAYERS`,
-`::nest_rs_http::target::ROUTES`); both predate this and are reported, not
-licensed.
+the umbrella. Reaching a *different* sibling is the breach that rule names.
+`nest-rs-ws-macros` had two of them (`::nest_rs_core::target::LAYERS`,
+`::nest_rs_http::target::ROUTES`); both are closed — it emits
+`::nest_rs_ws::target::{LAYERS, ROUTES}` and `nest-rs-ws` re-exports the two
+under its own `target` module, which is the sanctioned form. No `*-macros` crate
+reaches a different sibling today.
 
 **One target is the family's toggle, and that is why no edge grows a config for
 it.** Every operation line is `nest_rs::operation`, so `<PREFIX>_LOG` silences

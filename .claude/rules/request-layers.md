@@ -211,7 +211,7 @@ declared.
 ## Mapped errors never commit
 
 A route-site `Filter`/`ExceptionFilter` that maps a handler `Err` to a
-response tags it `nest_rs_core::MappedError`; `DbContext` rolls back
+response tags it `nest_rs_http::MappedError`; `DbContext` rolls back
 regardless of the mapped status. (Global filters sit outside `DbContext`
 — the rollback already happened.)
 

@@ -5,14 +5,35 @@ description: "Per-route rate limiting — a guard, a default limit from env, per
 
 import { Aside } from '@astrojs/starlight/components';
 
-The throttler turns a route into "at most N requests per window, per
-client". It ships as a guard on the [HTTP transport](/http/): one
-`ThrottlerModule` import provides the in-memory counter (an
+The throttler turns a unit of work into "at most N per window, per
+caller". One `ThrottlerModule` import provides the in-memory counter (an
 [`InMemoryThrottler`] fixed-window store); one
-`#[use_guards(ThrottlerGuard)]` binds it to a route or controller; one
+`#[use_guards(ThrottlerGuard)]` binds it wherever a guard binds; one
 `#[meta(Throttle::per_minute(10))]` overrides the limit for a single
-handler. Over the limit, the response is `429 Too Many Requests` with
-a `Retry-After` header.
+handler. Over the limit, an HTTP route answers `429 Too Many Requests`
+with a `Retry-After` header, and the other edges answer through their own
+error frame.
+
+`ThrottlerGuard` checks **all four request-carrying edges**, and each keys
+its bucket on the unit that edge addresses joined with the caller it can
+see:
+
+| Edge | Bucket |
+|---|---|
+| HTTP | the matched route pattern + the client address |
+| GraphQL | the field name — an operation carries no client address, so every caller shares that field's bucket |
+| MCP | the tool or prompt name — same, and the operation runs on a task rmcp spawned |
+| WS | the event name + the connection — the peer that keyed the upgrade is gone by the time a message runs |
+
+That is not a nicety: `/graphql` and `/mcp` are `EdgePosture::Exempt` and a
+WS message runs after the upgrade's chain returned, so **none of the three
+is reachable from an HTTP-scope binding**. Bind the guard globally *as well*
+where those mounts are public, so the request carrying the document, the
+session or the upgrade is metered per address too.
+
+Only HTTP carries per-unit metadata, so `#[meta(Throttle::…)]` overrides the
+module default there and nowhere else; the other three count against
+`ThrottlerConfig`'s limit.
 
 Bind it **per route**, or per controller. `use_guards_global` works and reads
 the same `#[meta(Throttle::…)]` — the guard pool runs post-routing, see
@@ -24,6 +45,14 @@ decision than rate limiting usually is.
 
 ```bash frame="terminal"
 cargo add nest-rs --features throttler
+```
+
+One replica, one counter. Across replicas each process keeps its own, so four
+pods let four times the configured rate through — the cross-process store is a
+second feature on the same page:
+
+```bash frame="terminal"
+cargo add nest-rs --features redis-throttler
 ```
 
 ## Mount the throttler
@@ -105,9 +134,9 @@ inherits the module default. Forms:
 The client key is the **direct peer IP** by default — every request
 coming from the same IP shares the same window. If the request arrives
 through a reverse proxy you have listed in
-`NESTRS_HTTP__TRUSTED_PROXIES`, the throttler reads the **rightmost**
-`X-Forwarded-For` hop that is not itself a trusted proxy, and counts that as
-the client.
+`NESTRS_HTTP__TRUSTED_PROXIES`, the throttler reads the **rightmost** hop that
+is not itself a trusted proxy — from `Forwarded` (RFC 7239), else
+`X-Forwarded-For`, else `X-Real-IP` — and counts that as the client.
 
 **Rightmost, not leftmost** — and the difference is the whole defence. A proxy
 *appends* the address it received the request from to the right of the chain,
@@ -120,8 +149,8 @@ direction.
 
 The rest of the rule:
 
-- An `X-Forwarded-For` from a peer that is **not** a listed proxy is
-  **ignored** — a direct client cannot bypass its own bucket by setting it.
+- A forwarding header from a peer that is **not** a listed proxy is
+  **ignored** — a direct client cannot bypass its own bucket by setting one.
 - An unparseable hop in the chain is skipped, never used as a key.
 - An unparseable IP in `TRUSTED_PROXIES` **aborts the boot** naming
   the offending value — never a silent skip.
@@ -156,47 +185,81 @@ $ for i in {1..11}; do
 `Retry-After` is the time until the window resets — clients respecting
 it back off cleanly and resume on the same window.
 
-## Alternative stores — Redis, sliding window, anywhere
+## Alternative stores — Redis, and anywhere else
 
 The counter sits behind a **`ThrottlerStore`** trait. `InMemoryThrottler`
 (fixed-window, process-local) ships with the module and covers a single
-replica; a distributed counter shared across replicas is the same trait over
-Redis, and the implementation below is the whole of it:
+replica. Across replicas each process would keep its own counter, so an app on
+four pods lets four times the configured rate through — which is why the
+cross-process store ships too.
+
+### Redis, shipped
+
+Enable it at the top of this page, then:
 
 ```rust
-use std::net::IpAddr;
+use nest_rs::core::module;
+use nest_rs::redis::{QueueModule, RedisThrottlerModule};
+
+#[module(imports = [
+    QueueModule::for_root(None),
+    RedisThrottlerModule::for_root(None),
+])]
+pub struct AppModule;
+```
+
+`RedisThrottlerModule::for_root` binds the same `dyn ThrottlerStore` the
+in-memory module binds, reads the same `NESTRS_THROTTLER__*` namespace, and
+reuses the app's existing Redis connection — so `QueueModule::for_root` must be
+imported, and it supplies the connection rather than opening a second one.
+Import **exactly one** of the two backends: both bind the same type, and
+importing both is a named boot failure rather than a silent last-one-wins.
+
+The counter is a single `EVAL` — `INCR`, read the TTL, set it on the first hit —
+so it is atomic across replicas with no check-then-act race. A backend failure
+**denies**: a rate limiter that fails open is not a rate limiter.
+
+### Writing your own
+
+```rust
+use async_trait::async_trait;
 use nest_rs::throttler::{Decision, Throttle, ThrottlerStore};
 
-pub struct RedisThrottler {
-    client: redis::Client,
+pub struct MyThrottler {
     default: Throttle,
-    trusted_proxies: Vec<IpAddr>,
 }
 
-impl ThrottlerStore for RedisThrottler {
-    fn hit(&self, key: &str, limit: Throttle) -> Decision {
-        // INCR a key with TTL = limit.window; on the first hit, set the TTL.
-        // Return `allowed = count <= limit.limit` and `retry_after = pttl`.
-        // ...
+#[async_trait]
+impl ThrottlerStore for MyThrottler {
+    async fn hit(&self, key: &str, limit: Throttle) -> Decision {
+        // Count one hit for `key`; return `allowed` and, when denied, the
+        // `Retry-After` duration.
+        todo!()
     }
 
-    fn default_limit(&self) -> Throttle { self.default }
-    fn trusted_proxies(&self) -> &[IpAddr] { &self.trusted_proxies }
+    fn default_limit(&self) -> Throttle {
+        self.default
+    }
 }
 ```
 
-The trait is **sync on purpose** — keeping `Guard::check` free of an extra
-await point for the in-memory default. A Redis implementor either fronts
-the call with `tokio::task::block_in_place`, or — preferable — wraps a
-non-async driver (`redis::Commands`) on a dedicated thread pool.
+The trait is **async**, so a networked implementor awaits its round-trip
+directly — no `block_in_place` bridge occupying a runtime worker per check, and
+no panic on a current-thread runtime.
+
+There is no `trusted_proxies` on the trait, and that is deliberate: a store
+counts hits, while **who** a hit belongs to is the transport's answer
+(`nest_rs_http::ClientOrigin`, configured by `NESTRS_HTTP__TRUSTED_PROXIES`).
+A backend that had to be told about proxies would be a second place the same
+question is answered.
 
 <Aside type="note">
 **Fixed-window by design.** `Throttle { limit, window }` maps one-to-one onto
 a counter plus a TTL — the shape every distributed store implements cheaply,
-and the reason a Redis store is a dozen lines. Sliding-window and token-bucket
-algorithms need per-key state the trait deliberately does not carry (a list of
-timestamps, or a `(tokens, refilled_at)` pair); implement them in a downstream
-crate with their own store type.
+and the reason the Redis store is a short Lua script. Sliding-window and
+token-bucket algorithms need per-key state the trait deliberately does not carry
+(a list of timestamps, or a `(tokens, refilled_at)` pair); implement them in a
+downstream crate with their own store type.
 </Aside>
 
 ## Going further

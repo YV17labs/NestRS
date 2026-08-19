@@ -228,10 +228,12 @@ telling clients to request something discovery never names.
 
 **`NESTRS_AUTHN__AUDIENCE` stops being optional.** On its own,
 `JwtConfig` treats it as a nice-to-have; under this module boot fails
-without it, naming the variable. That is the confused-deputy defence:
-a resource server that does not pin `aud` accepts any token its issuer
-signed, including one a user granted to some other service, which that
-service can then replay against you. RFC 8707 makes the resource
+without it, naming the variable. The confused-deputy defence itself is
+not what the module adds — `JwtService` applies RFC 7519 §4.1.3 on every
+path, so a token minted *for another named service* is refused even by an
+app that pins no audience. What pinning adds is the token that carries no
+`aud` at all: without a pinned audience such a token is accepted, and a
+resource server cannot afford that. RFC 8707 makes the resource
 identifier *be* the audience — keep the two strings identical, and the
 framework warns at boot when they drift.
 

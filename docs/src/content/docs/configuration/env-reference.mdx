@@ -45,10 +45,12 @@ config survives adopting or dropping the observability stack.
 | `PORT` | listen port |
 | `GLOBAL_PREFIX` | path prefix for every route (unset ⇒ none) |
 | `MAX_BODY_BYTES` | request body cap |
-| `REQUEST_TIMEOUT_SECS` | per-request timeout |
+| `REQUEST_TIMEOUT_SECS` | per-request timeout — default `30`, `0` ⇒ no timeout. An overrun answers `503` with a `Retry-After`, not `504`: this transport is the origin, not a gateway |
 | `FAIL_SECURE_STRICT` | fail boot (vs warn) on an unguarded self-mount under global guards — default `true` |
 | `SECURITY_HEADERS` | master switch for the secure-by-default response headers |
 | `HSTS` · `FRAME_OPTIONS` · `CONTENT_TYPE_OPTIONS` · `SERVER_HEADER` | individual security-header controls |
+| `REFERRER_POLICY` · `CROSS_ORIGIN_OPENER_POLICY` · `CROSS_ORIGIN_RESOURCE_POLICY` | the rest of the default-on set — `strict-origin-when-cross-origin`, `same-origin`, `same-origin`; an empty value drops one |
+| `CONTENT_SECURITY_POLICY` · `CROSS_ORIGIN_EMBEDDER_POLICY` · `PERMISSIONS_POLICY` | settable, off by default — each governs a *document* whose sources the framework cannot speak for; see [HTTP configuration](/http/configuration/) |
 | `TLS_CERT` / `TLS_KEY` | PEM cert + key for HTTPS (inline); `TLS_CERT_FILE` / `TLS_KEY_FILE` read from a path instead. Unset ⇒ plain HTTP |
 | `TLS_RELOAD_SECS` | how often a file-sourced pair is re-read, so a renewal swaps in without a restart — default `60`, `0` disables |
 | `VERSIONING` | how a caller selects an API version — `uri` (default), `header`, `media_type` |
@@ -64,7 +66,7 @@ config survives adopting or dropping the observability stack.
 | `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h), `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
 | `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`, `0` ⇒ none sent |
 | `ACCESS_LOG` | emit one access-log event per request on `nest_rs::operation` — default `true`. Owned by the HTTP transport, so it needs no observability crate; `trace_id` joins the line only when one is mounted |
-| `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/) and the trace context; an unparseable entry aborts the boot |
+| `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `Forwarded` (RFC 7239) / `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/) and the trace context; an unparseable entry aborts the boot |
 
 ## `database` — `NESTRS_DATABASE__*`
 
@@ -121,7 +123,8 @@ signing side.
 | `PRIVATE_KEY` | EdDSA private key (PEM) — issuer only, to sign |
 | `PUBLIC_KEY` | EdDSA public key (PEM) — to verify |
 | `ISSUER` | expected `iss` claim (unset ⇒ no issuer check) |
-| `AUDIENCE` | expected `aud` claim (unset ⇒ no audience check) |
+| `AUDIENCE` | expected `aud` claim. Set ⇒ the claim is **mandatory** and must name this app. Unset does *not* disable the check: a token carrying an `aud` this app is not named in is refused either way (RFC 7519 §4.1.3) |
+| `ALLOW_ANY_AUDIENCE` | opt out of that clause and accept a token minted for another service (default `false`). Refused beside `AUDIENCE`, and reported at `warn` once per boot |
 | `LEEWAY_SECS` | clock-skew leeway in seconds (default `30`) |
 | `EXPIRES_IN_SECS` | minted-token lifetime in seconds (default `3600`) |
 
@@ -140,7 +143,10 @@ every field is required, so an unconfigured app fails boot naming the field:
 `ProtectedResourceModule` shares the namespace too — it is what turns the app
 into a conformant OAuth 2.1 resource server (RFC 9728) and what an MCP server
 needs. Importing it makes `AUDIENCE` above **mandatory**: the boot fails without
-it rather than accepting a token minted for someone else.
+it rather than leaving the app unable to say which tokens are its own. (A token
+minted for *another named* audience is refused with or without the module — that
+is RFC 7519 §4.1.3. What the module adds is that a token carrying no `aud` at
+all is refused too.)
 
 | Key | Meaning |
 |---|---|
@@ -180,7 +186,7 @@ The endpoint URLs are provider constants, not config — see
 
 ## Other namespaces
 
-`graphql`, `openapi`, `ws`, `throttler`, and the `auth` app's `issuer` each read
+`graphql`, `openapi`, `ws`, `throttler`, `health`, and the `auth` app's `issuer` each read
 their own `NESTRS_<NAMESPACE>__*` keys — see the matching module page for the
 fields. The rule is uniform: the struct's field name uppercased is the key.
 

@@ -147,6 +147,7 @@ pub struct DevTokenController {
 impl DevTokenController {
     #[post("/dev-token")]
     #[public]
+    #[api(summary = "Mint a development-only bearer token")]
     async fn dev_token(&self, body: Json<DevTokenDto>) -> Result<Json<DevTokenResponseDto>> {
         let DevTokenDto { sub, roles } = body.0;
         let claims = Claims {

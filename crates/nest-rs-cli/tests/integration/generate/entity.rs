@@ -52,14 +52,14 @@ fn generate_entity_writes_the_lone_entity_and_wires_the_port() {
     assert!(mod_rs.contains("mod entity;"), "{mod_rs}");
     assert!(mod_rs.contains("pub use entity::*;"), "{mod_rs}");
 
-    // Everything the entity's own source names, in both manifests.
+    // Everything the entity's own source names, in both manifests. `seaorm` is
+    // the single feature behind `#[expose]`: it activates `nest-rs-resource` and
+    // `nest-rs-seaorm` together, because each half's expansion names the other's
+    // crate and two features implying each other is a cycle Cargo rejects.
     let root_cargo = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    for feature_flag in ["resource", "seaorm"] {
-        let quoted = format!("\"{feature_flag}\"");
-        assert!(features_cargo.contains(&quoted), "{features_cargo}");
-        assert!(root_cargo.contains(&quoted), "{root_cargo}");
-    }
+    assert!(features_cargo.contains("\"seaorm\""), "{features_cargo}");
+    assert!(root_cargo.contains("\"seaorm\""), "{root_cargo}");
     for krate in ["sea-orm", "serde"] {
         assert!(root_cargo.contains(krate), "{root_cargo}");
         assert!(features_cargo.contains(krate), "{features_cargo}");

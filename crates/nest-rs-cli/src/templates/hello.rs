@@ -48,6 +48,7 @@ impl {{controller}} {
     // This greeting is deliberately open, so it says so.
     #[get("/")]
     #[public]
+    #[api(summary = "Greet the caller")]
     async fn hello(&self) -> String {
         self.svc.greeting()
     }

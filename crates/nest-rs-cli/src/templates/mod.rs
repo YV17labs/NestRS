@@ -43,35 +43,17 @@ pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, St
     }
 
     let body = match transport {
-        Transport::Ws => concat!(
-            "        // SECURITY: rows are ability-scoped, and this gateway is unguarded as\n",
-            "        // scaffolded — with no ambient `Ability` every `Repo` read denies all\n",
-            "        // rows. Bind #[use_guards(AuthnGuard, AuthzGuard)] on the struct and\n",
-            "        // import AuthzWsModule in this adapter's module.rs (it brings\n",
-            "        // `WsDataContext`, which installs the executor + ability per message),\n",
-            "        // then replace the placeholder with `self.svc.list().await`.\n",
-            "        let _ = &self.svc;",
-        ),
-        Transport::Schedule => concat!(
-            "        // A scheduled tick is system work: `DatabaseModule`'s JobContext\n",
-            "        // installs the job executor with no ability, so `Repo` runs unscoped.\n",
-            "        // Replace the placeholder with the call this tick should make, e.g.\n",
-            "        // `self.svc.list().await?`.\n",
-            "        let _ = &self.svc;",
-        ),
-        Transport::Mcp => concat!(
-            "        // SECURITY: rows are ability-scoped. Bind the app's McpAbilityBridge as\n",
-            "        // `dyn McpOperationGuard` and import AuthzMcpModule (it brings\n",
-            "        // `McpDataContext`, which installs the executor + ability per tool call),\n",
-            "        // then replace the placeholder with `self.svc.list().await` and mask the\n",
-            "        // rows through `nest_rs::authz::masked_output_ambient`.\n",
-            "        let _ = &self.svc;",
-        ),
+        // A skeleton over a resource port names the service and returns a
+        // placeholder: its rows are ability-scoped, and an ambient `Ability` is
+        // what the adapter's authz module installs — none of which a scaffold
+        // may fabricate. The generated `AGENTS.md` carries the posture each edge
+        // then declares; the placeholder is what keeps `svc` used until it does.
+        Transport::Ws | Transport::Schedule | Transport::Mcp => "        let _ = &self.svc;",
         // These three render no `{{op_body}}` over a resource: HTTP and GraphQL
         // take a template of their own (`resource::HTTP_CONTROLLER` /
         // `GRAPHQL_RESOLVER_CRUD`), and the queue processor is driven by its
-        // payload type rather than by a read. Spelled out so a transport added
-        // later cannot inherit another one's security note by falling into `_`.
+        // payload type rather than by a read. Spelled out rather than left to
+        // `_` so a transport added later has to choose a body on purpose.
         Transport::Http | Transport::Graphql | Transport::Queue => "",
     };
     let value = match transport {
@@ -89,20 +71,21 @@ pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, St
 
 #[cfg(test)]
 mod tests {
+
     /// Every template module, as source. Scanned rather than enumerated by
     /// constant so a log added to a *new* template is covered without anyone
     /// remembering to extend a list.
-    const SOURCES: &[&str] = &[
-        include_str!("adapter.rs"),
-        include_str!("auth.rs"),
-        include_str!("entity.rs"),
-        include_str!("feature.rs"),
-        include_str!("hello.rs"),
-        include_str!("migration.rs"),
-        include_str!("resource.rs"),
-        include_str!("shared.rs"),
-        include_str!("standalone.rs"),
-        include_str!("workspace.rs"),
+    const SOURCES: &[(&str, &str)] = &[
+        ("adapter", include_str!("adapter.rs")),
+        ("auth", include_str!("auth.rs")),
+        ("entity", include_str!("entity.rs")),
+        ("feature", include_str!("feature.rs")),
+        ("hello", include_str!("hello.rs")),
+        ("migration", include_str!("migration.rs")),
+        ("resource", include_str!("resource.rs")),
+        ("shared", include_str!("shared.rs")),
+        ("standalone", include_str!("standalone.rs")),
+        ("workspace", include_str!("workspace.rs")),
     ];
 
     /// A template that spells `NESTRS_` writes a variable an `--env-prefix`
@@ -113,7 +96,7 @@ mod tests {
     fn templates_use_the_env_prefix_placeholder_not_a_literal() {
         let literals: Vec<&str> = SOURCES
             .iter()
-            .flat_map(|src| src.lines())
+            .flat_map(|(_, src)| src.lines())
             // Rust doc/line comments in the CLI's own source describe the
             // scheme; only the emitted template strings are the contract.
             .filter(|line| !line.trim_start().starts_with("//"))
@@ -137,7 +120,7 @@ mod tests {
     fn no_scaffolded_log_is_emitted_without_a_structured_field() {
         let bare: Vec<&str> = SOURCES
             .iter()
-            .flat_map(|src| src.lines())
+            .flat_map(|(_, src)| src.lines())
             .filter(|line| line.contains("tracing::") && line.contains("!(target: \""))
             .filter(|line| {
                 // Between the target's closing quote and the message's opening

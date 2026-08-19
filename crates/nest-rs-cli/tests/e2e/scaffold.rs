@@ -190,9 +190,7 @@ fn a_generated_entity_compiles() {
 /// The files stay on disk; Rust compiles the module tree, not the directory, so
 /// undeclaring them is enough to take `identity/claims.rs` — and its `uuid` —
 /// out of the build.
-const RESOURCE_ONLY_LIB: &str = r#"//! Product features — vertical slices shared across apps.
-
-pub mod hello;
+const RESOURCE_ONLY_LIB: &str = r#"pub mod hello;
 pub mod post;
 
 pub use hello::HelloHttpModule;

@@ -399,6 +399,25 @@ saying `features = ["resource"]` drops the word.
 - The `nest-rs-macro-hygiene` witness swaps `resource` for `seaorm`, keeping
   the one-dependency proof standing.
 
+### The scaffold refuses reserved names, and its prose moves where an agent reads it
+
+- **`nestrs g feature module` no longer writes `ModuleModule` in
+  `module.rs`.** A feature named after the structural vocabulary — `module`,
+  `service`, `http`, `apps` — collided with the layout it was scaffolded
+  into, silently. The reserved set is **scraped from the architecture rules
+  file the CLI already embeds**, category by category, so the rules and the
+  refusal cannot drift; the refusal names the category's role and suggests
+  the domain word.
+- **The teaching prose leaves the generated code.** The `// SECURITY:` blocks
+  in the WS, schedule and MCP skeletons, and the migration crate's header,
+  move into the scaffold's `AGENTS.md` — which gains the access-posture
+  recipe (declare per operation, wire the guards, the two edges that differ)
+  and a migrations-and-seed section. Public scaffolded routes gain
+  `#[api(summary = …)]` so the published document starts described.
+- **`cargo install --locked nest-rs-cli`**, in the README and in
+  `nestrs update` — an unlocked install resolves this tool's dependencies to
+  versions it was never built against.
+
 ### Also
 
 - **`nest-rs-opentelemetry` loses five dependencies and gains a voice.**

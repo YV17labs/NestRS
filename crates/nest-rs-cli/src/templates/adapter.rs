@@ -65,6 +65,7 @@ impl {{controller}} {
     // three, and `nestrs g http` on a `g resource` port emits them.
     #[get("/")]
     #[public]
+    #[api(summary = "Count {{kebab}} items")]
     async fn list(&self) -> String {
         format!("{} items", self.svc.count())
     }

@@ -134,13 +134,24 @@ impl OpenTelemetryConfig {
         if let Some(v) = env_var(&EnvPrefix::var(var::FILTER)).or_else(|| env_var("RUST_LOG")) {
             cfg.log_filter = v;
         }
-        if let Some(raw) = env_var(&EnvPrefix::var(var::FORMAT))
-            && let Some(fmt) = LogFormat::parse(&raw)
-        {
-            cfg.log_format = fmt;
+        // Both of these report through the same helper as their two numeric
+        // siblings below. They used to drop a set-but-unparseable value in
+        // silence — so `<PREFIX>_LOG_FORMAT=console` gave a production deploy
+        // text output where it asked for JSON, with nothing anywhere saying
+        // why. The family is "an unparseable `<PREFIX>_*` value at init" and it
+        // is answered at every member, not at the two that happened to be
+        // numbers.
+        if let Some(raw) = env_var(&EnvPrefix::var(var::FORMAT)) {
+            match LogFormat::parse(&raw) {
+                Some(fmt) => cfg.log_format = fmt,
+                None => warn_unparseable(&EnvPrefix::var(var::FORMAT), &raw),
+            }
         }
         if let Some(raw) = env_var(&EnvPrefix::var(var::SOURCE_LOCATION)) {
-            cfg.log_source_location = parse_bool(&raw).unwrap_or(false);
+            match parse_bool(&raw) {
+                Some(on) => cfg.log_source_location = on,
+                None => warn_unparseable(&EnvPrefix::var(var::SOURCE_LOCATION), &raw),
+            }
         }
 
         cfg.otlp_endpoint = env.get("OTLP_ENDPOINT");

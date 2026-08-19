@@ -376,6 +376,18 @@ and reads the other two.
   symmetric `#[use_guards(AuthnGuard, AuthzGuard)]` its three siblings carry
   bindable here too.
 
+### Also
+
+- **`nest-rs-opentelemetry` loses five dependencies and gains a voice.**
+  `nest-rs-http`, `nest-rs-interceptors` and `poem` were optional entries
+  without `dep:`, so Cargo synthesised a public implicit feature per entry
+  and `--features poem` built poem — the opposite of what the manifest's own
+  comment described; `tokio` and `async-trait` were simply unused. And an
+  unparseable `<PREFIX>_LOG_FORMAT` / `_LOG_SOURCE_LOCATION` now reports
+  itself instead of silently keeping the default — `LOG_FORMAT=console` gave
+  a production deploy text output where it asked for JSON, with nothing
+  anywhere saying why.
+
 ### The documented front door is compiled
 
 - **`use nest_rs::prelude::*` now has a reader, and it had drifted where

@@ -149,8 +149,11 @@ fn parse_log_filter(spec: &str) -> Result<EnvFilter, OpenTelemetryError> {
 }
 
 /// Boxed because `text` and `json` layers have distinct concrete types.
-/// `FmtSpan::NONE` by default — only the explicit access-log event shows up
-/// in the console.
+/// `FmtSpan::NONE` by default — a span's lifecycle is not an event, so what
+/// reaches the console is the operation line each edge files once per unit of
+/// work on `nest_rs::operation`. (Through 5.1 that was HTTP's access log alone,
+/// on `nest_rs::access`; the concept generalised to every edge and the target
+/// went with it.)
 fn console_layer<S>(
     format: LogFormat,
     source_location: bool,
@@ -183,17 +186,17 @@ impl Drop for OpenTelemetry {
             if let Some(p) = self.tracer_provider.take()
                 && let Err(e) = p.shutdown()
             {
-                eprintln!("nest_rs::opentelemetry: tracer provider shutdown failed: {e}");
+                eprintln!("{}: tracer provider shutdown failed: {e}", crate::TARGET);
             }
             if let Some(p) = self.meter_provider.take()
                 && let Err(e) = p.shutdown()
             {
-                eprintln!("nest_rs::opentelemetry: meter provider shutdown failed: {e}");
+                eprintln!("{}: meter provider shutdown failed: {e}", crate::TARGET);
             }
             if let Some(p) = self.logger_provider.take()
                 && let Err(e) = p.shutdown()
             {
-                eprintln!("nest_rs::opentelemetry: logger provider shutdown failed: {e}");
+                eprintln!("{}: logger provider shutdown failed: {e}", crate::TARGET);
             }
         }
     }

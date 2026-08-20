@@ -418,6 +418,80 @@ saying `features = ["resource"]` drops the word.
   `nestrs update` — an unlocked install resolves this tool's dependencies to
   versions it was never built against.
 
+### A documented fact is derived once, and the gate fires where it broke
+
+The docs linter derived its own facts: seven checks opened `crates/**`,
+`demo/**` and the root manifest and re-derived in JavaScript, with regexes,
+what `nest-rs-conformance` derives in Rust with `syn` and `toml_edit`. Two
+implementations of one definition drift, and these did — the linter counted
+umbrella capabilities as *features carrying a `dep:`* (27) where the join
+counts `dep:` *entries* (28), while the linter's own comment claimed the two
+derivations could not disagree. The word had never been defined: a feature a
+developer types and a crate a feature activates are different sets that
+numbered the same until `seaorm` grew a second `dep:`.
+
+- **`docs/canon.json` and `docs/demo-sources.json` are derived by the `canon`
+  join and read by the linter, which now derives nothing.** Verified by
+  instrumenting `fs`: zero reads outside `docs/`. Two artefacts rather than
+  one because the facts are twenty values a reviewer reads at a glance and
+  the quoted demo corpus is 380 KB that churns whenever `demo/` moves.
+- **The workflow's `paths: docs/**` filter became a true declaration**, where
+  it named one input class of eight. A framework change that falsified a page
+  did not run the job; the failure surfaced later on an unrelated docs commit,
+  naming `index.mdx`, which no commit in the window had touched. Regenerating
+  the canon now lands a `docs/**` diff on the commit that moved the fact, so
+  the gate fires there. The `Cargo.toml` entry the filter carried for one
+  check is gone with the check that needed it.
+- **The linter's thirty-two rules are a family joined against themselves.**
+  Each owes a fixture that makes it fire, a `STYLE.md` § F entry, and no
+  violation naming anything outside `RULES` — thirty bare literals at
+  thirty-two call sites became one frozen object. Nothing had proved a rule
+  still fired: neutralising any regex left the gate *greener*, which
+  `.claude/rules/testing.md` calls worse than an empty cell. Nothing was
+  importable either, so the seam was structural rather than a missing chore.
+- **The baseline contract is enforced instead of promised.** A line naming a
+  violation since fixed now fails, a corpus below its floor fails, and
+  `--update-baseline` is gone: it re-snapshotted every violation including the
+  code-truth ones, so the remedy the failure message printed turned a
+  proven-false public claim into a permanent exemption, offered to whoever
+  held the red build and could not see the cause from the message. `--land
+  <rule>` replaces it — one named rule, written and then failed, which is
+  `baseline.rs`'s shape for its reason.
+- **Two rules the corpus never had.** `link` resolves all 969 internal links
+  and their anchors — a probe page linking a route that does not exist built
+  clean and shipped the dead href, the only validated targets being the ~20
+  sidebar slugs. Anchor ids follow GitHub's algorithm, written out rather than
+  imported because `github-slugger` last published 2023-09-15, outside the
+  twelve-month freshness bar, and verified against the built site: 933 of 933
+  agreeing in both directions. `fence-drift` asserts that a fence titled with
+  a real `demo/` file is an excerpt of it; 102 pre-existing drifts are
+  baselined and the list only shrinks.
+- **A `docs` join puts the framework's families against the corpus**, so a
+  family declared in Rust owes a docs cell by construction rather than by
+  anyone remembering. It found twelve holes and all twelve were closed rather
+  than recorded: `graphql.operation` and `events.dispatch` appeared on **zero**
+  of 125 pages while the table publishing the canonical unit names listed eight
+  of ten, and ten config keys a deployment can set were documented nowhere —
+  among them the ceiling on a GraphQL subscription's stale-privilege window and
+  the bound on a federation `_entities` request.
+- **What the pages were saying.** `/packages/` published `cargo add nest-rs
+  --features resource` for a feature `335b80e5` had deleted, so the command
+  failed for anyone following the page the landing calls the feature map, while
+  `redis-throttler` was absent from it. Both authentication pages published a
+  `#[module]` inside a file titled `mod.rs`, which the architecture rules the
+  CLI generates into every scaffolded project forbid, and `/configuration/
+  testing/` published a `#[tokio::test]` inside one titled `tests/e2e/main.rs`,
+  which the locked test-layout norm forbids. One anchor pointed at a heading
+  renamed out from under it.
+- **Four smaller corrections in the joins themselves.**
+  `sources::exported_decorators` accepted `#[proc_macro]` against the argument
+  its own doc comment makes — a bang macro is applied `name!(…)`, so it opens a
+  cell nothing can fill. `umbrella.rs` defined a capability as a feature while
+  counting crates, and its README corpus borrowed the capability floor.
+  `declared_str` reads an associated `const` as well as a free one, so the
+  `docs` join derives the env prefix from `EnvPrefix::DEFAULT` rather than
+  spelling it — which `env_names` had refused, correctly.
+
 ### Also
 
 - **`nest-rs-opentelemetry` loses five dependencies and gains a voice.**

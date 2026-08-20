@@ -141,7 +141,9 @@ is a separate line, one per unit of work, on the shared target `nest_rs::operati
 | Scheduled tick | `schedule.tick` | provider, method |
 | Queue job | `queue.job` | queue, processor, `job_id`, attempt |
 | MCP operation | `mcp.operation` | the JSON-RPC method |
+| GraphQL operation | `graphql.operation` | role, operation |
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |
+| Event dispatch | `events.dispatch` | event, listener |
 
 **The name is `<edge>.<unit>`, and it is the same string the operation's span
 carries.** It is declared once — by the crate that owns the edge, as

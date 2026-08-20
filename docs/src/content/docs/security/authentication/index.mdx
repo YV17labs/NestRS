@@ -32,11 +32,22 @@ cargo add nest-rs --features authn
 The common case writes no strategy at all. `AuthnGuard<S>` is generic
 over the strategy, and the framework ships
 [`JwtStrategy`](/security/authentication/jwt/) — a resource-server app
-ships a single type alias and a tiny module:
+ships two short files — the aliases, and the module that provides them:
 
-```rust title="crates/features/src/authn/mod.rs"
+```rust title="crates/features/src/authn/strategy.rs"
+use nest_rs::authn::JwtStrategy;
+
+use crate::Claims;
+
 pub type AppJwtStrategy = JwtStrategy<Claims>;
+
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
+```
+
+```rust title="crates/features/src/authn/module.rs"
+use nest_rs::core::module;
+
+use super::strategy::{AppJwtStrategy, AuthnGuard};
 
 #[module(
     imports = [nest_rs::authn::AuthnModule::for_root(None)],

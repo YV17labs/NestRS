@@ -24,9 +24,20 @@ configures the algorithm without taking a direct dependency.
 
 A resource-server app declares a type alias and a tiny module:
 
-```rust title="crates/features/src/authn/mod.rs"
+```rust title="crates/features/src/authn/strategy.rs"
+use nest_rs::authn::JwtStrategy;
+
+use crate::Claims;
+
 pub type AppJwtStrategy = JwtStrategy<Claims>;
+
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
+```
+
+```rust title="crates/features/src/authn/module.rs"
+use nest_rs::core::module;
+
+use super::strategy::{AppJwtStrategy, AuthnGuard};
 
 #[module(
     imports = [nest_rs::authn::AuthnModule::for_root(None)],

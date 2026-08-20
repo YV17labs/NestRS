@@ -1,0 +1,12 @@
+# Empty, and it landed that way after one pass.
+#
+# The join found twelve holes on the day it was written and all twelve were
+# closed rather than recorded: two units of work the site never named
+# (`graphql.operation`, `events.dispatch` — the table publishing the canonical
+# names listed eight of ten, and its shape said there were no others), and ten
+# config keys a deployment can set and no page mentioned, among them the
+# ceiling on a GraphQL subscription's stale-privilege window and the bound on a
+# federation `_entities` request.
+#
+# Twelve was small enough to fix. A larger landing would be recorded here
+# instead, and would only ever shrink.

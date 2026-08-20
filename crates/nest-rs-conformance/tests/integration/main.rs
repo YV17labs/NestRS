@@ -6,6 +6,8 @@
 //! is covered anywhere, which is the one question no individual suite can ask
 //! about itself.
 
+mod canon;
+mod docs;
 mod edges;
 mod env_names;
 mod events;

@@ -20,12 +20,19 @@ proc-macro2 = { workspace = true }
 quote = { workspace = true }
 
 # The umbrella's `[features]` table is read with a TOML parser for the reason the
-# rest is read with `syn`: a wrapped list is what a line scan gets wrong. Its one
-# reader is the `umbrella` join, so it is a dev edge — nothing under `src/` names
-# it, and a normal dependency would put a TOML parser in the graph of anything
-# that ever links this crate.
-[dev-dependencies]
+# rest is read with `syn`: a wrapped list is what a line scan gets wrong. It sat
+# in `[dev-dependencies]` while the `umbrella` join was its only reader; the
+# `canon` join is the second, and both now read one `sources::umbrella_matrix`
+# so the word "capability" is derived once rather than per join. That moves the
+# parse under `src/`, hence this line. The graph it widens is empty — the crate
+# is `publish = false` and nothing links it but its own tests.
 toml_edit = { workspace = true }
+
+# `canon` writes the facts file the docs linter reads, so it serializes. A join
+# that only asserts needs neither, which is why they stay a dev edge.
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

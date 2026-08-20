@@ -7,9 +7,25 @@
 //! checklist and was checked by nobody, so a capability could reach a user with
 //! no documented way to install it.
 //!
-//! A **capability** is derived, not listed: a feature whose value activates a
-//! `dep:nest-rs-<y>`. That is what separates the twenty-eight capabilities from
-//! `default` and `full`, which activate nothing of their own.
+//! A **capability** is derived, not listed — and the word names two populations
+//! that this file used to conflate, so it now says which one it means.
+//!
+//! `sources::UmbrellaMatrix` holds the split. A **feature** is what a developer
+//! types after `--features`; there are twenty-eight, `default` and `full` aside,
+//! and that is the set the landing counts and the packages page maps. A
+//! **crate** is what a feature's `dep:` entry activates; there are also
+//! twenty-eight, but not the same twenty-eight — `seaorm` activates two
+//! (`#[expose]` expands to one, `#[crud]` to the other) and `redis-throttler`
+//! activates none.
+//!
+//! **This join's rows are crates**, because what it asks is what each crate
+//! owes: a re-export, an install line, a README, an expansion witness, a boot.
+//! Its columns key on the crate for the reason [`Capability::cell`] argues.
+//! Until this paragraph existed the doc here said *feature* while the code
+//! counted `dep:` entries, and the numbers agreed only for as long as every
+//! capability feature activated exactly one crate. The day that stopped being
+//! true the docs linter — which had copied the sentence, not the code — began
+//! publishing 27 against a landing that correctly said 28.
 //!
 //! Six columns, and each is owed by a derived subset rather than by all
 //! twenty-eight:
@@ -85,16 +101,35 @@ use std::path::Path;
 
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    crate_dirs, executed_tokens, exported_decorators, files_with_extension, parsed, path_roots,
-    read, repo_root, rust_files, spells_path,
+    UMBRELLA_AGGREGATES, crate_dirs, executed_tokens, exported_decorators, files_with_extension,
+    parsed, path_roots, read, repo_root, rust_files, spells_path, umbrella_matrix,
 };
 use syn::{Item, UseTree};
 
 const BASELINE: &str = "umbrella-baseline.txt";
 
-/// Twenty-eight capabilities stand today. Below that the scan is reading the
-/// wrong manifest and every hole it reports is an artefact.
-const FLOOR: usize = 28;
+/// Twenty-eight crates stand behind the matrix today. Below that the scan is
+/// reading the wrong manifest and every hole it reports is an artefact.
+///
+/// **This counts crates, and the word is now spelled where it is defined.** The
+/// module doc above used to define a capability as *a feature* while this
+/// number counted `dep:` **entries** — 27 of the first, 28 of the second, since
+/// `seaorm` activates two crates. One word, two populations, and the docs linter
+/// picked the other one: it published 27 against a landing that said 28.
+/// `sources::UmbrellaMatrix` now names both and this join takes the crate view,
+/// which is its own subject — see [`Capability::cell`].
+const CRATE_FLOOR: usize = 28;
+
+/// The README corpus is at least the size of the crate list, and that is its
+/// own floor rather than a borrowed one.
+///
+/// It read [`CRATE_FLOOR`] until this line existed: two unrelated populations
+/// behind one constant, so dropping to twenty capabilities would have loosened
+/// a README check to twenty for no reason — weakening exactly the column whose
+/// stated purpose is that a negative check over an empty corpus reports nothing.
+/// `baseline::floor` makes the same argument for why the *sentence* is central
+/// and the *number* is not.
+const README_FLOOR: usize = 28;
 
 /// A capability, as the umbrella's own feature matrix declares it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -161,49 +196,23 @@ fn sub_features(root: &Path, capabilities: &[Capability]) -> BTreeSet<String> {
         .iter()
         .map(|(name, _)| name.to_owned())
         .filter(|name| !owned.contains(name.as_str()))
-        .filter(|name| name != "default" && name != "full")
+        .filter(|name| !UMBRELLA_AGGREGATES.contains(&name.as_str()))
         .collect()
 }
 
-/// Every capability the umbrella declares, from its `[features]` table.
+/// Every crate the umbrella activates, one row per `dep:` entry.
 ///
-/// Parsed with a TOML parser rather than scanned: a feature list wraps across
-/// lines as freely as a Rust string does, and the wrapping is exactly what a
-/// line-oriented read gets wrong.
+/// Reads `sources::umbrella_matrix`, which is where the `[features]` table is
+/// parsed for the whole crate — this join and the `canon` join both need it, and
+/// two parsers for one table is how the two answers came to differ. The *view*
+/// is this join's own: it asks what each crate owes, so a crate is what a row
+/// names, for the reason [`Capability::cell`] argues.
 fn capabilities(root: &Path) -> Vec<Capability> {
-    let manifest =
-        read(&root.join("crates/nest-rs/Cargo.toml")).expect("the umbrella has a manifest");
-    let doc: toml_edit::DocumentMut = manifest
-        .parse()
-        .expect("the umbrella manifest is valid TOML");
-    let Some(features) = doc.get("features").and_then(|f| f.as_table()) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for (feature, value) in features {
-        let Some(list) = value.as_array() else {
-            continue;
-        };
-        for entry in list {
-            let Some(text) = entry.as_str() else {
-                continue;
-            };
-            // `dep:nest-rs-x` activates the crate outright.
-            if let Some(krate) = text.strip_prefix("dep:") {
-                out.push(Capability {
-                    feature: feature.to_owned(),
-                    krate: krate.to_owned(),
-                });
-                continue;
-            }
-            // `nest-rs-x/y` and `nest-rs-x?/y` both only forward a feature to a
-            // crate some *other* capability activates, so neither makes this
-            // feature the owner of a crate. What a strong forward **can** make
-            // is a surface reachable only under this feature — see
-            // [`sub_features`], which is the column that asks about those.
-        }
-    }
-    out
+    umbrella_matrix(root)
+        .crates()
+        .into_iter()
+        .map(|(feature, krate)| Capability { feature, krate })
+        .collect()
 }
 
 /// The concerns the umbrella re-exports at its root, as `<crate> as <alias>`.
@@ -309,7 +318,7 @@ fn readmes(root: &Path) -> Vec<(String, String)> {
         }
     }
     assert!(
-        out.len() > FLOOR,
+        out.len() > README_FLOOR,
         "{} README(s) read — the corpus is the population's own size at least, \
          and a negative column over an empty corpus reports nothing",
         out.len(),
@@ -405,8 +414,8 @@ fn every_umbrella_capability_carries_its_witnesses() {
     let capabilities = capabilities(&root);
     baseline::floor(
         capabilities.len(),
-        FLOOR,
-        "capability feature(s) in the umbrella manifest",
+        CRATE_FLOOR,
+        "crate(s) activated by the umbrella manifest",
     );
 
     let reexports = reexports(&root);

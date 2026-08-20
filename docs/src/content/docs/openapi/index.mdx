@@ -223,9 +223,19 @@ move together. No hand-written schema, no annotation, nothing to drift.
 
 ## Configure the document
 
-The `info` block — title, version, description — is settable from the
-[`.env` cascade](/configuration/) **and** the pinned struct (the framework-wide
-dual-path rule):
+Six keys, all on the framework-wide dual path — the [`.env` cascade](/configuration/)
+**and** the pinned struct:
+
+| Field | Env var | Default | Effect |
+|---|---|---|---|
+| `enabled` | `NESTRS_OPENAPI__ENABLED` | dev/test only | Serves `/api` and `/api-json`. Left on outside a dev profile, the boot logs a `warn` — the document and the UI are public. |
+| `title` | `NESTRS_OPENAPI__TITLE` | the crate's name | The document's `info.title`. |
+| `version` | `NESTRS_OPENAPI__VERSION` | the crate's version | The document's `info.version`. |
+| `description` | `NESTRS_OPENAPI__DESCRIPTION` | none | The document's `info.description`. |
+| `emit_document` | `NESTRS_OPENAPI__EMIT_DOCUMENT` | `false` | Writes the document to `document_path` once at boot — the committed-artifact workflow the GraphQL SDL emit has. |
+| `document_path` | `NESTRS_OPENAPI__DOCUMENT_PATH` | `openapi.json` | Where `emit_document` writes. |
+
+The `info` block is the common case:
 
 ```bash frame="terminal"
 $ NESTRS_OPENAPI__TITLE="Acme API" \

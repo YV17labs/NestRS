@@ -79,7 +79,9 @@ framework's doing, not the decorator's: the same holds for any streaming body a
 handler returns.
 
 The ceiling is a **security** control, and the same one
-`NESTRS_WS__MAX_CONNECTION_SECS` and
+`NESTRS_WS__MAX_MESSAGE_BYTES` bounds an inbound frame at the protocol
+layer — 64 KiB by default, so buffering stops before a giant frame is
+fully read. `NESTRS_WS__MAX_CONNECTION_SECS` and
 `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` carry, at the same default. A stream
 is authenticated once, when the request arrives, then emits with those
 privileges for as long as it lives — so without a ceiling it outlives an

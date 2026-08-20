@@ -51,7 +51,15 @@ default to each provider's canonical login set.
 NESTRS_SOCIAL__GITHUB__CLIENT_ID=…
 NESTRS_SOCIAL__GITHUB__CLIENT_SECRET=…
 NESTRS_SOCIAL__GITHUB__REDIRECT_URL=https://auth.example/social/github/callback
+
+NESTRS_SOCIAL__GOOGLE__CLIENT_ID=…
+NESTRS_SOCIAL__GOOGLE__CLIENT_SECRET=…
+NESTRS_SOCIAL__GOOGLE__REDIRECT_URL=https://auth.example/social/google/callback
 ```
+
+`NESTRS_SOCIAL__GITHUB__SCOPES` and `NESTRS_SOCIAL__GOOGLE__SCOPES` take a
+comma-separated list and default to each provider's canonical login set, so
+neither is deployment config until you need more than sign-in.
 
 Three outcomes per provider, and no fourth:
 

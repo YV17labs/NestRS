@@ -24,7 +24,7 @@ skipped, so a developer's personal secrets cannot leak in.
 matches a config registered via `ConfigModule::for_feature::<C>()`, the
 seed wins and the factory never runs.
 
-```rust title="apps/auth/tests/e2e/main.rs"
+```rust title="tests/e2e/token.rs"
 use nest_rs::testing::TestApp;
 use uuid::Uuid;
 
@@ -70,7 +70,7 @@ a test must not read the environment at all, seed the value with `.provide()`
 (above): a seed short-circuits the resolving factory outright.
 </Aside>
 
-```rust title="apps/api/tests/e2e/main.rs"
+```rust title="tests/e2e/http.rs"
 use nest_rs::http::{HttpConfig, HttpModule};
 
 let app = TestApp::builder()

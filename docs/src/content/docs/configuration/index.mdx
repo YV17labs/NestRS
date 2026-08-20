@@ -76,7 +76,7 @@ Three pieces do the heavy lifting:
 - **`#[derive(Validate)]`** plus `#[validate(...)]` attributes run after
   the load. A failure aborts boot naming the field. A rule the derive
   cannot express is the one case for a hand-written `impl Validate` —
-  see the [Advanced section](#advanced-hand-written-from_env-and-custom-validation)
+  see the [Advanced section](#advanced)
   at the end of this page.
 
 `env.parse("PAGE_SIZE")?` reads + parses into the field's type; unset

@@ -5,6 +5,7 @@ import starlightLlmsTxt from 'starlight-llms-txt';
 import mermaid from 'astro-mermaid';
 import remarkGfm from 'remark-gfm';
 import rehypeExternalLinks from 'rehype-external-links';
+import { REDIRECTS } from './src/redirects.mjs';
 import { sidebarSection } from './src/sidebar.mjs';
 import { DEFAULT_DESCRIPTION } from './src/brand.mjs';
 
@@ -23,10 +24,10 @@ export default defineConfig({
   base,
   // One entry per moved/deleted/renamed page (audit §2.8.B). No 404 for a URL
   // that ever shipped.
-  redirects: {
-    '/graphql/dataloader/': '/database/dataloaders/',
-    '/throttler/': '/rate-limiting/',
-  },
+  // Declared in `src/redirects.mjs` so the docs linter's `link` rule reads the
+  // same list: a retired route is resolvable exactly because it redirects, and
+  // a second copy would make that true for one reader and false for the other.
+  redirects: REDIRECTS,
   // GFM tables/strikethrough/task-lists must be enabled for .mdx. Since
   // @astrojs/mdx@7 the processor carries that — the top-level `markdown.gfm`
   // flag Astro 6 needed is deprecated and gone.

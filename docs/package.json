@@ -12,6 +12,7 @@
     "build": "astro build",
     "preview": "astro preview --host",
     "lint:docs": "node scripts/lint-docs.mjs",
+    "test": "node --test 'scripts/*.test.mjs'",
     "astro": "astro"
   },
   "dependencies": {

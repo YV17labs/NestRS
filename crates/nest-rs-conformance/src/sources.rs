@@ -86,7 +86,8 @@ pub fn read(path: &Path) -> io::Result<String> {
     fs::read_to_string(path)
 }
 
-/// The value of a top-level `pub const <name>: &str = "…";` in one file.
+/// The value of a `pub const <name>: &str = "…";` in one file — free, or
+/// associated on an `impl`.
 ///
 /// **Parsed, not grepped.** The declarations this crate reads are string
 /// constants, and a text scan reads two of them wrong: a `\`-continued literal
@@ -94,10 +95,30 @@ pub fn read(path: &Path) -> io::Result<String> {
 /// exactly that, and the alternative — linking the crate that declares it — is
 /// the 400-crate relink [`operation_log_target`] records measuring.
 pub fn declared_str(path: &Path, name: &str) -> Option<String> {
-    parsed(path)?.items.iter().find_map(|item| match item {
-        syn::Item::Const(konst) if konst.ident == name => as_str_lit(&konst.expr),
-        _ => None,
-    })
+    let ast = parsed(path)?;
+    // Top level first, so a free constant always wins a name an `impl` also
+    // uses. The associated arm came second, for `EnvPrefix::DEFAULT` — a value
+    // the `docs` join needs and which lives where the type that owns it does,
+    // which is the placement the naming rules ask for. Reading only free
+    // constants would have meant either a second reader beside this one or a
+    // literal beside the rule forbidding it.
+    ast.items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Const(konst) if konst.ident == name => as_str_lit(&konst.expr),
+            _ => None,
+        })
+        .or_else(|| {
+            ast.items.iter().find_map(|item| {
+                let syn::Item::Impl(block) = item else {
+                    return None;
+                };
+                block.items.iter().find_map(|item| match item {
+                    syn::ImplItem::Const(konst) if konst.ident == name => as_str_lit(&konst.expr),
+                    _ => None,
+                })
+            })
+        })
 }
 
 /// Every crate directory the repo's two workspaces hold.
@@ -125,6 +146,114 @@ pub fn crate_dirs() -> Vec<PathBuf> {
     out
 }
 
+/// The umbrella's `[features]` table, as declared.
+///
+/// **One parse, two named views, because "capability" means two things and the
+/// repo had never said which.** A *feature* is what a developer types after
+/// `--features`; a *crate* is what one activates. They numbered the same for as
+/// long as every capability feature activated exactly one crate, so nothing
+/// forced the distinction — then `seaorm` grew a second `dep:` (`#[expose]`
+/// expands to one crate and `#[crud]` to the other, and two features would have
+/// to imply each other, which Cargo rejects as a cycle) and `redis-throttler`
+/// arrived activating none at all. Two readers, two answers, one word.
+///
+/// So neither reading is left to a call site to re-derive:
+/// [`UmbrellaMatrix::features`] is the developer's set — what the landing counts
+/// and the docs' packages table maps — and [`UmbrellaMatrix::crates`] is the set
+/// that owes witnesses, which is the umbrella join's own subject and is keyed on
+/// the crate for the reason that join argues at `Capability::cell`.
+///
+/// Parsed with a TOML parser rather than scanned: a feature list wraps across
+/// lines as freely as a Rust string does, and the wrapping is what a
+/// line-oriented read gets wrong.
+pub struct UmbrellaMatrix {
+    /// Every feature the table declares, in declaration order, mapped to the
+    /// entries it activates.
+    entries: Vec<(String, Vec<String>)>,
+}
+
+/// Features that activate nothing of their own and are documented as
+/// aggregates, so neither view counts them.
+pub const UMBRELLA_AGGREGATES: [&str; 2] = ["default", "full"];
+
+impl UmbrellaMatrix {
+    /// Every capability a developer can name in `--features`.
+    ///
+    /// The aggregates aside, that is the whole table: a feature exists to be
+    /// typed, and one activating no `dep:` of its own is still a capability when
+    /// it forwards a surface that exists in no build without it —
+    /// `redis-throttler` is exactly that, and the manifest's own comment calls it
+    /// one. Counting `dep:`-bearing features instead is the derivation the docs
+    /// linter used to run, and it disagreed with this file by one.
+    pub fn features(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|(name, _)| name.clone())
+            .filter(|name| !UMBRELLA_AGGREGATES.contains(&name.as_str()))
+            .collect()
+    }
+
+    /// Every `(feature, crate)` the table activates outright.
+    ///
+    /// `nest-rs-x/y` and `nest-rs-x?/y` are excluded: both only forward a
+    /// feature to a crate some *other* feature activates, so neither makes this
+    /// feature the owner of a crate.
+    pub fn crates(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .flat_map(|(feature, entries)| {
+                entries.iter().filter_map(move |entry| {
+                    entry
+                        .strip_prefix("dep:")
+                        .map(|krate| (feature.clone(), krate.to_owned()))
+                })
+            })
+            .collect()
+    }
+
+    /// The entries one feature activates, for a join asking about a single row.
+    pub fn entries_of(&self, feature: &str) -> &[String] {
+        self.entries
+            .iter()
+            .find(|(name, _)| name == feature)
+            .map_or(&[], |(_, entries)| entries.as_slice())
+    }
+}
+
+/// Read the umbrella's feature matrix, or an empty one when the manifest has no
+/// `[features]` table — a floor at the call site names that, rather than this
+/// returning a shape nobody can tell from a real one.
+pub fn umbrella_matrix(root: &Path) -> UmbrellaMatrix {
+    let Ok(manifest) = read(&root.join("crates/nest-rs/Cargo.toml")) else {
+        return UmbrellaMatrix {
+            entries: Vec::new(),
+        };
+    };
+    let Ok(doc) = manifest.parse::<toml_edit::DocumentMut>() else {
+        return UmbrellaMatrix {
+            entries: Vec::new(),
+        };
+    };
+    let Some(features) = doc.get("features").and_then(|f| f.as_table()) else {
+        return UmbrellaMatrix {
+            entries: Vec::new(),
+        };
+    };
+    let mut entries = Vec::new();
+    for (feature, value) in features {
+        let Some(list) = value.as_array() else {
+            continue;
+        };
+        entries.push((
+            feature.to_owned(),
+            list.iter()
+                .filter_map(|entry| entry.as_str().map(str::to_owned))
+                .collect(),
+        ));
+    }
+    UmbrellaMatrix { entries }
+}
+
 /// The decorators a crate exports, or empty when it exports none.
 ///
 /// Rust forces `#[proc_macro_attribute]` items to the crate root, so `lib.rs` is
@@ -136,6 +265,14 @@ pub fn crate_dirs() -> Vec<PathBuf> {
 /// join records an applied attribute's last path segment and a derive is applied
 /// as `#[derive(X)]`, whose path is `derive`. Any derive it returned would be a
 /// cell nothing could ever fill.
+///
+/// **`#[proc_macro]` is refused on that same argument**, which the arm used to
+/// contradict while the paragraph above made the case against it. A bang macro
+/// is invoked `name!(…)` and the umbrella join records an *applied attribute's*
+/// path, so a bang macro returned here opens a cell nothing can fill — and
+/// `baseline.rs` guarantees the only way back out is a permanent line in a file
+/// documented as one that only shrinks. Zero are exported today, so this closed
+/// a latent hole rather than a live one.
 pub fn exported_decorators(dir: &Path) -> Vec<String> {
     let Some(ast) = parsed(&dir.join("src/lib.rs")) else {
         return Vec::new();
@@ -147,7 +284,7 @@ pub fn exported_decorators(dir: &Path) -> Vec<String> {
         };
         for attr in &f.attrs {
             let path = attr.path();
-            if path.is_ident("proc_macro_attribute") || path.is_ident("proc_macro") {
+            if path.is_ident("proc_macro_attribute") {
                 out.push(f.sig.ident.to_string());
             }
         }

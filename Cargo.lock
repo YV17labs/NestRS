@@ -2762,6 +2762,8 @@ version = "5.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "serde",
+ "serde_json",
  "syn 3.0.3",
  "toml_edit 0.25.13+spec-1.1.0",
 ]

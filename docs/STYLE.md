@@ -329,16 +329,41 @@ section" list (§B) is the same navigation in prose, so it carries the same two 
 
 ```
 cd docs
-npm run lint:docs              # fails on any violation not in the baseline
-npm run lint:docs -- --update-baseline   # re-snapshot known violations (shrinks toward zero)
+npm run lint:docs                    # the gate
+npm test                             # the linter joined against itself
+npm run lint:docs -- --land <rule>   # land a new rule on the corpus it inherits
 ```
 
-The linter is **baseline-gated**: `docs/scripts/lint-baseline.json` records tolerated violations so
-CI fails only on *new* dialect drift. **The baseline is now empty — every rule above gates the
-whole corpus, and any violation fails the build.** It only ever shrinks: a new violation is fixed
-on the page, never re-snapshotted with `--update-baseline`.
+The linter is **baseline-gated**: `docs/scripts/lint-baseline.json` records the violations a rule
+inherited on the day it landed, so CI fails only on *new* dialect drift. The contract runs **both
+directions**, enforced rather than promised — a violation not in the baseline fails, *and* a
+baseline line naming a violation since fixed fails, so deleting that line is part of fixing the
+page instead of a chore nobody is prompted to do. The list only ever shrinks. Every rule above
+gates the whole corpus at zero except `fence-drift`, whose entry says why it landed on a corpus
+written before it.
 
-CI runs it on pushes to `main` that touch `docs/**`, before the build, in
+**`--update-baseline` is gone, and its removal is the rule.** It re-snapshotted every current
+violation, the code-truth ones of §F included — so the remedy the failure message printed could
+turn a proven-false claim about the framework into a permanent exemption, in a file nobody
+re-reads, and it was offered to whoever held the red build, who is routinely not the author of
+the break. `--land` is the narrow replacement: it names **one** rule, refuses a name `RULES` does
+not hold, writes that rule's current violations and then **fails**, so a landing is a reviewed
+commit rather than a silent green. Anything else is fixed on the page; a line that genuinely
+belongs in the baseline is added by hand, where a reviewer sees it.
+
+A clean run only means something if the walk read the corpus, so **below 100 pages the gate fails**
+instead of reporting success. That is the mirror of the baseline: a baseline catches a corpus that
+grew a violation, and nothing caught a corpus that *shrank* — rename a section directory and its
+pages leave the walk, every rule over them stops running, and the build goes greener.
+
+`npm test` is the other half. `scripts/lint.test.mjs` joins the rules against themselves: every
+member of `RULES` owes a **fixture that makes it fire** and a **§F entry above**, and no violation
+may name a rule outside the set. A rule added without a fixture fails, a rule weakened until it
+matches nothing fails, and a §F entry for a rule that does not exist fails. Before that join,
+thirty rules had no proof they still fired — neutralise any regex and the gate went greener. A
+fixture proves a rule triggers, never that its judgement is right; that question is `/audit`'s.
+
+CI runs the gate on pushes to `main` that touch `docs/**`, before the build, in
 `.github/workflows/docs-pages.yml`. That filter is the job's whole input set, exactly — the
 linter opens no file outside `docs/`, which is what `docs/canon.json` bought. A framework change
 that moves a documented fact regenerates the canon, so it lands a `docs/**` diff and trips this

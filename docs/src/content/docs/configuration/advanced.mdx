@@ -13,8 +13,8 @@ payload** (a JSON blob in one variable) and a **rule spanning the whole
 struct**. This is the real `IssuerConfig` from `features/oauth` (signs
 the OAuth clients accepted by `apps/auth`) — it needs both:
 
-```rust title="crates/features/src/oauth/config.rs (abridged)"
-use nest_rs::authn::RegisteredClient;
+```rust title="crates/features/src/app_oauth/config.rs (abridged)"
+use nest_rs::oauth::server::RegisteredClient;
 use nest_rs::config::{config, Config, ConfigError, ConfigService};
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
@@ -77,7 +77,7 @@ impl Config for IssuerConfig {
 Wiring and consumption do not change — the same `for_feature` import,
 the same `Arc<IssuerConfig>` injection:
 
-```rust title="crates/features/src/oauth/module.rs"
+```rust title="crates/features/src/app_oauth/module.rs"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use super::config::IssuerConfig;
@@ -87,7 +87,7 @@ use super::service::OAuthFlow;
     imports = [ConfigModule::for_feature::<IssuerConfig>(), UsersModule],
     providers = [OAuthFlow],
 )]
-pub struct OAuthModule;
+pub struct AppOAuthModule;
 ```
 
 ```rust title="apps/auth/src/module.rs"
@@ -97,13 +97,13 @@ use nest_rs::core::module;
 #[module(
     imports = [
         ConfigModule::for_root(),
-        OAuthHttpModule,
+        AppOAuthHttpModule,
     ],
 )]
 pub struct AuthModule;
 ```
 
-```rust title="crates/features/src/oauth/service.rs"
+```rust title="crates/features/src/app_oauth/service.rs"
 #[injectable]
 pub struct OAuthFlow {
     #[inject]

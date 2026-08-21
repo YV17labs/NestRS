@@ -128,7 +128,7 @@ signing side.
 | `LEEWAY_SECS` | clock-skew leeway in seconds (default `30`) |
 | `EXPIRES_IN_SECS` | minted-token lifetime in seconds (default `3600`) |
 
-`OAuth2Config` shares this namespace for the login flow's provider endpoints —
+`OAuthClientConfig` shares this namespace for the login flow's provider endpoints —
 every field is required, so an unconfigured app fails boot naming the field:
 
 | Key | Meaning |
@@ -140,7 +140,7 @@ every field is required, so an unconfigured app fails boot naming the field:
 | `USERINFO_URL` | provider endpoint the profile is fetched from |
 | `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
 
-`ProtectedResourceModule` shares the namespace too — it is what turns the app
+`OAuthResourceModule` shares the namespace too — it is what turns the app
 into a conformant OAuth 2.1 resource server (RFC 9728) and what an MCP server
 needs. Importing it makes `AUDIENCE` above **mandatory**: the boot fails without
 it rather than leaving the app unable to say which tokens are its own. (A token

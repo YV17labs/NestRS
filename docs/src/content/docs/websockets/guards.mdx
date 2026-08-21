@@ -42,17 +42,17 @@ request, like any HTTP guard:
 
 ```rust
 use nest_rs::ws::{gateway, messages};
-use crate::auth::AuthnGuard;
+use crate::auth::AppAuthnGuard;
 
 #[gateway(path = "/ws")]
-#[use_guards(AuthnGuard)]
+#[use_guards(AppAuthnGuard)]
 pub struct ChatGateway {
     #[inject]
     svc: Arc<RoomService>,
 }
 ```
 
-`AuthnGuard` reads the `Authorization` header (or a cookie, or a query
+`AppAuthnGuard` reads the `Authorization` header (or a cookie, or a query
 parameter — your strategy decides), verifies the token, and attaches
 the principal to the request. A failed check returns the same
 `Denial` shape an HTTP route would return (`401`, `403`, etc.) — the
@@ -63,7 +63,7 @@ guards and **captures the post-guard request state**, anything those
 guards attach (the principal, an ambient ability, the database
 executor) is re-installed around every message dispatch on the
 connection. Without that capture, a per-message guard like
-`AuthzGuard` — whose `check_ws_message` reads `current_ability()` and
+`AppAuthzGuard` — whose `check_ws_message` reads `current_ability()` and
 fails closed — would see `None` once the upgrade request had unwound.
 
 ## Per-message: the envelope gate
@@ -114,11 +114,11 @@ you get this error, the guard almost certainly belongs on the **gateway
 struct** instead, which the diagnostic says:
 
 ```text frame="terminal"
-error[E0277]: `AuthnGuard` does not check WebSocket messages
+error[E0277]: `AppAuthnGuard` does not check WebSocket messages
    |
-   |     #[use_guards(AuthnGuard)]
+   |     #[use_guards(AppAuthnGuard)]
    |                  ^^^^^^^^^^ this guard has no `check_ws_message`
-   = note: override `check_ws_message`, then declare `impl WsGuard for AuthnGuard {}`;
+   = note: override `check_ws_message`, then declare `impl WsGuard for AppAuthnGuard {}`;
            or move it to the `#[gateway]` struct, where guards run on the HTTP upgrade
 ```
 
@@ -188,19 +188,19 @@ markers are attestations on the one `Guard`, not four guard types.
 
 WebSockets reuse the HTTP pair **directly** — there is no WS-specific
 guard type. The gateway struct binds
-`#[use_guards(AuthnGuard, AuthzGuard)]`; both run once on the upgrade
+`#[use_guards(AppAuthnGuard, AppAuthzGuard)]`; both run once on the upgrade
 (an HTTP `GET`) and are access-graph-validated like any HTTP binding:
-omit `AuthzWsModule` and those guards are unreachable, so boot fails.
+omit `AppAuthzWsModule` and those guards are unreachable, so boot fails.
 Because the upgrade's task-locals unwind before message handlers run,
-`WsDataContext` — the `SocketContext` bridge `AuthzWsModule` provides
+`WsDataContext` — the `SocketContext` bridge `AppAuthzWsModule` provides
 — re-seeds the executor and ability around each message. Binding
-`AuthzGuard` beside a `#[subscribe_message]` adds a per-message check
+`AppAuthzGuard` beside a `#[subscribe_message]` adds a per-message check
 through `check_ws_message`: it denies, fail-closed, when no ambient
 ability is present.
 
 See [Security](/security/) for the strategy + ability composition; the
 WS-specific bit — `WsDataContext` — lives in `nest_rs::seaorm` behind
-the `ws` feature (packaged by `AuthzWsModule`), alongside its HTTP and
+the `ws` feature (packaged by `AppAuthzWsModule`), alongside its HTTP and
 GraphQL sibling bridges.
 
 ## Going further

@@ -1,6 +1,6 @@
 ---
 title: Persist through Postgres
-description: Import DatabaseModule, declare the migration, run the binary against Postgres — mutating routes commit in a transaction; failures roll back.
+description: Import SeaOrmDatabaseModule, declare the migration, run the binary against Postgres — mutating routes commit in a transaction; failures roll back.
 sidebar:
   order: 6
 ---
@@ -15,7 +15,7 @@ back automatically, and the e2e baseline you add in
 
 ## The data layer in one import
 
-`DatabaseModule::for_root(None)` activates the SeaORM data layer:
+`SeaOrmDatabaseModule::for_root(None)` activates the SeaORM data layer:
 seeds the connection from `NESTRS_DATABASE__URL`, registers the
 transaction interceptor, binds the worker context. The configuration
 uses the framework's dual-path rule — pin a value here or leave it
@@ -30,17 +30,17 @@ The data layer crates are
 ```rust title="apps/blog/src/module.rs" {3, 10}
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::seaorm::DatabaseModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 
-use features::authn::AuthnModule;
-use features::authz::AuthzHttpModule;
+use features::app_authn::AppAuthnModule;
+use features::app_authz::AppAuthzHttpModule;
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    DatabaseModule::for_root(None),
+    SeaOrmDatabaseModule::for_root(None),
     HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-    AuthnModule,
-    AuthzHttpModule,
+    AppAuthnModule,
+    AppAuthzHttpModule,
     PostsHttpModule,
 ])]
 pub struct BlogModule;
@@ -155,7 +155,7 @@ databases.
 
 ## Transactions wrap mutating routes automatically
 
-`DatabaseModule` registers a request interceptor that classifies the
+`SeaOrmDatabaseModule` registers a request interceptor that classifies the
 HTTP method and installs the right executor before the handler runs:
 
 | HTTP method | Ambient executor |
@@ -193,7 +193,7 @@ $ TOKEN=$(curl -s -X POST http://localhost:3005/auth/dev-token \
 Pass `{"roles": ["admin"]}` for an admin token, or a `sub` to pin the subject.
 The real login is yours to write — what counts as a credential and where users
 live are domain decisions, and [Add a login route](/security/add-login/) is the
-pattern. Delete `crates/features/src/authn/http/` the day you write it.
+pattern. Delete `crates/features/src/app_authn/http/` the day you write it.
 
 ```bash frame="terminal"
 $ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \
@@ -225,7 +225,7 @@ tags the interceptor span and the SQL spans.
 
 ## What you have now
 
-- A `DatabaseModule::for_root(None)` import in the app — the data
+- A `SeaOrmDatabaseModule::for_root(None)` import in the app — the data
   layer is on.
 - A migration adding the `post` table, applied through
   `nestrs run db up`.

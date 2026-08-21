@@ -12,7 +12,7 @@ onto its NestRS equivalent, then shows where the machine underneath diverges.
 
 ```rust
 #[controller(path = "/users")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -72,11 +72,11 @@ exported. NestRS keeps one. `#[module]` accepts exactly two keys, `imports` and
 use nest_rs::core::module;
 
 use super::controller::UsersController;
-use crate::authz::AuthzHttpModule;
+use crate::app_authz::AppAuthzHttpModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, AuthzHttpModule],
+    imports = [UsersModule, AppAuthzHttpModule],
     providers = [UsersController],
 )]
 pub struct UsersHttpModule;
@@ -273,7 +273,7 @@ route. The NestJS sketch:
 
 ```ts
 @Controller('users')
-@UseGuards(AuthnGuard, AuthzGuard)
+@UseGuards(AppAuthnGuard, AppAuthzGuard)
 export class UsersController {
   constructor(private readonly svc: UsersService) {}
 

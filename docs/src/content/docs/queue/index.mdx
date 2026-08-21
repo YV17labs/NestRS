@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 Background work shares the rest of the framework's shape. A queue
 handler is a method on any `#[injectable]` provider, tagged
 `#[process(queue = <Name>Queue, retries)]` inside a
-`#[processor]` impl block. Importing `QueueWorkerModule` in the worker app
+`#[processor]` impl block. Importing `RedisWorkerModule` in the worker app
 activates the runtime at boot, drains the discovered methods, and spawns
 one worker per method. A producer-only app skips that import and only
 gets the connection — same crate, same types, one less module.
@@ -28,8 +28,8 @@ Read this section, then start from the working reference: the
 The abstractions — `Job`, `Processor`, `ProcessMethod`, the `#[processor]`
 macro — ship in **`nest-rs-queue`**. The first-class storage, **Redis**,
 ships in **`nest-rs-redis`** (built on
-[`apalis`](https://docs.rs/apalis)): the `QueueConnection` producer,
-the `QueueWorker` transport, and the `QueueModule` / `QueueWorkerModule`
+[`apalis`](https://docs.rs/apalis)): the `RedisQueueConnection` producer,
+the `RedisWorker` transport, and the `RedisQueueModule` / `RedisWorkerModule`
 activation seams. Both are compilation units, not lines you write: the
 `redis` feature below pulls them together, and an app's manifest names
 neither.
@@ -251,9 +251,9 @@ same block — same convention as `#[routes]` and `#[scheduled]`.
 
 Two modules, two roles:
 
-- **`QueueModule::for_root(None)`** — provides the shared
-  `QueueConnection`. Every app (producer *and* consumer) needs it.
-- **`QueueWorkerModule`** — activates the consumer runtime. At boot the
+- **`RedisQueueModule::for_root(None)`** — provides the shared
+  `RedisQueueConnection`. Every app (producer *and* consumer) needs it.
+- **`RedisWorkerModule`** — activates the consumer runtime. At boot the
   framework drains the discovered `#[process]` methods, spawns one
   apalis worker per method, and shuts them down with the app. A
   producer-only app does NOT import this.
@@ -261,17 +261,17 @@ Two modules, two roles:
 ```rust title="apps/worker/src/module.rs"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::redis::{QueueModule, QueueWorkerModule};
+use nest_rs::redis::{RedisQueueModule, RedisWorkerModule};
 
 use features::audio::AudioQueueModule;
 
 #[module(imports = [
     ConfigModule::for_root(),
-    QueueModule::for_root(None),
-    QueueWorkerModule,
+    RedisQueueModule::for_root(None),
+    RedisWorkerModule,
     AudioQueueModule,
 ])]
-pub struct WorkerModule;
+pub struct RedisWorkerModule;
 ```
 
 `AudioQueueModule` imports the `AudioModule` port itself, so the app
@@ -283,12 +283,12 @@ lists only the adapter — registration is idempotent.
 use nest_rs::core::anyhow::Result;
 use nest_rs::core::App;
 
-use worker::WorkerModule;
+use worker::RedisWorkerModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     App::builder()
-        .module::<WorkerModule>()
+        .module::<RedisWorkerModule>()
         .build()
         .await?
         .run()
@@ -303,7 +303,7 @@ $ nestrs run dev worker
 ```
 
 ```text frame="terminal"
- INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
+ INFO nest_rs::app: attached module-contributed transport transport="RedisWorker"
  INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
  INFO features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
  INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" job_id="01M0ATJ9C2YN8NJX3GVTA911X6" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
@@ -317,7 +317,7 @@ full field set.
 - [Producing jobs](/queue/producing-jobs/) — typing payloads, the
   publisher handle, and the rule that keeps `push_to::<Q>` behind a
   service.
-- [Wiring](/queue/wiring/) — `QueueModule` vs `QueueWorkerModule`,
+- [Wiring](/queue/wiring/) — `RedisQueueModule` vs `RedisWorkerModule`,
   producer-only deploys, and module-gating across shared features.
 - [Retries and failure](/queue/retries-and-failure/) — what an `Err`
   means, the apalis retry shape, panics, dead-lettering.
@@ -330,5 +330,5 @@ full field set.
 
 - `crates/nest-rs-queue/` — the abstractions: `#[processor]`,
   `#[process]`, `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
-- `crates/nest-rs-redis/` — the Redis storage: `QueueConnection`,
-  `QueueWorker`, `QueueModule`, `QueueWorkerModule`.
+- `crates/nest-rs-redis/` — the Redis storage: `RedisQueueConnection`,
+  `RedisWorker`, `RedisQueueModule`, `RedisWorkerModule`.

@@ -22,7 +22,7 @@ Roles and scopes answer different questions, and both have to hold:
 
 ## Declare the scope on the rule it conditions
 
-```rust title="crates/features/src/authz/ability.rs" {5,9}
+```rust title="crates/features/src/app_authz/ability.rs" {5,9}
 impl AbilityFactory for AppAbility {
     type Actor = Claims;
 
@@ -62,7 +62,7 @@ Scopes reach the ability layer from the principal. Implement
 space-delimited `scope` claim with the `serde` helper the framework
 ships:
 
-```rust title="crates/features/src/identity/claims.rs" {6-11,19-21}
+```rust title="crates/features/src/app_authn/claims.rs" {6-11,19-21}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: Option<Uuid>,
@@ -113,7 +113,7 @@ forever. So the two refusals are distinct on every transport.
 
 On HTTP, WS and MCP, a scope refusal is a `403` carrying the RFC 6750
 §3.1 challenge — provided the app is a
-[protected resource server](/security/authentication/issuer-and-resource-server/):
+[protected resource server](/security/authentication/split-deployment/):
 
 ```http
 HTTP/1.1 403 Forbidden
@@ -145,7 +145,7 @@ The scopes your rules require and the scopes your resource server
 advertises must be the same set:
 
 ```bash title=".env"
-NESTRS_AUTHN__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
+NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
 ```
 
 A scope a rule requires but the metadata document omits is a dead end —
@@ -169,7 +169,7 @@ at the transport edge, so a guard never formats a header itself.
 
 ## Going further
 
-- [Issuer & resource server](/security/authentication/issuer-and-resource-server/) —
+- [Split deployment](/security/authentication/split-deployment/) —
   the discovery document the challenge points the client at.
 - [Policies](/security/authorization/policies/) — the role-driven
   conditions a scope narrows.

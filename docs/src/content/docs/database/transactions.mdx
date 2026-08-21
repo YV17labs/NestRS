@@ -9,7 +9,7 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A mutating request runs inside a transaction with no boilerplate. The
-`DbContext` interceptor — auto-installed by `DatabaseModule` — opens it on
+`DbContext` interceptor — auto-installed by `SeaOrmDatabaseModule` — opens it on
 the way in, hands the handler the transactional executor, and decides
 commit or rollback based on the response. The hard cases — serialization
 conflicts, deadlocks — get their own primitive, with a defined boundary
@@ -72,7 +72,7 @@ NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS=true
 ```
 
 ```rust
-DatabaseModule::for_root(DatabaseConfig {
+SeaOrmDatabaseModule::for_root(SeaOrmDatabaseConfig {
     observe_serialization_conflicts: true,
     ..Default::default()
 })
@@ -190,7 +190,7 @@ explicitly (replay the work against a fresh snapshot). One way to do each.
 
 ## Going further
 
-- [Database](/database/) — the slice that imports `DatabaseModule`.
+- [Database](/database/) — the slice that imports `SeaOrmDatabaseModule`.
 - [Repo and executor](/database/repo-and-executor/) — what the interceptor
   installs, the escape-on-spawn fail-closed.
 - [Pagination](/database/pagination/) — the other knob the entity carries.

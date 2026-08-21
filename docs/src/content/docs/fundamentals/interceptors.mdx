@@ -159,7 +159,7 @@ impl Interceptor for DbContext {
 }
 ```
 
-That's the entire transactional boundary. Import `DatabaseModule`, the
+That's the entire transactional boundary. Import `SeaOrmDatabaseModule`, the
 interceptor is auto-mounted, and every handler runs inside a transaction
 on a mutating verb, on the pool on a safe verb. No `#[use_interceptors]`
 on any controller.

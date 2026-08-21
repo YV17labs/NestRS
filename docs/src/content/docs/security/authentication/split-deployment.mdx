@@ -1,5 +1,5 @@
 ---
-title: Issuer and resource server
+title: Split deployment
 description: A single signer issues tokens, every API verifies them — split the deployment, keep the keys asymmetric, never RPC across the boundary.
 tier: all-options
 sidebar:
@@ -19,6 +19,44 @@ verifies what it produces. nestrs leans hard on the second posture.
 the exemplar resource server. They share a Postgres database and the
 `crates/features` code; they never RPC each other.
 
+Two vocabularies meet on this page, so here is which is which. RFC 6749 §1.1
+names the roles — *authorization server* and *resource server* — and that is
+what the crates are named for: `nest-rs-oauth-server` and
+`nest-rs-oauth-resource`. Below, `apps/auth` is called the **issuer**, because
+everything that follows is about the signing key, and *issuer* is RFC 7519
+§4.1.1's own word for whoever holds it — the `iss` claim in every token it
+mints. Same app, two standards, one deployment.
+
+## Install
+
+The split is a deployment shape; the crates divide once more narrowly, one per
+RFC 6749 §1.1 role. Both halves need `authn` — `JwtService` signs and verifies,
+and that is the question preceding all four roles. Only the issuer needs
+`oauth-server`, which holds the §5.2 token-endpoint codes and the §2.3.1
+machine-client registry: neither is a credential verdict, and a resource server
+that compiled them would carry a token endpoint it never serves.
+
+```sh
+# the issuer — signs tokens, so it serves a token endpoint
+cargo add nest-rs --features oauth-server
+
+# and, on both halves
+cargo add nest-rs --features authn
+```
+
+Being **discoverable** is what stands apart, and it has its own capability: the
+RFC 9728 document and the `401` challenge describe the *deployment*, are served
+to callers with no credential at all, and mount an HTTP controller a worker
+would never reach.
+
+```sh
+cargo add nest-rs --features oauth-resource
+```
+
+So `apps/auth` enables `authn`; `apps/api` enables `authn` **and**
+`oauth-resource`; a queue worker that only verifies a JWT enables `authn` alone
+and compiles no controller, no interceptor and no outbound HTTP client.
+
 ## The split
 
 | Concern | Issuer (`apps/auth`) | Resource server (`apps/api`) |
@@ -31,7 +69,7 @@ the exemplar resource server. They share a Postgres database and the
 | Cross-app calls | None | None |
 
 The two binaries see the same `Claims` type via the shared
-`crates/features::identity` crate. The verifier deserializes a token
+`crates/features::app_authn` crate. The verifier deserializes a token
 the issuer signed; both speak the same struct, no schema drift
 possible.
 
@@ -75,20 +113,21 @@ NESTRS_AUTHN__PUBLIC_KEY"`.
 #[module(
     imports = [
         ConfigModule::for_root(),
-        DatabaseModule::for_root(None),
-        AuthnModule::for_root(None),
-        OAuth2Module::for_root(None),
-        ThrottlerModule::for_root(None),
-        OAuthHttpModule,
-        HealthModule,
         OpenTelemetryModule,
+        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmHealthModule,
+        ThrottlerModule::for_root(None),
+        HealthModule,
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
+        AuthnModule::for_root(None),
+        SocialModule,
+        AppOAuthHttpModule,
     ],
 )]
 pub struct AuthModule;
 ```
 
-The issuer imports the OAuth flow controller (`OAuthHttpModule`) and
+The issuer imports the OAuth flow controller (`AppOAuthHttpModule`) and
 the throttler. It does **not** import `UsersHttpModule` — the issuer
 mints tokens, not users.
 
@@ -96,22 +135,34 @@ mints tokens, not users.
 #[module(
     imports = [
         ConfigModule::for_root(),
-        DatabaseModule::for_root(None),
-        AuthnModule::for_root(None),
-        AuthzHttpModule,
-        AuthzGraphqlModule,
-        UsersHttpModule,
-        OrgsHttpModule,
+        SeaOrmDatabaseModule::for_root(None),
         HealthModule,
-        HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
+        HttpModule::for_root(HttpConfig {
+            port: 3002,
+            compression: true,
+            ..Default::default()
+        }),
+        AppAuthnModule,
+        AppAuthzHttpModule,
+        AppAuthzGraphqlModule,
+        OrgsHttpModule,
+        UsersHttpModule,
     ],
 )]
 pub struct ApiModule;
 ```
 
 The resource server imports the authz transports and every feature
-controller. Same `AuthnModule` — but with only the public key in
-env, it loads as verify-only.
+controller. With only the public key in env, its authn loads as
+verify-only.
+
+The two lists import different modules, and the names say which.
+`apps/auth` takes `nest_rs::authn::AuthnModule` — the framework's, which
+provides `JwtService` and carries the config seam. `apps/api` takes
+`features::app_authn::AppAuthnModule` — the product's own, which wraps that one
+and adds the `Claims`-bound strategy and guard; it owns no configuration, so it
+has no seam. The `app_` prefix is what makes the pair readable without going
+back to the `use` line.
 
 ## Why not RPC
 
@@ -162,7 +213,7 @@ wanted to.
 ## Telling clients where the issuer is
 
 An OAuth client that has never met your API does not know which
-authorization server to ask. `ProtectedResourceModule` answers that,
+authorization server to ask. `OAuthResourceModule` answers that,
 the way [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) and
 the MCP authorization spec require: it serves
 `/.well-known/oauth-protected-resource`, and it stamps a pointer to
@@ -172,17 +223,37 @@ that document onto every `401` the app emits.
 #[module(imports = [
     HttpModule::for_root(None),
     AuthnModule::for_root(None),
-    ProtectedResourceModule::for_root(None),
+    OAuthResourceModule::for_root(None),
 ])]
 pub struct ApiModule;
 ```
 
 ```bash
-NESTRS_AUTHN__RESOURCE=https://api.example.com
-NESTRS_AUTHN__AUTHORIZATION_SERVERS=https://auth.example.com
+NESTRS_OAUTH_RESOURCE__RESOURCE=https://api.example.com
+NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
 NESTRS_AUTHN__AUDIENCE=https://api.example.com
-NESTRS_AUTHN__SCOPES_SUPPORTED=users:read,users:write
+NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED=users:read,users:write
 ```
+
+Three optional members of the RFC 9728 document round out the deployment's
+description of itself. Each is omitted from the served JSON when unset, as
+§3.2 requires:
+
+| Env var | Document member | What it says |
+|---|---|---|
+| `NESTRS_OAUTH_RESOURCE__RESOURCE_NAME` | `resource_name` | a human-readable name for this resource (§2 RECOMMENDs it) |
+| `NESTRS_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION` | `resource_documentation` | where a developer reads about it |
+| `NESTRS_OAUTH_RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
+| `NESTRS_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
+| `NESTRS_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
+
+§2 defines fourteen members and the framework serves eight. The other six are
+refused in writing on `ProtectedResourceMetadata` — each naming the fact that
+makes it impossible here (nothing signs a response, so no `jwks_uri`; no
+`cnf`-claim handling, so no DPoP binding; a `Strategy` never sees the TLS
+handshake, so no mTLS binding), with `signed_metadata` recorded as an owner
+question rather than a refusal, since publishing one is possible and only the
+validating half is missing.
 
 The discovery walk, from a client that knows only one URL:
 

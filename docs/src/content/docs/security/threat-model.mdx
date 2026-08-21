@@ -17,8 +17,8 @@ back on you.
 
 | Layer | Catches | Does not catch |
 |-------|---------|----------------|
-| [`AuthnGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens | Stolen-but-unexpired tokens, replay before expiry, key compromise |
-| [`OAuth2Client`](/security/authentication/oauth2/) | CSRF (state cookie), code-interception (PKCE), SSRF on token exchange (no redirects) | Phishing the provider, malicious provider, callback URL takeover |
+| [`AppAuthnGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens | Stolen-but-unexpired tokens, replay before expiry, key compromise |
+| [`OAuthClient`](/security/authentication/oauth2/) | CSRF (state cookie), code-interception (PKCE), SSRF on token exchange (no redirects) | Phishing the provider, malicious provider, callback URL takeover |
 | [`hash_password` + `burn_verify`](/security/authentication/password/) | Timing-based account enumeration via login | Slow GPU farms cracking dumped hashes, weak passwords, password reuse |
 | [`AbilityGuard`](/security/authorization/) | Missing or malformed `Ability` (500), unauthenticated GraphQL/WS (403) | Logic bugs in your `AbilityFactory` itself |
 | [`Repo::scoped`](/security/authorization/row-level-filtering/) | Scope leakage on every read — handler cannot forget the filter | Custom queries that ignore `Scope<E, A>` |
@@ -53,7 +53,7 @@ the framework's job.
 ### Key management
 
 EdDSA splits the issuer's private key from every verifier's public
-key — see [Issuer and resource server](/security/authentication/issuer-and-resource-server/).
+key — see [Split deployment](/security/authentication/split-deployment/).
 Rotation, HSM integration, and secret-store wiring are not the
 framework's job. Treat `NESTRS_AUTHN__PRIVATE_KEY` as you would
 treat any production secret: load it from a real secret store, never
@@ -88,7 +88,7 @@ storing plaintext, `verify_password` instead of comparing strings,
 For a production app:
 
 1. **Bearer tokens with short TTL** + refresh.
-2. **EdDSA split** between issuer and resource servers.
+2. **EdDSA split** between split deployments.
 3. **Authz guards bound on every controller** (negative-path tests
    catch the missing one).
 4. **Exposure is opt-in — no `#[expose]` on server-only columns.**
@@ -97,7 +97,7 @@ For a production app:
    masker is the second line for columns you *do* expose but restrict,
    covering them only when the field rule is `.fields([...])`.
 5. **CDN / WAF** in front for DDoS and bot defense.
-6. **Real secret store** for `JWT_PRIVATE_KEY`, OAuth secrets, DB
+6. **Real secret store** for `NESTRS_AUTHN__PRIVATE_KEY`, OAuth secrets, DB
    credentials.
 7. **TLS terminated** at the edge or at the app (`HttpConfig`).
 8. **Logging at the right level.** `nest_rs::authn` and `nest_rs::orm`
@@ -110,7 +110,7 @@ A bug in your `AbilityFactory` (forgot to scope `org_id`, granted
 `Action::Manage` on the wrong subject) is the framework's most
 likely failure mode. Pin the matrix with unit tests against
 `Ability::condition_for` and `Ability::can` — the
-`crates/features/src/authz/ability.rs` exemplar's test module shows
+`crates/features/src/app_authz/ability.rs` exemplar's test module shows
 the pattern.
 </Aside>
 

@@ -96,7 +96,7 @@ filters by it like any other. Nothing here treats "no login" as "no filter"
 
 ## The DbContext interceptor
 
-`DbContext` is auto-registered when you import `DatabaseModule`. It wraps
+`DbContext` is auto-registered when you import `SeaOrmDatabaseModule`. It wraps
 every HTTP request *outside* the route's guards so guards and handlers
 resolve the same ambient executor through `Repo`:
 
@@ -106,7 +106,7 @@ HTTP request
 DbContext              ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
                        ──→ installs Executor::Lazy (POST/PUT/PATCH/DELETE)
   ↓
-guards (AuthnGuard, AbilityGuard, ...)
+guards (AppAuthnGuard, AbilityGuard, ...)
   ↓
 handler
   ↓
@@ -140,7 +140,7 @@ work after the request, enqueue a job.
 ## Workers — same Repo, one transaction per attempt
 
 Queue processors and cron jobs run outside any HTTP request — no method to
-classify, no response to inspect. `DatabaseModule` binds a
+classify, no response to inspect. `SeaOrmDatabaseModule` binds a
 `WorkerDbContext` to `dyn JobContext`, which the worker transport
 (`#[scheduled]`, `#[processor]`) runs around every job:
 
@@ -245,7 +245,7 @@ handler, something else is wrong.
 
 ## Going further
 
-- [Database](/database/) — the 60-line slice that imports `DatabaseModule`.
+- [Database](/database/) — the 60-line slice that imports `SeaOrmDatabaseModule`.
 - [Dataloaders](/database/dataloaders/) — `#[dataloader]` methods are
   Repo-backed too; the `LoaderScope` re-installs the executor around each
   batch.

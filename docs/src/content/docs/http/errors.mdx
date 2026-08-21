@@ -63,7 +63,7 @@ field).
 
 A feature owns one error type — usually the one it already returns from
 its service. The framework's plumbing errors carry their own HTTP mapping:
-`nest_rs::seaorm::ServiceError` and the OAuth `nest_rs::authn::TokenError`
+`nest_rs::seaorm::ServiceError` and the OAuth `nest_rs::oauth::server::TokenError`
 ship `ResponseError` impls, so service-layer `?` works without a
 feature-level conversion. (`nest_rs::authn::AuthError` maps itself through
 `IntoResponse` instead — see [the table below](#framework-errors-carry-their-own-mapping).)
@@ -170,7 +170,7 @@ on a handler that calls a service without a single line of conversion code:
 | Error | Source | Renders as |
 |-------|--------|------------|
 | `nest_rs::seaorm::ServiceError` | Repo, CrudService, dataloader | `problem+json` — `422` validation/invalid, `409` conflict, `403` forbidden, `404` not found, `500` else (validation field errors ride as `errors`) |
-| `nest_rs::authn::TokenError` | OAuth token endpoint | `ResponseError` — `400` bad grant/scope, `401` invalid credentials, `500` signing/backend |
+| `nest_rs::oauth::server::TokenError` | OAuth token endpoint | `ResponseError` — `application/json` per RFC 6749 §5.2 — `400` bad grant/scope, `401` `invalid_client`, `500` signing/backend |
 | `nest_rs::authn::AuthError` | Strategy authentication | `IntoResponse` — `401` challenge (`500` when the identity store is unavailable) |
 
 Every error the HTTP transport renders — a handler's `ServiceError`, an
@@ -187,7 +187,7 @@ own error type (`Result<T, AuthError>`), not `?`-propagated into a
 `poem::Result`.
 
 There is **no `AbilityError`** — an ability denial is not an error. It is
-a guard denial, returned as an `Ok(403)` response by `AuthzGuard`, so it
+a guard denial, returned as an `Ok(403)` response by `AppAuthzGuard`, so it
 never travels the `?`/`ResponseError` path at all (see
 [Guards](/fundamentals/guards/)).
 

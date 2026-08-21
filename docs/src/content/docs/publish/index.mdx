@@ -24,7 +24,7 @@ snippet naming `posts` is Publish's unless the page says otherwise.
 
 | App | Port | Role in the story | Transports |
 |-----|------|-------------------|------------|
-| [`auth`](/security/authentication/issuer-and-resource-server/) | 3001 | Authors sign in (OAuth2, JWT issuance) | HTTP |
+| [`auth`](/security/authentication/split-deployment/) | 3001 | Authors sign in (OAuth2, JWT issuance) | HTTP |
 | [`api`](/tutorial/) | 3002 | Main API — users, orgs, audio hooks | HTTP, GraphQL, OpenAPI |
 | [`assistant`](/mcp/) | 3003 | AI tools over the audio pipeline (JWT-guarded) | MCP |
 | [`live`](/websockets/) | 3004 | Live comments and notifications | WebSockets |
@@ -86,7 +86,7 @@ before inventing a second pattern.
 
 ## Going further
 
-- [Issuer and resource server](/security/authentication/issuer-and-resource-server/) —
+- [Split deployment](/security/authentication/split-deployment/) —
   why auth is a separate binary.
 - [Build a feature end to end](/tutorial/) — scaffold your own `apps/blog/`.
 - [E2E testing](/testing/e2e/) — every Publish app ships `tests/e2e/main.rs`.

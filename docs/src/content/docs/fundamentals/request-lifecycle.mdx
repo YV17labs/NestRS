@@ -28,14 +28,14 @@ teachable rule:
 > Global = around the whole HTTP process. Scoped = around your handler. Either
 > way, once.
 
-You can watch the dedup happen. Declare `AuthnGuard` both globally
-(`use_guards_global`) and on a controller (`#[use_guards(AuthnGuard, …)]`), and
+You can watch the dedup happen. Declare `AppAuthnGuard` both globally
+(`use_guards_global`) and on a controller (`#[use_guards(AppAuthnGuard, …)]`), and
 boot logs the redundant declaration it dropped — the guard still runs exactly
 once:
 
 ```text
 DEBUG nest_rs::layers: redundant layer declaration deduped
-  layer="AuthnGuard<JwtStrategy<Claims>>" kept="global" skipped="host"
+  layer="AppAuthnGuard<JwtStrategy<Claims>>" kept="global" skipped="host"
   hint="broadest site wins; use `#[force_*]` to re-run"
 ```
 
@@ -94,9 +94,9 @@ If a provider injects a layer whose module the app never imported, the
 
 ```text
 module access violation: `PostsController` (in module `PostsHttpModule`)
-depends on `AuthzGuard`, but `PostsHttpModule` imports no module that
-provides it. `AuthzGuard` is provided by `AuthzHttpModule` — add
-`AuthzHttpModule` to `#[module(imports = [...])]` of `PostsHttpModule`, or
+depends on `AppAuthzGuard`, but `PostsHttpModule` imports no module that
+provides it. `AppAuthzGuard` is provided by `AppAuthzHttpModule` — add
+`AppAuthzHttpModule` to `#[module(imports = [...])]` of `PostsHttpModule`, or
 route the dependency through a module `PostsHttpModule` already imports.
 ```
 

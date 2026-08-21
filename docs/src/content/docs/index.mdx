@@ -57,7 +57,7 @@ generates the five routes.
 
 ```rust title="crates/features/src/orgs/http/controller.rs (abridged)"
 #[controller(path = "/orgs")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,
@@ -70,7 +70,7 @@ impl OrgsController {}
 
 One ability decides the rows and the fields, in one place:
 
-```rust title="crates/features/src/authz/ability.rs (abridged)"
+```rust title="crates/features/src/app_authz/ability.rs (abridged)"
 ab.can(Action::Read, user::Entity)
     .when(|p| p.eq(user::Column::OrgId, actor.org_id))
     .fields([user::Column::Id, user::Column::Name]);
@@ -188,7 +188,7 @@ off — a headless worker compiles no HTTP stack.
 | Testing | In-process harness booting the real DI graph; e2e against live backends | [Testing](/testing/) |
 | Tooling | `nestrs` — scaffold a project, generate a feature or an adapter, run it | [CLI](/cli/) |
 
-**28 capabilities**, one dependency to install them:
+**31 capabilities**, one dependency to install them:
 `cargo add nest-rs --features http,seaorm`. The [Packages](/packages/) page maps
 every feature to the crate behind it.
 

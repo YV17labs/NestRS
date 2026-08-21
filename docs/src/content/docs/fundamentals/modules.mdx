@@ -145,7 +145,7 @@ Framework and feature modules appear in `imports` two ways.
 with configuration at the import site:
 
 ```rust
-DatabaseModule::for_root(None)
+SeaOrmDatabaseModule::for_root(None)
 
 HttpModule::for_root(HttpConfig {
     host: "0.0.0.0".into(),
@@ -162,7 +162,7 @@ PostsHttpModule
 ```
 
 Static modules dedupe automatically: if two branches of the import tree
-both reach `DatabaseModule`, its providers are built once. Dynamic
+both reach `SeaOrmDatabaseModule`, its providers are built once. Dynamic
 modules do **not** dedupe — each call carries its own config.
 
 <Aside type="tip">
@@ -172,7 +172,7 @@ environment can still override **per field** — never a lock, see
 [the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
 
 ```rust
-DatabaseModule::for_root(None)
+SeaOrmDatabaseModule::for_root(None)
 HttpModule::for_root(None)
 ```
 
@@ -198,7 +198,7 @@ providers — it only composes imports:
 #[module(
     imports = [
         ConfigModule::for_root(),
-        DatabaseModule::for_root(None),
+        SeaOrmDatabaseModule::for_root(None),
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
         PostsHttpModule,
     ],
@@ -225,7 +225,7 @@ framework modules; let adapters own the handlers.
 flowchart TB
   BM[BlogModule]
   BM --> CM[ConfigModule]
-  BM --> DM[DatabaseModule]
+  BM --> DM[SeaOrmDatabaseModule]
   BM --> HM[HttpModule]
   BM --> PHM[PostsHttpModule]
   PHM --> PM[PostsModule]

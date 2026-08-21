@@ -12,11 +12,11 @@ import { Aside } from '@astrojs/starlight/components';
 
 The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To
 authenticate instead — bearer JWT, ability, row-level filtering — import
-`AuthzMcpModule`, which binds
+`AppAuthzMcpModule`, which binds
 [`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
-endpoint's `dyn McpOperationGuard` (mirroring `AuthzHttpModule`,
-`AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
-re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
+endpoint's `dyn McpOperationGuard` (mirroring `AppAuthzHttpModule`,
+`AppAuthzGraphqlModule`, and `AppAuthzWsModule` on the other transports). The bridge
+re-runs your `AppAuthnGuard` + `AppAuthzGuard` chain on every MCP request and installs
 the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
 in the same order, from the same `run_ability_chain`, nothing re-implemented per
 transport.
@@ -25,16 +25,16 @@ transport.
 #[module(
     imports = [
         HttpModule::for_root(None),
-        DatabaseModule::for_root(None),
-        AuthnModule,
-        AuthzMcpModule,
+        SeaOrmDatabaseModule::for_root(None),
+        AppAuthnModule,
+        AppAuthzMcpModule,
     ],
     providers = [HelloTool],
 )]
 pub struct AssistantModule;
 ```
 
-With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
+With `AppAuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
 endpoint's guard, so the closed default is replaced, not silenced (a registered
 bridge also replaces the global-pool fallback: it runs the same guards itself,
 so nothing runs twice). Tools then
@@ -112,15 +112,15 @@ the projection *is* the field restriction.
 
 Guarding the endpoint closes it; it does not tell a client how to open it. The
 MCP authorization spec requires the server to publish that, so add
-`ProtectedResourceModule` and name the deployment:
+`OAuthResourceModule` and name the deployment:
 
 ```rust title="src/module.rs"
-imports = [/* … */, ProtectedResourceModule::for_root(None)]
+imports = [/* … */, OAuthResourceModule::for_root(None)]
 ```
 
 ```bash
-NESTRS_AUTHN__RESOURCE=https://mcp.example.com
-NESTRS_AUTHN__AUTHORIZATION_SERVERS=https://auth.example.com
+NESTRS_OAUTH_RESOURCE__RESOURCE=https://mcp.example.com
+NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
 NESTRS_AUTHN__AUDIENCE=https://mcp.example.com
 ```
 
@@ -134,7 +134,7 @@ www-authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/
 That is the first hop of the client's flow — rmcp implements the rest of it, so
 an MCP client reaches your authorization server without being configured with
 its address. `NESTRS_AUTHN__AUDIENCE` becomes mandatory under this module: see
-[issuer and resource server](/security/authentication/issuer-and-resource-server/)
+[split deployment](/security/authentication/split-deployment/)
 for why a resource server that skips it can be handed someone else's token.
 
 ## Going further

@@ -1,6 +1,6 @@
 ---
 title: Authenticate and authorize
-description: AuthnGuard verifies the JWT, AppAbility decides what the caller may do, Repo filters every read, Bind enforces by-id access.
+description: AppAuthnGuard verifies the JWT, AppAbility decides what the caller may do, Repo filters every read, Bind enforces by-id access.
 sidebar:
   order: 9
 ---
@@ -28,16 +28,16 @@ only their org, and the `email` column disappears from a non-admin listing.
 Authentication and authorization are different jobs handled by different
 crates. The reference feature wires both:
 
-- **`AuthnGuard`** lives in
+- **`AppAuthnGuard`** lives in
   [**`nest-rs-authn`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authn).
   A `Strategy` turns the request into a principal — for a resource
   server, that's `JwtStrategy<Claims>` verifying a `Bearer` token.
-- **`AuthzGuard`** lives in
+- **`AppAuthzGuard`** lives in
   [**`nest-rs-authz`**](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authz).
   It seeds the ambient `Ability` from the principal and an `AbilityFactory`.
 
 Two crates, one binding on the controller. The reference feature
-re-exports both under `crates/features/src/authn/` and `authz/`; the
+re-exports both under `crates/features/src/app_authn/` and `authz/`; the
 tutorial reuses those aliases.
 
 ## The principal
@@ -46,10 +46,10 @@ A resource server pins a single alias once. The reference feature's
 `Claims` carries an org id and a role set — exactly what authz reads
 back.
 
-```rust title="crates/features/src/authn/strategy.rs"
+```rust title="crates/features/src/app_authn/strategy.rs"
 pub type AppJwtStrategy = JwtStrategy<Claims>;
 
-pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
+pub type AppAuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
 ```
 
 `JwtStrategy<Claims>` is provided by `nest-rs-authn`. On a missing or
@@ -67,7 +67,7 @@ so it cannot ship a `Claims` or an `AppAbility` for you.
 Admins manage their org's users; plain users read a scoped, redacted
 view. The reference policy fits in one method:
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/app_authz/ability.rs"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
@@ -121,12 +121,12 @@ use nest_rs::http::poem::Result;
 use nest_rs::http::poem::web::Json;
 
 use crate::Claims;
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[controller(path = "/users")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -156,8 +156,8 @@ Four things changed:
 
 | Change | Job |
 |--------|-----|
-| `#[use_guards(AuthnGuard, AuthzGuard)]` | Run authn then authz on every route in the controller |
-| `auth: Ctx<Claims>` | Read the principal that `AuthnGuard` attached to the request |
+| `#[use_guards(AppAuthnGuard, AppAuthzGuard)]` | Run authn then authz on every route in the controller |
+| `auth: Ctx<Claims>` | Read the principal that `AppAuthnGuard` attached to the request |
 | `_authz: Authorize<Create, UserEntity>` | Check the ability allows `Create` on `UserEntity` before the body runs |
 | `user: Bind<Read, UsersService>` | Parse the `:id`, load the row through the service, return `403` if the ability refuses it |
 
@@ -172,39 +172,39 @@ The HTTP adapter now needs the authz bridge:
 use nest_rs::core::module;
 
 use super::controller::UsersController;
-use crate::authz::AuthzHttpModule;
+use crate::app_authz::AppAuthzHttpModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, AuthzHttpModule],
+    imports = [UsersModule, AppAuthzHttpModule],
     providers = [UsersController],
 )]
 pub struct UsersHttpModule;
 ```
 
-`AuthzHttpModule` carries the `AuthzGuard` provider and the response
+`AppAuthzHttpModule` carries the `AppAuthzGuard` provider and the response
 masker. Forgetting the import is caught at boot by the access graph —
 the binary fails to start with a clear "missing guard" error rather
 than running silently unprotected.
 
-The app root — `api`, not `blog` — imports `AuthnModule` and
-`AuthzHttpModule` once:
+The app root — `api`, not `blog` — imports `AppAuthnModule` and
+`AppAuthzHttpModule` once:
 
 ```rust title="apps/api/src/module.rs (abridged)"
-use features::authn::AuthnModule;
-use features::authz::AuthzHttpModule;
+use features::app_authn::AppAuthnModule;
+use features::app_authz::AppAuthzHttpModule;
 use features::users::UsersHttpModule;
 use nest_rs::core::module;
 
 #[module(
     imports = [
-        DatabaseModule::for_root(None),
+        SeaOrmDatabaseModule::for_root(None),
         HttpModule::for_root(HttpConfig {
             port: 3002,
             ..Default::default()
         }),
-        AuthnModule,
-        AuthzHttpModule,
+        AppAuthnModule,
+        AppAuthzHttpModule,
         UsersHttpModule,
     ],
 )]
@@ -270,14 +270,14 @@ never had to know.
 ## Now narrow your own `blog`
 
 Step 4 left `posts` on one blanket rule — `Action::Manage` for everybody.
-Rewriting `define` in `crates/features/src/authz/ability.rs` turns it into a
+Rewriting `define` in `crates/features/src/app_authz/ability.rs` turns it into a
 policy, using only the columns `blog` already has (the actor comes first — the
 trait's own order):
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/app_authz/ability.rs"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
-use crate::identity::Claims;
+use crate::app_authn::Claims;
 use crate::posts::entity as post;
 
 impl AbilityFactory for AppAbility {
@@ -301,7 +301,7 @@ this page just walked through, at the size your domain is.
 
 ## What the reference feature has
 
-- A `UsersController` guarded by `AuthnGuard` + `AuthzGuard` — every
+- A `UsersController` guarded by `AppAuthnGuard` + `AppAuthzGuard` — every
   route requires a valid JWT and a matching ability.
 - An `AppAbility` policy that scopes reads to the caller's org and
   masks the email column for plain users.

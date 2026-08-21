@@ -95,12 +95,12 @@ use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::posts::{CreatePost, Entity as PostEntity, Post, PostsService, UpdatePost};
 
 #[controller(path = "/posts")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct PostsController {
     #[inject]
     svc: Arc<PostsService>,
@@ -120,14 +120,14 @@ impl PostsController {}
 
 From this line on, no row crosses the data layer without someone to answer for
 it. `Repo` ANDs the caller's ambient [`Ability`](/security/authorization/) into
-every read and every by-id write; nothing but `AuthzGuard` installs one, so a
+every read and every by-id write; nothing but `AppAuthzGuard` installs one, so a
 request with no ability reads **nothing** rather than everything. That is the
 framework's central claim doing its work — row-level filtering you never write
 a `WHERE` for — and the price is that it starts now rather than later: there is
 no "skip auth for now" switch, because a public read of a table is not
 something the 1.0 data layer expresses.
 
-`AuthnGuard` and `AuthzGuard` are **your** types, not framework ones: the
+`AppAuthnGuard` and `AppAuthzGuard` are **your** types, not framework ones: the
 framework is generic over the principal and the policy, so each workspace writes
 them once. Generate them:
 
@@ -140,7 +140,7 @@ the app, appends a development `NESTRS_AUTHN__SECRET` to `.env`, and gives you
 `POST /auth/dev-token` — the route the next page gets its bearer token from.
 Then grant the ability — the policy starts empty, so `Post` needs a rule:
 
-```rust title="crates/features/src/authz/ability.rs" {2, 8}
+```rust title="crates/features/src/app_authz/ability.rs" {2, 8}
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use crate::posts as post;
 
@@ -160,18 +160,18 @@ narrows it down to what a given caller may actually touch.
 ## The HTTP module
 
 The feature's HTTP adapter is a separate module. It imports the port
-(`PostsModule`) and `AuthzHttpModule`, which is what makes the ability guard
+(`PostsModule`) and `AppAuthzHttpModule`, which is what makes the ability guard
 reachable — omit it and the access graph fails the boot by name.
 
 ```rust title="crates/features/src/posts/http/module.rs"
 use nest_rs::core::module;
 
 use super::controller::PostsController;
-use crate::authz::AuthzHttpModule;
+use crate::app_authz::AppAuthzHttpModule;
 use crate::posts::PostsModule;
 
 #[module(
-    imports = [PostsModule, AuthzHttpModule],
+    imports = [PostsModule, AppAuthzHttpModule],
     providers = [PostsController],
 )]
 pub struct PostsHttpModule;
@@ -210,15 +210,15 @@ scaffold wired on page 1.
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
-use features::authn::AuthnModule;
-use features::authz::AuthzHttpModule;
+use features::app_authn::AppAuthnModule;
+use features::app_authz::AppAuthzHttpModule;
 use features::blog::BlogHttpModule;
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-    AuthnModule,
-    AuthzHttpModule,
+    AppAuthnModule,
+    AppAuthzHttpModule,
     BlogHttpModule,
     PostsHttpModule,
 ])]
@@ -229,7 +229,7 @@ pub struct BlogModule;
 `crates/features/src/blog/` whenever you want — it exists so page 1 had
 something to prove.
 
-`PostsHttpModule` already imports `AuthzHttpModule` transitively, so listing
+`PostsHttpModule` already imports `AppAuthzHttpModule` transitively, so listing
 both here changes nothing at boot. It changes what the file *tells you*: an
 app's root module is the inventory of the concerns it serves, and auth is one of
 them.
@@ -281,7 +281,7 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3005/posts
 
 ```text frame="terminal"
 WARN nest_rs::authn: authentication failed strategy="…JwtStrategy<…Claims>" reason="missing_credentials" trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
-WARN nest_rs::layers: guard denied the request guard="…AuthnGuard<…>" status=401 trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
+WARN nest_rs::layers: guard denied the request guard="…AppAuthnGuard<…>" status=401 trace_id=01a0156ebd7d77e0b78201a531dd9536 span_id=e0312d68a4872409
 ```
 
 Both lines carry the request's `trace_id`, and no `actor_id` — nobody was
@@ -294,24 +294,24 @@ ability for it to read:
 ```text frame="terminal"
 ERROR nest_rs::authz: missing request Ability — route is authorized but no ability guard ran
                       action=Read subject="features::posts::entity::Entity"
-                      hint="bind the ability guard (#[use_guards(AuthnGuard, AuthzGuard)]) …"
+                      hint="bind the ability guard (#[use_guards(AppAuthnGuard, AppAuthzGuard)]) …"
 ```
 
 That log line is the difference between a five-minute fix and an afternoon:
 grep `nest_rs::authz` whenever a guarded route answers `500`.
-[Persist through Postgres](/tutorial/database/) plugs `DatabaseModule` in, and
+[Persist through Postgres](/tutorial/database/) plugs `SeaOrmDatabaseModule` in, and
 the same curl — with a token — returns a post.
 
 ## What you have now
 
 - A `PostsService` that owns the entity through `Repo<Posts>`.
 - A `PostsController` with the full CRUD surface `#[crud]` generated,
-  behind `AuthnGuard` + `AuthzGuard`.
+  behind `AppAuthnGuard` + `AppAuthzGuard`.
 - An `AppAbility` granting `Manage` on `Post`.
 - A `PostsHttpModule` mounted in the app — the boot log shows the
   routes.
 
 ## Going further
 
-- [Persist through Postgres](/tutorial/database/) — the next step: wire `DatabaseModule` and see the first curl return a post.
+- [Persist through Postgres](/tutorial/database/) — the next step: wire `SeaOrmDatabaseModule` and see the first curl return a post.
 - [Controllers](/http/controllers/) — the reference page for `#[controller]` and `#[crud]`.

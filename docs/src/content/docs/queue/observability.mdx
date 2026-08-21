@@ -20,7 +20,7 @@ service-level logs your `#[process]` method emits keep their own target
 |---|---|---|
 | `nest_rs::queue` | Boot registration, per-job span, skipped/unversioned warnings, and the reason a job failed. | `debug` on job start, `warn` on a retryable failure, `error` on a dead-letter. |
 | `nest_rs::operation` | One `queue.job` line per attempt — identity, `outcome`, `duration_ms`. Shared with every other edge. | `info`. |
-| `nest_rs::app` | Boot: `attached module-contributed transport transport="QueueWorker"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
+| `nest_rs::app` | Boot: `attached module-contributed transport transport="RedisWorker"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
 | `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
 
 Hot paths respect `RUST_LOG=info`: `job started` sits at `debug`, so a
@@ -85,7 +85,7 @@ provider isn't reachable from this app's module tree is skipped with a
 `warn`:
 
 ```text frame="terminal"
- INFO nest_rs::app: attached module-contributed transport transport="QueueWorker"
+ INFO nest_rs::app: attached module-contributed transport transport="RedisWorker"
  INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
  WARN nest_rs::queue: skipped #[process] method: no instance of the provider in
       this app's container processor=ReportJobs::weekly queue=reports

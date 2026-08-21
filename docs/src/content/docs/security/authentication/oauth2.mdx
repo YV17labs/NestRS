@@ -1,6 +1,6 @@
 ---
 title: OAuth2
-description: Authorization-code flow with PKCE — OAuth2Client builds the redirect, validates the callback, and the JWT carries the CSRF state stateless.
+description: Authorization-code flow with PKCE — OAuthClient builds the redirect, validates the callback, and the JWT carries the CSRF state stateless.
 tier: all-options
 sidebar:
   order: 4
@@ -8,7 +8,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-`OAuth2Client` runs the authorization-code flow against any provider
+`OAuthClient` runs the authorization-code flow against any provider
 that speaks RFC 6749. The flow uses PKCE end-to-end and keeps the
 CSRF state in a signed cookie — no server-side session, no Redis
 lookup, no in-memory map. The redirect leg returns a URL the browser
@@ -16,40 +16,52 @@ follows; the callback leg validates the `state`, exchanges the code
 for an access token, and hands you the provider's user info.
 
 The implementation wraps the [`oauth2`](https://docs.rs/oauth2) crate,
-configured against the provider via `OAuth2Config`. Profile mapping
+configured against the provider via `OAuthClientConfig`. Profile mapping
 stays in your app's [`Strategy`](/security/authentication/) so the
 client itself never sees your principal type.
 
+## Install
+
+The OAuth 2.0 *client* role — this app obtaining a token from somebody else's
+authorization server — is its own capability. RFC 6749 §1.1 names four roles,
+and the crate that answers *who the caller is* is a different one.
+
+```sh
+cargo add nest-rs --features oauth-client
+```
+
+Enabling `social` brings it along: every social provider composes this client
+as its shared flow.
+
 ## Wire it in
 
-`OAuth2Module::for_root(None)` registers an `OAuth2Client` as global
-infrastructure, configured via `NESTRS_AUTHN__*` env vars. Pin the
-config in code by passing an `OAuth2Config`.
+`OAuthClientModule::for_root(None)` registers an `OAuthClient` as global
+infrastructure, configured via `NESTRS_OAUTH_CLIENT__*` env vars. Pin the
+config in code by passing an `OAuthClientConfig`.
 
-```rust title="apps/auth/src/module.rs"
+```rust title="src/module.rs"
 #[module(
     imports = [
         ConfigModule::for_root(),
         AuthnModule::for_root(None),
-        OAuth2Module::for_root(None),
-        OAuthHttpModule,
+        OAuthClientModule::for_root(None),
     ],
 )]
 pub struct AuthModule;
 ```
 
 A controller then exposes the two HTTP legs. The exemplar in
-`crates/features/src/oauth/` ships the full handler:
+`crates/features/src/app_oauth/` ships the full handler:
 
 ```rust
 #[controller(path = "/")]
-pub struct OAuthController {
+pub struct AppOAuthController {
     #[inject]
     issuer: Arc<TokenIssuer>,
 }
 
 #[routes]
-impl OAuthController {
+impl AppOAuthController {
     // The redirect leg is a plain handler: a `Strategy` maps a request to a
     // principal and never issues a transport response, so the 302 and the
     // cookie are built here. `#[public]` because there is no credential yet.
@@ -65,18 +77,18 @@ impl OAuthController {
                 format!(
                     "nestrs_oauth_tx={}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={}",
                     auth.transaction,
-                    OAuth2Client::TRANSACTION_TTL_SECS,
+                    OAuthClient::TRANSACTION_TTL_SECS,
                 ),
             )
             .finish())
     }
 
-    // NOT `#[public]`: `OAuthGuard` authenticates *from* `code`/`state`, so it
+    // NOT `#[public]`: `AppOAuthGuard` authenticates *from* `code`/`state`, so it
     // must be allowed to reject. A forged callback is then the documented
     // `401`; marked public, the guard would absorb the denial and the handler
     // would fail on the missing principal instead.
     #[get("/callback")]
-    #[use_guards(OAuthGuard)]
+    #[use_guards(AppOAuthGuard)]
     async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
         Ok(Json(self.issuer.issue(
             Some(caller.user_id),
@@ -89,29 +101,34 @@ impl OAuthController {
 
 Only `/authorize` is `#[public]`: it runs before any credential exists, and it
 binds no guard because there is nothing yet to authenticate. `/callback` is the
-opposite — `code` and `state` *are* the credential, and `OAuthGuard` (your app's
+opposite — `code` and `state` *are* the credential, and `AppOAuthGuard` (your app's
 `Strategy<Principal = Caller>`) is what verifies them. Marking it `#[public]`
-tells `AuthnGuard` to admit a rejected credential as anonymous, which turns a
+tells `AppAuthnGuard` to admit a rejected credential as anonymous, which turns a
 forged-callback `401` into a failure on the missing principal — invisible to any
 alert, WAF rule or rate limit keyed on `401`.
 
 ## Configuration
 
-`OAuth2Config` is a `validator`-validated struct: every URL field
+`OAuthClientConfig` lives in `nest-rs-oauth-client` and reads the `oauth_client`
+namespace — the OAuth *client* role has its own crate, so it has its own
+namespace rather than borrowing the one belonging to the crate that answers
+*who the caller is*.
+
+`OAuthClientConfig` is a `validator`-validated struct: every URL field
 must be non-empty (length ≥ 1) or the boot fails loudly. All fields
 follow the dual-path rule.
 
 | Field | Env var | Validation |
 |-------|---------|------------|
-| `client_id` | `NESTRS_AUTHN__CLIENT_ID` | length ≥ 1 |
-| `client_secret` | `NESTRS_AUTHN__CLIENT_SECRET` | length ≥ 1 |
-| `auth_url` | `NESTRS_AUTHN__AUTH_URL` | length ≥ 1 + parses as URL |
-| `token_url` | `NESTRS_AUTHN__TOKEN_URL` | length ≥ 1 + parses as URL |
-| `redirect_url` | `NESTRS_AUTHN__REDIRECT_URL` | absolute URL |
-| `userinfo_url` | `NESTRS_AUTHN__USERINFO_URL` | length ≥ 1 |
-| `scopes` | `NESTRS_AUTHN__SCOPES` | comma-separated list |
+| `client_id` | `NESTRS_OAUTH_CLIENT__CLIENT_ID` | length ≥ 1 |
+| `client_secret` | `NESTRS_OAUTH_CLIENT__CLIENT_SECRET` | length ≥ 1 |
+| `auth_url` | `NESTRS_OAUTH_CLIENT__AUTH_URL` | length ≥ 1 + parses as URL |
+| `token_url` | `NESTRS_OAUTH_CLIENT__TOKEN_URL` | length ≥ 1 + parses as URL |
+| `redirect_url` | `NESTRS_OAUTH_CLIENT__REDIRECT_URL` | absolute URL |
+| `userinfo_url` | `NESTRS_OAUTH_CLIENT__USERINFO_URL` | length ≥ 1 |
+| `scopes` | `NESTRS_OAUTH_CLIENT__SCOPES` | comma-separated list |
 
-`OAuth2Client::new` runs `validate()` first, then constructs the
+`OAuthClient::new` runs `validate()` first, then constructs the
 underlying `BasicClient`. The HTTP backend refuses redirects during
 the token exchange — following them is an SSRF risk per the `oauth2`
 crate's own guidance.
@@ -186,13 +203,13 @@ let profile: GoogleUser = self.client.userinfo(&tokens.access_token).await?;
 
 Mapping the provider profile into your principal (looking the user up
 in your DB, creating one if absent, issuing your app's JWT) is the
-`Strategy`'s job — `OAuth2Client` deliberately never sees your
+`Strategy`'s job — `OAuthClient` deliberately never sees your
 principal type.
 
-## `Authorization` — the redirect leg's return value
+## `AuthorizationRedirect` — the redirect leg's return value
 
 ```rust
-pub struct Authorization {
+pub struct AuthorizationRedirect {
     pub url: String,
     pub transaction: String,
 }
@@ -217,7 +234,7 @@ A token-issuing controller that fronts the OAuth flow (or its
 |---------|-------------|--------|
 | `UnsupportedGrant` | `unsupported_grant_type` | 400 |
 | `InvalidScope` | `invalid_scope` | 400 |
-| `InvalidCredentials` | `invalid_credentials` | 401 |
+| `InvalidClient` | `invalid_client` | 401 |
 | `Sign(inner)` | `server_error` | 500 |
 
 The `Sign` variant collapses any internal signing failure to the
@@ -226,7 +243,7 @@ for `tracing`. A rename of these strings breaks every conforming
 client — they are wire contracts, not display strings.
 
 <Aside>
-`OAuth2Client` is a confidential client: it holds a `client_secret` and
+`OAuthClient` is a confidential client: it holds a `client_secret` and
 runs server-side. Native and SPA front-ends keep the secret out of the
 browser by routing their `code` exchange through your app — the
 recommended shape regardless of framework, since a public client cannot

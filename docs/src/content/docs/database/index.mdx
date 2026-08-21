@@ -186,7 +186,7 @@ The app root activates the database and lists the slice:
 ```rust title="src/module.rs"
 #[module(
     imports = [
-        DatabaseModule::for_root(None),
+        SeaOrmDatabaseModule::for_root(None),
         PostsModule,
         PostsHttpModule,
     ],
@@ -194,14 +194,14 @@ The app root activates the database and lists the slice:
 pub struct AppModule;
 ```
 
-`DatabaseModule::for_root(None)` reads `NESTRS_DATABASE__URL` (and the other
-`NESTRS_DATABASE__*` keys) from the environment; pass a `DatabaseConfig` to set
+`SeaOrmDatabaseModule::for_root(None)` reads `NESTRS_DATABASE__URL` (and the other
+`NESTRS_DATABASE__*` keys) from the environment; pass a `SeaOrmDatabaseConfig` to set
 those values in code. They stay overridable per field by the environment — see
 [the dual-path rule](/configuration/#the-dual-path-rule).
 
 ## What the data layer hands you for free
 
-Importing `DatabaseModule` activates four invariants every handler in the
+Importing `SeaOrmDatabaseModule` activates four invariants every handler in the
 slice inherits, without writing any of them:
 
 - **Row-level filtering.** Every `Repo` read runs with the caller's
@@ -223,7 +223,7 @@ slice inherits, without writing any of them:
   and GraphQL.
 - [Transactions](/database/transactions/) — auto-commit, the
   `observe_serialization_conflicts` flag, the `retry_on_conflict` primitive.
-- [Health](/database/health/) — `DatabaseHealthModule` and the readiness
+- [Health](/database/health/) — `SeaOrmHealthModule` and the readiness
   probe.
 - [CRUD](/database/crud/) — `#[crud(...)]` on a controller or resolver.
 - [Migrations](/database/migrations/) and [Seeding](/database/seeding/) —

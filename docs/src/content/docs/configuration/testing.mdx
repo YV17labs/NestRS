@@ -125,7 +125,7 @@ let source = Arc::new(Map(HashMap::from([
     ("NESTRS_DATABASE__MAX_CONNECTIONS", "5"),
 ])));
 let env = ConfigService::with_source("database", source);
-let cfg = DatabaseConfig::from_env(&env, DatabaseConfig::defaults()).unwrap();
+let cfg = SeaOrmDatabaseConfig::from_env(&env, SeaOrmDatabaseConfig::defaults()).unwrap();
 
 let app = TestApp::builder()
     .module::<AppModule>()
@@ -155,7 +155,7 @@ through `figment::Jail`. The jail is a `dev-dependency` borrowed from
 the `figment` crate; it scopes every `set_env` / `create_file` call to
 the test closure and restores `std::env` on drop.
 
-```rust title="crates/features/src/oauth/config.rs"
+```rust title="crates/features/src/app_oauth/config.rs"
 #[cfg(test)]
 mod tests {
     use super::*;

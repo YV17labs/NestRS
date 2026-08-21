@@ -199,18 +199,18 @@ Enable it at the top of this page, then:
 
 ```rust
 use nest_rs::core::module;
-use nest_rs::redis::{QueueModule, RedisThrottlerModule};
+use nest_rs::redis::{RedisQueueModule, ThrottlerModule};
 
 #[module(imports = [
-    QueueModule::for_root(None),
-    RedisThrottlerModule::for_root(None),
+    RedisQueueModule::for_root(None),
+    ThrottlerModule::for_root(None),
 ])]
 pub struct AppModule;
 ```
 
-`RedisThrottlerModule::for_root` binds the same `dyn ThrottlerStore` the
+`ThrottlerModule::for_root` binds the same `dyn ThrottlerStore` the
 in-memory module binds, reads the same `NESTRS_THROTTLER__*` namespace, and
-reuses the app's existing Redis connection — so `QueueModule::for_root` must be
+reuses the app's existing Redis connection — so `RedisQueueModule::for_root` must be
 imported, and it supplies the connection rather than opening a second one.
 Import **exactly one** of the two backends: both bind the same type, and
 importing both is a named boot failure rather than a silent last-one-wins.

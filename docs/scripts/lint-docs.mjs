@@ -448,7 +448,7 @@ const FLAT_TEST_TARGET = /\btests\/[A-Za-z0-9_*]+\.rs\b/g;
 ///   page quoting it with a `///` publishes code the repo forbids writing,
 ///   under a title asserting the repo contains it. `producing-jobs.mdx` added
 ///   two.
-/// - **A port.** `issuer-and-resource-server.mdx` pinned `3000` in a block
+/// - **A port.** `split-deployment.mdx` pinned `3000` in a block
 ///   titled `apps/api/src/module.rs` while the app listens on `3002` — and
 ///   `curl`ed `3002` forty lines down.
 const DEMO_TITLE_PREFIXES = [

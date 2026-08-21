@@ -21,7 +21,7 @@ resource for orgs. The `impl` block is empty on purpose.
 
 ```rust title="demo/crates/features/src/orgs/http/controller.rs (abridged)"
 #[controller(path = "/orgs")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,

@@ -14,6 +14,9 @@
     "schedule",
     "events",
     "authn",
+    "oauth-client",
+    "oauth-server",
+    "oauth-resource",
     "authz",
     "social",
     "opentelemetry",
@@ -331,7 +334,7 @@
       "type_key"
     ]
   },
-  "test_count": 2053,
+  "test_count": 2076,
   "version_req": "5.1",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -342,18 +345,6 @@
     "v"
   ],
   "configs": {
-    "DatabaseConfig": {
-      "source": "crates/nest-rs-seaorm/src/config.rs",
-      "fields": [
-        "url",
-        "max_connections",
-        "min_connections",
-        "connect_timeout_secs",
-        "sqlx_logging",
-        "observe_serialization_conflicts"
-      ],
-      "profile_split": false
-    },
     "GithubSocialConfig": {
       "source": "crates/nest-rs-social/src/providers/github/config.rs",
       "fields": [
@@ -432,7 +423,7 @@
       "profile_split": false
     },
     "JwtConfig": {
-      "source": "crates/nest-rs-authn/src/jwt/config.rs",
+      "source": "crates/nest-rs-authn/src/config.rs",
       "fields": [
         "secret",
         "private_key",
@@ -441,7 +432,8 @@
         "audience",
         "issuer",
         "expires_in_secs",
-        "allow_any_audience"
+        "allow_any_audience",
+        "explicit_typing"
       ],
       "profile_split": false
     },
@@ -458,8 +450,8 @@
       ],
       "profile_split": false
     },
-    "OAuth2Config": {
-      "source": "crates/nest-rs-authn/src/oauth/config.rs",
+    "OAuthClientConfig": {
+      "source": "crates/nest-rs-oauth-client/src/config.rs",
       "fields": [
         "client_id",
         "client_secret",
@@ -468,6 +460,20 @@
         "redirect_url",
         "userinfo_url",
         "scopes"
+      ],
+      "profile_split": false
+    },
+    "OAuthResourceConfig": {
+      "source": "crates/nest-rs-oauth-resource/src/config.rs",
+      "fields": [
+        "resource",
+        "authorization_servers",
+        "scopes_supported",
+        "bearer_methods_supported",
+        "resource_name",
+        "resource_documentation",
+        "resource_policy_uri",
+        "resource_tos_uri"
       ],
       "profile_split": false
     },
@@ -483,24 +489,24 @@
       ],
       "profile_split": false
     },
-    "ProtectedResourceConfig": {
-      "source": "crates/nest-rs-authn/src/resource/config.rs",
-      "fields": [
-        "resource",
-        "authorization_servers",
-        "scopes_supported",
-        "bearer_methods_supported",
-        "resource_name",
-        "resource_documentation"
-      ],
-      "profile_split": false
-    },
-    "QueueConfig": {
-      "source": "crates/nest-rs-redis/src/config.rs",
+    "RedisQueueConfig": {
+      "source": "crates/nest-rs-redis/src/queue/config.rs",
       "fields": [
         "url",
         "shutdown_timeout",
         "connect_timeout"
+      ],
+      "profile_split": false
+    },
+    "SeaOrmDatabaseConfig": {
+      "source": "crates/nest-rs-seaorm/src/database/config.rs",
+      "fields": [
+        "url",
+        "max_connections",
+        "min_connections",
+        "connect_timeout_secs",
+        "sqlx_logging",
+        "observe_serialization_conflicts"
       ],
       "profile_split": false
     },
@@ -539,9 +545,28 @@
       "| Level | Named for | Appears as |",
       "|---|---|---|",
       "| **Project** | the product | the repository and the workspace — **nowhere else** |",
+      "| **Family** | the **standard** that names its members | a shared crate-name prefix — and nothing else |",
       "| **Crate** | what it holds | its directory, and the root of every span target it emits |",
       "| **App** | what it **serves** (`api`, `worker`, `auth`) | the binary, and `<App>Module` |",
       "| **Module** | its **domain** (`users`, `billing`) | `<module>/`, `<Module>Module` |",
+      "| path | type |",
+      "|---|---|",
+      "| `nest-rs-http/src/module.rs` | `HttpModule` |",
+      "| `nest-rs-throttler/src/module.rs` | `ThrottlerModule` |",
+      "| `nest-rs-redis/src/queue/module.rs` | `RedisQueueModule` |",
+      "| `nest-rs-redis/src/throttler/module.rs` | `RedisThrottlerModule` |",
+      "| `nest-rs-seaorm/src/database/module.rs` | `SeaOrmDatabaseModule` |",
+      "| `features/src/audio/http/module.rs` | `AudioHttpModule` |",
+      "| Crate | Path a caller types | Read off |",
+      "|---|---|---|",
+      "| `nest-rs-oauth-client` | `nest_rs::oauth::client` | §1.1 *client* |",
+      "| `nest-rs-oauth-server` | `nest_rs::oauth::server` | §1.1 *authorization server* |",
+      "| `nest-rs-oauth-resource` | `nest_rs::oauth::resource` | §1.1 *resource server* |",
+      "| | |",
+      "|---|---|",
+      "| `features/app_authn/` | `AppAuthnModule`, `AppAuthnGuard`, `AppJwtStrategy` |",
+      "| `features/app_authz/` | `AppAuthzModule`, `AppAuthzHttpModule`, `AppAbility` |",
+      "| `features/app_oauth/` | `AppOAuthModule`, `AppOAuthHttpModule`, `AppOAuthService` |",
       "| File | Job | Answers to | Holds |",
       "|---|---|---|---|",
       "| `mod.rs` | which **files** exist, and **what leaves the module** | the compiler, and readers | `//!`, `mod`, `pub use` |",
@@ -561,6 +586,7 @@
       "| Event listener host | `events/listener.rs` |",
       "| Entity (ORM + `#[expose]`) | `entity.rs` / `entities/` |",
       "| Guard / Strategy / Pipe | `guard.rs` / `strategy.rs` / `pipe.rs` |",
+      "| Interceptor / Filter / Exception filter | `interceptor.rs` / `filter.rs` / `exception_filter.rs` |",
       "| Module config (`#[config]`) | `config.rs` |",
       "| Domain error / Static constants | `error.rs` / `constants.rs` |",
       "| Folder | File | Type |",
@@ -576,6 +602,6 @@
       "| WS message payload | `Dto` — `SendMessageDto` |",
       "| GraphQL input, hand-written | `Input` |"
     ],
-    "reserved_block": "structure   apps  crates  features  src  tests\nroles       mod  module  service  controller  resolver  gateway  tool\n            processor  tasks  listener  guard  strategy  pipe  config\n            entity  error  constants  testing\nplurals     services  entities  dtos  commands  events  strategies  pipes\nedges       http  graphql  ws  queue  schedule  mcp  events\n"
+    "reserved_block": "structure   apps  crates  features  src  tests\nroles       mod  module  service  controller  resolver  gateway  tool\n            processor  tasks  listener  guard  strategy  pipe  config\n            interceptor  filter\n            entity  error  constants  testing\nplurals     services  entities  dtos  commands  events  strategies  pipes\nedges       http  graphql  ws  queue  schedule  mcp  events\n"
   }
 }

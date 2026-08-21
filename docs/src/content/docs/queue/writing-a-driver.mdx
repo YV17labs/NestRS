@@ -223,7 +223,7 @@ code is the transport. The macro is the dispatcher.
 
 ## Step 3 — The modules
 
-Two modules — same split as `nest-rs-redis::{QueueModule, QueueWorkerModule}`.
+Two modules — same split as `nest-rs-redis::{RedisQueueModule, RedisWorkerModule}`.
 A producer-only app (an API binary that enqueues but doesn't drain)
 imports the first; a worker app imports both.
 
@@ -284,7 +284,7 @@ pub struct ApiModule;
     YourQueueWorkerModule,
     /* features that ship #[processor]s */
 ])]
-pub struct WorkerModule;
+pub struct RedisWorkerModule;
 ```
 
 The `#[processor] impl ...` blocks in user code are unchanged — same

@@ -82,7 +82,7 @@ let vault = Arc::new(
     VaultSource::fetch(&vault_client, "secret/api").await?,
 );
 let env = ConfigService::with_source("database", vault);
-let db_config = DatabaseConfig::from_env(&env, DatabaseConfig::defaults())?;
+let db_config = SeaOrmDatabaseConfig::from_env(&env, SeaOrmDatabaseConfig::defaults())?;
 
 App::builder()
     .module::<AppModule>()
@@ -91,7 +91,7 @@ App::builder()
     .await?;
 ```
 
-A seeded config wins over `ConfigModule::for_feature::<DatabaseConfig>()`,
+A seeded config wins over `ConfigModule::for_feature::<SeaOrmDatabaseConfig>()`,
 so the rest of the app sees the Vault-loaded value without changing any
 downstream code. The pattern matches [`Repo::scoped`](/database/repo-and-executor/):
 build the seam where the source lives, hand the result to the framework.

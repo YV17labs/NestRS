@@ -13,7 +13,7 @@ that caller live in the same `AbilityFactory` as everything else, in a
 second branch: `define_visitor`. It receives no actor because there is
 none, and it grants nothing until you write a rule into it.
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/app_authz/ability.rs"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 impl AbilityFactory for AppAbility {
@@ -55,8 +55,8 @@ pub async fn feed(&self) -> Result<Vec<Post>, ServiceError> {
 }
 ```
 
-`#[public]` is the posture. It tells `AuthnGuard` to admit a caller
-with no credential, and it tells `AuthzGuard` to build the ability from
+`#[public]` is the posture. It tells `AppAuthnGuard` to admit a caller
+with no credential, and it tells `AppAuthzGuard` to build the ability from
 `define_visitor` instead of `define`.
 
 `Authorize<Read, post::Entity>` is the enforcement plumbing that
@@ -75,7 +75,7 @@ its no-ability behaviour and renders `1 = 0`. Fail-closed, and not silent: the
 ```text frame="terminal"
 WARN nest_rs::orm: no ambient Ability outside a worker job — denying all rows
   entity=features::posts::entity::Entity action=Read scope=Some(Request)
-  hint="bind #[use_guards(AuthnGuard, AuthzGuard)], or — on a #[public] route —
+  hint="bind #[use_guards(AppAuthnGuard, AppAuthzGuard)], or — on a #[public] route —
         take the `Authorize<A, E>` parameter that arms the shaper"
 ```
 
@@ -86,7 +86,7 @@ shaper too.
 ## A token still takes the authenticated branch
 
 `define_visitor` answers for the anonymous caller only. On a `#[public]`
-route reached with a valid token, `AuthnGuard` attaches the principal
+route reached with a valid token, `AppAuthnGuard` attaches the principal
 and `AbilityGuard` calls `define` — the visitor rules are not a floor
 added under every caller.
 
@@ -99,7 +99,7 @@ grants them, and a signed-in author sees their drafts too because
 
 **The reach of `#[public]` grows with this feature, and that is the
 point of it.** Before, the marker could only widen authentication:
-`AuthzGuard` built an empty ability for the anonymous caller, so no
+`AppAuthzGuard` built an empty ability for the anonymous caller, so no
 `#[public]` route could return a row of a guarded entity, however it was
 written. Now the marker also selects which half of the policy runs.
 

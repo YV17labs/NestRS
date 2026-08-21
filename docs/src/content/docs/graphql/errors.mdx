@@ -189,8 +189,9 @@ those exist to be read, and travel as themselves.
 
 The `GraphqlAbilityBridge` from `nest-rs-authz`'s `graphql` feature
 turns an `Ability` refusal into a `FORBIDDEN`-coded error before the
-resolver runs. A `GraphqlAuthnGuard` does the same for missing or
-invalid principals (`UNAUTHENTICATED`).
+The same bridge answers a missing or invalid principal with
+`UNAUTHENTICATED`, since it runs authentication in band before the
+operation.
 
 The handler doesn't write the mapping; it just declares
 `#[authorize(Action, Entity)]`. See [Security](/security/) for

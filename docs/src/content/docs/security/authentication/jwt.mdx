@@ -24,29 +24,29 @@ configures the algorithm without taking a direct dependency.
 
 A resource-server app declares a type alias and a tiny module:
 
-```rust title="crates/features/src/authn/strategy.rs"
+```rust title="crates/features/src/app_authn/strategy.rs"
 use nest_rs::authn::JwtStrategy;
 
 use crate::Claims;
 
 pub type AppJwtStrategy = JwtStrategy<Claims>;
 
-pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
+pub type AppAuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
 ```
 
-```rust title="crates/features/src/authn/module.rs"
+```rust title="crates/features/src/app_authn/module.rs"
 use nest_rs::core::module;
 
-use super::strategy::{AppJwtStrategy, AuthnGuard};
+use super::strategy::{AppAuthnGuard, AppJwtStrategy};
 
 #[module(
     imports = [nest_rs::authn::AuthnModule::for_root(None)],
-    providers = [AppJwtStrategy, AuthnGuard],
+    providers = [AppJwtStrategy, AppAuthnGuard],
 )]
-pub struct AuthnModule;
+pub struct AppAuthnModule;
 ```
 
-`AuthnModule::for_root(None)` reads `JwtConfig` from the environment;
+`AppAuthnModule::for_root(None)` reads `JwtConfig` from the environment;
 pass a `JwtConfig` to pin it in code. The factory phase builds
 `JwtService` once and registers it as global infrastructure —
 controllers, login services, OAuth flows all inject the same instance.
@@ -59,7 +59,7 @@ export NESTRS_AUTHN__SECRET='a-32-byte-minimum-development-secret!!'
 ```
 
 With that set, `JwtService` signs and verifies against the same
-secret: `AuthnGuard` returns a 401 without a valid
+secret: `AppAuthnGuard` returns a 401 without a valid
 `Authorization: Bearer` token and attaches the claims otherwise.
 Every other knob is optional — the full env table and the
 HS256-vs-EdDSA decision come [later on this page](#configuration).
@@ -77,7 +77,7 @@ HS256-vs-EdDSA decision come [later on this page](#configuration).
 
 A missing header yields `AuthError::MissingCredentials`; a bad
 signature yields `AuthError::InvalidSignature`; an expired token
-yields `AuthError::Expired`. `AuthnGuard` maps every variant to a 401
+yields `AuthError::Expired`. `AppAuthnGuard` maps every variant to a 401
 with `WWW-Authenticate: Bearer`.
 
 ## Claims — your shape, your business rules
@@ -86,7 +86,7 @@ The framework's `JwtStrategy<C>` is generic. `C` is any
 `DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static` type —
 usually a struct with the standard `sub`, `exp`, plus whatever your app needs:
 
-```rust title="crates/features/src/identity/claims.rs"
+```rust title="crates/features/src/app_authn/claims.rs"
 use nest_rs::authn::PrincipalIdentity;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -107,7 +107,7 @@ impl PrincipalIdentity for Claims {
 ```
 
 `PrincipalIdentity` is the one required impl. On a successful authentication
-`AuthnGuard` records `actor_id` onto the request span, so every downstream
+`AppAuthnGuard` records `actor_id` onto the request span, so every downstream
 event — denials included — is attributable without threading the identity
 through each call site. Return `None` for a principal that genuinely has no
 identity (a machine token scoped to an org, say). `nestrs g auth` writes both
@@ -161,14 +161,17 @@ applies RFC 7519 §4.1.3 to `aud` **always**: a token carrying an audience
 this service is not named in is rejected whether or not
 `JwtConfig::audience` is set. Setting it adds the other direction — the
 claim becomes mandatory, so a token omitting `aud` is rejected too.
-Invalid signatures and expired tokens hit `tracing::warn!` under
-`nest_rs::authn`.
+Verification failures here log at `tracing::debug!` under `nest_rs::authn`,
+carrying the typed decode reason — and an *expired* token logs nothing at all.
+Both follow from "one event, said once": the single `warn` for an
+authentication failure is the guard's, which has the strategy and the route to
+name, so a second line from the service would double-count every denial.
 
 ## Configuration
 
 `JwtConfig` follows the framework-wide dual-path rule: every field is
 settable from `NESTRS_AUTHN__*` env vars **or** from a pinned struct
-passed to `AuthnModule::for_root(config)`.
+passed to `AppAuthnModule::for_root(config)`.
 
 | Field | Env var | Notes |
 |-------|---------|-------|
@@ -179,6 +182,7 @@ passed to `AuthnModule::for_root(config)`.
 | `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
 | `issuer` | `NESTRS_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
 | `expires_in_secs` | `NESTRS_AUTHN__EXPIRES_IN_SECS` | Minted-token lifetime, default 3600 |
+| `explicit_typing` | `NESTRS_AUTHN__EXPLICIT_TYPING` | RFC 9068 §2.1/§4 — stamp and require `typ: at+jwt`, default `true`. Turn off only for a legacy issuer minting plain `typ: JWT` |
 | `allow_any_audience` | `NESTRS_AUTHN__ALLOW_ANY_AUDIENCE` | Opt out of §4.1.3, default `false`. Refused beside `audience`; `warn`s once per boot |
 
 `JwtConfig::into_options` walks the three key fields and chooses a
@@ -206,7 +210,7 @@ only. Even a compromised resource server cannot mint a token. The
 issuer sets both `PRIVATE_KEY` and `PUBLIC_KEY`; verifiers set only
 `PUBLIC_KEY`.
 
-See [Issuer and resource server](/security/authentication/issuer-and-resource-server/)
+See [Split deployment](/security/authentication/split-deployment/)
 for the deployment pattern.
 
 ```bash
@@ -226,7 +230,7 @@ not catch.
 
 ## Going further
 
-- [Issuer and resource server](/security/authentication/issuer-and-resource-server/)
+- [Split deployment](/security/authentication/split-deployment/)
   — the split-deploy pattern that pairs with EdDSA.
 - [OAuth2](/security/authentication/oauth2/) — the JWT issuer is
   often the OAuth callback.

@@ -15,18 +15,18 @@ handler to write.
 
 ## Wire the indicator
 
-Import `DatabaseHealthModule` alongside `HealthModule`:
+Import `SeaOrmHealthModule` alongside `HealthModule`:
 
 ```rust title="src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::seaorm::DatabaseHealthModule;
+use nest_rs::seaorm::SeaOrmHealthModule;
 
 #[module(
     imports = [
-        DatabaseModule::for_root(None),
+        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmHealthModule,
         HealthModule,
-        DatabaseHealthModule,
     ],
 )]
 pub struct AppModule;

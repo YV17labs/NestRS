@@ -127,12 +127,20 @@ The file is named for the role, never for the type.
 | Event listener host | `events/listener.rs` |
 | Entity | `entity.rs` / `entities/` |
 | Guard / Strategy / Pipe | `guard.rs` / `strategy.rs` / `pipe.rs` |
+| Interceptor / Filter / Exception filter | `interceptor.rs` / `filter.rs` / `exception_filter.rs` |
 | Module config | `config.rs` |
 | Domain error / Constants | `error.rs` / `constants.rs` |
 
 An adapter role carries its folder: `schedule/tasks.rs`, never `tasks.rs` at the
 module root, and a transport-specific guard belongs to its adapter too —
 `mcp/guard.rs`, not `guard.rs` beside the service.
+
+The layer roles sit on that table because the framework dispatches to them
+exactly as it does to a guard or a pipe. Same placement rule: a layer serving
+one transport lives in that transport's folder (`http/interceptor.rs`), a layer
+a module applies to itself whatever the edge sits flat at the module root — and
+a crate whose whole subject *is* one layer keeps it at the crate root, since
+there is no second adapter for a folder to separate it from.
 
 Shared test doubles are the one file that sits at a crate's root rather than in
 a module: `testing.rs`, behind `#[cfg(test)]`, doubles and nothing else.
@@ -177,6 +185,7 @@ makes every path ambiguous:
 structure   apps  crates  features  src  tests
 roles       mod  module  service  controller  resolver  gateway  tool
             processor  tasks  listener  guard  strategy  pipe  config
+            interceptor  filter
             entity  error  constants  testing
 plurals     services  entities  dtos  commands  events  strategies  pipes
 edges       http  graphql  ws  queue  schedule  mcp  events

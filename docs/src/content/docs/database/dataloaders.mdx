@@ -161,7 +161,7 @@ gone and the loader would read on the pool, unscoped.
 The framework installs a `LoaderScope` (bound to `dyn GraphqlBatchContext`)
 that runs while the per-request loader is built, snapshots the executor and
 ability, and re-installs them around each batch future. You don't write
-this; importing `AuthzGraphqlModule` on the resolver activates it. The
+this; importing `AppAuthzGraphqlModule` on the resolver activates it. The
 captured executor is the **pool**, never the request transaction — a batch
 runs off the request task, and a write inside a loader would race the
 auto-commit's `Arc::try_unwrap`. Loaders are reads.

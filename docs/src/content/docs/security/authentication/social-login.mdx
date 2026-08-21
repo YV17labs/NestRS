@@ -22,13 +22,13 @@ cargo add nest-rs --features social
 ```
 
 The `social` feature implies `authn`: the authorization-code machinery
-`SocialModule` drives (`OAuth2Client`, `TokenSet`) arrives with it.
+`SocialModule` drives (`OAuthClient`, `TokenSet`) arrives with it.
 
 ```rust
 use nest_rs::core::module;
 use nest_rs::social::SocialModule;
 
-#[module(imports = [SocialModule, OAuthHttpModule])]
+#[module(imports = [SocialModule, AppOAuthHttpModule])]
 pub struct AuthModule;
 ```
 
@@ -36,7 +36,7 @@ pub struct AuthModule;
 `SocialModule`, no social login. Which providers come up inside that gate
 is a config decision, not a second import.
 
-`OAuthHttpModule` is **yours** — the two routes below are app code, for the
+`AppOAuthHttpModule` is **yours** — the two routes below are app code, for the
 reason [The request flow](#the-request-flow) explains.
 
 ## Wire it in
@@ -104,22 +104,22 @@ Two legs, both dispatched by a `:provider` path segment:
   PKCE/CSRF transaction in a signed, short-lived cookie. Unknown provider ⇒
   `404`.
 - `GET /social/:provider/callback` — the redirect URI. A `Strategy` bound with
-  `#[use_guards(OAuthGuard)]` validates the `state` against the cookie,
+  `#[use_guards(AppOAuthGuard)]` validates the `state` against the cookie,
   exchanges the code, fetches the profile, resolves it to a local user, and
   hands the handler a `Ctx<Caller>` to issue this app's token from. A forged
   callback is a `401` denial — do **not** mark this route `#[public]`, or the
   guard's denial is absorbed and the failure surfaces as a missing principal
   instead.
 
-```rust title="crates/features/src/oauth/http/controller.rs (abridged)"
+```rust title="crates/features/src/app_oauth/http/controller.rs (abridged)"
 #[controller(path = "/")]
-pub struct OAuthController {
+pub struct AppOAuthController {
     #[inject]
-    svc: Arc<OAuthService>,
+    svc: Arc<AppOAuthService>,
 }
 
 #[routes]
-impl OAuthController {
+impl AppOAuthController {
     #[get("/social/:provider/authorize")]
     #[public]
     async fn social_authorize(&self, provider: Path<String>) -> Result<Response> {
@@ -131,7 +131,7 @@ impl OAuthController {
     }
 
     #[get("/social/:provider/callback")]
-    #[use_guards(OAuthGuard)]
+    #[use_guards(AppOAuthGuard)]
     async fn social_callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
         Ok(Json(self.svc.issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?))
     }
@@ -161,7 +161,7 @@ shared flow, so a standard provider writes only `profile`:
 ```rust title="src/provider.rs"
 impl SocialProvider for AcmeProvider {
     fn key(&self) -> &'static str { "acme" }
-    fn client(&self) -> &OAuth2Client { &self.client }
+    fn client(&self) -> &OAuthClient { &self.client }
 
     fn profile<'a>(&'a self, tokens: &'a TokenSet) -> ProfileFuture<'a> {
         Box::pin(async move {
@@ -207,7 +207,7 @@ nest_rs::core::inventory::submit! {
         config_namespace: AcmeSocialConfig::NAMESPACE,
         build: |container| {
             resolve_provider::<AcmeProvider, AcmeSocialConfig>(container, |config| {
-                let client = OAuth2Client::new(config.oauth2_config())
+                let client = OAuthClient::new(config.oauth2_config())
                     .map_err(|e| anyhow::anyhow!("invalid Acme OAuth2 client config: {e}"))?;
                 Ok(AcmeProvider::new(client))
             })
@@ -232,7 +232,7 @@ keep it out of committed config.
 
 - [OAuth2](/security/authentication/oauth2/) — the shared
   authorization-code client every provider composes.
-- [Issuer and resource server](/security/authentication/issuer-and-resource-server/) —
+- [Split deployment](/security/authentication/split-deployment/) —
   where the token this flow issues is verified.
 - [Providers](/fundamentals/providers/) — keyed injection, the tool for
   static compile-time roles (distinct from the open provider set here).

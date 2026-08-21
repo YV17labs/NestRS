@@ -289,7 +289,7 @@ nestrs g feature posts
 
 # DB-backed CRUD: #[expose] entity + CrudService + guarded #[crud] controller.
 # Bootstraps the auth adapter below when the workspace has none — its routes
-# name AuthnGuard/AuthzGuard, so they would not compile without it.
+# name AppAuthnGuard/AppAuthzGuard, so they would not compile without it.
 nestrs g resource posts
 
 # One #[expose] entity in an existing feature — no controller, no auth
@@ -298,9 +298,9 @@ nestrs g resource posts
 nestrs g entity posts             # → Post, in posts/entity.rs
 nestrs g entity posts/comment     # → Comment
 
-# The app's authn/authz adapter — Claims, AuthnGuard, AppAbility, AuthzGuard.
+# The app's authn/authz adapter — Claims, AppAuthnGuard, AppAbility, AppAuthzGuard.
 # Run it *before* the first `g resource`, or not at all: it refuses when
-# `crates/features/src/authz/` already exists.
+# `crates/features/src/app_authz/` already exists.
 nestrs g auth
 
 # A SeaORM migration, registered in lib.rs and migrator.rs
@@ -316,7 +316,7 @@ nestrs g mcp posts         # MCP tool
 ```
 
 `g graphql`, `g ws` and `g mcp` also write that transport's **authz bridge**
-under `crates/features/src/authz/` when the workspace has a policy to enforce,
+under `crates/features/src/app_authz/` when the workspace has a policy to enforce,
 and wire it into the app. It is not optional wiring: `/graphql` and `/mcp` gate
 in band, per operation, so without the bridge `/mcp` denies every call and
 `/graphql` runs operations with no ability installed. A gateway's bridge carries
@@ -349,7 +349,7 @@ pub struct ApiModule;
 
 ### Why `g resource` is guarded
 
-`g resource` emits the `#[crud]` + `#[use_guards(AuthnGuard, AuthzGuard)]` form,
+`g resource` emits the `#[crud]` + `#[use_guards(AppAuthnGuard, AppAuthzGuard)]` form,
 and scaffolds the `g auth` adapter when the workspace has none. That is not
 hardening you can defer: `Repo` filters every read by the caller's ambient
 [`Ability`](/security/authorization/), which only the ability guard installs, so
@@ -388,7 +388,7 @@ controller together.
 
 The GraphQL adapter for a resource port is the `#[crud]` resolver behind the
 same two guards, and it comes with the per-operation bridge it is enforced
-through: `crates/features/src/authz/graphql/` plus the `AuthzGraphqlModule`
+through: `crates/features/src/app_authz/graphql/` plus the `AppAuthzGraphqlModule`
 import in the adapter's `module.rs`. That folder is not optional decoration —
 `/graphql` runs no guard at the HTTP edge, so the bridge is the only thing that
 authenticates the caller and installs the ability the resolvers read. Over a

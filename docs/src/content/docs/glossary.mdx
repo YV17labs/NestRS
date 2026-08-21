@@ -108,7 +108,7 @@ deep on each.
 ## Security
 
 - **[Strategy](/security/authentication/)** — a plain `#[injectable]`
-  that turns a request into a principal; `AuthnGuard<S>` is generic
+  that turns a request into a principal; `AppAuthnGuard<S>` is generic
   over it.
 - **[Principal](/security/authentication/)** — the typed identity a
   strategy returns (`Claims` for JWT, a session for OAuth); read back
@@ -135,7 +135,7 @@ deep on each.
 - **[Row-level filtering](/security/authorization/row-level-filtering/)**
   — `Ability::condition_for` joined into the SQL by `Repo::scoped`, so
   every read returns only rows the ability allows.
-- **[Resource server vs Issuer](/security/authentication/issuer-and-resource-server/)**
+- **[Resource server vs authorization server](/security/authentication/split-deployment/)**
   — the split-deploy pattern: the *issuer* app holds the signing key
   and mints tokens; the *resource server* holds only the public key
   and verifies them.
@@ -170,7 +170,7 @@ deep on each.
   handle WS events; self-mounts on `HttpTransport`.
 - **[Processor (queue)](/queue/wiring/)** — a struct marked with
   `#[processor]` whose `#[process(queue, ...)]` methods consume jobs;
-  activated by importing `QueueWorkerModule`.
+  activated by importing `RedisWorkerModule`.
 - **[Scheduler](/schedule/)** — the transport that drains
   `#[scheduled]` orchestrators; each method tagged with exactly one of
   `#[every]` / `#[cron]` / `#[after]`.

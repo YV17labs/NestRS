@@ -31,12 +31,12 @@ use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::orgs::{CreateOrg, Entity as OrgEntity, Org, OrgsService, UpdateOrg};
 
 #[controller(path = "/orgs")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,
@@ -127,7 +127,7 @@ the ones that need custom logic — the rest are filled in:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -173,7 +173,7 @@ type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -335,12 +335,12 @@ pub struct OrgsModule;
 ```
 
 ```rust title="src/orgs/http/module.rs"
-#[module(imports = [OrgsModule, AuthzHttpModule], providers = [OrgsController])]
+#[module(imports = [OrgsModule, AppAuthzHttpModule], providers = [OrgsController])]
 pub struct OrgsHttpModule;
 ```
 
 The HTTP transport + the data context interceptor activate at the app
-root with `HttpModule::for_root(...)` and `DatabaseModule::for_root(...)`.
+root with `HttpModule::for_root(...)` and `SeaOrmDatabaseModule::for_root(...)`.
 Importing only `OrgsModule` (no HTTP module) gives a worker the same
 `OrgsService` without mounting the endpoints — that is the port + adapter
 split this framework is built around.
@@ -414,7 +414,7 @@ addressable, the service override is what tombstones.
 Keeping only one half is **a boot failure**, not a caveat. `#[expose(...,
 soft_delete)]` on an entity whose service never overrides the column would
 answer `DELETE` with the same `204` a tombstone answers, having destroyed the
-row — so `DatabaseModule` refuses to start and names both sides:
+row — so `SeaOrmDatabaseModule` refuses to start and names both sides:
 
 ```text frame="terminal"
 Error: soft delete is declared on the entity but not on the service:

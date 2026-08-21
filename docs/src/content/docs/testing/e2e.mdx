@@ -147,7 +147,7 @@ Postgres database, runs migrations, and drops it on the guard's `Drop`
 admin URL comes from `NESTRS_DATABASE__URL`.
 
 `provide_arc(db.connection())` seeds the real connection into the
-container, short-circuiting `DatabaseModule`'s `for_root` factory. The
+container, short-circuiting `SeaOrmDatabaseModule`'s `for_root` factory. The
 rest of the app builds normally.
 
 ```rust
@@ -282,7 +282,7 @@ still runs, so the access-graph check still fires.
 
 ```rust
 let app = TestApp::builder()
-    .module::<WorkerModule>()
+    .module::<RedisWorkerModule>()
     .provide_arc(db.connection())
     .build_headless()
     .await?;

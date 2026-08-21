@@ -75,7 +75,7 @@ The dividing rule matches every other adapter: a file lives in
 
 | Scope                                    | Home                                              | Example                              |
 |------------------------------------------|---------------------------------------------------|--------------------------------------|
-| Framework primitive (any nestrs project) | `crates/nest-rs-<concern>/` behind a Cargo feature | `DatabaseHealthModule` (next section) |
+| Framework primitive (any nestrs project) | `crates/nest-rs-<concern>/` behind a Cargo feature | `HealthModule` (next section) |
 | Product feature (any app of this repo)   | `crates/features/<feature>/health/`               | `UpstreamHealthIndicator` above       |
 | App-specific glue (this binary only)     | `apps/<x>/<feature>/health/` (exception)          | a deployment-quirk check              |
 
@@ -85,14 +85,14 @@ would belong to no `#[module]`. See [Monorepo
 layout](/fundamentals/modules/#extract-a-feature) for
 the full rule.
 
-## Framework-shipped: `DatabaseHealthModule`
+## Framework-shipped: `SeaOrmHealthModule`
 
 A framework concern — a pool ping, a queue connection probe — belongs
 in the crate that owns the dependency, behind a Cargo feature so an
 app that does not import `HealthModule` does not pay for the
 indicator. The SeaORM pool ping is the first one to ship.
 
-`nest-rs-seaorm` exposes it as `DatabaseHealthModule`, which registers
+`nest-rs-seaorm` exposes it as `SeaOrmHealthModule`, which registers
 `DbHealthIndicator`. The indicator runs `DatabaseConnection::ping` on
 both `#[readiness]` and `#[startup]` — exactly what most apps want and
 zero code in the app:
@@ -103,14 +103,14 @@ nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "health"]
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::seaorm::{DatabaseHealthModule, DatabaseModule};
 use nest_rs::health::HealthModule;
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule};
 
 #[module(
     imports = [
-        DatabaseModule::for_root(None),
+        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmHealthModule,
         HealthModule,
-        DatabaseHealthModule,
     ],
 )]
 pub struct ApiModule;
@@ -190,7 +190,7 @@ provider's `#[injectable]` owns it. Inventory is the same seam
 
 - [Discovery](/health/discovery/) — how module-gating decides which
   indicators fire.
-- [Database / Health](/database/health/) — `DatabaseHealthModule` end
+- [Database / Health](/database/health/) — `SeaOrmHealthModule` end
   to end.
 - [Providers](/fundamentals/providers/) — `#[injectable]`, the access
   graph, and what makes a provider reachable.

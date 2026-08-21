@@ -2,11 +2,14 @@
 paths:
   - "crates/nest-rs-authn/**/*.rs"
   - "crates/nest-rs-authz/**/*.rs"
+  - "crates/nest-rs-oauth-client/**/*.rs"
+  - "crates/nest-rs-oauth-resource/**/*.rs"
+  - "crates/nest-rs-oauth-server/**/*.rs"
   - "crates/nest-rs-social/**/*.rs"
   - "crates/nest-rs-guards/**/*.rs"
-  - "demo/crates/features/src/authn/**/*.rs"
-  - "demo/crates/features/src/authz/**/*.rs"
-  - "demo/crates/features/src/oauth/**/*.rs"
+  - "demo/crates/features/src/app_authn/**/*.rs"
+  - "demo/crates/features/src/app_authz/**/*.rs"
+  - "demo/crates/features/src/app_oauth/**/*.rs"
   - "demo/apps/auth/**/*.rs"
   - "**/guard.rs"
   - "**/strategy.rs"
@@ -15,14 +18,14 @@ paths:
 # Authn / authz
 
 `nest-rs-authn` answers *who*; `nest-rs-authz` answers *what they may
-do*. Compose at the boundary: `#[use_guards(AuthnGuard, AuthzGuard)]`.
+do*. Compose at the boundary: `#[use_guards(AppAuthnGuard, AppAuthzGuard)]`.
 The verification alias and the policy live in `demo/crates/features`
-(`authn/`, `authz/` + `authz/http/`); apps only mount.
+(`app_authn/`, `app_authz/` + `app_authz/http/`); apps only mount.
 
 ## Absolute rule — only a guard verifies authn/authz
 
 Authentication and authorization are decided in exactly one place: a
-`Guard` (`AuthnGuard`/`AuthzGuard`), bound by `#[use_guards(...)]` and —
+`Guard` (`AppAuthnGuard`/`AppAuthzGuard`), bound by `#[use_guards(...)]` and —
 per operation — by a **visible** `#[authorize(Action, Entity)]` or
 `#[public]` that `#[operations]`/`#[routes]` turns into the gate.
 
@@ -74,7 +77,7 @@ The credential reports what it carries through
 scope-aware*, so scoped rules apply in full; `Some(&[])` means *an OAuth
 credential delegated nothing*, so they are all withheld. A bearer-token
 claims type returns `Some`; conflating the two is the fail-open reading.
-`AuthnGuard` publishes it as `nest_rs_guards::GrantedScopes`, which is
+`AppAuthnGuard` publishes it as `nest_rs_guards::GrantedScopes`, which is
 how authn tells authz without either crate depending on the other.
 
 A refusal for want of a scope is `Denial::InsufficientScope`, not
@@ -86,7 +89,7 @@ frame on GraphQL. **Convert a denial to a poem `Err` with
 `denial_to_http_error`, never `Error::from_response(denial_to_http_response(..))`**
 — poem's `into_response` overwrites the response's extensions, silently
 dropping the evidence. Every scope a rule requires must appear in
-`NESTRS_AUTHN__SCOPES_SUPPORTED`, or the client is told to request what
+`NESTRS_OAUTH_DISCOVERY__SCOPES_SUPPORTED`, or the client is told to request what
 discovery never names (reported at `warn`, `reason="scope_not_advertised"`).
 
 **Non-CRUD routes: a capability-only guard IS the sanctioned pattern.**
@@ -110,7 +113,7 @@ to hand-write the parameter.
 ## Strategy and principal
 
 **`Strategy`** turns a request into a principal (plain `#[injectable]`,
-no macro). **`AuthnGuard<S>`** is generic over it.
+no macro). **`AppAuthnGuard<S>`** is generic over it.
 
 `Strategy::authenticate` returns `Result<Self::Principal, AuthError>` —
 a pure request → principal mapping that **never issues a transport
@@ -118,14 +121,15 @@ response**; a redirect-style flow (OAuth `/authorize`) is a plain
 handler, so one trait serves bearer and OAuth alike.
 
 Every `Strategy::Principal` is bound on **`PrincipalIdentity`**
-(`actor_id() -> Option<String>`): on success `AuthnGuard` records
-`actor_id` onto the request span (pre-declared by the OTel interceptor),
+(`actor_id() -> Option<String>`): on success `AppAuthnGuard` records
+`actor_id` onto the request span (pre-declared by `operation_span!`, which
+is the only place the canonical field vocabulary is written),
 so every downstream event — denials included — is attributable without
 per-site threading.
 
-Standard resource-server: `JwtStrategy<C>` ships it; `features::authn`'s
-`strategy.rs` writes `type AuthnGuard =
-nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>`
+Standard resource server: `JwtStrategy<C>` ships it; `features::app_authn`'s
+`strategy.rs` writes `type AppAuthnGuard =
+nest_rs_authn::AppAuthnGuard<JwtStrategy<Claims>>`
 once. A guard *alias* binding a strategy is co-located in the strategy's
 file, not a separate `guard.rs`.
 
@@ -139,13 +143,13 @@ DB, **never RPC each other**.
 
 | Folder | Provides |
 |---|---|
-| `authz/` (root) | `AppAbility`, `AuthzModule` |
-| `authz/http/` | `AuthzGuard` (`AbilityGuard<AppAbility>` — **alias in `features`, not in `nest-rs-authz`**), `AuthzHttpModule` |
-| `authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `GraphqlAuthnGuard` (context-seed owner marker), `LoaderScope` as `dyn BatchContext`, `AuthzGraphqlModule` + `forward_principal!(Claims)` |
-| `authz/ws/` | `WsDataContext` as `dyn SocketContext`, `AuthzWsModule` |
-| `authz/mcp/` | `AppMcpGuard` (`nest_rs_authz::mcp::McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `AuthzMcpModule` |
+| `app_authz/` (root) | `AppAbility`, `AppAuthzModule` |
+| `app_authz/http/` | `AppAuthzGuard` (`AbilityGuard<AppAbility>` — **alias in `features`, not in `nest-rs-authz`**), `AppAuthzHttpModule` |
+| `app_authz/graphql/` | `AppGraphqlGuard` (`GraphqlAbilityBridge<…>`) as `dyn OperationGuard`, `LoaderScope` as `dyn BatchContext`, `AppAuthzGraphqlModule` + `forward_principal!(Claims)` |
+| `app_authz/ws/` | `WsDataContext` as `dyn SocketContext`, `AppAuthzWsModule` |
+| `app_authz/mcp/` | `AppMcpGuard` (`nest_rs_authz::mcp::McpAbilityBridge<AppAuthnGuard, AppAuthzGuard>`) as `dyn McpOperationGuard`, `AppAuthzMcpModule` |
 
-**No app-side `authz/` folder** — bridges live with the rest of authz.
+**No app-side `app_authz/` folder** — bridges live with the rest of authz.
 
 ## Symmetric pattern across transports
 
@@ -155,10 +159,10 @@ bring every layer they need).
 
 | Transport | Handler | Guard binding | Module import |
 |---|---|---|---|
-| HTTP | `#[controller]` | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct + per-route posture `#[authorize(Action, Entity)]` / `#[public]` — optional (a non-CRUD route gates through a capability-only guard instead) | `[<Feature>Module, AuthzHttpModule]` |
-| GraphQL | `#[resolver]` + `#[operations]` | `#[use_guards(...)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error** | `[<Feature>Module, AuthzGraphqlModule]` |
-| WS | `#[gateway]` + `#[messages]` | `#[use_guards(...)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]`, plus a per-message posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error**, as on GraphQL and MCP | `[<Feature>Module, AuthzWsModule]` |
-| MCP | `#[mcp]` host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **none registered ⇒ the global guard pool, else deny-all** — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint. Above it: `#[use_guards(...)]` on the host struct and per operation, plus a per-operation posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error**, as on GraphQL | `[<Feature>Module, AuthzMcpModule]` |
+| HTTP | `#[controller]` | `#[use_guards(AppAuthnGuard, AppAuthzGuard)]` on the struct + per-route posture `#[authorize(Action, Entity)]` / `#[public]` — optional (a non-CRUD route gates through a capability-only guard instead) | `[<Feature>Module, AppAuthzHttpModule]` |
+| GraphQL | `#[resolver]` + `#[operations]` | `#[use_guards(...)]` on the struct + per-op posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error** | `[<Feature>Module, AppAuthzGraphqlModule]` |
+| WS | `#[gateway]` + `#[messages]` | `#[use_guards(...)]` on the gateway struct (connection-level, on the upgrade request); optional per-event `#[use_guards(...)]` beside a `#[subscribe_message]`, plus a per-message posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error**, as on GraphQL and MCP | `[<Feature>Module, AppAuthzWsModule]` |
+| MCP | `#[mcp]` host | `AppMcpGuard` as `dyn McpOperationGuard` (in-band per operation); **none registered ⇒ the global guard pool, else deny-all** — `AllowAllMcpGuard` is the explicit opt-out for a deliberately public endpoint. Above it: `#[use_guards(...)]` on the host struct and per operation, plus a per-operation posture `#[authorize(Action, Entity)]` / `#[public]` — **mandatory: no posture ⇒ compile error**, as on GraphQL | `[<Feature>Module, AppAuthzMcpModule]` |
 
 ### Why GraphQL uses a marker but WS binds real guards
 
@@ -166,15 +170,18 @@ HTTP guards run on `&mut Request` before the handler — they *are* the
 auth chain.
 
 **GraphQL** runs authn/ability **in-band** per operation, then seeds
-`Ability` into per-operation context; the `GraphqlAuthnGuard` **marker**
-turns that seeded-context dep into an `#[inject]` the access graph can
-validate — omit `AuthzGraphqlModule` ⇒ boot fails naming the missing
-guard.
+`Ability` into per-operation context and forwards the principal with
+`forward_principal!(Claims)`. That forward declares no owner and needs none:
+it copies `Claims` off the request only when the in-band chain attached them,
+so omitting `AppAuthzGraphqlModule` means the chain never runs and there is
+nothing to copy. The marker this used to require was an empty struct in every
+consumer, and silent when forgotten — see the *Hard "no" list*'s module-gating
+entry.
 
 **WS** instead reuses the connection **upgrade** (an HTTP `GET`), so the
 gateway binds the real HTTP guards on its struct; they run once at
 upgrade and are access-graph-validated the same way — omit
-`AuthzWsModule` ⇒ those guards are unreachable ⇒ boot fails. Because the
+`AppAuthzWsModule` ⇒ those guards are unreachable ⇒ boot fails. Because the
 upgrade's task-locals have unwound by the time a message handler runs,
 `WsDataContext` re-seeds executor + ability around each message;
 per-message `Guard`s (bound beside a `#[subscribe_message]`, reusing
@@ -215,7 +222,7 @@ guard: same authn→authz ordering (`nest_rs_authz::run_ability_chain` — one
 function, two error mappings), same global-pool fallback when no bridge is
 registered (`FallbackMcpGuard` / `FallbackOperationGuard`), and the *guard's*
 `around` installs the ambient ability on both. Two deliberate differences:
-`/graphql` carries the `Public` marker so a pooled `AuthnGuard` admits an
+`/graphql` carries the `Public` marker so a pooled `AppAuthnGuard` admits an
 anonymous operation through to the resolver gates, and `/mcp` does not — an
 unauthenticated tool call is refused; and MCP's *no-pool* tail is deny-all
 rather than pass-through, so the fallback can only ever widen what

@@ -1,8 +1,9 @@
-## Names — four levels, and none overflows into the next
+## Names — five levels, and none overflows into the next
 
 | Level | Named for | Appears as |
 |---|---|---|
 | **Project** | the product | the repository and the workspace — **nowhere else** |
+| **Family** | the **standard** that names its members | a shared crate-name prefix — and nothing else |
 | **Crate** | what it holds | its directory, and the root of every span target it emits |
 | **App** | what it **serves** (`api`, `worker`, `auth`) | the binary, and `<App>Module` |
 | **Module** | its **domain** (`users`, `billing`) | `<module>/`, `<Module>Module` |
@@ -14,15 +15,190 @@
 <WhatItBinds>Module      <name>/module.rs             a substrate
 ```
 
+**A name and its path say the same thing, and that is the whole law.** From a
+path you know the type; from a type you know where the file is. Nothing weaker is
+worth having — a reader who has to *learn* which crate holds `SeaOrmDatabaseModule` has
+lost the only property naming buys, and a name seen in a stack trace has to
+identify itself without the path beside it.
+
+**The stem is the crate's subject plus every folder below `src/`, joined.**
+
+| path | type |
+|---|---|
+| `nest-rs-http/src/module.rs` | `HttpModule` |
+| `nest-rs-throttler/src/module.rs` | `ThrottlerModule` |
+| `nest-rs-redis/src/queue/module.rs` | `RedisQueueModule` |
+| `nest-rs-redis/src/throttler/module.rs` | `RedisThrottlerModule` |
+| `nest-rs-seaorm/src/database/module.rs` | `SeaOrmDatabaseModule` |
+| `features/src/audio/http/module.rs` | `AudioHttpModule` |
+
+**A port keeps the bare name; a driver carries its own.** `ThrottlerStore` is
+the trait, and its implementations are already `InMemoryThrottler` and
+`RedisThrottler` — the module follows the implementation, so
+`nest_rs::redis::RedisThrottlerModule` sits beside `RedisThrottler` and says the
+same thing. The bare `ThrottlerModule` belongs to `nest-rs-throttler`, which
+defines the port. Two consequences, both deliberate: the path stutters
+(`redis::RedisQueueModule`), and swapping a backend edits the type name as well
+as the import. Both are paid on purpose — **a name that is unambiguous in a log
+outranks a name that is short in an import**, and a module name appears in a
+composition root, not in fifty call sites.
+
+**A driver gives each port it binds a folder.** `nest-rs-redis` holds a queue, a
+throttler and a worker, so it has `queue/`, `throttler/` and `worker/` — never a
+`src/module.rs` whose own path fails to say what it is a module *of*.
+
+**The crate counts only when it is a subject.** Every `nest-rs-*` is named for
+what it holds, so it prefixes. A product library like `features` is a container
+— its modules are domains, so `audio/http/module.rs` is `AudioHttpModule`, never
+`FeaturesAudioHttpModule`.
+
+**Every type in a `module.rs` shares the stem**, not just the module:
+`RedisThrottlerModule`, `RedisThrottlerSetup`, `RedisThrottlerHost`. A rename
+that leaves a sibling behind is half a rename, and the half left behind is the
+one a reader trips on. The same reading gives the adapter's own types —
+`posts/http/controller.rs` is `PostsController`, `users/ws/gateway.rs` is
+`UsersGateway`.
+
+Enforced, not merely written: `naming.rs` in `nest-rs-conformance` derives every
+`module.rs` and every edge adapter in both workspaces and fails on a name that
+does not match its path. Its baseline is empty and only shrinks.
+
+**One documented precedence, and it is the only one.** A file whose subject is a
+*capability* rather than its module keeps the capability's name — `audio`'s
+`TranscodeGuard`, `posts`' `PostAuthorGuard`. That is the rule under
+*Precedence* below, it is judgement rather than a scan, and it applies to role
+files only: a `module.rs` never takes it.
+
 **No module or provider below the root ever carries the project's or the app's
 name.** The project name stops at the workspace; the app name stops at
 `<App>Module`. An app may share the project's name only while it is the only
 app — and even then, nothing beneath it may.
 
+**`App` is the one exception, and it is not an app's name.** The apps are `api`,
+`auth`, `live`, `worker`; `App` names none of them. It is the marker for *the
+product's own* — the sense `AppAbility` and `AppJwtStrategy` already carry — and
+the rule above forbids a **name**, never a marker. See *The product's own* below.
+
 **A module name is plural when the domain is a collection of enumerable things
 (`users`, `orders`), singular when it is a capability (`auth`, `search`).** Not
 cosmetic: the generator singularizes the folder name to derive the entity, so a
 wrongly pluralized module produces a wrongly named entity, silently.
+
+## Families — a shared prefix names a standard, never a theme
+
+`crates/` is one flat directory, read alphabetically. A shared prefix is
+therefore the only grouping a reader is given for free, and it is worth having.
+It is also a **claim**, compiled into every path, every span target and every
+env var the family owns — so it has to be checkable, not merely helpful.
+
+**A family exists when one external standard names each of its members.** The
+prefix takes that standard's subject; the word after it is *read off* the
+standard's own vocabulary rather than chosen. RFC 6749 §1.1 enumerates the roles
+— *client*, *authorization server*, *resource server* — so the family is:
+
+| Crate | Path a caller types | Read off |
+|---|---|---|
+| `nest-rs-oauth-client` | `nest_rs::oauth::client` | §1.1 *client* |
+| `nest-rs-oauth-server` | `nest_rs::oauth::server` | §1.1 *authorization server* |
+| `nest-rs-oauth-resource` | `nest_rs::oauth::resource` | §1.1 *resource server* |
+
+**The membership test must be answerable by someone who did not write the code.**
+*Does this standard name this thing?* is such a test. *Is this about auth?* is
+not. A family whose membership is argued will be argued again, and every
+re-argument renames crates — which is the cost the level exists to stop.
+
+**No crate carries the prefix alone.** A name that is both a level and a member
+denotes two things at once, and that breaks the property the whole model buys:
+from a type you know the path. The family is `oauth`, so there is no
+`nest-rs-oauth`.
+
+**A theme is not a family.** Grouping *everything about auth* is a reading aid,
+and reading aids belong in the documentation's own sections, which group without
+asserting anything about what the code does. Alphabetical order already puts a
+theme's members side by side; a prefix additionally states that the standard
+above them is shared, which is a stronger claim and usually a false one.
+
+**Recorded so it is not re-derived: `authn-*` / `authz-*` was considered, and the
+standards retire it.** The instinct is sound — authentication and authorization
+*are* the two halves of this territory — but the resulting family cannot be
+tested. RFC 6749 titles itself *The OAuth 2.0 **Authorization** Framework*, so a
+client and an authorization server are authz; social login is authentication
+performed *through* that authorization flow; a JWT verifier serves both, because
+one token carries the identity and the scopes; and RFC 9728 discovery is served
+to callers who have no identity at all, so it is neither. One member in five
+classifies without argument. `authn` and `authz` stay as **crate** names — the
+pair is real, and it is the pair a reader wants — but they name two crates, not
+two families.
+
+## The product's own — `app_` where the name is already the framework's
+
+A product module is named for its domain, and most domains are the product's
+alone: `users`, `posts`, `audio`, `orders`. A few are not. Where the product
+binds a framework concern, the obvious name is the concern's own word — and
+then two modules wear it:
+
+```rust
+use nest_rs::authn::AuthnModule;      // the port
+use features::authn::AuthnModule;     // the app's binding — same name
+```
+
+At the call site only `AuthnModule` is written, so the reader has to go back to
+the `use` line to learn which one is imported. **That is the defect**: a name
+that needs a second lookup is the one property the naming law exists to buy.
+
+**So a product module whose name is one the umbrella re-exports takes the
+`app_` prefix**, and every type in it follows:
+
+| | |
+|---|---|
+| `features/app_authn/` | `AppAuthnModule`, `AppAuthnGuard`, `AppJwtStrategy` |
+| `features/app_authz/` | `AppAuthzModule`, `AppAuthzHttpModule`, `AppAbility` |
+| `features/app_oauth/` | `AppOAuthModule`, `AppOAuthHttpModule`, `AppOAuthService` |
+
+Four things make it checkable rather than a matter of taste:
+
+- **The set is closed and derived.** It is the `pub use nest_rs_* as <concern>;`
+  list in `crates/nest-rs/src/lib.rs`, plus the members of each family module —
+  one file, read by the conformance join. A module outside that set never takes
+  the prefix: `users` and `posts` collide with nothing.
+- **The marker goes in front**, because that is where the two ecosystems that
+  have a convention put it — Rails' `ApplicationController` against
+  `ActionController::Base`, and Rust's own `AppState` / `AppError` — and because
+  the first word is the one a reader scans. NestJS needs none: `@nestjs/` in the
+  import path does the same work a shared prefix does here.
+- **The concern's word survives**, so the correspondence is immediate and
+  `rg authn` still finds the binding. A suffix would keep that too; a rename
+  (`identity`, `permissions`, `issuer`) would not.
+- **It groups.** The bindings sort together above the product's own domains,
+  which is the one grouping a flat directory gives away for free.
+
+**The prefix is a claim about the module, so it binds what is inside it too.**
+`app_authn/` holds `Claims` because `Claims` is what `JwtStrategy<Claims>`
+binds; a separate `identity/` holding one file and no `module.rs` is that
+content sitting where nothing reaches for it.
+
+**And the claim is a test, so what is not the product's own does not live behind
+the prefix.** Anything inside it that *every* consumer would write identically —
+a wire shape a specification fixes, a token a framework seam requires, a default
+nobody varies — is the framework's. Left in the app it is a copy waiting to
+drift from the thing it duplicates, and the drift is silent because nothing
+joins the two. **It moves up.** What earns the prefix is what this product
+*decides*: its claims, its policy, its scopes, its validation rules.
+
+Two tells, and both have been found here:
+
+- **The fields are a specification's own field names.** `AccessTokenResponse`'s
+  `access_token` / `token_type` / `expires_in` are RFC 6749 §5.1, so no
+  conforming issuer can spell them otherwise. The framework already held §5.2's
+  `TokenError` — one half of one response in the framework and the other half in
+  the app is the asymmetry this rule names.
+- **The type has no members at all.** A struct declared only so a macro has a
+  concrete provider to gate on says nothing about the product; the seam that
+  demands it should declare it.
+
+This is *One declaration, every site the standard permits* read from the other
+end: there the framework owes every site an answer, here the product owes the
+framework anything that was never its own.
 
 ## Modules — two files, two jobs, never merged
 
@@ -145,12 +321,28 @@ is named for the role, never for the type.
 | Event listener host | `events/listener.rs` |
 | Entity (ORM + `#[expose]`) | `entity.rs` / `entities/` |
 | Guard / Strategy / Pipe | `guard.rs` / `strategy.rs` / `pipe.rs` |
+| Interceptor / Filter / Exception filter | `interceptor.rs` / `filter.rs` / `exception_filter.rs` |
 | Module config (`#[config]`) | `config.rs` |
 | Domain error / Static constants | `error.rs` / `constants.rs` |
 
 An adapter role carries its folder: `schedule/tasks.rs`, never `tasks.rs` at
 the module root. A transport-specific guard belongs to its adapter too
 (`mcp/guard.rs`).
+
+**The layer roles are on the table because they are dispatched to.** An
+`#[interceptor]`, a `#[filter]` and an exception filter are mounted by the
+framework exactly as a guard or a pipe is, so they are named for the role and
+not for the type. The rule above binds them the same way: a layer that exists
+to serve one transport sits in that transport's folder
+(`http/interceptor.rs`), and a layer a module applies to itself whatever the
+edge sits flat at the module root.
+
+**A crate whose whole subject is one layer keeps it at the crate root.** There
+is no `http/` folder to carry when the crate serves one edge and nothing else —
+`nest-rs-server-timing`'s `interceptor.rs` is the whole crate, and wrapping it
+in a folder would name an adapter the crate has no second of. The folder
+separates *several* adapters within one module; it is not a suffix the role
+carries everywhere.
 
 **Custom providers.** Injectable, but nothing is dispatched *to* them. Named
 for what they are, file named the same, and **never folded into `service.rs`**.
@@ -221,6 +413,7 @@ is `programs`, not `apps`.
 structure   apps  crates  features  src  tests
 roles       mod  module  service  controller  resolver  gateway  tool
             processor  tasks  listener  guard  strategy  pipe  config
+            interceptor  filter
             entity  error  constants  testing
 plurals     services  entities  dtos  commands  events  strategies  pipes
 edges       http  graphql  ws  queue  schedule  mcp  events

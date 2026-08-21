@@ -298,8 +298,8 @@ flattening it to a bare `C` would silently demote the cascade.
 *dependency declaration* — "my providers inject `Arc<WsServer>`" — and it
 configures nothing, so it is not a second seam. A module that must not be
 imported bare hides its `#[module]` behind a private host struct and
-exposes only the plain façade: `ProtectedResourceHost` /
-`ProtectedResourceModule` is the exemplar.
+exposes only the plain façade: `OAuthResourceHost` /
+`OAuthResourceModule` is the exemplar.
 
 **The ownership table — which config reaches which seam — is in
 `architecture.md`** (*Configuration — one seam per config*), because a product

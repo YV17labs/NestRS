@@ -27,6 +27,47 @@ and declaration is met by every feature that will ever use it, so the
 unit of design is the whole surface, never the corner that motivated the
 work — see *The ask names a site; the design answers the family*.
 
+## Naming is the pillar — read this before anything else
+
+**A name and its path say the same thing.** From a path you know the type; from
+a type you know where the file is. Every other rule in this file assumes that
+property, because a reader who cannot navigate cannot check anything else — a
+misplaced concern, a missing guard, a silent failure are all invisible to
+someone who cannot find the file. **This is the single most important rule in
+the project.**
+
+It is also the rule most reliably under-weighted, and the failure mode is
+specific: a name reads fine *in isolation* and is only wrong *against its
+location*. `ThrottlerModule` is a perfectly good name; `ThrottlerModule` inside
+`nest-rs-redis` is a defect, because nothing in it says which backend you are
+looking at when it appears in a stack trace at three in the morning. So a name
+is **never judged alone** — always as the qualified path a caller types, and
+always against its siblings at the same level.
+
+Three consequences, and they are not negotiable:
+
+1. **The framework's crate name is a subject, and a driver carries it.** The
+   bare name of a capability belongs to the crate that defines the port. A crate
+   that *implements* somebody else's port prefixes every module it declares with
+   its own subject — `nest_rs::throttler::ThrottlerModule` is the port's own
+   binding, `nest_rs::redis::RedisThrottlerModule` is Redis's. This mirrors what
+   the implementations already do (`InMemoryThrottler`, `RedisThrottler`), and
+   the stutter at the path is an accepted cost: a name that is unambiguous in a
+   log outranks a name that is short in an import.
+2. **The stem is the path.** A module's type name is the crate subject plus
+   every folder below `src/`, joined — `redis/queue/module.rs` is
+   `RedisQueueModule`, `audio/http/module.rs` is `AudioHttpModule`. Adapters
+   read the same way: `posts/http/controller.rs` is `PostsController`.
+3. **Siblings follow one scheme.** One odd member means either it or the scheme
+   is wrong, and deciding which is the finding — never a shrug. A type renamed
+   without its `*Setup`, its `*Host` or its config is half a rename.
+
+The full model, the tables and the one documented precedence live in
+`.claude/rules/architecture.md`; `naming.rs` in `nest-rs-conformance` enforces
+what is mechanical, with an empty baseline that only shrinks. **When a naming
+question and any other question compete for the answer, naming wins** — settle
+it first, then build.
+
 ## Rule priority — Rust first, conventions second
 
 Both, in order. When they conflict, **Rust wins** — adapt the
@@ -104,7 +145,19 @@ to require it, **stop and ask**.
 - **No mocking the database in e2e tests.**
 - **No flat `tests/<x>.rs` and no third suite name.**
 - **No umbrella module re-exporting every edge of a feature.**
-- **No transport-level discovery without module-gating.**
+- **No transport-level discovery without module-gating.** *Discovery* is
+  anything an `inventory` submission would **mount or expose** — a route, a
+  resolver, a tool, a loader — and the gate is what stops a linked crate from
+  serving through an app that never imported it. A **request-scoped forwarder**
+  is not that: it mounts nothing, exposes nothing, and copies a value only if
+  something already put that value on the request. Its gate is therefore the
+  module-gated guard that *produces* the value, and a second gate below it buys
+  an empty marker struct in every consumer — the defect *The product's own*
+  names. So `forward_principal!` takes the principal type alone. Recorded
+  because the argument reads as a relaxation and is not one: the condition that
+  activates the forwarder is strictly narrower than a provider registration,
+  since a registered marker fires the forwarder whether or not anyone
+  authenticated, and the value's presence does not.
 - **No two decorators for the same concern** — deprecate first.
 - **No capability built for the site that asked.** A need surfaces at one
   member of a family and is answered for the family: every other member is
@@ -376,7 +429,7 @@ ships a trybuild snapshot. A capability shipped at one site is shipped
 
 ## Naming — strict
 
-**The model lives in `.claude/rules/architecture.md`** — four naming levels,
+**The model lives in `.claude/rules/architecture.md`** — five naming levels,
 crate types, the provider decision procedure, the role tables, precedence, and
 the reserved vocabulary. That file has no `paths:` header, so it is loaded in
 every session; read it there rather than restating it here.
@@ -423,6 +476,18 @@ Three consequences are load-bearing enough to repeat here:
   | a `nest-rs-*` framework crate | `nest_rs::<concern>` — `nest_rs::http`, `nest_rs::orm` |
   | the shared feature library | `features::<feature>` — `features::users` |
   | an app crate, or a standalone crate | `<app>::<concern>` — `api::users` |
+
+  **A crate in a family roots its target at the family**, so the target and the
+  path a caller types are the same string: `nest-rs-oauth-client` emits on
+  `nest_rs::oauth::client` and is reached at `nest_rs::oauth::client`. The
+  concern is then two segments rather than one, which is the *Family* level of
+  `.claude/rules/architecture.md` reaching the target table — and it is the
+  reason the family gets a filter of its own: `nest_rs::oauth=off` silences
+  three crates because they are three roles of one standard, which is a
+  hierarchy `EnvFilter` was built to express. That is prefixing on purpose, and
+  it is the one case *no target may prefix another* does not name: the rule
+  forbids an **accidental** prefix between unrelated concerns — `access` over
+  `access_graph` — never a level a reader can see in the path.
 
   **The root is the crate, never the product.** A feature living in
   `features` stays `features::…` even in a single-product repo whose
@@ -696,6 +761,7 @@ assert success.**
 cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all --check
 cargo nextest run --workspace -E 'not binary(e2e)' && cargo test --workspace --doc
 cargo nextest run --workspace -E 'binary(e2e)'   # if it touches seaorm/storage
+cargo audit                                      # if a manifest or the lockfile moved
 ```
 
 **Product (`demo/`)** — `nestrs run` is the single front door:
@@ -746,6 +812,21 @@ fix is new code nobody has read. It fans narrow lanes out to agents whose
 mandate is to *prove and not fix*, ranks silence above noise, and
 separates "clean" from "not looked at". The classes it hunts are the ones
 that have actually shipped here; the skill carries them.
+
+**Three review skills, and the order is what a mistake costs.**
+`/architecture` asks where a thing lives and under what name; it takes a
+**scope** — a crate, a subsystem — never a diff, so it runs when a territory
+opens (a new crate, a new decorator family, new vocabulary, a new `for_root`
+seam) or when a scope has drifted over several sessions, not per commit.
+`/audit` asks whether the code answers wrongly, on the working tree.
+`/simplify` asks whether the shape is heavier than the job, on the current
+diff. When more than one applies, run them in **that order**: a move
+invalidates every probe taken before it, and a probe invalidates the polish.
+Two of the three write — `/architecture` applies what a written rule already
+decided, `/simplify` applies its own findings — so both are followed by the
+*Definition of done* and, for anything non-trivial, by `/audit`, since applied
+code is new code nobody has read. `/audit` itself never writes: it proves, and
+hands the fix back.
 
 ## Reading order
 

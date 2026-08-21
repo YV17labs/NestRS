@@ -42,7 +42,7 @@ nest-rs-mcp #[tools] emits McpGuard :: a boot-time phase validation of the chain
 # per-message chain runs `check_ws_message`; `validate_guard_chain` reads
 # `produced_principal` / `expected_principal`, which describe `check_http` — and
 # `AuthnGuard` keeps the no-op `check_ws_message` default *by design*
-# (`nest-rs-authn/src/passport/guard.rs`). Applied at that site the check was
+# (`nest-rs-authn/src/guard.rs`). Applied at that site the check was
 # wrong in both directions at once:
 #
 #   - silently green on a chain where nothing attaches the principal at all,

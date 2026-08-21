@@ -370,9 +370,11 @@ fn every_unit_of_work_is_named_by_the_shared_constant() {
 /// nothing in the tree to read it off — a crate named `nest-rs-grpc` would prove
 /// only that someone wrote one. Opening an edge therefore touches
 /// `architecture.md` and this line, which is the deliberate, reviewed act the
-/// closure exists to require. What *is* derived is everything the list is
+/// closure exists to require. Shared with the `naming` join, which reads the
+/// same vocabulary to tell an edge adapter from a module-root role file — a
+/// second copy there would have made the reviewed act two lines. What *is* derived is everything the list is
 /// checked against: the members below come from the declarations themselves.
-const EDGES: [&str; 7] = [
+pub(crate) const EDGES: [&str; 7] = [
     "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
 ];
 

@@ -27,21 +27,23 @@
 # covers it.
 nest_rs::orm :: transaction escaped into a spawned task
 
-# ── nest_rs::authn
+# ── nest_rs::oauth::resource
 # The challenge is built from the resource URI, the metadata URL and
 # `scopes_supported`, and `into_metadata` — the one production path — rejects
 # `is_ascii_control() || '"' | '\' | ' '` in each (`validate_canonical_uri` and
-# its scope twin in `resource/config.rs`). That is exactly the set
+# its scope twin in `nest-rs-oauth-resource`'s `config.rs`). That is exactly the set
 # `HeaderValue::from_str` refuses; every non-ASCII character encodes to bytes
 # ≥ 0x80, all accepted. Checked by sweeping U+0000..U+2FFFF through both the
 # resource and an advertised scope: none reaches the branch. Its
 # insufficient-scope twin *is* covered, because a scope there arrives from a
 # guard rather than from config.
-nest_rs::authn :: protected resource challenge is not a valid header value
+nest_rs::oauth::resource :: protected resource challenge is not a valid header value
 # `ProtectedResourceMetadata` is `String`s and `Vec<String>`s, and `serde_json`
 # is built without `arbitrary_precision`: no manual `Serialize`, no `flatten`,
 # no non-string key, nothing that can fail.
-nest_rs::authn :: protected resource metadata failed to serialize
+nest_rs::oauth::resource :: protected resource metadata failed to serialize
+
+# ── nest_rs::authn
 # Not a serialization — the odd one out in this file, filed here because the
 # outcome is the same. `argon2 0.5.3` returns `Err` for six reasons, and the
 # call hashes a 19-byte compile-time constant with the crate's defaults: too

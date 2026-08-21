@@ -142,11 +142,21 @@ struct Capability {
 
 impl Capability {
     /// The module path both halves of the re-export use — `server_timing`.
-    fn concern(&self) -> String {
-        self.krate
-            .strip_prefix("nest-rs-")
-            .unwrap_or(&self.krate)
-            .replace('-', "_")
+    /// The path `::nest_rs::<concern>::` a macro expansion resolves through.
+    ///
+    /// One segment for a crate that stands alone, two for a member of a
+    /// **family** — `nest-rs-oauth-client` is reached at `oauth::client`,
+    /// because the umbrella groups RFC 6749's roles under one module. The
+    /// families are read off the umbrella rather than listed here, so adding a
+    /// role is one `pub use` and no edit to this join.
+    fn concern(&self, families: &BTreeSet<String>) -> String {
+        let subject = self.krate.strip_prefix("nest-rs-").unwrap_or(&self.krate);
+        match subject.split_once('-') {
+            Some((family, member)) if families.contains(family) => {
+                format!("{family}::{}", member.replace('-', "_"))
+            }
+            _ => subject.replace('-', "_"),
+        }
     }
 
     /// The cell this capability owes, keyed on the **crate** rather than the
@@ -215,14 +225,45 @@ fn capabilities(root: &Path) -> Vec<Capability> {
         .collect()
 }
 
-/// The concerns the umbrella re-exports at its root, as `<crate> as <alias>`.
-fn reexports(root: &Path) -> BTreeSet<(String, String, Option<String>)> {
+/// One umbrella re-export: the crate it renames, the concern path it exposes it
+/// at, and the feature gating it.
+type Reexport = (String, String, Option<String>);
+
+/// The concerns the umbrella re-exports, as `<crate> as <concern>`, plus the
+/// **family** modules it declares.
+///
+/// A capability is re-exported at the root (`pub use nest_rs_http as http;`) or
+/// one level down inside its family (`pub mod oauth { pub use
+/// nest_rs_oauth_client as client; }`). Families are one level by rule, so one
+/// level of descent is the whole search — and the module names it finds are
+/// what [`Capability::concern`] reads, which is why the family is declared once,
+/// in the umbrella, and nowhere else.
+fn reexports(root: &Path) -> (BTreeSet<Reexport>, BTreeSet<String>) {
     let Some(ast) = parsed(&root.join("crates/nest-rs/src/lib.rs")) else {
-        return BTreeSet::new();
+        return (BTreeSet::new(), BTreeSet::new());
     };
-    ast.items
+    let mut families = BTreeSet::new();
+    let flattened: Vec<(Option<String>, &Item)> = ast
+        .items
         .iter()
-        .filter_map(|item| {
+        .flat_map(|item| match item {
+            Item::Mod(module) => module
+                .content
+                .as_ref()
+                .map(|(_, inner)| {
+                    let name = module.ident.to_string();
+                    inner
+                        .iter()
+                        .map(|nested| (Some(name.clone()), nested))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+            other => vec![(None, other)],
+        })
+        .collect();
+    let found = flattened
+        .into_iter()
+        .filter_map(|(family, item)| {
             let Item::Use(use_item) = item else {
                 return None;
             };
@@ -252,9 +293,18 @@ fn reexports(root: &Path) -> BTreeSet<(String, String, Option<String>)> {
                     .nth(1)
                     .map(std::string::ToString::to_string)
             });
-            Some((rename.ident.to_string(), rename.rename.to_string(), gate))
+            let alias = rename.rename.to_string();
+            let concern = match &family {
+                Some(name) => {
+                    families.insert(name.clone());
+                    format!("{name}::{alias}")
+                }
+                None => alias,
+            };
+            Some((rename.ident.to_string(), concern, gate))
         })
-        .collect()
+        .collect();
+    (found, families)
 }
 
 /// Every `cargo add nest-rs --features …` line the docs spell under `## Install`.
@@ -418,7 +468,7 @@ fn every_umbrella_capability_carries_its_witnesses() {
         "crate(s) activated by the umbrella manifest",
     );
 
-    let reexports = reexports(&root);
+    let (reexports, families) = reexports(&root);
     let installs = documented_installs(&root);
     let readmes = readmes(&root);
     let hygiene = hygiene_attrs(&root);
@@ -432,7 +482,7 @@ fn every_umbrella_capability_carries_its_witnesses() {
         }
     }
     for cap in &capabilities {
-        let concern = cap.concern();
+        let concern = cap.concern(&families);
         // The re-export must exist, be `pub`, and be gated on **this**
         // capability's own feature — `nest-rs-core` is the only unconditional
         // one, and it is not a capability.

@@ -244,6 +244,9 @@ nest-rs-resource-macros = { version = "5.1.0", path = "crates/nest-rs-resource-m
 nest-rs-schedule = { version = "5.1.0", path = "crates/nest-rs-schedule" }
 nest-rs-schedule-macros = { version = "5.1.0", path = "crates/nest-rs-schedule-macros" }
 nest-rs-server-timing = { version = "5.1.0", path = "crates/nest-rs-server-timing" }
+nest-rs-oauth-client = { version = "5.1.0", path = "crates/nest-rs-oauth-client" }
+nest-rs-oauth-server = { version = "5.1.0", path = "crates/nest-rs-oauth-server" }
+nest-rs-oauth-resource = { version = "5.1.0", path = "crates/nest-rs-oauth-resource" }
 nest-rs-social = { version = "5.1.0", path = "crates/nest-rs-social" }
 nest-rs-opentelemetry = { version = "5.1.0", path = "crates/nest-rs-opentelemetry" }
 nest-rs-testing = { version = "5.1.0", path = "crates/nest-rs-testing" }

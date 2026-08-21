@@ -1,10 +1,33 @@
 //! Authentication failures, rendered as HTTP 401 challenges.
+//!
+//! The token-endpoint vocabulary an *issuing* app answers with is
+//! `nest-rs-oauth-server`'s: this crate resolves who is calling, and a grant
+//! refusal is not a credential verdict.
 
 use poem::error::ResponseError;
 use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 
-use crate::resource::NoBearerChallenge;
+use nest_rs_guards::NoBearerChallenge;
+
+/// Hashing-level failure from [`hash_password`](crate::hash_password) /
+/// [`verify_password`](crate::verify_password).
+///
+/// Distinct from [`CredentialError`] on purpose: a login service collapses both
+/// variants into that opaque type so the wire stays uniform, but only
+/// [`InvalidHash`](Self::InvalidHash) means a *stored* record is unusable —
+/// schema drift or corruption — and that one deserves its own `error` line
+/// rather than being folded into "wrong password".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PasswordError {
+    /// Argon2 refused to hash — rare, and an infrastructure signal (OOM, RNG
+    /// failure) rather than anything about the password.
+    #[error("password hashing failed")]
+    HashFailed,
+    /// The stored string did not parse as a PHC hash.
+    #[error("stored password hash is not valid PHC")]
+    InvalidHash,
+}
 
 /// Opaque "wrong credentials" failure for any password-login path.
 ///
@@ -65,6 +88,27 @@ impl From<CredentialError> for AuthError {
 }
 
 impl AuthError {
+    /// The RFC 6750 §3.1 code this failure reports on the `WWW-Authenticate`
+    /// challenge, or `None` when §3 says to report none.
+    ///
+    /// §3 defines the `error` parameter as describing *why the request was
+    /// declined*, and states it is omitted when the request carried no
+    /// authentication at all — a challenge to a caller who presented nothing is
+    /// an invitation, not a report. Everything else here is a token that was
+    /// presented and refused, which is §3.1's `invalid_token`.
+    ///
+    /// Without it a client cannot tell "refresh and retry" from "start
+    /// discovery", and both answers look like a bare `401`.
+    pub fn error_code(&self) -> Option<&'static str> {
+        match self {
+            // Nothing was presented, so there is nothing to report on.
+            AuthError::MissingCredentials => None,
+            // Not a credential signal at all — a 500 carries no challenge.
+            AuthError::Unavailable(_) => None,
+            _ => Some(nest_rs_http::challenge::INVALID_TOKEN),
+        }
+    }
+
     /// Stable, low-cardinality code for the `reason` field of a security log —
     /// what an incident query groups on. Distinct from
     /// [`client_message`](Self::client_message), which is what the *caller*
@@ -83,12 +127,12 @@ impl AuthError {
     }
 
     /// Message safe to return in an HTTP 401 body (no strategy/configuration detail).
-    pub fn client_message(&self) -> String {
+    pub fn client_message(&self) -> &'static str {
         match self {
-            Self::Failed(_) => "authentication failed".into(),
-            Self::MissingCredentials => "missing credentials".into(),
-            Self::Unavailable(_) => "authentication unavailable".into(),
-            _ => "invalid token".into(),
+            Self::Failed(_) => "authentication failed",
+            Self::MissingCredentials => "missing credentials",
+            Self::Unavailable(_) => "authentication unavailable",
+            _ => "invalid token",
         }
     }
 }
@@ -112,8 +156,28 @@ impl AuthError {
         }
         Response::builder()
             .status(StatusCode::UNAUTHORIZED)
-            .header(header::WWW_AUTHENTICATE, "Bearer")
+            .header(header::WWW_AUTHENTICATE, self.challenge())
             .body(body)
+    }
+
+    /// The `WWW-Authenticate` value this failure answers with.
+    ///
+    /// RFC 9110 §11.6.1 requires a `401` to carry a challenge at all, and RFC
+    /// 6750 §3.1 supplies the code when a credential was actually presented and
+    /// refused. A caller who sent nothing gets the bare scheme — §3: "if the
+    /// request lacks any authentication information … the resource server
+    /// SHOULD NOT include an error code".
+    ///
+    /// Built through `nest_rs_http::challenge` rather than a local `format!`:
+    /// the grammar is one RFC production and three hand-written spellings of it
+    /// had already drifted into three parameter sets for one failure.
+    fn challenge(&self) -> String {
+        match self.error_code() {
+            Some(code) => {
+                nest_rs_http::challenge::bearer_error_described(code, self.client_message())
+            }
+            None => nest_rs_http::challenge::BEARER.to_owned(),
+        }
     }
 }
 

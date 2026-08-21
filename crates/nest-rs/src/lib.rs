@@ -49,6 +49,25 @@ pub use nest_rs_authn as authn;
 #[cfg(feature = "authz")]
 pub use nest_rs_authz as authz;
 
+/// RFC 6749 §1.1's roles, one module per role, spelled in the RFC's own words.
+///
+/// The level exists because a family whose members are named by one standard is
+/// read as one thing; the word below it is looked up in §1.1 rather than chosen,
+/// so a role added later has exactly one place to land. See *Families* in
+/// `.claude/rules/architecture.md`.
+#[cfg(any(
+    feature = "oauth-client",
+    feature = "oauth-server",
+    feature = "oauth-resource"
+))]
+pub mod oauth {
+    #[cfg(feature = "oauth-client")]
+    pub use nest_rs_oauth_client as client;
+    #[cfg(feature = "oauth-resource")]
+    pub use nest_rs_oauth_resource as resource;
+    #[cfg(feature = "oauth-server")]
+    pub use nest_rs_oauth_server as server;
+}
 #[cfg(feature = "social")]
 pub use nest_rs_social as social;
 

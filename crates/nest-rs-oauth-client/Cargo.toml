@@ -1,0 +1,52 @@
+[package]
+name = "nest-rs-oauth-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "OAuth 2.0 client for NestRS: the Authorization Code flow with PKCE, a signed CSRF/PKCE transaction, and the token exchange — the role RFC 6749 §1.1 calls the client."
+keywords = ["framework", "nestrs", "oauth", "oauth2", "pkce"]
+categories = ["authentication", "web-programming"]
+
+
+[dependencies]
+# `OAuthClient` is provided through the factory phase; `OAuthClientModule` is the
+# `DynamicModule` that queues it.
+nest-rs-core.workspace = true
+# `OAuthClientModule` owns `OAuthClientConfig` (namespace `oauth_client`), loaded from
+# `NESTRS_OAUTH_CLIENT__*`; `validator` backs this crate's own `Validate` impls.
+nest-rs-config.workspace = true
+validator.workspace = true
+# `AuthError` is the framework's authentication failure, and the CSRF/PKCE
+# transaction is a `JwtService`-signed cookie — both belong to the crate that
+# answers *who*, so this crate reads them rather than declaring a second pair.
+nest-rs-authn.workspace = true
+# OAuth2 Authorization Code flow; its bundled reqwest (re-exported as
+# `oauth2::reqwest`) drives the token exchange, so we add no second reqwest. The
+# default features (reqwest + rustls-tls) are exactly what we want.
+oauth2.workspace = true
+serde.workspace = true
+# Parsing the OAuth userinfo response (oauth2's reqwest is built without its
+# `json` feature, so we read the body and deserialize it ourselves).
+serde_json.workspace = true
+# Constant-time comparison of the CSRF state carried in the transaction cookie.
+subtle.workspace = true
+# `OAuthClientModule::for_root` provides the client through the factory phase, whose
+# error channel is anyhow (the container's `Result`).
+anyhow.workspace = true
+# A refused callback logs at `warn` — the audit point every provider shares.
+tracing.workspace = true
+
+[dev-dependencies]
+# `LogCapture` asserts the callback-refusal `warn` carries its `reason`.
+nest-rs-testing = { path = "../nest-rs-testing" }
+# Forging an expired transaction cookie, to prove `exchange` refuses it. The
+# crate hides `jsonwebtoken` from consumers; only the test that has to mint a
+# malformed token names it.
+jsonwebtoken = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

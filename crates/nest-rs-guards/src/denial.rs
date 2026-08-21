@@ -14,6 +14,23 @@ pub enum Denial {
     /// 401 — authentication missing or invalid.
     Unauthorized(Cow<'static, str>),
 
+    /// 401 — a credential was **presented and rejected**, carrying the RFC 6750
+    /// §3.1 code that says why.
+    ///
+    /// Distinct from [`Unauthorized`](Self::Unauthorized) because §3 draws the
+    /// same line: a request that "lacks any authentication information" is told
+    /// no reason, while a rejected credential names one — which is what lets a
+    /// client tell "refresh and retry" from "start discovery" instead of
+    /// re-walking discovery on every token expiry.
+    InvalidCredential {
+        /// Human-readable reason, rendered as the problem envelope's `detail`.
+        reason: Cow<'static, str>,
+        /// The §3.1 code: `invalid_token` for every credential this framework
+        /// rejects. `invalid_request` describes a malformed request rather than
+        /// a bad credential, and `insufficient_scope` has its own variant.
+        code: &'static str,
+    },
+
     /// 403 — authentication ok but the caller may not perform this operation.
     Forbidden(Cow<'static, str>),
 
@@ -84,10 +101,35 @@ impl Denial {
         Self::Internal(reason.into())
     }
 
+    /// A credential was presented and rejected, with the RFC 6750 §3.1 code
+    /// saying why. Use this rather than [`unauthorized`](Self::unauthorized)
+    /// whenever a credential actually arrived — the two render differently on
+    /// the challenge, and the difference is what a client acts on.
+    pub fn invalid_credential(reason: impl Into<Cow<'static, str>>, code: &'static str) -> Self {
+        Self::InvalidCredential {
+            reason: reason.into(),
+            code,
+        }
+    }
+
+    /// The RFC 6750 §3.1 error code this denial reports on the
+    /// `WWW-Authenticate` challenge, or `None` when the specification says to
+    /// report none.
+    ///
+    /// One accessor rather than a `match` per transport, for the same reason
+    /// [`required_scopes`](Self::required_scopes) is one.
+    pub fn bearer_error(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidCredential { code, .. } => Some(code),
+            Self::InsufficientScope { .. } => Some(nest_rs_http::challenge::INSUFFICIENT_SCOPE),
+            _ => None,
+        }
+    }
+
     /// HTTP status code analog — the value transports report.
     pub fn http_status(&self) -> u16 {
         match self {
-            Self::Unauthorized(_) => 401,
+            Self::Unauthorized(_) | Self::InvalidCredential { .. } => 401,
             Self::Forbidden(_) | Self::InsufficientScope { .. } => 403,
             Self::RateLimited { .. } => 429,
             Self::Internal(_) => 500,
@@ -112,9 +154,9 @@ impl Denial {
     pub fn message(&self) -> &str {
         match self {
             Self::Unauthorized(s) | Self::Forbidden(s) | Self::Internal(s) => s.as_ref(),
-            Self::RateLimited { reason, .. } | Self::InsufficientScope { reason, .. } => {
-                reason.as_ref()
-            }
+            Self::RateLimited { reason, .. }
+            | Self::InsufficientScope { reason, .. }
+            | Self::InvalidCredential { reason, .. } => reason.as_ref(),
         }
     }
 }

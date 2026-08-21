@@ -73,7 +73,7 @@ pub struct SocialProviderEntry {
 /// nothing upstream has to know which config type this provider uses.
 ///
 /// `make` turns a validated config into the concrete provider — for the shared
-/// OAuth2 flow that is one `OAuth2Client::new` call.
+/// OAuth2 flow that is one `OAuthClient::new` call.
 pub fn resolve_provider<P, C>(
     container: &Container,
     make: fn(C) -> anyhow::Result<P>,
@@ -227,7 +227,8 @@ fn build_registry(
 
 #[cfg(test)]
 mod tests {
-    use nest_rs_authn::{AuthError, OAuth2Client, TokenSet};
+    use nest_rs_authn::AuthError;
+    use nest_rs_oauth_client::{OAuthClient, TokenSet};
     use validator::Validate;
 
     use super::*;
@@ -243,7 +244,7 @@ mod tests {
         fn key(&self) -> &'static str {
             self.reported_key
         }
-        fn client(&self) -> &OAuth2Client {
+        fn client(&self) -> &OAuthClient {
             unreachable!("build_registry never touches the client")
         }
         fn profile<'a>(&'a self, _tokens: &'a TokenSet) -> ProfileFuture<'a> {
@@ -341,7 +342,7 @@ mod tests {
         fn key(&self) -> &'static str {
             self.key
         }
-        fn client(&self) -> &OAuth2Client {
+        fn client(&self) -> &OAuthClient {
             unreachable!("these tests never run the OAuth flow")
         }
         fn profile<'a>(&'a self, _tokens: &'a TokenSet) -> ProfileFuture<'a> {

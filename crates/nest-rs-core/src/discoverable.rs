@@ -171,7 +171,7 @@ pub const INERT_HOST_HINT: &str = concat!(
 /// A `nest-rs-*` crate is linked as soon as *any* of its capabilities is used,
 /// so its opt-in providers — the ones behind a `for_root` the app did not
 /// import — are inert in the normal case: `nest_rs_seaorm`'s `db` indicator in
-/// an app that imports `DatabaseModule` without `DatabaseHealthModule`,
+/// an app that imports `SeaOrmDatabaseModule` without `SeaOrmHealthModule`,
 /// `nest_rs_authn`'s audience check in every app that does not run a resource
 /// server. The developer cannot act on those and they are not mistakes, so they
 /// report at `debug`; the app's own inert code stays at `warn`, where the
@@ -259,13 +259,13 @@ mod tests {
     /// there, and no imperative that could be followed into that shape is.
     // Which *level* an inert hook is reported at, and why it matters: a `warn`
     // naming a framework-internal provider shows up on every freshly scaffolded
-    // auth app (`AudienceBinding`, behind a `ProtectedResourceModule` nobody
+    // auth app (`AudienceBinding`, behind a `OAuthResourceModule` nobody
     // imported), is not actionable, and teaches the reader to ignore a target
     // that also carries security events.
     #[test]
     fn a_framework_owned_origin_is_not_the_developers_problem() {
         for origin in [
-            "nest_rs_authn::resource::module",
+            "nest_rs_oauth_resource::module",
             "nest_rs_events::module",
             "nest_rs",
             "nest_rs::authn",

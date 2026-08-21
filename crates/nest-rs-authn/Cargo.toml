@@ -7,7 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
 description = "Authentication for NestRS: a JwtService (sign/verify), a pluggable Strategy trait, and the request-scoped AuthnGuard that establishes the caller's identity."
-keywords = ["framework", "nestrs", "authentication", "jwt", "oauth"]
+keywords = ["framework", "nestrs", "authentication", "jwt", "guard"]
 categories = ["authentication", "web-programming"]
 
 
@@ -15,39 +15,33 @@ categories = ["authentication", "web-programming"]
 # `AuthnGuard` is `#[injectable]` (it resolves the app's `Strategy`); `AuthnModule`
 # is a `DynamicModule` that provides the configured `JwtService` as global infra.
 nest-rs-core.workspace = true
-# `AuthnModule`/`OAuth2Module` own their `#[config]` (`JwtConfig`/`OAuth2Config`,
-# namespace `authn`), loaded from `NESTRS_AUTHN__*`; `validator` backs the derives.
+# `AuthnModule` owns `JwtConfig` (namespace `authn`), loaded from
+# `NESTRS_AUTHN__*`. The `#[config]` derive routes through
+# `nest_rs_config::validator`, so this crate declares no `validator` of its own.
 nest-rs-config.workspace = true
-validator.workspace = true
 # `Strategy` reads the `poem::Request`; `AuthnGuard` implements the `Guard` trait
 # re-exported by the HTTP surface.
 nest-rs-http.workspace = true
 nest-rs-guards.workspace = true
-# `ResourceChallenge` is the infra `#[interceptor]` that stamps the RFC 9728
-# discovery pointer onto every 401 — the one seam HTTP, WS and MCP share.
-nest-rs-interceptors.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on
 # jsonwebtoken directly), mirroring how nest-rs-redis hides apalis.
 jsonwebtoken.workspace = true
-# OAuth2 Authorization Code flow; its bundled reqwest (re-exported as
-# `oauth2::reqwest`) drives the token exchange, so we add no second reqwest. The
-# default features (reqwest + rustls-tls) are exactly what we want.
-oauth2.workspace = true
-# Decoding `Authorization: Basic` for the `basic_credentials` helper (the building
-# block of OAuth2 client authentication, symmetric to `bearer_token`).
+# Decoding `Authorization: Basic` for the `basic_credentials` helper, symmetric
+# to `bearer_token` — the two credential forms a `Strategy` reads off a request.
 base64.workspace = true
 serde.workspace = true
-# Parsing the OAuth userinfo response (oauth2's reqwest is built without its
-# `json` feature, so we read the body and deserialize it ourselves).
+# Claim stamping in `JwtService` — a caller's claims type is serialized to a
+# JSON object before the framework's own claims are merged into it.
 serde_json.workspace = true
 thiserror.workspace = true
+# Constant-time comparison for the machine-client registry — the same
+# fail-closed discipline `verify_password` needs, for the other credential kind.
+subtle.workspace = true
 # Argon2id for local credential storage (`hash_password` / `verify_password`).
 argon2.workspace = true
-# Constant-time credential comparison for the client-credentials grant registry.
-subtle.workspace = true
-# `OAuth2Module::for_root` provides the client through the factory phase, whose
+# `AuthnModule::for_root` provides `JwtService` through the factory phase, whose
 # error channel is anyhow (the container's `Result`).
 anyhow.workspace = true
 # `AuthnGuard` logs the authentication outcome — a failure at `warn` so it is
@@ -55,24 +49,12 @@ anyhow.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# The discovery-flow proof boots a real app and walks 401 → metadata → AS.
+# Booting the `AuthnModule::for_root` seam and reading the resolved service back.
 nest-rs-testing = { path = "../nest-rs-testing" }
-nest-rs-core = { workspace = true }
-# `mcp` brings `GlobalPoolMcpGuard`, the fallback that folds the global guard
-# pool in-band on `/mcp`. Without it a `use_guards_global` denial never reaches
-# the MCP endpoint and the step-up parity test silently proves nothing.
-nest-rs-guards = { workspace = true, features = ["mcp"] }
-# The challenge is attached once at the transport edge; these prove it reaches
-# an MCP client and a WS client, not only an HTTP one.
-nest-rs-mcp = { path = "../nest-rs-mcp" }
-nest-rs-ws = { path = "../nest-rs-ws" }
-serde_json = { workspace = true }
 tokio = { workspace = true }
-jsonwebtoken = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 base64 = { workspace = true }
-poem = { workspace = true }
-validator = { workspace = true }
 
 [lints]
 workspace = true

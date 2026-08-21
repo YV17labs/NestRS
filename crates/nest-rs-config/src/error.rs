@@ -40,7 +40,7 @@ pub enum ConfigError {
     ///
     /// `<PREFIX>_<DOMAIN>__<KEY>` is a flat, process-global name space, and
     /// several types sharing a `<DOMAIN>` is deliberate — `nest-rs-authn`'s JWT,
-    /// OAuth and protected-resource configs are all `authn`, because a domain is
+    /// OAuth and oauth-resource configs are all `authn`, because a domain is
     /// the operator's word for a subsystem rather than one struct's identity.
     /// What may not be shared is a **variable**: two types reading one name means
     /// a deployment setting it configures whichever happens to read it, both

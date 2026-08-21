@@ -14,6 +14,9 @@ categories = ["authentication", "web-programming"]
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-authn.workspace = true
+# Providers compose the shared Authorization-Code flow rather than each writing
+# their own; `SocialProvider::authorize`/`exchange` default to it.
+nest-rs-oauth-client.workspace = true
 nest-rs-config.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -34,6 +34,15 @@ pub struct RejectedCredential {
     pub principal: TypeId,
     /// The client-safe message the guard would have denied with.
     pub client_message: String,
+    /// The RFC 6750 §3.1 error code this rejection reports on the
+    /// `WWW-Authenticate` challenge, or `None` when §3 says to report none —
+    /// which is the case for a request that carried no credentials at all.
+    ///
+    /// Only the authentication layer knows *why* a credential failed, and the
+    /// layer that writes the challenge runs much later, on the response. This
+    /// field is how the first tells the second, the same way `RequiredScopes`
+    /// carries a scope verdict to the edge.
+    pub bearer_error: Option<&'static str>,
 }
 
 /// Extracts a request-scoped value of type `T` an upstream guard or
@@ -86,9 +95,18 @@ impl<'a, T: Clone + Send + Sync + 'static> FromRequest<'a> for Ctx<T> {
                 context_type = std::any::type_name::<T>(),
                 "public route needs the principal a rejected credential never produced — answering the deferred 401",
             );
-            return Err(ProblemDetails::unauthorized()
-                .with_detail(rejected.client_message.clone())
-                .into());
+            // The guard recorded *why* the credential failed; without it the
+            // caller reads a `401` carrying no `WWW-Authenticate` at all and
+            // cannot tell "refresh and retry" from "start discovery" — the very
+            // distinction `bearer_error` exists to carry, and which the guarded
+            // path already renders. A `#[public]` route must not answer worse.
+            let mut response = poem::IntoResponse::into_response(
+                ProblemDetails::unauthorized().with_detail(rejected.client_message.clone()),
+            );
+            if let Some(code) = rejected.bearer_error {
+                crate::challenge::stamp_bearer_error(&mut response, code);
+            }
+            return Err(poem::Error::from_response(response));
         }
         // Otherwise a missing context is a wiring bug, not a client error. The
         // Rust type name belongs in the logs, not the response body — reply
@@ -158,18 +176,52 @@ mod tests {
         req.extensions_mut().insert(RejectedCredential {
             principal: TypeId::of::<Principal>(),
             client_message: "authentication failed".into(),
+            bearer_error: Some(crate::challenge::INVALID_TOKEN),
         });
         let err = extract(req).await.err().expect("credential was rejected");
         assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
-        let body = err
-            .into_response()
-            .into_body()
-            .into_bytes()
-            .await
-            .expect("body");
+        let response = err.into_response();
+        // RFC 6750 §3: a `401` from a Bearer-protected resource carries the
+        // challenge, and §3.1's code is what lets a client tell "refresh and
+        // retry" from "start discovery". The guarded path renders it; this one
+        // recorded the code and shipped without it, so a `#[public]` route
+        // answered strictly worse than its guarded neighbour.
+        assert_eq!(
+            response
+                .headers()
+                .get(poem::http::header::WWW_AUTHENTICATE)
+                .and_then(|v| v.to_str().ok()),
+            Some(r#"Bearer error="invalid_token""#),
+        );
+        let body = response.into_body().into_bytes().await.expect("body");
         let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(json["status"], 401);
         assert_eq!(json["detail"], "authentication failed");
+    }
+
+    /// RFC 6750 §3 says a request carrying *no* credentials gets no `error`
+    /// code — the challenge is an invitation, not a report — while RFC 9110
+    /// §11.6.1 still requires the `401` to carry one. So the bare `Bearer` the
+    /// problem envelope already writes stands, and nothing invents a code.
+    #[tokio::test]
+    async fn a_rejection_with_no_code_defers_a_401_whose_challenge_names_none() {
+        let mut req = Request::default();
+        req.extensions_mut().insert(RejectedCredential {
+            principal: TypeId::of::<Principal>(),
+            client_message: "authentication failed".into(),
+            bearer_error: None,
+        });
+        let err = extract(req).await.err().expect("credential was rejected");
+        assert_eq!(err.status(), StatusCode::UNAUTHORIZED);
+        let challenge = err
+            .into_response()
+            .headers()
+            .get(poem::http::header::WWW_AUTHENTICATE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .expect("a 401 always carries a challenge");
+        assert_eq!(challenge, "Bearer");
+        assert!(!challenge.contains("error="));
     }
 
     // The deferral is scoped to the principal the guard would have attached.
@@ -185,6 +237,7 @@ mod tests {
         req.extensions_mut().insert(RejectedCredential {
             principal: TypeId::of::<SomethingElse>(),
             client_message: "authentication failed".into(),
+            bearer_error: Some(crate::challenge::INVALID_TOKEN),
         });
         let err = extract(req).await.err().expect("no guard attached it");
         assert_eq!(

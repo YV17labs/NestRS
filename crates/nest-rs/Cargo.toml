@@ -45,7 +45,7 @@ default = ["http", "config"]
 full = [
     "http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue",
     "redis", "redis-throttler", "schedule", "events", "authn", "authz",
-    "social", "opentelemetry",
+    "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry",
     "openapi", "health", "throttler", "server-timing", "guards", "pipes",
     "interceptors", "filters", "exception-filters", "worker",
     "storage",
@@ -149,11 +149,28 @@ redis = ["dep:nest-rs-redis", "queue"]
 redis-throttler = ["redis", "throttler", "nest-rs-redis/throttler"]
 schedule = ["dep:nest-rs-schedule"]
 events = ["dep:nest-rs-events"]
-authn = ["dep:nest-rs-authn"]
+# `Strategy::authenticate` takes a `poem::Request` and a custom strategy's
+# neighbouring guard names `nest_rs::guards` — both are types the developer has
+# to *write*, so the capability closes over `http` (which brings `guards`) the
+# way every other capability row does. Without it the extension point the docs
+# teach cannot be spelled, and the error is an unresolved import at their `use`.
+authn = ["dep:nest-rs-authn", "http"]
+# The OAuth 2.0 *client* role: obtaining a token from somebody else's
+# authorization server. Its transaction cookie is `JwtService`-signed, hence
+# `authn`.
+oauth-client = ["dep:nest-rs-oauth-client", "authn"]
+# The OAuth 2.0 *authorization server* role: RFC 6749 §5.2's token-endpoint
+# error set and §2.3.1 client authentication. `TokenError` renders itself as a
+# poem response and marks it `NoBearerChallenge`, so the capability closes over
+# `http` (which brings `guards`) the way every other request-shaped row does.
+oauth-server = ["dep:nest-rs-oauth-server", "http"]
+# RFC 9728 discovery. Mounts a controller and an interceptor, so `http`; the
+# boot check reads `JwtConfig`, so `authn`.
+oauth-resource = ["dep:nest-rs-oauth-resource", "authn", "http"]
 # The `#[authorize]` half: the developer writes the attribute, so they enable
 # the feature named after it. Transport bindings ride the transport features.
 authz = ["dep:nest-rs-authz"]
-social = ["dep:nest-rs-social", "authn"]
+social = ["dep:nest-rs-social", "authn", "oauth-client"]
 # Same shape: the `with_test_telemetry` boot guard lives behind testing's
 # `opentelemetry` feature.
 opentelemetry = ["dep:nest-rs-opentelemetry", "nest-rs-testing?/opentelemetry"]
@@ -195,6 +212,9 @@ nest-rs-schedule = { workspace = true, optional = true }
 nest-rs-events = { workspace = true, optional = true }
 nest-rs-authn = { workspace = true, optional = true }
 nest-rs-authz = { workspace = true, optional = true }
+nest-rs-oauth-client = { workspace = true, optional = true }
+nest-rs-oauth-server = { workspace = true, optional = true }
+nest-rs-oauth-resource = { workspace = true, optional = true }
 nest-rs-social = { workspace = true, optional = true }
 nest-rs-opentelemetry = { workspace = true, optional = true }
 nest-rs-openapi = { workspace = true, optional = true }

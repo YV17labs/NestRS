@@ -140,7 +140,7 @@ pub use guard::GraphqlGuard;
 pub use guard::McpGuard;
 #[cfg(feature = "ws")]
 pub use guard::WsGuard;
-pub use scope::{GrantedScopes, RequiredScopes};
+pub use scope::{GrantedScopes, NoBearerChallenge, RequiredScopes};
 // The WS bridge the `#[messages]` macro wraps per-event guards in — only
 // exists (and is only needed) when the `ws` feature is on.
 #[cfg(feature = "ws")]

@@ -1,5 +1,5 @@
-use nest_rs_authn::OAuth2Config;
 use nest_rs_config::{Config, ConfigService, config};
+use nest_rs_oauth_client::OAuthClientConfig;
 
 use crate::registry::SocialProviderConfig;
 
@@ -43,10 +43,10 @@ impl GithubSocialConfig {
         }
     }
 
-    /// Compose the transport-level [`OAuth2Config`] the shared client needs:
+    /// Compose the transport-level [`OAuthClientConfig`] the shared client needs:
     /// deployment credentials + provider-constant endpoints.
-    pub(crate) fn oauth2_config(&self) -> OAuth2Config {
-        OAuth2Config {
+    pub(crate) fn oauth2_config(&self) -> OAuthClientConfig {
+        OAuthClientConfig {
             client_id: self.client_id.clone(),
             client_secret: self.client_secret.clone(),
             auth_url: Self::AUTH_URL.to_owned(),

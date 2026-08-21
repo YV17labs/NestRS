@@ -1,4 +1,5 @@
-use nest_rs_authn::{AuthError, OAuth2Client, TokenSet};
+use nest_rs_authn::AuthError;
+use nest_rs_oauth_client::{OAuthClient, TokenSet};
 use serde::Deserialize;
 
 use super::config::GoogleSocialConfig;
@@ -10,13 +11,13 @@ use crate::registry::{SocialProviderEntry, resolve_provider};
 /// (Reading identity from the id_token instead is a future optimization — the
 /// userinfo path keeps Google on the zero-override flow template.)
 pub struct GoogleSocialProvider {
-    client: OAuth2Client,
+    client: OAuthClient,
 }
 
 impl GoogleSocialProvider {
     pub(crate) const KEY: &'static str = "google";
 
-    pub(crate) fn new(client: OAuth2Client) -> Self {
+    pub(crate) fn new(client: OAuthClient) -> Self {
         Self { client }
     }
 }
@@ -37,7 +38,7 @@ impl SocialProvider for GoogleSocialProvider {
         Self::KEY
     }
 
-    fn client(&self) -> &OAuth2Client {
+    fn client(&self) -> &OAuthClient {
         &self.client
     }
 
@@ -60,7 +61,7 @@ nest_rs_core::inventory::submit! {
         config_namespace: <GoogleSocialConfig as nest_rs_config::Namespaced>::NAMESPACE,
         build: |container| {
             resolve_provider::<GoogleSocialProvider, GoogleSocialConfig>(container, |config| {
-                let client = OAuth2Client::new(config.oauth2_config())
+                let client = OAuthClient::new(config.oauth2_config())
                     .map_err(|e| anyhow::anyhow!("invalid Google OAuth2 client config: {e}"))?;
                 Ok(GoogleSocialProvider::new(client))
             })

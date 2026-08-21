@@ -9,6 +9,7 @@
 mod access_log;
 mod allow;
 mod boot_check;
+pub mod challenge;
 mod client_ip;
 mod config;
 mod context;

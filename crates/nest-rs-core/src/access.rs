@@ -941,14 +941,14 @@ mod tests {
         assert!(keys.contains(&TypeId::of::<Db>()));
     }
 
-    // A stand-in for the keyed `OAuth2Client` case: one concrete type injected
+    // A stand-in for the keyed `OAuthClient` case: one concrete type injected
     // twice, disambiguated by key.
-    struct OAuth2Client;
+    struct OAuthClient;
 
     fn github_dep() -> Vec<KeyedDependency> {
         vec![KeyedDependency {
-            key: ProviderKey::named::<OAuth2Client>("github"),
-            type_name: "OAuth2Client",
+            key: ProviderKey::named::<OAuthClient>("github"),
+            type_name: "OAuthClient",
         }]
     }
 
@@ -971,7 +971,7 @@ mod tests {
     #[test]
     fn keyed_dependency_supplied_globally_passes() {
         let users = keyed_consumer_module();
-        let global_keyed = HashSet::from([ProviderKey::named::<OAuth2Client>("github")]);
+        let global_keyed = HashSet::from([ProviderKey::named::<OAuthClient>("github")]);
         validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
             .expect("a globally-seeded keyed provider satisfies the keyed dependency");
     }
@@ -984,10 +984,10 @@ mod tests {
                 .expect_err("a keyed dependency with no keyed provider must fail");
         assert_eq!(err.consumer, "SocialLoginService");
         assert_eq!(err.module, "UsersModule");
-        assert_eq!(err.type_name, "OAuth2Client");
+        assert_eq!(err.type_name, "OAuthClient");
         assert_eq!(err.key, "github");
         let msg = err.to_string();
-        assert!(msg.contains("OAuth2Client"), "names the type: {msg}");
+        assert!(msg.contains("OAuthClient"), "names the type: {msg}");
         assert!(msg.contains("github"), "names the key: {msg}");
     }
 
@@ -996,7 +996,7 @@ mod tests {
         // Only the exact `(type, key)` counts — a different key of the same
         // type leaves the dependency unmet.
         let users = keyed_consumer_module();
-        let global_keyed = HashSet::from([ProviderKey::named::<OAuth2Client>("google")]);
+        let global_keyed = HashSet::from([ProviderKey::named::<OAuthClient>("google")]);
         let err =
             validate_keyed_access_graph(&[&users], &[TypeId::of::<UsersMod>()], &global_keyed)
                 .expect_err("the `google` key must not satisfy a `github` dependency");

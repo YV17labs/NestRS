@@ -37,7 +37,7 @@ pub fn denial_to_http_response(denial: Denial) -> Response {
     let mut response = problem_response(&denial);
     // The scopes ride as a response extension rather than a header written
     // here: the challenge also has to name the metadata document, which
-    // only the resource-server module knows. Attaching the evidence lets
+    // only the oauth-resource crate knows. Attaching the evidence lets
     // that one interceptor render the whole `WWW-Authenticate` at the edge,
     // for every transport, instead of this function learning about RFC 9728.
     if let Some(required) = required_scopes(&denial) {
@@ -61,6 +61,22 @@ fn problem_response(denial: &Denial) -> Response {
         problem = problem.with_detail(denial.message().to_owned());
     }
     let mut response = problem.into_response();
+    // RFC 6750 §3: the `Bearer` scheme "MUST be followed by one or more
+    // auth-param values", and §3.1 that a rejected credential names its code.
+    // Written here rather than deferred like the scopes: the code needs nothing
+    // this function does not have, while the `resource_metadata` pointer needs
+    // the RFC 9728 document only the oauth-resource crate holds. That module's
+    // interceptor merges its pointer into whatever stands here.
+    //
+    // Not gated on the status: §3.1 puts `insufficient_scope` at `403` ("the
+    // resource server SHOULD respond with the HTTP 403 (Forbidden) status
+    // code"), so a `401` test would exclude the one code that lives there and
+    // `bearer_error`'s scope arm could never fire. `bearer_error` is already
+    // `None` for every denial the specification says carries no challenge,
+    // which is the condition that actually decides this.
+    if let Some(code) = denial.bearer_error() {
+        nest_rs_http::challenge::stamp_bearer_error(&mut response, code);
+    }
     if let Denial::RateLimited {
         retry_after_secs, ..
     } = denial

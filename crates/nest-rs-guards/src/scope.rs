@@ -110,3 +110,19 @@ mod tests {
         assert!(GrantedScopes::default().as_slice().is_empty());
     }
 }
+
+/// Opt a `401` out of the `Bearer` challenge, by inserting it into the
+/// response's extensions.
+///
+/// A third marker, riding the **response** like [`RequiredScopes`] and living
+/// here for the same reason: its writers and its reader sit in different
+/// crates. A password-login rejection and a token-endpoint refusal (both
+/// `nest-rs-authn`) mean *these credentials are wrong*,
+/// not *go discover an authorization server*; the interceptor that would
+/// otherwise stamp the RFC 9728 pointer (`nest-rs-oauth-resource`) reads this
+/// and leaves the response alone. `POST /auth/login` and `POST /token` are not
+/// protected resources — pointing those callers at discovery is misdirection.
+///
+/// An app whose own `401` means the same thing marks it the same way.
+#[derive(Clone, Copy, Debug)]
+pub struct NoBearerChallenge;

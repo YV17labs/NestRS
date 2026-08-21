@@ -37,7 +37,7 @@ pub fn authorize<A: ActionMarker, S: Subject>(ctx: &Context<'_>) -> Result<()> {
         GateVerdict::Unauthenticated => unauthenticated(),
         GateVerdict::Forbidden => forbidden(),
         // A refusal that a wider token would have fixed says so on this
-        // transport too. GraphQL has no `401` for the resource-server
+        // transport too. GraphQL has no `401` for the discovery
         // interceptor to enrich, but a scope refusal is an ordinary error frame
         // here — so the same fact reaches the client, in this transport's own
         // shape.

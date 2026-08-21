@@ -2,7 +2,7 @@
 //!
 //! `SocialProvider` is **flow-owning**: `authorize` and `exchange` carry
 //! default implementations that drive the shared PKCE/CSRF Authorization-Code
-//! flow through the provider's [`OAuth2Client`]. A provider writes nothing for
+//! flow through the provider's [`OAuthClient`]. A provider writes nothing for
 //! the common case — GitHub and Google override only [`profile`], the one
 //! method whose per-provider code justifies the crate. A provider whose
 //! protocol genuinely deviates (e.g. Apple's per-request ES256-signed client
@@ -14,7 +14,8 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
-use nest_rs_authn::{AuthError, Authorization, JwtService, OAuth2Client, TokenSet};
+use nest_rs_authn::{AuthError, JwtService};
+use nest_rs_oauth_client::{AuthorizationRedirect, OAuthClient, TokenSet};
 
 /// The normalized profile a provider reports for the authenticated caller.
 ///
@@ -105,13 +106,13 @@ pub trait SocialProvider: Send + Sync + 'static {
 
     /// The configured base-flow client. The default `authorize`/`exchange`
     /// drive the shared PKCE/CSRF flow through it.
-    fn client(&self) -> &OAuth2Client;
+    fn client(&self) -> &OAuthClient;
 
     /// Begin the redirect leg. Default: the shared flow. Overriding this is
     /// almost never needed.
     /// The transaction is bound to [`key`](Self::key), so a flow started here
     /// cannot be completed on another provider's callback.
-    fn authorize(&self, jwt: &JwtService) -> Result<Authorization, AuthError> {
+    fn authorize(&self, jwt: &JwtService) -> Result<AuthorizationRedirect, AuthError> {
         self.client().authorize(jwt, self.key())
     }
 

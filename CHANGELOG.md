@@ -2888,7 +2888,7 @@ to go get one. The MCP authorization spec makes that a **MUST**, and HTTP and WS
 are resource servers on exactly the same terms, so the capability lives in
 `nest-rs-authn` and serves all of them at once.
 
-- **`ProtectedResourceModule::for_root(..)`** serves
+- **`OAuthResourceModule::for_root(..)`** serves
   `GET /.well-known/oauth-protected-resource` (RFC 9728 §3) and stamps
   `WWW-Authenticate: Bearer resource_metadata="…"` — plus `scope` when the
   deployment advertises one — onto every `401` the process emits. The route is
@@ -2906,7 +2906,7 @@ are resource servers on exactly the same terms, so the capability lives in
   variable. Without it a resource server accepts any token its issuer signed,
   including one a user granted to another service — the confused deputy RFC 8707
   exists to close. A `resource` that disagrees with `aud` warns at boot.
-- **`ProtectedResourceConfig`** is dual-path (`NESTRS_AUTHN__RESOURCE`,
+- **`OAuthResourceConfig`** is dual-path (`NESTRS_AUTHN__RESOURCE`,
   `__AUTHORIZATION_SERVERS`, `__SCOPES_SUPPORTED`, … over a pinned base) and
   refuses a non-canonical identity at boot: no scheme, a fragment, an empty
   authorization-server list, or a scope carrying a space are all build breaks

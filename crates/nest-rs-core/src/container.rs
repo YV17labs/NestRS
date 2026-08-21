@@ -22,7 +22,7 @@ type AnyArc = Arc<dyn Any + Send + Sync>;
 /// every non-keyed `provide*`/`get*` path keys with `None`, so existing code
 /// behaves exactly as before. `name: Some(_)` is a **keyed** provider
 /// ([`ContainerBuilder::provide_keyed`]), letting several instances of the same
-/// concrete type coexist in the flat container (two `OAuth2Client`s, one per
+/// concrete type coexist in the flat container (two `OAuthClient`s, one per
 /// upstream provider).
 ///
 /// Keying is singleton-only: request-scoped and transient factories, and the

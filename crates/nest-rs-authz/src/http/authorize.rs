@@ -87,7 +87,7 @@ where
             return Err(denial_to_http_error(Denial::forbidden("forbidden")));
         }
         // A token that verified but is too narrow. The scopes ride to the edge,
-        // where the resource-server interceptor turns them into the RFC 6750
+        // where the discovery interceptor turns them into the RFC 6750
         // `insufficient_scope` challenge — so the client learns what to ask the
         // authorization server for instead of retrying the same token.
         // The scopes ride on the `Denial`, and the denial line stays the shared

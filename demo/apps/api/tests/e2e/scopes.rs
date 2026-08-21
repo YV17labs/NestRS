@@ -1,4 +1,4 @@
-use features::authz::constants;
+use features::app_authz::constants;
 use features::testing::{ORG_ID, token_with_scopes};
 use nest_rs::testing::TestApp;
 use poem::http::{StatusCode, header};

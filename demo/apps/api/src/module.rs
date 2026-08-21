@@ -4,15 +4,15 @@ use nest_rs::graphql::GraphqlModule;
 use nest_rs::health::HealthModule;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::openapi::OpenApiModule;
-use nest_rs::redis::QueueModule;
+use nest_rs::redis::RedisQueueModule;
 use nest_rs::schedule::ScheduleModule;
-use nest_rs::seaorm::{DatabaseHealthModule, DatabaseModule};
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule};
 use nest_rs::server_timing::ServerTimingModule;
 use nest_rs::throttler::ThrottlerModule;
 
+use features::app_authn::AppAuthnModule;
+use features::app_authz::{AppAuthzGraphqlModule, AppAuthzHttpModule};
 use features::audio::{AudioHttpModule, AudioScheduleModule};
-use features::authn::AuthnModule;
-use features::authz::{AuthzGraphqlModule, AuthzHttpModule};
 use features::notifications::{NotificationsEventsModule, NotificationsHttpModule};
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
 use features::posts::{PostsGraphqlModule, PostsHttpModule};
@@ -21,9 +21,9 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
 #[module(
     imports = [
         ConfigModule::for_root(),
-        DatabaseModule::for_root(None),
-        DatabaseHealthModule,
-        QueueModule::for_root(None),
+        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmHealthModule,
+        RedisQueueModule::for_root(None),
         HealthModule,
         ServerTimingModule,
         ScheduleModule,
@@ -35,9 +35,9 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         ThrottlerModule::for_root(None),
         GraphqlModule::for_root(None),
         OpenApiModule::for_root(None),
-        AuthnModule,
-        AuthzHttpModule,
-        AuthzGraphqlModule,
+        AppAuthnModule,
+        AppAuthzHttpModule,
+        AppAuthzGraphqlModule,
         OrgsHttpModule,
         OrgsGraphqlModule,
         UsersHttpModule,

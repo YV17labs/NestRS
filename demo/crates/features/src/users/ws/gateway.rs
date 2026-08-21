@@ -4,12 +4,12 @@ use nest_rs::authz::Read;
 use nest_rs::seaorm::{CrudService, ServiceError};
 use nest_rs::ws::{gateway, messages};
 
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::users::{Entity as UserEntity, User, UsersService};
 
 #[gateway(path = "/users")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct UsersGateway {
     #[inject]
     svc: Arc<UsersService>,

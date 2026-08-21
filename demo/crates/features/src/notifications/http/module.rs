@@ -1,11 +1,11 @@
 use nest_rs::core::module;
 
 use super::controller::NotificationsController;
-use crate::authz::AuthzHttpModule;
+use crate::app_authz::AppAuthzHttpModule;
 use crate::notifications::NotificationsModule;
 
 #[module(
-    imports = [NotificationsModule, AuthzHttpModule],
+    imports = [NotificationsModule, AppAuthzHttpModule],
     providers = [NotificationsController],
 )]
 pub struct NotificationsHttpModule;

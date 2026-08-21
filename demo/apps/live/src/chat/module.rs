@@ -1,4 +1,4 @@
-use features::authn::AuthnModule;
+use features::app_authn::AppAuthnModule;
 use nest_rs::core::module;
 use nest_rs::ws::WsModule;
 
@@ -7,7 +7,7 @@ use crate::chat::guard::ModeratedGuard;
 use crate::chat::request_seq::{RequestSeq, SeqSource};
 use crate::chat::service::ChatService;
 
-#[module(imports = [WsModule, AuthnModule], providers = [ChatService, ModeratedGuard, ChatGateway, SeqSource, RequestSeq])]
+#[module(imports = [WsModule, AppAuthnModule], providers = [ChatService, ModeratedGuard, ChatGateway, SeqSource, RequestSeq])]
 pub struct ChatModule;
 
 #[cfg(test)]

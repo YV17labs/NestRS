@@ -17,7 +17,7 @@ anyhow.workspace = true
 nest-rs.workspace = true
 # The e2e test defines its own `#[processor]`/`#[queue]` types and drives
 # `JobProducerExt::push_to` — the binary itself only consumes the queue via
-# `nest_rs_redis::QueueModule`, so the abstractions crate is test-only here.
+# `nest_rs_redis::RedisQueueModule`, so the abstractions crate is test-only here.
 # `#[processor]` in the e2e test emits absolute `::nest_rs_worker::*` paths.
 serde.workspace = true
 

@@ -9,14 +9,14 @@ use poem::web::Json;
 use super::exception_filter::PostProblemFilter;
 use super::interceptor::PostAuditInterceptor;
 use crate::Claims;
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::posts::{
     CreatePost, Entity as PostEntity, Post, PostAuthor, PostAuthorGuard, PostsService, UpdatePost,
 };
 
 #[controller(path = "/posts")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 #[use_interceptors(PostAuditInterceptor)]
 pub struct PostsController {
     #[inject]

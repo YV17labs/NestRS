@@ -1,14 +1,14 @@
 use features::audio::AudioMcpModule;
 use features::posts::PostsMcpModule;
 use features::users::UsersMcpModule;
-use nest_rs::authn::ProtectedResourceModule;
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
-use nest_rs::redis::QueueModule;
-use nest_rs::seaorm::{DatabaseHealthModule, DatabaseModule};
+use nest_rs::oauth::resource::OAuthResourceModule;
+use nest_rs::redis::RedisQueueModule;
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule};
 use nest_rs::server_timing::ServerTimingModule;
 
 const SERVER_NAME: &str = "nestrs-assistant";
@@ -32,10 +32,10 @@ const INSTRUCTIONS: &str = "Tools over the demo's own data. Every call is scoped
             ),
             ..Default::default()
         }),
-        ProtectedResourceModule::for_root(None),
-        DatabaseModule::for_root(None),
-        DatabaseHealthModule,
-        QueueModule::for_root(None),
+        OAuthResourceModule::for_root(None),
+        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmHealthModule,
+        RedisQueueModule::for_root(None),
         AudioMcpModule,
         UsersMcpModule,
         PostsMcpModule,

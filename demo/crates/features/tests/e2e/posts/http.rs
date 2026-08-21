@@ -1,14 +1,14 @@
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::seaorm::DatabaseModule;
+use nest_rs::seaorm::SeaOrmDatabaseModule;
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
 use serde_json::json;
 use uuid::Uuid;
 
-use features::authn::AuthnModule;
-use features::authz::AuthzHttpModule;
-use features::identity::Role;
+use features::app_authn::AppAuthnModule;
+use features::app_authn::Role;
+use features::app_authz::AppAuthzHttpModule;
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
 use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, token};
@@ -18,10 +18,10 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[module(
     imports = [
-        DatabaseModule::for_root(None),
+        SeaOrmDatabaseModule::for_root(None),
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-        AuthnModule,
-        AuthzHttpModule,
+        AppAuthnModule,
+        AppAuthzHttpModule,
         PostsHttpModule,
     ],
 )]

@@ -2669,6 +2669,9 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-mcp",
+ "nest-rs-oauth-client",
+ "nest-rs-oauth-resource",
+ "nest-rs-oauth-server",
  "nest-rs-openapi",
  "nest-rs-opentelemetry",
  "nest-rs-pipes",
@@ -2699,15 +2702,12 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
- "nest-rs-interceptors",
- "oauth2",
  "poem",
  "serde",
  "serde_json",
  "subtle",
  "thiserror 2.0.19",
  "tracing",
- "validator",
 ]
 
 [[package]]
@@ -2992,6 +2992,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "nest-rs-oauth-client"
+version = "5.1.0"
+dependencies = [
+ "anyhow",
+ "nest-rs-authn",
+ "nest-rs-config",
+ "nest-rs-core",
+ "oauth2",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tracing",
+ "validator",
+]
+
+[[package]]
+name = "nest-rs-oauth-resource"
+version = "5.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "nest-rs-authn",
+ "nest-rs-config",
+ "nest-rs-core",
+ "nest-rs-guards",
+ "nest-rs-http",
+ "nest-rs-interceptors",
+ "poem",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "nest-rs-oauth-server"
+version = "5.1.0"
+dependencies = [
+ "anyhow",
+ "nest-rs-authn",
+ "nest-rs-guards",
+ "poem",
+ "schemars",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
 name = "nest-rs-openapi"
 version = "5.1.0"
 dependencies = [
@@ -3195,6 +3245,7 @@ dependencies = [
  "nest-rs-authn",
  "nest-rs-config",
  "nest-rs-core",
+ "nest-rs-oauth-client",
  "serde",
  "serde_json",
  "tracing",

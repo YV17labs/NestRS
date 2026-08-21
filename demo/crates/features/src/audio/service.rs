@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
 use nest_rs::core::injectable;
 use nest_rs::queue::JobProducerExt;
-use nest_rs::redis::QueueConnection;
+use nest_rs::redis::RedisQueueConnection;
 use nest_rs::storage::Storage;
 use uuid::Uuid;
 
@@ -23,7 +23,7 @@ const TRANSCODE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 #[injectable]
 pub struct AudioService {
     #[inject]
-    queue: Arc<QueueConnection>,
+    queue: Arc<RedisQueueConnection>,
     #[inject]
     storage: Arc<Storage>,
 }

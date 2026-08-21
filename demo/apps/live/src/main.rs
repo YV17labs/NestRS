@@ -1,5 +1,5 @@
 use anyhow::Result;
-use features::authn::AuthnGuard;
+use features::app_authn::AppAuthnGuard;
 use nest_rs::config::Environment;
 use nest_rs::core::App;
 use nest_rs::guards::{AppBuilderGuardsExt, guard};
@@ -11,7 +11,7 @@ async fn main() -> Result<()> {
     let _environment = Environment::init();
 
     App::builder()
-        .use_guards_global([guard::<AuthnGuard>()])
+        .use_guards_global([guard::<AppAuthnGuard>()])
         .module::<LiveModule>()
         .build()
         .await?

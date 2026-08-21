@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs::core::{injectable, module};
 use nest_rs::queue::{JobProducerExt, processor, queue};
-use nest_rs::redis::{QueueConfig, QueueConnection, QueueModule, QueueWorker};
+use nest_rs::redis::{RedisQueueConfig, RedisQueueConnection, RedisQueueModule, RedisWorker};
 use nest_rs::testing::TestApp;
 use serde::{Deserialize, Serialize};
 use worker::WorkerModule;
@@ -47,7 +47,7 @@ impl ProbeConsumer {
 }
 
 #[module(
-    imports = [QueueModule::for_root(QueueConfig { url: redis_url(), ..Default::default() })],
+    imports = [RedisQueueModule::for_root(RedisQueueConfig { url: redis_url(), ..Default::default() })],
     providers = [ProbeConsumer],
 )]
 struct ProbeModule;
@@ -60,9 +60,9 @@ async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
         .await
         .expect("WorkerModule boots and connects to Redis");
     let worker_queue = worker
-        .spawn_transport(QueueWorker::new())
+        .spawn_transport(RedisWorker::new())
         .await
-        .expect("WorkerModule's QueueWorker configures against Redis");
+        .expect("WorkerModule's RedisWorker configures against Redis");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let _ = PROBE_TX.set(tx);
@@ -74,15 +74,15 @@ async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
         .expect("ProbeModule boots and connects to Redis");
 
     let queue = app
-        .spawn_transport(QueueWorker::new())
+        .spawn_transport(RedisWorker::new())
         .await
-        .expect("QueueWorker configures");
+        .expect("RedisWorker configures");
 
     let tag = unique_tag();
     let conn = app
         .container()
-        .get::<QueueConnection>()
-        .expect("QueueModule seeded the shared QueueConnection");
+        .get::<RedisQueueConnection>()
+        .expect("RedisQueueModule seeded the shared RedisQueueConnection");
     conn.push_to::<ProbeQueue>(ProbeCommand { tag: tag.clone() })
         .await
         .expect("enqueue onto the probe queue");
@@ -97,11 +97,11 @@ async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
     })
     .await;
 
-    queue.shutdown().await.expect("QueueWorker stops cleanly");
+    queue.shutdown().await.expect("RedisWorker stops cleanly");
     worker_queue
         .shutdown()
         .await
-        .expect("WorkerModule's QueueWorker stops cleanly");
+        .expect("WorkerModule's RedisWorker stops cleanly");
 
     assert!(
         matches!(saw_our_job, Ok(true)),

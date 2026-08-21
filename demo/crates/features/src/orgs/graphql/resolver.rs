@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use nest_rs::graphql::{crud, resolver};
 
-use crate::authz::AuthzGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::orgs::{CreateOrg, Entity as OrgEntity, Org, OrgsService, UpdateOrg};
 
 #[resolver]
-#[use_guards(AuthzGuard)]
+#[use_guards(AppAuthzGuard)]
 pub struct OrgsResolver {
     #[inject]
     svc: Arc<OrgsService>,

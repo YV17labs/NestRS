@@ -7,12 +7,12 @@ use poem::Result;
 use poem::web::Json;
 
 use crate::Claims;
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[controller(path = "/users")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,

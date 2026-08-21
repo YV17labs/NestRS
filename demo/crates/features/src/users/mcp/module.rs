@@ -1,11 +1,11 @@
 use nest_rs::core::module;
 
 use super::tool::UsersTool;
-use crate::authz::mcp::AuthzMcpModule;
+use crate::app_authz::mcp::AppAuthzMcpModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, AuthzMcpModule],
+    imports = [UsersModule, AppAuthzMcpModule],
     providers = [UsersTool],
 )]
 pub struct UsersMcpModule;

@@ -1,11 +1,11 @@
 use nest_rs::core::module;
 
 use super::gateway::UsersGateway;
-use crate::authz::AuthzWsModule;
+use crate::app_authz::AppAuthzWsModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, AuthzWsModule],
+    imports = [UsersModule, AppAuthzWsModule],
     providers = [UsersGateway],
 )]
 pub struct UsersWsModule;

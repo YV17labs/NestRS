@@ -1,11 +1,11 @@
 use nest_rs::core::module;
 
 use super::controller::AudioController;
+use crate::app_authz::AppAuthzHttpModule;
 use crate::audio::AudioModule;
-use crate::authz::AuthzHttpModule;
 
 #[module(
-    imports = [AudioModule, AuthzHttpModule],
+    imports = [AudioModule, AppAuthzHttpModule],
     providers = [AudioController],
 )]
 pub struct AudioHttpModule;

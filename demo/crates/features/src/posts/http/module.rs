@@ -3,11 +3,11 @@ use nest_rs::core::module;
 use super::controller::PostsController;
 use super::exception_filter::PostProblemFilter;
 use super::interceptor::PostAuditInterceptor;
-use crate::authz::AuthzHttpModule;
+use crate::app_authz::AppAuthzHttpModule;
 use crate::posts::PostsModule;
 
 #[module(
-    imports = [PostsModule, AuthzHttpModule],
+    imports = [PostsModule, AppAuthzHttpModule],
     providers = [
         PostsController,
         PostAuditInterceptor,

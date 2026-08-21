@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::orgs::{CreateOrg, Entity as OrgEntity, Org, OrgsService, UpdateOrg};
 
 #[controller(path = "/orgs")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,

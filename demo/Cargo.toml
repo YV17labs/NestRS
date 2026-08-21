@@ -22,7 +22,7 @@ homepage = "https://nestrs.dev"
 # One entry, capabilities as features — the shape every app consuming NestRS
 # uses. The demo is the reference product: if it needed a second framework
 # line, no user could avoid one either.
-nest-rs = { path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis", "redis-throttler", "schedule", "events", "authn", "authz", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "worker", "storage"] }
+nest-rs = { path = "../crates/nest-rs", features = ["http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue", "redis", "redis-throttler", "schedule", "events", "authn", "authz", "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry", "openapi", "health", "throttler", "server-timing", "testing", "guards", "pipes", "interceptors", "filters", "exception-filters", "worker", "storage"] }
 
 # Third-party crates this product's own source names. Requirements are
 # `major.minor` and the exact pins mirror the framework's — see the root

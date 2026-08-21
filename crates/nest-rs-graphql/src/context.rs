@@ -457,19 +457,24 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
 /// GraphQL context, so resolvers read it with `ctx.data::<T>()`.
 ///
 /// ```ignore
-/// nest_rs_graphql::forward_principal!(MyPrincipal, MyGraphqlAuthnGuard);
+/// nest_rs_graphql::forward_principal!(MyPrincipal);
 /// ```
 ///
-/// The second arg is the owner provider whose module gates the forward — pick
-/// a provider declared by the module producing the principal (typically the
-/// GraphQL auth guard). `T: Clone + Send + Sync + 'static`. Anonymous requests
-/// pass through untouched.
+/// `T: Clone + Send + Sync + 'static`. Anonymous requests pass through
+/// untouched, which is also the whole gate: the forwarder copies a value only
+/// if something already attached that value to the request, and the only thing
+/// that does is the authn guard — already module-gated. A second gate below it
+/// would be an owner provider the consumer declares, which is an empty marker
+/// struct in every app, silent when forgotten, and *wider* than the condition
+/// it replaces: a registered marker fires the forwarder whether or not anyone
+/// authenticated. See the *Hard "no" list*'s module-gating entry, which records
+/// why a request-scoped forwarder is not discovery.
 #[macro_export]
 macro_rules! forward_principal {
-    ($ty:ty, $owner:ty) => {
+    ($ty:ty) => {
         $crate::inventory::submit! {
             $crate::GraphqlContextSeed {
-                owner_type_id: || ::core::option::Option::Some(::core::any::TypeId::of::<$owner>()),
+                owner_type_id: || ::core::option::Option::None,
                 // A principal is established once, at the request that carries
                 // it — including the upgrade of a graphql-ws socket, whose
                 // operations are that principal's for as long as it is open.

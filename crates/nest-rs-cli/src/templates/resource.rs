@@ -108,34 +108,34 @@ pub use controller::{{controller}};
 pub use module::{{http_module}};
 "#;
 
-/// Imports `AuthzHttpModule` alongside the port so the ability guard is
+/// Imports `AppAuthzHttpModule` alongside the port so the ability guard is
 /// reachable — the access graph fails boot otherwise.
 pub const HTTP_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::controller::{{controller}};
-use crate::authz::AuthzHttpModule;
+use crate::app_authz::AppAuthzHttpModule;
 use crate::{{snake}}::{{module}};
 
 #[module(
-    imports = [{{module}}, AuthzHttpModule],
+    imports = [{{module}}, AppAuthzHttpModule],
     providers = [{{controller}}],
 )]
 pub struct {{http_module}};
 "#;
 
 /// The `#[crud]` + guards controller, mirroring
-/// `demo/crates/features/src/orgs/http/controller.rs`. `AuthnGuard` /
-/// `AuthzGuard` come from the workspace's own auth adapter (`nestrs g auth`).
+/// `demo/crates/features/src/orgs/http/controller.rs`. `AppAuthnGuard` /
+/// `AppAuthzGuard` come from the workspace's own auth adapter (`nestrs g auth`).
 pub const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::{{snake}}::{{{create_op}}, Entity as {{entity}}Entity, {{entity}}, {{service}}, {{update_op}}};
 
 #[controller(path = "/{{kebab}}")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct {{controller}} {
     #[inject]
     svc: Arc<{{service}}>,

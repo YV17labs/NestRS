@@ -16,7 +16,7 @@ fn generate_auth_scaffolds_the_adapter_once() {
     );
 
     let src = dir.path().join("crates/features/src");
-    let ability = fs::read_to_string(src.join("authz/ability.rs")).unwrap();
+    let ability = fs::read_to_string(src.join("app_authz/ability.rs")).unwrap();
     assert!(ability.contains("impl AbilityFactory for AppAbility"));
     // Both branches are scaffolded empty: the authenticated policy and the
     // visitor one a `#[public]` route reads. Leaving `define_visitor` out would
@@ -25,13 +25,13 @@ fn generate_auth_scaffolds_the_adapter_once() {
         ability.contains("fn define(") && ability.contains("fn define_visitor("),
         "the scaffolded policy carries both branches: {ability}"
     );
-    let guard = fs::read_to_string(src.join("authz/http/guard.rs")).unwrap();
+    let guard = fs::read_to_string(src.join("app_authz/http/guard.rs")).unwrap();
     assert!(guard.contains("AbilityGuard<AppAbility>"));
 
     let lib = fs::read_to_string(src.join("lib.rs")).unwrap();
-    assert!(lib.contains("pub mod authn;"));
-    assert!(lib.contains("pub mod authz;"));
-    assert!(lib.contains("pub use identity::{Claims, Role};"));
+    assert!(lib.contains("pub mod app_authn;"));
+    assert!(lib.contains("pub mod app_authz;"));
+    assert!(lib.contains("pub use app_authn::{Claims, Role};"));
 
     // Every guarded route the adapter arms needs a bearer token, and until the
     // app writes its real login nothing mints one. The route that fills the gap
@@ -39,7 +39,7 @@ fn generate_auth_scaffolds_the_adapter_once() {
     // for one — so what keeps it out of production is the boot refusal, not the
     // posture. Assert both halves: without the refusal this is an open token
     // minter, and without the route the tutorial is back to hand-signing HS256.
-    let controller = fs::read_to_string(src.join("authn/http/controller.rs")).unwrap();
+    let controller = fs::read_to_string(src.join("app_authn/http/controller.rs")).unwrap();
     assert!(
         controller.contains("#[post(\"/dev-token\")]") && controller.contains("#[public]"),
         "the development token route is what a scaffolded app calls its guarded routes with: \
@@ -49,7 +49,7 @@ fn generate_auth_scaffolds_the_adapter_once() {
     // `#[controller]` registers metadata, never an instance, so a `#[hooks]`
     // block on it could only be skipped at boot — a composition the framework
     // now refuses at compile time (`hooks_on_a_controller` trybuild snapshot).
-    let audit = fs::read_to_string(src.join("authn/http/audit.rs")).unwrap();
+    let audit = fs::read_to_string(src.join("app_authn/http/audit.rs")).unwrap();
     assert!(
         audit.contains("#[on_module_init]") && audit.contains("if is_development()"),
         "the module refuses the boot when this is not a development run: {audit}"
@@ -79,7 +79,7 @@ fn generate_auth_scaffolds_the_adapter_once() {
     // A guard rather than an `if` in the body: an access decision belongs at a
     // greppable `#[use_guards]` site, renders through the same denial path as
     // every other refusal, and logs. A body `if` does none of the three.
-    let guard = fs::read_to_string(src.join("authn/http/guard.rs")).unwrap();
+    let guard = fs::read_to_string(src.join("app_authn/http/guard.rs")).unwrap();
     assert!(
         guard.contains("impl Guard for DevOnlyGuard") && guard.contains("if is_development()"),
         "the route's own refusal is a guard: {guard}"
@@ -103,7 +103,7 @@ fn generate_auth_scaffolds_the_adapter_once() {
 // imports into the same `module.rs`, and a scaffold transaction resolves every
 // edit against the file *on disk* — so queuing them as separate edits would
 // silently drop all but the last, leaving an app that lists part of what it
-// serves. `AuthnHttpModule` is the one that would go unnoticed: the app still
+// serves. `AppAuthnHttpModule` is the one that would go unnoticed: the app still
 // boots without it, and the only symptom is a `POST /auth/dev-token` answering
 // 404 to a reader following the tutorial.
 #[test]
@@ -116,9 +116,15 @@ fn generate_auth_wires_every_root_into_the_app() {
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
     for (use_path, ident) in [
-        ("features::authn::AuthnModule", "AuthnModule"),
-        ("features::authn::AuthnHttpModule", "AuthnHttpModule"),
-        ("features::authz::AuthzHttpModule", "AuthzHttpModule"),
+        ("features::app_authn::AppAuthnModule", "AppAuthnModule"),
+        (
+            "features::app_authn::AppAuthnHttpModule",
+            "AppAuthnHttpModule",
+        ),
+        (
+            "features::app_authz::AppAuthzHttpModule",
+            "AppAuthzHttpModule",
+        ),
     ] {
         assert!(module.contains(&format!("use {use_path};")), "{module}");
         assert!(

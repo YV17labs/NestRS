@@ -276,8 +276,11 @@ mod tests {
     fn ensure_module_imports_lands_every_pair_in_one_pass() {
         let src = "use nest_rs_core::module;\n\n#[module(\n    imports = [\n        HttpModule::for_root(None),\n    ],\n)]\npub struct AppModule;\n";
         let pairs = [
-            ("features::authn::AuthnModule", "AuthnModule"),
-            ("features::authz::AuthzHttpModule", "AuthzHttpModule"),
+            ("features::app_authn::AppAuthnModule", "AppAuthnModule"),
+            (
+                "features::app_authz::AppAuthzHttpModule",
+                "AppAuthzHttpModule",
+            ),
         ];
         let out = ensure_module_imports(&pairs)(src).expect("inserts");
         for (use_path, ident) in pairs {

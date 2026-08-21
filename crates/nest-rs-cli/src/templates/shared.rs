@@ -157,7 +157,7 @@ pub const ENV_WORKSPACE: &str = r#"# {{env_label}} — committed base config (`.
 #
 # Postgres + Redis as `compose.yml` exposes them on localhost. Start them with
 # `docker compose up -d`, then `nestrs run db up`. An app only connects if it
-# imports DatabaseModule / a queue module, so these are inert for a plain HTTP app.
+# imports SeaOrmDatabaseModule / a queue module, so these are inert for a plain HTTP app.
 {{env_prefix}}_DATABASE__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
 {{env_prefix}}_QUEUE__URL=redis://localhost:6379
 #
@@ -204,7 +204,7 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 /// `integration` suite.
 ///
 /// Booting the app *root* here was the trap: the moment a resource is wired the
-/// way `g resource` instructs, the root imports `DatabaseModule`, the
+/// way `g resource` instructs, the root imports `SeaOrmDatabaseModule`, the
 /// connection opens during `build()`, and the suite that `test.just` and
 /// `/testing/integration-tests/` both define as the infrastructure-free one
 /// fails with a 30 s pool timeout. Booting the feature module keeps the promise
@@ -423,7 +423,7 @@ import the edge's authz module in that adapter's `module.rs` —
 emits the wiring already done.
 
 Two edges answer differently, by design. A **scheduled** tick is system work:
-`DatabaseModule`'s job context installs the executor with no ability, so `Repo`
+`SeaOrmDatabaseModule`'s job context installs the executor with no ability, so `Repo`
 runs unscoped and there is nothing to declare. **MCP** gates at the endpoint,
 through the app's `dyn McpOperationGuard`, else the global guard pool, else
 deny-all — so an `/mcp` endpoint with no bridge registered answers 401 to every
@@ -494,7 +494,7 @@ Unit tests stay in `#[cfg(test)] mod tests` in the file under test.
 
 The scaffolded `tests/integration/main.rs` boots the **feature's own** module
 through `TestApp`, never the app root: the root grows every transport and
-connection the app serves, and the moment it imports `DatabaseModule` a suite
+connection the app serves, and the moment it imports `SeaOrmDatabaseModule` a suite
 defined as infrastructure-free waits 30 s for a pool. Assert on the composed app
 in `tests/e2e/main.rs` instead — scaffolded empty, and where a test boots against
 a throwaway database with `nest_rs::testing`'s `EphemeralDatabase` (feature

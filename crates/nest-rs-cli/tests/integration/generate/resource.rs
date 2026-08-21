@@ -76,7 +76,7 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
     let feature = dir.path().join("crates/features/src/posts");
     let controller = fs::read_to_string(feature.join("http/controller.rs")).unwrap();
     assert!(
-        controller.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        controller.contains("#[use_guards(AppAuthnGuard, AppAuthzGuard)]"),
         "a DB-backed controller serves nothing without an ability guard: {controller}"
     );
     assert!(
@@ -86,16 +86,16 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
 
     let module = fs::read_to_string(feature.join("http/module.rs")).unwrap();
     assert!(
-        module.contains("AuthzHttpModule"),
-        "the http module imports AuthzHttpModule: {module}"
+        module.contains("AppAuthzHttpModule"),
+        "the http module imports AppAuthzHttpModule: {module}"
     );
 
     // The guards it names have to exist — so the adapter came with it.
     let src = dir.path().join("crates/features/src");
-    assert!(src.join("authn/strategy.rs").is_file());
-    assert!(src.join("authz/ability.rs").is_file());
-    assert!(src.join("authz/http/guard.rs").is_file());
-    assert!(src.join("identity/claims.rs").is_file());
+    assert!(src.join("app_authn/strategy.rs").is_file());
+    assert!(src.join("app_authz/ability.rs").is_file());
+    assert!(src.join("app_authz/http/guard.rs").is_file());
+    assert!(src.join("app_authn/claims.rs").is_file());
 
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
     // Built through the CLI's own mirror, never spelled: the generator writes
@@ -115,15 +115,16 @@ fn generate_resource_wires_the_auth_roots_it_bootstrapped() {
     let app = write_fake_app(dir.path(), "api");
     // `g resource` wires only into an app that already has a database.
     let module_rs = app.join("src/module.rs");
-    let with_db = fs::read_to_string(&module_rs)
-        .unwrap()
-        .replace("    ],", "        DatabaseModule::for_root(None),\n    ],");
+    let with_db = fs::read_to_string(&module_rs).unwrap().replace(
+        "    ],",
+        "        SeaOrmDatabaseModule::for_root(None),\n    ],",
+    );
     fs::write(&module_rs, with_db).unwrap();
 
     run_ok(&app, &["g", "resource", "posts"]);
 
     let module = fs::read_to_string(&module_rs).unwrap();
-    for ident in ["PostsHttpModule", "AuthnModule", "AuthzHttpModule"] {
+    for ident in ["PostsHttpModule", "AppAuthnModule", "AppAuthzHttpModule"] {
         assert!(module.contains(&format!("{ident},")), "{ident}: {module}");
     }
 }

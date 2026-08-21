@@ -245,7 +245,7 @@ fn print_next_steps(target: &Target, placement: Placement, stem: &str) {
         }
     }
     println!();
-    println!("  3. Grant the ability in `crates/features/src/authz/ability.rs` once something");
+    println!("  3. Grant the ability in `crates/features/src/app_authz/ability.rs` once something");
     println!("     reads it — `Repo` filters every read by the caller's ambient `Ability`:");
     println!();
     println!("       use crate::{feature} as {feature}_entity;");

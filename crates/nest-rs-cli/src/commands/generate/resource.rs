@@ -54,7 +54,7 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     s.create(root.join("module.rs"), r.render(resource::MODULE));
     s.create(root.join("mod.rs"), r.render(resource::MOD));
 
-    // HTTP adapter — `#[crud]` behind AuthnGuard + AuthzGuard.
+    // HTTP adapter — `#[crud]` behind AppAuthnGuard + AppAuthzGuard.
     s.create(root.join("http/mod.rs"), r.render(resource::HTTP_MOD));
     s.create(root.join("http/module.rs"), r.render(resource::HTTP_MODULE));
     s.create(
@@ -80,7 +80,7 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     s.edit(ws.features_lib(), ensure_lines(decls));
 
     // Wire the HTTP module into the current app — but only when it has a DB,
-    // since the resource module needs `DatabaseModule` at boot. The auth roots
+    // since the resource module needs `SeaOrmDatabaseModule` at boot. The auth roots
     // ride along in the same edit when this run scaffolded them, so the
     // composition site stays the inventory `g auth` would have written.
     let use_path = format!("features::{}::{}", names.snake, names.http_module());
@@ -89,7 +89,7 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     if scaffolded_auth {
         imports.extend(auth::APP_IMPORTS);
     }
-    let wired_app = wire_into_app(&ctx, &mut s, &imports, Some("DatabaseModule"));
+    let wired_app = wire_into_app(&ctx, &mut s, &imports, Some("SeaOrmDatabaseModule"));
 
     finish(
         s,
@@ -111,7 +111,7 @@ fn print_next_steps(
     println!();
     println!("Next steps:");
     println!("  1. Fill in `entity.rs` columns, then:  nestrs g migration create_{snake}");
-    println!("  2. Grant the ability in `crates/features/src/authz/ability.rs` — until you");
+    println!("  2. Grant the ability in `crates/features/src/app_authz/ability.rs` — until you");
     println!("     do, every route answers 403 and no row crosses the data layer:");
     println!();
     println!("       use crate::{snake} as {snake}_entity;");
@@ -124,14 +124,14 @@ fn print_next_steps(
         );
     } else if ctx.current_app.is_some() {
         println!(
-            "  3. Add `DatabaseModule::for_root(None)` to this app, then import \
+            "  3. Add `SeaOrmDatabaseModule::for_root(None)` to this app, then import \
              `features::{}::{}`.",
             snake,
             names.http_module()
         );
     } else {
         println!(
-            "  3. Import `features::{}::{}` in an app that has `DatabaseModule`.",
+            "  3. Import `features::{}::{}` in an app that has `SeaOrmDatabaseModule`.",
             snake,
             names.http_module()
         );
@@ -148,7 +148,9 @@ fn print_next_steps(
         // boot warning whose remedy is to import it.
         println!("It includes `POST /auth/dev-token`, which mints a token with no credential so");
         println!("your guarded routes are callable at once. It refuses to boot outside");
-        println!("development and test. Import `features::authn::AuthnHttpModule` to serve it,");
-        println!("or delete `crates/features/src/authn/http/` and write the real login route.");
+        println!(
+            "development and test. Import `features::app_authn::AppAuthnHttpModule` to serve it,"
+        );
+        println!("or delete `crates/features/src/app_authn/http/` and write the real login route.");
     }
 }

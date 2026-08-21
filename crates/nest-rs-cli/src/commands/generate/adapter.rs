@@ -7,9 +7,9 @@
 //! exposes a `CrudService` rather than the `count()` stand-in `g feature`
 //! writes, and a DB-backed adapter is only reachable behind the app's guards.
 //! So a GraphQL adapter over a resource takes the `#[crud]` template and comes
-//! with the `authz/graphql/` bridge its module imports — the GraphQL twin of
+//! with the `app_authz/graphql/` bridge its module imports — the GraphQL twin of
 //! what `g resource` already does for HTTP. GraphQL, WS and MCP each get their
-//! own bridge under `authz/` ([`auth::bridge_for`]) whenever the workspace has
+//! own bridge under `app_authz/` ([`auth::bridge_for`]) whenever the workspace has
 //! a policy to enforce.
 
 use std::path::PathBuf;
@@ -100,8 +100,8 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     // context that scopes its rows.
     //
     // Generating them is the whole point: the `g mcp` next step names
-    // `features::authz::mcp`, and the generated gateway's SECURITY comment
-    // names `AuthzWsModule`. Both used to be instructions pointing at modules
+    // `features::app_authz::mcp`, and the generated gateway's SECURITY comment
+    // names `AppAuthzWsModule`. Both used to be instructions pointing at modules
     // no generator wrote, leaving the repo's own demo as the only source.
     let scaffolded_auth = is_graphql && crud_port && !auth::exists(&ws);
     let bridge = auth::bridge_for(transport).filter(|b| {
@@ -112,13 +112,16 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         bridge.queue(&mut s, &ws);
     }
     if scaffolded_auth {
-        // The index lines ride in `authz/mod.rs`'s contents: this run creates
+        // The index lines ride in `app_authz/mod.rs`'s contents: this run creates
         // the file, so there is nothing on disk for an `edit` to resolve
         // against. (Scaffolding auth implies scaffolding its bridge — an
-        // `authz/<transport>` cannot exist when `authz` does not.)
+        // `app_authz/<transport>` cannot exist when `app_authz` does not.)
         auth::queue(&mut s, &ws, decls);
     } else if bridge.is_some() {
-        s.edit(ws.features_root().join("authz/mod.rs"), ensure_lines(decls));
+        s.edit(
+            ws.features_root().join("app_authz/mod.rs"),
+            ensure_lines(decls),
+        );
     }
 
     // The queue payload and its `QueueName` marker are a producer↔worker
@@ -274,7 +277,7 @@ fn host_module(transport: Transport) -> &'static str {
     match transport {
         Transport::Http | Transport::Ws => "HttpModule",
         Transport::Graphql => "GraphqlModule",
-        Transport::Queue => "QueueWorkerModule",
+        Transport::Queue => "RedisWorkerModule",
         Transport::Schedule => "ScheduleModule",
         Transport::Mcp => "HttpModule",
     }
@@ -315,14 +318,14 @@ fn print_next_steps(
         println!(
             "  Security: the MCP endpoint denies all requests until you bind an \
              McpOperationGuard. Run `nestrs g auth`, then `nestrs g mcp` again — it \
-             writes the AuthzMcpModule that authenticates callers and installs the \
+             writes the AppAuthzMcpModule that authenticates callers and installs the \
              ambient Ability."
         );
     }
     if let Some(bridge) = bridge {
         println!();
         println!(
-            "Also created the {} authz adapter (crates/features/src/authz/{}/):",
+            "Also created the {} authz adapter (crates/features/src/app_authz/{}/):",
             transport.folder(),
             bridge.dir,
         );

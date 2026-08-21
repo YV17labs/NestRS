@@ -60,8 +60,8 @@ impl {{controller}} {
     // SECURITY: scaffolded as #[public] because this port holds no entity.
     // Before serving real rows, declare #[authorize(Action, Entity)] instead
     // (class gate + automatic response masking), bind
-    // #[use_guards(AuthnGuard, AuthzGuard)] on the struct, and import
-    // AuthzHttpModule in this adapter's module.rs — `nestrs g auth` writes all
+    // #[use_guards(AppAuthnGuard, AppAuthzGuard)] on the struct, and import
+    // AppAuthzHttpModule in this adapter's module.rs — `nestrs g auth` writes all
     // three, and `nestrs g http` on a `g resource` port emits them.
     #[get("/")]
     #[public]
@@ -90,8 +90,8 @@ impl {{resolver}} {
     // SECURITY: scaffolded as #[public] because this port holds no entity.
     // Before serving real rows, declare #[authorize(Action, Entity)] instead
     // (class gate + automatic response masking), bind
-    // #[use_guards(AuthnGuard, AuthzGuard)] on the struct, and import
-    // AuthzGraphqlModule in this adapter's module.rs — `nestrs g auth` writes
+    // #[use_guards(AppAuthnGuard, AppAuthzGuard)] on the struct, and import
+    // AppAuthzGraphqlModule in this adapter's module.rs — `nestrs g auth` writes
     // all three, and `nestrs g graphql` on a `g resource` port emits them.
     #[query]
     #[public]
@@ -108,12 +108,12 @@ pub const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 
 use nest_rs::graphql::{crud, resolver};
 
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::AppAuthzGuard;
 use crate::{{snake}}::{{{create_op}}, Entity as {{entity}}Entity, {{entity}}, {{service}}, {{update_op}}};
 
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AppAuthnGuard, AppAuthzGuard)]
 pub struct {{resolver}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -273,7 +273,7 @@ pub const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!
 //! Security: the MCP endpoint gates through the app's `dyn McpOperationGuard`,
 //! else the global guard pool (`use_guards_global`), else deny-all. Wire your
-//! app's `McpAbilityBridge` (`features::authz::mcp`) as `dyn McpOperationGuard`
+//! app's `McpAbilityBridge` (`features::app_authz::mcp`) as `dyn McpOperationGuard`
 //! so callers are authenticated and the ambient `Ability` is installed.
 //!
 //! Every operation then declares its own posture, exactly as a `#[query]` or an

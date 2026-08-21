@@ -58,7 +58,7 @@ pub(super) const GRAPHQL: Dep = nest_rs(&["graphql"]);
 pub(super) const WS: Dep = nest_rs(&["ws"]);
 pub(super) const SCHEDULE: Dep = nest_rs(&["schedule"]);
 // `redis` implies `queue`: the abstractions and the Redis-bound
-// `QueueConnection` / `QueueModule` arrive together.
+// `RedisQueueConnection` / `RedisQueueModule` arrive together.
 pub(super) const REDIS: Dep = nest_rs(&["redis"]);
 pub(super) const MCP: Dep = nest_rs(&["mcp"]);
 pub(super) const AUTHN: Dep = nest_rs(&["authn"]);

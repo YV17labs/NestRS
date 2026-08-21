@@ -6,14 +6,9 @@
 //! `demo/crates/features/src/{identity,authn,authz}/` — copy that exemplar
 //! when extending, don't invent a second shape.
 
-pub const IDENTITY_MOD: &str = r#"mod claims;
-
-pub use claims::{Claims, Role};
-"#;
-
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AppAbility` reads it to build the caller's rules.
-pub const IDENTITY_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
+pub const AUTHN_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
 use nest_rs::resource::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -52,36 +47,39 @@ impl PrincipalIdentity for Claims {
 }
 "#;
 
-pub const AUTHN_MOD: &str = r#"mod module;
+pub const AUTHN_MOD: &str = r#"mod claims;
+mod module;
 mod strategy;
 
 pub mod http;
 
-pub use http::AuthnHttpModule;
-pub use module::AuthnModule;
-pub use strategy::AuthnGuard;
+pub use claims::{Claims, Role};
+pub use http::AppAuthnHttpModule;
+pub use module::AppAuthnModule;
+pub use strategy::AppAuthnGuard;
 "#;
 
 pub const AUTHN_STRATEGY: &str = r#"use nest_rs::authn::JwtStrategy;
 
-use crate::identity::Claims;
+use crate::app_authn::Claims;
 
 pub type AppJwtStrategy = JwtStrategy<Claims>;
 
 /// Bind first, before the ability guard:
-/// `#[use_guards(AuthnGuard, AuthzGuard)]`.
-pub type AuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
+/// `#[use_guards(AppAuthnGuard, AppAuthzGuard)]`.
+pub type AppAuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
 "#;
 
-pub const AUTHN_MODULE: &str = r#"use nest_rs::core::module;
+pub const AUTHN_MODULE: &str = r#"use nest_rs::authn::AuthnModule;
+use nest_rs::core::module;
 
-use super::strategy::{AppJwtStrategy, AuthnGuard};
+use super::strategy::{AppAuthnGuard, AppJwtStrategy};
 
 #[module(
-    imports = [nest_rs::authn::AuthnModule::for_root(None)],
-    providers = [AppJwtStrategy, AuthnGuard],
+    imports = [AuthnModule::for_root(None)],
+    providers = [AppJwtStrategy, AppAuthnGuard],
 )]
-pub struct AuthnModule;
+pub struct AppAuthnModule;
 "#;
 
 // ── authn/http/ — the development token route ───────────────────────────────
@@ -102,7 +100,7 @@ mod controller;
 mod guard;
 mod module;
 
-pub use module::AuthnHttpModule;
+pub use module::AppAuthnHttpModule;
 "#;
 
 /// The route the tutorial `curl`s. `#[public]` because a caller with no token
@@ -118,7 +116,7 @@ use nest_rs::http::{controller, input, routes};
 use uuid::Uuid;
 
 use super::guard::DevOnlyGuard;
-use crate::identity::{Claims, Role};
+use crate::app_authn::{Claims, Role};
 
 #[input]
 #[derive(Debug, Default)]
@@ -180,7 +178,7 @@ use nest_rs::http::poem::Request;
 use super::audit::is_development;
 
 /// Refuses every request unless this is a development or test process. The
-/// boot refusal covers the app that imports `AuthnHttpModule`; this covers the
+/// boot refusal covers the app that imports `AppAuthnHttpModule`; this covers the
 /// route wherever it is mounted from.
 #[injectable]
 #[derive(Default)]
@@ -229,7 +227,7 @@ impl DevTokenAudit {
         Err(anyhow!(
             "DevTokenController mints unauthenticated bearer tokens, and {} is not set to \
              `development` or `test` (it reads {:?}). Set it for a development run, or delete \
-             crates/features/src/authn/http/ and its AuthnHttpModule import and write the real \
+             crates/features/src/app_authn/http/ and its AppAuthnHttpModule import and write the real \
              login route in its place.",
             Environment::var_name(),
             std::env::var(Environment::var_name()).ok(),
@@ -243,13 +241,13 @@ pub const AUTHN_HTTP_MODULE: &str = r#"use nest_rs::core::module;
 use super::audit::DevTokenAudit;
 use super::controller::DevTokenController;
 use super::guard::DevOnlyGuard;
-use crate::authn::AuthnModule;
+use crate::app_authn::AppAuthnModule;
 
 #[module(
-    imports = [AuthnModule],
+    imports = [AppAuthnModule],
     providers = [DevTokenAudit, DevOnlyGuard, DevTokenController],
 )]
-pub struct AuthnHttpModule;
+pub struct AppAuthnHttpModule;
 "#;
 
 pub const AUTHZ_MOD: &str = r#"mod ability;
@@ -258,9 +256,9 @@ mod module;
 pub mod http;
 
 pub use ability::AppAbility;
-pub use module::AuthzModule;
+pub use module::AppAuthzModule;
 
-pub use http::{AuthzGuard, AuthzHttpModule};
+pub use http::{AppAuthzGuard, AppAuthzHttpModule};
 "#;
 
 /// The whole policy, in one function. Empty on purpose: the data layer denies
@@ -269,7 +267,7 @@ pub use http::{AuthzGuard, AuthzHttpModule};
 pub const AUTHZ_ABILITY: &str = r#"use nest_rs::authz::{AbilityBuilder, AbilityFactory};
 use nest_rs::core::injectable;
 
-use crate::identity::Claims;
+use crate::app_authn::Claims;
 
 #[injectable]
 #[derive(Default)]
@@ -316,39 +314,39 @@ impl AbilityFactory for AppAbility {
 pub const AUTHZ_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::ability::AppAbility;
-use crate::authn::AuthnModule;
+use crate::app_authn::AppAuthnModule;
 
 #[module(
-    imports = [AuthnModule],
+    imports = [AppAuthnModule],
     providers = [AppAbility],
 )]
-pub struct AuthzModule;
+pub struct AppAuthzModule;
 "#;
 
 pub const AUTHZ_HTTP_MOD: &str = r#"mod guard;
 mod module;
 
-pub use guard::AuthzGuard;
-pub use module::AuthzHttpModule;
+pub use guard::AppAuthzGuard;
+pub use module::AppAuthzHttpModule;
 "#;
 
 pub const AUTHZ_HTTP_GUARD: &str = r#"use nest_rs::authz::http::AbilityGuard;
 
-use crate::authz::AppAbility;
+use crate::app_authz::AppAbility;
 
-pub type AuthzGuard = AbilityGuard<AppAbility>;
+pub type AppAuthzGuard = AbilityGuard<AppAbility>;
 "#;
 
 pub const AUTHZ_HTTP_MODULE: &str = r#"use nest_rs::core::module;
 
-use super::guard::AuthzGuard;
-use crate::authz::AuthzModule;
+use super::guard::AppAuthzGuard;
+use crate::app_authz::AppAuthzModule;
 
 #[module(
-    imports = [AuthzModule],
-    providers = [AuthzGuard],
+    imports = [AppAuthzModule],
+    providers = [AppAuthzGuard],
 )]
-pub struct AuthzHttpModule;
+pub struct AppAuthzHttpModule;
 "#;
 
 // ── authz/graphql/ — the per-operation bridge (`nestrs g graphql`) ──────────
@@ -360,62 +358,49 @@ pub struct AuthzHttpModule;
 // deny-all fallback that installs no ability at all.
 
 pub const AUTHZ_GRAPHQL_MOD: &str = r#"mod bridge;
-mod guard;
 mod module;
 
-pub use module::AuthzGraphqlModule;
+pub use module::AppAuthzGraphqlModule;
 "#;
 
-/// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
-/// `AuthzGuard`) on the GraphQL request, then scopes the operation to the
+/// The operation guard: runs the controllers' own chain (`AppAuthnGuard`, then
+/// `AppAuthzGuard`) on the GraphQL request, then scopes the operation to the
 /// ability it produced — so one policy answers on both transports.
 pub const AUTHZ_GRAPHQL_BRIDGE: &str = r#"use nest_rs::authz::graphql::GraphqlAbilityBridge;
 
-use crate::authn::AuthnGuard;
-use crate::authz::http::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::http::AppAuthzGuard;
 
-pub type AppGraphqlGuard = GraphqlAbilityBridge<AuthnGuard, AuthzGuard>;
-"#;
-
-/// The marker that owns the seeded `Claims` context entry. It is not a guard
-/// chain member: `forward_principal!` gates the principal it forwards on this
-/// type being reachable, which turns "did the app import the GraphQL authz
-/// module?" into a boot-time access-graph answer instead of a null at run time.
-pub const AUTHZ_GRAPHQL_GUARD: &str = r#"use nest_rs::core::injectable;
-
-#[injectable]
-#[derive(Default)]
-pub struct GraphqlAuthnGuard;
+pub type AppGraphqlGuard = GraphqlAbilityBridge<AppAuthnGuard, AppAuthzGuard>;
 "#;
 
 pub const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs::core::module;
-use nest_rs::graphql::{GraphqlBatchContext, GraphqlOperationGuard};
+use nest_rs::graphql::{GraphqlBatchContext, GraphqlOperationGuard, forward_principal};
 use nest_rs::seaorm::graphql::LoaderScope;
 
 use super::bridge::AppGraphqlGuard;
-use super::guard::GraphqlAuthnGuard;
-use crate::authz::http::AuthzHttpModule;
-use crate::identity::Claims;
+use crate::app_authz::http::AppAuthzHttpModule;
+use crate::app_authn::Claims;
 
 #[module(
-    imports = [AuthzHttpModule],
+    imports = [AppAuthzHttpModule],
     providers = [
         AppGraphqlGuard as dyn GraphqlOperationGuard,
-        GraphqlAuthnGuard,
         LoaderScope as dyn GraphqlBatchContext,
     ],
 )]
-pub struct AuthzGraphqlModule;
+pub struct AppAuthzGraphqlModule;
 
-// Forwards the verified principal into every operation's GraphQL context,
-// gated on `GraphqlAuthnGuard` being reachable from the running app.
-nest_rs::graphql::forward_principal!(Claims, GraphqlAuthnGuard);
+// Forwards the verified principal into every operation's GraphQL context.
+// Anonymous requests pass through untouched, so nothing to gate: the guard that
+// attaches the principal is the gate.
+forward_principal!(Claims);
 "#;
 
 // ── authz/ws/ — the socket-side context (`nestrs g ws`) ────────────────────
 //
 // A WS upgrade is an HTTP GET, so the gateway reuses the HTTP guards
-// (`#[use_guards(AuthnGuard, AuthzGuard)]`) rather than a bridge of its own.
+// (`#[use_guards(AppAuthnGuard, AppAuthzGuard)]`) rather than a bridge of its own.
 // What it does need is the `dyn SocketContext` that carries the connection's
 // data scope — without it a guarded gateway serves rows nobody scoped, and the
 // generated gateway's own SECURITY comment tells the reader to import a module
@@ -423,22 +408,22 @@ nest_rs::graphql::forward_principal!(Claims, GraphqlAuthnGuard);
 
 pub const AUTHZ_WS_MOD: &str = r#"mod module;
 
-pub use module::AuthzWsModule;
+pub use module::AppAuthzWsModule;
 "#;
 
 pub const AUTHZ_WS_MODULE: &str = r#"use nest_rs::core::module;
 use nest_rs::seaorm::ws::WsDataContext;
 use nest_rs::ws::{SocketContext, WsModule};
 
-use crate::authz::http::AuthzHttpModule;
+use crate::app_authz::http::AppAuthzHttpModule;
 
 #[module(
-    imports = [AuthzHttpModule, WsModule],
+    imports = [AppAuthzHttpModule, WsModule],
     providers = [
         WsDataContext as dyn SocketContext,
     ],
 )]
-pub struct AuthzWsModule;
+pub struct AppAuthzWsModule;
 "#;
 
 // ── authz/mcp/ — the per-operation bridge (`nestrs g mcp`) ─────────────────
@@ -451,18 +436,18 @@ pub struct AuthzWsModule;
 pub const AUTHZ_MCP_MOD: &str = r#"mod bridge;
 mod module;
 
-pub use module::AuthzMcpModule;
+pub use module::AppAuthzMcpModule;
 "#;
 
-/// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
-/// `AuthzGuard`) on the MCP request, then installs the ambient `Ability` a tool
+/// The operation guard: runs the controllers' own chain (`AppAuthnGuard`, then
+/// `AppAuthzGuard`) on the MCP request, then installs the ambient `Ability` a tool
 /// returns masked rows through — so one policy answers on every transport.
 pub const AUTHZ_MCP_BRIDGE: &str = r#"use nest_rs::authz::mcp::McpAbilityBridge;
 
-use crate::authn::AuthnGuard;
-use crate::authz::http::AuthzGuard;
+use crate::app_authn::AppAuthnGuard;
+use crate::app_authz::http::AppAuthzGuard;
 
-pub type AppMcpGuard = McpAbilityBridge<AuthnGuard, AuthzGuard>;
+pub type AppMcpGuard = McpAbilityBridge<AppAuthnGuard, AppAuthzGuard>;
 "#;
 
 pub const AUTHZ_MCP_MODULE: &str = r#"use nest_rs::core::module;
@@ -470,16 +455,16 @@ use nest_rs::mcp::{McpOperationGuard, McpToolContext};
 use nest_rs::seaorm::mcp::McpDataContext;
 
 use super::bridge::AppMcpGuard;
-use crate::authz::http::AuthzHttpModule;
+use crate::app_authz::http::AppAuthzHttpModule;
 
 #[module(
-    imports = [AuthzHttpModule],
+    imports = [AppAuthzHttpModule],
     providers = [
         AppMcpGuard as dyn McpOperationGuard,
         McpDataContext as dyn McpToolContext,
     ],
 )]
-pub struct AuthzMcpModule;
+pub struct AppAuthzMcpModule;
 "#;
 
 /// Appended to the committed `.env`. HS256 needs ≥ 32 bytes or the app refuses

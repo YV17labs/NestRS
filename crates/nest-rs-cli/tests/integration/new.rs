@@ -138,10 +138,10 @@ fn assert_agents_md_carries_the_conventions(
         "CLAUDE.md is the pointer — duplicating the conventions is what drifts:\n{claude}"
     );
     for rule in [
-        // The four naming levels, the decision procedure, and the two rules a
+        // The five naming levels, the decision procedure, and the two rules a
         // generated project cannot infer from four files: what a name may not
         // be, and what happens when a role repeats.
-        "## Names — four levels",
+        "## Names — five levels",
         "## Modules — two files, two jobs",
         "## Providers — three questions",
         "## Several of the same role",
@@ -423,7 +423,7 @@ fn new_workspace_app_scaffold() {
 
 /// B8: the scaffolded smoke test booted the app **root**, so the moment a
 /// resource was wired the way `g resource` instructs, the root imported
-/// `DatabaseModule`, the connection opened during `build()`, and the suite
+/// `SeaOrmDatabaseModule`, the connection opened during `build()`, and the suite
 /// three separate places define as infrastructure-free failed on a 30 s pool
 /// timeout. It must boot the narrowest module that serves the greeting.
 #[test]

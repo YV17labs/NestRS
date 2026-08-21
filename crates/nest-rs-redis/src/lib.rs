@@ -10,10 +10,10 @@
 //!
 //! Two sides:
 //! - **Consumer**: `#[processor]` on a provider + one `#[process(queue =
-//!   "...")]` per method. The [`QueueWorker`] transport drains the
+//!   "...")]` per method. The [`RedisWorker`] transport drains the
 //!   `ProcessMethod` inventory the macro feeds and runs one apalis worker
 //!   per method.
-//! - **Producer**: inject [`QueueConnection`] and call
+//! - **Producer**: inject [`RedisQueueConnection`] and call
 //!   `.of::<Job>("name").push(job).await?`.
 //!
 //! Connection is async, seeded at the composition root as a factory — apalis
@@ -28,7 +28,7 @@
 //! sibling crate — Redis is one external dependency, this is its one
 //! integration home. The first such feature is **`throttler`**: a
 //! cross-process `RedisThrottler` rate-limit store backing the
-//! `nest-rs-throttler` guard over the shared [`QueueConnection`].
+//! `nest-rs-throttler` guard over the shared [`RedisQueueConnection`].
 //!
 //! [`Job`]: ::nest_rs_queue::Job
 //! [`Processor`]: ::nest_rs_queue::Processor
@@ -36,18 +36,16 @@
 
 #![warn(missing_docs)]
 
-mod config;
-mod connection;
 mod error;
-mod module;
+mod queue;
 #[cfg(feature = "throttler")]
 mod throttler;
 mod worker;
 
-pub use config::QueueConfig;
-pub use connection::{Queue, QueueConnection};
 pub use error::RedisError;
-pub use module::{QueueModule, QueueSetup};
+pub use queue::{
+    RedisQueue, RedisQueueConfig, RedisQueueConnection, RedisQueueModule, RedisQueueSetup,
+};
 #[cfg(feature = "throttler")]
 pub use throttler::{RedisThrottler, RedisThrottlerModule, RedisThrottlerSetup};
-pub use worker::{QueueWorker, QueueWorkerModule};
+pub use worker::{RedisWorker, RedisWorkerModule};

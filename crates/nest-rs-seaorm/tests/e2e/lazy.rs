@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use nest_rs_interceptors::InterceptorExt;
 use nest_rs_seaorm::{
-    DatabaseConfig, DbContext, Executor, LazyTransaction, current_executor, with_request_executor,
+    DbContext, Executor, LazyTransaction, SeaOrmDatabaseConfig, current_executor,
+    with_request_executor,
 };
 use poem::endpoint::make;
 use poem::http::{Method, StatusCode};
@@ -81,7 +82,7 @@ async fn first_query_opens_the_transaction_once() {
 async fn a_denied_mutating_request_passes_through_with_no_transaction() {
     let ctx = DbContext::new(
         crate::harness::connect_arc().await,
-        Arc::new(DatabaseConfig::default()),
+        Arc::new(SeaOrmDatabaseConfig::default()),
     );
 
     let endpoint = make(|_req: Request| async { StatusCode::FORBIDDEN.into_response() });
@@ -102,7 +103,7 @@ async fn a_writing_handler_commits_through_the_lazy_transaction() {
         .await
         .expect("create the probe table");
 
-    let ctx = DbContext::new(conn.clone(), Arc::new(DatabaseConfig::default()));
+    let ctx = DbContext::new(conn.clone(), Arc::new(SeaOrmDatabaseConfig::default()));
     let endpoint = make(|_req: Request| async {
         let executor = current_executor().expect("ambient executor installed");
         executor

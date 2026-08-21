@@ -1,4 +1,4 @@
-//! [`DatabaseConfig`] — connection settings for [`DatabaseModule`]. The
+//! [`SeaOrmDatabaseConfig`] — connection settings for [`SeaOrmDatabaseModule`]. The
 //! `from_env` mapping below is the single source of truth for which
 //! `NESTRS_DATABASE__*` variable feeds each field.
 
@@ -7,12 +7,12 @@ use std::time::Duration;
 use nest_rs_config::{Config, ConfigService, Result, config};
 use sea_orm::ConnectOptions;
 
-/// Connection settings for [`DatabaseModule`](crate::DatabaseModule). Every
+/// Connection settings for [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule). Every
 /// field is settable via a `NESTRS_DATABASE__*` env var (see `from_env`) or
-/// pinned through [`DatabaseModule::for_root`](crate::DatabaseModule::for_root).
+/// pinned through [`SeaOrmDatabaseModule::for_root`](crate::SeaOrmDatabaseModule::for_root).
 #[config(namespace = "database")]
 #[derive(Clone, Default)]
-pub struct DatabaseConfig {
+pub struct SeaOrmDatabaseConfig {
     /// e.g. `postgres://user:pass@host/db`. Empty aborts the build.
     pub url: String,
     /// Upper bound on pooled connections; `None` uses SeaORM's default.
@@ -39,7 +39,7 @@ pub struct DatabaseConfig {
     pub observe_serialization_conflicts: bool,
 }
 
-impl Config for DatabaseConfig {
+impl Config for SeaOrmDatabaseConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
             url: env.get("URL").unwrap_or(base.url), //                NESTRS_DATABASE__URL
@@ -57,9 +57,9 @@ impl Config for DatabaseConfig {
     }
 }
 
-impl std::fmt::Debug for DatabaseConfig {
+impl std::fmt::Debug for SeaOrmDatabaseConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DatabaseConfig")
+        f.debug_struct("SeaOrmDatabaseConfig")
             .field("url", &"<redacted>")
             .field("max_connections", &self.max_connections)
             .field("min_connections", &self.min_connections)
@@ -73,7 +73,7 @@ impl std::fmt::Debug for DatabaseConfig {
     }
 }
 
-impl DatabaseConfig {
+impl SeaOrmDatabaseConfig {
     pub(crate) fn connect_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new(self.url.clone());
         if let Some(n) = self.max_connections {
@@ -94,8 +94,8 @@ impl DatabaseConfig {
 mod tests {
     use super::*;
 
-    fn pinned(url: &str) -> DatabaseConfig {
-        DatabaseConfig {
+    fn pinned(url: &str) -> SeaOrmDatabaseConfig {
+        SeaOrmDatabaseConfig {
             url: url.into(),
             ..Default::default()
         }
@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         use nest_rs_config::ConfigService;
-        let cfg = DatabaseConfig::from_env(
+        let cfg = SeaOrmDatabaseConfig::from_env(
             &ConfigService::with_vars("database", [("MAX_CONNECTIONS", "25")]),
             pinned("postgres://pinned/app"),
         )
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn connect_options_propagates_pool_bounds_when_set() {
-        let opts = DatabaseConfig {
+        let opts = SeaOrmDatabaseConfig {
             url: "postgres://localhost/app".into(),
             max_connections: Some(50),
             min_connections: Some(5),
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn observe_serialization_conflicts_defaults_off() {
-        let cfg = DatabaseConfig::default();
+        let cfg = SeaOrmDatabaseConfig::default();
         assert!(
             !cfg.observe_serialization_conflicts,
             "retry must default off — never change behaviour silently",
@@ -178,7 +178,7 @@ mod tests {
                 ("OBSERVE_SERIALIZATION_CONFLICTS", "true"),
             ],
         );
-        let cfg = DatabaseConfig::from_env(&service, Default::default()).expect("ok");
+        let cfg = SeaOrmDatabaseConfig::from_env(&service, Default::default()).expect("ok");
         assert_eq!(cfg.url, "postgres://u@h/d");
         assert_eq!(cfg.max_connections, Some(25));
         assert_eq!(cfg.min_connections, Some(2));
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn from_env_defaults_to_empty_url_and_no_bounds() {
-        let cfg = DatabaseConfig::from_env(
+        let cfg = SeaOrmDatabaseConfig::from_env(
             &ConfigService::with_vars("database", []),
             Default::default(),
         )

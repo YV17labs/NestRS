@@ -1,6 +1,6 @@
 //! SeaORM database integration.
 //!
-//! [`DatabaseModule`] is a [`DynamicModule`](nest_rs_core::DynamicModule) that
+//! [`SeaOrmDatabaseModule`] is a [`DynamicModule`](nest_rs_core::DynamicModule) that
 //! builds the pool in the collect phase and registers it as a
 //! `sea_orm::DatabaseConnection`. Importing it also installs the `DbContext`
 //! request interceptor, which binds each request to an ambient [`Executor`] —
@@ -11,11 +11,11 @@
 //! security cannot be forgotten).
 //!
 //! ```ignore
-//! #[module(imports = [DatabaseModule, UsersModule])]
+//! #[module(imports = [SeaOrmDatabaseModule, UsersModule])]
 //! pub struct AppModule;
 //! ```
 //!
-//! Pin explicit values with [`DatabaseModule::for_root`]`(DatabaseConfig { .. })`.
+//! Pin explicit values with [`SeaOrmDatabaseModule::for_root`]`(SeaOrmDatabaseConfig { .. })`.
 
 #![warn(missing_docs)]
 
@@ -28,12 +28,11 @@
 /// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::orm";
 
-mod config;
+mod database;
 #[cfg(any(feature = "ws", feature = "mcp"))]
 mod dispatch;
 mod error;
 mod executor;
-mod module;
 mod page;
 mod repo;
 pub mod retry;
@@ -54,7 +53,9 @@ pub mod mcp;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-pub use config::DatabaseConfig;
+pub use database::{
+    SeaOrmDatabaseConfig, SeaOrmDatabaseModule, SeaOrmDatabaseSetup, connect_from_env,
+};
 pub use error::ServiceError;
 #[cfg(feature = "http")]
 pub use error::crud_error;
@@ -62,7 +63,6 @@ pub use executor::{
     CommitError, Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
     current_executor_scope, with_executor, with_job_executor, with_request_executor,
 };
-pub use module::{DatabaseModule, DatabaseSetup, connect_from_env};
 pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
 pub use service::{
@@ -77,7 +77,7 @@ pub use time::now;
 pub use worker::WorkerDbContext;
 
 #[cfg(feature = "health")]
-pub use health::{DatabaseHealthModule, DbHealthIndicator};
+pub use health::{DbHealthIndicator, SeaOrmHealthModule};
 #[cfg(feature = "http")]
 pub use http::{Bind, DbContext};
 

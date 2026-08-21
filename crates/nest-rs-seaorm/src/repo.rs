@@ -82,11 +82,11 @@ impl<E: EntityTrait> Repo<E> {
             // execution. The message names every context that installs an
             // executor, so the missing one is the answer.
             const HINT: &str = "a Repo query runs against the executor its transport installs: \
-                 HTTP through DatabaseModule's DbContext interceptor, a WS message through \
+                 HTTP through SeaOrmDatabaseModule's DbContext interceptor, a WS message through \
                  `WsDataContext as dyn SocketContext`, an MCP tool through \
                  `McpDataContext as dyn McpToolContext`, a dataloader batch through \
                  `LoaderScope as dyn GraphqlBatchContext`, and worker/cron jobs through \
-                 DatabaseModule's JobContext — none of those is bound on this path";
+                 SeaOrmDatabaseModule's JobContext — none of those is bound on this path";
             tracing::error!(
                 target: crate::TARGET,
                 entity = std::any::type_name::<E>(),

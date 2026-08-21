@@ -138,8 +138,8 @@ impl App {
     ///
     /// Every transport is contributed by an imported module via
     /// [`TransportContribution`] — `HttpModule` brings `HttpTransport`,
-    /// `ScheduleModule` brings `Scheduler`, `QueueWorkerModule` brings
-    /// `QueueWorker`. There is no imperative `.transport()` on `App` —
+    /// `ScheduleModule` brings `Scheduler`, `RedisWorkerModule` brings
+    /// `RedisWorker`. There is no imperative `.transport()` on `App` —
     /// `AppModule.imports` is the single composition seam.
     pub async fn run(self) -> Result<()> {
         let App { container } = self;
@@ -548,7 +548,7 @@ mod tests {
         assert!(err.to_string().contains("connection refused"));
     }
 
-    // Module owning its provider's factory via `collect` (the `DatabaseModule`
+    // Module owning its provider's factory via `collect` (the `SeaOrmDatabaseModule`
     // shape).
     struct ConfigModule;
     impl Module for ConfigModule {

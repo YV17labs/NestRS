@@ -19,7 +19,7 @@ use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject}
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
 use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait};
 use nest_rs_resource::WireModelDefaults;
-use nest_rs_seaorm::{CrudService, DatabaseConfig, DatabaseModule};
+use nest_rs_seaorm::{CrudService, SeaOrmDatabaseConfig, SeaOrmDatabaseModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
 
@@ -129,7 +129,7 @@ impl GhostsResolver {
 
 #[module(
     imports = [
-        DatabaseModule::for_root(DatabaseConfig {
+        SeaOrmDatabaseModule::for_root(SeaOrmDatabaseConfig {
             url: crate::harness::url(),
             ..Default::default()
         }),

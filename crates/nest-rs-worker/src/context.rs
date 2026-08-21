@@ -1,6 +1,6 @@
 //! Worker-execution ambient-data seam — the cron/queue counterpart to HTTP's
 //! `DbContext` interceptor and WebSocket's `SocketContext`. A worker transport
-//! (`Scheduler`, `QueueWorker`) resolves an optional [`JobContext`] from the
+//! (`Scheduler`, `RedisWorker`) resolves an optional [`JobContext`] from the
 //! container and wraps each job, letting e.g. `nest-rs-seaorm`'s
 //! `WorkerDbContext` install an executor so a job's `Repo` calls join a
 //! connection without injecting one. With nothing bound a job runs bare.

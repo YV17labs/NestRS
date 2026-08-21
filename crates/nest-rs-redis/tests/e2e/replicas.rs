@@ -42,7 +42,9 @@ use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobProducerExt, processor, queue};
-use nest_rs_redis::{QueueConfig, QueueConnection, QueueModule, QueueWorker, QueueWorkerModule};
+use nest_rs_redis::{
+    RedisQueueConfig, RedisQueueConnection, RedisQueueModule, RedisWorker, RedisWorkerModule,
+};
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 
@@ -59,8 +61,8 @@ struct SlowCommand {
     seq: usize,
 }
 
-fn queue_config() -> QueueConfig {
-    QueueConfig {
+fn queue_config() -> RedisQueueConfig {
+    RedisQueueConfig {
         url: std::env::var(nest_rs_config::var_name("queue", "URL"))
             .unwrap_or_else(|_| "redis://redis:6379".to_string()),
         ..Default::default()
@@ -89,7 +91,7 @@ impl FetchProcessor {
 }
 
 #[module(
-    imports = [QueueModule::for_root(queue_config()), QueueWorkerModule],
+    imports = [RedisQueueModule::for_root(queue_config()), RedisWorkerModule],
     providers = [FetchProcessor],
 )]
 struct FetchModule;
@@ -116,12 +118,12 @@ impl ScaleUpProcessor {
 }
 
 #[module(
-    imports = [QueueModule::for_root(queue_config()), QueueWorkerModule],
+    imports = [RedisQueueModule::for_root(queue_config()), RedisWorkerModule],
     providers = [ScaleUpProcessor],
 )]
 struct ScaleUpModule;
 
-/// Boot one "replica": its own app, its own `QueueWorker` transport, against the
+/// Boot one "replica": its own app, its own `RedisWorker` transport, against the
 /// same Redis and the same queue. Two of these in one process are
 /// indistinguishable from two containers as far as the backend is concerned —
 /// the consumer identity apalis registers comes from the worker name, which is
@@ -134,7 +136,7 @@ async fn spawn_replica<M: nest_rs_core::Module + 'static>() -> nest_rs_testing::
         .expect("a worker replica boots against the dev container Redis");
     app.init().await.expect("init phases");
     let handle = app
-        .spawn_transport(QueueWorker::default())
+        .spawn_transport(RedisWorker::default())
         .await
         .expect("the queue worker transport starts");
     // The transport borrows the container the app owns; leak it so the replica
@@ -156,7 +158,7 @@ async fn the_fetch_never_hands_one_job_to_two_replicas() {
     let second = spawn_replica::<FetchModule>().await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let conn = QueueConnection::connect(&queue_config().url)
+    let conn = RedisQueueConnection::connect(&queue_config().url)
         .await
         .expect("connect");
     for seq in 0..JOBS {
@@ -201,7 +203,7 @@ async fn the_fetch_never_hands_one_job_to_two_replicas() {
 async fn a_replica_starting_mid_flight_re_runs_the_in_flight_job() {
     let first = spawn_replica::<ScaleUpModule>().await;
 
-    let conn = QueueConnection::connect(&queue_config().url)
+    let conn = RedisQueueConnection::connect(&queue_config().url)
         .await
         .expect("connect");
     conn.push_to::<ScaleUpQueue>(SlowCommand { seq: 0 })

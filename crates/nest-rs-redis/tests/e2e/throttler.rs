@@ -88,7 +88,7 @@ async fn the_budget_is_shared_across_store_instances() {
 /// `dyn ThrottlerStore` the guard injects, and binds the *Redis* one.
 ///
 /// Nothing booted this seam before, and a compile could not have covered it —
-/// the store is a factory output that reads `QueueConnection`, another factory
+/// the store is a factory output that reads `RedisQueueConnection`, another factory
 /// output, so what is under test is a phase the builder runs and a type the
 /// container resolves. The discriminating assertion is the one the in-memory
 /// default cannot satisfy: **two independently booted apps share one budget**,
@@ -98,15 +98,17 @@ mod module {
     use std::time::Duration;
 
     use nest_rs_core::{App, module};
-    use nest_rs_redis::{QueueConfig, QueueModule, QueueSetup, RedisThrottlerModule};
+    use nest_rs_redis::{
+        RedisQueueConfig, RedisQueueModule, RedisQueueSetup, RedisThrottlerModule,
+    };
     use nest_rs_throttler::{Throttle, ThrottlerConfig, ThrottlerStore};
 
     use crate::{redis_url, unique_key};
 
-    fn pinned_queue() -> QueueSetup {
-        QueueModule::for_root(QueueConfig {
+    fn pinned_queue() -> RedisQueueSetup {
+        RedisQueueModule::for_root(RedisQueueConfig {
             url: redis_url(),
-            ..QueueConfig::default()
+            ..RedisQueueConfig::default()
         })
     }
 
@@ -172,7 +174,7 @@ mod module {
 ///
 /// The error is produced with a `WRONGTYPE` — the window key made to hold a
 /// hash, so `INCR` refuses it — rather than by pointing at a dead port:
-/// `QueueConnection::connect` refuses an unreachable endpoint up front (that is
+/// `RedisQueueConnection::connect` refuses an unreachable endpoint up front (that is
 /// its own boot error, asserted in `connection.rs`), so a store that exists at
 /// all has a connection that worked. What this covers is the branch for *any*
 /// error the store gets back, of which an outage mid-flight is the common one.

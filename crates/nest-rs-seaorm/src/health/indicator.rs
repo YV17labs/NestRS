@@ -2,7 +2,7 @@
 //!
 //! [`DbHealthIndicator`] runs `DatabaseConnection::ping` on the readiness and
 //! startup probes, so an unreachable DB drops those probes to `503` until the
-//! connection comes back. [`DatabaseHealthModule`](super::DatabaseHealthModule)
+//! connection comes back. [`SeaOrmHealthModule`](super::SeaOrmHealthModule)
 //! is the import seam that registers it.
 
 use std::sync::Arc;

@@ -11,7 +11,7 @@ mod config;
 /// ```ignore
 /// #[config(namespace = "database")]
 /// #[derive(Clone, Debug, serde::Deserialize)]
-/// pub struct DatabaseConfig {
+/// pub struct SeaOrmDatabaseConfig {
 ///     pub url: String,
 ///     #[validate(range(min = 1))]
 ///     pub max_connections: u32,
@@ -21,7 +21,7 @@ mod config;
 /// # Expands to
 ///
 /// ```ignore
-/// impl ::nest_rs_config::Namespaced for DatabaseConfig {
+/// impl ::nest_rs_config::Namespaced for SeaOrmDatabaseConfig {
 ///     const NAMESPACE: &'static str = "database";
 /// }
 /// ```

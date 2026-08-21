@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobProducerExt, processor, queue};
-use nest_rs_redis::{QueueConfig, QueueConnection, QueueModule, QueueWorker, QueueWorkerModule};
+use nest_rs_redis::{
+    RedisQueueConfig, RedisQueueConnection, RedisQueueModule, RedisWorker, RedisWorkerModule,
+};
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
 
@@ -61,8 +63,8 @@ impl HoldProcessor {
 /// Pinned rather than read from the env: the framework workspace ships no
 /// `.env`, so `for_root(None)` would resolve to the localhost default and this
 /// suite would fail on connect instead of measuring anything.
-fn queue_config() -> QueueConfig {
-    QueueConfig {
+fn queue_config() -> RedisQueueConfig {
+    RedisQueueConfig {
         url: std::env::var(nest_rs_config::var_name("queue", "URL"))
             .unwrap_or_else(|_| "redis://redis:6379".to_string()),
         ..Default::default()
@@ -70,7 +72,7 @@ fn queue_config() -> QueueConfig {
 }
 
 #[module(
-    imports = [QueueModule::for_root(queue_config()), QueueWorkerModule],
+    imports = [RedisQueueModule::for_root(queue_config()), RedisWorkerModule],
     providers = [HoldProcessor],
 )]
 struct ConcurrencyModule;
@@ -86,11 +88,11 @@ async fn a_process_method_never_runs_two_jobs_at_once() {
 
     let conn = app
         .container()
-        .get::<QueueConnection>()
-        .expect("QueueModule seeds the connection");
+        .get::<RedisQueueConnection>()
+        .expect("RedisQueueModule seeds the connection");
 
     let handle = app
-        .spawn_transport(QueueWorker::default())
+        .spawn_transport(RedisWorker::default())
         .await
         .expect("the queue worker transport starts");
 

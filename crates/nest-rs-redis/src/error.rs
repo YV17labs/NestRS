@@ -10,7 +10,7 @@
 use thiserror::Error;
 
 /// A failure opening the shared Redis
-/// [`QueueConnection`](crate::QueueConnection) from the configured URL.
+/// [`RedisQueueConnection`](crate::RedisQueueConnection) from the configured URL.
 ///
 /// Concern-prefixed (`RedisError`, not a generic `ConnectionError`) to match
 /// the house pattern — `ConfigError`, `StorageError`, `QueueError` — and avoid

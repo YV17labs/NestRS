@@ -15,11 +15,11 @@ const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 /// Redis connection settings for the queue, settable via `NESTRS_QUEUE__*` or
-/// pinned through [`QueueModule::for_root`](crate::QueueModule::for_root). The
+/// pinned through [`RedisQueueModule::for_root`](crate::RedisQueueModule::for_root). The
 /// URL is redacted in `Debug` output — it may embed credentials.
 #[config(namespace = "queue")]
 #[derive(Clone)]
-pub struct QueueConfig {
+pub struct RedisQueueConfig {
     /// The Redis connection URL (e.g. `redis://127.0.0.1/`).
     pub url: String,
     /// How long the worker waits for in-flight jobs to finish after a shutdown
@@ -36,9 +36,9 @@ pub struct QueueConfig {
     pub connect_timeout: Duration,
 }
 
-impl std::fmt::Debug for QueueConfig {
+impl std::fmt::Debug for RedisQueueConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QueueConfig")
+        f.debug_struct("RedisQueueConfig")
             .field("url", &"<redacted>")
             .field("shutdown_timeout", &self.shutdown_timeout)
             .field("connect_timeout", &self.connect_timeout)
@@ -46,7 +46,7 @@ impl std::fmt::Debug for QueueConfig {
     }
 }
 
-impl Default for QueueConfig {
+impl Default for RedisQueueConfig {
     fn default() -> Self {
         Self {
             url: DEFAULT_URL.to_string(),
@@ -56,7 +56,7 @@ impl Default for QueueConfig {
     }
 }
 
-impl Config for QueueConfig {
+impl Config for RedisQueueConfig {
     /// The loopback URL is a dev convenience, so the *unpinned* baseline drops it
     /// outside dev/test: an unset `NESTRS_QUEUE__URL` then fails boot naming the
     /// variable instead of silently pointing the queue at a non-existent local
@@ -131,17 +131,17 @@ mod tests {
 
     #[test]
     fn default_url_targets_local_loopback_redis() {
-        assert_eq!(QueueConfig::default().url, "redis://127.0.0.1/");
+        assert_eq!(RedisQueueConfig::default().url, "redis://127.0.0.1/");
     }
 
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
-        let pinned = QueueConfig {
+        let pinned = RedisQueueConfig {
             url: "redis://pinned:6379/".into(),
             shutdown_timeout: Duration::from_secs(7),
             ..Default::default()
         };
-        let cfg = QueueConfig::from_env(
+        let cfg = RedisQueueConfig::from_env(
             &ConfigService::with_vars("queue", [("URL", "redis://from-env:6379/")]),
             pinned,
         )
@@ -191,10 +191,10 @@ mod tests {
     fn shutdown_timeout_defaults_to_30s_and_reads_the_env() {
         // QUEUE-I5: the drain window is configurable and defaults to a
         // K8s-friendly 30s.
-        let d = QueueConfig::default();
+        let d = RedisQueueConfig::default();
         assert_eq!(d.shutdown_timeout, Duration::from_secs(30));
 
-        let cfg = QueueConfig::from_env(
+        let cfg = RedisQueueConfig::from_env(
             &ConfigService::with_vars(
                 "queue",
                 [
@@ -214,11 +214,11 @@ mod tests {
     #[test]
     fn connect_timeout_defaults_to_10s_and_reads_the_env() {
         assert_eq!(
-            QueueConfig::default().connect_timeout,
+            RedisQueueConfig::default().connect_timeout,
             Duration::from_secs(10)
         );
 
-        let cfg = QueueConfig::from_env(
+        let cfg = RedisQueueConfig::from_env(
             &ConfigService::with_vars(
                 "queue",
                 [("URL", "redis://redis:6379"), ("CONNECT_TIMEOUT_SECS", "3")],
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn connect_timeout_of_zero_is_rejected_by_name() {
-        let err = QueueConfig::from_env(
+        let err = RedisQueueConfig::from_env(
             &ConfigService::with_vars(
                 "queue",
                 [("URL", "redis://redis:6379"), ("CONNECT_TIMEOUT_SECS", "0")],
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn from_env_picks_up_a_custom_url() {
-        let cfg = QueueConfig::from_env(
+        let cfg = RedisQueueConfig::from_env(
             &ConfigService::with_vars("queue", [("URL", "redis://redis.staging:6379/2")]),
             Default::default(),
         )

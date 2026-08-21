@@ -23,13 +23,13 @@ use redis::aio::ConnectionManager;
 use crate::error::RedisError;
 
 /// The app's shared Redis connection — queue-flavoured by history, not
-/// queue-only. It is seeded once by [`QueueModule`](crate::QueueModule) and
+/// queue-only. It is seeded once by [`RedisQueueModule`](crate::RedisQueueModule) and
 /// injected by producers; other Redis-backed features enabled on this crate
 /// (the `throttler` rate-limit store, a future cache/locks) reuse the very same
 /// multiplexed handle via [`manager`](Self::manager) instead of opening a
 /// second connection.
 #[derive(Clone)]
-pub struct QueueConnection {
+pub struct RedisQueueConnection {
     conn: ConnectionManager,
 }
 
@@ -41,15 +41,19 @@ const FIRST_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 /// several attempts, each of which gets its own `warn`.
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 
-impl QueueConnection {
+impl RedisQueueConnection {
     /// Open a multiplexed Redis connection to `redis_url`, bounded by
-    /// [`QueueConfig::connect_timeout`](crate::QueueConfig::connect_timeout)'s
+    /// [`RedisQueueConfig::connect_timeout`](crate::RedisQueueConfig::connect_timeout)'s
     /// default.
     ///
     /// Prefer [`connect_within`](Self::connect_within) from the module factory,
     /// which passes the configured budget.
     pub async fn connect(redis_url: &str) -> Result<Self, RedisError> {
-        Self::connect_within(redis_url, crate::QueueConfig::default().connect_timeout).await
+        Self::connect_within(
+            redis_url,
+            crate::RedisQueueConfig::default().connect_timeout,
+        )
+        .await
     }
 
     /// Open the connection, giving up after `budget`.
@@ -142,8 +146,8 @@ impl QueueConnection {
     /// Typed producer handle. `J` is the job type the consumer expects; the
     /// payload is serialized to JSON on the wire (matches the consumer's
     /// `JobHandler` deserializing from `serde_json::Value`).
-    pub fn of<J: Job>(&self, queue: &str) -> Queue<J> {
-        Queue {
+    pub fn of<J: Job>(&self, queue: &str) -> RedisQueue<J> {
+        RedisQueue {
             storage: self.value_storage(queue),
             _phantom: PhantomData,
         }
@@ -157,7 +161,7 @@ impl QueueConnection {
     }
 
     /// Consumer-side storage, one job per fetch. A `#[process]` method runs a
-    /// single job at a time (see [`QueueWorker`](crate::QueueWorker)), so
+    /// single job at a time (see [`RedisWorker`](crate::RedisWorker)), so
     /// prefetching would only hold jobs a peer replica could be running.
     pub(crate) fn consumer_storage(&self, queue: &str) -> RedisStorage<serde_json::Value> {
         RedisStorage::new_with_config(
@@ -167,14 +171,14 @@ impl QueueConnection {
     }
 }
 
-/// Typed producer handle returned by [`QueueConnection::of`]. The `J` is a
+/// Typed producer handle returned by [`RedisQueueConnection::of`]. The `J` is a
 /// compile-time aid for the call site — the wire payload is always JSON.
-pub struct Queue<J: Job> {
+pub struct RedisQueue<J: Job> {
     storage: RedisStorage<serde_json::Value>,
     _phantom: PhantomData<fn(J)>,
 }
 
-impl<J: Job> Queue<J> {
+impl<J: Job> RedisQueue<J> {
     /// Serialize `job` and enqueue it onto this queue's Redis storage.
     pub async fn push(&self, job: J) -> Result<(), QueueError> {
         let payload = serde_json::to_value(&job)?;
@@ -190,10 +194,10 @@ impl<J: Job> Queue<J> {
 }
 
 /// Backend-agnostic producer surface — any feature injecting
-/// `Arc<dyn JobProducer>` (instead of the concrete `QueueConnection`) is
+/// `Arc<dyn JobProducer>` (instead of the concrete `RedisQueueConnection`) is
 /// portable across backends.
 #[async_trait]
-impl JobProducer for QueueConnection {
+impl JobProducer for RedisQueueConnection {
     async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError> {
         let mut storage = self.value_storage(queue);
         storage
@@ -253,7 +257,7 @@ mod tests {
     async fn connect_within_gives_up_on_an_unreachable_endpoint_and_names_it() {
         let started = Instant::now();
         // Port 9 is `discard` — reserved and never listening.
-        let Err(err) = QueueConnection::connect_within(
+        let Err(err) = RedisQueueConnection::connect_within(
             "redis://alice:s3cr3t@127.0.0.1:9/0",
             Duration::from_millis(600),
         )
@@ -298,7 +302,7 @@ mod tests {
         // The budget sits above `FIRST_RETRY_BACKOFF` (250ms) so the loop
         // retries at least once before it expires.
         assert!(
-            QueueConnection::connect_within(
+            RedisQueueConnection::connect_within(
                 "redis://user:secret@[::bad-host/",
                 Duration::from_millis(700),
             )
@@ -342,9 +346,12 @@ mod tests {
         // Port 1 on loopback: the client keeps retrying inside a single
         // `connect` call, so the budget is what ends it.
         assert!(
-            QueueConnection::connect_within("redis://127.0.0.1:1/", Duration::from_millis(120))
-                .await
-                .is_err(),
+            RedisQueueConnection::connect_within(
+                "redis://127.0.0.1:1/",
+                Duration::from_millis(120)
+            )
+            .await
+            .is_err(),
             "an unreachable endpoint fails the boot rather than parking it",
         );
 

@@ -9,7 +9,7 @@
 //! The unit tests beside `audit` cover the message. What only a real expansion
 //! can prove is that `#[expose]` submits the pair at all, and that the audit
 //! reads it back: both entities below are compiled by the decorator, and the
-//! verdict is read out of the link-time registry exactly as `DatabaseModule`
+//! verdict is read out of the link-time registry exactly as `SeaOrmDatabaseModule`
 //! reads it at boot.
 
 use nest_rs_resource::expose;

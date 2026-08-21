@@ -44,7 +44,7 @@ impl DynamicModule for ThrottlerSetup {
         // Register the store as the `dyn ThrottlerStore` binding the guard
         // injects — a factory output, so the access graph sees it as global
         // infrastructure (the guard's `#[inject] Arc<dyn ThrottlerStore>`
-        // resolves). An alternative backend (`RedisThrottlerModule`) supplies
+        // resolves). An alternative backend (`nest_rs::redis::RedisThrottlerModule`) supplies
         // the same binding from its own factory; import exactly one.
         let builder = builder.provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(
             BACKEND_REMEDY,
@@ -63,7 +63,7 @@ impl DynamicModule for ThrottlerSetup {
 /// `nest-rs-redis` so the two halves of the rule cannot drift.
 #[doc(hidden)]
 pub const BACKEND_REMEDY: &str = "Import exactly one throttler backend: `ThrottlerModule` keeps \
-                                  counters in this process, `RedisThrottlerModule` shares them \
+                                  counters in this process, `nest_rs::redis::RedisThrottlerModule` shares them \
                                   across instances.";
 
 /// Register [`ThrottlerGuard`] as global infrastructure, next to whichever
@@ -79,7 +79,7 @@ pub const BACKEND_REMEDY: &str = "Import exactly one throttler backend: `Throttl
 /// import at the app is genuinely the whole wiring.
 ///
 /// Every store backend calls this, so the two never drift: an app that swaps
-/// `ThrottlerModule` for `RedisThrottlerModule` changes the store and nothing
+/// `nest_rs::throttler::ThrottlerModule` for `nest_rs::redis::RedisThrottlerModule` changes the store and nothing
 /// else, exactly as the guard's own doc promises.
 ///
 /// A cross-crate seam for the backends, not an app-facing one: `for_root` is
@@ -90,7 +90,7 @@ pub fn provide_guard(builder: ContainerBuilder) -> ContainerBuilder {
         let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
             anyhow::anyhow!(
                 "ThrottlerGuard needs a `dyn ThrottlerStore` binding — register one \
-                 (ThrottlerModule::for_root / RedisThrottlerModule::for_root) before the guard"
+                 (throttler::ThrottlerModule::for_root / redis::RedisThrottlerModule::for_root) before the guard"
             )
         })?;
         Ok(ThrottlerGuard::new(store))

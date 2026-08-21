@@ -1,4 +1,4 @@
-//! `QueueWorker` configure fail-fast and `JobContext` wrapping; no Redis.
+//! `RedisWorker` configure fail-fast and `JobContext` wrapping; no Redis.
 //!
 //! Also covers the wire-format envelope: the `#[processor]` macro emits a
 //! handler that unwraps `{ "v": <n>, "payload": <…> }` (current version),
@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use nest_rs_core::{Container, Transport, injectable};
 use nest_rs_queue::{ProcessMethod, Processor, WIRE_FORMAT_VERSION, processor, queue};
-use nest_rs_redis::QueueWorker;
+use nest_rs_redis::RedisWorker;
 use nest_rs_worker::{JobContext, JobSettlement, JobTransaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 type ProbeFuture = Pin<Box<dyn Future<Output = Result<(), nest_rs_queue::JobError>> + Send>>;
 
-// A link-time `ProcessMethod` so `QueueWorker::configure` sees at least one
+// A link-time `ProcessMethod` so `RedisWorker::configure` sees at least one
 // processor in this test binary and exercises the missing-connection branch.
 fn probe_handler(_payload: serde_json::Value, _container: Container) -> ProbeFuture {
     Box::pin(async { Ok(()) })
@@ -52,12 +52,12 @@ async fn configure_fails_when_processors_exist_without_a_connection() {
         ))
         .build();
 
-    let err = QueueWorker::new()
+    let err = RedisWorker::new()
         .configure(&container)
         .await
-        .expect_err("processors without QueueConnection abort configure");
+        .expect_err("processors without RedisQueueConnection abort configure");
     assert!(
-        err.to_string().contains("QueueConnection"),
+        err.to_string().contains("RedisQueueConnection"),
         "the error names the missing connection: {err}",
     );
 }
@@ -104,7 +104,7 @@ async fn two_processors_claiming_one_queue_fail_configure() {
         ))
         .build();
 
-    let err = QueueWorker::new()
+    let err = RedisWorker::new()
         .configure(&container)
         .await
         .expect_err("two claimants on one queue abort configure");
@@ -129,12 +129,12 @@ async fn a_processor_another_app_owns_does_not_contest_this_queue() {
         ))
         .build();
 
-    let err = QueueWorker::new()
+    let err = RedisWorker::new()
         .configure(&container)
         .await
         .expect_err("one claimant still needs a connection");
     assert!(
-        err.to_string().contains("QueueConnection"),
+        err.to_string().contains("RedisQueueConnection"),
         "it got past the duplicate check to the connection check: {err}",
     );
 }
@@ -147,7 +147,7 @@ async fn configure_succeeds_with_no_processors_and_serve_idles_until_cancel() {
     let container = Container::builder()
         .provide(nest_rs_core::ReachableProviders(Default::default()))
         .build();
-    let mut worker = QueueWorker::new();
+    let mut worker = RedisWorker::new();
     worker
         .configure(&container)
         .await

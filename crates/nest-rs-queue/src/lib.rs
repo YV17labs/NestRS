@@ -9,8 +9,8 @@
 //! `nest-rs-redis`. Application code keeps writing `nest_rs_queue::*` for the
 //! abstractions — the `#[processor]` macro, `Job`, `Processor`,
 //! `ProcessMethod`, `JobProducer` — and reaches for `nest_rs_redis::*` only
-//! when it needs the Redis-specific types (the `QueueConnection` producer,
-//! the `QueueWorker` transport, the activation modules). A third-party
+//! when it needs the Redis-specific types (the `RedisQueueConnection` producer,
+//! the `RedisWorker` transport, the activation modules). A third-party
 //! `nest-rs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
 //! directly — see this crate's README for the extension contract.
 

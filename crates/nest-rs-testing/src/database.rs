@@ -12,7 +12,7 @@ use crate::env::load_project_env;
 
 /// Fresh Postgres database created for one e2e run, migrated, then **dropped
 /// when this guard drops**. Seed `db.connection()` into a `TestApp` and the
-/// real connection short-circuits `DatabaseModule`'s `for_root` factory.
+/// real connection short-circuits `SeaOrmDatabaseModule`'s `for_root` factory.
 ///
 /// Each run uses a unique `nest_rs_e2e_*` name; orphans from crashed runs are
 /// reaped (age-gated) on the next [`create`](Self::create). Admin URL comes
@@ -72,7 +72,7 @@ impl EphemeralDatabase {
     }
 
     /// The live connection to the ephemeral database — seed this into a
-    /// [`TestApp`] to short-circuit `DatabaseModule`'s `for_root` factory.
+    /// [`TestApp`] to short-circuit `SeaOrmDatabaseModule`'s `for_root` factory.
     pub fn connection(&self) -> Arc<DatabaseConnection> {
         self.connection.clone()
     }

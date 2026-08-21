@@ -11,7 +11,7 @@ mod queue;
 
 /// Orchestrator on an `#[injectable]` provider's `impl` block. Each method
 /// tagged with `#[process(queue = <Queue>, retries)]` becomes a queue consumer
-/// the `QueueWorker` spawns at boot.
+/// the `RedisWorker` spawns at boot.
 ///
 /// A single provider may carry several `#[process]` methods (different queues)
 /// sharing the same `#[inject]` dependencies — pooling related queue handlers
@@ -20,7 +20,7 @@ mod queue;
 /// **A process method runs one job at a time.** There is no per-method
 /// concurrency knob: throughput scales by running more replicas of the worker,
 /// which is the unit the container platform already schedules. See
-/// `QueueWorker` for the guarantee and why it is the framework's job to be
+/// `RedisWorker` for the guarantee and why it is the framework's job to be
 /// predictable here rather than tunable.
 ///
 /// The `queue` is named by its `QueueName` **type**, declared with

@@ -3,7 +3,7 @@
 //! outcomes a service expresses against its data — together with their HTTP
 //! mapping. Domain-specific *wire* contracts (an opaque credential rejection,
 //! an RFC 6749 code) still live in their own crates
-//! (`nest_rs_authn::CredentialError`, `nest_rs_authn::TokenError`); features
+//! (`nest_rs_authn::CredentialError`, `nest_rs_oauth_server::TokenError`); features
 //! never re-define those.
 //!
 //! The business variants ([`Invalid`](ServiceError::Invalid),

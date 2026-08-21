@@ -34,17 +34,17 @@ use nest_rs_queue::ProcessMethod;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use crate::connection::QueueConnection;
+use crate::RedisQueueConnection;
 
 /// The consumer-side transport: drains the `#[processor]` inventory and runs
 /// each job's process method against the Redis queue. Attached by
-/// [`QueueWorkerModule`](crate::QueueWorkerModule).
-pub struct QueueWorker {
+/// [`RedisWorkerModule`](crate::RedisWorkerModule).
+pub struct RedisWorker {
     methods: Vec<&'static ProcessMethod>,
     container: Option<Container>,
 }
 
-impl QueueWorker {
+impl RedisWorker {
     /// An empty worker; process methods and the container are wired at boot.
     pub fn new() -> Self {
         Self {
@@ -54,14 +54,14 @@ impl QueueWorker {
     }
 }
 
-impl Default for QueueWorker {
+impl Default for RedisWorker {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl Transport for QueueWorker {
+impl Transport for RedisWorker {
     async fn configure(&mut self, container: &Container) -> Result<()> {
         // Drain link-time `#[process]` methods, filtered by ReachableProviders
         // so a method on a provider not in the app's module tree compiles in
@@ -94,9 +94,9 @@ impl Transport for QueueWorker {
 
         // Fail fast at boot if methods exist but no connection is seeded.
         if !self.methods.is_empty() {
-            container.get::<QueueConnection>().context(
-                "QueueWorker found #[processor]s but no QueueConnection in the container — \
-                 seed one with App::builder().provide_factory(|_| QueueConnection::connect(url))",
+            container.get::<RedisQueueConnection>().context(
+                "RedisWorker found #[processor]s but no RedisQueueConnection in the container — \
+                 seed one with App::builder().provide_factory(|_| RedisQueueConnection::connect(url))",
             )?;
             for m in &self.methods {
                 tracing::info!(
@@ -123,10 +123,10 @@ impl Transport for QueueWorker {
 
         let container = self
             .container
-            .expect("QueueWorker::configure must run before serve");
+            .expect("RedisWorker::configure must run before serve");
         let connection = container
-            .get::<QueueConnection>()
-            .expect("QueueConnection presence is verified in configure");
+            .get::<RedisQueueConnection>()
+            .expect("RedisQueueConnection presence is verified in configure");
 
         let mut monitor = Monitor::new();
         for method in &self.methods {
@@ -137,9 +137,9 @@ impl Transport for QueueWorker {
         // until the orchestrator SIGKILLs the pod (QUEUE-I5). The config is a
         // factory output present in the container.
         let shutdown_timeout = container
-            .get::<crate::QueueConfig>()
+            .get::<crate::RedisQueueConfig>()
             .map(|cfg| cfg.shutdown_timeout)
-            .unwrap_or_else(|| crate::QueueConfig::default().shutdown_timeout);
+            .unwrap_or_else(|| crate::RedisQueueConfig::default().shutdown_timeout);
 
         monitor
             .shutdown_timeout(shutdown_timeout)
@@ -157,7 +157,7 @@ impl Transport for QueueWorker {
 /// user's `J` inside the closure, so this builder never names `J`.
 fn build_worker(
     monitor: Monitor,
-    conn: &QueueConnection,
+    conn: &RedisQueueConnection,
     container: Container,
     method: &ProcessMethod,
 ) -> Monitor {

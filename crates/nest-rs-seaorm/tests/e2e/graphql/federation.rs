@@ -17,7 +17,9 @@ use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject}
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
 use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait, guard};
 use nest_rs_resource::WireModelDefaults;
-use nest_rs_seaorm::{Access, CrudService, DatabaseConfig, DatabaseModule, ServiceError};
+use nest_rs_seaorm::{
+    Access, CrudService, SeaOrmDatabaseConfig, SeaOrmDatabaseModule, ServiceError,
+};
 use nest_rs_testing::TestApp;
 use sea_orm::prelude::Uuid;
 use serde::{Deserialize, Serialize};
@@ -164,7 +166,7 @@ impl PostsResolver {
 
 #[module(
     imports = [
-        DatabaseModule::for_root(DatabaseConfig {
+        SeaOrmDatabaseModule::for_root(SeaOrmDatabaseConfig {
             url: crate::harness::url(),
             ..Default::default()
         }),

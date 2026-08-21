@@ -1,6 +1,6 @@
 //! [`DbContext`] — request boundary that installs the ambient executor.
 //!
-//! Auto-installed by [`DatabaseModule`](crate::DatabaseModule), it wraps the
+//! Auto-installed by [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule), it wraps the
 //! routing tree (band `DATA_CONTEXT`, the innermost transport wrap), so it
 //! covers controller routes and self-mounted surfaces alike. The guard pool
 //! runs *inside* it (in the per-route shaper, post-routing). The executor a
@@ -29,7 +29,7 @@
 //!
 //! This interceptor does **not** retry — it cannot: a poem `Request` is
 //! consumed by `next.run` and is not replayable at this layer. When
-//! [`DatabaseConfig::observe_serialization_conflicts`] is on, a commit that fails
+//! [`SeaOrmDatabaseConfig::observe_serialization_conflicts`] is on, a commit that fails
 //! with a SQLSTATE the [`retry`](crate::retry) module recognizes is merely
 //! *tagged* — logged at `warn` as a serialization conflict for observability —
 //! then the request still fails closed (`500`). To actually retry a conflicting
@@ -50,7 +50,7 @@ use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use sea_orm::DatabaseConnection;
 
-use crate::config::DatabaseConfig;
+use crate::SeaOrmDatabaseConfig;
 use crate::executor::{
     CommitError, Executor, FinalizeOutcome, LazyTransaction, with_request_executor,
 };
@@ -59,19 +59,19 @@ use crate::executor::{
 /// a safe method, a **lazily opened** per-request transaction (committed on
 /// 2xx/3xx, rolled back otherwise; never opened when nothing touches the data
 /// layer) for a mutating one. Auto-mounted at band −10 by importing
-/// [`DatabaseModule`](crate::DatabaseModule).
+/// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule).
 #[interceptor(priority = -10)]
 pub struct DbContext {
     #[inject]
     db: Arc<DatabaseConnection>,
     #[inject]
-    config: Arc<DatabaseConfig>,
+    config: Arc<SeaOrmDatabaseConfig>,
 }
 
 impl DbContext {
     /// Construct the interceptor from a pool and config — the honest constructor
     /// tests use in place of container resolution.
-    pub fn new(db: Arc<DatabaseConnection>, config: Arc<DatabaseConfig>) -> Self {
+    pub fn new(db: Arc<DatabaseConnection>, config: Arc<SeaOrmDatabaseConfig>) -> Self {
         Self { db, config }
     }
 }

@@ -2,7 +2,7 @@
 //! [`throttler`] for the cross-process rate-limit store, [`concurrency`] and
 //! [`replicas`] for the worker's fetch guarantees, [`correlation`] for the
 //! trace context that crosses the producer/consumer process boundary, and
-//! [`portable_producer`] for the two names `QueueModule::for_root` binds.
+//! [`portable_producer`] for the two names `RedisQueueModule::for_root` binds.
 //!
 //! Needs a reachable Redis — gated out of `unit` by the nextest `binary(e2e)`
 //! filter, and behind the `throttler` feature (off by default, so producer /
@@ -26,7 +26,7 @@ mod throttler;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nest_rs_redis::QueueConnection;
+use nest_rs_redis::RedisQueueConnection;
 
 fn redis_url() -> String {
     std::env::var(nest_rs_config::var_name("queue", "URL"))
@@ -43,8 +43,8 @@ fn unique_key(tag: &str) -> String {
     format!("redis-q2:{tag}:{}:{nanos}", std::process::id())
 }
 
-async fn connect() -> QueueConnection {
-    QueueConnection::connect(&redis_url())
+async fn connect() -> RedisQueueConnection {
+    RedisQueueConnection::connect(&redis_url())
         .await
         .expect("connect to the dev container Redis")
 }

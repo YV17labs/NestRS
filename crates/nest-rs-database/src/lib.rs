@@ -11,7 +11,7 @@
 //!
 //! The first-class implementation is `nest-rs-seaorm` (SeaORM): it ships
 //! `Repo` (row-level filter), `CrudService`, `Bind`, the HTTP mask
-//! shaper, and `DatabaseModule` (the request interceptor that opens the
+//! shaper, and `SeaOrmDatabaseModule` (the request interceptor that opens the
 //! transaction). Those pieces are SeaORM-specific by design — the
 //! leverage comes from binding tightly to the ORM's query/model types.
 //! A future third-party `nest-rs-<other-orm>` crate (sqlx, diesel,

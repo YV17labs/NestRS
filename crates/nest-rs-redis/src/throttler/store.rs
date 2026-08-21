@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
 use redis::Script;
 
-use crate::QueueConnection;
+use crate::RedisQueueConnection;
 
 /// Atomic fixed-window step. Returns `{count, ttl_ms}` in one round-trip:
 ///
@@ -43,18 +43,18 @@ return {count, ttl}
 
 /// Redis-backed [`ThrottlerStore`]. Construct via [`RedisThrottler::new`] or let
 /// [`RedisThrottlerModule`](crate::RedisThrottlerModule) wire it from config +
-/// the shared [`QueueConnection`].
+/// the shared [`RedisQueueConnection`].
 pub struct RedisThrottler {
-    conn: QueueConnection,
+    conn: RedisQueueConnection,
     default: Throttle,
     script: Script,
 }
 
 impl RedisThrottler {
     /// `conn` is the app's shared Redis connection (reused, not reopened —
-    /// [`QueueConnection::manager`] hands out the multiplexed handle). `default`
+    /// [`RedisQueueConnection::manager`] hands out the multiplexed handle). `default`
     /// applies to routes that pin no `#[meta(Throttle)]`.
-    pub fn new(conn: QueueConnection, default: Throttle) -> Self {
+    pub fn new(conn: RedisQueueConnection, default: Throttle) -> Self {
         Self {
             conn,
             default,

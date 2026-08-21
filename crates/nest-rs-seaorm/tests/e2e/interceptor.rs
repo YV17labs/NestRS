@@ -6,14 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_interceptors::InterceptorExt;
-use nest_rs_seaorm::{DatabaseConfig, DbContext, current_executor};
+use nest_rs_seaorm::{DbContext, SeaOrmDatabaseConfig, current_executor};
 use poem::endpoint::make;
 use poem::http::{Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-fn config() -> Arc<DatabaseConfig> {
-    Arc::new(DatabaseConfig::default())
+fn config() -> Arc<SeaOrmDatabaseConfig> {
+    Arc::new(SeaOrmDatabaseConfig::default())
 }
 
 fn mutating_request() -> Request {
@@ -416,10 +416,10 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
 // is the switch, off by default, because a deployment on READ COMMITTED never
 // sees one and does not want the branch.
 
-fn conflict_observing_config() -> Arc<DatabaseConfig> {
-    Arc::new(DatabaseConfig {
+fn conflict_observing_config() -> Arc<SeaOrmDatabaseConfig> {
+    Arc::new(SeaOrmDatabaseConfig {
         observe_serialization_conflicts: true,
-        ..DatabaseConfig::default()
+        ..SeaOrmDatabaseConfig::default()
     })
 }
 

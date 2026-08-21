@@ -62,7 +62,7 @@ inventory::collect!(SoftDeleteRegistration);
 
 /// The boot refusal for a half-wired tombstone.
 ///
-/// A lifecycle hook rather than a `DatabaseModule` factory for the same reason
+/// A lifecycle hook rather than a `SeaOrmDatabaseModule` factory for the same reason
 /// `AudienceBinding` is one: it depends on nothing built in the collect phase,
 /// so running it after every provider exists makes the answer independent of
 /// import order — and an `Err` from `#[on_module_init]` aborts boot.
@@ -81,7 +81,7 @@ impl SoftDeleteAudit {
 /// Run the soft-delete audit over every `#[expose(..., soft_delete)]` entity
 /// linked into this binary.
 ///
-/// [`DatabaseModule`](crate::DatabaseModule) runs it at boot; it is public so an
+/// [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule) runs it at boot; it is public so an
 /// app that composes the ORM some other way — and any test that wants the answer
 /// without booting — can ask for the same verdict.
 pub fn audit_soft_delete_bindings() -> anyhow::Result<()> {

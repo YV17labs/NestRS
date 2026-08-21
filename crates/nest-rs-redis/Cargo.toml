@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Redis-backed queue integration for nest-rs-queue (via apalis-redis): the QueueConnection producer, the QueueWorker consumer transport, and the #[processor] decorator re-export. The user-facing storage is Redis; apalis is an implementation detail."
+description = "Redis-backed queue integration for nest-rs-queue (via apalis-redis): the RedisQueueConnection producer, the RedisWorker consumer transport, and the #[processor] decorator re-export. The user-facing storage is Redis; apalis is an implementation detail."
 keywords = ["framework", "nestrs", "redis", "queue", "apalis"]
 categories = ["asynchronous", "database"]
 
@@ -18,7 +18,7 @@ nest-rs-core.workspace = true
 # code reaches both this crate's Redis types AND the abstractions through
 # the same import root by depending on `nest-rs-queue` + `nest-rs-redis`.
 nest-rs-queue.workspace = true
-# `QueueModule` owns its `#[config]` `QueueConfig` (namespace `queue`), loaded
+# `RedisQueueModule` owns its `#[config]` `RedisQueueConfig` (namespace `queue`), loaded
 # from `NESTRS_QUEUE__*`; `validator` backs its `#[validate]` rules.
 nest-rs-config.workspace = true
 validator.workspace = true
@@ -43,7 +43,7 @@ apalis-redis.workspace = true
 # `throttler` feature only: the shared `dyn ThrottlerStore` seam + config types
 # reused verbatim (the guard is transport-agnostic; only the backing store
 # changes), running the atomic fixed-window Lua script over
-# `QueueConnection::manager()`.
+# `RedisQueueConnection::manager()`.
 nest-rs-throttler = { workspace = true, optional = true }
 # The user-facing Redis surface (`RedisError`, `aio::ConnectionManager`) is
 # named through the `redis` crate directly — apalis-redis only re-exports these

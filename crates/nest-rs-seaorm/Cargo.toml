@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "SeaORM integration for NestRS: the first-class implementation of the `nest-rs-database` extension contract. `DatabaseModule::for_root` owns the connection, composed at `App::builder()`. Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features."
+description = "SeaORM integration for NestRS: the first-class implementation of the `nest-rs-database` extension contract. `SeaOrmDatabaseModule::for_root` owns the connection, composed at `App::builder()`. Transport extractors (`Bind`, `LoaderScope`, `WsDataContext`) live behind Cargo features."
 keywords = ["framework", "nestrs", "seaorm", "database", "orm"]
 categories = ["database"]
 
@@ -48,7 +48,7 @@ nest-rs-worker.workspace = true
 # in this crate implements `nest_rs_database::Executor`; the task-local plumbing
 # lives in `nest-rs-database` so a third-party ORM can reuse it.
 nest-rs-database.workspace = true
-# `DatabaseModule` owns its `#[config]` `DatabaseConfig` (namespace `database`),
+# `SeaOrmDatabaseModule` owns its `#[config]` `SeaOrmDatabaseConfig` (namespace `database`),
 # loaded from `NESTRS_DATABASE__*`; `validator` backs its `#[validate]` rules.
 nest-rs-config.workspace = true
 # `validation_details` — the one redaction policy for `ValidationErrors` on a

@@ -1,7 +1,7 @@
 //! [`WorkerDbContext`] — ORM bridge for the worker-transport [`JobContext`]
 //! seam (queue + schedule), the cron/queue counterpart of
 //! [`DbContext`](crate::DbContext). Auto-bound by
-//! [`DatabaseModule`](crate::DatabaseModule).
+//! [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule).
 //!
 //! A job runs in **one transaction per attempt** by default, opened lazily on
 //! its first data-layer touch and settled by the same
@@ -42,7 +42,7 @@ const POISONED: &str =
 const COMMIT_FAILED: &str = "the job's transaction could not be committed";
 
 /// Installs the request-less executor around a worker job. Bound to
-/// `dyn JobContext` by [`DatabaseModule`](crate::DatabaseModule).
+/// `dyn JobContext` by [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule).
 #[injectable]
 pub struct WorkerDbContext {
     #[inject]

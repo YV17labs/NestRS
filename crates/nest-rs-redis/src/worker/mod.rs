@@ -1,10 +1,10 @@
-//! Consumer side: the [`QueueWorker`] transport drains `#[process]` methods
-//! discovered at link time, and [`QueueWorkerModule`] is the activation seam
+//! Consumer side: the [`RedisWorker`] transport drains `#[process]` methods
+//! discovered at link time, and [`RedisWorkerModule`] is the activation seam
 //! a worker app imports to attach the transport. Producer-only apps skip
-//! this module — see [`crate::QueueModule`] for the connection side.
+//! this module — see [`crate::RedisQueueModule`] for the connection side.
 
 mod consumer;
 mod module;
 
-pub use consumer::QueueWorker;
-pub use module::QueueWorkerModule;
+pub use consumer::RedisWorker;
+pub use module::RedisWorkerModule;

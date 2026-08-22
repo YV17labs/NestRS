@@ -2,5 +2,4 @@
 
 mod alias;
 mod authorize;
-mod guard;
 mod mask;

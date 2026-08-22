@@ -11,7 +11,7 @@
 //! owns the request half itself (the canonical bridge runs its own authn and
 //! authz guards), so a pooled guard's `check_http` is not executed for that
 //! transport at all — which is the shape a `use_guards_global([ThrottlerGuard])`
-//! beside an `AppMcpGuard` has, and why the docs qualify the fallback rather
+//! beside an `AuthzMcpBridge` has, and why the docs qualify the fallback rather
 //! than describing it as the pool's edge.
 //!
 //! Either way this is only the **request** half. A pooled guard's *operation*

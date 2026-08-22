@@ -5,7 +5,8 @@
 //! only in what the visitor branch grants — nothing else about the route
 //! changes, so each assertion isolates the grant.
 
-use nest_rs_authz::http::{AbilityGuard, Authorize};
+use nest_rs_authz::AbilityGuard;
+use nest_rs_authz::http::Authorize;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::module;
 use nest_rs_guards::guard;

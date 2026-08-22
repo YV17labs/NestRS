@@ -1,4 +1,4 @@
-//! `AbilityGuard`'s MCP entry (`src/http/guard.rs`) through the real
+//! `AbilityGuard`'s MCP entry (`src/guard.rs`) through the real
 //! decorators: `#[use_guards(AuthzGuard)]` on an `#[mcp]` host, which is the
 //! symmetric binding its HTTP, GraphQL and WS siblings already carry.
 //!
@@ -10,7 +10,7 @@
 //! instead. So both directions are asserted, because only the pair distinguishes
 //! a working check from a deny-all and from a no-op.
 
-use nest_rs_authz::http::AbilityGuard;
+use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::mcp::McpAbilityBridge;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs_core::{Layer, injectable, module};
@@ -20,7 +20,7 @@ use nest_rs_http::poem::Request;
 use nest_rs_mcp::{AllowAllMcpGuard, McpError, McpOperationGuard, mcp, tools};
 use nest_rs_testing::{LogCapture, TestApp, mcp::call_tool};
 
-use super::widget;
+use crate::widget;
 
 const PATH: &str = "/mcp/guard";
 

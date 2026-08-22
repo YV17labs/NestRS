@@ -696,7 +696,7 @@ mod tests {
             imports: &[],
             providers: &[
                 ProviderDescriptor {
-                    name: "AppAbility",
+                    name: "AuthzAbility",
                     provides: || TypeId::of::<UsersService>(),
                     injects: no_deps,
                     inject_names: no_names,

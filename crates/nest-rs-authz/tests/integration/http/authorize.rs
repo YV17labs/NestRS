@@ -66,7 +66,7 @@ async fn a_route_whose_ability_guard_never_ran_says_so_at_error_with_the_remedy(
     assert!(
         event
             .field("hint")
-            .is_some_and(|h| h.contains("AuthzHttpModule")),
+            .is_some_and(|h| h.contains("AuthzModule")),
         "the event carries the remedy, got {:?}",
         event.fields,
     );

@@ -61,7 +61,7 @@ where
                 subject = std::any::type_name::<S>(),
                 path = %req.original_uri().path(),
                 hint = "bind the ability guard (#[use_guards(AuthnGuard, AuthzGuard)]) \
-                        and import AuthzHttpModule in this feature's http/module.rs",
+                        and import AuthzModule in this feature's module.rs",
                 "missing request Ability — route is authorized but no ability guard ran",
             );
             Error::from_string(

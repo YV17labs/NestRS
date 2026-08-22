@@ -7,6 +7,11 @@
 mod ability;
 mod builder;
 
+// `src/guard.rs` is transport-agnostic, so its mirror is here and not under an
+// edge; the files inside carry the per-entry feature gates.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod guard;
+
 #[cfg(feature = "http")]
 mod http;
 

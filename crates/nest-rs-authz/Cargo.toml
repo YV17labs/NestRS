@@ -19,18 +19,16 @@ default = []
 # `nest_rs_seaorm::Bind` (it must use the data layer). Also activates the
 # unified `nest_rs_guards::Guard` impl so `AbilityGuard` can be used both
 # per-route and globally via `App::builder().use_guards_global(...)`.
-# `AbilityGuard` implements the guard's `check_ws_message` entry (the WS
-# upgrade reuses the HTTP guards), so `nest-rs-guards/ws` is forwarded — that
-# feature exists only when the guard's WS method does, and it transitively
-# turns on the `ws` feature of the sibling layer crates (filters /
-# exception-filters / interceptors) so the whole Layer System lines up.
+# `AbilityGuard` itself is at the crate root and every transport feature turns
+# it on, because it answers all four; this feature adds only HTTP's own
+# extractors and shaper. It no longer forwards `nest-rs-guards/ws`: that
+# forwarding existed solely because the guard's `check_ws_message` used to
+# compile under `http`, which is what the guard living in `http/` cost.
 http = [
     "dep:nest-rs-core",
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
-    "nest-rs-guards/ws",
     "dep:nest-rs-resource",
-    "dep:nest-rs-ws",
     "dep:poem",
 ]
 # GraphQL surface: per-operation bridge (`GraphqlAbilityBridge`), the `ability`
@@ -40,6 +38,13 @@ http = [
 graphql = [
     "dep:nest-rs-core",
     "dep:nest-rs-graphql",
+    # The root `AbilityGuard` is what a resolver binds, and its `check_http`
+    # entry is what `GraphqlAbilityBridge` runs in band — so this surface needs
+    # `nest-rs-http`, which the GraphQL bindings alone never named. The two
+    # sibling crates need no `dep:` line: `nest-rs-guards/graphql` and
+    # `nest-rs-resource/graphql` are the strong form, which activates the
+    # optional dependency as well as its feature.
+    "dep:nest-rs-http",
     "nest-rs-guards/graphql",
     "nest-rs-resource/graphql",
     "dep:poem",
@@ -55,6 +60,9 @@ graphql = [
 mcp = [
     "dep:nest-rs-core",
     "dep:nest-rs-mcp",
+    # Same as GraphQL: the root guard's `check_http` is what `McpAbilityBridge`
+    # runs in band.
+    "dep:nest-rs-http",
     "dep:nest-rs-guards",
     "nest-rs-guards/mcp",
     # `masked_value_for` strains a masked row against the entity's statically
@@ -73,6 +81,9 @@ mcp = [
 ws = [
     "dep:nest-rs-core",
     "dep:nest-rs-ws",
+    # The root guard's `check_ws_message` lives behind *this* feature now, and
+    # its `check_http` entry is what runs on the upgrade.
+    "dep:nest-rs-http",
     "dep:nest-rs-guards",
     "nest-rs-guards/ws",
     "dep:nest-rs-resource",

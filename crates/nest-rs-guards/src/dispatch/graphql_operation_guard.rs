@@ -2,7 +2,7 @@
 //!
 //! `/graphql` is `EdgePosture::Exempt`: no guard runs at the HTTP edge, the
 //! per-operation seam is the only gate. An app normally registers its authz
-//! bridge there (`AppGraphqlGuard as dyn GraphqlOperationGuard`); when it
+//! bridge there (`AuthzGraphqlBridge as dyn GraphqlOperationGuard`); when it
 //! does not, this fallback folds the **global guard pool** in-band so a
 //! forgotten bridge module never leaves GraphQL operations unguarded —
 //! the fail-secure net, not the full authz integration (it installs no

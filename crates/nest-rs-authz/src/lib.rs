@@ -7,6 +7,9 @@
 //! `sea_orm::Condition` for row-level filtering), and `mask` (strip
 //! disallowed instances + fields from a response).
 //!
+//! [`AbilityGuard`] is the one guard and it is transport-agnostic — it answers
+//! all four edges, so it lives here rather than under any of them.
+//!
 //! Bindings: `http`, `graphql`, `ws`, `mcp`. The data-coupled bindings
 //! (`Bind`, the GraphQL `bind` helper, `LoaderScope`, `WsDataContext`) live in
 //! `nest-rs-seaorm` so the engine stays free of a data-layer dependency.
@@ -31,6 +34,12 @@ mod factory;
 // only thing that ever compiled that feature set, and they failed on it.
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
 mod gate;
+// The one guard, at the root because it answers every transport: it implements
+// `check_http`, `check_graphql`, `check_ws_message` and `check_mcp`, and each
+// arm is gated on its own feature. A transport folder would have claimed a
+// quarter of it — see the module's own note.
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+mod guard;
 mod mask;
 mod predicate;
 mod subject;
@@ -55,6 +64,8 @@ pub use context::{current_ability, with_ability};
 pub use factory::AbilityFactory;
 #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
 pub use gate::{GateVerdict, gate};
+#[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
+pub use guard::AbilityGuard;
 pub use mask::masked_output_ambient;
 pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::Subject;

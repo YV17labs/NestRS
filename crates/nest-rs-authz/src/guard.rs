@@ -1,6 +1,16 @@
 //! [`AbilityGuard<F>`] — request-scoped bridge from the authenticated actor to
 //! the [`Ability`](crate::Ability) the enforcement layers read. Generic over
 //! the app's [`AbilityFactory`].
+//!
+//! **At the crate root, beside [`gate`](crate::gate) and
+//! [`chain`](crate::chain), because it answers every transport.** It implements
+//! four of `Guard`'s entries — `check_http`, `check_graphql`,
+//! `check_ws_message`, `check_mcp` — and carries the matching four marker
+//! traits, so a transport folder would have named one quarter of it. It sat in
+//! `http/` until 5.2, and the cost was not only the path: `graphql`, `ws` and
+//! `mcp` each had to turn on the `http` feature to reach their own guard, and
+//! the WS entry compiled under `http` rather than `ws`, which is why that
+//! feature forwarded `nest-rs-ws` for a file that is no longer there.
 
 use std::sync::Arc;
 
@@ -8,17 +18,26 @@ use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Reflector, async_trait};
-use nest_rs_ws::WsClient;
 use poem::Request;
-use serde_json::Value;
 
+use crate::{AbilityBuilder, AbilityFactory};
+
+// The three in-band entries only. `check_http` *builds* the ability rather than
+// reading one back, so under `http` alone none of this is reachable — which is
+// the shape the crate root makes visible and `http/` hid.
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
+use crate::current_ability;
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
 use crate::gate::{Refusal, reason, transport};
-use crate::{AbilityBuilder, AbilityFactory, current_ability};
 
 #[cfg(feature = "graphql")]
 use nest_rs_graphql::GraphqlOperationContext;
 #[cfg(feature = "mcp")]
 use nest_rs_mcp::McpOperationContext;
+#[cfg(feature = "ws")]
+use nest_rs_ws::WsClient;
+#[cfg(feature = "ws")]
+use serde_json::Value;
 
 /// The refusal every in-band entry files: no ambient ability, so nothing
 /// decided what this caller may do.
@@ -28,6 +47,7 @@ use nest_rs_mcp::McpOperationContext;
 /// same 401 whichever installed nothing — so the line an operator greps under
 /// incident has to be the same line, with the same machine reason, or a query
 /// that finds a broken GraphQL bridge misses the identical MCP one.
+#[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
 fn deny_unscoped(refusal: Refusal<'_>) {
     crate::gate::warn_denied(Refusal {
         reason: Some(reason::NO_AMBIENT_ABILITY),
@@ -35,15 +55,17 @@ fn deny_unscoped(refusal: Refusal<'_>) {
     });
 }
 
-/// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AppAbility>)]`.
+/// Bind after the auth guard: `#[use_guards(AuthnGuard, AbilityGuard<AuthzAbility>)]`.
 /// `F::Actor` is read from request extensions; its absence on a non-public
 /// route is a `500` (an authn guard must run first). On a `#[public]`
 /// route the guard builds an Ability for the anonymous (visitor) actor —
 /// see the dev's `AbilityFactory` to define visitor rules.
 ///
 /// **`AuthzGuard` is not a framework type.** Apps define a project alias once
-/// in their authz adapter, e.g. `pub type AuthzGuard = AbilityGuard<AppAbility>;`
-/// in `features/authz/http/guard.rs`. Import that alias from your feature crate,
+/// in their authz adapter, e.g. `pub type AuthzGuard = AbilityGuard<AuthzAbility>;`
+/// in `features/authz/guard.rs` — at the module root, not under an edge folder,
+/// because this guard answers every transport. Import that alias from your
+/// feature crate,
 /// not from `nest_rs_authz`.
 #[injectable]
 pub struct AbilityGuard<F: AbilityFactory> {
@@ -136,6 +158,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
         Ok(())
     }
 
+    #[cfg(feature = "ws")]
     async fn check_ws_message(
         &self,
         _client: &WsClient,
@@ -194,6 +217,7 @@ impl<F: AbilityFactory> nest_rs_guards::GraphqlGuard for AbilityGuard<F> {}
 
 /// And WebSocket messages, for the same reason: `check_ws_message` refuses a
 /// message whose connection never authenticated.
+#[cfg(feature = "ws")]
 impl<F: AbilityFactory> nest_rs_guards::WsGuard for AbilityGuard<F> {}
 
 /// And MCP operations: [`check_mcp`](Guard::check_mcp) refuses an operation no

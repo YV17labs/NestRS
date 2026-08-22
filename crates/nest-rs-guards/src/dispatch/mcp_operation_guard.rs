@@ -2,7 +2,7 @@
 //!
 //! The twin of [`GlobalPoolOperationGuard`](super::GlobalPoolOperationGuard):
 //! `/mcp` is `EdgePosture::Exempt` too, so the per-operation seam is the only
-//! gate. An app normally registers its authz bridge there (`AppMcpGuard as dyn
+//! gate. An app normally registers its authz bridge there (`AuthzMcpBridge as dyn
 //! McpOperationGuard`); when it does not, this fallback folds the **global
 //! guard pool** in-band, so `use_guards_global(...)` reaches `/mcp` exactly as
 //! it reaches `/graphql` — a global `ThrottlerGuard` rate-limits tool calls,

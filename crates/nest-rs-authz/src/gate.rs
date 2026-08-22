@@ -69,6 +69,7 @@ pub(crate) mod reason {
     /// gates, and the masking paths alike, the last of which reach it through
     /// [`mask_reason`](crate::ability::mask_reason) so an incident query on this
     /// one value finds all three.
+    #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
     pub const NO_AMBIENT_ABILITY: &str = crate::ability::mask_reason::NO_AMBIENT_ABILITY;
     /// A field grant stripped a key the answer cannot be delivered without.
     /// The refusal a *mask* makes rather than a gate, and the same decision on
@@ -94,12 +95,7 @@ pub(crate) mod transport {
     #[cfg(feature = "graphql")]
     pub const GRAPHQL: &str = "graphql";
     /// The WebSocket edge — one message on an established connection.
-    ///
-    /// Reachable from an `http`-only build as well, and that is not an
-    /// oversight: `AbilityGuard::check_ws_message` is compiled with the guard
-    /// (the upgrade is an HTTP `GET`, so `http` forwards `nest-rs-guards/ws`),
-    /// while the per-message gate and mask need the `ws` feature.
-    #[cfg(any(feature = "http", feature = "ws"))]
+    #[cfg(feature = "ws")]
     pub const WS: &str = "ws";
     /// The MCP edge — one tool call or prompt fetch.
     #[cfg(feature = "mcp")]

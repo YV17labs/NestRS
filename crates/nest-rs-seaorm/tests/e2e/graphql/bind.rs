@@ -11,8 +11,8 @@
 //! is a driver error on a real statement — a hand-made `DbErr` would prove the
 //! branch and not that the branch is reachable.
 
+use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
-use nest_rs_authz::http::AbilityGuard;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};

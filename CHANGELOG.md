@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The one guard that answers every transport lives at the root
+
+`AbilityGuard` implements four of `Guard`'s entries — `check_http`,
+`check_graphql`, `check_ws_message`, `check_mcp` — and carries the four matching
+marker traits, but it sat in `nest-rs-authz/src/http/`. A folder named for one
+edge held the type that answers all of them, and the cost was never only the
+path:
+
+- **`nest_rs::authz::http::AbilityGuard` is now `nest_rs::authz::AbilityGuard`**,
+  beside `gate` and `chain` — the crate's other transport-agnostic decision
+  points. Each `check_*` arm is gated on its own feature.
+- **A transport no longer turns on `http` to reach its own guard.** `graphql`,
+  `ws` and `mcp` each pull the guard's dependencies directly; a GraphQL-only app
+  used to enable the HTTP surface for a type it bound on resolvers.
+- **`check_ws_message` compiles under `ws`, not `http`.** The `http` feature
+  forwarded `nest-rs-guards/ws` and `nest-rs-ws` for exactly one method of one
+  misfiled file; both forwardings are gone, and `gate::transport::WS` drops the
+  `#[cfg(any(feature = "http", feature = "ws"))]` that documented the anomaly.
+- **In the product and in what the CLI scaffolds, `authz/http/` is gone.**
+  `AuthzGuard` is `authz/guard.rs` and `AuthzModule` provides it, so
+  `AuthzGraphqlModule`, `AuthzWsModule` and `AuthzMcpModule` import `AuthzModule`
+  rather than the HTTP adapter they never served. `AuthzHttpModule` held that one
+  provider and nothing else; every `imports = [.., AuthzHttpModule]` becomes
+  `imports = [.., AuthzModule]`.
+
 ### A declaration is refused at the token that wrote it
 
 The second refusal wave: what a decorator silently accepted, deferred to a
@@ -3506,7 +3531,7 @@ the day the upstream fix lands.
 - **`AuthzGraphqlModule` was required but never scaffolded.** The generated
   resolver's own comment told the reader to import it, while
   `g resource` / `g auth` wrote `authz/http/` only and no command wrote the
-  GraphQL bridge — leaving three providers (`AppGraphqlGuard`,
+  GraphQL bridge — leaving three providers (`AuthzGraphqlBridge`,
   `GraphqlAuthnGuard`, `LoaderScope`) to be reconstructed from prose.
   `g graphql` now writes `authz/graphql/` when the workspace has a policy to
   enforce, imports it from the adapter's `module.rs`, and lists it at the app's
@@ -3921,7 +3946,7 @@ two flags are gone (`g resource --guarded`, `new --template`).
   rather than overwriting product code.
 
 - **`nestrs g auth`** — the app-side authn/authz adapter (`Claims`,
-  `AuthnGuard`, `AppAbility`, `AuthzGuard`, and their modules) that roughly ten
+  `AuthnGuard`, `AuthzAbility`, `AuthzGuard`, and their modules) that roughly ten
   documentation pages referenced and nothing generated. The framework is
   generic over the principal and the policy, so these types cannot ship in a
   `nest-rs-*` crate; every workspace wrote the same eight files by hand, from
@@ -3945,7 +3970,7 @@ two flags are gone (`g resource --guarded`, `new --template`).
   [Public reads](https://nestrs.dev/security/authorization/public-reads/).
 
   Additive under semver, with one exception worth naming: an app that already
-  has an **inherent** `define_visitor` method on its `AppAbility` would see the
+  has an **inherent** `define_visitor` method on its `AuthzAbility` would see the
   inherent one win at every call site, and the trait method silently keep its
   empty default. The name is new, so the risk is close to zero — but it is a
   real shadowing rule, not a rounding error.

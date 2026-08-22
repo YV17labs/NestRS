@@ -9,8 +9,8 @@
 //! reachable *by key* either. Asserted here rather than in-process because the
 //! filter that matters is the `WHERE` the ability adds.
 
+use nest_rs_authz::AbilityGuard;
 use nest_rs_authz::graphql::GraphqlAbilityBridge;
-use nest_rs_authz::http::AbilityGuard;
 use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, Read};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject};

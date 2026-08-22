@@ -1,4 +1,4 @@
-//! Covers `src/http/guard.rs` — what `AbilityGuard` *says* when it denies.
+//! Covers `src/guard.rs` — what `AbilityGuard` *says* when it denies.
 //!
 //! The refusals themselves are asserted elsewhere; what nothing read was the
 //! event. Both are `warn`+ on `nest_rs::authz`, which `CLAUDE.md` calls the
@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_authz::{AbilityBuilder, AbilityFactory, Action, http::AbilityGuard};
+use nest_rs_authz::{AbilityBuilder, AbilityFactory, AbilityGuard, Action};
 use nest_rs_core::Container;
 use nest_rs_guards::{Denial, Guard};
 use nest_rs_testing::LogCapture;

@@ -1,0 +1,3 @@
+RedisQueueConfig is queue/'s, named by crates/nest-rs-redis/src/worker/consumer.rs
+RedisQueueConnection is queue/'s, named by crates/nest-rs-redis/src/throttler/store.rs
+RedisQueueConnection is queue/'s, named by crates/nest-rs-redis/src/worker/consumer.rs

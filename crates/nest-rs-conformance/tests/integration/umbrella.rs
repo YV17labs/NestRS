@@ -575,3 +575,90 @@ fn every_umbrella_capability_carries_its_witnesses() {
         "a witness the front door owes",
     );
 }
+
+/// **An edge the umbrella turns on for the guard trait, it turns on for every
+/// crate that implements that edge's entry.**
+///
+/// `Guard::check_graphql` / `check_ws_message` / `check_mcp` each have a default
+/// `Ok(())` body, so a guard whose arm is compiled out **authorises everything
+/// at that edge, silently**. Two optional crates implement those arms behind
+/// their own per-edge features, and the umbrella pairs them by hand:
+/// `ws = [.., "nest-rs-guards/ws", "nest-rs-authz?/ws", "nest-rs-throttler?/ws"]`.
+///
+/// Nothing held that pairing until this test. It used to be structural —
+/// `nest-rs-authz`'s `http` feature forwarded `nest-rs-guards/ws`, so the WS arm
+/// existed whenever the guard did — and moving `AbilityGuard` to the crate root
+/// in 5.2 replaced that with the hand-written lines above. An audit reproduced
+/// the gap the day it opened: same source, `authz = ["http"]` with
+/// `guards = ["ws"]`, a message with no ambient ability came back **PASSED**
+/// where `HEAD` returned **DENIED 401**. Unreachable through the umbrella, and
+/// unreachable is exactly what this test is for.
+///
+/// The population is derived, never listed: a crate implementing `fn check_<x>`
+/// owes the pairing, so a new guard crate joins the day it is written.
+#[test]
+fn every_edge_the_umbrella_arms_is_armed_on_every_guard_crate() {
+    // `Guard`'s per-edge entries and the umbrella feature each belongs to.
+    const ENTRIES: [(&str, &str); 3] = [
+        ("check_graphql", "graphql"),
+        ("check_ws_message", "ws"),
+        ("check_mcp", "mcp"),
+    ];
+    let root = repo_root();
+    let matrix = nest_rs_conformance::sources::umbrella_matrix(&root);
+    let mut offenders = Vec::new();
+    let mut checked = 0usize;
+
+    for (entry, edge) in ENTRIES {
+        // Who implements this entry, read off the tree. `nest-rs-guards` owns
+        // the trait rather than implementing it for a bound guard, and
+        // `nest-rs-macro-hygiene` is the one-dependency witness crate — neither
+        // is an optional crate the umbrella pairs.
+        let implementors: BTreeSet<String> = nest_rs_conformance::sources::crate_dirs()
+            .into_iter()
+            .filter(|k| k.starts_with(root.join("crates")))
+            .filter(|k| {
+                nest_rs_conformance::sources::rust_files(&k.join("src"))
+                    .iter()
+                    .filter_map(|p| nest_rs_conformance::sources::parsed(p))
+                    .any(|f| file_declares_impl_fn(&f, entry))
+            })
+            .filter_map(|k| k.file_name().and_then(|n| n.to_str()).map(str::to_owned))
+            .filter(|k| k != "nest-rs-guards" && k != "nest-rs-macro-hygiene")
+            .collect();
+
+        let enabled = matrix.entries_of(edge);
+        if enabled.is_empty() {
+            offenders.push(format!("the umbrella declares no `{edge}` feature"));
+            continue;
+        }
+        for krate in &implementors {
+            checked += 1;
+            let pairing = format!("{krate}?/{edge}");
+            if !enabled.iter().any(|e| e == &pairing) {
+                offenders.push(format!(
+                    "`{edge}` arms `{entry}` but does not enable `{pairing}` — \
+                     that crate's guard would authorise every {edge} unit in silence",
+                ));
+            }
+        }
+    }
+
+    baseline::floor(checked, 4, "edge/guard-crate pairings");
+    assert!(
+        offenders.is_empty(),
+        "every `Guard::check_*` entry defaults to `Ok(())`, so an arm the \
+         umbrella leaves compiled out is a guard that passes rather than one \
+         that is absent: {offenders:#?}",
+    );
+}
+
+/// Whether the file carries an `impl` block declaring a method of this name —
+/// the shape that *answers* an edge, as opposed to the trait that declares it.
+fn file_declares_impl_fn(file: &syn::File, method: &str) -> bool {
+    file.items.iter().any(|item| {
+        matches!(item, Item::Impl(block) if block.items.iter().any(|sub| {
+            matches!(sub, syn::ImplItem::Fn(f) if f.sig.ident == method)
+        }))
+    })
+}

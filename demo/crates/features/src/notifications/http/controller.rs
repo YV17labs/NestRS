@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 
-use crate::app_authn::AppAuthnGuard;
-use crate::app_authz::AppAuthzGuard;
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 use crate::notifications::{Entity as NotificationEntity, Notification, NotificationsService};
 
 #[controller(path = "/notifications")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct NotificationsController {
     #[inject]
     svc: Arc<NotificationsService>,

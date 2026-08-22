@@ -10,16 +10,16 @@ use poem::web::{Json, Query};
 use poem::{Body, Error, Response, Result};
 
 use super::extract::UploadedAudio;
-use crate::app_authn::AppAuthnGuard;
-use crate::app_authz::AppAuthzGuard;
 use crate::audio::TranscodeGuard;
 use crate::audio::{
     AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,
     UploadRequestDto,
 };
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 
 #[controller(path = "/audio")]
-#[use_guards(ThrottlerGuard, AppAuthnGuard, AppAuthzGuard, TranscodeGuard)]
+#[use_guards(ThrottlerGuard, AuthnGuard, AuthzGuard, TranscodeGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,

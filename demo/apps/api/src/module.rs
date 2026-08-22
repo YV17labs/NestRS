@@ -10,9 +10,9 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule};
 use nest_rs::server_timing::ServerTimingModule;
 use nest_rs::throttler::ThrottlerModule;
 
-use features::app_authn::AppAuthnModule;
-use features::app_authz::{AppAuthzGraphqlModule, AppAuthzHttpModule};
 use features::audio::{AudioHttpModule, AudioScheduleModule};
+use features::authn::AuthnModule;
+use features::authz::{AuthzGraphqlModule, AuthzModule};
 use features::notifications::{NotificationsEventsModule, NotificationsHttpModule};
 use features::orgs::{OrgsGraphqlModule, OrgsHttpModule};
 use features::posts::{PostsGraphqlModule, PostsHttpModule};
@@ -35,9 +35,9 @@ use features::users::{UsersGraphqlModule, UsersHttpModule};
         ThrottlerModule::for_root(None),
         GraphqlModule::for_root(None),
         OpenApiModule::for_root(None),
-        AppAuthnModule,
-        AppAuthzHttpModule,
-        AppAuthzGraphqlModule,
+        AuthnModule,
+        AuthzModule,
+        AuthzGraphqlModule,
         OrgsHttpModule,
         OrgsGraphqlModule,
         UsersHttpModule,

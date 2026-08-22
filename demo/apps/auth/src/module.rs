@@ -8,7 +8,7 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule};
 use nest_rs::social::SocialModule;
 use nest_rs::throttler::ThrottlerModule;
 
-use features::app_oauth::AppOAuthHttpModule;
+use features::oauth::OAuthHttpModule;
 
 #[module(
     imports = [
@@ -21,7 +21,7 @@ use features::app_oauth::AppOAuthHttpModule;
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
         AuthnModule::for_root(None),
         SocialModule,
-        AppOAuthHttpModule,
+        OAuthHttpModule,
     ],
 )]
 pub struct AuthModule;

@@ -1,1 +1,1 @@
-mod app_oauth;
+mod oauth;

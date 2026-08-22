@@ -1,11 +1,11 @@
 use nest_rs::core::module;
 
 use super::tool::PostsTool;
-use crate::app_authz::mcp::AppAuthzMcpModule;
+use crate::authz::mcp::AuthzMcpModule;
 use crate::posts::PostsModule;
 
 #[module(
-    imports = [PostsModule, AppAuthzMcpModule],
+    imports = [PostsModule, AuthzMcpModule],
     providers = [PostsTool],
 )]
 pub struct PostsMcpModule;

@@ -6,7 +6,7 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule};
 
 use crate::chat::ChatModule as ChatFeatureModule;
 use crate::notify::NotifyModule;
-use features::app_authn::AppAuthnModule;
+use features::authn::AuthnModule;
 use features::users::UsersWsModule;
 
 #[module(
@@ -14,7 +14,7 @@ use features::users::UsersWsModule;
         ConfigModule::for_root(),
         SeaOrmDatabaseModule::for_root(None),
         SeaOrmHealthModule,
-        AppAuthnModule,
+        AuthnModule,
         HealthModule,
         HttpModule::for_root(HttpConfig { port: 3004, ..Default::default() }),
         ChatFeatureModule,

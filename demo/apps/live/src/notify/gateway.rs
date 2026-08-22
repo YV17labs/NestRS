@@ -1,11 +1,11 @@
 use nest_rs::ws::{WsClient, gateway, messages};
 
-use features::app_authn::AppAuthnGuard;
+use features::authn::AuthnGuard;
 
 pub struct NotifyNs;
 
 #[gateway(path = "/notify", namespace = NotifyNs)]
-#[use_guards(AppAuthnGuard)]
+#[use_guards(AuthnGuard)]
 #[derive(Default)]
 pub struct NotifyGateway {}
 

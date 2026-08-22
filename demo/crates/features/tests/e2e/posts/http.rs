@@ -6,9 +6,9 @@ use poem::http::{StatusCode, header};
 use serde_json::json;
 use uuid::Uuid;
 
-use features::app_authn::AppAuthnModule;
-use features::app_authn::Role;
-use features::app_authz::AppAuthzHttpModule;
+use features::authn::AuthnModule;
+use features::authn::Role;
+use features::authz::AuthzModule;
 use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
 use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, token};
@@ -20,8 +20,8 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
     imports = [
         SeaOrmDatabaseModule::for_root(None),
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-        AppAuthnModule,
-        AppAuthzHttpModule,
+        AuthnModule,
+        AuthzModule,
         PostsHttpModule,
     ],
 )]

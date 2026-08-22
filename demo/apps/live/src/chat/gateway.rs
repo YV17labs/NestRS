@@ -6,10 +6,10 @@ use crate::chat::dtos::{ChatMessageDto, SendMessageDto};
 use crate::chat::guard::ModeratedGuard;
 use crate::chat::request_seq::RequestSeq;
 use crate::chat::service::ChatService;
-use features::app_authn::AppAuthnGuard;
+use features::authn::AuthnGuard;
 
 #[gateway(path = "/ws")]
-#[use_guards(AppAuthnGuard)]
+#[use_guards(AuthnGuard)]
 pub struct ChatGateway {
     #[inject]
     svc: Arc<ChatService>,

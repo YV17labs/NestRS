@@ -88,7 +88,7 @@ pinned struct — the framework-wide **dual-path config rule**, which
 applies to every `nest-rs-*` module.
 
 An app activates a transport by importing its module
-(`HttpModule::for_root(...)`, `QueueModule::for_root(...)`,
+(`HttpModule::for_root(...)`, `RedisQueueModule::for_root(...)`,
 `OpenApiModule`, `OpenTelemetryModule`, …). There is no public
 `.transport(...)` seam.
 

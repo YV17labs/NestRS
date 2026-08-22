@@ -7,7 +7,7 @@ paths:
 # Framework crates — macros, container, discovery
 
 Loaded when touching `crates/nest-rs-*`. See also: `request-layers.md`,
-`data-layer.md`, `authn-authz.md`.
+`data-layer.md`.
 
 ## Macros
 
@@ -426,6 +426,118 @@ module owns — so a metadata-discovered surface (`HttpEndpointMeta`,
 inert-entry `warn` to emit. Pick the mechanism, then take its gate; never
 bolt a `ReachableProviders` filter onto metadata to look symmetric.
 
+### A swappable concern ships an extension contract
+
+Anything a third party could plug a different implementation into owes a
+written **extension contract**: the trait(s) they implement, the seam that makes
+their implementation reachable from the container, and the sentence that says
+what happens when there is more than one. **If the contract cannot be written,
+the concern is not swappable — say so in the crate's `//!`, never leave it to be
+inferred.** A trait with no contract beside it is an extension a reader has to
+reverse-engineer; a client with no trait and no sentence is a closed door that
+looks like an open one.
+
+**The unit is the port, never the crate that houses it.** A crate may hold a
+port and something that is not one — `nest-rs-authn` holds `Strategy` (a port,
+selected by type parameter, owing no namespace) beside `JwtService` (shared token
+infrastructure four sibling crates reach, whose `NESTRS_AUTHN__*` is legitimate).
+Ask the questions below of the port; asking them of the crate is what produced
+the two false rows this table used to carry.
+
+Two questions determine the shape, and they are **independent** — answer both.
+
+**Q1 — who owns the driver problem?**
+
+- **Delegated.** A third-party library is *already* the multi-driver
+  abstraction, and the nestrs crate is a thin adapter over it that does not let
+  the vendor's types leak. `object_store` (S3, GCS, Azure, local filesystem,
+  in-memory) under `nest-rs-storage`; `sea-orm` (postgres/mysql/sqlite) under
+  `nest-rs-seaorm`; `apalis` (redis, sql) under `nest-rs-redis`. The port then
+  exists for exactly one move — swapping the **vendor** — so its contract is
+  thin **and declares no config**, because nothing is asked of the integrator's
+  settings. A thin port here is the correct outcome, not an unfinished one:
+  reading `nest-rs-database`'s bare `Executor` as a deficiency is the mistake
+  this paragraph exists to stop, and it was made three times in one session.
+- **Owned.** Nothing abstracts the concern, so nestrs defines the trait, the
+  registration seam and the arbitration sentence itself — `ThrottlerStore`,
+  `SocialProvider`, `Strategy`.
+
+**Q2 — what selects the active implementation? Three modes, and the third is
+the one this framework uses most.**
+
+- **By import.** Exactly one, chosen at compile time by which module the app
+  imports; the consumer injects `dyn Port` and never names the backend. Two
+  imported is a **boot error naming both**, worded once and shared by every
+  backend so the halves cannot drift — `nest_rs_throttler::BACKEND_REMEDY` is
+  that shape already built.
+- **By type parameter.** The app names the implementation in an alias and the
+  generic host is instantiated with it — `AuthnGuard<S: Strategy>`,
+  `AbilityGuard<F: AbilityFactory>`, `GraphqlAbilityBridge<A, G>`. **No
+  arbitration exists and none is owed**: two instantiations are two distinct
+  types, so nothing can be contested. The port declares no config either; an
+  implementation that needs one carries its own.
+- **By configuration.** The import only **opens the gate** (module-gated
+  discovery); **configuration decides which members are active**, from zero to
+  all of them. Discovery registering an entry is not activation — that
+  distinction is the whole mechanism, and `nest-rs-social` is the exemplar:
+  a complete `NESTRS_SOCIAL__<KEY>__*` set makes a provider active, an absent
+  one leaves it inert with a boot `warn`, a partial one fails the boot naming it.
+
+The two axes are orthogonal, and the measured tree carries this much:
+
+**Q1 is answered by the crate that *binds* the port, never by the crate that
+declares it.** A port crate depending on nothing is the normal case —
+`nest-rs-database`'s whole manifest is `tokio`, `nest-rs-queue` names no
+`apalis` — so it is the driver row that says delegated or owned:
+
+| port | declared by | bound by | Q1 (of the binding) | Q2 | contract written |
+|---|---|---|---|---|---|
+| `Executor` | `nest-rs-database` | `nest-rs-seaorm` | delegated (`sea-orm`) | by import | **yes** — `## Extension contract`, but no arbitration sentence |
+| `JobProducer` / `Processor` | `nest-rs-queue` | `nest-rs-redis` | delegated (`apalis`) | by import | **yes** — `docs/queue/writing-a-driver.mdx` |
+| `SocialProvider` | `nest-rs-social` | itself + third parties | owned | by configuration | **yes** — open provider contract |
+| `ThrottlerStore` | `nest-rs-throttler` | itself + `nest-rs-redis` | owned | by import | no |
+| `Strategy` | `nest-rs-authn` | the app's alias | owned | by type parameter | no |
+| object storage | — | `nest-rs-storage` | delegated (`object_store`) | **nothing selects** — see below | no port exists |
+
+**The namespace falls out of the contract — it is never arbitrated.** A port
+owns a config namespace **if and only if its contract requires the integrator to
+honour a config**. The throttler's does (`resolve(&ThrottlerConfig)` is in the
+shared seam), so `NESTRS_THROTTLER__*` has an owner and survives a backend swap.
+A delegated port's contract requires nothing, so `NESTRS_DATABASE__*` and
+`NESTRS_QUEUE__*` name ports that declare no field — every key under them is the
+driver's, and `NESTRS_DATABASE__SQLX_LOGGING` is sqlx's flag wearing the port's
+word. Selection *by configuration* is the one case that forces a two-segment
+namespace, because members coexist and must be told apart: `social__github`,
+`social__google`. Selection *by type parameter* is the one case that needs no
+namespace at all. Nothing else needs either.
+
+**`nest-rs-storage` is the open breach of this rule, and it is recorded rather
+than fixed.** It delegates to `object_store`, whose whole point is being
+multi-driver (S3, GCS, Azure, local filesystem, in-memory) — and then pins one:
+`Storage` holds a concrete `OnceLock<AmazonS3>`, and every field of
+`StorageConfig` is S3's own vocabulary (`endpoint`, `region`, `access_key`,
+`secret_key`, `bucket`, `force_path_style`, `allow_http`) under the port's word,
+`NESTRS_STORAGE__*`. So a consumer cannot reach GCS or the local filesystem at
+all, while **three shipped surfaces say otherwise** — and the two loudest are the
+ones a driver author actually opens: the crate's `//!` ("pointing at GCS/Azure/fs
+later is a builder change in `Storage`, not an API change for consumers"), the
+doc on the `pub` `Storage` type, which renders on docs.rs, and the `description`
+in `Cargo.toml`, which is the crates.io landing page: "the GCS, Azure, fs and
+memory drivers sit behind the same client." All three are true of *us*, and read
+by everyone as true of *them*. That is the sentence this rule forbids: a concern
+that is not swappable implying that it is. It is also the naming law's own case —
+a bare port name worn by one backend, exactly what `RedisThrottlerModule` exists
+not to be. Two ways out and both are the owner's: expose `object_store`'s other
+drivers, or rename the crate for the backend it pins. `nest-rs-redis` shows the
+second working — it pins `apalis_redis` just as hard, and its name says so.
+
+That derivation replaces three rejected attempts, each recorded so none is
+re-proposed: classifying a field as *policy* or *connection* (a judgement no
+outsider can repeat), asking whether *a second driver would write it identically*
+(a counterfactual whose answer depends on which driver you imagine), and reading
+the namespace off the file's path stem (mechanical, but it decides nothing about
+where the field should have been declared).
+
 ### A transport aggregates; owning a mount is the exception
 
 **A transport aggregates contributions from several providers onto one
@@ -836,8 +948,8 @@ name order; init failure aborts boot, shutdown is best-effort.
   with Redis first-class (on `apalis`). Crate names follow the
   **storage** (Redis), not the framework (apalis). Queues identified by
   name (stringly-typed, known cost). Producer/consumer decoupled.
-  Connection seeded via `QueueModule::for_root`; consumer activates via
-  `QueueWorkerModule` (producer-only apps skip it). **No apalis types
+  Connection seeded via `RedisQueueModule::for_root`; consumer activates via
+  `RedisWorkerModule` (producer-only apps skip it). **No apalis types
   leak.**
 
   **`#[input]` stays re-exported at the queue edge and stays off the queue

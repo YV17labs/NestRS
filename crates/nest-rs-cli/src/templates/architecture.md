@@ -72,12 +72,9 @@ files only: a `module.rs` never takes it.
 **No module or provider below the root ever carries the project's or the app's
 name.** The project name stops at the workspace; the app name stops at
 `<App>Module`. An app may share the project's name only while it is the only
-app — and even then, nothing beneath it may.
-
-**`App` is the one exception, and it is not an app's name.** The apps are `api`,
-`auth`, `live`, `worker`; `App` names none of them. It is the marker for *the
-product's own* — the sense `AppAbility` and `AppJwtStrategy` already carry — and
-the rule above forbids a **name**, never a marker. See *The product's own* below.
+app — and even then, nothing beneath it may. There is no marker exception: a
+product module never prefixes itself to stand apart from the framework — see
+*The product's own* below.
 
 **A module name is plural when the domain is a collection of enumerable things
 (`users`, `orders`), singular when it is a capability (`auth`, `search`).** Not
@@ -130,60 +127,64 @@ classifies without argument. `authn` and `authz` stay as **crate** names — the
 pair is real, and it is the pair a reader wants — but they name two crates, not
 two families.
 
-## The product's own — `app_` where the name is already the framework's
+## The product's own — what the product decides, and nothing else
 
-A product module is named for its domain, and most domains are the product's
-alone: `users`, `posts`, `audio`, `orders`. A few are not. Where the product
-binds a framework concern, the obvious name is the concern's own word — and
-then two modules wear it:
+A product module is named for its domain and its name is derived from its path
+like any other — `features/authn/module.rs` is `AuthnModule`, whether or not the
+framework happens to export a type of that name. **No marker is ever added to
+tell a product name apart from a framework one.** A product name is local and a
+framework name is global, and the path a caller already types separates them.
+
+**This does not reach the framework's own crates, and the two rules do not
+compete.** *A port keeps the bare name; a driver carries its own subject* binds
+`nest-rs-redis`, and it still does: `Redis` is a **subject**, so
+`RedisThrottlerModule` says which backend a log line came from at no cost but
+length. The product has no such word — the marker considered here was `App`,
+which names nothing, and a marker that carries no subject buys no
+identification, only length. So the framework keeps paying and the product
+stops.
+
+**Two colliding idents cannot both be imported into one file**, so where the
+product's own name equals the framework's, the framework's is written in full
+at the point of use — not aliased, and not renamed:
 
 ```rust
-use nest_rs::authn::AuthnModule;      // the port
-use features::authn::AuthnModule;     // the app's binding — same name
+// features/src/authn/module.rs — the product's AuthnModule binds the framework's
+#[module(imports = [nest_rs::authn::AuthnModule::for_root(None)])]
+pub struct AuthnModule;
 ```
 
-At the call site only `AuthnModule` is written, so the reader has to go back to
-the `use` line to learn which one is imported. **That is the defect**: a name
-that needs a second lookup is the one property the naming law exists to buy.
+That qualified path is **mandatory, not a preference**: `use … as` is not an
+escape either, because `#[module]` records `ModuleDescriptor.name` from the
+struct's own ident at its *definition* site. That descriptor label is the one
+place in the framework where a name appears without its path — it is what
+`AccessGraphError` and `UnresolvedDependencyError` print. Everything else is
+path-qualified and unaffected: `ContestedDeclarationError` carries
+`std::any::type_name::<T>()`, and a provider's label is the last segment of the
+path **as written** in `providers = [...]`, so an alias does rename it.
 
-**So a product module whose name is one the umbrella re-exports takes the
-`app_` prefix**, and every type in it follows:
+Nothing collides in this repo today — `nest_rs::authn::AuthnModule` is a
+hand-written dynamic module with no `#[module]`, so it files no descriptor and
+no boot line. **Whether the framework should absorb such a binding entirely —
+`AuthnModule::for_root::<S>(cfg)` registering the strategy and its guard, so the
+product declares no module at all — is an open question for the owner**, not a
+decided remedy: it is possible and unbuilt, and writing it as settled would put
+a claim in the rules that nothing has tested.
 
-| | |
-|---|---|
-| `features/app_authn/` | `AppAuthnModule`, `AppAuthnGuard`, `AppJwtStrategy` |
-| `features/app_authz/` | `AppAuthzModule`, `AppAuthzHttpModule`, `AppAbility` |
-| `features/app_oauth/` | `AppOAuthModule`, `AppOAuthHttpModule`, `AppOAuthService` |
+**A prefixed variant was tried and removed; recorded so it is not re-proposed.**
+`app_authn` / `AppAuthnModule` triggered on the *namespace* the umbrella
+re-exports rather than on the ident, so fourteen of seventeen marked types
+carried a marker that distinguished them from nothing — `nest-rs-authz` exports
+no `AuthzModule`, and `nest-rs-oauth-server` exports no module at all. A marker
+that is right for three names and noise for fourteen is not a convention.
 
-Four things make it checkable rather than a matter of taste:
-
-- **The set is closed and derived.** It is the `pub use nest_rs_* as <concern>;`
-  list in `crates/nest-rs/src/lib.rs`, plus the members of each family module —
-  one file, read by the conformance join. A module outside that set never takes
-  the prefix: `users` and `posts` collide with nothing.
-- **The marker goes in front**, because that is where the two ecosystems that
-  have a convention put it — Rails' `ApplicationController` against
-  `ActionController::Base`, and Rust's own `AppState` / `AppError` — and because
-  the first word is the one a reader scans. NestJS needs none: `@nestjs/` in the
-  import path does the same work a shared prefix does here.
-- **The concern's word survives**, so the correspondence is immediate and
-  `rg authn` still finds the binding. A suffix would keep that too; a rename
-  (`identity`, `permissions`, `issuer`) would not.
-- **It groups.** The bindings sort together above the product's own domains,
-  which is the one grouping a flat directory gives away for free.
-
-**The prefix is a claim about the module, so it binds what is inside it too.**
-`app_authn/` holds `Claims` because `Claims` is what `JwtStrategy<Claims>`
-binds; a separate `identity/` holding one file and no `module.rs` is that
-content sitting where nothing reaches for it.
-
-**And the claim is a test, so what is not the product's own does not live behind
-the prefix.** Anything inside it that *every* consumer would write identically —
-a wire shape a specification fixes, a token a framework seam requires, a default
-nobody varies — is the framework's. Left in the app it is a copy waiting to
-drift from the thing it duplicates, and the drift is silent because nothing
-joins the two. **It moves up.** What earns the prefix is what this product
-*decides*: its claims, its policy, its scopes, its validation rules.
+**What is not the product's own does not live in the product.** Anything a
+module holds that *every* consumer would write identically — a wire shape a
+specification fixes, a token a framework seam requires, a default nobody varies
+— is the framework's. Left in the app it is a copy waiting to drift from the
+thing it duplicates, and the drift is silent because nothing joins the two. **It
+moves up.** What stays is what this product *decides*: its claims, its policy,
+its scopes, its validation rules.
 
 Two tells, and both have been found here:
 
@@ -397,6 +398,31 @@ or an enum leaves the count at one, and that is the common case. Reach for
   `schedule`, `mcp`, `events`. The *form* is open — a new edge follows
   `<edge>/module.rs` + `<Module><Edge>Module` — but adding one is a framework
   change, not a local improvisation.
+- **A file under `<edge>/` serves that edge and nothing else.** The folder is a
+  statement about the file, exactly as a type's name is a statement about its
+  path, and a file answering two edges from inside one of them makes that
+  statement false. So a type the framework dispatches to at several edges — one
+  guard implementing `check_http`, `check_graphql`, `check_ws_message` and
+  `check_mcp`, one layer bound at more than one — sits **at the level every edge
+  it answers can reach**: the crate root, or the module root beside the edge
+  folders. Not in the folder of whichever edge asked for it first.
+
+  This one is worth stating because it is the hardest to see from the inside.
+  `nest-rs-authz/src/http/guard.rs` held exactly such a guard through 5.1 and the
+  name was never wrong — `AbilityGuard` reads correctly anywhere. Only its
+  *location* was, and it cost three transports the HTTP feature to reach their
+  own guard, put the WS entry behind `http`, and made three of the demo's four
+  `Authz<Edge>Module`s import an HTTP adapter they never served. The reverse is
+  **not** a law: a crate whose whole subject is one edge keeps its role files at
+  the root (`nest-rs-server-timing`'s `interceptor.rs`), because a folder
+  separates several adapters and there are none to separate.
+
+  Mechanised by `no_file_under_an_edge_folder_answers_another_edge` in
+  `naming.rs`, which derives each edge's dispatch surface from the framework's
+  own `pub trait` declarations rather than listing it. Two things it cannot see
+  and a reviewer therefore owes: an edge-bound trait that does not name its edge
+  (`SocketContext`, `RouteResponseShaper`), and an alias whose aliased type is
+  the thing answering several edges.
 - `mod.rs` / `lib.rs` carry `//!`, `mod` and `pub use` — no logic.
 - Injected service field is `svc` when there is one, `<name>_svc` when there
   are several. Non-service dependencies keep descriptive names (`db`, `queue`,

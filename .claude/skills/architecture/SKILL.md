@@ -132,17 +132,44 @@ Hunt these before anything generic.
   reads fine in isolation and is only wrong against its location. The property
   to test is bidirectional — from the path you must know the type, from the type
   you must know the path — and the unit is the whole set of siblings, never one
-  name. `redis/queue/module.rs` ⇒ `QueueModule`, `audio/http/module.rs` ⇒
+  name. `redis/queue/module.rs` ⇒ `RedisQueueModule`, `audio/http/module.rs` ⇒
   `AudioHttpModule`, `posts/http/controller.rs` ⇒ `PostsController`. A mismatch
   is not a nit: it is the one defect that makes every *other* review harder,
-  because a reader who cannot navigate cannot check anything else. Two things
-  follow and both are findings: a name that restates its namespace
-  (`redis::RedisThrottlerModule`) and a file whose path never says what it is
-  (`nest-rs-redis/src/module.rs` holding `QueueModule` — the fix is the folder
-  the file should have been in, not a better name). `nest-rs-conformance`'s
-  `naming.rs` mechanises the module and adapter cases; everything else here is
-  yours.
+  because a reader who cannot navigate cannot check anything else. The finding
+  that follows is **a file whose path never says what it is** — a
+  `nest-rs-redis/src/module.rs` holding a bare `QueueModule`, where the fix is
+  the folder the file should have been in, not a better name.
 
+  **A driver's stutter is not that finding, and this paragraph used to say it
+  was.** `nest_rs::redis::RedisThrottlerModule` repeats `redis` at the path and
+  is **correct** — `CLAUDE.md` settles it: "the stutter at the path is an
+  accepted cost: a name that is unambiguous in a log outranks a name that is
+  short in an import." Flagging it costs the review its credibility on the one
+  law it exists to enforce. `nest-rs-conformance`'s `naming.rs` mechanises the
+  module, the adapter, the edge-folder and the binding-folder cases; everything
+  else here is yours.
+
+- **A file that serves more than the folder it sits in.** The sibling of the
+  class above, one level down, and the one that hides best: an edge folder
+  (`http/`, `graphql/`, `ws/`, `mcp/`, `queue/`, `schedule/`, `events/`) states
+  that its file serves that edge, so a file answering two from inside one makes
+  its own path a false statement. **Open the file — this class is invisible from
+  the outside.** The module list, the `mod.rs` and the type name all read
+  correctly; the tell is inside, and it is that the framework dispatches to the
+  type at edges the folder does not name. `nest-rs-authz/src/http/guard.rs` held
+  a guard implementing `check_http`, `check_graphql`, `check_ws_message` **and**
+  `check_mcp` for a full release. `AbilityGuard` was a good name the whole time.
+  The blast radius is never just the path: three transports had to enable the
+  `http` feature to reach their own guard, the WS entry compiled under `http`,
+  and three of the demo's four `Authz<Edge>Module`s imported an HTTP adapter they
+  never served. *Ask: what dispatches to this type, and can every one of those
+  callers reach it without importing an edge it does not use?* The fix is the
+  move — up to the level every answering edge reaches — never a better name.
+  `naming.rs`'s `no_file_under_an_edge_folder_answers_another_edge` mechanises
+  the part that is a symbol; **two parts are yours**, because a scan on
+  identifiers cannot see them: a trait that is edge-bound without naming its edge
+  (`SocketContext`, `RouteResponseShaper`), and an alias whose *aliased* type is
+  what answers several edges.
 - **A concern in a crate that does not own it.** A type, constant, check or
   descriptor whose subject belongs to another crate — the kernel holding a
   descriptor for an optional edge, a transport holding a rule the kernel
@@ -187,16 +214,20 @@ Hunt these before anything generic.
   before it: it **narrows** it (`http::HttpModule`,
   `seaorm::health::DatabaseHealthModule`), or it names a **second axis** of it —
   the one sanctioned pair being an implementation namespace over a port type
-  (`redis::QueueModule`, `seaorm::DatabaseModule`, `redis::RedisThrottlerModule`),
-  where `redis` says *how* and `Queue` says *what it binds*. A segment that does
+  (`redis::RedisQueueModule`, `seaorm::SeaOrmDatabaseModule`), where `redis`
+  says *how* and `Queue` says *what it binds*. A segment that does
   neither — a second word for the subject the segment above already named — is a
   **synonym split**, and it is the costliest naming defect there is: neither
   half is greppable from the other, so a reader has to know both words to find
   either, and every item the crate adds inherits the split.
-  `nest_rs::oauth_discovery::OAuthResourceModule` is that defect in the
-  framework's own front door — the namespace calls the concern *discovery*, the
-  type calls it *protected resource*, and the crate's `//!` argues at length for
-  the first word while every single item it exports is spelled in the second.
+  `nest_rs::oauth_discovery::OAuthResourceModule` **was** that defect in the
+  framework's own front door — the namespace called the concern *discovery*, the
+  type called it *protected resource*, and the crate's `//!` argued at length for
+  the first word while every single item it exported was spelled in the second.
+  It has since been settled the other way: the crate is `nest-rs-oauth-resource`,
+  the target `nest_rs::oauth::resource`, the namespace `oauth_resource`, and the
+  exports `OAuthResource*` — one word at every site. The worked count below is
+  kept because the *method* is what transfers, not because the defect is live.
   The finding is never "the type is badly named": it is **the two levels
   disagree**, one of them has to move, and arguing *which* — with the cost of
   each direction — is what you owe.
@@ -209,9 +240,9 @@ Hunt these before anything generic.
   prefix, the README's `# ` line, the file names, and **every exported type,
   trait, function, constant and error**. Count them before you write the
   finding, because the count *is* the argument for which side moves:
-  `nest-rs-oauth-discovery` spells *discovery* at five of those sites (directory,
+  `nest-rs-oauth-discovery` spelled *discovery* at five of those sites (directory,
   feature, re-export, `TARGET`, config namespace — hence `NESTRS_OAUTH_DISCOVERY__*`
-  on the deployment) and *protected resource* at all four it exports
+  on the deployment) and *protected resource* at all four it exported
   (`OAuthResourceConfig`, `ProtectedResourceMetadata`, `OAuthResourceModule`,
   `OAuthResourceSetup`). Five against four is not a tie, and neither number
   is a `*Module` count.

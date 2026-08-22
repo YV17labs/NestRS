@@ -188,7 +188,7 @@ fn a_generated_entity_compiles() {
 /// `crates/features/src/lib.rs` with the auth adapter's modules dropped.
 ///
 /// The files stay on disk; Rust compiles the module tree, not the directory, so
-/// undeclaring them is enough to take `app_authn/claims.rs` — and its `uuid` —
+/// undeclaring them is enough to take `authn/claims.rs` — and its `uuid` —
 /// out of the build.
 const RESOURCE_ONLY_LIB: &str = r#"pub mod hello;
 pub mod post;
@@ -220,7 +220,7 @@ pub struct PostController {
 impl PostController {}
 "#;
 
-/// The resource's HTTP module without the `AppAuthzHttpModule` import the guards
+/// The resource's HTTP module without the `AuthzModule` import the guards
 /// brought — the second and last thread tying the generated resource to the
 /// auth adapter.
 const UNGUARDED_CRUD_MODULE: &str = r#"use nest_rs::core::module;
@@ -383,14 +383,14 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
 
 #[test]
 fn the_generated_ws_and_mcp_authz_bridges_compile() {
-    // F4: `g ws` and `g mcp` named `AppAuthzWsModule` / `features::app_authz::mcp` in
+    // F4: `g ws` and `g mcp` named `AuthzWsModule` / `features::authz::mcp` in
     // their own output while writing neither. They write both now — and a
     // bridge module is exactly the shape the `integration` suite cannot judge:
     // it asserts on the *text* a generator produced, so a `#[module]` naming a
     // provider behind a feature the manifest never enabled reads as correct
     // there and fails on the user's first `cargo check`.
     //
-    // One workspace, both adapters: the `app_authz/` tree is shared, so this also
+    // One workspace, both adapters: the `authz/` tree is shared, so this also
     // pins that two bridges land side by side without clobbering each other's
     // index lines.
     scaffold_and_check(

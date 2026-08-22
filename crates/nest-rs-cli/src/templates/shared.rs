@@ -418,7 +418,7 @@ not "open" — it answers nothing until it is wired, which is the fail-secure ha
 of the design. Before an operation serves real rows: swap `#[public]` for
 `#[authorize]`, bind `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct, and
 import the edge's authz module in that adapter's `module.rs` —
-`AuthzHttpModule`, `AuthzGraphqlModule`, `AuthzWsModule`, `AuthzMcpModule`.
+`AuthzModule`, `AuthzGraphqlModule`, `AuthzWsModule`, `AuthzMcpModule`.
 `nestrs g auth` writes all of them, and `nestrs g <edge>` on a `g resource` port
 emits the wiring already done.
 
@@ -429,7 +429,7 @@ through the app's `dyn McpOperationGuard`, else the global guard pool, else
 deny-all — so an `/mcp` endpoint with no bridge registered answers 401 to every
 tool call.
 
-**`AppAbility` is the whole policy, and it grants nothing until you say so.** A
+**`AuthzAbility` is the whole policy, and it grants nothing until you say so.** A
 freshly scaffolded resource answers 403 on every route until a rule names its
 entity:
 

@@ -1,11 +1,11 @@
 //! `nestrs g auth` — the app-side authn/authz adapter every guarded feature
-//! imports: the `Claims` principal, `AppAuthnGuard`/`AppAuthnModule`, and
-//! `AppAbility`/`AppAuthzGuard`/`AppAuthzHttpModule`.
+//! imports: the `Claims` principal, `AuthnGuard`/`AuthnModule`, and
+//! `AuthzAbility`/`AuthzGuard`/`AuthzModule`.
 //!
 //! The framework is generic over the principal and the policy, so these types
 //! cannot ship in a `nest-rs-*` crate — they are app code, identical in every
 //! project until you edit the rules. Generating them is what makes
-//! `#[use_guards(AppAuthnGuard, AppAuthzGuard)]` resolve; without it a guarded
+//! `#[use_guards(AuthnGuard, AuthzGuard)]` resolve; without it a guarded
 //! controller names two types nothing defines.
 
 use std::path::PathBuf;
@@ -29,7 +29,7 @@ pub fn run(opts: AuthOptions) -> CliResult<()> {
 
     if exists(&ws) {
         return Err(CliError::Anyhow(anyhow::anyhow!(
-            "`{}` already has an auth adapter — edit `app_authz/ability.rs` to change the policy",
+            "`{}` already has an auth adapter — edit `authz/ability.rs` to change the policy",
             ws.root.display()
         )));
     }
@@ -56,9 +56,9 @@ pub fn run(opts: AuthOptions) -> CliResult<()> {
 /// the second write would clobber the first.
 pub(super) fn lib_decls() -> Vec<String> {
     [
-        "pub mod app_authn;",
-        "pub mod app_authz;",
-        "pub use app_authn::{Claims, Role};",
+        "pub mod authn;",
+        "pub mod authz;",
+        "pub use authn::{Claims, Role};",
     ]
     .map(str::to_owned)
     .to_vec()
@@ -69,7 +69,7 @@ pub(super) fn lib_decls() -> Vec<String> {
 /// fold into a single `edit` per path. Split out so `g resource` can bootstrap
 /// the adapter in the same transaction as the resource that needs it.
 ///
-/// `authz_decls` are extra index lines for `app_authz/mod.rs` — a caller
+/// `authz_decls` are extra index lines for `authz/mod.rs` — a caller
 /// scaffolding a transport bridge in the same transaction passes
 /// [`AuthzBridge::decls`], since the file is created here and an `edit` targets
 /// what is already on disk.
@@ -78,20 +78,21 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
 
     // Every verbatim file, in one table — the same shape as
     // [`AuthzBridge::queue`]. The two files below the loop are the ones a
-    // table cannot say: `app_authz/mod.rs` folds in the caller's index lines, and
+    // table cannot say: `authz/mod.rs` folds in the caller's index lines, and
     // `.env` is an edit whenever the file already exists.
-    const FILES: [(&str, &str); 11] = [
-        ("app_authn/claims.rs", auth::AUTHN_CLAIMS),
-        ("app_authn/mod.rs", auth::AUTHN_MOD),
-        ("app_authn/module.rs", auth::AUTHN_MODULE),
-        ("app_authn/strategy.rs", auth::AUTHN_STRATEGY),
-        ("app_authn/http/mod.rs", auth::AUTHN_HTTP_MOD),
-        ("app_authn/http/audit.rs", auth::AUTHN_HTTP_AUDIT),
-        ("app_authn/http/guard.rs", auth::AUTHN_HTTP_GUARD),
-        ("app_authn/http/controller.rs", auth::AUTHN_HTTP_CONTROLLER),
-        ("app_authn/http/module.rs", auth::AUTHN_HTTP_MODULE),
-        ("app_authz/ability.rs", auth::AUTHZ_ABILITY),
-        ("app_authz/module.rs", auth::AUTHZ_MODULE),
+    const FILES: [(&str, &str); 12] = [
+        ("authn/claims.rs", auth::AUTHN_CLAIMS),
+        ("authn/mod.rs", auth::AUTHN_MOD),
+        ("authn/module.rs", auth::AUTHN_MODULE),
+        ("authn/strategy.rs", auth::AUTHN_STRATEGY),
+        ("authn/http/mod.rs", auth::AUTHN_HTTP_MOD),
+        ("authn/http/audit.rs", auth::AUTHN_HTTP_AUDIT),
+        ("authn/http/guard.rs", auth::AUTHN_HTTP_GUARD),
+        ("authn/http/controller.rs", auth::AUTHN_HTTP_CONTROLLER),
+        ("authn/http/module.rs", auth::AUTHN_HTTP_MODULE),
+        ("authz/ability.rs", auth::AUTHZ_ABILITY),
+        ("authz/guard.rs", auth::AUTHZ_GUARD),
+        ("authz/module.rs", auth::AUTHZ_MODULE),
     ];
     for (path, body) in FILES {
         s.create(src.join(path), body.to_string());
@@ -99,8 +100,7 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
 
     let authz_mod =
         ensure_lines(authz_decls)(auth::AUTHZ_MOD).unwrap_or_else(|| auth::AUTHZ_MOD.to_string());
-    s.create(src.join("app_authz/mod.rs"), authz_mod);
-    HTTP_BRIDGE.queue(s, ws);
+    s.create(src.join("authz/mod.rs"), authz_mod);
 
     // Every scaffolded workspace has one; a hand-rolled tree may not, and a
     // missing `.env` is not a reason to refuse the whole adapter.
@@ -118,28 +118,28 @@ pub(super) fn queue(s: &mut Scaffold, ws: &NestrsWorkspace, authz_decls: Vec<Str
     }
 }
 
-/// Both roots are listed at the composition site even though `AppAuthzHttpModule`
-/// pulls `AppAuthnModule` in transitively — an app's `module.rs` is the inventory
+/// Both roots are listed at the composition site even though `AuthzModule`
+/// pulls `AuthnModule` in transitively — an app's `module.rs` is the inventory
 /// of the concerns it serves. Returned rather than wired here so a caller
 /// bootstrapping the adapter folds them into its own single `module.rs` edit.
-pub(super) const APP_IMPORTS: [(&str, &str); 3] = [
-    ("features::app_authn::AppAuthnModule", "AppAuthnModule"),
-    (
-        "features::app_authn::AppAuthnHttpModule",
-        "AppAuthnHttpModule",
-    ),
-    (
-        "features::app_authz::AppAuthzHttpModule",
-        "AppAuthzHttpModule",
-    ),
-];
+/// A function rather than a `const` so the third row reads `HTTP_BRIDGE`'s own
+/// fields: that bridge is the one `written_by_g_auth`, and stating its app-side
+/// path twice in one file is how the two wiring paths — this one and
+/// `adapter.rs`'s `imports.push((b.app_path, b.module))` — come to disagree.
+pub(super) fn app_imports() -> [(&'static str, &'static str); 3] {
+    [
+        ("features::authn::AuthnModule", "AuthnModule"),
+        ("features::authn::AuthnHttpModule", "AuthnHttpModule"),
+        (HTTP_BRIDGE.app_path, HTTP_BRIDGE.module),
+    ]
+}
 
 fn wire(ctx: &Context, s: &mut Scaffold) -> Option<PathBuf> {
-    wire_into_app(ctx, s, &APP_IMPORTS, None)
+    wire_into_app(ctx, s, &app_imports(), None)
 }
 
 pub(super) fn exists(ws: &NestrsWorkspace) -> bool {
-    ws.features_root().join("app_authz").is_dir()
+    ws.features_root().join("authz").is_dir()
 }
 
 // ── authz/<transport>/ — the bridge a guarded adapter is enforced through ───
@@ -154,15 +154,16 @@ pub(super) fn exists(ws: &NestrsWorkspace) -> bool {
 /// it needs. Plain fields — it is a `pub(super)` table, and a getter per field
 /// would be one more place a row has to be read through.
 pub(super) struct AuthzBridge {
-    /// Folder under `crates/features/src/app_authz/`.
+    /// Folder under `crates/features/src/authz/`. Empty for the base bridge,
+    /// whose providers sit at the `authz/` root — see [`HTTP_BRIDGE`].
     pub dir: &'static str,
-    /// The module type the `app_authz/mod.rs` index, the adapter and the app name.
+    /// The module type the `authz/mod.rs` index, the adapter and the app name.
     pub module: &'static str,
     /// How an adapter's own `module.rs` reaches it (inside the features crate).
     pub feature_path: &'static str,
     /// How an app's composition site reaches it.
     pub app_path: &'static str,
-    /// `(file name, template)`, mirroring `demo/crates/features/src/app_authz/<dir>/`.
+    /// `(file name, template)`, mirroring `demo/crates/features/src/authz/<dir>/`.
     pub files: &'static [(&'static str, &'static str)],
     /// What this bridge buys, printed as the run's next steps. Kept beside the
     /// files so the explanation and the code cannot drift apart.
@@ -177,10 +178,10 @@ pub(super) struct AuthzBridge {
 impl AuthzBridge {
     /// Already on disk — a second `g <transport>` must not re-create it.
     pub(super) fn exists(&self, ws: &NestrsWorkspace) -> bool {
-        ws.features_root().join("app_authz").join(self.dir).is_dir()
+        ws.features_root().join("authz").join(self.dir).is_dir()
     }
 
-    /// The `app_authz/mod.rs` index lines this bridge adds — a `Vec` like
+    /// The `authz/mod.rs` index lines this bridge adds — a `Vec` like
     /// [`lib_decls`], so a caller folds them into whichever single edit (or
     /// file body) they belong to.
     pub(super) fn decls(&self) -> Vec<String> {
@@ -192,7 +193,7 @@ impl AuthzBridge {
 
     /// Queue the bridge's files.
     pub(super) fn queue(&self, s: &mut Scaffold, ws: &NestrsWorkspace) {
-        let dir = ws.features_root().join("app_authz").join(self.dir);
+        let dir = ws.features_root().join("authz").join(self.dir);
         for (name, body) in self.files {
             s.create(dir.join(name), (*body).to_string());
         }
@@ -212,22 +213,22 @@ pub(super) fn bridge_for(transport: Transport) -> Option<&'static AuthzBridge> {
     }
 }
 
-/// The base bridge: `AbilityGuard<AppAbility>` on the HTTP request, which every
-/// other bridge re-runs. Written by `g auth`, not by `g http`.
+/// The base bridge — and the one with no folder of its own. `AbilityGuard`
+/// answers every transport, so the guard it aliases lives at the `authz/` root
+/// and `AuthzModule` is what provides it; there is no `authz/http/` to write.
+/// `dir` and `files` are therefore empty and never read: `written_by_g_auth`
+/// keeps this row out of every path that would touch them, since `g auth`
+/// writes `authz/module.rs` and `authz/guard.rs` directly.
 static HTTP_BRIDGE: AuthzBridge = AuthzBridge {
-    dir: "http",
-    module: "AppAuthzHttpModule",
-    feature_path: "crate::app_authz::AppAuthzHttpModule",
-    app_path: "features::app_authz::AppAuthzHttpModule",
-    files: &[
-        ("mod.rs", auth::AUTHZ_HTTP_MOD),
-        ("guard.rs", auth::AUTHZ_HTTP_GUARD),
-        ("module.rs", auth::AUTHZ_HTTP_MODULE),
-    ],
+    dir: "",
+    module: "AuthzModule",
+    feature_path: "crate::authz::AuthzModule",
+    app_path: "features::authz::AuthzModule",
+    files: &[],
     rationale: &[
-        "The guard runs on the HTTP request and attaches the caller's Ability, which",
-        "every other transport's bridge re-runs. Controllers serving rows bind",
-        "#[use_guards(AppAuthnGuard, AppAuthzGuard)] and import AppAuthzHttpModule.",
+        "The guard attaches the caller's Ability and answers every transport, so it is",
+        "provided by AuthzModule itself. Controllers serving rows bind",
+        "#[use_guards(AuthnGuard, AuthzGuard)] and import AuthzModule.",
     ],
     deps: &[&super::cargo::AUTHZ],
     written_by_g_auth: true,
@@ -240,9 +241,9 @@ static HTTP_BRIDGE: AuthzBridge = AuthzBridge {
 /// scoped.
 static GRAPHQL_BRIDGE: AuthzBridge = AuthzBridge {
     dir: "graphql",
-    module: "AppAuthzGraphqlModule",
-    feature_path: "crate::app_authz::AppAuthzGraphqlModule",
-    app_path: "features::app_authz::AppAuthzGraphqlModule",
+    module: "AuthzGraphqlModule",
+    feature_path: "crate::authz::AuthzGraphqlModule",
+    app_path: "features::authz::AuthzGraphqlModule",
     files: &[
         ("mod.rs", auth::AUTHZ_GRAPHQL_MOD),
         ("bridge.rs", auth::AUTHZ_GRAPHQL_BRIDGE),
@@ -250,7 +251,7 @@ static GRAPHQL_BRIDGE: AuthzBridge = AuthzBridge {
     ],
     rationale: &[
         "/graphql has no guard at the HTTP edge — authn and the ability run in band,",
-        "per operation, through AppAuthzGraphqlModule. Every resolver serving rows",
+        "per operation, through AuthzGraphqlModule. Every resolver serving rows",
         "imports it and declares #[authorize(Action, Entity)] or #[public].",
     ],
     deps: &[
@@ -266,16 +267,16 @@ static GRAPHQL_BRIDGE: AuthzBridge = AuthzBridge {
 /// connection's data scope.
 static WS_BRIDGE: AuthzBridge = AuthzBridge {
     dir: "ws",
-    module: "AppAuthzWsModule",
-    feature_path: "crate::app_authz::AppAuthzWsModule",
-    app_path: "features::app_authz::AppAuthzWsModule",
+    module: "AuthzWsModule",
+    feature_path: "crate::authz::AuthzWsModule",
+    app_path: "features::authz::AuthzWsModule",
     files: &[
         ("mod.rs", auth::AUTHZ_WS_MOD),
         ("module.rs", auth::AUTHZ_WS_MODULE),
     ],
     rationale: &[
-        "A gateway reuses the HTTP guards — bind #[use_guards(AppAuthnGuard, AppAuthzGuard)]",
-        "on the struct and import AppAuthzWsModule in the adapter's module.rs. It carries",
+        "A gateway reuses the HTTP guards — bind #[use_guards(AuthnGuard, AuthzGuard)]",
+        "on the struct and import AuthzWsModule in the adapter's module.rs. It carries",
         "the dyn SocketContext that scopes the connection's rows to the caller.",
     ],
     deps: &[
@@ -291,16 +292,16 @@ static WS_BRIDGE: AuthzBridge = AuthzBridge {
 /// `g mcp` prints and the state a reader following the docs used to land in.
 static MCP_BRIDGE: AuthzBridge = AuthzBridge {
     dir: "mcp",
-    module: "AppAuthzMcpModule",
-    feature_path: "crate::app_authz::AppAuthzMcpModule",
-    app_path: "features::app_authz::AppAuthzMcpModule",
+    module: "AuthzMcpModule",
+    feature_path: "crate::authz::AuthzMcpModule",
+    app_path: "features::authz::AuthzMcpModule",
     files: &[
         ("mod.rs", auth::AUTHZ_MCP_MOD),
         ("bridge.rs", auth::AUTHZ_MCP_BRIDGE),
         ("module.rs", auth::AUTHZ_MCP_MODULE),
     ],
     rationale: &[
-        "/mcp denies every request until an McpOperationGuard is bound. AppAuthzMcpModule",
+        "/mcp denies every request until an McpOperationGuard is bound. AuthzMcpModule",
         "binds one: callers are authenticated and the ambient Ability is installed, so",
         "a tool can return entity rows through nest_rs::authz::masked_output_ambient.",
     ],
@@ -329,21 +330,19 @@ fn append_authn_secret(env_prefix: &str, rendered: String) -> crate::scaffold::T
 fn print_next_steps(env_prefix: &str, wired: bool) {
     println!();
     println!("Next steps:");
-    println!("  1. Add your rules in `crates/features/src/app_authz/ability.rs` — nothing is");
+    println!("  1. Add your rules in `crates/features/src/authz/ability.rs` — nothing is");
     println!("     granted until you do, so guarded routes answer 403.");
     if wired {
-        println!(
-            "  2. AppAuthnModule, AppAuthnHttpModule and AppAuthzHttpModule are wired into the"
-        );
+        println!("  2. AuthnModule, AuthnHttpModule and AuthzModule are wired into the");
         println!("     current app.");
     } else {
-        println!("  2. Import `features::app_authn::AppAuthnModule`,");
-        println!("     `features::app_authn::AppAuthnHttpModule` and");
-        println!("     `features::app_authz::AppAuthzHttpModule` in your app's `module.rs`.");
+        println!("  2. Import `features::authn::AuthnModule`,");
+        println!("     `features::authn::AuthnHttpModule` and");
+        println!("     `features::authz::AuthzModule` in your app's `module.rs`.");
     }
     println!("  3. `POST /auth/dev-token` mints a bearer token to call your guarded routes");
     println!("     with. It refuses to boot outside development and test — delete");
-    println!("     `crates/features/src/app_authn/http/` when you write the real login.");
+    println!("     `crates/features/src/authn/http/` when you write the real login.");
     println!("  4. `.env` carries a development HS256 secret — replace it through the");
     println!("     real environment before deploying ({env_prefix}_AUTHN__SECRET).");
 }

@@ -54,7 +54,7 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     s.create(root.join("module.rs"), r.render(resource::MODULE));
     s.create(root.join("mod.rs"), r.render(resource::MOD));
 
-    // HTTP adapter — `#[crud]` behind AppAuthnGuard + AppAuthzGuard.
+    // HTTP adapter — `#[crud]` behind AuthnGuard + AuthzGuard.
     s.create(root.join("http/mod.rs"), r.render(resource::HTTP_MOD));
     s.create(root.join("http/module.rs"), r.render(resource::HTTP_MODULE));
     s.create(
@@ -87,7 +87,7 @@ pub fn run(opts: ResourceOptions) -> CliResult<()> {
     let http_module = names.http_module();
     let mut imports = vec![(use_path.as_str(), http_module.as_str())];
     if scaffolded_auth {
-        imports.extend(auth::APP_IMPORTS);
+        imports.extend(auth::app_imports());
     }
     let wired_app = wire_into_app(&ctx, &mut s, &imports, Some("SeaOrmDatabaseModule"));
 
@@ -111,7 +111,7 @@ fn print_next_steps(
     println!();
     println!("Next steps:");
     println!("  1. Fill in `entity.rs` columns, then:  nestrs g migration create_{snake}");
-    println!("  2. Grant the ability in `crates/features/src/app_authz/ability.rs` — until you");
+    println!("  2. Grant the ability in `crates/features/src/authz/ability.rs` — until you");
     println!("     do, every route answers 403 and no row crosses the data layer:");
     println!();
     println!("       use crate::{snake} as {snake}_entity;");
@@ -148,9 +148,7 @@ fn print_next_steps(
         // boot warning whose remedy is to import it.
         println!("It includes `POST /auth/dev-token`, which mints a token with no credential so");
         println!("your guarded routes are callable at once. It refuses to boot outside");
-        println!(
-            "development and test. Import `features::app_authn::AppAuthnHttpModule` to serve it,"
-        );
-        println!("or delete `crates/features/src/app_authn/http/` and write the real login route.");
+        println!("development and test. Import `features::authn::AuthnHttpModule` to serve it,");
+        println!("or delete `crates/features/src/authn/http/` and write the real login route.");
     }
 }

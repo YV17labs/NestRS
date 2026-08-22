@@ -205,7 +205,7 @@ pub enum GenerateCommand {
     /// there. The name after the slash is the entity's own — `g entity posts`
     /// writes `Post`, `g entity posts/comment` writes `Comment`.
     Entity(EntityTarget),
-    /// The app's authn/authz adapter (Claims, AuthnGuard, AppAbility, AuthzGuard).
+    /// The app's authn/authz adapter (Claims, AuthnGuard, AuthzAbility, AuthzGuard).
     Auth(AuthTarget),
     /// A SeaORM migration, registered in both lib.rs and migrator.rs.
     Migration(GenTarget),

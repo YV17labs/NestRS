@@ -430,7 +430,7 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
     .unwrap();
     assert!(resolver.contains("#[public]"), "{resolver}");
     assert!(
-        !dir.path().join("crates/features/src/app_authz").exists(),
+        !dir.path().join("crates/features/src/authz").exists(),
         "a workspace with no policy does not get one from a public count query",
     );
 }
@@ -438,7 +438,7 @@ fn generate_graphql_adapter_enables_the_guards_graphql_feature() {
 /// The GraphQL twin of `generate_resource_emits_the_guarded_form_…`: over a
 /// `g resource` port the resolver is the `#[crud]` form behind the app's
 /// guards, and the per-operation bridge it is enforced through
-/// (`app_authz/graphql/`) is scaffolded with it. The old scaffold called
+/// (`authz/graphql/`) is scaffolded with it. The old scaffold called
 /// `svc.count()` — a method a `CrudService` does not have.
 #[test]
 fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
@@ -456,7 +456,7 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
         "a CrudService has no `count()`: {resolver}"
     );
     assert!(
-        resolver.contains("#[use_guards(AppAuthnGuard, AppAuthzGuard)]"),
+        resolver.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
         "DB-backed rows are only reachable behind the ability guard: {resolver}"
     );
     assert!(
@@ -470,22 +470,22 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
 
     // The bridge `/graphql` gates through, and the module that serves it.
     let module = fs::read_to_string(src.join("posts/graphql/module.rs")).unwrap();
-    assert!(module.contains("AppAuthzGraphqlModule"), "{module}");
-    let bridge = fs::read_to_string(src.join("app_authz/graphql/bridge.rs")).unwrap();
+    assert!(module.contains("AuthzGraphqlModule"), "{module}");
+    let bridge = fs::read_to_string(src.join("authz/graphql/bridge.rs")).unwrap();
     assert!(
-        bridge.contains("GraphqlAbilityBridge<AppAuthnGuard, AppAuthzGuard>"),
+        bridge.contains("GraphqlAbilityBridge<AuthnGuard, AuthzGuard>"),
         "{bridge}"
     );
-    let authz_graphql = fs::read_to_string(src.join("app_authz/graphql/module.rs")).unwrap();
+    let authz_graphql = fs::read_to_string(src.join("authz/graphql/module.rs")).unwrap();
     assert!(
         authz_graphql.contains("dyn GraphqlOperationGuard")
             && authz_graphql.contains("dyn GraphqlBatchContext")
             && authz_graphql.contains("forward_principal!(Claims)"),
         "the two providers the bridge needs, and the principal forward: {authz_graphql}"
     );
-    let authz_mod = fs::read_to_string(src.join("app_authz/mod.rs")).unwrap();
+    let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
     assert!(
-        authz_mod.contains("pub use graphql::AppAuthzGraphqlModule;"),
+        authz_mod.contains("pub use graphql::AuthzGraphqlModule;"),
         "{authz_mod}"
     );
 
@@ -514,7 +514,7 @@ fn generate_graphql_reuses_an_existing_authz_bridge() {
     run_ok(dir.path(), &["g", "graphql", "tags", "-p", path]);
 
     let authz_mod =
-        fs::read_to_string(dir.path().join("crates/features/src/app_authz/mod.rs")).unwrap();
+        fs::read_to_string(dir.path().join("crates/features/src/authz/mod.rs")).unwrap();
     assert_eq!(
         authz_mod.matches("pub mod graphql;").count(),
         1,
@@ -573,8 +573,8 @@ fn generate_adapter_requires_existing_feature() {
 }
 
 /// F4: `g ws` and `g mcp` used to *name* an authz module in their output and in
-/// the code they generated — `AppAuthzWsModule` in the gateway's SECURITY comment,
-/// `features::app_authz::mcp` in the MCP next step and the tool's own doc — while no
+/// the code they generated — `AuthzWsModule` in the gateway's SECURITY comment,
+/// `features::authz::mcp` in the MCP next step and the tool's own doc — while no
 /// generator wrote either. A reader following the docs end to end got a boot
 /// `warn` on an unguarded self-mount edge, a `/mcp` answering 401 to everything,
 /// and the repo's demo as the only source for the two modules.
@@ -585,8 +585,8 @@ fn generate_adapter_requires_existing_feature() {
 fn generate_ws_and_mcp_write_the_authz_bridges_their_own_output_names() {
     // (transport, bridge dir, module, a provider only that bridge registers)
     const CASES: [(&str, &str, &str, &str); 2] = [
-        ("ws", "ws", "AppAuthzWsModule", "dyn SocketContext"),
-        ("mcp", "mcp", "AppAuthzMcpModule", "dyn McpOperationGuard"),
+        ("ws", "ws", "AuthzWsModule", "dyn SocketContext"),
+        ("mcp", "mcp", "AuthzMcpModule", "dyn McpOperationGuard"),
     ];
 
     for (transport, bridge_dir, module, provider) in CASES {
@@ -600,19 +600,16 @@ fn generate_ws_and_mcp_write_the_authz_bridges_their_own_output_names() {
         run_ok(&app, &["g", transport, "posts"]);
 
         let src = dir.path().join("crates/features/src");
-        let bridge_module =
-            fs::read_to_string(src.join(format!("app_authz/{bridge_dir}/module.rs")))
-                .unwrap_or_else(|_| {
-                    panic!("`g {transport}` writes app_authz/{bridge_dir}/module.rs")
-                });
+        let bridge_module = fs::read_to_string(src.join(format!("authz/{bridge_dir}/module.rs")))
+            .unwrap_or_else(|_| panic!("`g {transport}` writes authz/{bridge_dir}/module.rs"));
         assert!(
             bridge_module.contains(provider),
             "the {transport} bridge registers {provider}: {bridge_module}"
         );
 
         // Reachable from the feature crate's root, and from the app that serves
-        // the adapter — an unimported AppAuthzMcpModule leaves /mcp deny-all.
-        let authz_mod = fs::read_to_string(src.join("app_authz/mod.rs")).unwrap();
+        // the adapter — an unimported AuthzMcpModule leaves /mcp deny-all.
+        let authz_mod = fs::read_to_string(src.join("authz/mod.rs")).unwrap();
         assert!(
             authz_mod.contains(&format!("pub use {bridge_dir}::{module};")),
             "{authz_mod}"
@@ -627,7 +624,7 @@ fn generate_ws_and_mcp_write_the_authz_bridges_their_own_output_names() {
 
 /// The bridge is scaffolded only where there is a policy to enforce. A `g
 /// feature` port in a workspace with no auth adapter has none, so `g ws` writes
-/// the adapter and stops — scaffolding a whole app_authn/authz slice off the back of
+/// the adapter and stops — scaffolding a whole authn/authz slice off the back of
 /// a WebSocket stub would be the generator deciding something the developer has
 /// not.
 #[test]
@@ -645,7 +642,7 @@ fn generate_ws_without_an_auth_adapter_writes_no_bridge() {
         "the adapter lands"
     );
     assert!(
-        !src.join("app_authz/ws").exists(),
+        !src.join("authz/ws").exists(),
         "no policy to bridge, so no bridge",
     );
 }

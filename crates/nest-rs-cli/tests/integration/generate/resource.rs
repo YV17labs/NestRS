@@ -76,7 +76,7 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
     let feature = dir.path().join("crates/features/src/posts");
     let controller = fs::read_to_string(feature.join("http/controller.rs")).unwrap();
     assert!(
-        controller.contains("#[use_guards(AppAuthnGuard, AppAuthzGuard)]"),
+        controller.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
         "a DB-backed controller serves nothing without an ability guard: {controller}"
     );
     assert!(
@@ -86,16 +86,16 @@ fn generate_resource_emits_the_guarded_form_and_bootstraps_auth() {
 
     let module = fs::read_to_string(feature.join("http/module.rs")).unwrap();
     assert!(
-        module.contains("AppAuthzHttpModule"),
-        "the http module imports AppAuthzHttpModule: {module}"
+        module.contains("AuthzModule"),
+        "the http module imports AuthzModule: {module}"
     );
 
     // The guards it names have to exist — so the adapter came with it.
     let src = dir.path().join("crates/features/src");
-    assert!(src.join("app_authn/strategy.rs").is_file());
-    assert!(src.join("app_authz/ability.rs").is_file());
-    assert!(src.join("app_authz/http/guard.rs").is_file());
-    assert!(src.join("app_authn/claims.rs").is_file());
+    assert!(src.join("authn/strategy.rs").is_file());
+    assert!(src.join("authz/ability.rs").is_file());
+    assert!(src.join("authz/guard.rs").is_file());
+    assert!(src.join("authn/claims.rs").is_file());
 
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
     // Built through the CLI's own mirror, never spelled: the generator writes
@@ -124,7 +124,7 @@ fn generate_resource_wires_the_auth_roots_it_bootstrapped() {
     run_ok(&app, &["g", "resource", "posts"]);
 
     let module = fs::read_to_string(&module_rs).unwrap();
-    for ident in ["PostsHttpModule", "AppAuthnModule", "AppAuthzHttpModule"] {
+    for ident in ["PostsHttpModule", "AuthnModule", "AuthzModule"] {
         assert!(module.contains(&format!("{ident},")), "{ident}: {module}");
     }
 }

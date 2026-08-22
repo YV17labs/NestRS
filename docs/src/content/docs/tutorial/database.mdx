@@ -32,15 +32,15 @@ use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::seaorm::SeaOrmDatabaseModule;
 
-use features::app_authn::AppAuthnModule;
-use features::app_authz::AppAuthzHttpModule;
+use features::authn::AuthnModule;
+use features::authz::AuthzModule;
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
     SeaOrmDatabaseModule::for_root(None),
     HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
-    AppAuthnModule,
-    AppAuthzHttpModule,
+    AuthnModule,
+    AuthzModule,
     PostsHttpModule,
 ])]
 pub struct BlogModule;
@@ -193,7 +193,7 @@ $ TOKEN=$(curl -s -X POST http://localhost:3005/auth/dev-token \
 Pass `{"roles": ["admin"]}` for an admin token, or a `sub` to pin the subject.
 The real login is yours to write — what counts as a credential and where users
 live are domain decisions, and [Add a login route](/security/add-login/) is the
-pattern. Delete `crates/features/src/app_authn/http/` the day you write it.
+pattern. Delete `crates/features/src/authn/http/` the day you write it.
 
 ```bash frame="terminal"
 $ curl -s -X POST http://localhost:3005/posts -H "Authorization: Bearer $TOKEN" \

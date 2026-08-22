@@ -51,17 +51,17 @@ pub struct AuthModule;
 ```
 
 A controller then exposes the two HTTP legs. The exemplar in
-`crates/features/src/app_oauth/` ships the full handler:
+`crates/features/src/oauth/` ships the full handler:
 
 ```rust
 #[controller(path = "/")]
-pub struct AppOAuthController {
+pub struct OAuthController {
     #[inject]
     issuer: Arc<TokenIssuer>,
 }
 
 #[routes]
-impl AppOAuthController {
+impl OAuthController {
     // The redirect leg is a plain handler: a `Strategy` maps a request to a
     // principal and never issues a transport response, so the 302 and the
     // cookie are built here. `#[public]` because there is no credential yet.
@@ -83,12 +83,12 @@ impl AppOAuthController {
             .finish())
     }
 
-    // NOT `#[public]`: `AppOAuthGuard` authenticates *from* `code`/`state`, so it
+    // NOT `#[public]`: `OAuthGuard` authenticates *from* `code`/`state`, so it
     // must be allowed to reject. A forged callback is then the documented
     // `401`; marked public, the guard would absorb the denial and the handler
     // would fail on the missing principal instead.
     #[get("/callback")]
-    #[use_guards(AppOAuthGuard)]
+    #[use_guards(OAuthGuard)]
     async fn callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
         Ok(Json(self.issuer.issue(
             Some(caller.user_id),
@@ -101,9 +101,9 @@ impl AppOAuthController {
 
 Only `/authorize` is `#[public]`: it runs before any credential exists, and it
 binds no guard because there is nothing yet to authenticate. `/callback` is the
-opposite — `code` and `state` *are* the credential, and `AppOAuthGuard` (your app's
+opposite — `code` and `state` *are* the credential, and `OAuthGuard` (your app's
 `Strategy<Principal = Caller>`) is what verifies them. Marking it `#[public]`
-tells `AppAuthnGuard` to admit a rejected credential as anonymous, which turns a
+tells `AuthnGuard` to admit a rejected credential as anonymous, which turns a
 forged-callback `401` into a failure on the missing principal — invisible to any
 alert, WAF rule or rate limit keyed on `401`.
 

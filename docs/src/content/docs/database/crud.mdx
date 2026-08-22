@@ -31,12 +31,12 @@ use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 
-use crate::app_authn::AppAuthnGuard;
-use crate::app_authz::AppAuthzGuard;
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 use crate::orgs::{CreateOrg, Entity as OrgEntity, Org, OrgsService, UpdateOrg};
 
 #[controller(path = "/orgs")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,
@@ -127,7 +127,7 @@ the ones that need custom logic — the rest are filled in:
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -173,7 +173,7 @@ type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 #[resolver]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -335,7 +335,7 @@ pub struct OrgsModule;
 ```
 
 ```rust title="src/orgs/http/module.rs"
-#[module(imports = [OrgsModule, AppAuthzHttpModule], providers = [OrgsController])]
+#[module(imports = [OrgsModule, AuthzModule], providers = [OrgsController])]
 pub struct OrgsHttpModule;
 ```
 

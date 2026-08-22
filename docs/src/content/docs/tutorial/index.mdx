@@ -100,11 +100,11 @@ If you cloned **this** repository to explore Publish, scaffold `hello` and
   <LinkCard title="1. Scaffold the app" href="/tutorial/scaffold/" description="nestrs new blog, nestrs run dev blog, Hello World on / — then read what the CLI wrote." />
   <LinkCard title="2. Declare the entity" href="/tutorial/entity/" description="The Post entity with SeaORM and #[expose]." />
   <LinkCard title="3. See the security payoff" href="/tutorial/checkpoint/" description="Optional detour — 10 min, needs Docker + a clone. Run the reference api: an admin, a masked member, a cross-tenant 403 — no handler check." />
-  <LinkCard title="4. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts — behind AppAuthnGuard and AppAuthzGuard, which nestrs g auth writes here." />
+  <LinkCard title="4. Expose over HTTP" href="/tutorial/http/" description="PostsController, the service, GET and POST /posts — behind AuthnGuard and AuthzGuard, which nestrs g auth writes here." />
   <LinkCard title="5. Persist through Postgres" href="/tutorial/database/" description="SeaOrmDatabaseModule, migrations, transactional writes." />
   <LinkCard title="6. Validate inputs" href="/tutorial/validation/" description="Valid<E> at the boundary, 400 on a bad body." />
   <LinkCard title="7. Test it end to end" href="/tutorial/testing/" description="apps/blog/tests/e2e/main.rs against an EphemeralDatabase." />
-  <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Read the reference api: AppAbility, Bind, response masking — the per-caller access you lived on step 3, then narrow blog's blanket Manage rule yourself." />
+  <LinkCard title="8. Authenticate and authorize" href="/tutorial/security/" description="Read the reference api: AuthzAbility, Bind, response masking — the per-caller access you lived on step 3, then narrow blog's blanket Manage rule yourself." />
   <LinkCard title="9. Mirror on GraphQL" href="/tutorial/graphql/" description="Read the reference api: a UsersResolver over the same service, ability, and dataloader — then add one to blog's posts." />
 </CardGrid>
 

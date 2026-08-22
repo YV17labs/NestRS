@@ -187,7 +187,7 @@ own error type (`Result<T, AuthError>`), not `?`-propagated into a
 `poem::Result`.
 
 There is **no `AbilityError`** — an ability denial is not an error. It is
-a guard denial, returned as an `Ok(403)` response by `AppAuthzGuard`, so it
+a guard denial, returned as an `Ok(403)` response by `AuthzGuard`, so it
 never travels the `?`/`ResponseError` path at all (see
 [Guards](/fundamentals/guards/)).
 

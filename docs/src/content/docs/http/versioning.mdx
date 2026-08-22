@@ -91,11 +91,11 @@ When the two versions share nothing but a URL, a controller each is clearer:
 use nest_rs::core::module;
 
 use super::controller::{PostsV1Controller, PostsV2Controller};
-use crate::app_authz::AppAuthzHttpModule;
+use crate::authz::AuthzModule;
 use crate::posts::PostsModule;
 
 #[module(
-    imports = [PostsModule, AppAuthzHttpModule],
+    imports = [PostsModule, AuthzModule],
     providers = [PostsV1Controller, PostsV2Controller],
 )]
 pub struct PostsHttpModule;

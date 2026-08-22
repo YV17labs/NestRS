@@ -113,7 +113,7 @@ scope (`current_executor_scope()`):
 - **Worker jobs and cron ticks** — system work, no caller, no filter.
   The query runs unscoped. Correct.
 - **A request-scoped executor with no ability** — an HTTP handler
-  whose controller imported neither `AppAuthzHttpModule` nor a
+  whose controller imported neither `AuthzModule` nor a
   transport-specific authz module. This **fails closed**: the filter
   renders `1 = 0`, the query returns zero rows, and a `warn` is
   emitted naming the entity and action. A missing authz module shows
@@ -136,7 +136,7 @@ Signature-verified webhook ingest is the same shape: the signature *is*
 the credential, so it authenticates in a `Guard` ahead of the handler —
 verify the HMAC with `subtle::ct_eq`, enforce a replay window on the
 timestamp, fail closed when the secret is unset, and `warn!` on denial.
-With that guard bound, the route is `#[public]` to `AppAuthnGuard` and free
+With that guard bound, the route is `#[public]` to `AuthnGuard` and free
 to read through `Repo::unscoped`.
 
 ## SQL injection — not the threat

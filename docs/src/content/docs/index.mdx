@@ -57,7 +57,7 @@ generates the five routes.
 
 ```rust title="crates/features/src/orgs/http/controller.rs (abridged)"
 #[controller(path = "/orgs")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct OrgsController {
     #[inject]
     svc: Arc<OrgsService>,
@@ -70,7 +70,7 @@ impl OrgsController {}
 
 One ability decides the rows and the fields, in one place:
 
-```rust title="crates/features/src/app_authz/ability.rs (abridged)"
+```rust title="crates/features/src/authz/ability.rs (abridged)"
 ab.can(Action::Read, user::Entity)
     .when(|p| p.eq(user::Column::OrgId, actor.org_id))
     .fields([user::Column::Id, user::Column::Name]);

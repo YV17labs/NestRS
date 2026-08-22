@@ -151,7 +151,7 @@ overlaps `@key(fields: "id")`.
 *above* the merged root this framework composes — so the chain `#[operations]`
 emits inside a resolver body is not where they are gated. **The app-wide guard
 pool runs in front of both**, once per field, through a schema extension
-`GraphqlModule` installs. A `use_guards_global([AppAuthnGuard])` therefore refuses
+`GraphqlModule` installs. A `use_guards_global([AuthnGuard])` therefore refuses
 `_service` and `_entities` exactly as it refuses a `#[query]`, with the same
 native GraphQL error frame.
 

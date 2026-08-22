@@ -106,7 +106,7 @@ HTTP request
 DbContext              ──→ installs Executor::Pool (GET/HEAD/OPTIONS/TRACE)
                        ──→ installs Executor::Lazy (POST/PUT/PATCH/DELETE)
   ↓
-guards (AppAuthnGuard, AbilityGuard, ...)
+guards (AuthnGuard, AbilityGuard, ...)
   ↓
 handler
   ↓

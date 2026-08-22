@@ -272,12 +272,12 @@ use nest_rs::graphql::{operations, resolver};
 use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
-use crate::app_authn::AppAuthnGuard;
-use crate::app_authz::AppAuthzGuard;
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, User, UsersService};
 
 #[resolver]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -305,9 +305,9 @@ The service stays the single audited choke point to the database. The
 resolver only translates between the wire shape and the service —
 `#[authorize(Action, Entity)]` is each operation's access posture,
 gating the call against the ambient ability and masking the returned
-value automatically. The `#[use_guards(AppAuthnGuard, AppAuthzGuard)]` binding
+value automatically. The `#[use_guards(AuthnGuard, AuthzGuard)]` binding
 on the struct is what runs authn + the ability chain per operation; its
-`AppAuthzGuard` marker is provided by `AppAuthzGraphqlModule`, which the
+`AuthzGuard` marker is provided by `AuthzGraphqlModule`, which the
 feature's `UsersGraphqlModule` imports (omit it and boot fails naming
 the missing guard). See [Database / CRUD](/database/crud/) for the
 service contract and [Security](/security/) for the guard wiring.

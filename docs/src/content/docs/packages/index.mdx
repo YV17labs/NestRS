@@ -69,7 +69,7 @@ these crates are the engine.
 
 | Crate | Cargo feature | What it is | Docs |
 |---|---|---|---|
-| [`nest-rs-authn`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authn) | `authn` | JWT service, pluggable `Strategy`, `AppAuthnGuard` | [Authentication](/security/authentication/) |
+| [`nest-rs-authn`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authn) | `authn` | JWT service, pluggable `Strategy`, `AuthnGuard` | [Authentication](/security/authentication/) |
 | [`nest-rs-authz`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-authz) | `authz` | Ability-based authorization — access gate, row-level filter, response masking | [Authorization](/security/authorization/) |
 | [`nest-rs-oauth-server`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-oauth-server) | `oauth-server` | The OAuth 2.0 *authorization server* role — RFC 6749 §5.2 token-endpoint errors, §2.3.1 client authentication | [Split deployment](/security/authentication/split-deployment/) |
 | [`nest-rs-oauth-client`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-oauth-client) | `oauth-client` | The OAuth 2.0 *client* role — Authorization Code flow with PKCE against someone else's authorization server | [OAuth 2.0](/security/authentication/oauth2/) |
@@ -162,7 +162,7 @@ In a fresh project the same step is
 `cargo add nest-rs --features <capability>` — exactly what each module's
 adoption page shows. Then import the matching **modules** in `AppModule` — for
 example `HttpModule::for_root(...)`, `SeaOrmDatabaseModule::for_root(...)`,
-`GraphqlModule`, `AppAuthzHttpModule`. The [Publish workspace](/publish/) and
+`GraphqlModule`, `AuthzModule`. The [Publish workspace](/publish/) and
 [Getting started](/getting-started/) walk through a full composition.
 
 ### Why one entry is enough

@@ -103,7 +103,7 @@ stripped key was required.
 
 Two cases stay fail-closed, and both are wiring or data faults rather
 than policy: **no ambient ability** (nothing decided what the caller may
-read — most often `AppAuthzWsModule` was never imported), and a body that
+read — most often `AuthzWsModule` was never imported), and a body that
 cannot be reconciled with the entity at all. Both answer an error frame
 and log a `warn` on `nest_rs::authz`.
 

@@ -160,7 +160,7 @@ use nest_rs::http::poem::{Error, Result};
 use crate::audio::{AudioService, TranscodeDto};
 
 #[controller(path = "/audio")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,

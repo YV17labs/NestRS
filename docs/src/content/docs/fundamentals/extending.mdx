@@ -1,0 +1,187 @@
+---
+title: Extending NestRS
+description: How to plug your own implementation into a swappable concern — the extension contract, the three selection modes, and where your configuration lives.
+tier: all-options
+sidebar:
+  order: 12
+---
+
+Some parts of NestRS are meant to be replaced: the ORM, the queue backend, the
+rate-limit store, a social provider. This page is the contract you implement to
+do that, and — just as important — how the framework decides what is swappable
+in the first place.
+
+## What a swappable concern owes you
+
+A concern you can plug into ships an **extension contract**: the trait you
+implement, the seam that makes your implementation reachable from the container,
+and the sentence describing what happens when there is more than one.
+
+If that contract cannot be written, the concern is **not** swappable, and the
+crate says so in its module docs. A trait with no contract beside it would be an
+extension you have to reverse-engineer; a client with no trait at all is a closed
+door that looks open. Neither is left to inference.
+
+## Two questions decide the shape
+
+### Who owns the driver problem?
+
+This is the question most likely to surprise you, because it explains why some
+ports look thin.
+
+**Delegated.** A third-party library is *already* the multi-driver abstraction,
+and the NestRS crate is a thin adapter over it that does not let the vendor's
+types leak.
+
+| the crate that *binds* the port | delegates to | which already drives |
+|---|---|---|
+| `nest-rs-seaorm` | `sea-orm` | PostgreSQL, MySQL, SQLite |
+| `nest-rs-redis` | `apalis` | Redis, SQL backends |
+| `nest-rs-storage` | `object_store` | S3, GCS, Azure, local filesystem, in-memory |
+
+Note which column the crate names sit in. The question is answered by whoever
+**binds** the port, never by the crate that declares it — `nest-rs-database`'s
+entire manifest is one dependency on `tokio`, and `nest-rs-queue` names no
+`apalis`. A port crate depending on nothing is the normal case.
+
+When a concern is delegated, the port exists for exactly one move — swapping the
+**vendor** — so its contract is thin and it declares **no configuration of its
+own**. That thinness is the correct outcome, not an unfinished one. If you want
+a different object store, you do not write a NestRS driver: you point
+`object_store` at it.
+
+**Owned.** Nothing abstracts the concern, so NestRS defines the trait, the
+registration seam and the arbitration sentence itself — `ThrottlerStore`,
+`SocialProvider`, `Strategy`.
+
+### What selects the active implementation?
+
+Three modes. They are not interchangeable, and which one a concern uses tells
+you where your configuration goes.
+
+**By import.** Exactly one implementation, chosen by which module your app
+imports. Consumers inject `dyn Port` and never name the backend, so swapping it
+is a composition-root edit rather than a change to your handlers. Importing two
+is a boot error naming both — where the binding declares itself; see the caveat
+below.
+
+```rust
+// One of these, never both — they bind the same `dyn ThrottlerStore`.
+ThrottlerModule::for_root(None)        // counters in this process
+RedisThrottlerModule::for_root(None)   // counters shared across instances
+```
+
+**By type parameter.** You name the implementation in an alias, and the generic
+host is instantiated with it. No arbitration exists and none is owed: two
+instantiations are two distinct types, so nothing can be contested.
+
+```rust
+pub type AuthnStrategy = JwtStrategy<Claims>;
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
+```
+
+The same shape carries `AbilityGuard<F: AbilityFactory>` and the GraphQL and MCP
+bridges. This is the mode NestRS uses most.
+
+:::caution[Two by-import ports do not yet arbitrate]
+`ThrottlerStore` declares its binding, so importing both backends fails the boot
+naming both. `dyn JobProducer` (queue) and `dyn JobContext` (database) bind
+through a container call that records no duplicate, so **two drivers of either
+would resolve to whichever module was imported last, silently**. Until that is
+closed, link exactly one driver per port and do not rely on a boot error to tell
+you.
+:::
+
+**By configuration.** The import only **opens the gate**; configuration decides
+which members are active, from zero to all of them. Registering a provider is
+not activating it — that distinction is the whole mechanism.
+
+| `NESTRS_SOCIAL__<KEY>__*` | outcome |
+|---|---|
+| complete | the provider is active |
+| absent entirely | inert, with one boot `warn` — its routes 404 |
+| partial, or invalid | **the boot fails**, naming the provider |
+
+## Where your configuration lives
+
+It follows from the contract; nothing is arbitrated.
+
+**A port owns a config namespace if and only if its contract requires you to
+honour one.** The throttler's does, so `NESTRS_THROTTLER__LIMIT` and
+`NESTRS_THROTTLER__WINDOW_SECS` survive a backend swap unchanged — they are the
+policy every store honours, and your store reads them through the shared seam.
+
+A delegated port's contract requires nothing of you, so it owns no namespace and
+your own settings are yours, under your crate's name.
+
+Selection by configuration is the one mode that forces a two-segment namespace,
+because members coexist and must be told apart — `NESTRS_SOCIAL__GITHUB__*`
+beside `NESTRS_SOCIAL__GOOGLE__*`. Selection by type parameter needs no namespace
+at all. Nothing else needs either.
+
+## Worked example — a different ORM
+
+`nest-rs-database` ships only the seam: the `Executor` trait, the `ExecutorScope`
+tag, and the task-local plumbing that carries "the current handle on a unit of
+work" across the framework. Its own module docs carry the contract:
+
+1. Implement `Executor` on the type representing your handle — a pool, a
+   transaction, or an enum forwarding to either.
+2. Ship a module that wraps each HTTP request in `with_request_executor` with
+   your `Arc<dyn Executor>`. Do the same with `with_job_executor` for worker
+   transports.
+3. Provide your own query API that calls `current_executor` and downcasts to
+   your concrete type.
+
+Step 3 is deliberate. `Repo`, `CrudService` and `Bind` couple tightly to SeaORM's
+`EntityTrait` and `Model` — that coupling is where their leverage comes from, and
+a generic abstraction over them would lose most of it. Your integration ships its
+own row-level-filter equivalent rather than inheriting one.
+
+## Worked example — a social provider
+
+`nest-rs-social` ships an open provider contract. You publish an independent
+crate that depends on it, implements `SocialProvider` and `SocialProviderConfig`,
+and submits one `SocialProviderEntry` — the same public seam the first-party
+GitHub and Google providers use, with no crate-private shortcut.
+
+A social provider is not a DI provider: it is never injected by type, only
+reached through `SocialRegistry` as `Arc<dyn SocialProvider>`. So discovery is
+gated by `SocialModule` — an app that never imports it sees no entry at all — and
+within that gate your provider's own `#[config]` decides its fate, per the table
+above. `SocialModule` itself takes no configuration, because it never learns
+which providers exist.
+
+## What is not documented yet
+
+Two ports expose a trait but carry no written contract beside it:
+`ThrottlerStore` and `Strategy`. Extending them is possible — the traits are
+public and the seams are real — but you would be working from the source, and the
+arbitration sentence is missing.
+
+The queue and the database each **do** have a full contract, at
+[queue / writing a driver](/queue/writing-a-driver/) and
+[database / writing a driver](/database/writing-a-driver/). Neither is named from
+the crate's own module docs, so start from those pages rather than from
+docs.rs.
+
+**`nest-rs-storage` is a different case, and the honest statement is that it is
+not extensible today.** It delegates to `object_store`, which drives S3, GCS,
+Azure, the local filesystem and memory — but this crate pins the S3 driver
+concretely, and every `StorageConfig` field is S3's own (`endpoint`, `region`,
+`access_key`, `bucket`, …). Reaching another backend is a change inside the
+crate, not something you can do from your app. Three shipped surfaces still say
+otherwise — the crate docs, the `Storage` type's own documentation, and the
+crates.io description — and this page is the one that is right. If you need
+another backend, say so on the issue tracker: that is the signal that decides
+whether the driver surface gets opened.
+
+## Going further
+
+- [Modules](/fundamentals/modules/) — how an import registers what you ship.
+- [Providers](/fundamentals/providers/) — injection, and why a discovered
+  provider is not one.
+- [Configuration](/configuration/) — the `.env` cascade, namespaces, and the
+  dual path between a pinned struct and an environment variable.
+- [Social login](/security/authentication/social-login/) — the open provider
+  contract, end to end.

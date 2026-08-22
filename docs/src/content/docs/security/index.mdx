@@ -38,7 +38,7 @@ installs the ambient `Ability`.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -74,10 +74,10 @@ The wiring sketch for an app that serves all three transports:
         SeaOrmDatabaseModule::for_root(None),
         HttpModule::for_root(None),
         GraphqlModule::for_root(None),
-        AppAuthnModule,
-        AppAuthzHttpModule,
-        AppAuthzGraphqlModule,
-        AppAuthzWsModule,
+        AuthnModule,
+        AuthzModule,
+        AuthzGraphqlModule,
+        AuthzWsModule,
         UsersHttpModule,
         UsersGraphqlModule,
         UsersWsModule,
@@ -90,7 +90,7 @@ pub struct ApiModule;
 A handler opts **out** by not importing the transport's authz module —
 public endpoints do exactly that and lose every layer transitively.
 Visitor-rule policy then lives in your `AbilityFactory`, not in
-`AppAuthnGuard`.
+`AuthnGuard`.
 </Aside>
 
 ## Where each piece lives
@@ -98,13 +98,13 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
 <FileTree>
 - security/
   - **authentication/**
-    - [index.mdx](/security/authentication/) — `Strategy`, `AppAuthnGuard<S>`, reading the principal back with `Ctx<P>`
+    - [index.mdx](/security/authentication/) — `Strategy`, `AuthnGuard<S>`, reading the principal back with `Ctx<P>`
     - [jwt.mdx](/security/authentication/jwt/) — `JwtStrategy`, `JwtService`, HS vs EdDSA keys, claims
     - [oauth2.mdx](/security/authentication/oauth2/) — authorization-code flow with PKCE
     - [password.mdx](/security/authentication/password/) — Argon2id hashing and `burn_verify`
     - [split-deployment.mdx](/security/authentication/split-deployment/) — the split-deploy pattern
   - **authorization/**
-    - [index.mdx](/security/authorization/) — `Ability`, `AppAbility`, where it runs
+    - [index.mdx](/security/authorization/) — `Ability`, `AuthzAbility`, where it runs
     - [policies.mdx](/security/authorization/policies/) — `Subject`, `Action`, `RuleSpec`, predicates, fields
     - [row-level-filtering.mdx](/security/authorization/row-level-filtering/) — `condition_for`, `Repo::scoped`
     - [by-id-binding.mdx](/security/authorization/by-id-binding/) — `Bind<A, S>`, the `Access` outcome
@@ -121,4 +121,4 @@ Visitor-rule policy then lives in your `AbilityFactory`, not in
 - [Guards](/fundamentals/guards/) — the primitive every security layer
   builds on.
 - [Throttler](/rate-limiting/) — rate limiting as a guard, composes with
-  `AppAuthnGuard`.
+  `AuthnGuard`.

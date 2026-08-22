@@ -22,8 +22,8 @@ Roles and scopes answer different questions, and both have to hold:
 
 ## Declare the scope on the rule it conditions
 
-```rust title="crates/features/src/app_authz/ability.rs" {5,9}
-impl AbilityFactory for AppAbility {
+```rust title="crates/features/src/authz/ability.rs" {5,9}
+impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
     fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
@@ -62,7 +62,7 @@ Scopes reach the ability layer from the principal. Implement
 space-delimited `scope` claim with the `serde` helper the framework
 ships:
 
-```rust title="crates/features/src/app_authn/claims.rs" {6-11,19-21}
+```rust title="crates/features/src/authn/claims.rs" {6-11,19-21}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: Option<Uuid>,

@@ -69,7 +69,7 @@ and compiles no controller, no interceptor and no outbound HTTP client.
 | Cross-app calls | None | None |
 
 The two binaries see the same `Claims` type via the shared
-`crates/features::app_authn` crate. The verifier deserializes a token
+`crates/features::authn` crate. The verifier deserializes a token
 the issuer signed; both speak the same struct, no schema drift
 possible.
 
@@ -121,13 +121,13 @@ NESTRS_AUTHN__PUBLIC_KEY"`.
         HttpModule::for_root(HttpConfig { port: 3001, ..Default::default() }),
         AuthnModule::for_root(None),
         SocialModule,
-        AppOAuthHttpModule,
+        OAuthHttpModule,
     ],
 )]
 pub struct AuthModule;
 ```
 
-The issuer imports the OAuth flow controller (`AppOAuthHttpModule`) and
+The issuer imports the OAuth flow controller (`OAuthHttpModule`) and
 the throttler. It does **not** import `UsersHttpModule` — the issuer
 mints tokens, not users.
 
@@ -142,9 +142,9 @@ mints tokens, not users.
             compression: true,
             ..Default::default()
         }),
-        AppAuthnModule,
-        AppAuthzHttpModule,
-        AppAuthzGraphqlModule,
+        AuthnModule,
+        AuthzModule,
+        AuthzGraphqlModule,
         OrgsHttpModule,
         UsersHttpModule,
     ],
@@ -159,7 +159,7 @@ verify-only.
 The two lists import different modules, and the names say which.
 `apps/auth` takes `nest_rs::authn::AuthnModule` — the framework's, which
 provides `JwtService` and carries the config seam. `apps/api` takes
-`features::app_authn::AppAuthnModule` — the product's own, which wraps that one
+`features::authn::AuthnModule` — the product's own, which wraps that one
 and adds the `Claims`-bound strategy and guard; it owns no configuration, so it
 has no seam. The `app_` prefix is what makes the pair readable without going
 back to the `use` line.

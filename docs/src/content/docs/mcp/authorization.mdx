@@ -12,11 +12,11 @@ import { Aside } from '@astrojs/starlight/components';
 
 The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To
 authenticate instead — bearer JWT, ability, row-level filtering — import
-`AppAuthzMcpModule`, which binds
+`AuthzMcpModule`, which binds
 [`McpAbilityBridge`](/security/authorization/per-transport-bridges/) as the
-endpoint's `dyn McpOperationGuard` (mirroring `AppAuthzHttpModule`,
-`AppAuthzGraphqlModule`, and `AppAuthzWsModule` on the other transports). The bridge
-re-runs your `AppAuthnGuard` + `AppAuthzGuard` chain on every MCP request and installs
+endpoint's `dyn McpOperationGuard` (mirroring `AuthzModule`,
+`AuthzGraphqlModule`, and `AuthzWsModule` on the other transports). The bridge
+re-runs your `AuthnGuard` + `AuthzGuard` chain on every MCP request and installs
 the resulting `Ability` around the call — the same guards HTTP and GraphQL run,
 in the same order, from the same `run_ability_chain`, nothing re-implemented per
 transport.
@@ -26,22 +26,22 @@ transport.
     imports = [
         HttpModule::for_root(None),
         SeaOrmDatabaseModule::for_root(None),
-        AppAuthnModule,
-        AppAuthzMcpModule,
+        AuthnModule,
+        AuthzMcpModule,
     ],
     providers = [HelloTool],
 )]
 pub struct AssistantModule;
 ```
 
-With `AppAuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
+With `AuthzMcpModule` imported you drop `AllowAllMcpGuard` — the bridge *is* the
 endpoint's guard, so the closed default is replaced, not silenced (a registered
 bridge also replaces the global-pool fallback: it runs the same guards itself,
 so nothing runs twice). Tools then
 read the ambient ability the same way HTTP handlers do: through a service that
 goes through `Repo`, which applies the ability's row-level filter automatically.
 A tool that lists users gets only the users the caller is allowed to see — same
-policy, same `AppAbility`, same audit log under `nest_rs::authz`. See the
+policy, same `AuthzAbility`, same audit log under `nest_rs::authz`. See the
 [per-transport bridges](/security/authorization/per-transport-bridges/) page for
 the four-transport story.
 

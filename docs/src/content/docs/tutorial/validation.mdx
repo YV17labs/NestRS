@@ -67,7 +67,7 @@ A malformed body comes back as an RFC 9457 `application/problem+json`
 `400` with the structured field errors `validator` produces riding as an
 `errors` extension member.
 
-`AppAuthnGuard` runs **before** the validation pipe, so both calls below carry the
+`AuthnGuard` runs **before** the validation pipe, so both calls below carry the
 `$TOKEN` you signed on [Persist through Postgres](/tutorial/database/) — drop
 the header and the answer is a `401` that never reaches the pipe this page is
 about.

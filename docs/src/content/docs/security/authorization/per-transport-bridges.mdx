@@ -1,6 +1,6 @@
 ---
 title: Authorization on GraphQL, WS & MCP
-description: "AppAuthzHttpModule, AppAuthzGraphqlModule, AppAuthzWsModule and AppAuthzMcpModule re-establish the ambient ability at each transport's dispatch point."
+description: "AuthzModule, AuthzGraphqlModule, AuthzWsModule and AuthzMcpModule re-establish the ambient ability at each transport's dispatch point."
 tier: all-options
 sidebar:
   order: 6
@@ -13,25 +13,28 @@ GraphQL operations multiplex over a single `POST /graphql`. WebSocket
 messages multiplex over a single connection upgrade. MCP tool calls
 multiplex over their own JSON-RPC. For each, the framework ships an
 authz bridge that re-establishes the ambient `Ability` at the right
-dispatch point. Your `AppAbility` factory stays the single source of
+dispatch point. Your `AuthzAbility` factory stays the single source of
 truth across every transport.
 
 The bridges live in:
 
-- `nest_rs::authz::http` — feature `http`
+- `nest_rs::authz` — the guard itself, under any transport feature
+- `nest_rs::authz::http` — feature `http`, the HTTP extractors and shaper
 - `nest_rs::authz::graphql` — feature `graphql`
 - `nest_rs::authz::mcp` — feature `mcp`; the matching data context is
   `nest_rs::seaorm::mcp::McpDataContext` (feature `mcp`)
 - `nest_rs::seaorm::ws` — the WS data-context (split avoids a
   circular dep)
 
-HTTP, GraphQL, WS, and MCP each get a one-import `Authz<Transport>Module`
-in `crates/features/src/app_authz/`. Each wraps the framework bridge for its
-transport and registers it against the access graph, so an app imports
-the module and lists nothing else (see [MCP](#mcp--same-shape-as-http)
-below).
+GraphQL, WS and MCP each get a one-import `Authz<Transport>Module` in
+`crates/features/src/authz/`. Each wraps the framework bridge for its transport
+and registers it against the access graph, so an app imports the module and
+lists nothing else (see [MCP](#mcp--same-shape-as-http) below). **HTTP has no
+such module**: the guard those bridges re-run is `AbilityGuard`, which answers
+every transport, so `AuthzModule` provides it directly.
 
-You do not write them: `nestrs g auth` writes `authz/http/`, and
+You do not write them: `nestrs g auth` writes `authz/module.rs` and
+`authz/guard.rs`, and
 `nestrs g graphql|ws|mcp` writes that transport's bridge alongside the adapter
 and wires it into the app. The blocks below are what those generators produce —
 read them to understand the wiring, copy them only into a workspace that was not
@@ -41,10 +44,10 @@ scaffolded.
 
 | Bridge | Provides | What it bridges |
 |--------|----------|------------------|
-| `AppAuthzHttpModule` | `AppAuthzGuard` (`AbilityGuard<AppAbility>`) | The HTTP request — guard runs on `&mut Request`, attaches `Arc<Ability>` |
-| `AppAuthzGraphqlModule` | `AppGraphqlGuard` (`dyn OperationGuard`), `LoaderScope` (`dyn BatchContext`) | Re-runs the HTTP guard chain on `/graphql`, scopes the operation, snapshots ability around dataloader batches |
-| `AppAuthzWsModule` | `WsDataContext` (`dyn SocketContext`) | Re-establishes the pool + ability per WS message — which is what the per-message `#[authorize]` gate and reply mask read |
-| `AppAuthzMcpModule` | `AppMcpGuard` (`McpAbilityBridge<AppAuthnGuard, AppAuthzGuard>`) as `dyn McpOperationGuard`, `McpDataContext` as `dyn McpToolContext` | Re-runs the HTTP guard chain on the MCP endpoint and installs the ability *inside* each tool dispatch; the data context adds the executor + per-operation transaction |
+| `AuthzModule` | `AuthzGuard` (`AbilityGuard<AuthzAbility>`) | The HTTP request — guard runs on `&mut Request`, attaches `Arc<Ability>` |
+| `AuthzGraphqlModule` | `AuthzGraphqlBridge` (`dyn OperationGuard`), `LoaderScope` (`dyn BatchContext`) | Re-runs the HTTP guard chain on `/graphql`, scopes the operation, snapshots ability around dataloader batches |
+| `AuthzWsModule` | `WsDataContext` (`dyn SocketContext`) | Re-establishes the pool + ability per WS message — which is what the per-message `#[authorize]` gate and reply mask read |
+| `AuthzMcpModule` | `AuthzMcpBridge` (`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, `McpDataContext` as `dyn McpToolContext` | Re-runs the HTTP guard chain on the MCP endpoint and installs the ability *inside* each tool dispatch; the data context adds the executor + per-operation transaction |
 
 A controller imports the matching module along with its feature
 module. The transports transitively bring every layer the feature
@@ -54,10 +57,10 @@ needs.
 #[module(
     imports = [
         SeaOrmDatabaseModule::for_root(None),
-        AppAuthnModule,
-        AppAuthzHttpModule,
-        AppAuthzGraphqlModule,
-        AppAuthzWsModule,
+        AuthnModule,
+        AuthzModule,
+        AuthzGraphqlModule,
+        AuthzWsModule,
         UsersHttpModule,
         UsersGraphqlModule,
         UsersWsModule,
@@ -73,12 +76,12 @@ the handler:
 
 ```rust
 #[controller(path = "/users")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController { /* ... */ }
 ```
 
-`AbilityGuard` reads the `Claims` an `AppAuthnGuard` attached, calls
-`AppAbility::define(&actor, &mut builder)`, and inserts
+`AbilityGuard` reads the `Claims` an `AuthnGuard` attached, calls
+`AuthzAbility::define(&actor, &mut builder)`, and inserts
 `Arc<Ability>` into request extensions. The `Authorize` shaper later
 installs that ability as a task-local via `with_ability` so
 `Repo::scoped` sees it.
@@ -87,30 +90,30 @@ installs that ability as a task-local via `with_ability` so
 
 A GraphQL `POST /graphql` is one HTTP request that multiplexes many
 operations, so per-operation auth cannot run as plain HTTP guards. What
-you write is unchanged in spirit: import `AppAuthzGraphqlModule`, bind the
+you write is unchanged in spirit: import `AuthzGraphqlModule`, bind the
 **marker** on the resolver, and declare each operation's posture:
 
 ```rust
 #[resolver]
-#[use_guards(AppAuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct UsersResolver { /* ... */ }
 
 #[operations]
 impl UsersResolver { /* #[authorize(Action, Entity)] or #[public] per op */ }
 ```
 
-`AppAuthzGuard` is the app's `AbilityGuard<AppAbility>` alias, and it is what
+`AuthzGuard` is the app's `AbilityGuard<AuthzAbility>` alias, and it is what
 `#[use_guards]` binds: it has a `check_graphql`, so it satisfies the
-`GraphqlGuard` bound `#[resolver]` emits. An `AppAuthnGuard` does **not** belong
+`GraphqlGuard` bound `#[resolver]` emits. An `AuthnGuard` does **not** belong
 in that list — it has no `check_graphql`, so on a resolver it would run
 nothing; the bridge below already authenticated the request in band.
 
 The module those three providers live in is app code, like the rest of
 `authz/`: **`nestrs g graphql <feature>` writes it** into
-`crates/features/src/app_authz/graphql/` the first time a resource gets a
+`crates/features/src/authz/graphql/` the first time a resource gets a
 GraphQL adapter, and imports it from that adapter's `module.rs`. The
 four files are the ones sketched below —
-[`demo/crates/features/src/app_authz/graphql/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/app_authz/graphql)
+[`demo/crates/features/src/authz/graphql/`](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/authz/graphql)
 is the same thing under version control.
 
 That's the whole resolver-side surface. HTTP guards run on `&mut Request`
@@ -144,7 +147,7 @@ impl<A: Guard, G: Guard> GraphqlOperationGuard for GraphqlAbilityBridge<A, G> {
 }
 ```
 
-`before` runs the same HTTP guard chain (`AppAuthnGuard`, then
+`before` runs the same HTTP guard chain (`AuthnGuard`, then
 `AbilityGuard`) on the GraphQL request. `/graphql` carries the `Public`
 marker — one endpoint, posture declared per operation — so an anonymous
 caller is admitted here and takes the ability guard's *visitor* branch.
@@ -178,12 +181,12 @@ A WS connection is one HTTP upgrade; messages arrive over a long-
 lived socket and dispatch into separate handlers. Each message needs
 its own ambient ability:
 
-```rust title="crates/features/src/app_authz/ws/module.rs"
+```rust title="crates/features/src/authz/ws/module.rs"
 #[module(
-    imports = [AppAuthzHttpModule, WsModule],
+    imports = [AuthzModule, WsModule],
     providers = [WsDataContext as dyn SocketContext],
 )]
-pub struct AppAuthzWsModule;
+pub struct AuthzWsModule;
 ```
 
 `WsDataContext` is a `dyn SocketContext` that installs the pool
@@ -195,13 +198,13 @@ Unlike GraphQL, WS has **no marker type** and **no bridge** — a gateway is
 `EdgePosture::Guarded`, so its upgrade already carried the real chain and there
 is nothing to re-run in band. It reuses the HTTP `Guard` trait directly. The gateway struct binds the real guards; because the
 upgrade is an HTTP `GET`, they run once on it, and the access graph
-validates them like any HTTP binding (omit `AppAuthzWsModule` ⇒ the
+validates them like any HTTP binding (omit `AuthzWsModule` ⇒ the
 guards are unreachable ⇒ boot fails). An optional per-message check
 binds a real `Guard` beside the message:
 
 ```rust
 #[gateway(path = "/ws")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct ChatGateway { /* ... */ }
 
 #[messages]
@@ -214,7 +217,7 @@ impl ChatGateway {
 }
 ```
 
-`AppAuthnGuard` + `AppAuthzGuard` run at the upgrade — those are real HTTP
+`AuthnGuard` + `AuthzGuard` run at the upgrade — those are real HTTP
 guards on a real `GET`, so they attest `HttpGuard`, not `WsGuard`;
 `#[gateway]` emits that bound, and `WsGuard` is what a guard bound beside
 a `#[subscribe_message]` owes instead. The upgrade's
@@ -228,7 +231,7 @@ other transport**, and it is mandatory: `#[authorize(Action, Entity)]` or
 the reply mask afterwards — so a handler answering with entity rows
 writes **no masking call**. It fails closed when no ambient ability is
 present, which is exactly the state of a gateway whose app imported
-`AppAuthzHttpModule` instead of `AppAuthzWsModule`.
+`AuthzModule` instead of `AuthzWsModule`.
 
 The mask acts on the serialized reply, so a withheld column is absent
 from the frame rather than an error — HTTP's behaviour, not GraphQL's,
@@ -241,13 +244,13 @@ checks; such a guard runs `Guard::check_ws_message` and must declare
 
 ## MCP — same shape as HTTP
 
-`AppAuthzMcpModule` registers `AppMcpGuard`
-(`McpAbilityBridge<AppAuthnGuard, AppAuthzGuard>`) as `dyn McpOperationGuard`, plus
+`AuthzMcpModule` registers `AuthzMcpBridge`
+(`McpAbilityBridge<AuthnGuard, AuthzGuard>`) as `dyn McpOperationGuard`, plus
 `McpDataContext` as `dyn McpToolContext` — on each MCP HTTP request it runs the same `A` then `G` chain
 controllers use (`run_ability_chain`, the same function the GraphQL bridge
 calls), then installs the caller's ambient `Ability` for the tool call. Either
 leg's denial is returned **as raised**, so a `401`, a `403` and a throttler's
-`429` + `Retry-After` all reach the client intact. Import `AppAuthzMcpModule`
+`429` + `Retry-After` all reach the client intact. Import `AuthzMcpModule`
 beside the feature module, the same shape as the other transports.
 
 ```rust
@@ -300,7 +303,7 @@ the two seams in the crate have one shape.
 `ThrottlerGuard` rate-limits tool calls, exactly as it does on `/graphql`. With
 no pool either, `/mcp` stays deny-all: the fallback only ever widens what the
 app declared, and unlike `/graphql` the MCP endpoint carries no `Public` marker,
-so a pooled `AppAuthnGuard` still refuses an anonymous tool call.
+so a pooled `AuthnGuard` still refuses an anonymous tool call.
 
 What that endpoint runs is `check_http` — it holds a request, not an operation.
 A pooled guard's `check_mcp` runs in the **per-operation chain**, which folds
@@ -319,7 +322,7 @@ meant to gate with.
 
 A handler is "public" by **not** binding the transport's authz
 module's guard. The whole module import then becomes optional — the
-app lists `AppAuthzHttpModule` only if other handlers need it.
+app lists `AuthzModule` only if other handlers need it.
 
 ```rust
 #[get("/health")]
@@ -327,7 +330,7 @@ app lists `AppAuthzHttpModule` only if other handlers need it.
 async fn health(&self) -> &'static str { "ok" }
 ```
 
-`#[public]` makes `AppAuthnGuard` non-rejecting (anonymous requests pass
+`#[public]` makes `AuthnGuard` non-rejecting (anonymous requests pass
 through with no claims). The `AbilityGuard` then builds an empty
 `Ability` for the visitor; the row-level filter returns nothing
 unless `AbilityFactory` granted the visitor branch explicitly. See
@@ -335,11 +338,11 @@ unless `AbilityFactory` granted the visitor branch explicitly. See
 pattern.
 
 <Aside>
-Cross-transport rule: **same `AppAbility` everywhere**. The bridge
+Cross-transport rule: **same `AuthzAbility` everywhere**. The bridge
 re-establishes the ambient ability at each transport's dispatch
 point, but the factory that builds it stays the single source of
 truth. Splitting policy across transports is the drift the framework
-prevents — keep all rules in `crates/features/src/app_authz/ability.rs`.
+prevents — keep all rules in `crates/features/src/authz/ability.rs`.
 </Aside>
 
 ## Going further

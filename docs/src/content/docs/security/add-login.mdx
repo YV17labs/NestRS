@@ -15,8 +15,8 @@ Three pieces, two of which you already have:
 | Piece | Where it lives | You write |
 |---|---|---|
 | `POST /login` — verify credentials, sign a JWT | **app code** — no generator emits it | the DTOs, the service method, and a thin handler |
-| `AppAuthnGuard` — bearer JWT → principal | alias over the shipped `JwtStrategy` | one `type` line |
-| `AppAuthzGuard` — principal → `Ability` | alias over the shipped `AbilityGuard` | one `type` line + your policy |
+| `AuthnGuard` — bearer JWT → principal | alias over the shipped `JwtStrategy` | one `type` line |
+| `AuthzGuard` — principal → `Ability` | alias over the shipped `AbilityGuard` | one `type` line + your policy |
 
 ## 1. Issue a token on `POST /login`
 
@@ -26,7 +26,7 @@ that mints a token with no credential at all, so a scaffolded app can call its
 own guarded routes from the first minute. That route refuses to boot outside
 development and test, which is exactly why it is not the login: what counts as
 a credential, where users live and what the token carries are domain decisions.
-Delete `crates/features/src/app_authn/http/` once the route below exists.
+Delete `crates/features/src/authn/http/` once the route below exists.
 
 **What keeps it out of production is `NESTRS_ENV`, and absence counts as
 production.** The route arms only when the variable positively reads
@@ -46,7 +46,7 @@ service method below are the three things you add.
 
 The handler validates the body, delegates to the service, returns the token:
 
-```rust title="crates/features/src/app_oauth/http/controller.rs (you write this)"
+```rust title="crates/features/src/oauth/http/controller.rs (you write this)"
 #[post("/login")]
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]
@@ -83,31 +83,31 @@ secret; split later without touching your features. See
 
 The two guards are project-local aliases written **once**:
 
-```rust title="crates/features/src/app_authn/strategy.rs"
-pub type AppJwtStrategy = nest_rs::authn::JwtStrategy<Claims>;
+```rust title="crates/features/src/authn/strategy.rs"
+pub type AuthnStrategy = nest_rs::authn::JwtStrategy<Claims>;
 
-pub type AppAuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 ```
 
-```rust title="crates/features/src/app_authz/http/guard.rs"
-use nest_rs::authz::http::AbilityGuard;
+```rust title="crates/features/src/authz/guard.rs"
+use nest_rs::authz::AbilityGuard;
 
-use crate::app_authz::AppAbility;
+use crate::authz::AuthzAbility;
 
-pub type AppAuthzGuard = AbilityGuard<AppAbility>;
+pub type AuthzGuard = AbilityGuard<AuthzAbility>;
 ```
 
-`AbilityGuard` lives at `nest_rs::authz::http`, behind the crate's `http`
-feature — not at the crate root. [`nestrs g auth`](/cli/#generate-features-and-adapters)
+`AbilityGuard` lives at `nest_rs::authz`, at the crate root — not under
+`http` — because it answers every transport. [`nestrs g auth`](/cli/#generate-features-and-adapters)
 writes both files, their modules, and the `Claims` they name.
 
-Then protecting a controller is one attribute — `AppAuthnGuard` turns the
-bearer token into a principal, `AppAuthzGuard` turns the principal into the
+Then protecting a controller is one attribute — `AuthnGuard` turns the
+bearer token into a principal, `AuthzGuard` turns the principal into the
 request's `Ability`:
 
 ```rust title="crates/features/src/users/http/controller.rs (excerpt)"
 #[controller(path = "/users")]
-#[use_guards(AppAuthnGuard, AppAuthzGuard)]
+#[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
     #[inject]
     svc: Arc<UsersService>,
@@ -117,7 +117,7 @@ pub struct UsersController {
 And the feature's HTTP module imports the authz adapter:
 
 ```rust title="crates/features/src/users/http/module.rs (excerpt)"
-#[module(imports = [UsersModule, AppAuthzHttpModule], providers = [UsersController])]
+#[module(imports = [UsersModule, AuthzModule], providers = [UsersController])]
 pub struct UsersHttpModule;
 ```
 

@@ -334,7 +334,7 @@
       "type_key"
     ]
   },
-  "test_count": 2076,
+  "test_count": 2078,
   "version_req": "5.1",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -562,11 +562,6 @@
       "| `nest-rs-oauth-client` | `nest_rs::oauth::client` | §1.1 *client* |",
       "| `nest-rs-oauth-server` | `nest_rs::oauth::server` | §1.1 *authorization server* |",
       "| `nest-rs-oauth-resource` | `nest_rs::oauth::resource` | §1.1 *resource server* |",
-      "| | |",
-      "|---|---|",
-      "| `features/app_authn/` | `AppAuthnModule`, `AppAuthnGuard`, `AppJwtStrategy` |",
-      "| `features/app_authz/` | `AppAuthzModule`, `AppAuthzHttpModule`, `AppAbility` |",
-      "| `features/app_oauth/` | `AppOAuthModule`, `AppOAuthHttpModule`, `AppOAuthService` |",
       "| File | Job | Answers to | Holds |",
       "|---|---|---|---|",
       "| `mod.rs` | which **files** exist, and **what leaves the module** | the compiler, and readers | `//!`, `mod`, `pub use` |",

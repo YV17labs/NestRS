@@ -24,29 +24,29 @@ configures the algorithm without taking a direct dependency.
 
 A resource-server app declares a type alias and a tiny module:
 
-```rust title="crates/features/src/app_authn/strategy.rs"
+```rust title="crates/features/src/authn/strategy.rs"
 use nest_rs::authn::JwtStrategy;
 
 use crate::Claims;
 
-pub type AppJwtStrategy = JwtStrategy<Claims>;
+pub type AuthnStrategy = JwtStrategy<Claims>;
 
-pub type AppAuthnGuard = nest_rs::authn::AuthnGuard<AppJwtStrategy>;
+pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 ```
 
-```rust title="crates/features/src/app_authn/module.rs"
+```rust title="crates/features/src/authn/module.rs"
 use nest_rs::core::module;
 
-use super::strategy::{AppAuthnGuard, AppJwtStrategy};
+use super::strategy::{AuthnGuard, AuthnStrategy};
 
 #[module(
     imports = [nest_rs::authn::AuthnModule::for_root(None)],
-    providers = [AppJwtStrategy, AppAuthnGuard],
+    providers = [AuthnStrategy, AuthnGuard],
 )]
-pub struct AppAuthnModule;
+pub struct AuthnModule;
 ```
 
-`AppAuthnModule::for_root(None)` reads `JwtConfig` from the environment;
+`AuthnModule::for_root(None)` reads `JwtConfig` from the environment;
 pass a `JwtConfig` to pin it in code. The factory phase builds
 `JwtService` once and registers it as global infrastructure —
 controllers, login services, OAuth flows all inject the same instance.
@@ -59,7 +59,7 @@ export NESTRS_AUTHN__SECRET='a-32-byte-minimum-development-secret!!'
 ```
 
 With that set, `JwtService` signs and verifies against the same
-secret: `AppAuthnGuard` returns a 401 without a valid
+secret: `AuthnGuard` returns a 401 without a valid
 `Authorization: Bearer` token and attaches the claims otherwise.
 Every other knob is optional — the full env table and the
 HS256-vs-EdDSA decision come [later on this page](#configuration).
@@ -77,7 +77,7 @@ HS256-vs-EdDSA decision come [later on this page](#configuration).
 
 A missing header yields `AuthError::MissingCredentials`; a bad
 signature yields `AuthError::InvalidSignature`; an expired token
-yields `AuthError::Expired`. `AppAuthnGuard` maps every variant to a 401
+yields `AuthError::Expired`. `AuthnGuard` maps every variant to a 401
 with `WWW-Authenticate: Bearer`.
 
 ## Claims — your shape, your business rules
@@ -86,7 +86,7 @@ The framework's `JwtStrategy<C>` is generic. `C` is any
 `DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static` type —
 usually a struct with the standard `sub`, `exp`, plus whatever your app needs:
 
-```rust title="crates/features/src/app_authn/claims.rs"
+```rust title="crates/features/src/authn/claims.rs"
 use nest_rs::authn::PrincipalIdentity;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -107,7 +107,7 @@ impl PrincipalIdentity for Claims {
 ```
 
 `PrincipalIdentity` is the one required impl. On a successful authentication
-`AppAuthnGuard` records `actor_id` onto the request span, so every downstream
+`AuthnGuard` records `actor_id` onto the request span, so every downstream
 event — denials included — is attributable without threading the identity
 through each call site. Return `None` for a principal that genuinely has no
 identity (a machine token scoped to an org, say). `nestrs g auth` writes both
@@ -171,7 +171,7 @@ name, so a second line from the service would double-count every denial.
 
 `JwtConfig` follows the framework-wide dual-path rule: every field is
 settable from `NESTRS_AUTHN__*` env vars **or** from a pinned struct
-passed to `AppAuthnModule::for_root(config)`.
+passed to `AuthnModule::for_root(config)`.
 
 | Field | Env var | Notes |
 |-------|---------|-------|

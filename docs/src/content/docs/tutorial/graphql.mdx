@@ -39,11 +39,11 @@ use nest_rs::graphql::{crud, resolver};
 use nest_rs::seaorm::graphql::bind;
 
 use crate::Claims;
-use crate::app_authz::AppAuthzGuard;
+use crate::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[resolver]
-#[use_guards(AppAuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -101,14 +101,14 @@ are different:
 
 The same `#[use_guards(...)]` declaration on the resolver struct — the
 markers are the same, the access graph checks the same thing. It names
-`AppAuthzGuard` alone here because `apps/api` already declares `AppAuthnGuard`
+`AuthzGuard` alone here because `apps/api` already declares `AuthnGuard`
 with `use_guards_global`, and a guard bound at two scopes still runs
 exactly once: scope chooses the site, never the count.
 
 ## The GraphQL module
 
 The adapter imports the port (`UsersModule`), the authz bridge
-(`AppAuthzGraphqlModule`), and — because the entity exposes a
+(`AuthzGraphqlModule`), and — because the entity exposes a
 `belongs_to` org relation (next section) — the org port whose service
 hosts the auto-emitted loader:
 
@@ -116,12 +116,12 @@ hosts the auto-emitted loader:
 use nest_rs::core::module;
 
 use super::resolver::UsersResolver;
-use crate::app_authz::graphql::AppAuthzGraphqlModule;
+use crate::authz::graphql::AuthzGraphqlModule;
 use crate::orgs::OrgsModule;
 use crate::users::UsersModule;
 
 #[module(
-    imports = [UsersModule, OrgsModule, AppAuthzGraphqlModule],
+    imports = [UsersModule, OrgsModule, AuthzGraphqlModule],
     providers = [UsersResolver],
 )]
 pub struct UsersGraphqlModule;

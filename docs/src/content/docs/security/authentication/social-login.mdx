@@ -28,7 +28,7 @@ The `social` feature implies `authn`: the authorization-code machinery
 use nest_rs::core::module;
 use nest_rs::social::SocialModule;
 
-#[module(imports = [SocialModule, AppOAuthHttpModule])]
+#[module(imports = [SocialModule, OAuthHttpModule])]
 pub struct AuthModule;
 ```
 
@@ -36,7 +36,7 @@ pub struct AuthModule;
 `SocialModule`, no social login. Which providers come up inside that gate
 is a config decision, not a second import.
 
-`AppOAuthHttpModule` is **yours** — the two routes below are app code, for the
+`OAuthHttpModule` is **yours** — the two routes below are app code, for the
 reason [The request flow](#the-request-flow) explains.
 
 ## Wire it in
@@ -104,22 +104,22 @@ Two legs, both dispatched by a `:provider` path segment:
   PKCE/CSRF transaction in a signed, short-lived cookie. Unknown provider ⇒
   `404`.
 - `GET /social/:provider/callback` — the redirect URI. A `Strategy` bound with
-  `#[use_guards(AppOAuthGuard)]` validates the `state` against the cookie,
+  `#[use_guards(OAuthGuard)]` validates the `state` against the cookie,
   exchanges the code, fetches the profile, resolves it to a local user, and
   hands the handler a `Ctx<Caller>` to issue this app's token from. A forged
   callback is a `401` denial — do **not** mark this route `#[public]`, or the
   guard's denial is absorbed and the failure surfaces as a missing principal
   instead.
 
-```rust title="crates/features/src/app_oauth/http/controller.rs (abridged)"
+```rust title="crates/features/src/oauth/http/controller.rs (abridged)"
 #[controller(path = "/")]
-pub struct AppOAuthController {
+pub struct OAuthController {
     #[inject]
-    svc: Arc<AppOAuthService>,
+    svc: Arc<OAuthService>,
 }
 
 #[routes]
-impl AppOAuthController {
+impl OAuthController {
     #[get("/social/:provider/authorize")]
     #[public]
     async fn social_authorize(&self, provider: Path<String>) -> Result<Response> {
@@ -131,7 +131,7 @@ impl AppOAuthController {
     }
 
     #[get("/social/:provider/callback")]
-    #[use_guards(AppOAuthGuard)]
+    #[use_guards(OAuthGuard)]
     async fn social_callback(&self, caller: Ctx<Caller>) -> Result<Json<AccessTokenDto>> {
         Ok(Json(self.svc.issue(Some(caller.user_id), caller.org_id, caller.roles.clone())?))
     }

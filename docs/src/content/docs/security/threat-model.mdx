@@ -17,7 +17,7 @@ back on you.
 
 | Layer | Catches | Does not catch |
 |-------|---------|----------------|
-| [`AppAuthnGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens | Stolen-but-unexpired tokens, replay before expiry, key compromise |
+| [`AuthnGuard` + `JwtStrategy`](/security/authentication/jwt/) | Missing, malformed, expired, unsigned-incorrectly tokens | Stolen-but-unexpired tokens, replay before expiry, key compromise |
 | [`OAuthClient`](/security/authentication/oauth2/) | CSRF (state cookie), code-interception (PKCE), SSRF on token exchange (no redirects) | Phishing the provider, malicious provider, callback URL takeover |
 | [`hash_password` + `burn_verify`](/security/authentication/password/) | Timing-based account enumeration via login | Slow GPU farms cracking dumped hashes, weak passwords, password reuse |
 | [`AbilityGuard`](/security/authorization/) | Missing or malformed `Ability` (500), unauthenticated GraphQL/WS (403) | Logic bugs in your `AbilityFactory` itself |
@@ -110,7 +110,7 @@ A bug in your `AbilityFactory` (forgot to scope `org_id`, granted
 `Action::Manage` on the wrong subject) is the framework's most
 likely failure mode. Pin the matrix with unit tests against
 `Ability::condition_for` and `Ability::can` — the
-`crates/features/src/app_authz/ability.rs` exemplar's test module shows
+`crates/features/src/authz/ability.rs` exemplar's test module shows
 the pattern.
 </Aside>
 

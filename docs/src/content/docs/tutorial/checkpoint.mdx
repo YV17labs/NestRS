@@ -107,7 +107,7 @@ turned a cross-tenant load into a `403`. The `UsersController` that
 produced all three is the same thin CRUD shape you are about to write for
 `posts` — it never reads the tenant or the role.
 
-You build this yourself — the guards, the `AppAbility`, the `Bind`
+You build this yourself — the guards, the `AuthzAbility`, the `Bind`
 extractor — in [Authenticate and authorize](/tutorial/security/), once
 your `posts` feature persists and is tested.
 

@@ -22,15 +22,15 @@ the response check accepts cannot diverge.
 
 ## A minimal policy
 
-```rust title="crates/features/src/app_authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]
-pub struct AppAbility;
+pub struct AuthzAbility;
 
-impl AbilityFactory for AppAbility {
+impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
     fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
@@ -216,10 +216,10 @@ member should not see.
 
 ## A real match-on-role example
 
-The exemplar in `crates/features/src/app_authz/ability.rs`:
+The exemplar in `crates/features/src/authz/ability.rs`:
 
 ```rust
-impl AbilityFactory for AppAbility {
+impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
     fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
@@ -279,9 +279,9 @@ chain.
 
 ## Where the policy lives
 
-Always in `crates/features/src/app_authz/ability.rs`. The factory is the
+Always in `crates/features/src/authz/ability.rs`. The factory is the
 **single source of truth** for the app's authorization rules — HTTP,
-GraphQL, WS, and MCP transports all bridge to the same `AppAbility`.
+GraphQL, WS, and MCP transports all bridge to the same `AuthzAbility`.
 Spreading policy across handlers is the drift the framework prevents.
 
 ## Going further

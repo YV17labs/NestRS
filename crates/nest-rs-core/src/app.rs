@@ -12,8 +12,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    AccessError, ContestedDeclarationError, DuplicateProviderError, ProviderOrder,
-    ReachableProviders, UnresolvedFactoryError, provider_order_from_inventory,
+    AccessError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
+    ProviderOrder, ReachableProviders, UnresolvedFactoryError, provider_order_from_inventory,
     reachable_provider_ids_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
 };
 use crate::container::ProviderKey;
@@ -76,7 +76,12 @@ impl App {
     pub fn new<M: Module + 'static>() -> Result<Self> {
         #[cfg(feature = "logging")]
         crate::logging::init_fallback()?;
-        let builder = M::register(Container::builder());
+        // `collect` runs first, exactly as the async builder runs it: a static
+        // module whose `collect` queues a factory — a vendor binding, a
+        // `ConfigModule::for_feature` — is then *seen* by the check below and
+        // refused by name, instead of the value being silently absent because
+        // nothing ever asked the module what it would have built.
+        let builder = M::register(M::collect(Container::builder()));
         let roots = [TypeId::of::<M>()];
         // `ReachableProviders` is seeded after register but is global
         // infrastructure for the access graph, so it must be in `global` up
@@ -89,9 +94,9 @@ impl App {
         // imperatively-provided values) — consulted so a dependency provided
         // outside the declarative graph is not misreported as unmet.
         check_duplicate_providers(&builder)?;
-        // `register` ran but `collect` did not, so anything a module queued as an
-        // async factory is unreachable on this path — refuse rather than boot a
-        // container with the hole in it.
+        // `collect` ran but nothing drains the queue on this path, so anything a
+        // module queued as an async factory would never exist — refuse rather
+        // than boot a container with the hole in it.
         check_no_queued_factories(&builder)?;
         let registered = builder.registered_ids();
         let deferred = builder.scoped_or_transient_ids();
@@ -393,12 +398,29 @@ impl AppBuilder {
         check_contested_declarations(&builder)?;
         // A factory whose output type a seed already supplies is skipped, so a
         // seed wins over a module's `for_root` factory — the path a test takes
-        // to boot against a pre-built resource.
-        for (type_id, _name, factory) in builder.take_factories() {
-            if builder.contains(type_id) {
+        // to boot against a pre-built resource. Otherwise the next to run is
+        // the first in queue order whose `after` types are all present — or
+        // are nothing still queued will provide, so its own error is the one
+        // to surface. Only a cycle leaves nothing runnable.
+        let mut pending = builder.take_factories();
+        while !pending.is_empty() {
+            let ready = pending.iter().position(|queued| {
+                queued.after.iter().all(|dep| {
+                    builder.contains(*dep)
+                        || !pending.iter().any(|other| other.provides.contains(dep))
+                })
+            });
+            let Some(index) = ready else {
+                return Err(FactoryCycleError {
+                    type_names: pending.iter().map(|queued| queued.name).collect(),
+                }
+                .into());
+            };
+            let queued = pending.remove(index);
+            if builder.contains(queued.id) {
                 continue;
             }
-            let register = factory(builder.snapshot()).await?;
+            let register = (queued.factory)(builder.snapshot()).await?;
             builder = register(builder);
         }
         // `ReachableProviders` is seeded after register but counts as global
@@ -532,6 +554,161 @@ mod tests {
             .await
             .expect("build succeeds");
         assert_eq!(app.container().get::<Second>().unwrap().0, 2);
+    }
+
+    // A module whose factory reads another module's factory output — a store
+    // bound over a shared connection is the shape — declares it with `_after`.
+    struct SecondAfterFirst;
+    impl Module for SecondAfterFirst {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_declared_factory_after::<Second, First, _, _>(
+                "one declaration",
+                |c| async move {
+                    let first = c
+                        .get::<First>()
+                        .ok_or_else(|| anyhow!("First is not registered — import FirstModule"))?;
+                    Ok(Second(first.0 + 1))
+                },
+            )
+        }
+    }
+
+    struct FirstModule;
+    impl Module for FirstModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory(|_| async { Ok(First(41)) })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_factory_declared_after_another_runs_after_it_whatever_the_queue_order() {
+        // `Second` is queued first; the drain reorders on the declaration, so
+        // `imports` order stays a readability choice.
+        let app = App::builder()
+            .module::<SecondAfterFirst>()
+            .module::<FirstModule>()
+            .build()
+            .await
+            .expect("the declared order is honoured");
+        assert_eq!(app.container().get::<Second>().unwrap().0, 42);
+    }
+
+    /// The portable form: a dependent names the `Arc<dyn Port>` a
+    /// `provide_factory_dyn` binds, not the vendor's concrete type. The queue
+    /// entry advertises both keys, so the dependent waits.
+    struct PortImpl(u32);
+    trait Port: Send + Sync {
+        fn value(&self) -> u32;
+    }
+    impl Port for PortImpl {
+        fn value(&self) -> u32 {
+            self.0
+        }
+    }
+    impl Clone for PortImpl {
+        fn clone(&self) -> Self {
+            Self(self.0)
+        }
+    }
+    struct ReadsPort(u32);
+    struct ReadsPortModule;
+    impl Module for ReadsPortModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory_after::<ReadsPort, Arc<dyn Port>, _, _>(|c| async move {
+                let port = c
+                    .get_dyn::<dyn Port>()
+                    .ok_or_else(|| anyhow!("dyn Port must already be bound"))?;
+                Ok(ReadsPort(port.value() + 1))
+            })
+        }
+    }
+    struct BindsPortModule;
+    impl Module for BindsPortModule {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_factory_dyn::<PortImpl, dyn Port, _, _>(
+                |_| async { Ok(PortImpl(41)) },
+                |p| Arc::new(p) as Arc<dyn Port>,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn a_factory_declared_after_a_dyn_binding_waits_for_the_dyn_side() {
+        let app = App::builder()
+            .module::<ReadsPortModule>()
+            .module::<BindsPortModule>()
+            .build()
+            .await
+            .expect("the dyn key is a key the binding's entry provides");
+        assert_eq!(app.container().get::<ReadsPort>().unwrap().0, 42);
+    }
+
+    #[test]
+    fn the_synchronous_boot_refuses_a_static_modules_queued_factory() {
+        // `App::new` has no factory phase; a static module whose `collect`
+        // queues one is refused by name rather than booted with the value
+        // silently absent.
+        let err = match App::new::<BindsPortModule>() {
+            Ok(_) => panic!("a queued factory cannot be drained synchronously"),
+            Err(e) => e,
+        };
+        assert!(
+            err.downcast_ref::<UnresolvedFactoryError>().is_some(),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_factory_waiting_on_nothing_queued_runs_and_reports_its_own_error() {
+        // Nothing will ever provide `First`, so the drain must not hang on the
+        // declaration: the factory runs and its own remedy is what surfaces.
+        let err = match App::builder().module::<SecondAfterFirst>().build().await {
+            Ok(_) => panic!("the factory's own error must surface"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("import FirstModule"), "{err}");
+    }
+
+    struct FirstAfterSecond;
+    impl Module for FirstAfterSecond {
+        fn register(builder: ContainerBuilder) -> ContainerBuilder {
+            builder
+        }
+        fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+            builder.provide_declared_factory_after::<First, Second, _, _>(
+                "one declaration",
+                |_| async { Ok(First(0)) },
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn two_factories_waiting_on_each_other_fail_the_boot_naming_both() {
+        let err = match App::builder()
+            .module::<SecondAfterFirst>()
+            .module::<FirstAfterSecond>()
+            .build()
+            .await
+        {
+            Ok(_) => panic!("a cycle cannot boot"),
+            Err(e) => e,
+        };
+        let cycle = err
+            .downcast_ref::<FactoryCycleError>()
+            .expect("the typed cycle error");
+        assert_eq!(cycle.type_names.len(), 2, "{cycle:?}");
     }
 
     #[tokio::test]

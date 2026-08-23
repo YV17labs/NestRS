@@ -353,7 +353,7 @@ fn generate_queue_adapter_module_imports_the_port() {
     assert!(features_cargo.contains("tracing"), "{features_cargo}");
 }
 
-/// C1: `/queue/producing-jobs/` opens with `use nest_rs_redis::RedisQueueConnection;`
+/// C1: `/queue/producing-jobs/` wires `RedisModule` + `RedisQueueModule` from `nest_rs::redis`
 /// and the install stanza names the crate — the generator wrote four of the
 /// five lines, so the first documented step after it did not compile.
 #[test]

@@ -61,6 +61,18 @@ Three consequences, and they are not negotiable:
 3. **Siblings follow one scheme.** One odd member means either it or the scheme
    is wrong, and deciding which is the finding — never a shrug. A type renamed
    without its `*Setup`, its `*Host` or its config is half a rename.
+4. **A variable is a path too.** A `#[config]`'s namespace is the same stem its
+   type is named from — crate subject, then binding folders, joined by `__` — so
+   `SeaOrmConfig` reads `NESTRS_SEAORM__URL` and `RedisWorkerConfig` reads
+   `NESTRS_REDIS__WORKER__*`. From a variable a reader finds the type; from a
+   module they find the variable. A resource word that names neither
+   (`NESTRS_DATABASE__URL`) is the defect, however universal the convention.
+
+The composition root follows from the same law and has **three module shapes,
+no fourth** — `<Vendor>Module::for_root` opens a resource, `<Port>Module::for_root`
+carries a capability's policy, `<Vendor><Port>Module` binds one to the other —
+and the framework is *Ports & Adapters*: the port owns the semantics, the
+adapter owns only the transport. The model is in `.claude/rules/architecture.md`.
 
 The full model, the tables and the one documented precedence live in
 `.claude/rules/architecture.md`; `naming.rs` in `nest-rs-conformance` enforces

@@ -1,14 +1,12 @@
-//! The database binding: [`SeaOrmDatabaseModule`], the seam an app imports, and the
-//! [`SeaOrmDatabaseConfig`] it resolves.
+//! The `nest-rs-database` binding: [`SeaOrmDatabaseModule`], the bare import
+//! that installs SeaORM's ambient executor around every unit of work.
 //!
 //! A folder rather than the crate root, so the module's own path names what it
-//! is a module *of* — `seaorm/database/module.rs` reads `SeaOrmDatabaseModule` before
-//! the file is opened. The rest of the crate is the ORM integration this
-//! binding makes usable (`Repo`, the executor, the edge adapters); this folder
-//! is only the port it binds.
+//! is a module *of* — `seaorm/database/module.rs` reads `SeaOrmDatabaseModule`
+//! before the file is opened. The pool it reads is the crate's, opened by
+//! `SeaOrmModule` at the root; the rest of the crate is the ORM integration
+//! this binding makes usable (`Repo`, the executor, the edge adapters).
 
-mod config;
 mod module;
 
-pub use config::SeaOrmDatabaseConfig;
-pub use module::{SeaOrmDatabaseModule, SeaOrmDatabaseSetup, connect_from_env};
+pub use module::SeaOrmDatabaseModule;

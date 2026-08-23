@@ -6,14 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nest_rs_interceptors::InterceptorExt;
-use nest_rs_seaorm::{DbContext, SeaOrmDatabaseConfig, current_executor};
+use nest_rs_seaorm::{DbContext, SeaOrmConfig, current_executor};
 use poem::endpoint::make;
 use poem::http::{Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Request, Response, Result};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-fn config() -> Arc<SeaOrmDatabaseConfig> {
-    Arc::new(SeaOrmDatabaseConfig::default())
+fn config() -> Arc<SeaOrmConfig> {
+    Arc::new(SeaOrmConfig::default())
 }
 
 fn mutating_request() -> Request {
@@ -56,7 +56,10 @@ async fn an_escaped_transaction_fails_an_otherwise_successful_response() {
     // the ordinary bug the developer will look for first. The event is what
     // names the actual cause, and `outcome` is what says whether the boundary
     // rolled back or rolled back *and* failed a response it had already built.
-    let event = logs.expect_one("nest_rs::orm", "executor escaped into a spawned task");
+    let event = logs.expect_one(
+        nest_rs_seaorm::TARGET,
+        "executor escaped into a spawned task",
+    );
     assert_eq!(event.level, "error");
     assert_eq!(event.field("outcome").as_deref(), Some("rollback_and_fail"));
     assert_eq!(
@@ -185,7 +188,7 @@ async fn a_swallowed_statement_failure_refuses_the_success_it_was_told_to_commit
     );
 
     let event = logs.expect_one(
-        "nest_rs::orm",
+        nest_rs_seaorm::TARGET,
         "a statement failed inside this transaction but the boundary reported success; \
          nothing it wrote could be committed",
     );
@@ -292,7 +295,7 @@ async fn a_commit_the_database_refuses_fails_the_response_it_had_already_built()
         .expect("read the count");
     assert_eq!(landed, 0, "and nothing was written");
 
-    let event = logs.expect_one("nest_rs::orm", "transaction commit failed");
+    let event = logs.expect_one(nest_rs_seaorm::TARGET, "transaction commit failed");
     assert_eq!(event.level, "error");
     assert!(
         event
@@ -348,7 +351,7 @@ async fn a_rollback_with_no_session_left_to_reach_is_reported_rather_than_assume
          could not be issued does not change what the request answered",
     );
 
-    let event = logs.expect_one("nest_rs::orm", "transaction rollback failed");
+    let event = logs.expect_one(nest_rs_seaorm::TARGET, "transaction rollback failed");
     assert_eq!(event.level, "error");
     assert!(
         event.field("error").is_some(),
@@ -386,7 +389,10 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
         "a swallowed statement failure still refuses the success it was handed",
     );
 
-    let event = logs.expect_one("nest_rs::orm", "poisoned transaction rollback failed");
+    let event = logs.expect_one(
+        nest_rs_seaorm::TARGET,
+        "poisoned transaction rollback failed",
+    );
     assert_eq!(event.level, "error");
     assert!(
         event.field("error").is_some(),
@@ -394,7 +400,7 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
         event.fields,
     );
     assert!(
-        logs.find("nest_rs::orm", "transaction rollback failed")
+        logs.find(nest_rs_seaorm::TARGET, "transaction rollback failed")
             .is_empty(),
         "and it is *this* line, not the failing-handler one: {:#?}",
         logs.events(),
@@ -416,10 +422,10 @@ async fn a_poisoned_rollback_that_cannot_be_issued_is_its_own_line() {
 // is the switch, off by default, because a deployment on READ COMMITTED never
 // sees one and does not want the branch.
 
-fn conflict_observing_config() -> Arc<SeaOrmDatabaseConfig> {
-    Arc::new(SeaOrmDatabaseConfig {
+fn conflict_observing_config() -> Arc<SeaOrmConfig> {
+    Arc::new(SeaOrmConfig {
         observe_serialization_conflicts: true,
-        ..SeaOrmDatabaseConfig::default()
+        ..SeaOrmConfig::default()
     })
 }
 
@@ -522,7 +528,7 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
         "SERIALIZABLE lets one through and refuses the other, got {left} and {right}",
     );
 
-    let event = logs.expect_one("nest_rs::orm", "serialization conflict at commit");
+    let event = logs.expect_one(nest_rs_seaorm::TARGET, "serialization conflict at commit");
     assert_eq!(
         event.level, "warn",
         "a conflict is the isolation level working, not an incident — filed at \
@@ -537,7 +543,7 @@ async fn a_commit_another_transaction_won_is_a_conflict_and_not_an_outage() {
         event.fields,
     );
     assert!(
-        logs.find("nest_rs::orm", "transaction commit failed")
+        logs.find(nest_rs_seaorm::TARGET, "transaction commit failed")
             .is_empty(),
         "and it is not also filed as a plain commit failure: {:#?}",
         logs.events(),

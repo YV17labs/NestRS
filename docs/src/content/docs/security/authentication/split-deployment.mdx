@@ -114,7 +114,8 @@ NESTRS_AUTHN__PUBLIC_KEY"`.
     imports = [
         ConfigModule::for_root(),
         OpenTelemetryModule,
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         SeaOrmHealthModule,
         ThrottlerModule::for_root(None),
         HealthModule,
@@ -135,7 +136,8 @@ mints tokens, not users.
 #[module(
     imports = [
         ConfigModule::for_root(),
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         HealthModule,
         HttpModule::for_root(HttpConfig {
             port: 3002,

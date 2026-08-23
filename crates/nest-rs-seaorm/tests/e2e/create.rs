@@ -99,7 +99,7 @@ async fn out_of_scope_create_over_the_pool_executor_persists_nothing() {
     // than a storage one, which is what makes a caller writing outside its
     // tenant queryable at all.
     let denied = logs.expect_one(
-        "nest_rs::orm",
+        nest_rs_seaorm::TARGET,
         "access denied — row outside the caller's scope",
     );
     assert_eq!(denied.level, "warn");
@@ -313,7 +313,7 @@ async fn a_create_whose_undo_cannot_be_issued_says_so() {
     );
 
     let event = logs.expect_one(
-        "nest_rs::orm",
+        nest_rs_seaorm::TARGET,
         "rollback of the create SAVEPOINT/transaction failed",
     );
     assert_eq!(event.level, "error");

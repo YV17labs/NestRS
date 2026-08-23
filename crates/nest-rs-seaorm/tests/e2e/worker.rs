@@ -339,7 +339,7 @@ async fn a_job_whose_commit_the_database_refuses_is_reported_as_unsettled() {
         "and nothing was written",
     );
 
-    let event = logs.expect_one("nest_rs::orm", "job transaction commit failed");
+    let event = logs.expect_one(nest_rs_seaorm::TARGET, "job transaction commit failed");
     assert_eq!(event.level, "error");
     assert_eq!(
         event.field("retryable").as_deref(),

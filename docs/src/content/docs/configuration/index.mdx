@@ -305,12 +305,12 @@ becomes implicit (which vars exist? what are their types?). With
 
 `NESTRS` is a default, not a fixture. Name your own once and every framework
 variable follows — `ACME_ENV`, `ACME_LOG`, `ACME_HTTP__PORT`,
-`ACME_DATABASE__URL`:
+`ACME_SEAORM__URL`:
 
 ```yaml title="compose.yml"
 environment:
   NESTRS_ENV_PREFIX: ACME
-  ACME_DATABASE__URL: postgres://…
+  ACME_SEAORM__URL: postgres://…
 ```
 
 There is exactly one place to write it, and it is an environment variable

@@ -13,7 +13,7 @@ use nest_rs_guards::guard;
 use nest_rs_http::poem::web::Json;
 use nest_rs_http::{controller, routes};
 use nest_rs_resource::WireModelDefaults;
-use nest_rs_seaorm::{CrudService, SeaOrmDatabaseConfig, SeaOrmDatabaseModule, ServiceError};
+use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError};
 use nest_rs_testing::TestApp;
 use sea_orm::DatabaseConnection;
 use serde::Serialize;
@@ -150,10 +150,13 @@ macro_rules! visitor_app {
             }
 
             #[module(
-                imports = [SeaOrmDatabaseModule::for_root(SeaOrmDatabaseConfig {
-                    url: crate::harness::url(),
-                    ..Default::default()
-                })],
+                imports = [
+                    SeaOrmModule::for_root(SeaOrmConfig {
+                        url: crate::harness::url(),
+                        ..Default::default()
+                    }),
+                    SeaOrmDatabaseModule,
+                    ],
                 providers = [$factory, VisitorGuard, PostsController],
             )]
             pub struct AppModule;

@@ -2,7 +2,7 @@ use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule};
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 
 use crate::chat::ChatModule as ChatFeatureModule;
 use crate::notify::NotifyModule;
@@ -12,7 +12,8 @@ use features::users::UsersWsModule;
 #[module(
     imports = [
         ConfigModule::for_root(),
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         SeaOrmHealthModule,
         AuthnModule,
         HealthModule,

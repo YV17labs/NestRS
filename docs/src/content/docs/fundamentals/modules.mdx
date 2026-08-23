@@ -145,7 +145,7 @@ Framework and feature modules appear in `imports` two ways.
 with configuration at the import site:
 
 ```rust
-SeaOrmDatabaseModule::for_root(None)
+SeaOrmModule::for_root(None)
 
 HttpModule::for_root(HttpConfig {
     host: "0.0.0.0".into(),
@@ -162,7 +162,8 @@ PostsHttpModule
 ```
 
 Static modules dedupe automatically: if two branches of the import tree
-both reach `SeaOrmDatabaseModule`, its providers are built once. Dynamic
+both reach `SeaOrmDatabaseModule` (the bare binding beside `SeaOrmModule`), its
+providers are built once. Dynamic
 modules do **not** dedupe — each call carries its own config.
 
 <Aside type="tip">
@@ -172,12 +173,12 @@ environment can still override **per field** — never a lock, see
 [the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
 
 ```rust
-SeaOrmDatabaseModule::for_root(None)
+SeaOrmModule::for_root(None)
 HttpModule::for_root(None)
 ```
 
 ```sh title=".env"
-NESTRS_DATABASE__URL=postgres://localhost/blog
+NESTRS_SEAORM__URL=postgres://localhost/blog
 NESTRS_HTTP__HOST=0.0.0.0
 NESTRS_HTTP__PORT=4000
 ```
@@ -198,7 +199,8 @@ providers — it only composes imports:
 #[module(
     imports = [
         ConfigModule::for_root(),
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
         PostsHttpModule,
     ],

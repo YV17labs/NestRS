@@ -1,21 +1,25 @@
-//! SeaORM database integration.
+//! SeaORM for nestrs — the adapter that wraps `sea_orm`, whose URL scheme picks
+//! the engine (postgres, mysql, sqlite). One substrate and its bindings:
 //!
-//! [`SeaOrmDatabaseModule`] is a [`DynamicModule`](nest_rs_core::DynamicModule) that
-//! builds the pool in the collect phase and registers it as a
-//! `sea_orm::DatabaseConnection`. Importing it also installs the `DbContext`
-//! request interceptor, which binds each request to an ambient [`Executor`] —
-//! the pool for a safe method, a transaction for a mutating one. Services then
-//! query through [`Repo`] instead of holding a connection: every call runs on
-//! the ambient executor (transactions need no hand-threading) and every read
-//! is filtered by the caller's [`Ability`](nest_rs_authz::Ability) (row-level
-//! security cannot be forgotten).
+//! - [`SeaOrmModule::for_root`] resolves [`SeaOrmConfig`] (`NESTRS_SEAORM__*`)
+//!   and opens the one `sea_orm::DatabaseConnection` every binding shares.
+//! - [`SeaOrmDatabaseModule`] (bare) binds the `nest-rs-database` port: the
+//!   `DbContext` request interceptor, which binds each request to an ambient
+//!   [`Executor`] — the pool for a safe method, a transaction for a mutating
+//!   one — and the `WorkerDbContext` bridge for jobs.
+//! - [`SeaOrmHealthModule`] (bare, feature `health`) binds a health indicator.
+//!
+//! Services then query through [`Repo`] instead of holding a connection: every
+//! call runs on the ambient executor (transactions need no hand-threading) and
+//! every read is filtered by the caller's [`Ability`](nest_rs_authz::Ability)
+//! (row-level security cannot be forgotten).
 //!
 //! ```ignore
-//! #[module(imports = [SeaOrmDatabaseModule, UsersModule])]
+//! #[module(imports = [SeaOrmModule::for_root(None), SeaOrmDatabaseModule, UsersModule])]
 //! pub struct AppModule;
 //! ```
 //!
-//! Pin explicit values with [`SeaOrmDatabaseModule::for_root`]`(SeaOrmDatabaseConfig { .. })`.
+//! Pin explicit values with [`SeaOrmModule::for_root`]`(SeaOrmConfig { .. })`.
 
 #![warn(missing_docs)]
 
@@ -28,11 +32,13 @@
 /// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::orm";
 
+mod config;
 mod database;
 #[cfg(any(feature = "ws", feature = "mcp"))]
 mod dispatch;
 mod error;
 mod executor;
+mod module;
 mod page;
 mod repo;
 pub mod retry;
@@ -53,9 +59,8 @@ pub mod mcp;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-pub use database::{
-    SeaOrmDatabaseConfig, SeaOrmDatabaseModule, SeaOrmDatabaseSetup, connect_from_env,
-};
+pub use config::SeaOrmConfig;
+pub use database::SeaOrmDatabaseModule;
 pub use error::ServiceError;
 #[cfg(feature = "http")]
 pub use error::crud_error;
@@ -63,6 +68,7 @@ pub use executor::{
     CommitError, Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
     current_executor_scope, with_executor, with_job_executor, with_request_executor,
 };
+pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};
 pub use page::{DEFAULT_PAGE_SIZE, LIST_CAP, Page, PageParams, clamp_page_size};
 pub use repo::{Repo, scope_for};
 pub use service::{

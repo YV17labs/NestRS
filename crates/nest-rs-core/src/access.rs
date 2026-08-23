@@ -265,6 +265,22 @@ pub struct UnresolvedFactoryError {
     pub type_name: &'static str,
 }
 
+/// Every factory left in the queue waits on a factory output still in it — one
+/// another's, or its own — so none can run first: a cycle in the `*_after`
+/// declarations. Raised by `AppBuilder::build` instead of running them in queue
+/// order, which would hand one of them a snapshot missing what it declared it
+/// reads.
+#[derive(Debug, Error)]
+#[error(
+    "factory cycle: {type_names:?} — each waits on a factory output that a member \
+     of this set (itself included) would provide, so no order satisfies them. \
+     Drop one `_after` declaration."
+)]
+pub struct FactoryCycleError {
+    /// The types whose factories wait on each other.
+    pub type_names: Vec<&'static str>,
+}
+
 /// A provider's `#[inject(key = "…")]` keyed dependency has no keyed provider
 /// registered as global infrastructure (a seed or a factory output). Raised at
 /// boot by the keyed pass of the access-graph validation. Unlike a bare

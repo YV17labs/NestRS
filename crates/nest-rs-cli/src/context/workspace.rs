@@ -329,7 +329,7 @@ pub fn validate_env_prefix(prefix: &str) -> Result<(), String> {
         Err(format!(
             "`{prefix}` is not a usable env prefix: use uppercase ASCII letters, digits and \
              underscores, starting with a letter and not ending in `_` (e.g. `ACME`, which \
-             yields ACME_ENV and ACME_DATABASE__URL)"
+             yields ACME_ENV and ACME_SEAORM__URL)"
         ))
     }
 }

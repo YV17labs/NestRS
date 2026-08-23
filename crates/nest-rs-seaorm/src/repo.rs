@@ -356,7 +356,7 @@ mod tests {
             "the dataloader binding is one of the ones named: {detail}",
         );
 
-        let event = logs.expect_one("nest_rs::orm", "no ambient database executor");
+        let event = logs.expect_one(crate::TARGET, "no ambient database executor");
         assert_eq!(event.level, "error");
         assert!(
             event.field("entity").is_some_and(|e| e.contains("widget")),
@@ -438,7 +438,7 @@ mod tests {
         .await;
 
         let event = logs.expect_one(
-            "nest_rs::orm",
+            crate::TARGET,
             "no ambient Ability outside a worker job — denying all rows",
         );
         assert_eq!(event.level, "warn");
@@ -460,7 +460,7 @@ mod tests {
         })
         .await;
         logs.expect_none(
-            "nest_rs::orm",
+            crate::TARGET,
             "no ambient Ability outside a worker job — denying all rows",
         );
     }

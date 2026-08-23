@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 nest-rs.workspace = true
 features.workspace = true
-# `RedisQueueModule::for_root` seeds the queue connection the audio port injects.
+# `RedisModule::for_root` opens the Redis connection; `RedisQueueModule` binds the producer the audio port injects.
 tokio.workspace = true
 anyhow.workspace = true
 

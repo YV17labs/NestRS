@@ -1,16 +1,17 @@
-//! Typed errors for the Redis queue backend.
+//! Typed errors for the Redis substrate.
 //!
 //! Framework crates surface `thiserror` enums, not `anyhow`. Opening the shared
 //! connection is a Redis-specific step, so it carries its own error here; the
-//! producer surface ([`Queue::push`](crate::Queue::push) and the `JobProducer`
-//! impl) instead speaks the backend-agnostic
+//! producer surface (the `JobProducer` impl on
+//! [`RedisQueueProducer`](crate::RedisQueueProducer)) instead speaks the
+//! backend-agnostic
 //! [`QueueError`](::nest_rs_queue::QueueError), wrapping a Redis push failure as
 //! its opaque `Backend` source.
 
 use thiserror::Error;
 
-/// A failure opening the shared Redis
-/// [`RedisQueueConnection`](crate::RedisQueueConnection) from the configured URL.
+/// A failure opening the shared [`RedisConnection`](crate::RedisConnection)
+/// from the configured URL.
 ///
 /// Concern-prefixed (`RedisError`, not a generic `ConnectionError`) to match
 /// the house pattern — `ConfigError`, `StorageError`, `QueueError` — and avoid
@@ -30,8 +31,8 @@ pub enum RedisError {
         "could not reach Redis at {endpoint} within {}s ({attempts} attempt(s)): \
          check {url_var}, or widen the budget with {timeout_var}",
         budget.as_secs(),
-        url_var = ::nest_rs_config::var_name("queue", "URL"),
-        timeout_var = ::nest_rs_config::var_name("queue", "CONNECT_TIMEOUT_SECS"),
+        url_var = ::nest_rs_config::var_name("redis", "URL"),
+        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
     )]
     Unreachable {
         /// The configured endpoint with any userinfo stripped — the URL may

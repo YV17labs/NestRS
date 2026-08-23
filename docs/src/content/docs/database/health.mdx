@@ -20,11 +20,12 @@ Import `SeaOrmHealthModule` alongside `HealthModule`:
 ```rust title="src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::seaorm::SeaOrmHealthModule;
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         SeaOrmHealthModule,
         HealthModule,
     ],

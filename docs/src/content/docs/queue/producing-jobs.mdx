@@ -1,6 +1,6 @@
 ---
 title: Producing jobs
-description: How an HTTP handler enqueues — the typed queue handle, the RedisQueueConnection publisher, and the service-as-choke-point rule.
+description: How an HTTP handler enqueues — the typed queue handle, the JobProducer publisher, and the service-as-choke-point rule.
 tier: basics
 sidebar:
   order: 2
@@ -64,8 +64,8 @@ marker it cannot see is a marker it cannot use.
 
 A producer is any code that asks the service to enqueue. The HTTP
 controller, the GraphQL resolver, the scheduled producer — all of them
-delegate. They do **not** hold `Arc<RedisQueueConnection>` and do **not**
-know the queue name.
+delegate. They do **not** hold the producer and do **not** know the queue
+name.
 
 ```rust title="crates/features/src/audio/service.rs"
 use std::sync::Arc;
@@ -73,15 +73,14 @@ use std::time::Duration;
 
 use anyhow::Result;
 use nest_rs::core::injectable;
-use nest_rs::queue::JobProducerExt;
-use nest_rs::redis::RedisQueueConnection;
+use nest_rs::queue::{JobProducer, JobProducerExt};
 
 use super::command::{AudioQueue, TranscodeCommand};
 
 #[injectable]
 pub struct AudioService {
     #[inject]
-    queue: Arc<RedisQueueConnection>,
+    queue: Arc<dyn JobProducer>,
 }
 
 impl AudioService {
@@ -105,7 +104,7 @@ impl AudioService {
 `Q`, so enqueueing onto the wrong queue, or with the wrong payload, does
 not compile. `push_to` comes from `JobProducerExt`, a blanket extension
 over any producer — import the trait, and it is available on
-`RedisQueueConnection` and on `Arc<dyn JobProducer>` alike. It is `async`
+`Arc<dyn JobProducer>` and on a backend's concrete producer alike. It is `async`
 because Redis is async; that is the whole producer surface from a
 feature's point of view. Inside the call, `nest-rs-redis` wraps your
 payload in the wire envelope (`{ "v": 1, "payload": ... }`) so any other
@@ -122,11 +121,13 @@ implements. Neither is the default path.
 </Aside>
 
 <Aside>
-Inject `Arc<RedisQueueConnection>` for the concrete type, or
-`Arc<dyn nest_rs::queue::JobProducer>` to keep the feature portable across
-backends. `RedisQueueModule::for_root` binds **both** names to the one connection,
-so either resolves from the container. Same publisher surface either way —
-`push_to` is on the extension trait, not the concrete type.
+`Arc<dyn nest_rs::queue::JobProducer>` is the form to inject: the feature names
+no backend, so it compiles unchanged against a different driver.
+`RedisQueueModule` binds **both** that name and the concrete
+`nest_rs::redis::RedisQueueProducer` over the one connection `RedisModule`
+opens, so the concrete type resolves too when a service genuinely needs it.
+Same publisher surface either way — `push_to` is on the extension trait, not
+the concrete type.
 </Aside>
 
 ## The HTTP adapter

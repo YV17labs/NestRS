@@ -193,8 +193,8 @@ pub(crate) fn claiming<C: 'static, T>(load: impl FnOnce() -> T) -> (T, Result<()
 /// // Built, not spelled — the assertion would be false the moment a deployment
 /// // sets `NESTRS_ENV_PREFIX`, which is the one thing this function exists for.
 /// assert_eq!(
-///     var_name("database", "URL"),
-///     format!("{}_DATABASE__URL", EnvPrefix::current()),
+///     var_name("seaorm", "URL"),
+///     format!("{}_SEAORM__URL", EnvPrefix::current()),
 /// );
 /// ```
 pub fn var_name(namespace: &str, key: &str) -> String {
@@ -425,11 +425,11 @@ mod tests {
 
     #[test]
     fn var_name_builds_the_namespaced_name() {
-        let env = ConfigService::for_namespace("database");
-        assert_eq!(env.var_name("URL"), var_name("database", "URL"));
+        let env = ConfigService::for_namespace("seaorm");
+        assert_eq!(env.var_name("URL"), var_name("seaorm", "URL"));
         assert_eq!(
             env.var_name("max_connections"),
-            var_name("database", "MAX_CONNECTIONS")
+            var_name("seaorm", "MAX_CONNECTIONS")
         );
     }
 
@@ -438,10 +438,10 @@ mod tests {
     // line built the other.
     #[test]
     fn the_free_var_name_matches_the_readers() {
-        assert_eq!(var_name("database", "url"), var_name("database", "URL"));
+        assert_eq!(var_name("seaorm", "url"), var_name("seaorm", "URL"));
         assert_eq!(
-            var_name("queue", "CONNECT_TIMEOUT_SECS"),
-            ConfigService::for_namespace("queue").var_name("connect_timeout_secs"),
+            var_name("redis", "CONNECT_TIMEOUT_SECS"),
+            ConfigService::for_namespace("redis").var_name("connect_timeout_secs"),
         );
     }
 

@@ -804,3 +804,127 @@ fn idents_in(file: &syn::File) -> BTreeSet<String> {
     walk(quote::ToTokens::to_token_stream(file), &mut out);
     out
 }
+
+/// **A `#[config]`'s namespace is its stem, exactly as its type name is — read,
+/// never chosen.**
+///
+/// The law in `architecture.md`: the segments are the crate's subject, then
+/// every binding folder below `src/` on the way to the file, joined by `__` —
+/// the same derivation that names the type. `http/src/config.rs` → `http`;
+/// `seaorm/src/config.rs` → `seaorm`; `redis/src/worker/config.rs` →
+/// `redis__worker`; `social/src/providers/github/config.rs` → `social__github`,
+/// because a pluralised role folder is not a segment exactly as it is not a
+/// word of the type. From a variable a reader knows the type, the file and the
+/// module that reads it; from a module they know the variable.
+///
+/// Two defects this test exists for: `NESTRS_QUEUE__URL`, the one Redis
+/// connection three bindings share, filed and configured under whichever asked
+/// first; and `NESTRS_DATABASE__URL`, the universal convention, which named
+/// neither the crate nor the type that parsed it — from the variable, a reader
+/// could not find the code.
+///
+/// Framework crates only, for the reason the bindings gate gives: a product's
+/// top-level folders are domains, and a product's namespace is the product's
+/// own decision. Shipped declarations only — a `#[config]` inside a `#[cfg(test)]`
+/// module is a fixture, and this walks top-level items.
+/// The pluralised role folders of `architecture.md` (*Several of the same role*)
+/// plus `providers/`, the folder a selection-by-configuration family keeps its
+/// members in. A role folder groups files of one role; it is not a level of the
+/// name, so it is not a segment of the namespace either. `events` is
+/// deliberately absent although the role table lists it: the word is also an
+/// edge folder, and an edge's config owes its segment — dropping it would give
+/// an `events/` adapter's namespace one word fewer than its type.
+const PLURAL_ROLE_FOLDERS: [&str; 7] = [
+    "services",
+    "entities",
+    "dtos",
+    "commands",
+    "strategies",
+    "pipes",
+    "providers",
+];
+
+#[test]
+fn namespace_is_the_stem() {
+    let root = repo_root();
+    let framework = root.join("crates");
+    let mut holes = BTreeSet::new();
+    let mut scanned = 0usize;
+
+    for krate in crate_dirs() {
+        if !krate.starts_with(&framework) {
+            continue;
+        }
+        let Some(name) = krate.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let subject = subject_of(name);
+        let src = krate.join("src");
+        for path in nest_rs_conformance::sources::rust_files(&src) {
+            let Some(ast) = parsed(&path) else { continue };
+            let folders: Vec<String> = path
+                .strip_prefix(&src)
+                .ok()
+                .and_then(|rel| rel.parent())
+                .map(|dir| {
+                    dir.components()
+                        .filter_map(|c| c.as_os_str().to_str())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            for item in &ast.items {
+                let Item::Struct(s) = item else { continue };
+                let Some(namespace) = config_namespace(&s.attrs) else {
+                    continue;
+                };
+                scanned += 1;
+                let expected: Vec<String> = std::iter::once(folded(subject))
+                    .chain(
+                        folders
+                            .iter()
+                            .filter(|f| !PLURAL_ROLE_FOLDERS.contains(&f.as_str()))
+                            .map(|f| folded(f)),
+                    )
+                    .collect();
+                let declared: Vec<String> = namespace.split("__").map(folded).collect();
+                if declared != expected {
+                    holes.insert(format!(
+                        "`{namespace}` is declared by {} — its stem says `{}`",
+                        nest_rs_conformance::sources::relative(&path, &root),
+                        expected.join("__"),
+                    ));
+                }
+            }
+        }
+    }
+
+    baseline::floor(scanned, 10, "shipped `#[config]` structs");
+    baseline::gate(
+        "namespace-baseline.txt",
+        &holes,
+        scanned,
+        "shipped `#[config]` structs",
+        "namespaces that disagree with their stem",
+        "a namespace chosen rather than read off the path — move the config to \
+         where its word belongs, or take the word of where it sits",
+    );
+}
+
+/// The `namespace = "…"` a `#[config(...)]` attribute declares, if any.
+fn config_namespace(attrs: &[syn::Attribute]) -> Option<String> {
+    let attr = attrs.iter().find(|a| a.path().is_ident("config"))?;
+    let mut namespace = None;
+    // Other keys (`validate = "manual"`) carry a value too; consume it so the
+    // walk reaches `namespace` wherever it sits in the list.
+    let _ = attr.parse_nested_meta(|meta| {
+        if meta.path.is_ident("namespace") {
+            let lit: syn::LitStr = meta.value()?.parse()?;
+            namespace = Some(lit.value());
+        } else if meta.input.peek(syn::Token![=]) {
+            let _: syn::Expr = meta.value()?.parse()?;
+        }
+        Ok(())
+    });
+    namespace
+}

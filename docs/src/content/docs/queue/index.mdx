@@ -28,7 +28,7 @@ Read this section, then start from the working reference: the
 The abstractions — `Job`, `Processor`, `ProcessMethod`, the `#[processor]`
 macro — ship in **`nest-rs-queue`**. The first-class storage, **Redis**,
 ships in **`nest-rs-redis`** (built on
-[`apalis`](https://docs.rs/apalis)): the `RedisQueueConnection` producer,
+[`apalis`](https://docs.rs/apalis)): the `RedisQueueProducer` producer binding,
 the `RedisWorker` transport, and the `RedisQueueModule` / `RedisWorkerModule`
 activation seams. Both are compilation units, not lines you write: the
 `redis` feature below pulls them together, and an app's manifest names
@@ -249,10 +249,13 @@ same block — same convention as `#[routes]` and `#[scheduled]`.
 
 ## Wire it in
 
-Two modules, two roles:
+Three modules, three roles:
 
-- **`RedisQueueModule::for_root(None)`** — provides the shared
-  `RedisQueueConnection`. Every app (producer *and* consumer) needs it.
+- **`RedisModule::for_root(None)`** — opens the one Redis connection every
+  Redis binding shares (`NESTRS_REDIS__URL`). Every app that touches Redis
+  needs it.
+- **`RedisQueueModule`** — binds the producer over that connection, as
+  `Arc<dyn JobProducer>`. Every app that enqueues imports it.
 - **`RedisWorkerModule`** — activates the consumer runtime. At boot the
   framework drains the discovered `#[process]` methods, spawns one
   apalis worker per method, and shuts them down with the app. A
@@ -261,17 +264,18 @@ Two modules, two roles:
 ```rust title="apps/worker/src/module.rs"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisQueueModule, RedisWorkerModule};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
 
 use features::audio::AudioQueueModule;
 
 #[module(imports = [
     ConfigModule::for_root(),
-    RedisQueueModule::for_root(None),
-    RedisWorkerModule,
+    RedisModule::for_root(None),
+    RedisQueueModule,
+    RedisWorkerModule::for_root(None),
     AudioQueueModule,
 ])]
-pub struct RedisWorkerModule;
+pub struct WorkerModule;
 ```
 
 `AudioQueueModule` imports the `AudioModule` port itself, so the app
@@ -283,12 +287,12 @@ lists only the adapter — registration is idempotent.
 use nest_rs::core::anyhow::Result;
 use nest_rs::core::App;
 
-use worker::RedisWorkerModule;
+use worker::WorkerModule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     App::builder()
-        .module::<RedisWorkerModule>()
+        .module::<WorkerModule>()
         .build()
         .await?
         .run()
@@ -317,8 +321,9 @@ full field set.
 - [Producing jobs](/queue/producing-jobs/) — typing payloads, the
   publisher handle, and the rule that keeps `push_to::<Q>` behind a
   service.
-- [Wiring](/queue/wiring/) — `RedisQueueModule` vs `RedisWorkerModule`,
-  producer-only deploys, and module-gating across shared features.
+- [Wiring](/queue/wiring/) — `RedisModule`, `RedisQueueModule` and
+  `RedisWorkerModule`, producer-only deploys, and module-gating across
+  shared features.
 - [Retries and failure](/queue/retries-and-failure/) — what an `Err`
   means, the apalis retry shape, panics, dead-lettering.
 - [Observability](/queue/observability/) — span structure, fields, and
@@ -330,5 +335,6 @@ full field set.
 
 - `crates/nest-rs-queue/` — the abstractions: `#[processor]`,
   `#[process]`, `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
-- `crates/nest-rs-redis/` — the Redis storage: `RedisQueueConnection`,
-  `RedisWorker`, `RedisQueueModule`, `RedisWorkerModule`.
+- `crates/nest-rs-redis/` — the Redis storage: `RedisModule` and its
+  `RedisConnection`, `RedisQueueModule` and its `RedisQueueProducer`,
+  `RedisWorkerModule` and its `RedisWorker`.

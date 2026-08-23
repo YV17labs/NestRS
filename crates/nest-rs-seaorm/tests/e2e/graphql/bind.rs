@@ -19,7 +19,7 @@ use nest_rs_graphql::async_graphql::{Context, Result as GqlResult, SimpleObject}
 use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, operations, resolver};
 use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait};
 use nest_rs_resource::WireModelDefaults;
-use nest_rs_seaorm::{CrudService, SeaOrmDatabaseConfig, SeaOrmDatabaseModule};
+use nest_rs_seaorm::{CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
 
@@ -129,10 +129,11 @@ impl GhostsResolver {
 
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(SeaOrmDatabaseConfig {
+        SeaOrmModule::for_root(SeaOrmConfig {
             url: crate::harness::url(),
             ..Default::default()
-        }),
+            }),
+            SeaOrmDatabaseModule,
         GraphqlModule::for_root(GraphqlConfig::default()),
     ],
     providers = [
@@ -187,7 +188,7 @@ async fn a_failed_by_id_load_logs_the_driver_error_and_answers_generically() {
         "and nothing about the schema behind it: {body}",
     );
 
-    let event = logs.expect_one("nest_rs::orm", "by-id access load failed");
+    let event = logs.expect_one(nest_rs_seaorm::TARGET, "by-id access load failed");
     assert_eq!(event.level, "error");
     // The service, because the resolver's name is not in the error and one
     // schema binds many: without it an operator has a driver error and no

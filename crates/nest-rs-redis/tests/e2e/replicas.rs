@@ -43,7 +43,8 @@ use std::time::Duration;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobProducerExt, processor, queue};
 use nest_rs_redis::{
-    RedisQueueConfig, RedisQueueConnection, RedisQueueModule, RedisWorker, RedisWorkerModule,
+    RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker,
+    RedisWorkerModule,
 };
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
@@ -59,14 +60,6 @@ const HOLD: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SlowCommand {
     seq: usize,
-}
-
-fn queue_config() -> RedisQueueConfig {
-    RedisQueueConfig {
-        url: std::env::var(nest_rs_config::var_name("queue", "URL"))
-            .unwrap_or_else(|_| "redis://redis:6379".to_string()),
-        ..Default::default()
-    }
 }
 
 // --- fixture 1: the exclusive-delivery guarantee ----------------------------
@@ -91,7 +84,7 @@ impl FetchProcessor {
 }
 
 #[module(
-    imports = [RedisQueueModule::for_root(queue_config()), RedisWorkerModule],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
     providers = [FetchProcessor],
 )]
 struct FetchModule;
@@ -118,7 +111,7 @@ impl ScaleUpProcessor {
 }
 
 #[module(
-    imports = [RedisQueueModule::for_root(queue_config()), RedisWorkerModule],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
     providers = [ScaleUpProcessor],
 )]
 struct ScaleUpModule;
@@ -158,9 +151,11 @@ async fn the_fetch_never_hands_one_job_to_two_replicas() {
     let second = spawn_replica::<FetchModule>().await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let conn = RedisQueueConnection::connect(&queue_config().url)
-        .await
-        .expect("connect");
+    let conn = RedisQueueProducer::new(
+        RedisConnection::connect(&crate::redis_config().url)
+            .await
+            .expect("connect"),
+    );
     for seq in 0..JOBS {
         conn.push_to::<FetchQueue>(SlowCommand { seq })
             .await
@@ -203,9 +198,11 @@ async fn the_fetch_never_hands_one_job_to_two_replicas() {
 async fn a_replica_starting_mid_flight_re_runs_the_in_flight_job() {
     let first = spawn_replica::<ScaleUpModule>().await;
 
-    let conn = RedisQueueConnection::connect(&queue_config().url)
-        .await
-        .expect("connect");
+    let conn = RedisQueueProducer::new(
+        RedisConnection::connect(&crate::redis_config().url)
+            .await
+            .expect("connect"),
+    );
     conn.push_to::<ScaleUpQueue>(SlowCommand { seq: 0 })
         .await
         .expect("enqueue");

@@ -7,9 +7,9 @@
 
 use nest_rs::config::config;
 
-/// Minimal config. Every field is settable from `NESTRS_HYGIENE__*` and from a
+/// Minimal config. Every field is settable from `NESTRS_MACRO_HYGIENE__*` and from a
 /// pinned base, per the dual-path rule.
-#[config(namespace = "hygiene")]
+#[config(namespace = "macro_hygiene")]
 #[derive(Clone, Debug)]
 pub struct HygieneConfig {
     /// A field with a validation rule, so the emitted `Validate` derive is

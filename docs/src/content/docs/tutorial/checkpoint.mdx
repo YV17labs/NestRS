@@ -39,8 +39,8 @@ build by hand later in
 
    Without VS Code, start the same services from the repo's compose
    file (`docker compose -f .devcontainer/docker-compose.yml up -d
-   postgres redis rustfs`) and point `NESTRS_DATABASE__URL` /
-   `NESTRS_QUEUE__URL` at `localhost` in a git-ignored
+   postgres redis rustfs`) and point `NESTRS_SEAORM__URL` /
+   `NESTRS_REDIS__URL` at `localhost` in a git-ignored
    `demo/.env.local`.
 
 2. Load the demo tenants and start both apps.

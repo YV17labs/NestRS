@@ -1,18 +1,21 @@
-//! [`SeaOrmDatabaseConfig`] — connection settings for [`SeaOrmDatabaseModule`]. The
-//! `from_env` mapping below is the single source of truth for which
-//! `NESTRS_DATABASE__*` variable feeds each field.
+//! [`SeaOrmConfig`] — the crate's one `#[config]`: the pool every SeaORM
+//! binding shares. Namespace `seaorm`, read off the path like every other
+//! config's: the pool is the crate's own subject, so it lives at the crate root
+//! under the crate's word, and `NESTRS_SEAORM__URL` says which crate parses it.
+//! The `from_env` mapping below is the single source of truth for which
+//! `NESTRS_SEAORM__*` variable feeds each field.
 
 use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigService, Result, config};
 use sea_orm::ConnectOptions;
 
-/// Connection settings for [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule). Every
-/// field is settable via a `NESTRS_DATABASE__*` env var (see `from_env`) or
-/// pinned through [`SeaOrmDatabaseModule::for_root`](crate::SeaOrmDatabaseModule::for_root).
-#[config(namespace = "database")]
+/// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
+/// settable via a `NESTRS_SEAORM__*` env var (see `from_env`) or pinned through
+/// [`SeaOrmModule::for_root`](crate::SeaOrmModule::for_root).
+#[config(namespace = "seaorm")]
 #[derive(Clone, Default)]
-pub struct SeaOrmDatabaseConfig {
+pub struct SeaOrmConfig {
     /// e.g. `postgres://user:pass@host/db`. Empty aborts the build.
     pub url: String,
     /// Upper bound on pooled connections; `None` uses SeaORM's default.
@@ -35,31 +38,31 @@ pub struct SeaOrmDatabaseConfig {
     /// non-transactional side effect (a queued job, an event, an object write).
     /// Retrying is the service's call, at a boundary it knows is replayable —
     /// [`retry_on_conflict`](crate::retry::retry_on_conflict).
-    /// `NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS`.
+    /// `NESTRS_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS`.
     pub observe_serialization_conflicts: bool,
 }
 
-impl Config for SeaOrmDatabaseConfig {
+impl Config for SeaOrmConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            url: env.get("URL").unwrap_or(base.url), //                NESTRS_DATABASE__URL
-            max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections), // NESTRS_DATABASE__MAX_CONNECTIONS
-            min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections), // NESTRS_DATABASE__MIN_CONNECTIONS
+            url: env.get("URL").unwrap_or(base.url), //                NESTRS_SEAORM__URL
+            max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections), // NESTRS_SEAORM__MAX_CONNECTIONS
+            min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections), // NESTRS_SEAORM__MIN_CONNECTIONS
             connect_timeout_secs: env
                 .parse("CONNECT_TIMEOUT_SECS")?
-                .or(base.connect_timeout_secs), //                     NESTRS_DATABASE__CONNECT_TIMEOUT_SECS
-            sqlx_logging: env.flag("SQLX_LOGGING", base.sqlx_logging)?, // NESTRS_DATABASE__SQLX_LOGGING
+                .or(base.connect_timeout_secs), //                     NESTRS_SEAORM__CONNECT_TIMEOUT_SECS
+            sqlx_logging: env.flag("SQLX_LOGGING", base.sqlx_logging)?, // NESTRS_SEAORM__SQLX_LOGGING
             observe_serialization_conflicts: env.flag(
                 "OBSERVE_SERIALIZATION_CONFLICTS",
                 base.observe_serialization_conflicts,
-            )?, //                       NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS
+            )?, //                       NESTRS_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS
         })
     }
 }
 
-impl std::fmt::Debug for SeaOrmDatabaseConfig {
+impl std::fmt::Debug for SeaOrmConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SeaOrmDatabaseConfig")
+        f.debug_struct("SeaOrmConfig")
             .field("url", &"<redacted>")
             .field("max_connections", &self.max_connections)
             .field("min_connections", &self.min_connections)
@@ -73,7 +76,7 @@ impl std::fmt::Debug for SeaOrmDatabaseConfig {
     }
 }
 
-impl SeaOrmDatabaseConfig {
+impl SeaOrmConfig {
     pub(crate) fn connect_options(&self) -> ConnectOptions {
         let mut opts = ConnectOptions::new(self.url.clone());
         if let Some(n) = self.max_connections {
@@ -94,8 +97,8 @@ impl SeaOrmDatabaseConfig {
 mod tests {
     use super::*;
 
-    fn pinned(url: &str) -> SeaOrmDatabaseConfig {
-        SeaOrmDatabaseConfig {
+    fn pinned(url: &str) -> SeaOrmConfig {
+        SeaOrmConfig {
             url: url.into(),
             ..Default::default()
         }
@@ -104,8 +107,8 @@ mod tests {
     #[test]
     fn env_overrides_each_field_of_a_pinned_config() {
         use nest_rs_config::ConfigService;
-        let cfg = SeaOrmDatabaseConfig::from_env(
-            &ConfigService::with_vars("database", [("MAX_CONNECTIONS", "25")]),
+        let cfg = SeaOrmConfig::from_env(
+            &ConfigService::with_vars("seaorm", [("MAX_CONNECTIONS", "25")]),
             pinned("postgres://pinned/app"),
         )
         .expect("the overlay resolves");
@@ -132,7 +135,7 @@ mod tests {
 
     #[test]
     fn connect_options_propagates_pool_bounds_when_set() {
-        let opts = SeaOrmDatabaseConfig {
+        let opts = SeaOrmConfig {
             url: "postgres://localhost/app".into(),
             max_connections: Some(50),
             min_connections: Some(5),
@@ -158,7 +161,7 @@ mod tests {
 
     #[test]
     fn observe_serialization_conflicts_defaults_off() {
-        let cfg = SeaOrmDatabaseConfig::default();
+        let cfg = SeaOrmConfig::default();
         assert!(
             !cfg.observe_serialization_conflicts,
             "retry must default off — never change behaviour silently",
@@ -168,7 +171,7 @@ mod tests {
     #[test]
     fn from_env_reads_url_and_pool_bounds() {
         let service = ConfigService::with_vars(
-            "database",
+            "seaorm",
             [
                 ("URL", "postgres://u@h/d"),
                 ("MAX_CONNECTIONS", "25"),
@@ -178,7 +181,7 @@ mod tests {
                 ("OBSERVE_SERIALIZATION_CONFLICTS", "true"),
             ],
         );
-        let cfg = SeaOrmDatabaseConfig::from_env(&service, Default::default()).expect("ok");
+        let cfg = SeaOrmConfig::from_env(&service, Default::default()).expect("ok");
         assert_eq!(cfg.url, "postgres://u@h/d");
         assert_eq!(cfg.max_connections, Some(25));
         assert_eq!(cfg.min_connections, Some(2));
@@ -189,12 +192,10 @@ mod tests {
 
     #[test]
     fn from_env_defaults_to_empty_url_and_no_bounds() {
-        let cfg = SeaOrmDatabaseConfig::from_env(
-            &ConfigService::with_vars("database", []),
-            Default::default(),
-        )
-        .expect("ok");
-        // Empty URL ⇒ module-level `for_root` aborts with a clear message.
+        let cfg =
+            SeaOrmConfig::from_env(&ConfigService::with_vars("seaorm", []), Default::default())
+                .expect("ok");
+        // Empty URL ⇒ `SeaOrmModule::for_root` aborts naming the variable.
         assert!(cfg.url.is_empty());
         assert!(cfg.max_connections.is_none());
         assert!(!cfg.sqlx_logging, "off by default — never noisy in prod");

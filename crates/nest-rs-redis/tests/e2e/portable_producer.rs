@@ -1,43 +1,33 @@
-//! C2: `RedisQueueModule::for_root` must bind the **portable** producer name too.
+//! C2: `RedisQueueModule` must bind the **portable** producer name too.
 //!
-//! `/queue/producing-jobs/` tells a feature to inject either
-//! `Arc<RedisQueueConnection>` (concrete) or `Arc<dyn JobProducer>` (portable), and
-//! `/queue/writing-a-driver/` states the dyn binding as the contract every
+//! `/queue/producing-jobs/` tells a feature to inject `Arc<dyn JobProducer>`,
+//! and `/queue/writing-a-driver/` states the dyn binding as the contract every
 //! driver owes. The first-party Redis driver used to seed only the concrete
 //! type, so the documented portable form compiled and then died at boot with
 //! `unmet dependency: dyn JobProducer`. Both names must resolve from one
-//! connection.
+//! connection — the one `RedisModule::for_root` opens.
 
 use std::sync::Arc;
 
 use nest_rs_core::{App, module};
 use nest_rs_queue::JobProducer;
-use nest_rs_redis::{RedisQueueConfig, RedisQueueConnection, RedisQueueModule};
+use nest_rs_redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
 
-use crate::redis_url;
+use crate::redis_config;
 
-/// Pinned rather than env-sourced: the workspace forbids `unsafe`, so a test
-/// cannot publish `NESTRS_QUEUE__URL` into the process env.
-fn dev_container_queue() -> RedisQueueConfig {
-    RedisQueueConfig {
-        url: redis_url(),
-        ..Default::default()
-    }
-}
-
-#[module(imports = [RedisQueueModule::for_root(dev_container_queue())])]
+#[module(imports = [RedisModule::for_root(redis_config()), RedisQueueModule])]
 struct PortableProducerModule;
 
 #[tokio::test]
-async fn for_root_binds_both_the_concrete_and_the_portable_producer_name() {
+async fn the_queue_binding_resolves_both_the_concrete_and_the_portable_producer_name() {
     let app = App::builder()
         .module::<PortableProducerModule>()
         .build()
         .await
-        .expect("the queue module boots against the dev-container Redis");
+        .expect("the queue binding boots against the dev-container Redis");
 
     assert!(
-        app.container().get::<RedisQueueConnection>().is_some(),
+        app.container().get::<RedisQueueProducer>().is_some(),
         "the concrete backend stays injectable",
     );
     let producer: Option<Arc<dyn JobProducer>> = app.container().get_dyn::<dyn JobProducer>();

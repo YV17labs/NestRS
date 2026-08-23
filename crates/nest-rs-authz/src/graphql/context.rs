@@ -48,8 +48,10 @@ pub fn ability(ctx: &Context<'_>) -> Result<Arc<Ability>> {
     })
 }
 
-/// A GraphQL `forbidden` error (code `FORBIDDEN`), shared by the gate and `bind`.
-pub(crate) fn forbidden() -> Error {
+/// A GraphQL `forbidden` error (code `FORBIDDEN`) — the one denial shape every
+/// GraphQL refusal carries, whether the class gate or a data-layer `bind`
+/// (`nest_rs_seaorm::graphql::bind`) emits it.
+pub fn forbidden() -> Error {
     Error::new("forbidden").extend_with(|_, e| e.set("code", "FORBIDDEN"))
 }
 

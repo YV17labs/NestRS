@@ -25,11 +25,11 @@ it provides `TestApp` (the in-process boot harness) and
 `EphemeralDatabase` (a throwaway database, created and dropped per run).
 
 `EphemeralDatabase` needs a **reachable Postgres**, not a container runtime:
-it reads `NESTRS_DATABASE__URL` from the project's `.env` cascade, issues a
+it reads `NESTRS_SEAORM__URL` from the project's `.env` cascade, issues a
 `CREATE DATABASE nest_rs_e2e_…` against that server, migrates it, and drops it
 when the guard drops. Whatever provides that server — the devcontainer's
 `compose.yml`, a service container in CI, a local install — is your choice.
-When the suite cannot connect, `NESTRS_DATABASE__URL` is what to check.
+When the suite cannot connect, `NESTRS_SEAORM__URL` is what to check.
 
 <FileTree>
 - apps/blog/
@@ -227,7 +227,7 @@ on `tests/e2e/main.rs`.
 ## What you have now
 
 - A `tests/e2e/main.rs` booting the real `BlogModule` against a
-  throwaway database created on the Postgres `NESTRS_DATABASE__URL` names.
+  throwaway database created on the Postgres `NESTRS_SEAORM__URL` names.
 - A happy path, a validation failure and an unauthenticated call — enough to
   catch a wiring regression in any of the previous six pages.
 - A `nestrs run test e2e` recipe running them green.

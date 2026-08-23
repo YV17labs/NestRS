@@ -441,13 +441,13 @@ mod tests {
         // the difference between a working deploy and one about to fall over
         // under load. Both carry `attempt`/`attempts`, so the ratio is queryable
         // rather than inferred from a count of lines.
-        let retried = logs.expect_one("nest_rs::orm", "transaction conflict — retrying");
+        let retried = logs.expect_one(crate::TARGET, "transaction conflict — retrying");
         assert_eq!(retried.level, "warn");
         assert_eq!(retried.field("attempt").as_deref(), Some("1"));
         assert_eq!(retried.field("attempts").as_deref(), Some("2"));
 
         let exhausted = logs.expect_one(
-            "nest_rs::orm",
+            crate::TARGET,
             "transaction conflict — retry budget exhausted",
         );
         assert_eq!(exhausted.level, "warn");

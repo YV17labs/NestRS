@@ -9,7 +9,7 @@
 //! `nest-rs-redis`. Application code keeps writing `nest_rs_queue::*` for the
 //! abstractions — the `#[processor]` macro, `Job`, `Processor`,
 //! `ProcessMethod`, `JobProducer` — and reaches for `nest_rs_redis::*` only
-//! when it needs the Redis-specific types (the `RedisQueueConnection` producer,
+//! when it needs the Redis-specific types (the `RedisQueueProducer`,
 //! the `RedisWorker` transport, the activation modules). A third-party
 //! `nest-rs-<storage>` (e.g. SQS, NATS, in-memory) depends on this crate
 //! directly — see this crate's README for the extension contract.
@@ -36,6 +36,7 @@ pub mod unit;
 // (`nest-rs-redis`, or a third-party one) is what pushes and drains, so it is
 // what seals and opens; this crate owns the *shape* so every backend wraps
 // identically. A seam between framework crates, not a surface an app calls.
+pub mod consume;
 pub mod envelope;
 pub use error::QueueError;
 pub use inventory::{

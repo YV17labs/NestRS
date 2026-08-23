@@ -43,9 +43,74 @@ as the import. Both are paid on purpose — **a name that is unambiguous in a lo
 outranks a name that is short in an import**, and a module name appears in a
 composition root, not in fifty call sites.
 
-**A driver gives each port it binds a folder.** `nest-rs-redis` holds a queue, a
-throttler and a worker, so it has `queue/`, `throttler/` and `worker/` — never a
-`src/module.rs` whose own path fails to say what it is a module *of*.
+**An adapter crate is named for the vendor whose types are the developer's
+surface** — the storage when the library is hidden (`nest-rs-redis`: apalis is
+an implementation detail, `redis::` is what a caller touches), the library when
+the library *is* the surface (`nest-rs-seaorm`: entities, `Repo`, `DbErr` are
+sea-orm's, and postgres/mysql/sqlite are interchangeable behind its URL). Never
+a capability name worn by one backend: that is a port's word, and a port keeps
+it.
+
+## Ports & Adapters — three module shapes, and no fourth
+
+The framework is Ports & Adapters as it is practised now: explicit in the
+composition root, thin where a library has already done the work, verified by
+tests rather than trusted to discipline. A **port** is a crate that defines a
+contract *and the semantics that travel with it* — `nest-rs-queue` owns what a
+job attempt *is* (the envelope, the trace, the span, the outcome classes, the
+events); an **adapter** is a crate named for a vendor that carries *only the
+transport* — how to connect, fetch, acknowledge, count. A library that is
+already multi-backend (sea-orm, object_store) is **wrapped, never abstracted**:
+the wrapper is the adapter, the library is the port, and its URL scheme picks
+the backend. Dependency runs one way — the adapter depends on the port, and a
+port's dependencies name no vendor crate.
+
+Every module in a composition root is one of three shapes, and a reader learns
+the list once:
+
+| Shape | Example | Role | Variables |
+|---|---|---|---|
+| `<Vendor>Module::for_root(cfg)` | `SeaOrmModule`, `RedisModule` | opens the **resource** — the pool, the connection — once, for every binding in the crate | `NESTRS_<VENDOR>__*` |
+| `<Port>Module::for_root(cfg)` | `ThrottlerModule`, `HttpModule`, `HealthModule` | the **capability**: its policy, its guard, its default implementation — when the port has any | `NESTRS_<PORT>__*` |
+| `<Vendor><Port>Module` | `SeaOrmDatabaseModule`, `RedisQueueModule`, `RedisThrottlerModule` | **binds** the vendor to the port; a bare import, unless it owns settings of its own — then a `for_root` | `NESTRS_<VENDOR>__<PORT>__*` |
+
+```rust
+SeaOrmModule::for_root(None),      SeaOrmDatabaseModule,   SeaOrmHealthModule,
+RedisModule::for_root(None),       RedisQueueModule,       RedisWorkerModule::for_root(None),
+ThrottlerModule::for_root(None),   RedisThrottlerModule,
+HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
+```
+
+"Bare or `for_root`" is not a fourth rule; it is the one under *Configuration*:
+a module that owns a `#[config]` offers a `for_root`, and one that owns none is
+imported bare. A bare import of a module that *does* own one is still legal —
+it is a dependency declaration, and the module reads its variables all the same
+— so `for_root` in a root is the sign of settings, never their precondition.
+
+**The layout follows.** An adapter crate's root holds the resource —
+`src/config.rs`, `src/connection.rs`, `src/module.rs` (the one case a driver's
+`src/module.rs` is right: it is a module *of the crate's own subject*, never one
+binding wearing the crate's name) — and **one folder per port it binds**:
+`queue/`, `worker/`, `throttler/` under `nest-rs-redis`; `database/` and
+`health/` under `nest-rs-seaorm`, whose `worker/` holds the job-context bridge
+the database binding installs rather than a binding of its own. A binding
+folder holds the adapter types (`queue/producer.rs`, `throttler/store.rs`) and
+its `module.rs`; what several bindings share sits at the root, and `naming.rs`'s
+bindings gate fires on a binding that names a sibling's type. A port crate holds
+the contract and its semantics and **no module** when it has nothing to register
+(`nest-rs-queue`, `nest-rs-database`): a second queue adapter calls
+`nest_rs_queue::consume` for the attempt and writes its fetch loop, nothing
+more.
+
+**Swapping or adding a backend edits the composition root and nothing else.**
+Two adapters binding one port are a boot error naming both
+(`provide_declared_factory`, one shared remedy sentence); a port's default
+implementation is an *ordinary* factory, so a vendor binding supersedes it
+wherever it sits in `imports`, and a binding that reads another factory's output
+declares it (`provide_*_factory_after`), so `imports` order stays a readability
+choice. `nest-rs-storage` is the recorded exception to this whole section — a
+capability name pinned to S3 — and is fixed by giving it the shape above, not by
+documenting it.
 
 **The crate counts only when it is a subject.** Every `nest-rs-*` is named for
 what it holds, so it prefixes. A product library like `features` is a container
@@ -269,6 +334,23 @@ something it merely discovers — `SocialModule` discovers providers that each
 carry their own `#[config]`, so it stays a bare import with no seam at all.
 Giving it one forces a list of unrelated config types, hence type erasure,
 hence no duplicate detection.
+
+**A `#[config]`'s namespace is its stem, exactly as its type name is — read,
+never chosen.** The segments are the crate's subject, then every folder below
+`src/` on the way to the file that is not a pluralised role folder, joined by
+`__` — the same derivation that names the module types, so the variable and the
+code say one thing: `http/src/config.rs` → `HttpConfig` → `NESTRS_HTTP__*`;
+`seaorm/src/config.rs` → `SeaOrmConfig` → `NESTRS_SEAORM__URL`;
+`redis/src/worker/config.rs` → `RedisWorkerConfig` →
+`NESTRS_REDIS__WORKER__*`; `social/src/providers/github/config.rs` →
+`NESTRS_SOCIAL__GITHUB__*` (`providers/` is a role folder, so it is not a
+segment — and the type there, `GithubSocialConfig`, takes the member-first name
+the role tables give a provider's files). From a variable a reader knows the
+file and the module that reads it; from a module they know the variable. The
+vendor is in the variable when the vendor is in the path — never one without
+the other — and `NESTRS_DATABASE__URL`, the universal convention, is exactly
+what this forbids: a word that names neither the crate nor the type that parses
+it. Enforced by `namespace_is_the_stem` in `naming.rs`.
 
 **Pinning by seeding (`App::builder().provide(cfg)`) is not a seam** — a seed
 short-circuits the resolving factory and freezes that whole namespace against

@@ -31,5 +31,5 @@ mod mask;
 
 pub use authorize::authorize;
 pub use bridge::GraphqlAbilityBridge;
-pub use context::ability;
+pub use context::{ability, forbidden};
 pub use mask::{masked_item_for, masked_value_for};

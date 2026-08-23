@@ -104,11 +104,12 @@ nest-rs = { workspace = true, features = ["http", "seaorm", "graphql", "health"]
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule};
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         SeaOrmHealthModule,
         HealthModule,
     ],

@@ -66,7 +66,7 @@ impl SocketContext for WsDataContext {
             "ws",
             inner,
             |reply| !matches!(reply, WsReply::Error(_)),
-            || WsReply::error("internal error"),
+            || WsReply::error(nest_rs_core::OPAQUE_CLIENT_MESSAGE),
         ))
     }
 }

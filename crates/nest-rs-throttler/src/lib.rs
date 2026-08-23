@@ -25,8 +25,6 @@ mod store;
 
 pub use config::ThrottlerConfig;
 pub use guard::ThrottlerGuard;
-#[doc(hidden)]
-pub use module::{BACKEND_REMEDY, provide_guard, resolve};
-pub use module::{DEFAULT_THROTTLE, ThrottlerModule, ThrottlerSetup};
-pub use rate::Throttle;
+pub use module::{BACKEND_REMEDY, ThrottlerModule, ThrottlerSetup};
+pub use rate::{DEFAULT_THROTTLE, Throttle};
 pub use store::{Decision, InMemoryThrottler, ThrottlerStore};

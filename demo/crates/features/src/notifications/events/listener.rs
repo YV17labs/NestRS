@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use nest_rs::core::injectable;
 use nest_rs::events::listeners;
-use nest_rs::queue::JobProducerExt;
-use nest_rs::redis::RedisQueueConnection;
+use nest_rs::queue::{JobProducer, JobProducerExt};
 
 use crate::notifications::{NotifyCommand, NotifyQueue};
 use crate::posts::PostPublishedEvent;
@@ -11,7 +10,7 @@ use crate::posts::PostPublishedEvent;
 #[injectable]
 pub struct NotificationsListener {
     #[inject]
-    queue: Arc<RedisQueueConnection>,
+    queue: Arc<dyn JobProducer>,
 }
 
 #[listeners]

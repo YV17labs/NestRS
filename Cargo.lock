@@ -3151,8 +3151,10 @@ version = "5.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures-util",
  "nest-rs-core",
  "nest-rs-queue-macros",
+ "nest-rs-testing",
  "nest-rs-worker",
  "serde",
  "serde_json",
@@ -3180,7 +3182,6 @@ dependencies = [
  "apalis",
  "apalis-redis",
  "async-trait",
- "futures-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-pipes",

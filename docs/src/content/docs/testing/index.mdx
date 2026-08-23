@@ -109,7 +109,7 @@ persistence. `nestrs run test e2e` covers the rest. The full suite is
   `nestrs run dev <app>` plus a `curl` on the affected endpoint. The e2e suite
   proves the wiring; the curl proves the wire shape.
 - **No DB mocking in e2e tests** — a real database per run via
-  `EphemeralDatabase`, created on the server `NESTRS_DATABASE__URL` points at
+  `EphemeralDatabase`, created on the server `NESTRS_SEAORM__URL` points at
   and dropped when the guard drops. Unit tests of *pure* logic need no DB.
 
 ## Reference

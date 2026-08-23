@@ -13,6 +13,13 @@ pub struct Throttle {
     pub window: Duration,
 }
 
+/// The port's default rate limit when neither config nor a route pins one:
+/// 60/minute. Deliberately **not** `Throttle`'s `Default`: the guard carries the
+/// resolved policy as an injected dependency, and a `Default` here is exactly
+/// what would let a guard built outside `ThrottlerModule::for_root` run the
+/// wrong limit without a word.
+pub const DEFAULT_THROTTLE: Throttle = Throttle::per_minute(60);
+
 impl Throttle {
     /// `limit` requests per `window`.
     pub const fn new(limit: u32, window: Duration) -> Self {

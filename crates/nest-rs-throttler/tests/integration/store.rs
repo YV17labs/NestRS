@@ -5,16 +5,8 @@ use std::time::Duration;
 use nest_rs_throttler::{InMemoryThrottler, Throttle};
 
 #[test]
-fn default_limit_is_reported_as_configured() {
-    let throttle = Throttle::new(5, Duration::from_secs(10));
-    let store = InMemoryThrottler::new(throttle);
-    assert_eq!(store.default_limit().limit, 5);
-    assert_eq!(store.default_limit().window, Duration::from_secs(10));
-}
-
-#[test]
 fn distinct_keys_have_independent_windows() {
-    let store = InMemoryThrottler::new(Throttle::per_second(1));
+    let store = InMemoryThrottler::new();
     let limit = Throttle::new(1, Duration::from_secs(60));
 
     assert!(store.hit("alice", limit).allowed);
@@ -26,7 +18,7 @@ fn distinct_keys_have_independent_windows() {
 
 #[test]
 fn retry_after_is_within_the_configured_window_when_denied() {
-    let store = InMemoryThrottler::new(Throttle::per_second(1));
+    let store = InMemoryThrottler::new();
     let limit = Throttle::new(1, Duration::from_secs(30));
 
     assert!(store.hit("k", limit).allowed);

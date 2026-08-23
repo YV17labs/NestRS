@@ -51,7 +51,7 @@ fn the_declared_prefix_replaces_nestrs_everywhere() {
         assert_eq!(EnvPrefix::current(), "ACME");
         assert_eq!(EnvPrefix::var("LOG"), "ACME_LOG");
         assert_eq!(Environment::var_name(), "ACME_ENV");
-        assert_eq!(var_name("database", "URL"), "ACME_DATABASE__URL");
+        assert_eq!(var_name("seaorm", "URL"), "ACME_SEAORM__URL");
         assert_eq!(
             ConfigService::for_namespace(WidgetConfig::NAMESPACE).var_name("PORT"),
             "ACME_WIDGET__PORT",

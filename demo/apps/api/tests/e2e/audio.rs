@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use features::audio::AudioQueueModule;
 use nest_rs::config::Config;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisQueueModule, RedisWorker, RedisWorkerModule};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule};
 use nest_rs::storage::{Storage, StorageConfig};
 use nest_rs::testing::TestApp;
 use poem::http::{StatusCode, header};
@@ -66,8 +66,9 @@ async fn audio_transcode_rate_limit_answers_429_with_retry_after() {
 
 #[module(
     imports = [
-        RedisQueueModule::for_root(None),
-        RedisWorkerModule,
+        RedisModule::for_root(None),
+        RedisQueueModule,
+        RedisWorkerModule::for_root(None),
         AudioQueueModule,
     ],
 )]

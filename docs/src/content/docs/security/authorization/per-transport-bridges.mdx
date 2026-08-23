@@ -56,7 +56,8 @@ needs.
 ```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         AuthnModule,
         AuthzModule,
         AuthzGraphqlModule,

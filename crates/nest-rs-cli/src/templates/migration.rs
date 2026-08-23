@@ -33,7 +33,7 @@ tracing-subscriber.workspace = true
 
 /// The binary behind every `nestrs run db <verb>`. `connect_from_env` is the
 /// single connector for tools outside the DI container: it resolves
-/// `<PREFIX>_DATABASE__*` through the same `.env` cascade the apps use, so a tool
+/// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use, so a tool
 /// and its app can never disagree about which database they mean.
 pub const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;

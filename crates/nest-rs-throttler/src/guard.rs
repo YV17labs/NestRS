@@ -121,14 +121,29 @@ fn rate_limited(retry_after: Duration) -> Denial {
 pub struct ThrottlerGuard {
     #[inject]
     throttler: Arc<dyn ThrottlerStore>,
+    /// The limit a route that pins no `#[meta(Throttle)]` runs under — the
+    /// port's policy, resolved from `ThrottlerConfig` and registered by
+    /// `ThrottlerModule::for_root`. It lives on the guard and not on the store
+    /// because a store only counts; swapping the backend must move the counters
+    /// and nothing else. **Injected, never defaulted**: a plain `Throttle` field
+    /// would be filled with 60/minute by any path that builds the guard from
+    /// the container — `providers = [ThrottlerGuard]` without `for_root` — and
+    /// the configured limit would be replaced in silence. As a dependency, that
+    /// composition fails the boot naming `Throttle` instead.
+    #[inject]
+    default: Arc<Throttle>,
 }
 
 impl ThrottlerGuard {
-    /// Build the guard over a store. `ThrottlerModule` uses it to register the
-    /// guard as global infrastructure, so `#[use_guards(ThrottlerGuard)]` needs
-    /// nothing in the controller module's `providers`.
-    pub fn new(throttler: Arc<dyn ThrottlerStore>) -> Self {
-        Self { throttler }
+    /// Build the guard over a store, with the default limit for routes that pin
+    /// none. `ThrottlerModule` uses it to register the guard as global
+    /// infrastructure, so `#[use_guards(ThrottlerGuard)]` needs nothing in the
+    /// controller module's `providers`.
+    pub fn new(throttler: Arc<dyn ThrottlerStore>, default: Throttle) -> Self {
+        Self {
+            throttler,
+            default: Arc::new(default),
+        }
     }
 }
 
@@ -140,7 +155,7 @@ impl Guard for ThrottlerGuard {
         let limit = Reflector::new(req)
             .get::<Throttle>()
             .copied()
-            .unwrap_or_else(|| self.throttler.default_limit());
+            .unwrap_or(*self.default);
 
         // Route-specific bucket. The window is per route (each route pins its
         // own `#[meta(Throttle)]`), so the counter must be per route too —
@@ -211,10 +226,7 @@ impl Guard for ThrottlerGuard {
         );
         let key = bucket_key(&[&transport::GRAPHQL, &field, &caller]);
 
-        let decision = self
-            .throttler
-            .hit(&key, self.throttler.default_limit())
-            .await;
+        let decision = self.throttler.hit(&key, *self.default).await;
         if decision.allowed {
             return Ok(());
         }
@@ -252,10 +264,7 @@ impl Guard for ThrottlerGuard {
         );
         let key = bucket_key(&[&transport::MCP, &kind, &name, &caller]);
 
-        let decision = self
-            .throttler
-            .hit(&key, self.throttler.default_limit())
-            .await;
+        let decision = self.throttler.hit(&key, *self.default).await;
         if decision.allowed {
             return Ok(());
         }
@@ -290,10 +299,7 @@ impl Guard for ThrottlerGuard {
         let connection = client.id();
         let key = bucket_key(&[&transport::WS, &event, &connection]);
 
-        let decision = self
-            .throttler
-            .hit(&key, self.throttler.default_limit())
-            .await;
+        let decision = self.throttler.hit(&key, *self.default).await;
         if decision.allowed {
             return Ok(());
         }
@@ -409,6 +415,7 @@ impl From<ClientOrigin> for ClientId {
 /// rather than a chosen one — reported once per process, and only when it
 /// actually happens. The per-address half for that traffic is the same guard in
 /// `use_guards_global`, where the carrying HTTP request is keyed on its client.
+#[cfg(any(feature = "graphql", feature = "mcp"))]
 fn caller_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static str) -> String {
     match nest_rs_core::current_actor_id() {
         Some(actor) => actor,
@@ -424,6 +431,7 @@ fn caller_bucket(seen: &AtomicBool, reason: &'static str, detail: &'static str) 
 /// A named value rather than an empty string: `""` would be indistinguishable
 /// from an actor named that, which is the sentinel `current_actor_id` refuses to
 /// return for the same reason.
+#[cfg(any(feature = "graphql", feature = "mcp"))]
 const ANONYMOUS_CALLER: &str = "<anonymous>";
 
 /// Report a keying degradation **once per process**, at `warn`.
@@ -517,7 +525,7 @@ mod tests {
         );
 
         let event = logs.expect_one(
-            "nest_rs::throttler",
+            crate::TARGET,
             "rate-limit keying degraded to a shared bucket",
         );
         assert_eq!(event.level, "warn");
@@ -535,7 +543,7 @@ mod tests {
         let _ = ClientId::from(ClientOrigin::Unknown);
         assert_eq!(
             logs.find(
-                "nest_rs::throttler",
+                crate::TARGET,
                 "rate-limit keying degraded to a shared bucket",
             )
             .len(),

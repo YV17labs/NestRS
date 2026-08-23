@@ -3,7 +3,7 @@
 //!
 //! Same shape as the sibling live-backend suites (`nest-rs-redis`'s
 //! `redis_url`, `nest-rs-storage`'s `StorageConfig::default`): the dev
-//! container's address is the default, and `NESTRS_DATABASE__URL` overrides it
+//! container's address is the default, and `NESTRS_SEAORM__URL` overrides it
 //! to point at a Postgres outside the container. The framework workspace
 //! deliberately ships no `.env` (that is the product's, under `demo/`), so a
 //! hard `expect` on the variable made the whole suite unrunnable from the
@@ -18,7 +18,7 @@ use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
 const DEFAULT_URL: &str = "postgres://nestrs:nestrs@postgres:5432/nestrs";
 
 pub(crate) fn url() -> String {
-    std::env::var(nest_rs_config::var_name("database", "URL"))
+    std::env::var(nest_rs_config::var_name("seaorm", "URL"))
         .unwrap_or_else(|_| DEFAULT_URL.to_owned())
 }
 

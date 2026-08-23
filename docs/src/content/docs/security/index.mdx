@@ -71,7 +71,8 @@ The wiring sketch for an app that serves all three transports:
 ```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         HttpModule::for_root(None),
         GraphqlModule::for_root(None),
         AuthnModule,

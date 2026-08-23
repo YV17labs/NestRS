@@ -6,8 +6,7 @@ use std::sync::Arc;
 
 use nest_rs_interceptors::InterceptorExt;
 use nest_rs_seaorm::{
-    DbContext, Executor, LazyTransaction, SeaOrmDatabaseConfig, current_executor,
-    with_request_executor,
+    DbContext, Executor, LazyTransaction, SeaOrmConfig, current_executor, with_request_executor,
 };
 use poem::endpoint::make;
 use poem::http::{Method, StatusCode};
@@ -82,7 +81,7 @@ async fn first_query_opens_the_transaction_once() {
 async fn a_denied_mutating_request_passes_through_with_no_transaction() {
     let ctx = DbContext::new(
         crate::harness::connect_arc().await,
-        Arc::new(SeaOrmDatabaseConfig::default()),
+        Arc::new(SeaOrmConfig::default()),
     );
 
     let endpoint = make(|_req: Request| async { StatusCode::FORBIDDEN.into_response() });
@@ -103,7 +102,7 @@ async fn a_writing_handler_commits_through_the_lazy_transaction() {
         .await
         .expect("create the probe table");
 
-    let ctx = DbContext::new(conn.clone(), Arc::new(SeaOrmDatabaseConfig::default()));
+    let ctx = DbContext::new(conn.clone(), Arc::new(SeaOrmConfig::default()));
     let endpoint = make(|_req: Request| async {
         let executor = current_executor().expect("ambient executor installed");
         executor
@@ -178,7 +177,7 @@ async fn a_pool_that_never_hands_out_a_connection_is_retryable() {
     // request never reached the database at all, which is a different incident
     // from one whose statements ran and were thrown away.
     let event = logs.expect_one(
-        "nest_rs::orm",
+        nest_rs_seaorm::TARGET,
         "a statement failed before this boundary could open its transaction, but the \
          boundary reported success; nothing it meant to write was written",
     );
@@ -296,7 +295,7 @@ async fn a_boundary_abandoned_mid_statement_says_so() {
     drop(lazy);
 
     let event = logs.expect_one(
-        "nest_rs::orm",
+        nest_rs_seaorm::TARGET,
         "transaction abandoned without settling; its locks are held until the abandoned \
          statement drains",
     );

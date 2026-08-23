@@ -9,9 +9,9 @@ mod config;
 ///
 ///
 /// ```ignore
-/// #[config(namespace = "database")]
+/// #[config(namespace = "seaorm")]
 /// #[derive(Clone, Debug, serde::Deserialize)]
-/// pub struct SeaOrmDatabaseConfig {
+/// pub struct SeaOrmConfig {
 ///     pub url: String,
 ///     #[validate(range(min = 1))]
 ///     pub max_connections: u32,
@@ -21,8 +21,8 @@ mod config;
 /// # Expands to
 ///
 /// ```ignore
-/// impl ::nest_rs_config::Namespaced for SeaOrmDatabaseConfig {
-///     const NAMESPACE: &'static str = "database";
+/// impl ::nest_rs_config::Namespaced for SeaOrmConfig {
+///     const NAMESPACE: &'static str = "seaorm";
 /// }
 /// ```
 ///

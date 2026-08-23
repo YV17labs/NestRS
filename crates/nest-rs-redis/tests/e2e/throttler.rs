@@ -16,7 +16,7 @@ use crate::{connect, unique_key};
 async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
     // A generous window so the counter can't roll over mid-test.
     let limit = Throttle::new(3, Duration::from_secs(30));
-    let store = RedisThrottler::new(connect().await, limit);
+    let store = RedisThrottler::new(connect().await);
     let key = unique_key("cap");
 
     for n in 1..=3 {
@@ -38,7 +38,7 @@ async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
 #[tokio::test]
 async fn distinct_keys_have_independent_budgets() {
     let limit = Throttle::new(1, Duration::from_secs(30));
-    let store = RedisThrottler::new(connect().await, limit);
+    let store = RedisThrottler::new(connect().await);
     let key_a = unique_key("indep-a");
     let key_b = unique_key("indep-b");
 
@@ -65,8 +65,8 @@ async fn distinct_keys_have_independent_budgets() {
 async fn the_budget_is_shared_across_store_instances() {
     let limit = Throttle::new(2, Duration::from_secs(30));
     // Two independent connections → two independent stores, same Redis.
-    let replica_a = RedisThrottler::new(connect().await, limit);
-    let replica_b = RedisThrottler::new(connect().await, limit);
+    let replica_a = RedisThrottler::new(connect().await);
+    let replica_b = RedisThrottler::new(connect().await);
     let key = unique_key("shared");
 
     assert!(
@@ -84,79 +84,88 @@ async fn the_budget_is_shared_across_store_instances() {
     );
 }
 
-/// The `for_root` seam, executed: `RedisThrottlerModule` binds the shared
-/// `dyn ThrottlerStore` the guard injects, and binds the *Redis* one.
+/// The three shapes, executed: `ThrottlerModule::for_root` carries the policy
+/// and the guard, `RedisThrottlerModule` (bare) declares the Redis store over
+/// the connection `RedisModule::for_root` opens — and the store supersedes the
+/// port's in-process default wherever the three fall in `imports`.
 ///
 /// Nothing booted this seam before, and a compile could not have covered it —
-/// the store is a factory output that reads `RedisQueueConnection`, another factory
-/// output, so what is under test is a phase the builder runs and a type the
-/// container resolves. The discriminating assertion is the one the in-memory
-/// default cannot satisfy: **two independently booted apps share one budget**,
-/// which is the whole reason this module exists.
+/// the store is a factory output that reads `RedisConnection`, another factory
+/// output, and the guard is a factory output that reads the store. What is
+/// under test is a phase the builder runs and a type the container resolves.
+/// The discriminating assertion is the one the in-memory default cannot
+/// satisfy: **two independently booted apps share one budget**, which is the
+/// whole reason the binding exists.
+///
+/// The vendor binding is listed **first** on purpose: its store declares it
+/// runs after `RedisConnection` and the guard declares it runs after the
+/// store, so `imports` order is a readability choice — and a throttler-only
+/// app names no queue.
 mod module {
     use std::sync::Arc;
     use std::time::Duration;
 
     use nest_rs_core::{App, module};
-    use nest_rs_redis::{
-        RedisQueueConfig, RedisQueueModule, RedisQueueSetup, RedisThrottlerModule,
+    use nest_rs_redis::{RedisModule, RedisThrottlerModule};
+    use nest_rs_throttler::{
+        Throttle, ThrottlerConfig, ThrottlerGuard, ThrottlerModule, ThrottlerSetup, ThrottlerStore,
     };
-    use nest_rs_throttler::{Throttle, ThrottlerConfig, ThrottlerStore};
 
-    use crate::{redis_url, unique_key};
-
-    fn pinned_queue() -> RedisQueueSetup {
-        RedisQueueModule::for_root(RedisQueueConfig {
-            url: redis_url(),
-            ..RedisQueueConfig::default()
-        })
-    }
+    use crate::{redis_config, unique_key};
 
     /// A limit no default could produce, so the assertion below can only pass by
     /// way of this call.
-    fn pinned_throttler() -> nest_rs_redis::RedisThrottlerSetup {
-        RedisThrottlerModule::for_root(ThrottlerConfig {
+    fn pinned_policy() -> ThrottlerSetup {
+        ThrottlerModule::for_root(ThrottlerConfig {
             limit: Some(2),
             window_secs: Some(30),
         })
     }
 
-    #[module(imports = [pinned_queue(), pinned_throttler()])]
+    #[module(imports = [
+        RedisThrottlerModule,
+        pinned_policy(),
+        RedisModule::for_root(redis_config()),
+    ])]
     struct RedisThrottlerHost;
 
-    async fn store() -> Arc<dyn ThrottlerStore> {
-        let app = App::builder()
+    async fn boot() -> App {
+        App::builder()
             .module::<RedisThrottlerHost>()
             .build()
             .await
-            .expect("the Redis-backed throttler module boots against the dev container");
+            .expect("the Redis-backed throttler boots against the dev container")
+    }
+
+    fn store_of(app: &App) -> Arc<dyn ThrottlerStore> {
         app.container()
             .get::<Arc<dyn ThrottlerStore>>()
             .map(|store| (*store).clone())
-            .expect("for_root binds the shared dyn ThrottlerStore")
+            .expect("the binding supersedes the port's default store")
     }
 
     #[tokio::test]
-    async fn for_root_pins_the_limit_and_binds_a_store_two_apps_share() {
-        let first = store().await;
-        let default = first.default_limit();
-        assert_eq!(
-            (default.limit, default.window),
-            (2, Duration::from_secs(30)),
-            "the pinned base reached the store's default limit",
+    async fn the_policy_reaches_the_guard_and_the_store_is_one_two_apps_share() {
+        let first = boot().await;
+        assert!(
+            first.container().get::<ThrottlerGuard>().is_some(),
+            "ThrottlerModule::for_root registers the guard as global infrastructure",
         );
+        // The store is Redis's — a superseded default would be the in-memory one,
+        // and the shared-budget assertion below would fail on it.
+        let limit = Throttle::new(2, Duration::from_secs(30));
+        let key = unique_key("for-root-shared");
 
         // A second boot is a second app instance: an in-memory store would hand
         // it a fresh budget, and the test would pass while the module bound the
         // wrong backend.
-        let second = store().await;
-        let key = unique_key("for-root-shared");
-        let limit = Throttle::new(2, Duration::from_secs(30));
+        let second = boot().await;
+        let (a, b) = (store_of(&first), store_of(&second));
 
-        assert!(first.hit(&key, limit).await.allowed, "app one, hit 1 of 2");
-        assert!(second.hit(&key, limit).await.allowed, "app two, hit 2 of 2");
+        assert!(a.hit(&key, limit).await.allowed, "app one, hit 1 of 2");
+        assert!(b.hit(&key, limit).await.allowed, "app two, hit 2 of 2");
         assert!(
-            !first.hit(&key, limit).await.allowed,
+            !a.hit(&key, limit).await.allowed,
             "the third hit is denied — both apps counted against one budget",
         );
     }
@@ -174,7 +183,7 @@ mod module {
 ///
 /// The error is produced with a `WRONGTYPE` — the window key made to hold a
 /// hash, so `INCR` refuses it — rather than by pointing at a dead port:
-/// `RedisQueueConnection::connect` refuses an unreachable endpoint up front (that is
+/// `RedisConnection::connect` refuses an unreachable endpoint up front (that is
 /// its own boot error, asserted in `connection.rs`), so a store that exists at
 /// all has a connection that worked. What this covers is the branch for *any*
 /// error the store gets back, of which an outage mid-flight is the common one.
@@ -209,7 +218,7 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
         .await
         .expect("bound the probe key's lifetime");
 
-    let store = RedisThrottler::new(conn, limit);
+    let store = RedisThrottler::new(conn);
     let decision = store.hit(&key, limit).await;
 
     assert!(
@@ -225,7 +234,7 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
     );
 
     let event = logs.expect_one(
-        "nest_rs::throttler",
+        nest_rs_throttler::TARGET,
         "redis throttler unavailable; denying (fail-closed)",
     );
     assert_eq!(event.level, "warn");

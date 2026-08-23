@@ -1,71 +1,48 @@
-//! [`RedisThrottlerModule`] — binds [`RedisThrottler`] as the shared
-//! `dyn ThrottlerStore` the `nest-rs-throttler` `ThrottlerGuard` injects, in
-//! place of the in-memory default. Enabled by the `throttler` feature.
+//! [`RedisThrottlerModule`] — the Redis binding of the throttler port. A bare
+//! import beside `ThrottlerModule::for_root(cfg)` (the policy and the guard) and
+//! [`RedisModule::for_root`](crate::RedisModule::for_root) (the connection): it
+//! declares [`RedisThrottler`] as the `dyn ThrottlerStore`, which supersedes the
+//! port's in-process default wherever the three fall in `imports`. Enabled by
+//! the `throttler` feature.
 
+use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
-use nest_rs_throttler::{ThrottlerConfig, ThrottlerStore};
+use nest_rs_core::{ContainerBuilder, Module};
+use nest_rs_throttler::ThrottlerStore;
 
-use crate::RedisQueueConnection;
+use crate::RedisConnection;
+use crate::connection::CONNECTION_REMEDY;
 use crate::throttler::RedisThrottler;
 
-/// Cross-process rate-limit store. Wire with `RedisThrottlerModule::for_root(None)`
-/// **instead of** `ThrottlerModule::for_root(...)` — both supply the same
-/// `dyn ThrottlerStore` binding, so import exactly one. The `ThrottlerGuard`
-/// binds per route unchanged.
-///
-/// Reuses the app's Redis connection ([`RedisQueueConnection`]), so
-/// [`RedisQueueModule::for_root`](crate::RedisQueueModule::for_root) must be imported
-/// **before** this module — its connection is a factory output this module's
-/// factory reads. Config is the same `NESTRS_THROTTLER__*` namespace as the
-/// in-memory module (one dual-path config surface for both backends).
+/// Cross-process rate-limit store. Import beside `ThrottlerModule::for_root`
+/// to share the counters across every instance of the app; the policy
+/// (`NESTRS_THROTTLER__*`) and the `ThrottlerGuard` stay the port's.
 pub struct RedisThrottlerModule;
 
-impl RedisThrottlerModule {
-    /// Pass `None` to load [`ThrottlerConfig`] from `NESTRS_THROTTLER__*`, or a
-    /// [`ThrottlerConfig`] to pin as the base those variables overlay, per field.
-    pub fn for_root(config: impl Into<Option<ThrottlerConfig>>) -> RedisThrottlerSetup {
-        RedisThrottlerSetup {
-            pinned: config.into(),
-        }
+impl Module for RedisThrottlerModule {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
     }
-}
 
-/// The configured import produced by `RedisThrottlerModule::for_root`. Registers
-/// the Redis-backed throttler store so rate limits are shared across instances.
-pub struct RedisThrottlerSetup {
-    pinned: Option<ThrottlerConfig>,
-}
-
-impl DynamicModule for RedisThrottlerSetup {
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        // Same `Arc<dyn ThrottlerStore>` factory-output binding the in-memory
-        // module registers — a factory output so the guard's
-        // `#[inject] Arc<dyn ThrottlerStore>` resolves as global infrastructure.
-        let builder = builder.provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(
+    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
+        // Deduped like a `#[module]` expansion: a diamond import of this binding
+        // is one declaration, not two contesting ones.
+        if !builder.mark_collected(TypeId::of::<Self>()) {
+            return builder;
+        }
+        // Declared: it supersedes the port's ordinary in-memory factory, and a
+        // second vendor binding contests it by name (`BACKEND_REMEDY`). Queued
+        // after the connection's factory, so `imports` order is not a wiring
+        // mistake a reader has to know about.
+        builder.provide_declared_factory_after::<Arc<dyn ThrottlerStore>, RedisConnection, _, _>(
             nest_rs_throttler::BACKEND_REMEDY,
             |container| async move {
-                let config = container
-                    .get::<ThrottlerConfig>()
-                    .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
-                let default = nest_rs_throttler::resolve(&config);
-                // Import order is a wiring mistake, so it is a boot error — the
-                // same channel `resolve` above already uses — not a panic.
-                let conn = container.get::<RedisQueueConnection>().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "RedisQueueConnection is not registered — import RedisQueueModule::for_root \
-                         before RedisThrottlerModule::for_root, whose store reuses that connection"
-                    )
-                })?;
-                Ok(Arc::new(RedisThrottler::new((*conn).clone(), default))
-                    as Arc<dyn ThrottlerStore>)
+                let conn = container
+                    .get::<RedisConnection>()
+                    .ok_or_else(|| anyhow::anyhow!("RedisThrottlerModule: {CONNECTION_REMEDY}"))?;
+                Ok(Arc::new(RedisThrottler::new((*conn).clone())) as Arc<dyn ThrottlerStore>)
             },
-        );
-        // The guard rides with the store on every backend — swapping the store
-        // must not also change what a controller has to list in `providers`.
-        nest_rs_throttler::provide_guard(builder)
+        )
     }
 }

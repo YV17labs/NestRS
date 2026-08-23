@@ -274,7 +274,7 @@ fn host_module(transport: Transport) -> &'static str {
     match transport {
         Transport::Http | Transport::Ws => "HttpModule",
         Transport::Graphql => "GraphqlModule",
-        Transport::Queue => "RedisWorkerModule",
+        Transport::Queue => "RedisModule::for_root(None) + RedisWorkerModule::for_root(None)",
         Transport::Schedule => "ScheduleModule",
         Transport::Mcp => "HttpModule",
     }

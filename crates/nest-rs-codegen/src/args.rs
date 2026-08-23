@@ -20,7 +20,7 @@ use syn::{Expr, ExprLit, Lit, LitStr, Meta};
 /// On a non-string value it errors (spanned at the value) with a message naming
 /// the decorator and key — ``#[{attr}] `{key}` must be a string literal, e.g.
 /// `{key} = "{example}"` `` — where `example` is the placeholder value shown in
-/// the hint (`"database"`, `"..."`).
+/// the hint (`"seaorm"`, `"..."`).
 pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> syn::Result<LitStr> {
     if let Expr::Lit(ExprLit {
         lit: Lit::Str(s), ..

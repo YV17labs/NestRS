@@ -29,7 +29,7 @@ version = "0.1.0"
         "[package]\nname = \"features\"\n\n[dependencies]\nnest-rs-core.workspace = true\n",
     )
     .unwrap();
-    fs::write(root.join(".env"), "NESTRS_DATABASE__URL=postgres://x\n").unwrap();
+    fs::write(root.join(".env"), "NESTRS_SEAORM__URL=postgres://x\n").unwrap();
 }
 
 /// An app crate inside the fake workspace, carrying the

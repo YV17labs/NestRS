@@ -29,7 +29,7 @@
 //!
 //! This interceptor does **not** retry — it cannot: a poem `Request` is
 //! consumed by `next.run` and is not replayable at this layer. When
-//! [`SeaOrmDatabaseConfig::observe_serialization_conflicts`] is on, a commit that fails
+//! [`SeaOrmConfig::observe_serialization_conflicts`] is on, a commit that fails
 //! with a SQLSTATE the [`retry`](crate::retry) module recognizes is merely
 //! *tagged* — logged at `warn` as a serialization conflict for observability —
 //! then the request still fails closed (`500`). To actually retry a conflicting
@@ -50,7 +50,7 @@ use poem::http::{Method, StatusCode};
 use poem::{Error, Request, Response, Result};
 use sea_orm::DatabaseConnection;
 
-use crate::SeaOrmDatabaseConfig;
+use crate::SeaOrmConfig;
 use crate::executor::{
     CommitError, Executor, FinalizeOutcome, LazyTransaction, with_request_executor,
 };
@@ -65,13 +65,13 @@ pub struct DbContext {
     #[inject]
     db: Arc<DatabaseConnection>,
     #[inject]
-    config: Arc<SeaOrmDatabaseConfig>,
+    config: Arc<SeaOrmConfig>,
 }
 
 impl DbContext {
     /// Construct the interceptor from a pool and config — the honest constructor
     /// tests use in place of container resolution.
-    pub fn new(db: Arc<DatabaseConnection>, config: Arc<SeaOrmDatabaseConfig>) -> Self {
+    pub fn new(db: Arc<DatabaseConnection>, config: Arc<SeaOrmConfig>) -> Self {
         Self { db, config }
     }
 }

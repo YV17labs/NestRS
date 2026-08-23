@@ -3,13 +3,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs::core::{injectable, module};
 use nest_rs::queue::{JobProducerExt, processor, queue};
-use nest_rs::redis::{RedisQueueConfig, RedisQueueConnection, RedisQueueModule, RedisWorker};
+use nest_rs::redis::{RedisConfig, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker};
 use nest_rs::testing::TestApp;
 use serde::{Deserialize, Serialize};
 use worker::WorkerModule;
 
 fn redis_url() -> String {
-    std::env::var(nest_rs::config::var_name("queue", "URL"))
+    std::env::var(nest_rs::config::var_name("redis", "URL"))
         .unwrap_or_else(|_| "redis://127.0.0.1/".into())
 }
 
@@ -47,7 +47,7 @@ impl ProbeConsumer {
 }
 
 #[module(
-    imports = [RedisQueueModule::for_root(RedisQueueConfig { url: redis_url(), ..Default::default() })],
+    imports = [RedisModule::for_root(RedisConfig { url: redis_url(), ..Default::default() }), RedisQueueModule],
     providers = [ProbeConsumer],
 )]
 struct ProbeModule;
@@ -81,8 +81,8 @@ async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
     let tag = unique_tag();
     let conn = app
         .container()
-        .get::<RedisQueueConnection>()
-        .expect("RedisQueueModule seeded the shared RedisQueueConnection");
+        .get::<RedisQueueProducer>()
+        .expect("RedisQueueModule bound the producer over the shared connection");
     conn.push_to::<ProbeQueue>(ProbeCommand { tag: tag.clone() })
         .await
         .expect("enqueue onto the probe queue");

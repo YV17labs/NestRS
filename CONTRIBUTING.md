@@ -44,7 +44,7 @@ design record: what was decided and why. Two rules matter most:
 The fastest path is the dev container — see
 [Contributing → Get the dev container running](README.md#contributing) in the
 README. It provisions the Rust toolchain, the dev tooling, and Postgres + Redis
-with `NESTRS_DATABASE__URL` / `NESTRS_QUEUE__URL` already wired.
+with `NESTRS_SEAORM__URL` / `NESTRS_REDIS__URL` already wired.
 
 Prefer a local toolchain? Install Rust (stable, see
 [`rust-toolchain.toml`](rust-toolchain.toml)) and the CLI:

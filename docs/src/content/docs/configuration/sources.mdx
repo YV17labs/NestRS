@@ -11,7 +11,7 @@ import { Aside } from '@astrojs/starlight/components';
 `ConfigService` reads its raw values through a small trait:
 `ConfigSource`. The default `EnvSource` returns process env vars after
 the `.env` cascade has merged. Swap it for anything that can answer
-"what's the value of `NESTRS_DATABASE__URL`?" and the same `Config`
+"what's the value of `NESTRS_SEAORM__URL`?" and the same `Config`
 struct loads from there — HashiCorp Vault, a K8s ConfigMap, AWS Parameter
 Store, an in-process map for tests.
 
@@ -24,7 +24,7 @@ pub trait ConfigSource: Send + Sync + 'static {
 ```
 
 One method. `var` is the fully-qualified name (e.g.
-`"NESTRS_DATABASE__URL"`) — namespacing happens in `ConfigService`, the
+`"NESTRS_SEAORM__URL"`) — namespacing happens in `ConfigService`, the
 source just answers lookups. Empty strings count as unset, same rule as
 `EnvSource`.
 
@@ -82,7 +82,7 @@ let vault = Arc::new(
     VaultSource::fetch(&vault_client, "secret/api").await?,
 );
 let env = ConfigService::with_source("database", vault);
-let db_config = SeaOrmDatabaseConfig::from_env(&env, SeaOrmDatabaseConfig::defaults())?;
+let db_config = SeaOrmConfig::from_env(&env, SeaOrmConfig::defaults())?;
 
 App::builder()
     .module::<AppModule>()
@@ -91,7 +91,7 @@ App::builder()
     .await?;
 ```
 
-A seeded config wins over `ConfigModule::for_feature::<SeaOrmDatabaseConfig>()`,
+A seeded config wins over `ConfigModule::for_feature::<SeaOrmConfig>()`,
 so the rest of the app sees the Vault-loaded value without changing any
 downstream code. The pattern matches [`Repo::scoped`](/database/repo-and-executor/):
 build the seam where the source lives, hand the result to the framework.
@@ -177,7 +177,7 @@ pub struct Dispatch {
 
 impl ConfigSource for Dispatch {
     fn get(&self, var: &str) -> Option<String> {
-        if var.starts_with("NESTRS_DATABASE__") || var.starts_with("NESTRS_ISSUER__") {
+        if var.starts_with("NESTRS_SEAORM__") || var.starts_with("NESTRS_ISSUER__") {
             self.vault.get(var)
         } else {
             self.env.get(var)

@@ -1,6 +1,6 @@
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::seaorm::SeaOrmDatabaseModule;
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
 use serde_json::json;
@@ -18,7 +18,8 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
         AuthnModule,
         AuthzModule,

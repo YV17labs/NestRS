@@ -5,5 +5,5 @@
 mod module;
 mod store;
 
-pub use module::{RedisThrottlerModule, RedisThrottlerSetup};
+pub use module::RedisThrottlerModule;
 pub use store::RedisThrottler;

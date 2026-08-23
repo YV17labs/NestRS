@@ -31,10 +31,11 @@ The contract without a backend: `redis` would pull the first-party producer and 
 ## What you'll implement
 
 - A `JobProducer` impl: wrap the wire envelope, push to your storage.
-- A `Transport` impl: drain the link-time `ProcessMethod` inventory and
-  dispatch each envelope to its handler.
-- Two `Module`s — one for the producer (apps that only enqueue),
-  one for the worker (apps that consume).
+- A `Transport` impl: a receive loop that calls the port's
+  `consume::attempt` and translates its outcome into your backend's
+  ack / retry / dead-letter.
+- Three modules, three shapes — the substrate (`<Vendor>Module::for_root`),
+  the producer binding (bare), the worker binding (`for_root`).
 
 A driver lives in a `nest-rs-<technology>` crate that depends on
 `nest-rs-core`, `nest-rs-queue`, plus whatever your storage and runtime
@@ -107,17 +108,21 @@ blanket impl on top of `push_json` — no extra code on your side.
 
 ## Step 2 — The worker (Transport)
 
-This is the meat. The worker is a `nest_rs::core::Transport`: the
-framework calls `configure` with the assembled container at boot, then
-`serve` with a cancellation token. Drain the inventory, route by queue
-name, hand each envelope to the matching `ProcessMethod::handler` — the
-macro owns everything after that. The five numbered comments mark the
-places you write storage-specific code.
+This is the meat, and it is smaller than it used to be. The worker is a
+`nest_rs::core::Transport`: the framework calls `configure` with the assembled
+container at boot, then `serve` with a cancellation token. **Two calls into the
+port do everything that is not your storage's**: `consume::discover` drains the
+`#[process]` inventory (module-gated, duplicate-checked, announced), and
+`consume::attempt` runs one attempt — it opens the envelope, continues or mints
+the trace, opens the `queue.job` span and the ambient scope, catches a panic,
+classifies the outcome and files the events and the `nest_rs::operation` line.
+You never restate any of that: an adapter that opens a `queue.job` span of its
+own has taken semantics it does not own, and the conformance suite says so.
 
-The framework owns the registry and the dispatch contract. Your code
-owns the **receive loop** — how envelopes arrive (block-pop, subscribe,
-long-poll, `ReceiveMessage`), how retries and visibility timeouts wire
-up. Those are storage decisions.
+What your code owns is the **transport**: how envelopes arrive (block-pop,
+subscribe, long-poll, `ReceiveMessage`), how retries and visibility timeouts
+wire up, and the translation of an `Attempt` into your backend's vocabulary.
+Those are storage decisions.
 
 One contract is *not* a storage decision: a `#[process]` method runs
 [one job at a time](/queue/#one-job-at-a-time). Serialize per method in
@@ -125,8 +130,9 @@ your receive loop, the way `nest-rs-redis` does, so a handler behaves the
 same whichever driver is underneath it.
 
 ```rust
+use nest_rs::core::{Container, Transport};
 use nest_rs::queue::async_trait;
-use nest_rs::core::{Container, ReachableProviders, Transport, inventory};
+use nest_rs::queue::consume::{self, Attempt};
 use nest_rs::queue::ProcessMethod;
 use tokio_util::sync::CancellationToken;
 
@@ -140,63 +146,37 @@ pub struct YourWorker {
 #[async_trait]
 impl Transport for YourWorker {
     async fn configure(&mut self, container: &Container) -> anyhow::Result<()> {
-        // (1) Snapshot the inventory of #[process] methods. Filter by
-        //     module reachability so a linked-but-unimported processor
-        //     is skipped with a boot `tracing::warn` — same property
-        //     nest-rs-redis relies on.
-        let reachable = container.get::<ReachableProviders>();
-        self.methods = inventory::iter::<ProcessMethod>()
-            .filter(|m| {
-                reachable
-                    .as_ref()
-                    .map_or(true, |r| r.0.contains(&(m.provider_type_id)()))
-            })
-            .collect();
+        // (1) Which methods this app serves is the port's answer.
+        self.methods = consume::discover(container)?;
+        // Fail fast here if your connection is not in the container — name the
+        // module that opens it, the way `RedisWorker` names `RedisModule`.
         self.container = Some(container.clone());
         Ok(())
     }
 
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
-        let container = self
-            .container
-            .expect("configure runs before serve");
+        let container = self.container.expect("configure runs before serve");
 
-        // (2) Group the reachable methods by queue name.
-        let mut by_queue: /* HashMap<&'static str, Vec<&ProcessMethod>> */ = todo!();
-        for m in &self.methods { /* by_queue.entry(m.queue).or_default().push(m); */ }
-
-        // (3) For each queue, spawn a worker task that loops.
-        //     Your code: replace `your_pop_from_queue(...)` with your
-        //     storage's receive primitive — BRPOP, subscribe,
-        //     ReceiveMessage, NOTIFY/LISTEN, a channel `recv`...
+        // (2) One receive loop per method, serialized. Your code: replace
+        //     `your_pop_from_queue(...)` with your storage's receive primitive —
+        //     BRPOP, subscribe, ReceiveMessage, NOTIFY/LISTEN, a channel `recv`…
         //     Respect `cancel` for graceful shutdown.
-        for (queue, methods) in by_queue {
+        for method in self.methods {
             let container = container.clone();
             let cancel = cancel.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
                         _ = cancel.cancelled() => break,
-                        envelope = /* your_pop_from_queue(queue) */ => {
-                            // (4) Take the producer's trace context off the
-                            //     value, then dispatch.
-                            let (envelope, inherited) =
-                                nest_rs::queue::envelope::open(envelope);
-                            //     The macro-emitted handler takes
-                            //     the serde_json::Value and the Container.
-                            //     It internally:
-                            //       - unwraps the wire envelope (v + payload),
-                            //       - deserializes the typed Job,
-                            //       - resolves the #[injectable] processor host,
-                            //       - runs the method inside run_in_job_context(...),
-                            //       - returns Err on failure for your retry budget
-                            //         to act on.
-                            //     You only feed it the Value; the macro does the rest.
-                            for method in &methods {
-                                let result = (method.handler)(envelope.clone(), container.clone()).await;
-                                // (5) On `result` being `Err`, apply your
-                                //     retry/dead-letter policy here — storage-specific.
-                                let _ = result;
+                        (job_id, attempt_no, payload) = /* your_pop_from_queue(method.queue) */ => {
+                            // (3) The attempt is the port's — envelope, trace, span,
+                            //     panic, classification, events and line included.
+                            match consume::attempt(method, payload, &job_id, attempt_no, container.clone()).await {
+                                // (4) What you decide: how each outcome maps onto your
+                                //     backend — ack / retry-later / dead-letter.
+                                Attempt::Ok => { /* ack */ }
+                                Attempt::Retry(error) => { /* nak / re-queue within `method.retries` */ let _ = error; }
+                                Attempt::DeadLetter(error) => { /* term / dead-letter now */ let _ = error; }
                             }
                         }
                     }
@@ -209,53 +189,93 @@ impl Transport for YourWorker {
 }
 ```
 
-`inherited` is `None` for a legacy or foreign payload: mint a
-`Correlation` there and open the job's span under it through
-`nest_rs::core::operation_span!`, the way `nest-rs-redis` does. Without
-that span the job's events file under nothing.
-
-The handler call — `(method.handler)(envelope, container)` — is the
-only thing your worker needs to know about a job. Inside that function
-pointer the macro already emitted the envelope unwrap, the
-`serde_json::from_value` to the user's job type, the `Container::get`
-of the `#[injectable]` host, and the `run_in_job_context` wrap. Your
-code is the transport. The macro is the dispatcher.
+`Attempt::Retry` is the user method's `Err` — re-run it within
+`method.retries`. `Attempt::DeadLetter` is deterministic (an undeserializable
+payload, a pipe rejection, a missing provider, a panic): re-running would burn
+the budget on a payload that cannot succeed, so dead-letter it at once. Inside
+`attempt` the macro-emitted handler already did the `serde_json::from_value` to
+the user's job type, the `Container::get` of the `#[injectable]` host and the
+`run_in_job_context` wrap. Your code is the transport. The port is the
+dispatcher.
 
 ## Step 3 — The modules
 
-Two modules — same split as `nest-rs-redis::{RedisQueueModule, RedisWorkerModule}`.
-A producer-only app (an API binary that enqueues but doesn't drain)
-imports the first; a worker app imports both.
+Three modules, three shapes — the same three every adapter in the framework
+has, so an app that has read `nest-rs-redis`'s composition root has read yours:
+
+| Shape | Yours | Role | Variables |
+|---|---|---|---|
+| `<Vendor>Module::for_root(cfg)` | `NatsModule::for_root(None)` | opens the one connection every binding in your crate shares | `NESTRS_NATS__*` |
+| `<Vendor><Port>Module` (bare) | `NatsQueueModule` | binds `Arc<dyn JobProducer>` over that connection | — |
+| `<Vendor><Port>Module::for_root(cfg)` | `NatsWorkerModule::for_root(None)` | contributes the `Transport`; its own settings, if any | `NESTRS_NATS__WORKER__*` |
+
+The layout follows: `src/config.rs`, `src/connection.rs`, `src/module.rs` at the
+crate root; `queue/producer.rs` + `queue/module.rs`; `worker/consumer.rs` +
+`worker/config.rs` + `worker/module.rs`. A namespace is the stem of its path —
+`nats` at the root, `nats__worker` in the binding folder — which is what keeps
+your variables findable from your types and your types from your variables.
 
 ```rust
+use std::sync::Arc;
+
+use nest_rs::config::{ConfigModule, ConfigSetup};
 use nest_rs::core::{ContainerBuilder, DynamicModule, Module, TransportContribution};
+use nest_rs::queue::JobProducer;
 
-/// Producer-side activation. Seeds `YourConnection` from config.
-pub struct YourQueueModule;
+/// The substrate: opens `YourConnection` from `YourConfig` (env + pinned).
+pub struct YourModule;
 
-impl YourQueueModule {
-    pub fn for_root(config: impl Into<Option<YourConfig>>) -> YourQueueSetup {
-        YourQueueSetup { pinned: config.into() }
+impl YourModule {
+    pub fn for_root(config: impl Into<Option<YourConfig>>) -> YourSetup {
+        YourSetup { pinned: config.into() }
     }
 }
 
-pub struct YourQueueSetup {
+pub struct YourSetup {
     pinned: Option<YourConfig>,
 }
 
-impl DynamicModule for YourQueueSetup {
+impl DynamicModule for YourSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        // Your code: build your client from config (env + pinned),
-        // seed it as `YourConnection`, and bind it to
-        // `Arc<dyn nest_rs::queue::JobProducer>` so callers stay portable.
-        builder
+        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
+        builder.provide_factory::<YourConnection, _, _>(|container| async move {
+            let config = container.get::<YourConfig>().expect("resolved above");
+            YourConnection::connect(&config).await
+        })
     }
 }
 
-/// Consumer-side activation. Contributes the `Transport`.
-pub struct YourQueueWorkerModule;
+/// The producer binding — bare. Declares it runs *after* the connection's
+/// factory, so `imports` order stays a readability choice.
+pub struct YourQueueModule;
 
-impl Module for YourQueueWorkerModule {
+impl Module for YourQueueModule {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder { builder }
+    fn collect(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.provide_factory_dyn_after::<YourQueueProducer, dyn JobProducer, YourConnection, _, _>(
+            |container| async move {
+                let conn = container.get::<YourConnection>()
+                    .ok_or_else(|| anyhow::anyhow!("import YourModule::for_root(None) beside YourQueueModule"))?;
+                Ok(YourQueueProducer::new((*conn).clone()))
+            },
+            |producer| Arc::new(producer) as Arc<dyn JobProducer>,
+        )
+    }
+}
+
+/// The consumer binding. Contributes the `Transport`; `for_root` because it
+/// owns settings of its own (`YourWorkerConfig`, namespace `<vendor>__worker`).
+pub struct YourWorkerModule;
+
+impl YourWorkerModule {
+    pub fn for_root(config: impl Into<Option<YourWorkerConfig>>) -> YourWorkerSetup {
+        ConfigModule::setup(config)
+    }
+}
+
+pub type YourWorkerSetup = ConfigSetup<YourWorkerModule, YourWorkerConfig>;
+
+impl Module for YourWorkerModule {
     fn register(builder: ContainerBuilder) -> ContainerBuilder {
         builder.provide_meta(TransportContribution {
             name: "YourWorker",
@@ -270,25 +290,28 @@ and pinned in code — the framework-wide dual-path rule.
 
 ## Step 4 — Using the integration
 
-Application code stays put. The swap is one line in the app's
-`module.rs`:
+Application code stays put. The swap is three lines in the app's
+`module.rs`, and they read like `nest-rs-redis`'s:
 
 ```rust
 // Producer-only API binary:
-#[module(imports = [YourQueueModule::for_root(None), /* features */])]
+#[module(imports = [YourModule::for_root(None), YourQueueModule, /* features */])]
 pub struct ApiModule;
 
 // Worker binary (consumes too):
 #[module(imports = [
-    YourQueueModule::for_root(None),
-    YourQueueWorkerModule,
+    YourModule::for_root(None),
+    YourQueueModule,
+    YourWorkerModule::for_root(None),
     /* features that ship #[processor]s */
 ])]
-pub struct RedisWorkerModule;
+pub struct WorkerModule;
 ```
 
 The `#[processor] impl ...` blocks in user code are unchanged — same
-impl, same `#[process(queue = <Name>Queue)]`, same method signatures.
+impl, same `#[process(queue = <Name>Queue)]`, same method signatures — and the
+features that enqueue inject `Arc<dyn JobProducer>`, so they never knew which
+backend they were on.
 
 ## Ephemeral vs durable backends
 
@@ -317,8 +340,10 @@ the driver's README.
 ## Reference
 
 - [`crates/nest-rs-redis/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) —
-  the reference impl; read its `connection.rs`, `worker.rs`, and
-  `module.rs` whenever a placeholder above needs a concrete shape.
+  the reference impl; read its `connection.rs` + `module.rs` (the shared
+  connection), `queue/producer.rs` + `queue/module.rs` (the producer) and
+  `worker/consumer.rs` + `worker/module.rs` (the transport) whenever a
+  placeholder above needs a concrete shape.
 - [`crates/nest-rs-queue/README.md`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-queue/README.md) —
   the extension contract, the `ProcessMethod` registry, the envelope spec.
 - [Database driver](/database/writing-a-driver/) — the analogous scaffold

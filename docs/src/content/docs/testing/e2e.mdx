@@ -144,7 +144,7 @@ Why one binary instead of `tests/e2e_users.rs`, `tests/e2e_orgs.rs`:
 Postgres database, runs migrations, and drops it on the guard's `Drop`
 — even on panic, even after a crashed previous run (it reaps
 `nest_rs_e2e_*` databases older than five minutes on the next call). The
-admin URL comes from `NESTRS_DATABASE__URL`.
+admin URL comes from `NESTRS_SEAORM__URL`.
 
 `provide_arc(db.connection())` seeds the real connection into the
 container, short-circuiting `SeaOrmDatabaseModule`'s `for_root` factory. The

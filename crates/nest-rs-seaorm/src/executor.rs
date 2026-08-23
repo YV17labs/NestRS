@@ -821,7 +821,7 @@ mod ambient_tests {
         })
         .await;
 
-        let event = logs.expect_one("nest_rs::orm", "ambient executor is not a SeaORM Executor");
+        let event = logs.expect_one(crate::TARGET, "ambient executor is not a SeaORM Executor");
         assert_eq!(event.level, "error");
         assert_eq!(
             event.field("reason").as_deref(),

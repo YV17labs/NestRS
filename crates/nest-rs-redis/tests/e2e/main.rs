@@ -2,7 +2,7 @@
 //! [`throttler`] for the cross-process rate-limit store, [`concurrency`] and
 //! [`replicas`] for the worker's fetch guarantees, [`correlation`] for the
 //! trace context that crosses the producer/consumer process boundary, and
-//! [`portable_producer`] for the two names `RedisQueueModule::for_root` binds.
+//! [`portable_producer`] for the two names `RedisQueueModule` binds.
 //!
 //! Needs a reachable Redis — gated out of `unit` by the nextest `binary(e2e)`
 //! filter, and behind the `throttler` feature (off by default, so producer /
@@ -13,7 +13,7 @@
 //! cargo nextest run -p nest-rs-redis --features throttler -E 'binary(e2e)'
 //! ```
 //!
-//! The URL comes from `NESTRS_QUEUE__URL` (the dev container wires
+//! The URL comes from `NESTRS_REDIS__URL` (the dev container wires
 //! `redis://redis:6379`); unset, it falls back to that default. This file holds
 //! the suite's shared fixtures and nothing else — every test lives in the
 //! module named for the concern it covers.
@@ -26,11 +26,21 @@ mod throttler;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nest_rs_redis::RedisQueueConnection;
+use nest_rs_redis::{RedisConfig, RedisConnection};
 
 fn redis_url() -> String {
-    std::env::var(nest_rs_config::var_name("queue", "URL"))
+    std::env::var(nest_rs_config::var_name("redis", "URL"))
         .unwrap_or_else(|_| "redis://redis:6379".to_string())
+}
+
+/// Pinned rather than read from the env: the framework workspace ships no
+/// `.env`, so `for_root(None)` would resolve to the localhost default and a
+/// suite would fail on connect instead of measuring anything.
+fn redis_config() -> RedisConfig {
+    RedisConfig {
+        url: redis_url(),
+        ..Default::default()
+    }
 }
 
 /// A key unique to this process, call site and wall-clock instant, so a rerun
@@ -43,8 +53,8 @@ fn unique_key(tag: &str) -> String {
     format!("redis-q2:{tag}:{}:{nanos}", std::process::id())
 }
 
-async fn connect() -> RedisQueueConnection {
-    RedisQueueConnection::connect(&redis_url())
+async fn connect() -> RedisConnection {
+    RedisConnection::connect(&redis_url())
         .await
         .expect("connect to the dev container Redis")
 }

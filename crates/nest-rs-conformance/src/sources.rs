@@ -575,6 +575,14 @@ pub fn past_value(tokens: &[TokenTree], at: usize) -> usize {
 
 /// Read the token at `at` as a literal or a path, with the path's segments.
 pub fn named_at(tokens: &[TokenTree], at: usize) -> Option<(Named, Vec<String>)> {
+    // A rooted path (`::nest_rs_queue::unit::JOB`) opens with punctuation, and
+    // the match below saw the punct and answered `None` — so a site spelled the
+    // one way `framework.md` mandates for macro emissions was invisible to
+    // every join built on this reader. Step over the leading `::` first.
+    let mut at = at;
+    while matches!(tokens.get(at), Some(TokenTree::Punct(p)) if p.as_char() == ':') {
+        at += 1;
+    }
     match tokens.get(at)? {
         TokenTree::Literal(lit) => syn::parse_str::<syn::LitStr>(&lit.to_string())
             .ok()

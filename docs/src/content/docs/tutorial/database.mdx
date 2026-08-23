@@ -15,9 +15,10 @@ back automatically, and the e2e baseline you add in
 
 ## The data layer in one import
 
-`SeaOrmDatabaseModule::for_root(None)` activates the SeaORM data layer:
-seeds the connection from `NESTRS_DATABASE__URL`, registers the
-transaction interceptor, binds the worker context. The configuration
+Two imports activate the SeaORM data layer, one per shape:
+`SeaOrmModule::for_root(None)` opens the pool from `NESTRS_SEAORM__URL`, and
+`SeaOrmDatabaseModule` — a bare import beside it — registers the transaction
+interceptor and binds the worker context over that pool. The configuration
 uses the framework's dual-path rule — pin a value here or leave it
 `None` and let env vars supply it.
 
@@ -30,14 +31,15 @@ The data layer crates are
 ```rust title="apps/blog/src/module.rs" {3, 10}
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::seaorm::SeaOrmDatabaseModule;
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 use features::authn::AuthnModule;
 use features::authz::AuthzModule;
 use features::posts::PostsHttpModule;
 
 #[module(imports = [
-    SeaOrmDatabaseModule::for_root(None),
+    SeaOrmModule::for_root(None),
+    SeaOrmDatabaseModule,
     HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() }),
     AuthnModule,
     AuthzModule,
@@ -133,7 +135,7 @@ extend the workspace.
 ## Run Postgres
 
 `nestrs new` scaffolds a `compose.yml` with Postgres and Redis, and the
-committed `.env` already points `NESTRS_DATABASE__URL` at it. The credentials
+committed `.env` already points `NESTRS_SEAORM__URL` at it. The credentials
 are the **workspace** name, not the app's — a workspace scaffolded with
 `nestrs new hello` gets `postgres://hello:hello@localhost:5432/hello`, whatever
 its apps are called. Bring the services up once:
@@ -148,7 +150,7 @@ INFO sea_orm_migration::migrator::exec: Applying migration 'm20260609_000000_cre
 INFO sea_orm_migration::migrator::exec: Migration 'm20260609_000000_create_post' has been applied
 ```
 
-`nestrs run db up` runs `Migrator::up` against `NESTRS_DATABASE__URL`. The
+`nestrs run db up` runs `Migrator::up` against `NESTRS_SEAORM__URL`. The
 binary resolves it through `connect_from_env`, which reads the same `.env`
 cascade the apps do — a tool and its app can never end up pointed at different
 databases.
@@ -225,8 +227,8 @@ tags the interceptor span and the SQL spans.
 
 ## What you have now
 
-- A `SeaOrmDatabaseModule::for_root(None)` import in the app — the data
-  layer is on.
+- `SeaOrmModule::for_root(None)` + `SeaOrmDatabaseModule` in the app — the
+  data layer is on.
 - A migration adding the `post` table, applied through
   `nestrs run db up`.
 - `POST /posts` persisting into Postgres inside an automatic

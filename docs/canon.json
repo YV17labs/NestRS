@@ -307,7 +307,6 @@
     ],
     "Subject": [],
     "ThrottlerStore": [
-      "default_limit",
       "hit"
     ],
     "Transport": [
@@ -334,7 +333,7 @@
       "type_key"
     ]
   },
-  "test_count": 2078,
+  "test_count": 2089,
   "version_req": "5.1",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -489,17 +488,23 @@
       ],
       "profile_split": false
     },
-    "RedisQueueConfig": {
-      "source": "crates/nest-rs-redis/src/queue/config.rs",
+    "RedisConfig": {
+      "source": "crates/nest-rs-redis/src/config.rs",
       "fields": [
         "url",
-        "shutdown_timeout",
         "connect_timeout"
       ],
       "profile_split": false
     },
-    "SeaOrmDatabaseConfig": {
-      "source": "crates/nest-rs-seaorm/src/database/config.rs",
+    "RedisWorkerConfig": {
+      "source": "crates/nest-rs-redis/src/worker/config.rs",
+      "fields": [
+        "shutdown_timeout"
+      ],
+      "profile_split": false
+    },
+    "SeaOrmConfig": {
+      "source": "crates/nest-rs-seaorm/src/config.rs",
       "fields": [
         "url",
         "max_connections",
@@ -557,6 +562,11 @@
       "| `nest-rs-redis/src/throttler/module.rs` | `RedisThrottlerModule` |",
       "| `nest-rs-seaorm/src/database/module.rs` | `SeaOrmDatabaseModule` |",
       "| `features/src/audio/http/module.rs` | `AudioHttpModule` |",
+      "| Shape | Example | Role | Variables |",
+      "|---|---|---|---|",
+      "| `<Vendor>Module::for_root(cfg)` | `SeaOrmModule`, `RedisModule` | opens the **resource** — the pool, the connection — once, for every binding in the crate | `NESTRS_<VENDOR>__*` |",
+      "| `<Port>Module::for_root(cfg)` | `ThrottlerModule`, `HttpModule`, `HealthModule` | the **capability**: its policy, its guard, its default implementation — when the port has any | `NESTRS_<PORT>__*` |",
+      "| `<Vendor><Port>Module` | `SeaOrmDatabaseModule`, `RedisQueueModule`, `RedisThrottlerModule` | **binds** the vendor to the port; a bare import, unless it owns settings of its own — then a `for_root` | `NESTRS_<VENDOR>__<PORT>__*` |",
       "| Crate | Path a caller types | Read off |",
       "|---|---|---|",
       "| `nest-rs-oauth-client` | `nest_rs::oauth::client` | §1.1 *client* |",

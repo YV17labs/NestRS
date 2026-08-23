@@ -67,7 +67,7 @@ Singletons have no other way to read per-request state:
 - **ability** — `nest-rs-authz` ambient `Arc<Ability>`.
 
 **Install depths.** *Executor* via the auto-registered `DbContext`
-interceptor (just import `DatabaseModule`) — innermost transport band
+interceptor (import `SeaOrmModule::for_root(None)` + the bare `SeaOrmDatabaseModule`) — innermost transport band
 (−10), wrapping routing, so it covers controllers and self-mounts alike.
 Safe methods run on the pool; mutating methods get a **lazy**
 transaction (`Executor::Lazy` — `BEGIN` deferred to the first data-layer
@@ -199,7 +199,7 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   opens no transaction; a writing one commits on success, rolls back on the
   transport's error shape.
 - **Worker transports** install the executor via the orm-agnostic `JobContext`
-  (`WorkerDbContext`, auto-bound by `DatabaseModule`) — system work ⇒ no
+  (`WorkerDbContext`, auto-bound by `SeaOrmDatabaseModule`) — system work ⇒ no
   ability ⇒ unscoped, correct. **One transaction per attempt** is the default,
   through the same `LazyTransaction::finalize` every other edge settles
   through: a job that fails halfway must leave nothing for its retry to write

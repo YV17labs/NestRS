@@ -18,7 +18,7 @@ use nest_rs_graphql::{GraphqlConfig, GraphqlModule, GraphqlOperationGuard, opera
 use nest_rs_guards::{Denial, Guard, HttpGuard, async_trait, guard};
 use nest_rs_resource::WireModelDefaults;
 use nest_rs_seaorm::{
-    Access, CrudService, SeaOrmDatabaseConfig, SeaOrmDatabaseModule, ServiceError,
+    Access, CrudService, SeaOrmConfig, SeaOrmDatabaseModule, SeaOrmModule, ServiceError,
 };
 use nest_rs_testing::TestApp;
 use sea_orm::prelude::Uuid;
@@ -166,10 +166,11 @@ impl PostsResolver {
 
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(SeaOrmDatabaseConfig {
+        SeaOrmModule::for_root(SeaOrmConfig {
             url: crate::harness::url(),
             ..Default::default()
-        }),
+            }),
+            SeaOrmDatabaseModule,
         GraphqlModule::for_root(GraphqlConfig {
             federation: true,
             ..GraphqlConfig::default()

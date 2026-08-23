@@ -88,7 +88,7 @@ pub(crate) fn deployment_env_var(name: &str) -> Option<String> {
 /// [`ConfigService::with_source`](crate::ConfigService::with_source).
 pub trait ConfigSource: Send + Sync + 'static {
     /// Return the raw value for the fully-qualified variable name (e.g.
-    /// `"NESTRS_DATABASE__URL"`). Empty strings should be treated as unset.
+    /// `"NESTRS_SEAORM__URL"`). Empty strings should be treated as unset.
     fn get(&self, var: &str) -> Option<String>;
 
     /// The subset of [`get`](Self::get) that comes from the **deployment** —

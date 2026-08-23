@@ -84,7 +84,7 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
     /// Defaults to [`Default::default`]. Override it when a field's *safe*
     /// baseline depends on the active profile rather than being a constant —
     /// `StorageConfig::allow_http`, `OpenApiConfig::enabled` and
-    /// `RedisQueueConfig::url` all default one way in dev and another in
+    /// `RedisConfig::url` all default one way in dev and another in
     /// staging/production, and that belongs here rather than inside `from_env`
     /// where it would also silently rewrite a pinned value.
     fn defaults() -> Self {

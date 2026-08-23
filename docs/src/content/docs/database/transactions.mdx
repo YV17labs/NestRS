@@ -68,11 +68,11 @@ The framework exposes two pieces, deliberately split:
 ## The observability flag
 
 ```bash frame="terminal"
-NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS=true
+NESTRS_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS=true
 ```
 
 ```rust
-SeaOrmDatabaseModule::for_root(SeaOrmDatabaseConfig {
+SeaOrmModule::for_root(SeaOrmConfig {
     observe_serialization_conflicts: true,
     ..Default::default()
 })
@@ -194,4 +194,4 @@ explicitly (replay the work against a fresh snapshot). One way to do each.
 - [Repo and executor](/database/repo-and-executor/) — what the interceptor
   installs, the escape-on-spawn fail-closed.
 - [Pagination](/database/pagination/) — the other knob the entity carries.
-- [Configuration](/configuration/) — the full `NESTRS_DATABASE__*` scheme.
+- [Configuration](/configuration/) — the full `NESTRS_SEAORM__*` scheme.

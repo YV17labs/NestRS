@@ -1,6 +1,6 @@
 ---
 title: Wiring
-description: RedisQueueModule vs RedisWorkerModule — how producer-only and worker apps share a features crate without spawning workers they don't run.
+description: RedisModule, RedisQueueModule and RedisWorkerModule — how producer-only and worker apps share a features crate without spawning workers they don't run.
 tier: basics
 sidebar:
   order: 3
@@ -14,88 +14,96 @@ module imports, two `main`s, one shared features crate — the framework
 decides which `#[process]` methods actually run by walking the access
 graph from each app's root.
 
-## Two modules, two roles
+## Three modules, three roles
 
 | Module | Role | Imported by |
 |---|---|---|
-| `RedisQueueModule::for_root(cfg)` | Seeds the shared `RedisQueueConnection` (the producer side). | Every app that talks to the queue. |
-| `RedisWorkerModule` | Contributes the `RedisWorker` transport — drains `#[process]` methods at boot and spawns one worker each. | Worker apps only. |
+| `RedisModule::for_root(cfg)` | Opens the **one** Redis connection every Redis binding shares — the queue producer, the worker, the rate-limit store. | Every app that touches Redis. |
+| `RedisQueueModule` | Binds the producer over that connection: `Arc<dyn JobProducer>`, the portable handle a feature injects to enqueue. | Every app that enqueues. |
+| `RedisWorkerModule::for_root(cfg)` | Contributes the `RedisWorker` transport — drains `#[process]` methods at boot and spawns one worker each; its own settings are `NESTRS_REDIS__WORKER__*` (the drain window at shutdown). | Worker apps only. |
 
-`RedisQueueModule::for_root(None)` reads `NESTRS_QUEUE__URL` from the
-environment; `RedisQueueModule::for_root(RedisQueueConfig { url, .. })` supplies
-that URL as the **base** the environment overlays — so a deployment setting
-`NESTRS_QUEUE__URL` still wins, field by field
-([the dual-path rule](/configuration/#the-dual-path-rule)). See
-[fundamentals/modules](/fundamentals/modules/) for the four boot
-phases that resolve the connection before any transport attaches.
+`RedisModule::for_root(None)` reads `NESTRS_REDIS__URL` from the environment;
+`RedisModule::for_root(RedisConfig { url, .. })` supplies that URL as the
+**base** the environment overlays — so a deployment setting `NESTRS_REDIS__URL`
+still wins, field by field ([the dual-path rule](/configuration/#the-dual-path-rule)).
+One connection, one variable, named for the crate that parses it: a
+throttler-only app sets the same `NESTRS_REDIS__URL`. See [fundamentals/modules](/fundamentals/modules/) for the
+four boot phases that resolve the connection before any transport attaches.
 
 <Aside>
-The connection is built in the **collect** phase as an async factory.
-By the time `RedisWorker::configure` runs, `Arc<RedisQueueConnection>` is in
-the container regardless of how modules were ordered in `imports = [...]`.
-A worker app with no `RedisQueueConnection` seeded fails fast at boot with
-a clear error — and so does one whose `NESTRS_QUEUE__URL` is unreachable:
-every connect attempt warns on `nest_rs::queue`, and the boot gives up after
-`NESTRS_QUEUE__CONNECT_TIMEOUT_SECS` (10 s by default) naming the redacted
-endpoint. A container that cannot reach its queue crashes rather than parking
-forever between "not healthy" and "not dead".
+The connection is built in the **collect** phase as an async factory, and
+every binding's factory declares that it runs after it — so `imports = [...]`
+order is a readability choice, and by the time `RedisWorker::configure` runs
+the connection is in the container. A worker app that forgot `RedisModule`
+fails fast at boot with an error naming it — and so does one whose
+`NESTRS_REDIS__URL` is unreachable: every connect attempt warns on
+`nest_rs::redis`, and the boot gives up after `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`
+(10 s by default) naming the redacted endpoint. A container that cannot reach
+its Redis crashes rather than parking forever between "not healthy" and "not
+dead".
 </Aside>
 
 ## The worker app
 
-The worker imports both queue modules plus the feature's queue adapter.
-That's it — `AudioQueueModule` pulls in the `AudioModule` port itself.
+The worker imports the substrate, both queue bindings and the feature's queue
+adapter. That's it — `AudioQueueModule` pulls in the `AudioModule` port itself.
 
 ```rust title="apps/worker/src/module.rs"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisQueueModule, RedisWorkerModule};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
 
 use features::audio::AudioQueueModule;
 
 #[module(imports = [
     ConfigModule::for_root(),
-    RedisQueueModule::for_root(None),
-    RedisWorkerModule,
+    RedisModule::for_root(None),
+    RedisQueueModule,
+    RedisWorkerModule::for_root(None),
     AudioQueueModule,
 ])]
-pub struct RedisWorkerModule;
+pub struct WorkerModule;
 ```
 
 At boot:
 
-1. `ConfigModule` reads env, materializes `RedisQueueConfig` from
-   `NESTRS_QUEUE__URL`.
-2. `RedisQueueModule::for_root(None)` registers a factory that calls
-   `RedisQueueConnection::connect(url)`.
-3. `RedisWorkerModule` contributes the `RedisWorker` transport.
-4. `AudioQueueModule` brings `AudioProcessor` (the `#[processor]` host) and
+1. `ConfigModule` reads env, materializes `RedisConfig` from
+   `NESTRS_REDIS__URL`.
+2. `RedisModule::for_root(None)` registers a factory that opens the
+   `RedisConnection`.
+3. `RedisQueueModule` registers a factory — declared to run after the
+   connection's — that binds `RedisQueueProducer` as `Arc<dyn JobProducer>`.
+4. `RedisWorkerModule::for_root(None)` contributes the `RedisWorker` transport.
+5. `AudioQueueModule` brings `AudioProcessor` (the `#[processor]` host) and
    its `#[process]` methods into the reachable set.
-5. `RedisWorker::configure` drains `inventory::iter::<ProcessMethod>()`,
+6. `RedisWorker::configure` drains `inventory::iter::<ProcessMethod>()`,
    keeps only the methods whose provider is reachable, and logs each
    one. `serve` builds one apalis worker per method on a shared
    `Monitor`.
 
 ## The producer-only app
 
-A producer-only binary imports `RedisQueueModule::for_root(...)` and skips
-`RedisWorkerModule` entirely. It gets `Arc<RedisQueueConnection>` to push
-with — and no worker spawn, no drained inventory, no apalis monitor.
+A producer-only binary imports `RedisModule::for_root(...)` and
+`RedisQueueModule`, and skips `RedisWorkerModule` entirely. It gets
+`Arc<dyn JobProducer>` to push with — and no worker spawn, no drained
+inventory, no apalis monitor.
 
 ```rust title="apps/api/src/module.rs (abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::http::HttpModule;
-use nest_rs::redis::RedisQueueModule;
-use nest_rs::seaorm::SeaOrmDatabaseModule;
+use nest_rs::redis::{RedisModule, RedisQueueModule};
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 
 #[module(imports = [
     ConfigModule::for_root(),
     HttpModule::for_root(None),
-    SeaOrmDatabaseModule::for_root(None),
-    RedisQueueModule::for_root(None),
+    SeaOrmModule::for_root(None),
+    SeaOrmDatabaseModule,
+    RedisModule::for_root(None),
+    RedisQueueModule,
     AudioHttpModule,
     AudioScheduleModule,
 ])]
@@ -104,7 +112,7 @@ pub struct ApiModule;
 
 That `apps/api` is exactly this shape: producer-only. Its HTTP
 controller and scheduled timer both call `AudioService::enqueue_transcode`,
-which uses the seeded `RedisQueueConnection` to push onto Redis. No worker
+which pushes through the bound `JobProducer` onto Redis. No worker
 runs in this process — that's the worker binary's job.
 
 ## Module-gating across the shared crate
@@ -145,14 +153,16 @@ $ nestrs run dev worker
 
 One `attached` line per transport, one `registered` line per
 discovered method that survived the reachability filter. The
-producer-only API's boot log has the same `RedisQueueConnection` factory
-line, but no `attached transport=RedisWorker` and no `registered queue
-processor` lines — the worker side never wakes up.
+producer-only API's boot opens the same connection, but logs no `attached
+transport=RedisWorker` and no `registered queue processor` lines — the worker
+side never wakes up.
 
 ## Reference
 
-- `crates/nest-rs-redis/src/module.rs` — `RedisQueueModule`,
-  `RedisQueueSetup::collect` (factory + config resolution).
+- `crates/nest-rs-redis/src/module.rs` — `RedisModule`,
+  `RedisSetup::collect` (config resolution + the one connection).
+- `crates/nest-rs-redis/src/queue/module.rs` — `RedisQueueModule` binding
+  `RedisQueueProducer` as `dyn JobProducer` over it.
 - `crates/nest-rs-redis/src/worker/module.rs` — `RedisWorkerModule`
   contributing the `RedisWorker` transport.
 - `crates/nest-rs-redis/src/worker/consumer.rs` —

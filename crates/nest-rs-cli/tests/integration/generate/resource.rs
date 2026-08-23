@@ -117,7 +117,7 @@ fn generate_resource_wires_the_auth_roots_it_bootstrapped() {
     let module_rs = app.join("src/module.rs");
     let with_db = fs::read_to_string(&module_rs).unwrap().replace(
         "    ],",
-        "        SeaOrmDatabaseModule::for_root(None),\n    ],",
+        "        SeaOrmModule::for_root(None),\n        SeaOrmDatabaseModule,\n    ],",
     );
     fs::write(&module_rs, with_db).unwrap();
 

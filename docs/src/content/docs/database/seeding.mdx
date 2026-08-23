@@ -109,7 +109,7 @@ nestrs run db reset    # fresh migrate, then seed
 `nestrs run db seed` runs the crate's `seed` binary. It connects through
 `nest_rs::seaorm::connect_from_env()` — the same connector
 [`migrate`](/database/migrations/#run-them) uses, resolving
-`NESTRS_DATABASE__*` through the `.env` cascade — then runs `seed::run` and
+`NESTRS_SEAORM__*` through the `.env` cascade — then runs `seed::run` and
 prints how many rows it inserted.
 
 Because `run` is a plain function, tests call it directly. The crate's e2e

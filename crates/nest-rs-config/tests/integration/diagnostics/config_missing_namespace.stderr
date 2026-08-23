@@ -1,4 +1,4 @@
-error: #[config] requires `namespace` — write `namespace = "database"`
+error: #[config] requires `namespace` — write `namespace = "seaorm"`
  --> tests/integration/diagnostics/config_missing_namespace.rs:7:1
   |
 7 | #[config]

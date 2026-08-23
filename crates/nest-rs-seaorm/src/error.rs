@@ -74,7 +74,7 @@ pub enum ServiceError {
     /// An internal failure that is not a `DbErr` (a hash, an enqueue push, an
     /// upstream call). Maps to **500**; like `Db`, the detail stays for
     /// `tracing` and the wire sees a constant string.
-    #[error("internal error")]
+    #[error("{}", nest_rs_core::OPAQUE_CLIENT_MESSAGE)]
     Internal(String),
 }
 
@@ -254,7 +254,7 @@ mod http {
             ))
             .as_response();
 
-            let event = logs.expect_one("nest_rs::orm", "service error surfaced as 500");
+            let event = logs.expect_one(crate::TARGET, "service error surfaced as 500");
             assert_eq!(event.level, "error");
             assert_eq!(event.field("kind").as_deref(), Some("db"));
             assert!(
@@ -279,7 +279,7 @@ mod http {
             let unexpected = crud_error(sea_orm::DbErr::Custom("deadlock detected".into()));
             assert_eq!(unexpected.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
-            let event = logs.expect_one("nest_rs::orm", "crud operation failed");
+            let event = logs.expect_one(crate::TARGET, "crud operation failed");
             assert_eq!(event.level, "error");
             assert_eq!(event.field("kind").as_deref(), Some("db"));
             assert!(
@@ -299,7 +299,7 @@ mod http {
             let logs = nest_rs_testing::LogCapture::install();
             let _ = ServiceError::not_found("no such widget").as_response();
             assert!(
-                logs.find("nest_rs::orm", "service error surfaced as 500")
+                logs.find(crate::TARGET, "service error surfaced as 500")
                     .is_empty(),
                 "a 404 is not an incident: {:#?}",
                 logs.events(),
@@ -396,7 +396,7 @@ mod tests {
     fn internal_display_is_wire_safe_constant() {
         // Like `Db`, an internal failure keeps its detail for `tracing` only.
         let err = ServiceError::internal("stripe key rejected: sk_live_… ");
-        assert_eq!(err.to_string(), "internal error");
+        assert_eq!(err.to_string(), nest_rs_core::OPAQUE_CLIENT_MESSAGE);
     }
 
     #[test]

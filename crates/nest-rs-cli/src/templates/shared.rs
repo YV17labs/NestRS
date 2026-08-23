@@ -47,7 +47,7 @@ pub const COMPOSE: &str = r#"# Local development services. Start them with:
 #
 #   docker compose up -d
 #
-# The committed `.env` points {{env_prefix}}_DATABASE__URL / {{env_prefix}}_QUEUE__URL at these
+# The committed `.env` points {{env_prefix}}_SEAORM__URL / {{env_prefix}}_REDIS__URL at these
 # on localhost. `nestrs run db up` then applies your migrations.
 
 services:
@@ -157,9 +157,9 @@ pub const ENV_WORKSPACE: &str = r#"# {{env_label}} — committed base config (`.
 #
 # Postgres + Redis as `compose.yml` exposes them on localhost. Start them with
 # `docker compose up -d`, then `nestrs run db up`. An app only connects if it
-# imports SeaOrmDatabaseModule / a queue module, so these are inert for a plain HTTP app.
-{{env_prefix}}_DATABASE__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
-{{env_prefix}}_QUEUE__URL=redis://localhost:6379
+# imports SeaOrmModule / RedisModule, so these are inert for a plain HTTP app.
+{{env_prefix}}_SEAORM__URL=postgres://{{kebab}}:{{kebab}}@localhost:5432/{{kebab}}
+{{env_prefix}}_REDIS__URL=redis://localhost:6379
 #
 # Precedence (highest first):
 #   real env  >  pinned in `module.rs`  >  .env.<{{env_prefix}}_ENV>.local  >  .env.local
@@ -193,8 +193,8 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 #
 # Uncomment when you add a database (https://nestrs.dev/configuration/).
 
-# {{env_prefix}}_DATABASE__URL=postgres://user:pass@localhost:5432/{{kebab}}
-# {{env_prefix}}_QUEUE__URL=redis://localhost:6379
+# {{env_prefix}}_SEAORM__URL=postgres://user:pass@localhost:5432/{{kebab}}
+# {{env_prefix}}_REDIS__URL=redis://localhost:6379
 "#;
 
 /// The scaffolded smoke test. `{{smoke_use}}` / `{{smoke_module}}` name the

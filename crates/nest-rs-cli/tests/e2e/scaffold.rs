@@ -371,7 +371,7 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
                 !read(workspace, ".env").contains("ENV_PREFIX"),
                 "the prefix cannot come from `.env` — the runtime aborts on it",
             );
-            assert!(read(workspace, ".env").contains("ACME_DATABASE__URL="));
+            assert!(read(workspace, ".env").contains("ACME_SEAORM__URL="));
             assert!(read(workspace, ".env.development").contains("ACME_LOG="));
             assert!(
                 read(workspace, ".env").contains("ACME_AUTHN__SECRET="),

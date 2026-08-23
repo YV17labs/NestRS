@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Ports & Adapters — three module shapes, and a variable is a path too
+
+The framework now states what it is: **Ports & Adapters**, as practised — the
+port owns the semantics, the adapter owns only the transport, a multi-backend
+library is wrapped rather than abstracted, and the composition root has
+**three module shapes and no fourth**. `architecture.md` carries the section;
+`naming.rs` and `units.rs` in `nest-rs-conformance` keep it true.
+
+- **Three shapes.** `<Vendor>Module::for_root(cfg)` opens a resource —
+  `SeaOrmModule` (the pool), `RedisModule` (the connection). `<Port>Module::for_root(cfg)`
+  carries a capability's policy — `ThrottlerModule`, `HttpModule`.
+  `<Vendor><Port>Module` binds one to the other, bare unless it owns settings —
+  `SeaOrmDatabaseModule`, `SeaOrmHealthModule`, `RedisQueueModule`,
+  `RedisThrottlerModule`, `RedisWorkerModule::for_root`. A composition root reads:
+  `SeaOrmModule::for_root(None), SeaOrmDatabaseModule, RedisModule::for_root(None),
+  RedisQueueModule, RedisWorkerModule::for_root(None), ThrottlerModule::for_root(None),
+  RedisThrottlerModule`.
+- **A `#[config]`'s namespace is its stem — crate subject, then binding folders,
+  joined by `__` — exactly as its type is named.** `SeaOrmConfig` →
+  `NESTRS_SEAORM__*` (**`NESTRS_DATABASE__*` is gone**: the universal convention
+  named neither the crate nor the type that parsed it); `RedisConfig` →
+  `NESTRS_REDIS__*` (**`NESTRS_QUEUE__*` is gone**); `RedisWorkerConfig` →
+  `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`; `NESTRS_THROTTLER__*` and
+  `NESTRS_SOCIAL__GITHUB__*` unchanged. `namespace_is_the_stem` compares segment
+  by segment. From a variable a reader finds the type; from a module, the
+  variable.
+- **`nest-rs-seaorm` is the adapter that wraps sea-orm.** `SeaOrmModule::for_root`
+  resolves `SeaOrmConfig` and opens the one pool; `SeaOrmDatabaseModule` is a bare
+  binding that installs the ambient executor (`DbContext`, `WorkerDbContext`)
+  and fails the boot naming `SeaOrmModule` if the pool is absent.
+  `SeaOrmDatabaseConfig` and `SeaOrmDatabaseSetup` are gone; `connect_from_env`
+  resolves `SeaOrmConfig`.
+- **`nest-rs-redis` is one connection and three bindings.** `RedisModule::for_root`
+  opens `RedisConnection`; `RedisQueueModule` (bare) binds `RedisQueueProducer`
+  as `Arc<dyn JobProducer>`; `RedisWorkerModule::for_root` owns
+  `RedisWorkerConfig`; `RedisThrottlerModule` (bare) declares the store.
+  `RedisQueueConnection`, `RedisQueueConfig`, `RedisQueueSetup` and
+  `RedisThrottlerSetup` are gone; the connection's events file on a
+  `nest_rs::redis` target.
+- **The throttler's policy lives in the port, its counters in the store.**
+  `ThrottlerStore` is `hit` alone — `default_limit` is gone, and so are the
+  `default` arguments of `InMemoryThrottler::new` and `RedisThrottler::new`;
+  the guard carries the default (`ThrottlerGuard::new(store, default)`,
+  `Throttle: Default`). `ThrottlerModule::for_root` binds the in-process store as
+  an *ordinary* factory, so `RedisThrottlerModule` supersedes it wherever it sits
+  in `imports` and the app removes no line; two vendor bindings still contest
+  (`BACKEND_REMEDY`). `provide_guard` and `resolve` are no longer public seams.
+- **The queue port owns the attempt.** `nest_rs_queue::consume::{discover, attempt,
+  Attempt}` — discovery, the envelope, the trace, the `queue.job` span, the panic
+  catch, the outcome classes, the events and the operation line — written once in
+  the port; `RedisWorker` is a fetch loop that translates `Attempt` into apalis's
+  `Abort`/`Failed`. A second adapter copies nothing, and
+  `a_unit_is_opened_only_by_the_crate_that_declares_it` refuses one that tries.
+- **A factory may declare the factory output it reads.**
+  `ContainerBuilder::provide_factory_after`, `provide_factory_dyn_after` and
+  `provide_declared_factory_after` name the type; the boot drains in dependency
+  order with queue order as the tie-break, so `imports = [..]` order is a
+  readability choice. A cycle is `FactoryCycleError`, naming the set.
+- Demo features inject `Arc<dyn JobProducer>`; the CLI scaffold and `.env`
+  templates write `_SEAORM__URL` / `_REDIS__URL`; `nest-rs-throttler`'s in-band
+  caller-bucket helpers are gated on the edges that use them.
+
 ### The one guard that answers every transport lives at the root
 
 `AbilityGuard` implements four of `Guard`'s entries — `check_http`,
@@ -2733,7 +2795,7 @@ process like everything else it governs:
 ```yaml
 environment:
   NESTRS_ENV_PREFIX: ACME
-  ACME_DATABASE__URL: postgres://…
+  ACME_SEAORM__URL: postgres://…
 ```
 
 **Breaking.** `env_prefix!` and `EnvPrefixDecl` are removed — no shim. A project
@@ -2790,7 +2852,7 @@ witness for both.
 
 `NESTRS_` was a fixture; it is now a default. An app declares its own once and
 every framework variable follows — `ACME_ENV`, `ACME_LOG`, `ACME_HTTP__PORT`,
-`ACME_DATABASE__URL`:
+`ACME_SEAORM__URL`:
 
 ```rust
 nest_rs::env_prefix!("ACME");
@@ -3203,7 +3265,7 @@ closed.
   `seaorm` and `testing`. It now mirrors what `nestrs g resource` produces.
 - **`EphemeralDatabase` does not use testcontainers.** Three pages sent a
   developer whose e2e suite failed looking for a Docker daemon; it reads
-  `NESTRS_DATABASE__URL` and creates a database on that server.
+  `NESTRS_SEAORM__URL` and creates a database on that server.
 - **Two security statements were wrong.** `/database/crud/` said an
   invisible-at-row-level row answers `404`; it answers `403`, deliberately, as
   `/security/authorization/by-id-binding/` documents in detail — a reader
@@ -4008,7 +4070,7 @@ two flags are gone (`g resource --guarded`, `new --template`).
   documentation always said. Without it the scaffold's own
   `NESTRS_LOG` / `NESTRS_LOG_FORMAT` / `NESTRS_LOG_SOURCE_LOCATION` in
   `.env.development` were inert, and a `migrate`-style binary reading
-  `std::env::var("NESTRS_DATABASE__URL")` found nothing. It writes through
+  `std::env::var("NESTRS_SEAORM__URL")` found nothing. It writes through
   `set_var`, so the documented obligation stands: call it at the top of `main`,
   never from a task.
 
@@ -4093,7 +4155,7 @@ code.
 
 - **`DatabaseConfig::retry_serialization_conflicts` is now
   `observe_serialization_conflicts`** (env
-  `NESTRS_DATABASE__OBSERVE_SERIALIZATION_CONFLICTS`). The flag never retried
+  `NESTRS_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS`). The flag never retried
   — it tags a commit-time conflict (`40001` / `40P01` / `1213` / `1205`) as a
   structured `warn` on `nest_rs::orm` so contention is distinguishable from a
   generic commit error. The old name promised a transparency the framework
@@ -4232,7 +4294,7 @@ code.
   targets (dev-deps do not propagate, and Cargo strips them from the published
   manifest). The workspace-wide `-E 'binary(e2e)'` step went from 1 test to 21.
   - Enabling them surfaced two real defects, both fixed: the `nest-rs-seaorm`
-    e2e harness `expect`ed `NESTRS_DATABASE__URL` instead of defaulting to the
+    e2e harness `expect`ed `NESTRS_SEAORM__URL` instead of defaulting to the
     dev container like its `nest-rs-redis` / `nest-rs-storage` siblings, and its
     shared probe tables were guarded by a per-*process* `OnceCell` while nextest
     runs each test in its own process — so a fresh database raced

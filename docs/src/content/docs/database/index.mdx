@@ -186,7 +186,8 @@ The app root activates the database and lists the slice:
 ```rust title="src/module.rs"
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(None),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
         PostsModule,
         PostsHttpModule,
     ],
@@ -194,10 +195,15 @@ The app root activates the database and lists the slice:
 pub struct AppModule;
 ```
 
-`SeaOrmDatabaseModule::for_root(None)` reads `NESTRS_DATABASE__URL` (and the other
-`NESTRS_DATABASE__*` keys) from the environment; pass a `SeaOrmDatabaseConfig` to set
-those values in code. They stay overridable per field by the environment — see
-[the dual-path rule](/configuration/#the-dual-path-rule).
+Two lines, two shapes: `SeaOrmModule::for_root(None)` opens the one pool —
+it reads `NESTRS_SEAORM__URL` (and the other `NESTRS_SEAORM__*` keys) from the
+environment, or a `SeaOrmConfig` you pass to set those values in code, still
+overridable per field by the environment (see
+[the dual-path rule](/configuration/#the-dual-path-rule)) — and
+`SeaOrmDatabaseModule`, a bare import, binds the data layer over it. The
+variable is named for the crate that parses it, exactly as the type is: from
+`NESTRS_SEAORM__URL` you find `SeaOrmConfig`, and from `SeaOrmModule` you find
+the variable.
 
 ## What the data layer hands you for free
 

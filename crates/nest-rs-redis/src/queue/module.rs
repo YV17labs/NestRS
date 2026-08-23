@@ -1,59 +1,46 @@
-//! Owns the shared Redis [`RedisQueueConnection`].
-//!
-//! The connection is async, built in the collect phase before the module tree
-//! is wired, so `RedisWorker` and every producer inject it regardless of
-//! import order.
+//! [`RedisQueueModule`] — the producer-side binding. A bare import: it owns no
+//! config, the connection is [`RedisModule`](crate::RedisModule)'s, and what it
+//! adds is the [`JobProducer`] bound over that connection.
 
+use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_config::ConfigModule;
-use nest_rs_core::{ContainerBuilder, DynamicModule};
+use nest_rs_core::{ContainerBuilder, Module};
 use nest_rs_queue::JobProducer;
 
-use super::RedisQueueConfig;
-use super::RedisQueueConnection;
+use super::RedisQueueProducer;
+use crate::RedisConnection;
+use crate::connection::CONNECTION_REMEDY;
 
-/// The producer-side activation seam. Import [`RedisQueueModule::for_root`] to build
-/// and share the Redis [`RedisQueueConnection`](crate::RedisQueueConnection) — enough to
-/// push jobs without running a consumer.
+/// The producer-side binding. Import it beside
+/// [`RedisModule::for_root`](crate::RedisModule::for_root) to push jobs — enough
+/// for an API that enqueues without running a consumer.
 pub struct RedisQueueModule;
 
-impl RedisQueueModule {
-    /// `None` ⇒ load from `NESTRS_QUEUE__*`; `Some(cfg)` pins in code.
-    pub fn for_root(config: impl Into<Option<RedisQueueConfig>>) -> RedisQueueSetup {
-        RedisQueueSetup {
-            pinned: config.into(),
-        }
+impl Module for RedisQueueModule {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
     }
-}
 
-/// The configured import produced by [`RedisQueueModule::for_root`]. Builds the Redis
-/// connection in the collect phase and registers it as [`RedisQueueConnection`](crate::RedisQueueConnection).
-pub struct RedisQueueSetup {
-    pinned: Option<RedisQueueConfig>,
-}
-
-impl DynamicModule for RedisQueueSetup {
-    fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
-        let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        // Bound as both names: `Arc<RedisQueueConnection>` for the concrete backend
-        // and `Arc<dyn JobProducer>` for the portable form the queue docs
-        // prescribe — the very contract `/queue/writing-a-driver/` asks a driver
-        // to honour. `RedisQueueConnection`'s `Clone` is a handle clone over the one
-        // multiplexed connection, so both names share a single socket.
-        builder.provide_factory_dyn::<RedisQueueConnection, dyn JobProducer, _, _>(
+    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
+        if !builder.mark_collected(TypeId::of::<Self>()) {
+            return builder;
+        }
+        // Bound as both names: `Arc<RedisQueueProducer>` for the concrete
+        // backend and `Arc<dyn JobProducer>` for the portable form the queue
+        // docs prescribe — the contract `/queue/writing-a-driver/` asks a driver
+        // to honour. A factory output so a producing feature injects it as
+        // global infrastructure without importing this module; queued *after*
+        // the connection's factory so `imports` order stays a readability
+        // choice.
+        builder.provide_factory_dyn_after::<RedisQueueProducer, dyn JobProducer, RedisConnection, _, _>(
             |container| async move {
-                let config = container
-                    .get::<RedisQueueConfig>()
-                    .expect("RedisQueueConfig is resolved by ConfigModule::provide_feature");
-                // `?` lifts the typed `RedisError` into the factory's `anyhow`
-                // boundary (the composition-root error channel).
-                Ok(
-                    RedisQueueConnection::connect_within(&config.url, config.connect_timeout)
-                        .await?,
-                )
+                let conn = container
+                    .get::<RedisConnection>()
+                    .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
+                Ok(RedisQueueProducer::new((*conn).clone()))
             },
-            |conn| Arc::new(conn) as Arc<dyn JobProducer>,
+            |producer| Arc::new(producer) as Arc<dyn JobProducer>,
         )
     }
 }

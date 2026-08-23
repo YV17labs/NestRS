@@ -199,21 +199,27 @@ Enable it at the top of this page, then:
 
 ```rust
 use nest_rs::core::module;
-use nest_rs::redis::{RedisQueueModule, ThrottlerModule};
+use nest_rs::redis::{RedisModule, RedisThrottlerModule};
+use nest_rs::throttler::ThrottlerModule;
 
 #[module(imports = [
-    RedisQueueModule::for_root(None),
-    ThrottlerModule::for_root(None),
+    ThrottlerModule::for_root(None),   // the policy and the guard — unchanged
+    RedisModule::for_root(None),       // the one Redis connection (NESTRS_REDIS__URL)
+    RedisThrottlerModule,              // the counters move to Redis
 ])]
 pub struct AppModule;
 ```
 
-`ThrottlerModule::for_root` binds the same `dyn ThrottlerStore` the
-in-memory module binds, reads the same `NESTRS_THROTTLER__*` namespace, and
-reuses the app's existing Redis connection — so `RedisQueueModule::for_root` must be
-imported, and it supplies the connection rather than opening a second one.
-Import **exactly one** of the two backends: both bind the same type, and
-importing both is a named boot failure rather than a silent last-one-wins.
+Three lines, three shapes. `ThrottlerModule::for_root` stays exactly as it was:
+it owns the policy (`NESTRS_THROTTLER__*` — the limit and the window are the
+throttler's whatever store counts them) and the `ThrottlerGuard` that applies it.
+`RedisThrottlerModule` is a bare import that *declares* `RedisThrottler` as the
+`dyn ThrottlerStore`, which supersedes the port's in-process default wherever
+the three fall in `imports`; it runs over the connection `RedisModule::for_root`
+opens, and an app that also queues shares that one connection with its
+producer. You add a line to move the counters off-process and remove none. A
+second vendor binding beside it is a named boot failure, never a silent
+last-one-wins.
 
 The counter is a single `EVAL` — `INCR`, read the TTL, set it on the first hit —
 so it is atomic across replicas with no check-then-act race. A backend failure
@@ -225,9 +231,7 @@ so it is atomic across replicas with no check-then-act race. A backend failure
 use async_trait::async_trait;
 use nest_rs::throttler::{Decision, Throttle, ThrottlerStore};
 
-pub struct MyThrottler {
-    default: Throttle,
-}
+pub struct MyThrottler { /* your client */ }
 
 #[async_trait]
 impl ThrottlerStore for MyThrottler {
@@ -236,13 +240,14 @@ impl ThrottlerStore for MyThrottler {
         // `Retry-After` duration.
         todo!()
     }
-
-    fn default_limit(&self) -> Throttle {
-        self.default
-    }
 }
 ```
 
+A store counts and nothing else. Which limit a route runs under is the port's
+policy, carried by the guard; your binding is a bare module that *declares*
+your store as the `dyn ThrottlerStore`
+(`provide_declared_factory_after::<Arc<dyn ThrottlerStore>, YourConnection, _, _>(BACKEND_REMEDY, …)`)
+so it supersedes the in-process default and contests a second vendor's by name.
 The trait is **async**, so a networked implementor awaits its round-trip
 directly — no `block_in_place` bridge occupying a runtime worker per check, and
 no panic on a current-thread runtime.

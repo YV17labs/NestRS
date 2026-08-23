@@ -7,12 +7,9 @@ use nest_rs_graphql::async_graphql::{Context, Error, ErrorExtensions, Result};
 use sea_orm::{EntityTrait, PrimaryKeyTrait};
 use uuid::Uuid;
 
-use crate::{Access, Authorized, CrudService};
+use nest_rs_authz::graphql::forbidden;
 
-/// Matches the `nest_rs_authz::graphql` gate's denial shape (code `FORBIDDEN`).
-fn forbidden() -> Error {
-    Error::new("forbidden").extend_with(|_, e| e.set("code", "FORBIDDEN"))
-}
+use crate::{Access, Authorized, CrudService};
 
 /// Parse a by-id argument as a UUID v7, or refuse with a stable code.
 ///
@@ -48,7 +45,8 @@ fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
         error = %err,
         "by-id access load failed",
     );
-    Error::new("internal error").extend_with(|_, e| e.set("code", "INTERNAL_SERVER_ERROR"))
+    Error::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE)
+        .extend_with(|_, e| e.set("code", "INTERNAL_SERVER_ERROR"))
 }
 
 /// Turn a by-id argument into the loaded, authorized entity (the resolver

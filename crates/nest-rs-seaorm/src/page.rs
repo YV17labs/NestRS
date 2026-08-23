@@ -446,7 +446,7 @@ mod tests {
         );
 
         let event = logs.expect_one(
-            "nest_rs::orm",
+            crate::TARGET,
             "entity has no primary-key column — keyset pagination requires one",
         );
         assert_eq!(event.level, "error");

@@ -57,7 +57,12 @@ impl McpToolContext for McpDataContext {
             "mcp",
             inner,
             |outcome| outcome.is_ok(),
-            || Err(McpError::internal_error("internal error".to_string(), None)),
+            || {
+                Err(McpError::internal_error(
+                    nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+                    None,
+                ))
+            },
         ))
     }
 }

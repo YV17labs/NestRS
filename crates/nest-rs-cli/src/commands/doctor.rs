@@ -377,37 +377,34 @@ mod tests {
     #[test]
     fn a_cascade_file_counts_as_set() {
         assert!(file_defines(
-            "NESTRS_DATABASE__URL=postgres://x",
-            "NESTRS_DATABASE__URL"
+            "NESTRS_SEAORM__URL=postgres://x",
+            "NESTRS_SEAORM__URL"
         ));
         assert!(file_defines(
-            "export NESTRS_DATABASE__URL=postgres://x",
-            "NESTRS_DATABASE__URL"
+            "export NESTRS_SEAORM__URL=postgres://x",
+            "NESTRS_SEAORM__URL"
         ));
         assert!(file_defines(
-            "# a comment\nNESTRS_QUEUE__URL=redis://x\n",
-            "NESTRS_QUEUE__URL"
+            "# a comment\nNESTRS_REDIS__URL=redis://x\n",
+            "NESTRS_REDIS__URL"
         ));
     }
 
     #[test]
     fn a_commented_or_empty_assignment_does_not_count() {
         assert!(!file_defines(
-            "# NESTRS_DATABASE__URL=postgres://x",
-            "NESTRS_DATABASE__URL"
+            "# NESTRS_SEAORM__URL=postgres://x",
+            "NESTRS_SEAORM__URL"
         ));
+        assert!(!file_defines("NESTRS_SEAORM__URL=", "NESTRS_SEAORM__URL"));
         assert!(!file_defines(
-            "NESTRS_DATABASE__URL=",
-            "NESTRS_DATABASE__URL"
-        ));
-        assert!(!file_defines(
-            "NESTRS_DATABASE__URL=   ",
-            "NESTRS_DATABASE__URL"
+            "NESTRS_SEAORM__URL=   ",
+            "NESTRS_SEAORM__URL"
         ));
         // A different key with a matching prefix must not answer for it.
         assert!(!file_defines(
-            "NESTRS_DATABASE__URL_EXTRA=x",
-            "NESTRS_DATABASE__URL"
+            "NESTRS_SEAORM__URL_EXTRA=x",
+            "NESTRS_SEAORM__URL"
         ));
     }
 
@@ -415,25 +412,25 @@ mod tests {
     fn the_cascade_is_consulted_from_the_starting_directory() {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        std::fs::write(dir.join(".env"), "NESTRS_DATABASE__URL=postgres://x\n").expect("write");
+        std::fs::write(dir.join(".env"), "NESTRS_SEAORM__URL=postgres://x\n").expect("write");
         let cascade = cascade_text(&dir, "NESTRS");
-        assert!(env_present(&cascade, "NESTRS_DATABASE__URL"));
-        assert!(!env_present(&cascade, "NESTRS_QUEUE__URL"));
+        assert!(env_present(&cascade, "NESTRS_SEAORM__URL"));
+        assert!(!env_present(&cascade, "NESTRS_REDIS__URL"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A project that renamed its variables must be answered in its own names.
-    /// Reporting `NESTRS_DATABASE__URL: not set` there is worse than silence:
+    /// Reporting `NESTRS_SEAORM__URL: not set` there is worse than silence:
     /// it sends the reader to add a key the app will never read.
     #[test]
     fn a_custom_prefix_project_is_answered_in_its_own_variable_names() {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-acme-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        std::fs::write(dir.join(".env"), "ACME_DATABASE__URL=postgres://x\n").expect("write");
+        std::fs::write(dir.join(".env"), "ACME_SEAORM__URL=postgres://x\n").expect("write");
         let cascade = cascade_text(&dir, "ACME");
-        assert!(env_present(&cascade, "ACME_DATABASE__URL"));
+        assert!(env_present(&cascade, "ACME_SEAORM__URL"));
         assert!(
-            !env_present(&cascade, "NESTRS_DATABASE__URL"),
+            !env_present(&cascade, "NESTRS_SEAORM__URL"),
             "the default name must not answer for a renamed project",
         );
         std::fs::remove_dir_all(&dir).ok();

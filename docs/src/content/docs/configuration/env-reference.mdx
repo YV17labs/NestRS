@@ -20,6 +20,18 @@ neighbours in `module.rs`.
 with that prefix instead — `ACME_HTTP__PORT`, `ACME_LOG` — and the `NESTRS_`
 spellings resolve nothing.
 
+**The namespace is the path of the crate that parses it — never chosen.** It is
+the same stem the config type is named from: the crate's word, then the
+binding folder's when the config sits in one, joined by `__`. `HttpConfig` reads
+`NESTRS_HTTP__*`; `SeaOrmConfig` reads `NESTRS_SEAORM__*`; `RedisWorkerConfig`
+(in `nest-rs-redis`'s `worker/` folder) reads `NESTRS_REDIS__WORKER__*`;
+`SocialGithubConfig` reads `NESTRS_SOCIAL__GITHUB__*`. So from any variable on
+this page you can name the type and the file that parse it, and from any
+`<X>Module::for_root` in a composition root you can name its variables: the
+vendor is in the variable exactly when it is in the type. That is also why there
+is no `NESTRS_DATABASE__URL` — the universal convention, but a word that names
+neither the crate nor the type, so a reader could not find the code from it.
+
 ## Logging — `NESTRS_LOG*`
 
 The baseline console logger is part of `nest-rs-core` — no module to
@@ -68,23 +80,42 @@ config survives adopting or dropping the observability stack.
 | `ACCESS_LOG` | emit one access-log event per request on `nest_rs::operation` — default `true`. Owned by the HTTP transport, so it needs no observability crate; `trace_id` joins the line only when one is mounted |
 | `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `Forwarded` (RFC 7239) / `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/) and the trace context; an unparseable entry aborts the boot |
 
-## `database` — `NESTRS_DATABASE__*`
+## `seaorm` — `NESTRS_SEAORM__*`
+
+The one pool every SeaORM binding shares, opened by `SeaOrmModule::for_root`.
+The engine is in the URL's scheme (`postgres://`, `mysql://`, `sqlite://`) —
+sea-orm picks it, the variable does not change.
 
 | Key | Meaning |
 |---|---|
-| `URL` | Postgres connection string |
+| `URL` | database connection string |
 | `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
 | `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
 | `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds |
 | `SQLX_LOGGING` | log SQL statements |
 | `OBSERVE_SERIALIZATION_CONFLICTS` | tag commit-time serialization conflicts at `warn` |
 
-## `queue` — `NESTRS_QUEUE__*`
+## `redis` — `NESTRS_REDIS__*`
+
+The one Redis connection every Redis binding shares — the queue producer, the
+worker and the rate-limit store — opened by `RedisModule::for_root`. One
+connection, one variable: a throttler-only app sets the same `URL` a queue app
+does.
 
 | Key | Meaning |
 |---|---|
 | `URL` | Redis connection string |
-| `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error; defaults to `10`, and `0` is rejected. Each attempt warns on `nest_rs::queue`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes |
+| `CONNECT_TIMEOUT_SECS` | boot budget for reaching Redis before failing with a named error; defaults to `10`, and `0` is rejected. Each attempt warns on `nest_rs::redis`, so an unreachable backend is a bounded boot failure rather than a process that never becomes healthy and never crashes |
+
+## `redis__worker` — `NESTRS_REDIS__WORKER__*`
+
+The consumer binding's own settings, resolved by `RedisWorkerModule::for_root`.
+Two segments because the config sits in the crate's `worker/` folder: the
+crate's word, then the binding's — exactly the stem `RedisWorkerConfig` is named
+from.
+
+| Key | Meaning |
+|---|---|
 | `SHUTDOWN_TIMEOUT_SECS` | how long the worker waits for in-flight jobs after a shutdown signal; defaults to `30` |
 
 ## `storage` — `NESTRS_STORAGE__*`

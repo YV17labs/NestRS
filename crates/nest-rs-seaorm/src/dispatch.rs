@@ -146,7 +146,7 @@ mod tests {
             "the operation runs, and it runs with nothing installed",
         );
 
-        let event = logs.expect_one("nest_rs::orm", "unexpected captured data context");
+        let event = logs.expect_one(crate::TARGET, "unexpected captured data context");
         assert_eq!(event.level, "error");
         assert_eq!(
             event.field("transport").as_deref(),

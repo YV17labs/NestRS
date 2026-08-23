@@ -95,7 +95,7 @@ fn validate_env_prefix(prefix: &str) -> Result<(), &'static str> {
     if bytes[bytes.len() - 1] == b'_' {
         return Err(
             "must not end with `_` — the framework supplies the separator \
-             (ACME yields ACME_ENV, ACME_DATABASE__URL)",
+             (ACME yields ACME_ENV, ACME_SEAORM__URL)",
         );
     }
     if !bytes

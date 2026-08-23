@@ -28,6 +28,7 @@ request.
 | WebSocket events | `nest_rs::ws` | `info` |
 | GraphQL execution and subscriptions | `nest_rs::graphql` | `info` |
 | Queue / Schedule | `nest_rs::queue` / `nest_rs::schedule` | `info` |
+| Redis connection (the one handle the queue, worker and rate-limit store share) | `nest_rs::redis` | `warn` per connect attempt while the boot budget runs |
 | Module lifecycle | `nest_rs::module` | `info` |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) | `info` |
 

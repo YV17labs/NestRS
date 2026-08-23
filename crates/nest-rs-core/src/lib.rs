@@ -102,8 +102,9 @@ pub mod transport;
 // visibility wider than its use is a promise nobody priced.
 pub use access::{
     AccessError, AccessGraphError, ContestedDeclarationError, DuplicateProviderError,
-    KeyedDependencyError, MissingDependencyError, ModuleDescriptor, ProviderDescriptor,
-    ProviderOrder, ReachableProviders, ScopeViolationError, UnresolvedFactoryError,
+    FactoryCycleError, KeyedDependencyError, MissingDependencyError, ModuleDescriptor,
+    ProviderDescriptor, ProviderOrder, ReachableProviders, ScopeViolationError,
+    UnresolvedFactoryError,
 };
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};

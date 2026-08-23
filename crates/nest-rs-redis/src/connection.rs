@@ -1,35 +1,29 @@
-//! Shared Redis connection + typed [`Queue`] producer handle. The queue name
-//! supplied at the call site must match the consuming `#[process(queue = ...)]`.
+//! [`RedisConnection`] — the one multiplexed Redis handle every binding in this
+//! crate shares. Opened once by [`RedisModule`](crate::RedisModule) in the
+//! collect phase; the queue producer, the worker and the rate-limit store each
+//! read it from the container rather than opening a second socket.
 //!
-//! Wire format is a JSON **envelope** — `{ "v": <number>, "payload": <user
-//! payload> }` — pushed onto an apalis `RedisStorage<serde_json::Value>`. The
-//! matching consumer (the `#[processor]` macro-emitted `JobHandler`) unwraps
-//! the envelope, switches on `v`, and deserializes `payload` to the user's
-//! job type. Unversioned legacy values are decoded directly with a warning so
-//! a rolling deploy doesn't drop jobs left in Redis from the prior release.
-//! This is the seam that lets the `#[processor]` macro stay backend-agnostic:
-//! any backend can drain the `ProcessMethod` inventory because every job is a
-//! JSON `Value` at the boundary.
+//! It sits at the crate root because three binding folders reach it: filed
+//! under whichever asked first, it was named, configured and module-gated for
+//! the queue, so enabling the throttler obliged an app with no queue to import
+//! the queue's module and set the queue's URL.
 
-use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
-use apalis::prelude::Storage;
-use apalis_redis::{Config, RedisStorage};
-use async_trait::async_trait;
-use nest_rs_queue::{Job, JobProducer, QueueError};
 use redis::aio::ConnectionManager;
 
 use crate::error::RedisError;
 
-/// The app's shared Redis connection — queue-flavoured by history, not
-/// queue-only. It is seeded once by [`RedisQueueModule`](crate::RedisQueueModule) and
-/// injected by producers; other Redis-backed features enabled on this crate
-/// (the `throttler` rate-limit store, a future cache/locks) reuse the very same
-/// multiplexed handle via [`manager`](Self::manager) instead of opening a
-/// second connection.
+/// The sentence every binding's boot error appends when the connection is
+/// missing — one wording, three sites, so the remedy cannot drift.
+pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered — import \
+     RedisModule::for_root(None), which opens the one Redis connection every Redis binding shares";
+
+/// The app's shared Redis connection. A `Clone` is a handle clone over the one
+/// underlying multiplexed socket, so every binding talks through a single
+/// connection — no second connect.
 #[derive(Clone)]
-pub struct RedisQueueConnection {
+pub struct RedisConnection {
     conn: ConnectionManager,
 }
 
@@ -41,28 +35,24 @@ const FIRST_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 /// several attempts, each of which gets its own `warn`.
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 
-impl RedisQueueConnection {
+impl RedisConnection {
     /// Open a multiplexed Redis connection to `redis_url`, bounded by
-    /// [`RedisQueueConfig::connect_timeout`](crate::RedisQueueConfig::connect_timeout)'s
+    /// [`RedisConfig::connect_timeout`](crate::RedisConfig::connect_timeout)'s
     /// default.
     ///
     /// Prefer [`connect_within`](Self::connect_within) from the module factory,
     /// which passes the configured budget.
     pub async fn connect(redis_url: &str) -> Result<Self, RedisError> {
-        Self::connect_within(
-            redis_url,
-            crate::RedisQueueConfig::default().connect_timeout,
-        )
-        .await
+        Self::connect_within(redis_url, crate::RedisConfig::default().connect_timeout).await
     }
 
     /// Open the connection, giving up after `budget`.
     ///
     /// The underlying client retries an unreachable endpoint indefinitely and
-    /// silently, which turned a misconfigured `NESTRS_QUEUE__URL` into a
+    /// silently, which turned a misconfigured `NESTRS_REDIS__URL` into a
     /// process parked forever with an empty log — the worst shape for a
     /// container platform, since it never becomes healthy and never crashes.
-    /// Every attempt is announced on `nest_rs::queue` and the budget converts
+    /// Every attempt is announced on `nest_rs::redis` and the budget converts
     /// the hang into the boot error `/queue/wiring/` promises.
     pub async fn connect_within(redis_url: &str, budget: Duration) -> Result<Self, RedisError> {
         let endpoint = redact_url(redis_url);
@@ -81,21 +71,21 @@ impl RedisQueueConnection {
                 Ok(Ok(conn)) => {
                     if attempts > 1 {
                         tracing::info!(
-                            target: nest_rs_queue::TARGET,
+                            target: crate::TARGET,
                             endpoint = %endpoint,
                             attempts,
-                            "connected to the queue backend after retrying",
+                            "connected to redis after retrying",
                         );
                     }
                     return Ok(Self { conn });
                 }
                 Ok(Err(error)) => {
                     tracing::warn!(
-                        target: nest_rs_queue::TARGET,
+                        target: crate::TARGET,
                         endpoint = %endpoint,
                         attempt = attempts,
                         error = %error,
-                        "queue backend unreachable — retrying within the connect budget",
+                        "redis unreachable — retrying within the connect budget",
                     );
                     last_error = Some(error);
                 }
@@ -103,11 +93,11 @@ impl RedisQueueConnection {
                 // or a black-holed port is as legible as a refused connection.
                 Err(_elapsed) => {
                     tracing::warn!(
-                        target: nest_rs_queue::TARGET,
+                        target: crate::TARGET,
                         endpoint = %endpoint,
                         attempt = attempts,
                         timeout_secs = budget.as_secs(),
-                        "queue backend connect timed out",
+                        "redis connect timed out",
                     );
                     break;
                 }
@@ -128,11 +118,10 @@ impl RedisQueueConnection {
         })
     }
 
-    /// A cheap clone of the multiplexed connection handle, shared with
-    /// non-queue Redis features enabled on this crate (rate-limit store, cache,
-    /// distributed locks). `ConnectionManager` is `Clone` and every clone talks
-    /// over the one underlying connection, so this is the reuse seam — no second
-    /// connect.
+    /// A cheap clone of the multiplexed connection handle — the reuse seam for
+    /// every binding (queue storage, the rate-limit script, a future cache or
+    /// lock). `ConnectionManager` is `Clone` and every clone talks over the one
+    /// underlying connection, so this is never a second connect.
     ///
     /// **Do not run blocking commands on it** (`BLPOP`, `BRPOP`, `WAIT`, a
     /// `SUBSCRIBE` that parks the socket): the handle multiplexes every caller
@@ -142,74 +131,10 @@ impl RedisQueueConnection {
     pub fn manager(&self) -> ConnectionManager {
         self.conn.clone()
     }
-
-    /// Typed producer handle. `J` is the job type the consumer expects; the
-    /// payload is serialized to JSON on the wire (matches the consumer's
-    /// `JobHandler` deserializing from `serde_json::Value`).
-    pub fn of<J: Job>(&self, queue: &str) -> RedisQueue<J> {
-        RedisQueue {
-            storage: self.value_storage(queue),
-            _phantom: PhantomData,
-        }
-    }
-
-    /// Producer-side storage handle. Configured to namespace under `queue`
-    /// just like the consumer — this is how apalis routes a job to the right
-    /// worker.
-    pub(crate) fn value_storage(&self, queue: &str) -> RedisStorage<serde_json::Value> {
-        RedisStorage::new_with_config(self.conn.clone(), Config::default().set_namespace(queue))
-    }
-
-    /// Consumer-side storage, one job per fetch. A `#[process]` method runs a
-    /// single job at a time (see [`RedisWorker`](crate::RedisWorker)), so
-    /// prefetching would only hold jobs a peer replica could be running.
-    pub(crate) fn consumer_storage(&self, queue: &str) -> RedisStorage<serde_json::Value> {
-        RedisStorage::new_with_config(
-            self.conn.clone(),
-            Config::default().set_namespace(queue).set_buffer_size(1),
-        )
-    }
-}
-
-/// Typed producer handle returned by [`RedisQueueConnection::of`]. The `J` is a
-/// compile-time aid for the call site — the wire payload is always JSON.
-pub struct RedisQueue<J: Job> {
-    storage: RedisStorage<serde_json::Value>,
-    _phantom: PhantomData<fn(J)>,
-}
-
-impl<J: Job> RedisQueue<J> {
-    /// Serialize `job` and enqueue it onto this queue's Redis storage.
-    pub async fn push(&self, job: J) -> Result<(), QueueError> {
-        let payload = serde_json::to_value(&job)?;
-        // `push` takes `&mut self`; storage is a cheap clone of the connection
-        // handle, so clone per call rather than force callers to hold it mut.
-        let mut storage = self.storage.clone();
-        storage
-            .push(nest_rs_queue::envelope::seal(payload))
-            .await
-            .map_err(QueueError::backend)?;
-        Ok(())
-    }
-}
-
-/// Backend-agnostic producer surface — any feature injecting
-/// `Arc<dyn JobProducer>` (instead of the concrete `RedisQueueConnection`) is
-/// portable across backends.
-#[async_trait]
-impl JobProducer for RedisQueueConnection {
-    async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError> {
-        let mut storage = self.value_storage(queue);
-        storage
-            .push(nest_rs_queue::envelope::seal(payload))
-            .await
-            .map_err(QueueError::backend)?;
-        Ok(())
-    }
 }
 
 /// Replace any `user:password@` userinfo with `***`. The connect diagnostics
-/// name the endpoint in logs and in the boot error, and `NESTRS_QUEUE__URL`
+/// name the endpoint in logs and in the boot error, and `NESTRS_REDIS__URL`
 /// routinely embeds a password.
 fn redact_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
@@ -257,7 +182,7 @@ mod tests {
     async fn connect_within_gives_up_on_an_unreachable_endpoint_and_names_it() {
         let started = Instant::now();
         // Port 9 is `discard` — reserved and never listening.
-        let Err(err) = RedisQueueConnection::connect_within(
+        let Err(err) = RedisConnection::connect_within(
             "redis://alice:s3cr3t@127.0.0.1:9/0",
             Duration::from_millis(600),
         )
@@ -281,12 +206,12 @@ mod tests {
             "the error must not leak the password: {rendered}",
         );
         assert!(
-            rendered.contains(&nest_rs_config::var_name("queue", "CONNECT_TIMEOUT_SECS")),
+            rendered.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
             "the error names the knob that widens the budget: {rendered}",
         );
     }
 
-    /// A wrong `NESTRS_QUEUE__URL` used to park the process forever with an
+    /// A wrong `NESTRS_REDIS__URL` used to park the process forever with an
     /// empty log — never healthy, never crashed, which is the worst shape a
     /// container platform can be handed.
     ///
@@ -302,7 +227,7 @@ mod tests {
         // The budget sits above `FIRST_RETRY_BACKOFF` (250ms) so the loop
         // retries at least once before it expires.
         assert!(
-            RedisQueueConnection::connect_within(
+            RedisConnection::connect_within(
                 "redis://user:secret@[::bad-host/",
                 Duration::from_millis(700),
             )
@@ -312,8 +237,8 @@ mod tests {
         );
 
         let retries = logs.find(
-            "nest_rs::queue",
-            "queue backend unreachable — retrying within the connect budget",
+            crate::TARGET,
+            "redis unreachable — retrying within the connect budget",
         );
         assert!(
             !retries.is_empty(),
@@ -346,31 +271,21 @@ mod tests {
         // Port 1 on loopback: the client keeps retrying inside a single
         // `connect` call, so the budget is what ends it.
         assert!(
-            RedisQueueConnection::connect_within(
-                "redis://127.0.0.1:1/",
-                Duration::from_millis(120)
-            )
-            .await
-            .is_err(),
+            RedisConnection::connect_within("redis://127.0.0.1:1/", Duration::from_millis(120))
+                .await
+                .is_err(),
             "an unreachable endpoint fails the boot rather than parking it",
         );
 
         let expired = logs
-            .find("nest_rs::queue", "queue backend connect timed out")
+            .find(crate::TARGET, "redis connect timed out")
             .into_iter()
             .next()
-            .expect("the budget expiring is its own line, not a silent give-up");
+            .unwrap_or_else(|| panic!("the expiry is its own event: {:#?}", logs.events()));
         assert_eq!(expired.level, "warn");
         assert!(
             expired.field("timeout_secs").is_some(),
-            "{:?}",
-            expired.fields
-        );
-        assert!(
-            expired
-                .field("endpoint")
-                .is_some_and(|e| e.contains("127.0.0.1:1")),
-            "{:?}",
+            "the event names the budget that elapsed: {:?}",
             expired.fields,
         );
     }

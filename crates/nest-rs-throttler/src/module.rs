@@ -1,7 +1,10 @@
-//! [`ThrottlerModule`] — binds the shared [`InMemoryThrottler`] as the
-//! `dyn ThrottlerStore` the [`ThrottlerGuard`](crate::ThrottlerGuard) injects,
-//! carrying the default rate limit. Configure at the import site with
-//! `ThrottlerModule::for_root(None)`.
+//! [`ThrottlerModule`] — the port's own seam. `ThrottlerModule::for_root(cfg)`
+//! resolves the policy ([`ThrottlerConfig`], `NESTRS_THROTTLER__*`), registers
+//! the [`ThrottlerGuard`] that applies it, and binds the in-process
+//! [`InMemoryThrottler`] as the default `dyn ThrottlerStore` — an *ordinary*
+//! factory, so a vendor binding imported beside it (`nest_rs::redis::RedisThrottlerModule`)
+//! supersedes the store wherever it sits in `imports`, and the app removes no
+//! line to move its counters off-process.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,15 +14,13 @@ use nest_rs_core::{ContainerBuilder, DynamicModule};
 
 use crate::config::ThrottlerConfig;
 use crate::guard::ThrottlerGuard;
-use crate::rate::Throttle;
+use crate::rate::{DEFAULT_THROTTLE, Throttle};
 use crate::store::{InMemoryThrottler, ThrottlerStore};
 
-/// The default rate limit when neither config nor a route pins one: 60/minute.
-pub const DEFAULT_THROTTLE: Throttle = Throttle::per_minute(60);
-
-/// Provides the process-wide [`InMemoryThrottler`]. Wire with
-/// `ThrottlerModule::for_root(None)` (env-driven, default
-/// `Throttle::per_minute(60)`).
+/// The throttler port: policy, guard, and the in-process default store. Wire
+/// with `ThrottlerModule::for_root(None)` (env-driven, default
+/// `Throttle::per_minute(60)`); add a vendor binding beside it to share the
+/// counters across instances.
 pub struct ThrottlerModule;
 
 impl ThrottlerModule {
@@ -32,8 +33,7 @@ impl ThrottlerModule {
     }
 }
 
-/// The configured import produced by [`ThrottlerModule::for_root`]. Registers
-/// the [`InMemoryThrottler`](crate::InMemoryThrottler) from the resolved config.
+/// The configured import produced by [`ThrottlerModule::for_root`].
 pub struct ThrottlerSetup {
     pinned: Option<ThrottlerConfig>,
 }
@@ -41,71 +41,79 @@ pub struct ThrottlerSetup {
 impl DynamicModule for ThrottlerSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
-        // Register the store as the `dyn ThrottlerStore` binding the guard
-        // injects — a factory output, so the access graph sees it as global
-        // infrastructure (the guard's `#[inject] Arc<dyn ThrottlerStore>`
-        // resolves). An alternative backend (`nest_rs::redis::RedisThrottlerModule`) supplies
-        // the same binding from its own factory; import exactly one.
-        let builder = builder.provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(
-            BACKEND_REMEDY,
+        // The default store, as an *ordinary* factory: a vendor binding's
+        // declared factory for the same `Arc<dyn ThrottlerStore>` supersedes it
+        // wherever the two fall in `imports`, and two vendor bindings contest
+        // (`BACKEND_REMEDY`). A factory output, so the guard's
+        // `#[inject] Arc<dyn ThrottlerStore>` resolves as global infrastructure.
+        let builder = builder.provide_factory::<Arc<dyn ThrottlerStore>, _, _>(|_| async {
+            Ok(Arc::new(InMemoryThrottler::new()) as Arc<dyn ThrottlerStore>)
+        });
+        // The resolved policy, as a provider of its own: the guard injects it,
+        // so a guard built by any other path (`providers = [ThrottlerGuard]`
+        // with no `for_root`) fails the boot naming `Throttle` rather than
+        // running 60/minute in silence. Queued in the same `collect` as the
+        // config it reads, hence after it.
+        let builder = builder.provide_factory::<Throttle, _, _>(|container| async move {
+            let config = container
+                .get::<ThrottlerConfig>()
+                .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
+            Ok(resolve(&config))
+        });
+        // The guard reads the store, and the store is itself a factory output —
+        // one that may wait on a connection of its own (a vendor binding).
+        // Declared after it, so the drain runs this last however the seams were
+        // queued; without it the guard ran first whenever the store's factory
+        // was deferred, and failed naming a binding that was about to exist.
+        builder.provide_factory_after::<ThrottlerGuard, Arc<dyn ThrottlerStore>, _, _>(
             |container| async move {
-                let config = container
-                    .get::<ThrottlerConfig>()
-                    .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
-                Ok(Arc::new(InMemoryThrottler::new(resolve(&config))) as Arc<dyn ThrottlerStore>)
+                let default = container
+                    .get::<Throttle>()
+                    .expect("the policy is queued by this same collect, before the guard");
+                let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "ThrottlerGuard needs a `dyn ThrottlerStore` binding — \
+                         `ThrottlerModule::for_root` binds the in-process default"
+                    )
+                })?;
+                Ok(ThrottlerGuard::new(store, *default))
             },
-        );
-        provide_guard(builder)
+        )
     }
 }
 
-/// What the boot tells you when two backends both bound the store. Shared with
-/// `nest-rs-redis` so the two halves of the rule cannot drift.
-#[doc(hidden)]
-pub const BACKEND_REMEDY: &str = "Import exactly one throttler backend: `ThrottlerModule` keeps \
-                                  counters in this process, `nest_rs::redis::RedisThrottlerModule` shares them \
-                                  across instances.";
+/// What the boot tells you when two vendor bindings both bound the store.
+/// Shared with every store adapter (`nest-rs-redis` today, a third party's
+/// tomorrow — it is part of the store contract) so the two halves of the rule
+/// cannot drift.
+pub const BACKEND_REMEDY: &str = "Import exactly one throttler store binding beside \
+                                  `ThrottlerModule::for_root`: `nest_rs::redis::RedisThrottlerModule` \
+                                  shares the counters across instances; with none, they stay \
+                                  in this process.";
 
-/// Register [`ThrottlerGuard`] as global infrastructure, next to whichever
-/// `dyn ThrottlerStore` binding the caller just registered.
-///
-/// Binding the guard is `#[use_guards(ThrottlerGuard)]` on a controller — which
-/// leaves the *controller's* module owing the access graph a provider for it.
-/// No documented step supplies one, and a **dynamic** import (`for_root`)
-/// contributes only global infrastructure, never an injectable a provider can
-/// depend on: importing `ThrottlerModule` anywhere therefore could not satisfy
-/// it, and the boot failed on a dependency the graph could not even name.
-/// Registered as a factory output, the guard *is* global infrastructure, so one
-/// import at the app is genuinely the whole wiring.
-///
-/// Every store backend calls this, so the two never drift: an app that swaps
-/// `nest_rs::throttler::ThrottlerModule` for `nest_rs::redis::RedisThrottlerModule` changes the store and nothing
-/// else, exactly as the guard's own doc promises.
-///
-/// A cross-crate seam for the backends, not an app-facing one: `for_root` is
-/// the only way an app wires throttling.
-#[doc(hidden)]
-pub fn provide_guard(builder: ContainerBuilder) -> ContainerBuilder {
-    builder.provide_factory::<ThrottlerGuard, _, _>(|container| async move {
-        let store = container.get_dyn::<dyn ThrottlerStore>().ok_or_else(|| {
-            anyhow::anyhow!(
-                "ThrottlerGuard needs a `dyn ThrottlerStore` binding — register one \
-                 (throttler::ThrottlerModule::for_root / redis::RedisThrottlerModule::for_root) before the guard"
-            )
-        })?;
-        Ok(ThrottlerGuard::new(store))
-    })
-}
-
-/// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] every
-/// [`ThrottlerStore`] backend needs. Shared so the in-memory and Redis modules
-/// resolve config identically — a cross-crate seam, not an app-facing one.
-#[doc(hidden)]
-pub fn resolve(config: &ThrottlerConfig) -> Throttle {
+/// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] the guard applies
+/// to routes that pin none.
+fn resolve(config: &ThrottlerConfig) -> Throttle {
     let limit = config.limit.unwrap_or(DEFAULT_THROTTLE.limit);
     let window = config
         .window_secs
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_THROTTLE.window);
     Throttle::new(limit, window)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_falls_back_to_the_port_default_per_field() {
+        let cfg = ThrottlerConfig {
+            limit: Some(5),
+            window_secs: None,
+        };
+        let t = resolve(&cfg);
+        assert_eq!(t.limit, 5);
+        assert_eq!(t.window, DEFAULT_THROTTLE.window);
+    }
 }

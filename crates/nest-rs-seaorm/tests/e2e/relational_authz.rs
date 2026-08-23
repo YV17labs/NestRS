@@ -226,7 +226,7 @@ async fn access_distinguishes_found_denied_and_missing() {
             // is hidden either way, deliberately. So the event is the only
             // place the two are ever distinguishable, and it is what an
             // incident query for cross-tenant probing actually reads.
-            let denial = logs.expect_one("nest_rs::orm", "access denied");
+            let denial = logs.expect_one(nest_rs_seaorm::TARGET, "access denied");
             assert_eq!(denial.level, "warn");
             assert_eq!(denial.field("entity").as_deref(), Some("rel_item"));
             assert_eq!(denial.field("id"), Some(item_b.to_string()));
@@ -419,7 +419,10 @@ async fn a_list_that_hits_the_hard_cap_says_so() {
         "the caller receives exactly the cap, with nothing marking the cut",
     );
 
-    let event = logs.expect_one("nest_rs::orm", "list result truncated at the hard cap");
+    let event = logs.expect_one(
+        nest_rs_seaorm::TARGET,
+        "list result truncated at the hard cap",
+    );
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("entity").as_deref(), Some("rel_item"));
     assert_eq!(

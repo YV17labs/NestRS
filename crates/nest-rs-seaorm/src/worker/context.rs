@@ -44,6 +44,7 @@ const COMMIT_FAILED: &str = "the job's transaction could not be committed";
 /// Installs the request-less executor around a worker job. Bound to
 /// `dyn JobContext` by [`SeaOrmDatabaseModule`](crate::SeaOrmDatabaseModule).
 #[injectable]
+#[derive(Clone)]
 pub struct WorkerDbContext {
     #[inject]
     db: Arc<DatabaseConnection>,

@@ -23,7 +23,7 @@ transport.
   **If the copy isn't enough, fix the exemplar — don't invent a second
   pattern.**
 - **Security is wired by composition, not ceremony.** Importing
-  `DatabaseModule` + `Authz<Edge>Module` activates row-level filtering,
+  `SeaOrmModule::for_root` + `SeaOrmDatabaseModule` + `Authz<Edge>Module` activates row-level filtering,
   transaction scope and response masking. Handlers opt *out* by not
   importing. Guards still bind explicitly per route — the principal
   source is a policy decision.

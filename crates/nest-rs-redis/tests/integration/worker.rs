@@ -55,9 +55,9 @@ async fn configure_fails_when_processors_exist_without_a_connection() {
     let err = RedisWorker::new()
         .configure(&container)
         .await
-        .expect_err("processors without RedisQueueConnection abort configure");
+        .expect_err("processors without RedisConnection abort configure");
     assert!(
-        err.to_string().contains("RedisQueueConnection"),
+        err.to_string().contains("RedisConnection"),
         "the error names the missing connection: {err}",
     );
 }
@@ -134,7 +134,7 @@ async fn a_processor_another_app_owns_does_not_contest_this_queue() {
         .await
         .expect_err("one claimant still needs a connection");
     assert!(
-        err.to_string().contains("RedisQueueConnection"),
+        err.to_string().contains("RedisConnection"),
         "it got past the duplicate check to the connection check: {err}",
     );
 }
@@ -301,7 +301,10 @@ async fn unversioned_legacy_payload_is_still_processed() {
     // the operator there is a pre-envelope queue left to drain. Running quietly
     // is the same defect as dropping the job, one incident later — and the
     // observability page documents the message and both fields verbatim.
-    let event = logs.expect_one("nest_rs::queue", "processed an unversioned job payload");
+    let event = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "processed an unversioned job payload",
+    );
     assert_eq!(event.level, "warn");
     assert_eq!(
         event.field("queue").as_deref(),

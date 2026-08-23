@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use features::notifications::NotificationsQueueModule;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisQueueModule, RedisWorker, RedisWorkerModule};
-use nest_rs::seaorm::SeaOrmDatabaseModule;
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule};
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
 use nest_rs::testing::TestApp;
 use poem::http::header;
 use serde_json::json;
@@ -177,9 +177,11 @@ async fn posts_graphql_scopes_reads_and_publish_transitions() {
 
 #[module(
     imports = [
-        SeaOrmDatabaseModule::for_root(None),
-        RedisQueueModule::for_root(None),
-        RedisWorkerModule,
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
+        RedisModule::for_root(None),
+        RedisQueueModule,
+        RedisWorkerModule::for_root(None),
         NotificationsQueueModule,
     ],
 )]

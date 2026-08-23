@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
 use redis::Script;
 
-use crate::RedisQueueConnection;
+use crate::RedisConnection;
 
 /// Atomic fixed-window step. Returns `{count, ttl_ms}` in one round-trip:
 ///
@@ -42,22 +42,20 @@ return {count, ttl}
 ";
 
 /// Redis-backed [`ThrottlerStore`]. Construct via [`RedisThrottler::new`] or let
-/// [`RedisThrottlerModule`](crate::RedisThrottlerModule) wire it from config +
-/// the shared [`RedisQueueConnection`].
+/// [`RedisThrottlerModule`](crate::RedisThrottlerModule) wire it over the shared
+/// [`RedisConnection`]. It counts and nothing else — which limit applies is the
+/// port's policy, carried by the guard.
 pub struct RedisThrottler {
-    conn: RedisQueueConnection,
-    default: Throttle,
+    conn: RedisConnection,
     script: Script,
 }
 
 impl RedisThrottler {
     /// `conn` is the app's shared Redis connection (reused, not reopened —
-    /// [`RedisQueueConnection::manager`] hands out the multiplexed handle). `default`
-    /// applies to routes that pin no `#[meta(Throttle)]`.
-    pub fn new(conn: RedisQueueConnection, default: Throttle) -> Self {
+    /// [`RedisConnection::manager`] hands out the multiplexed handle).
+    pub fn new(conn: RedisConnection) -> Self {
         Self {
             conn,
-            default,
             script: Script::new(WINDOW_SCRIPT),
         }
     }
@@ -116,9 +114,5 @@ impl ThrottlerStore for RedisThrottler {
                 Decision::denied(limit.window)
             }
         }
-    }
-
-    fn default_limit(&self) -> Throttle {
-        self.default
     }
 }

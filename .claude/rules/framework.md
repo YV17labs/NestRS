@@ -339,11 +339,15 @@ with a witness in `nest-rs-config`:
 - the synchronous `App::new` refuses a queued factory it could never drain
   (`UnresolvedFactoryError`) — `the_synchronous_boot_refuses_a_config_it_could_never_resolve`.
 
-**It is not config-only.** Any module binding an implementation a *sibling
-module also binds* declares it, so importing both is a named boot failure
-rather than whichever `imports` listed first: `ThrottlerModule` and
-`RedisThrottlerModule` both bind `Arc<dyn ThrottlerStore>`, and they share one
-`BACKEND_REMEDY` constant so the two halves cannot drift.
+**It is not config-only.** Any *adapter* binding an implementation a sibling
+adapter also binds declares it, so importing both is a named boot failure
+rather than whichever `imports` listed first — every vendor binding of
+`Arc<dyn ThrottlerStore>` shares one `BACKEND_REMEDY` constant so the halves
+cannot drift. **The port's own default is the one exception, by design**: it is
+an *ordinary* factory (`ThrottlerModule` binds `InMemoryThrottler` that way), so
+a vendor binding supersedes it wherever it sits in `imports` — the app writes
+`ThrottlerModule::for_root(None)` for the policy and adds `RedisThrottlerModule`
+to move the counters off-process, and no line has to be removed.
 
 This is where we deliberately exceed NestJS, which lets the last registration
 win in silence — a dropped declaration is on the wrong side of *no silent
@@ -503,13 +507,21 @@ declares it.** A port crate depending on nothing is the normal case —
 owns a config namespace **if and only if its contract requires the integrator to
 honour a config**. The throttler's does (`resolve(&ThrottlerConfig)` is in the
 shared seam), so `NESTRS_THROTTLER__*` has an owner and survives a backend swap.
-A delegated port's contract requires nothing, so `NESTRS_DATABASE__*` and
-`NESTRS_QUEUE__*` name ports that declare no field — every key under them is the
-driver's, and `NESTRS_DATABASE__SQLX_LOGGING` is sqlx's flag wearing the port's
-word. Selection *by configuration* is the one case that forces a two-segment
-namespace, because members coexist and must be told apart: `social__github`,
-`social__google`. Selection *by type parameter* is the one case that needs no
-namespace at all. Nothing else needs either.
+A delegated port's contract requires nothing, so it owns no namespace: the
+adapter's config takes its namespace from where it is declared — read off the
+path, exactly as a type name is (*A `#[config]`'s namespace is its stem* in
+`architecture.md`). The resource an adapter opens is the crate's own subject, so
+its config sits at the crate root and wears the vendor's word — `SeaOrmConfig`
+→ `NESTRS_SEAORM__URL`, `RedisConfig` → `NESTRS_REDIS__URL` — and a setting one
+binding owns sits in that binding's folder and wears both words
+(`RedisWorkerConfig` → `NESTRS_REDIS__WORKER__*`). A `NESTRS_QUEUE__URL` was a
+connection filed under whichever binding asked first; a `NESTRS_DATABASE__URL`
+was the universal convention naming neither the crate nor the type that parsed
+it — both retired for the same reason: from the variable, a reader could not
+find the code. Selection *by configuration* is the case where the member is a
+folder of the crate, hence two segments: `social__github`, `social__google`.
+Selection *by type parameter* is the one case that needs no namespace at all.
+Nothing else needs either.
 
 **`nest-rs-storage` is the open breach of this rule, and it is recorded rather
 than fixed.** It delegates to `object_store`, whose whole point is being
@@ -945,12 +957,28 @@ name order; init failure aborts boot, shutdown is best-effort.
   resolves at boot. `Scheduler` is a `Transport` via `TransportContribution`.
 - **`nest-rs-queue` + `nest-rs-redis`** — backend-agnostic queue contract
   (`Job`/`Processor`/`ProcessMethod` + `#[processor]` + inventory seam)
-  with Redis first-class (on `apalis`). Crate names follow the
-  **storage** (Redis), not the framework (apalis). Queues identified by
-  name (stringly-typed, known cost). Producer/consumer decoupled.
-  Connection seeded via `RedisQueueModule::for_root`; consumer activates via
-  `RedisWorkerModule` (producer-only apps skip it). **No apalis types
-  leak.**
+  with Redis first-class (on `apalis`). The adapter crate is named for the
+  **storage** (Redis), because that is the surface a caller touches; apalis is
+  hidden — **no apalis types leak**. Queues identified by name (a `#[queue]`
+  marker type, or a string through the raw hatch). Producer/consumer decoupled.
+  One connection, opened by `RedisModule::for_root` (`NESTRS_REDIS__*`) and
+  shared by every Redis binding; the producer binds through `RedisQueueModule`
+  (bare), the consumer activates via `RedisWorkerModule::for_root`
+  (`NESTRS_REDIS__WORKER__*`; producer-only apps skip it), and each binding
+  factory that reads the connection declares it runs *after* the connection's,
+  so `imports` order stays a readability choice.
+
+  **The port owns the attempt; the adapter owns the transport.** What a job
+  attempt *is* — opening the envelope, continuing or minting the trace, the
+  `queue.job` span and the ambient scope, catching a panic, classifying the
+  outcome into ok / retry / dead-letter, the three events and the
+  `nest_rs::operation` line — is `nest_rs_queue::consume::attempt`, written once
+  and tested once in the port. An adapter's consumer is a fetch loop that calls
+  it and translates the `Attempt` into its backend's vocabulary (apalis `Abort`
+  / `Failed`; a NATS consumer's `ack` / `nak` / `term`); discovery of the
+  `#[process]` methods, module-gated, is `nest_rs_queue::consume::discover`. A
+  second adapter therefore copies nothing — and an adapter that opens a
+  `queue.job` span of its own has taken semantics it does not own.
 
   **`#[input]` stays re-exported at the queue edge and stays off the queue
   scaffolds — both on purpose.** Unknown-key rejection is the right default

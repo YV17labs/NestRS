@@ -414,7 +414,7 @@ fn new_workspace_app_scaffold() {
     // active so `nestrs run db up` works out of the box; the port stays code.
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
     assert!(!env.contains("NESTRS_HTTP__PORT"));
-    assert!(env.contains("NESTRS_DATABASE__URL=postgres://"));
+    assert!(env.contains("NESTRS_SEAORM__URL=postgres://"));
 
     let module = fs::read_to_string(app.join("src/module.rs")).unwrap();
     assert!(module.contains("HttpConfig { port: 3000"));

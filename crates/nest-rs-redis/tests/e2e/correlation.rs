@@ -21,7 +21,8 @@ use std::time::Duration;
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobProducerExt, processor, queue};
 use nest_rs_redis::{
-    RedisQueueConfig, RedisQueueConnection, RedisQueueModule, RedisWorker, RedisWorkerModule,
+    RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker,
+    RedisWorkerModule,
 };
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
@@ -79,19 +80,8 @@ impl CorrelationProcessor {
     }
 }
 
-/// Pinned rather than read from the env: the framework workspace ships no
-/// `.env`, so `for_root(None)` would resolve to the localhost default and this
-/// suite would fail on connect instead of measuring anything.
-fn queue_config() -> RedisQueueConfig {
-    RedisQueueConfig {
-        url: std::env::var(nest_rs_config::var_name("queue", "URL"))
-            .unwrap_or_else(|_| "redis://redis:6379".to_string()),
-        ..Default::default()
-    }
-}
-
 #[module(
-    imports = [RedisQueueModule::for_root(queue_config()), RedisWorkerModule],
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
     providers = [CorrelationProcessor],
 )]
 struct CorrelationModule;
@@ -111,9 +101,11 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
 
     // Enqueue *under an ambient context*, the way an HTTP handler does. This id
     // is the one the consumer must end up running under.
-    let conn = RedisQueueConnection::connect(&queue_config().url)
-        .await
-        .expect("connect");
+    let conn = RedisQueueProducer::new(
+        RedisConnection::connect(&crate::redis_config().url)
+            .await
+            .expect("connect"),
+    );
     let correlation = nest_rs_core::Correlation::mint();
     // This run's own marker, so a job left behind by an earlier run cannot be
     // mistaken for it — see `SEEN`.

@@ -115,6 +115,30 @@ pub(crate) type Registrar = Box<dyn FnOnce(ContainerBuilder) -> ContainerBuilder
 type FactoryFuture = Pin<Box<dyn Future<Output = Result<Registrar>> + Send>>;
 pub(crate) type BoxedFactory = Box<dyn FnOnce(Container) -> FactoryFuture + Send>;
 
+/// One entry of the async factory queue, drained by
+/// [`AppBuilder::build`](crate::AppBuilder::build).
+///
+/// `after` names the factory outputs this one reads from its snapshot — a
+/// store built over a shared connection, a producer bound over it. The drain
+/// runs an entry only once every type it names is present (or is nothing in the
+/// queue will ever provide, in which case the entry's own error is the right
+/// one), with queue order as the tie-break. That is what keeps
+/// `imports = [..]` order a readability choice even when one `for_root` builds
+/// what another's factory consumes.
+///
+/// `provides` is every key the entry registers once it runs — the concrete `T`
+/// and, for a `provide_factory_dyn`, the `Arc<dyn D>` beside it — because a
+/// dependent names whichever of the two it injects. It used to be the concrete
+/// id alone, so `_after::<X, Arc<dyn Port>>` — the portable form a consumer is
+/// told to write — matched nothing pending and ran first, silently.
+pub(crate) struct QueuedFactory {
+    pub(crate) id: TypeId,
+    pub(crate) name: &'static str,
+    pub(crate) provides: Vec<TypeId>,
+    pub(crate) after: Vec<TypeId>,
+    pub(crate) factory: BoxedFactory,
+}
+
 #[derive(Clone)]
 pub(crate) struct MetaEntry {
     pub(crate) provider_type_id: Option<TypeId>,
@@ -289,7 +313,7 @@ pub struct ContainerBuilder {
     /// supplies (a test injecting a pre-built resource in place of a `for_root`).
     /// The type name rides along so the synchronous boot can name what it
     /// cannot resolve.
-    factories: Vec<(TypeId, &'static str, BoxedFactory)>,
+    factories: Vec<QueuedFactory>,
     /// Types queued by [`provide_declared_factory`](Self::provide_declared_factory)
     /// — a call site chose a value rather than accepting the default. Kept so a
     /// declaration supersedes an already-queued default instead of losing the
@@ -610,10 +634,16 @@ impl ContainerBuilder {
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
-        self.queue_factory(factory, move |builder, value| {
-            let dynamic = bind(value.clone());
-            builder.provide(value).provide_dyn(dynamic)
-        })
+        self.queue(
+            None,
+            vec![TypeId::of::<Arc<D>>()],
+            Vec::new(),
+            factory,
+            move |builder, value| {
+                let dynamic = bind(value.clone());
+                builder.provide(value).provide_dyn(dynamic)
+            },
+        )
     }
 
     /// Queue a factory that **supersedes** an ordinary one for the same type,
@@ -621,7 +651,10 @@ impl ContainerBuilder {
     ///
     /// The plain [`provide_factory`](Self::provide_factory) queue is
     /// first-queued-wins, which is right for a default that several modules
-    /// declare — a diamond import must not build twice. It is wrong for a value
+    /// declare — a diamond import must not build twice. (First-*queued*, not
+    /// first-*run*: an ordinary factory blocked by an `_after` still yields the
+    /// type to a later unblocked one — two different ordinary factories for one
+    /// type is already the ambiguity this method exists to replace.) It is wrong for a value
     /// an import site *chose*: `imports = [AudioModule, StorageModule::for_root(cfg)]`
     /// would drop `cfg` on the floor, silently, because `AudioModule` imports
     /// `StorageModule` and queued the environment-only factory first. A
@@ -645,9 +678,84 @@ impl ContainerBuilder {
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
-        self.queue(Some(remedy), factory, |builder, value| {
-            builder.provide(value)
-        })
+        self.queue(
+            Some(remedy),
+            Vec::new(),
+            Vec::new(),
+            factory,
+            |builder, value| builder.provide(value),
+        )
+    }
+
+    /// [`provide_factory`](Self::provide_factory) for a factory that reads
+    /// another factory's output — `After` — from its snapshot. The drain runs it
+    /// once `After` is present, wherever the two seams fall in `imports = [..]`;
+    /// a guard built over a store that a sibling factory binds is the shape.
+    pub fn provide_factory_after<T, After, F, Fut>(self, factory: F) -> Self
+    where
+        T: Any + Send + Sync,
+        After: Any,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.queue(
+            None,
+            Vec::new(),
+            vec![TypeId::of::<After>()],
+            factory,
+            |builder, value| builder.provide(value),
+        )
+    }
+
+    /// [`provide_declared_factory`](Self::provide_declared_factory) for a
+    /// factory that reads another factory's output — `After` — from its
+    /// snapshot. See [`provide_factory_after`](Self::provide_factory_after); a
+    /// store bound over a shared connection is the shape.
+    pub fn provide_declared_factory_after<T, After, F, Fut>(
+        self,
+        remedy: &'static str,
+        factory: F,
+    ) -> Self
+    where
+        T: Any + Send + Sync,
+        After: Any,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.queue(
+            Some(remedy),
+            Vec::new(),
+            vec![TypeId::of::<After>()],
+            factory,
+            |builder, value| builder.provide(value),
+        )
+    }
+
+    /// [`provide_factory_dyn`](Self::provide_factory_dyn) for a factory that
+    /// reads another factory's output — `After` — from its snapshot. See
+    /// [`provide_declared_factory_after`](Self::provide_declared_factory_after).
+    pub fn provide_factory_dyn_after<T, D, After, F, Fut>(
+        self,
+        factory: F,
+        bind: fn(T) -> Arc<D>,
+    ) -> Self
+    where
+        T: Any + Clone + Send + Sync,
+        D: ?Sized + Send + Sync + 'static,
+        After: Any,
+        F: FnOnce(Container) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        self.queue(
+            None,
+            vec![TypeId::of::<Arc<D>>()],
+            vec![TypeId::of::<After>()],
+            factory,
+            move |builder, value| {
+                let dynamic = bind(value.clone());
+                builder.provide(value).provide_dyn(dynamic)
+            },
+        )
     }
 
     /// The factory-queue protocol both public forms share: box the future,
@@ -660,10 +768,19 @@ impl ContainerBuilder {
         Fut: Future<Output = Result<T>> + Send + 'static,
         I: FnOnce(ContainerBuilder, T) -> ContainerBuilder + Send + 'static,
     {
-        self.queue(None, factory, install)
+        self.queue(None, Vec::new(), Vec::new(), factory, install)
     }
 
-    fn queue<T, F, Fut, I>(mut self, remedy: Option<&'static str>, factory: F, install: I) -> Self
+    /// `also` is every key `install` registers besides `T` itself — the
+    /// `Arc<dyn D>` of a dyn binding — so a dependent may name either.
+    fn queue<T, F, Fut, I>(
+        mut self,
+        remedy: Option<&'static str>,
+        also: Vec<TypeId>,
+        after: Vec<TypeId>,
+        factory: F,
+        install: I,
+    ) -> Self
     where
         T: Any + Send + Sync,
         F: FnOnce(Container) -> Fut + Send + 'static,
@@ -691,9 +808,17 @@ impl ContainerBuilder {
             })
         });
         if remedy.is_some() {
-            self.factories.retain(|(queued, _, _)| *queued != id);
+            self.factories.retain(|queued| queued.id != id);
         }
-        self.factories.push((id, name, boxed));
+        let mut provides = vec![id];
+        provides.extend(also);
+        self.factories.push(QueuedFactory {
+            id,
+            name,
+            provides,
+            after,
+            factory: boxed,
+        });
         self
     }
 
@@ -765,7 +890,7 @@ impl ContainerBuilder {
         self
     }
 
-    pub(crate) fn take_factories(&mut self) -> Vec<(TypeId, &'static str, BoxedFactory)> {
+    pub(crate) fn take_factories(&mut self) -> Vec<QueuedFactory> {
         std::mem::take(&mut self.factories)
     }
 
@@ -773,7 +898,7 @@ impl ContainerBuilder {
     /// synchronous [`App::new`](crate::App::new) register phase means those
     /// values will never exist — nothing drains the queue on that path.
     pub(crate) fn queued_factory_names(&self) -> Vec<&'static str> {
-        self.factories.iter().map(|(_, name, _)| *name).collect()
+        self.factories.iter().map(|queued| queued.name).collect()
     }
 
     /// Provider keys registered so far. Snapshotted by `AppBuilder::build`

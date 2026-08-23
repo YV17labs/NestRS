@@ -148,12 +148,25 @@ struct Scan {
     /// what let every refusal say `unit` — including the ones about a span
     /// kind.
     found: BTreeMap<(&'static str, &'static str, Spelled), BTreeSet<String>>,
+    /// Every `operation_span!` that names a unit constant: `(constant, the
+    /// path's segments before `unit`, joined by `::`)` → the files. That prefix
+    /// is what says which crate the site reached for — `crate`, a sibling's
+    /// name, or the umbrella's `nest_rs::<crate>` — which is the one fact
+    /// [`a_unit_is_opened_only_by_the_crate_that_declares_it`] reads.
+    opened: BTreeMap<(String, String), BTreeSet<String>>,
 }
 
 impl Scan {
     fn record(&mut self, site: &'static str, module: &'static str, named: Spelled) {
         self.found
             .entry((site, module, named))
+            .or_default()
+            .insert(self.file.clone());
+    }
+
+    fn record_opened(&mut self, constant: String, root_segment: String) {
+        self.opened
+            .entry((constant, root_segment))
             .or_default()
             .insert(self.file.clone());
     }
@@ -205,8 +218,18 @@ impl<'ast> Visit<'ast> for Scan {
                 if let Some(named) = spelled_at(&tokens, kind_at, KIND_MODULE) {
                     self.record("kind:", KIND_MODULE, named);
                 }
-                if let Some(named) = spelled_at(&tokens, past_value(&tokens, kind_at), UNIT_MODULE)
-                {
+                let unit_at = past_value(&tokens, kind_at);
+                if let Some(named) = spelled_at(&tokens, unit_at, UNIT_MODULE) {
+                    if let Spelled::Unit(constant) = &named
+                        && let Some((_, segments)) = named_at(&tokens, unit_at)
+                    {
+                        let prefix: Vec<String> = segments
+                            .iter()
+                            .take_while(|s| *s != UNIT_MODULE)
+                            .cloned()
+                            .collect();
+                        self.record_opened(constant.clone(), prefix.join("::"));
+                    }
                     self.record("operation_span!", UNIT_MODULE, named);
                 }
             }
@@ -238,6 +261,10 @@ impl<'ast> Visit<'ast> for Scan {
 }
 
 fn scan(root: &Path) -> BTreeMap<(&'static str, &'static str, Spelled), BTreeSet<String>> {
+    scan_all(root).found
+}
+
+fn scan_all(root: &Path) -> Scan {
     let mut scan = Scan::default();
     each_source(root, |rel, ast| {
         scan.file = rel.to_owned();
@@ -251,7 +278,90 @@ fn scan(root: &Path) -> BTreeMap<(&'static str, &'static str, Spelled), BTreeSet
             scan.visit_file(&example);
         }
     });
-    scan.found
+    scan
+}
+
+/// **A unit of work is opened only by the crate that declares it** — the port
+/// owns the semantics, an adapter owns the transport.
+///
+/// `nest_rs_queue::unit::JOB` is what a job attempt *is*; the span that opens
+/// it, the events that classify its outcome and the line that reports it are
+/// one body of semantics, and `architecture.md` (*Ports & Adapters*) puts that
+/// body in the port. `nest-rs-redis/src/worker/consumer.rs` opened that span
+/// itself through 5.1, which meant a second queue adapter would have copied the
+/// envelope, the trace continuation, the panic catch and three events — and
+/// corrected them twice. The span moved into `nest_rs_queue::consume::attempt`
+/// and this join is what keeps it there: an `operation_span!` that reaches for a
+/// *sibling's* `unit` module is an adapter taking semantics it does not own.
+///
+/// The declaring crate's own `*-macros` companion may open it too — a
+/// decorator's expansion is the owning crate's code, emitted elsewhere —
+/// whether it spells the owner directly (`::nest_rs_queue::unit::JOB`) or
+/// through the umbrella (`::nest_rs::queue::unit::JOB`): both name the owner in
+/// the path, and both are resolved from it, never from who happens to emit.
+/// No baseline: the one hole was closed in the change that wrote this.
+#[test]
+fn a_unit_is_opened_only_by_the_crate_that_declares_it() {
+    let root = repo_root();
+    let opened = scan_all(&root).opened;
+    baseline::floor(opened.len(), 6, "`operation_span!` site(s) naming a unit");
+
+    let mut holes = BTreeSet::new();
+    for ((constant, prefix), files) in &opened {
+        for file in files {
+            // `crate::unit::X`, and a bare `unit::X` reached through a `use`, are
+            // by construction the emitting crate's own — and the only way a
+            // crate without a `unit` module could write them is not to compile.
+            let Some(owner) = owner_of(prefix) else {
+                continue;
+            };
+            let emitter = crate_of(file);
+            let allowed = emitter == owner || emitter == format!("{owner}-macros");
+            if !allowed {
+                holes.insert(format!(
+                    "`{constant}` is declared by `{owner}` and opened by `{emitter}` \
+                     ({file}) — the span, its events and its line belong to the port; \
+                     the adapter calls the port's `consume` function instead",
+                ));
+            }
+        }
+    }
+    assert!(
+        holes.is_empty(),
+        "{} unit(s) opened outside the crate that declares them:\n  {}",
+        holes.len(),
+        holes.iter().cloned().collect::<Vec<_>>().join("\n  "),
+    );
+}
+
+/// The crate directory a repo-relative source path sits in (`crates/x/src/..`
+/// → `x`, `demo/crates/features/src/..` → `features`).
+fn crate_of(file: &str) -> String {
+    let parts: Vec<&str> = file.split('/').collect();
+    parts
+        .iter()
+        .position(|p| *p == "crates" || *p == "apps")
+        .and_then(|i| parts.get(i + 1))
+        .map(|s| (*s).to_owned())
+        .unwrap_or_default()
+}
+
+/// The crate a unit path's prefix (everything before `unit`) names, or `None`
+/// when the prefix is the emitting crate's own (`crate::`, `self::`, `super::`,
+/// or a bare `unit::X` reached through a `use`). `nest_rs_queue` →
+/// `nest-rs-queue`; the umbrella form `nest_rs::queue` → `nest-rs-queue`, read
+/// from the path's own second segment — never from who happens to emit, which
+/// is the tautology this function replaced.
+fn owner_of(prefix: &str) -> Option<String> {
+    let mut segments = prefix.split("::").filter(|s| !s.is_empty());
+    let first = segments.next()?;
+    match first {
+        "crate" | "self" | "super" => None,
+        "nest_rs" => segments
+            .next()
+            .map(|second| format!("nest-rs-{}", second.replace('_', "-"))),
+        other => Some(other.replace('_', "-")),
+    }
 }
 
 /// The one emitter that may name its unit from a binding, and the reason.

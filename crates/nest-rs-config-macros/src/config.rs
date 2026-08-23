@@ -79,7 +79,7 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
                     &meta.value,
                     "config",
                     "namespace",
-                    "database",
+                    "seaorm",
                 )?)
             }
             "validate" => {
@@ -106,7 +106,7 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
     let lit = namespace.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),
-            nest_rs_codegen::missing_argument("config", "namespace", "\"database\""),
+            nest_rs_codegen::missing_argument("config", "namespace", "\"seaorm\""),
         )
     })?;
     validate_namespace(&lit)?;
@@ -141,7 +141,7 @@ fn validate_namespace(lit: &LitStr) -> syn::Result<()> {
             lit.span(),
             "#[config] `namespace` must be a lowercase env-domain segment \
              (start with a letter, then lowercase letters, digits, or underscores), \
-             e.g. \"database\" or \"object_store\"",
+             e.g. \"seaorm\" or \"redis__worker\"",
         ))
     }
 }

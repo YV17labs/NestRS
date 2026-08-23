@@ -19,7 +19,12 @@ use crate::Scheduler;
 pub struct ScheduleModule;
 
 impl Module for ScheduleModule {
-    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+    // Deduped like a `#[module]` expansion: two importers attach one scheduler,
+    // not two firing every tick twice.
+    fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
+        if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
+            return builder;
+        }
         builder.provide_meta(TransportContribution {
             name: "Scheduler",
             build: |_| Ok(Box::new(Scheduler::new())),

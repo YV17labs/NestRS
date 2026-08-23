@@ -129,8 +129,8 @@ nestrs run db fresh    # drop every table, then re-apply from scratch
 Each verb shells out to the crate's `migrate` binary at
 `crates/migrations/src/bin/migrate.rs`. It connects through
 **`nest_rs::seaorm::connect_from_env()`** — the single connector for tools
-outside the DI container, which resolves `NESTRS_DATABASE__*` through the same
-`.env` cascade the apps use. Reaching for `std::env::var("NESTRS_DATABASE__URL")`
+outside the DI container, which resolves `NESTRS_SEAORM__*` through the same
+`.env` cascade the apps use. Reaching for `std::env::var("NESTRS_SEAORM__URL")`
 in a tool of your own works only when the variable is really in the process
 environment; `connect_from_env` works either way.
 

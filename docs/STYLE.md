@@ -133,7 +133,7 @@ deliberately not greped — too many false positives; they are a review call, li
 | Relations, row-level, masking, by-id | `users` + `orgs` |
 | Security (authn/authz) | `users`/`orgs` + the `auth` app |
 | GraphQL | `users` (+ `org` relation) |
-| WebSockets | `chat` / `notify` (`demo/apps/live`) |
+| WebSockets | `chat` / the `notifications` ws edge (`demo/crates/features`, served by `demo/apps/live`) |
 | Queue + Schedule | `audio` / `TranscodeCommand` (`demo/apps/worker`) |
 | Events | `PostPublishedEvent` (notifications listener) |
 | MCP | `weather` (+ `hello` tool) (`demo/apps/assistant`) |

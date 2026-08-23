@@ -41,7 +41,7 @@ the manifest stops at one line. `nestrs g ws <feature>` writes it.
 
 The smallest possible gateway: one event, one reply.
 
-```rust title="apps/live/src/chat/gateway.rs"
+```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::{gateway, messages};
 
 #[gateway(path = "/ws")]
@@ -185,5 +185,6 @@ well, since a browser cannot set headers on a `WebSocket` handshake.
   `#[subscribe_message]`, `#[on_connect]`, `#[on_disconnect]`,
   `WsClient`, `WsServer`, `WsModule`.
 - [`apps/live`](https://github.com/YV17labs/NestRS/tree/main/demo/apps/live) —
-  end-to-end real-time example (`ChatGateway`, `NotifyGateway`) used
+  end-to-end real-time example (`ChatGateway`, and the `notifications`
+  feature's `NotificationsGateway`) used
   throughout these pages.

@@ -31,54 +31,55 @@ A marker is just a unit struct — no traits, no methods, no runtime
 data:
 
 ```rust
-pub struct NotifyNs;
+pub struct NotificationsNs;
 ```
 
-Attach it to a gateway with `#[gateway(namespace = NotifyNs)]`. The registry
-comes from `WsModule` — the same module that provides the default one, so
-namespacing changes which registry is wired, not how it is wired:
+Attach it to a gateway with `#[gateway(namespace = NotificationsNs)]`. The
+registry comes from `WsModule` — the same module that provides the default one,
+so namespacing changes which registry is wired, not how it is wired:
 
-```rust title="apps/live/src/notify/gateway.rs"
-use nest_rs::ws::{gateway, messages, WsClient};
+```rust title="crates/features/src/notifications/ws/gateway.rs"
+use nest_rs::ws::{WsClient, gateway, messages};
 
-pub struct NotifyNs;
+pub struct NotificationsNs;
 
-#[gateway(path = "/notify", namespace = NotifyNs)]
+#[gateway(path = "/notify", namespace = NotificationsNs)]
 #[derive(Default)]
-pub struct NotifyGateway;
+pub struct NotificationsGateway;
 
 #[messages]
-impl NotifyGateway {
+impl NotificationsGateway {
     #[subscribe_message("ping")]
     #[public]
     async fn ping(&self, client: &WsClient) {
-        let _ = client.broadcast("pong", &"hi");
+        // …
     }
 }
 ```
 
-That gateway's `WsClient` holds an `Arc<WsServer<NotifyNs>>` behind a
+That gateway's `WsClient` holds an `Arc<WsServer<NotificationsNs>>` behind a
 type-erased `Registry` trait. Calls to `client.broadcast(...)` reach
-only `NotifyGateway` connections; the `ChatGateway` next to it on the
+only `NotificationsGateway` connections; the `ChatGateway` next to it on the
 same HTTP transport stays untouched.
 
 ## Reaching the namespaced registry
 
 A service that wants to push to one namespace injects the typed
-registry directly:
+registry directly — the marker is exported by the edge that declares it, so
+nothing but the type crosses the module boundary:
 
-```rust title="crates/features/src/notify/service.rs"
+```rust
 use std::sync::Arc;
 
 use nest_rs::core::injectable;
 use nest_rs::ws::WsServer;
 
-use crate::notify::NotifyNs;
+use features::notifications::NotificationsNs;
 
 #[injectable]
 pub struct AdminNotifier {
     #[inject]
-    server: Arc<WsServer<NotifyNs>>,
+    server: Arc<WsServer<NotificationsNs>>,
 }
 
 impl AdminNotifier {
@@ -91,20 +92,20 @@ impl AdminNotifier {
 Its module imports `WsModule`, exactly as it would to inject the default
 registry:
 
-```rust title="crates/features/src/notify/module.rs"
+```rust
 #[module(imports = [WsModule], providers = [AdminNotifier])]
-pub struct NotifyModule;
+pub struct AdminModule;
 ```
 
-`Arc<WsServer<Global>>` and `Arc<WsServer<NotifyNs>>` are distinct injected
-types, and the access graph verifies each one is reachable on its own: forget
-the import and the boot fails naming both the key and its owner —
+`Arc<WsServer<Global>>` and `Arc<WsServer<NotificationsNs>>` are distinct
+injected types, and the access graph verifies each one is reachable on its own:
+forget the import and the boot fails naming both the key and its owner —
 
 ```text frame="terminal"
-Error: module access violation: `AdminNotifier` (in module `NotifyModule`) depends on
-`WsServer<NotifyNs>`, but `NotifyModule` imports no module that provides it.
-`WsServer<NotifyNs>` is provided by `WsModule` — add `WsModule` to
-`#[module(imports = [...])]` of `NotifyModule`, …
+Error: module access violation: `AdminNotifier` (in module `AdminModule`) depends on
+`WsServer<NotificationsNs>`, but `AdminModule` imports no module that provides it.
+`WsServer<NotificationsNs>` is provided by `WsModule` — add `WsModule` to
+`#[module(imports = [...])]` of `AdminModule`, …
 ```
 
 A service can inject both registries at once if it needs to fan out to both
@@ -130,7 +131,7 @@ Picture a real-time app with two concerns living side by side:
   receives every notification; rooms would be noise.
 
 On one shared `WsServer`, a `server.broadcast("alert", ...)` from a
-notify handler would also reach every chat user — the notification
+notifications handler would also reach every chat user — the notification
 arrives in the wrong client's frame loop. Two namespaces solve it
 structurally: distinct registries mean a broadcast on one is invisible
 to the other, and no handler can leak a frame across by accident.

@@ -37,7 +37,7 @@ ships two short files — the aliases, and the module that provides them:
 ```rust title="crates/features/src/authn/strategy.rs"
 use nest_rs::authn::JwtStrategy;
 
-use crate::Claims;
+use super::Claims;
 
 pub type AuthnStrategy = JwtStrategy<Claims>;
 

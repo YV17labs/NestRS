@@ -79,12 +79,12 @@ use nest_rs::guards::{Denial, Guard, WsGuard, async_trait};
 
 #[injectable]
 #[derive(Default)]
-pub struct ModeratedGuard;
+pub struct ModerationGuard;
 
-impl Layer for ModeratedGuard {}
+impl Layer for ModerationGuard {}
 
 #[async_trait]
-impl Guard for ModeratedGuard {
+impl Guard for ModerationGuard {
     async fn check_ws_message(
         &self,
         _client: &WsClient,
@@ -99,7 +99,7 @@ impl Guard for ModeratedGuard {
 }
 
 // The capability marker — see below. One line, right beside the method it attests.
-impl WsGuard for ModeratedGuard {}
+impl WsGuard for ModerationGuard {}
 ```
 
 <Aside type="caution" title="A per-message guard must declare `WsGuard`">
@@ -135,7 +135,7 @@ Bind it beside the message it gates:
 impl ChatGateway {
     #[subscribe_message("message")]
     #[public]
-    #[use_guards(ModeratedGuard)]
+    #[use_guards(ModerationGuard)]
     async fn on_message(&self, msg: SendMessageDto) {
         self.svc.record(msg);
     }
@@ -216,5 +216,5 @@ GraphQL sibling bridges.
   the `check_http` / `check_graphql` / `check_ws_message` triple.
 - [`EventLayerTable`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/guard.rs) —
   the per-gateway, per-event guard table the dispatcher iterates.
-- [`apps/live/src/chat/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/apps/live/src/chat/guard.rs) —
+- [`crates/features/src/chat/ws/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/ws/guard.rs) —
   a per-message guard worked end to end.

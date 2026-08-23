@@ -56,7 +56,6 @@
   "schedule/index.mdx::fence-drift::crates/features/src/audio/schedule/module.rs shows `use crate::audio::AudioModule;` and demo/crates/features/src/audio/schedule/module.rs does not contain that line",
   "schedule/index.mdx::fence-drift::crates/features/src/audio/schedule/tasks.rs (abridged) shows `use nest_rs::schedule::scheduled;` and demo/crates/features/src/audio/schedule/tasks.rs does not contain that line",
   "schedule/index.mdx::fence-drift::crates/features/src/audio/schedule/tasks.rs (abridged) shows `use nest_rs::schedule::{scheduled, CronExpression};` and demo/crates/features/src/audio/schedule/tasks.rs does not contain that line",
-  "security/add-login.mdx::fence-drift::crates/features/src/authn/strategy.rs shows `pub type AuthnStrategy = nest_rs::authn::JwtStrategy<Claims` and demo/crates/features/src/authn/strategy.rs does not contain that line",
   "security/authentication/jwt.mdx::fence-drift::crates/features/src/authn/claims.rs shows `use serde::{Deserialize, Serialize};` and demo/crates/features/src/authn/claims.rs has it earlier \u2014 the excerpt is out of order",
   "security/authentication/password.mdx::fence-drift::crates/features/src/users/service.rs shows `use nest_rs::authn::hash_password;` and demo/crates/features/src/users/service.rs does not contain that line",
   "security/authentication/password.mdx::fence-drift::crates/features/src/users/service.rs shows `use nest_rs::authn::{CredentialError, burn_verify, verify_pa` and demo/crates/features/src/users/service.rs does not contain that line",
@@ -93,8 +92,7 @@
   "tutorial/security.mdx::fence-drift::apps/api/src/module.rs (abridged) shows `use features::authz::AuthzModule;` and demo/apps/api/src/module.rs does not contain that line",
   "tutorial/security.mdx::fence-drift::crates/features/src/authz/ability.rs shows `use crate::authn::Claims;` and demo/crates/features/src/authz/ability.rs does not contain that line",
   "tutorial/security.mdx::fence-drift::crates/features/src/users/http/controller.rs shows `use nest_rs::authz::http::Authorize;` and demo/crates/features/src/users/http/controller.rs does not contain that line",
-  "websockets/index.mdx::fence-drift::apps/live/src/chat/gateway.rs shows `use nest_rs::ws::{gateway, messages};` and demo/apps/live/src/chat/gateway.rs does not contain that line",
+  "websockets/index.mdx::fence-drift::crates/features/src/chat/ws/gateway.rs shows `use nest_rs::ws::{gateway, messages};` and demo/crates/features/src/chat/ws/gateway.rs does not contain that line",
   "websockets/index.mdx::fence-drift::apps/live/src/module.rs shows `use nest_rs::ws::WsModule;` and demo/apps/live/src/module.rs does not contain that line",
-  "websockets/namespaces.mdx::fence-drift::apps/live/src/notify/gateway.rs shows `use nest_rs::ws::{gateway, messages, WsClient};` and demo/apps/live/src/notify/gateway.rs does not contain that line",
-  "websockets/rooms.mdx::fence-drift::apps/live/src/chat/gateway.rs shows `svc: Arc<RoomService>,` and demo/apps/live/src/chat/gateway.rs does not contain that line"
+  "websockets/rooms.mdx::fence-drift::crates/features/src/chat/ws/gateway.rs shows `svc: Arc<RoomService>,` and demo/crates/features/src/chat/ws/gateway.rs does not contain that line"
 ]

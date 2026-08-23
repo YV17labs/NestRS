@@ -27,7 +27,7 @@ A resource-server app declares a type alias and a tiny module:
 ```rust title="crates/features/src/authn/strategy.rs"
 use nest_rs::authn::JwtStrategy;
 
-use crate::Claims;
+use super::Claims;
 
 pub type AuthnStrategy = JwtStrategy<Claims>;
 

@@ -84,7 +84,9 @@ secret; split later without touching your features. See
 The two guards are project-local aliases written **once**:
 
 ```rust title="crates/features/src/authn/strategy.rs"
-pub type AuthnStrategy = nest_rs::authn::JwtStrategy<Claims>;
+use nest_rs::authn::JwtStrategy;
+
+pub type AuthnStrategy = JwtStrategy<Claims>;
 
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 ```

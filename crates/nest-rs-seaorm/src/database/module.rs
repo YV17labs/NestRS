@@ -37,9 +37,12 @@ impl Module for SeaOrmDatabaseModule {
             _,
         >(
             |container| async move {
-                if container.get::<DatabaseConnection>().is_none() {
-                    anyhow::bail!("SeaOrmDatabaseModule: {POOL_REMEDY}");
-                }
+                // Read for its absence: `from_container` would panic on a
+                // missing pool, and this is what makes it the named boot error
+                // every binding gives.
+                container
+                    .get::<DatabaseConnection>()
+                    .ok_or_else(|| anyhow::anyhow!("SeaOrmDatabaseModule: {POOL_REMEDY}"))?;
                 Ok(crate::WorkerDbContext::from_container(&container))
             },
             |context| Arc::new(context) as Arc<dyn nest_rs_worker::JobContext>,
@@ -50,31 +53,19 @@ impl Module for SeaOrmDatabaseModule {
         if !builder.mark_registered(TypeId::of::<Self>()) {
             return builder;
         }
-        install_boot_audits(install_request_layers(builder))
+        // The `DbContext` interceptor only exists with the `http` feature (it is
+        // the HTTP request seam). Built eagerly from the snapshot — the pool is
+        // a factory output present before the register phase: its absence
+        // failed the async boot in `collect`, and the synchronous `App::new`
+        // refuses the queued factory before reaching here.
+        #[cfg(feature = "http")]
+        let builder = <crate::DbContext as nest_rs_core::Discoverable>::register(builder);
+        // The link-time invariant checks this import brings — providers that
+        // need neither config nor pool, only what the decorators submitted, and
+        // that refuse boot from `#[on_module_init]`. They ride
+        // `SeaOrmDatabaseModule` because an app without it has no `CrudService`
+        // to mis-wire; an app composing the ORM some other way calls the audit
+        // directly (`audit_soft_delete_bindings`).
+        <crate::soft_delete::SoftDeleteAudit as nest_rs_core::Discoverable>::register(builder)
     }
-}
-
-/// Install the sync request layer: the `DbContext` HTTP interceptor. Built
-/// eagerly from the snapshot — the pool is a factory output present before the
-/// register phase: its absence failed the async boot in `collect`, and the
-/// synchronous `App::new` refuses the queued factory before reaching here.
-fn install_request_layers(builder: ContainerBuilder) -> ContainerBuilder {
-    // The `DbContext` interceptor only exists with the `http` feature (it is the
-    // HTTP request seam). Without it there is no HTTP layer to install — the
-    // worker bridge queued in `collect` still applies.
-    #[cfg(feature = "http")]
-    let builder = <crate::DbContext as nest_rs_core::Discoverable>::register(builder);
-    builder
-}
-
-/// Install the link-time invariant checks this import brings — providers that
-/// need neither config nor pool, only what the decorators submitted, and that
-/// refuse boot from `#[on_module_init]`.
-///
-/// Separate from the request layers above: these run once and touch no request.
-/// The audits ride `SeaOrmDatabaseModule` because an app without it has no
-/// `CrudService` to mis-wire; an app composing the ORM some other way calls the
-/// audit directly (`audit_soft_delete_bindings`).
-fn install_boot_audits(builder: ContainerBuilder) -> ContainerBuilder {
-    <crate::soft_delete::SoftDeleteAudit as nest_rs_core::Discoverable>::register(builder)
 }

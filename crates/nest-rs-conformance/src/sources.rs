@@ -437,6 +437,28 @@ pub fn declared_targets() -> &'static [(&'static str, &'static str, &'static str
     })
 }
 
+/// The namespace a `#[config(namespace = "…")]` declares, or `None` for any
+/// other struct.
+///
+/// One reader, because there were two and they had already drifted: the copy
+/// that did not consume a *valued* sibling key (`validate = "manual"`) left the
+/// nested-meta walk in an error state, so a `namespace` written after one was
+/// silently reported absent.
+pub fn config_namespace(attrs: &[syn::Attribute]) -> Option<String> {
+    let attr = attrs.iter().find(|a| a.path().is_ident("config"))?;
+    let mut namespace = None;
+    let _ = attr.parse_nested_meta(|meta| {
+        if meta.path.is_ident("namespace") {
+            let lit: syn::LitStr = meta.value()?.parse()?;
+            namespace = Some(lit.value());
+        } else if meta.input.peek(syn::Token![=]) {
+            let _: syn::Expr = meta.value()?.parse()?;
+        }
+        Ok(())
+    });
+    namespace
+}
+
 /// Every canonical unit-of-work name the framework declares.
 ///
 /// The same shape [`declared_targets`] reads, for the other per-edge vocabulary:

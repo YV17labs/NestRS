@@ -315,6 +315,21 @@ pub struct KeyedDependencyError {
 /// `providers = [...]` plus the global infrastructure keys.
 pub struct ReachableProviders(pub std::collections::HashSet<TypeId>);
 
+impl ReachableProviders {
+    /// Whether `provider` is reachable — the one spelling of the gate every
+    /// inventory-draining edge reads before it mounts an entry.
+    ///
+    /// It takes the **optional** set because that is what `Container::get`
+    /// returns, and the absent case is the whole decision: no set means the
+    /// access graph never ran (a hand-built container in a test), so everything
+    /// is in scope rather than nothing. Written once because four edges wrote
+    /// it — and because the GraphQL loader registry decided the absent case the
+    /// other way, a divergence one predicate is what makes visible.
+    pub fn reaches(set: Option<&Self>, provider: TypeId) -> bool {
+        set.is_none_or(|r| r.0.contains(&provider))
+    }
+}
+
 /// The reachable providers again, this time **in declaration order** — modules
 /// depth-first from the root along `imports = [...]`, each module's
 /// `providers = [...]` left to right.

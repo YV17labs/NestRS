@@ -417,7 +417,7 @@ impl AppBuilder {
                 .into());
             };
             let queued = pending.remove(index);
-            if builder.contains(queued.id) {
+            if builder.contains(queued.id()) {
                 continue;
             }
             let register = (queued.factory)(builder.snapshot()).await?;
@@ -602,6 +602,7 @@ mod tests {
     /// The portable form: a dependent names the `Arc<dyn Port>` a
     /// `provide_factory_dyn` binds, not the vendor's concrete type. The queue
     /// entry advertises both keys, so the dependent waits.
+    #[derive(Clone)]
     struct PortImpl(u32);
     trait Port: Send + Sync {
         fn value(&self) -> u32;
@@ -609,11 +610,6 @@ mod tests {
     impl Port for PortImpl {
         fn value(&self) -> u32 {
             self.0
-        }
-    }
-    impl Clone for PortImpl {
-        fn clone(&self) -> Self {
-            Self(self.0)
         }
     }
     struct ReadsPort(u32);

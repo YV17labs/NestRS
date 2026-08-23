@@ -35,10 +35,7 @@ pub fn discover(container: &Container) -> anyhow::Result<Vec<&'static ProcessMet
     let reachable = container.get::<ReachableProviders>();
     let mut methods: Vec<&'static ProcessMethod> = Vec::new();
     for entry in nest_rs_core::inventory::iter::<ProcessMethod>() {
-        let provider_id = (entry.provider_type_id)();
-        if let Some(r) = reachable.as_ref()
-            && !r.0.contains(&provider_id)
-        {
+        if !ReachableProviders::reaches(reachable.as_deref(), (entry.provider_type_id)()) {
             ::nest_rs_core::report_inert_host!(
                 target: TARGET,
                 what: "#[process] method",
@@ -88,11 +85,13 @@ pub enum Attempt {
 ///
 /// `job_id` and `attempt` are the backend's identifiers for the task and its
 /// attempt number; they ride the span and the operation line so retries of one
-/// task are one `job_id` and distinct `attempt`s.
+/// task are one `job_id` and distinct `attempt`s. The id is taken **by value**
+/// because the line owns it for the length of the attempt: borrowing it made
+/// every adapter allocate the string and this function allocate it again.
 pub async fn attempt(
     method: &'static ProcessMethod,
     payload: serde_json::Value,
-    job_id: &str,
+    job_id: String,
     attempt: usize,
     container: Container,
 ) -> Attempt {
@@ -133,7 +132,7 @@ pub async fn attempt(
     let identity = JobIdentity {
         queue: method.queue,
         processor: method.name,
-        job_id: job_id.to_owned(),
+        job_id,
         attempt,
     };
     async move {

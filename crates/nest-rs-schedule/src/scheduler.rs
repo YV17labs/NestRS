@@ -160,10 +160,7 @@ impl Transport for Scheduler {
         // module compiles in but does not fire.
         let reachable = container.get::<ReachableProviders>();
         for entry in inventory::iter::<ScheduledMethod>() {
-            let provider_id = (entry.provider_type_id)();
-            if let Some(r) = reachable.as_ref()
-                && !r.0.contains(&provider_id)
-            {
+            if !ReachableProviders::reaches(reachable.as_deref(), (entry.provider_type_id)()) {
                 ::nest_rs_core::report_inert_host!(
                     target: crate::TARGET,
                     what: "scheduled method",

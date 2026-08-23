@@ -260,10 +260,6 @@ impl<'ast> Visit<'ast> for Scan {
     }
 }
 
-fn scan(root: &Path) -> BTreeMap<(&'static str, &'static str, Spelled), BTreeSet<String>> {
-    scan_all(root).found
-}
-
 fn scan_all(root: &Path) -> Scan {
     let mut scan = Scan::default();
     each_source(root, |rel, ast| {
@@ -381,7 +377,7 @@ fn is_shared_emitter(files: &BTreeSet<String>) -> bool {
 #[test]
 fn every_unit_of_work_is_named_by_the_shared_constant() {
     let root = repo_root();
-    let found = scan(&root);
+    let found = scan_all(&root).found;
     baseline::floor(found.len(), FLOOR, "unit-naming site(s)");
 
     let mut wrong: Vec<String> = Vec::new();

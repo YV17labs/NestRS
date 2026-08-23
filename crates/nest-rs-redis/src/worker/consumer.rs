@@ -185,7 +185,7 @@ fn build_worker(
                     consume::attempt(
                         method,
                         job,
-                        &task_id.to_string(),
+                        task_id.to_string(),
                         attempt.current(),
                         container,
                     )
@@ -202,19 +202,16 @@ type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
 /// The one thing this backend decides about an outcome: how it maps onto
 /// apalis's retry model. A retryable failure stays a plain boxed error →
 /// `Error::Failed`, which the retry budget re-attempts; a dead letter is
-/// `Abort`, which `RetryLayer` skips so the job dead-letters at once.
+/// wrapped as `Abort`, which `RetryLayer` skips so the job dead-letters at
+/// once instead of spending the budget on a payload that cannot succeed.
 fn translate(attempt: Attempt) -> Result<(), BoxDynError> {
     match attempt {
         Attempt::Ok => Ok(()),
         Attempt::Retry(error) => Err(error.source),
-        Attempt::DeadLetter(error) => Err(abort(error.source)),
+        Attempt::DeadLetter(error) => Err(Box::new(apalis::prelude::Error::Abort(
+            std::sync::Arc::new(error.source),
+        ))),
     }
-}
-
-/// Wrap an error as apalis's `Abort` — the shape that skips the retry budget
-/// and dead-letters immediately.
-fn abort(source: BoxDynError) -> BoxDynError {
-    Box::new(apalis::prelude::Error::Abort(std::sync::Arc::new(source)))
 }
 
 #[cfg(test)]

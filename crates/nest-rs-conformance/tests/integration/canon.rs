@@ -430,7 +430,7 @@ impl<'ast> Visit<'ast> for FileScan {
     }
 
     fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-        if config_namespace(&node.attrs).is_some() && self.ships() {
+        if nest_rs_conformance::sources::config_namespace(&node.attrs).is_some() && self.ships() {
             self.configs.push(ConfigDecl {
                 name: node.ident.to_string(),
                 fields: node
@@ -470,25 +470,6 @@ fn bound_is(bound: &syn::TypeParamBound, name: &str) -> bool {
         return false;
     };
     t.path.segments.last().is_some_and(|s| s.ident == name)
-}
-
-/// The namespace of a `#[config(namespace = "…")]`, or `None` for any other
-/// struct.
-fn config_namespace(attrs: &[syn::Attribute]) -> Option<String> {
-    let attr = attrs.iter().find(|a| a.path().is_ident("config"))?;
-    let mut found = None;
-    // `parse_nested_meta` rather than a token scan: the decorator takes other
-    // keys (`validate = "manual"`), and their order is the author's.
-    let _ = attr.parse_nested_meta(|meta| {
-        if meta.path.is_ident("namespace")
-            && let Ok(value) = meta.value()
-            && let Ok(lit) = value.parse::<syn::LitStr>()
-        {
-            found = Some(lit.value());
-        }
-        Ok(())
-    });
-    found
 }
 
 /// Whether a `defaults()` body consults the profile.

@@ -123,7 +123,7 @@ fn wire_listeners(
 /// reachability rule land in one of them and leave the report describing a set
 /// the app does not have.
 fn is_reachable(reachable: Option<&ReachableProviders>, entry: &ListenerMethod) -> bool {
-    reachable.is_none_or(|r| r.0.contains(&(entry.provider_type_id)()))
+    ReachableProviders::reaches(reachable, (entry.provider_type_id)())
 }
 
 /// The listeners this app would wire, in no particular order — the population

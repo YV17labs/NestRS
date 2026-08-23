@@ -132,11 +132,35 @@ pub(crate) type BoxedFactory = Box<dyn FnOnce(Container) -> FactoryFuture + Send
 /// id alone, so `_after::<X, Arc<dyn Port>>` — the portable form a consumer is
 /// told to write — matched nothing pending and ran first, silently.
 pub(crate) struct QueuedFactory {
-    pub(crate) id: TypeId,
     pub(crate) name: &'static str,
     pub(crate) provides: Vec<TypeId>,
     pub(crate) after: Vec<TypeId>,
     pub(crate) factory: BoxedFactory,
+}
+
+impl QueuedFactory {
+    /// The concrete `T` this entry is keyed by — always the first of
+    /// [`provides`](Self::provides), the rest being the extra names `install`
+    /// registers. One field rather than two carrying the same fact.
+    pub(crate) fn id(&self) -> TypeId {
+        self.provides[0]
+    }
+}
+
+/// How one [`ContainerBuilder::queue`] call differs from the plain form.
+///
+/// Named fields rather than three positional arguments: `also` and `after` are
+/// both `Vec<TypeId>`, so a swapped pair compiles and boots differently.
+#[derive(Default)]
+struct QueueSpec {
+    /// Set when the call is a **declaration** — an import site chose this value
+    /// — carrying the sentence `ContestedDeclarationError` appends.
+    remedy: Option<&'static str>,
+    /// Every key `install` registers besides `T` itself, so a dependent may
+    /// name either — the `Arc<dyn D>` of a dyn binding.
+    also: Vec<TypeId>,
+    /// The factory outputs this one reads from its snapshot.
+    after: Vec<TypeId>,
 }
 
 #[derive(Clone)]
@@ -612,7 +636,9 @@ impl ContainerBuilder {
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
-        self.queue_factory(factory, |builder, value| builder.provide(value))
+        self.queue(QueueSpec::default(), factory, |builder, value| {
+            builder.provide(value)
+        })
     }
 
     /// Queue an async factory whose awaited output is bound **twice**: as the
@@ -635,9 +661,10 @@ impl ContainerBuilder {
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.queue(
-            None,
-            vec![TypeId::of::<Arc<D>>()],
-            Vec::new(),
+            QueueSpec {
+                also: vec![TypeId::of::<Arc<D>>()],
+                ..QueueSpec::default()
+            },
             factory,
             move |builder, value| {
                 let dynamic = bind(value.clone());
@@ -679,9 +706,10 @@ impl ContainerBuilder {
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.queue(
-            Some(remedy),
-            Vec::new(),
-            Vec::new(),
+            QueueSpec {
+                remedy: Some(remedy),
+                ..QueueSpec::default()
+            },
             factory,
             |builder, value| builder.provide(value),
         )
@@ -699,9 +727,10 @@ impl ContainerBuilder {
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.queue(
-            None,
-            Vec::new(),
-            vec![TypeId::of::<After>()],
+            QueueSpec {
+                after: vec![TypeId::of::<After>()],
+                ..QueueSpec::default()
+            },
             factory,
             |builder, value| builder.provide(value),
         )
@@ -723,9 +752,11 @@ impl ContainerBuilder {
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.queue(
-            Some(remedy),
-            Vec::new(),
-            vec![TypeId::of::<After>()],
+            QueueSpec {
+                remedy: Some(remedy),
+                after: vec![TypeId::of::<After>()],
+                ..QueueSpec::default()
+            },
             factory,
             |builder, value| builder.provide(value),
         )
@@ -747,9 +778,11 @@ impl ContainerBuilder {
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         self.queue(
-            None,
-            vec![TypeId::of::<Arc<D>>()],
-            vec![TypeId::of::<After>()],
+            QueueSpec {
+                also: vec![TypeId::of::<Arc<D>>()],
+                after: vec![TypeId::of::<After>()],
+                ..QueueSpec::default()
+            },
             factory,
             move |builder, value| {
                 let dynamic = bind(value.clone());
@@ -758,35 +791,22 @@ impl ContainerBuilder {
         )
     }
 
-    /// The factory-queue protocol both public forms share: box the future,
+    /// The factory-queue protocol every public form shares: box the future,
     /// await it in the factory phase, and hand the awaited value to `install`,
-    /// which decides under which name(s) it registers.
-    fn queue_factory<T, F, Fut, I>(self, factory: F, install: I) -> Self
+    /// which decides under which name(s) it registers. What differs between the
+    /// six is [`QueueSpec`], and nothing else.
+    fn queue<T, F, Fut, I>(mut self, spec: QueueSpec, factory: F, install: I) -> Self
     where
         T: Any + Send + Sync,
         F: FnOnce(Container) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
         I: FnOnce(ContainerBuilder, T) -> ContainerBuilder + Send + 'static,
     {
-        self.queue(None, Vec::new(), Vec::new(), factory, install)
-    }
-
-    /// `also` is every key `install` registers besides `T` itself — the
-    /// `Arc<dyn D>` of a dyn binding — so a dependent may name either.
-    fn queue<T, F, Fut, I>(
-        mut self,
-        remedy: Option<&'static str>,
-        also: Vec<TypeId>,
-        after: Vec<TypeId>,
-        factory: F,
-        install: I,
-    ) -> Self
-    where
-        T: Any + Send + Sync,
-        F: FnOnce(Container) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<T>> + Send + 'static,
-        I: FnOnce(ContainerBuilder, T) -> ContainerBuilder + Send + 'static,
-    {
+        let QueueSpec {
+            remedy,
+            also,
+            after,
+        } = spec;
         let id = TypeId::of::<T>();
         let name = std::any::type_name::<T>();
         // A default never displaces a declaration, whichever order they arrive
@@ -808,12 +828,11 @@ impl ContainerBuilder {
             })
         });
         if remedy.is_some() {
-            self.factories.retain(|queued| queued.id != id);
+            self.factories.retain(|queued| queued.id() != id);
         }
         let mut provides = vec![id];
         provides.extend(also);
         self.factories.push(QueuedFactory {
-            id,
             name,
             provides,
             after,

@@ -875,7 +875,8 @@ fn namespace_is_the_stem() {
                 .unwrap_or_default();
             for item in &ast.items {
                 let Item::Struct(s) = item else { continue };
-                let Some(namespace) = config_namespace(&s.attrs) else {
+                let Some(namespace) = nest_rs_conformance::sources::config_namespace(&s.attrs)
+                else {
                     continue;
                 };
                 scanned += 1;
@@ -909,22 +910,4 @@ fn namespace_is_the_stem() {
         "a namespace chosen rather than read off the path — move the config to \
          where its word belongs, or take the word of where it sits",
     );
-}
-
-/// The `namespace = "…"` a `#[config(...)]` attribute declares, if any.
-fn config_namespace(attrs: &[syn::Attribute]) -> Option<String> {
-    let attr = attrs.iter().find(|a| a.path().is_ident("config"))?;
-    let mut namespace = None;
-    // Other keys (`validate = "manual"`) carry a value too; consume it so the
-    // walk reaches `namespace` wherever it sits in the list.
-    let _ = attr.parse_nested_meta(|meta| {
-        if meta.path.is_ident("namespace") {
-            let lit: syn::LitStr = meta.value()?.parse()?;
-            namespace = Some(lit.value());
-        } else if meta.input.peek(syn::Token![=]) {
-            let _: syn::Expr = meta.value()?.parse()?;
-        }
-        Ok(())
-    });
-    namespace
 }

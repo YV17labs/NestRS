@@ -46,7 +46,7 @@ impl ChatService {
 
         let reached = self.server.broadcast("message", &stored)?;
         tracing::debug!(
-            target: "live::chat",
+            target: "features::chat",
             author = %stored.author,
             total,
             reached,

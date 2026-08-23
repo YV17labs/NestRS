@@ -39,11 +39,20 @@ it only when *this app's exposure decides something the feature can't
 generalize*; otherwise it belongs in `demo/crates/features/`.
 
 Such an app-local feature **may flatten** — handler + `service.rs` +
-`module.rs` at the folder root, no port/adapter split (`live/chat/`,
-`live/notify/`). The hexagonal split is mandatory only in
-`crates/features/`, where a slice must serve many apps and transports; an
-app-local single-transport slice that only this binary uses keeps the
-lighter layout.
+`module.rs` at the folder root, no port/adapter split. The hexagonal
+split is mandatory only in `crates/features/`, where a slice must serve
+many apps and transports; an app-local single-transport slice that only
+this binary uses keeps the lighter layout.
+
+**The repo holds none, and that is the point.** `live/chat/` and
+`live/notify/` sat here until the test was applied to them rather than
+recited: a chat slice and a notification push surface are business
+logic, and business logic that another app could serve belongs in the
+feature library whatever its size. Both became feature edges —
+`chat/ws/` and `notifications/ws/` — and `apps/live` went back to being
+`main.rs` + `module.rs`, like every other app. Reach for the exception
+when the *exposure* is what the app decides, never when the code is
+merely small or currently single-transport.
 
 ## Multiple deployable apps
 

@@ -5,12 +5,12 @@ use nest_rs::ws::{WsClient, async_trait};
 
 #[injectable]
 #[derive(Default)]
-pub struct ModeratedGuard;
+pub struct ModerationGuard;
 
-impl Layer for ModeratedGuard {}
+impl Layer for ModerationGuard {}
 
 #[async_trait]
-impl Guard for ModeratedGuard {
+impl Guard for ModerationGuard {
     async fn check_ws_message(
         &self,
         _client: &WsClient,
@@ -20,7 +20,7 @@ impl Guard for ModeratedGuard {
         match data.get("author").and_then(Value::as_str) {
             Some(author @ "banned") => {
                 tracing::warn!(
-                    target: "live::chat",
+                    target: "features::chat",
                     action = "post",
                     subject = event,
                     author,
@@ -33,7 +33,7 @@ impl Guard for ModeratedGuard {
     }
 }
 
-impl WsGuard for ModeratedGuard {}
+impl WsGuard for ModerationGuard {}
 
 #[cfg(test)]
 mod tests {
@@ -49,7 +49,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_a_banned_author() {
-        let denied = ModeratedGuard
+        let denied = ModerationGuard
             .check_ws_message(
                 &client(),
                 "message",
@@ -61,7 +61,7 @@ mod tests {
 
     #[tokio::test]
     async fn allows_everyone_else() {
-        let ok = ModeratedGuard
+        let ok = ModerationGuard
             .check_ws_message(
                 &client(),
                 "message",

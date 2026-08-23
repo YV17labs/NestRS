@@ -17,6 +17,7 @@ async-trait.workspace = true
 # (`futures_util::Stream` of `bytes::Bytes`) into a streamed poem body.
 bytes.workspace = true
 futures-util.workspace = true
+parking_lot.workspace = true
 poem.workspace = true
 tokio.workspace = true
 sea-orm.workspace = true

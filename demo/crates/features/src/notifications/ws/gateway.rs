@@ -1,21 +1,21 @@
 use nest_rs::ws::{WsClient, gateway, messages};
 
-use features::authn::AuthnGuard;
+use crate::authn::AuthnGuard;
 
-pub struct NotifyNs;
+pub struct NotificationsNs;
 
-#[gateway(path = "/notify", namespace = NotifyNs)]
+#[gateway(path = "/notify", namespace = NotificationsNs)]
 #[use_guards(AuthnGuard)]
 #[derive(Default)]
-pub struct NotifyGateway {}
+pub struct NotificationsGateway;
 
 #[messages]
-impl NotifyGateway {
+impl NotificationsGateway {
     #[subscribe_message("ping")]
     #[public]
     async fn ping(&self, client: &WsClient) {
         if let Err(e) = client.broadcast("pong", &"hi") {
-            tracing::warn!(target: "live::notify", error = %e, "broadcast failed");
+            tracing::warn!(target: "features::notifications", error = %e, "broadcast failed");
         }
     }
 }

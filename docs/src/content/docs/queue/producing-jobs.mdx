@@ -141,7 +141,7 @@ Declare the DTO with `#[input]`: a `Json<T>` handler argument requires
 derives it along with `Deserialize` and `Validate`. A hand-derived DTO needs
 `#[derive(schemars::JsonSchema)]` and the `schemars` dependency to go with it.
 
-```rust title="crates/features/src/audio/dto.rs"
+```rust title="crates/features/src/audio/dtos/transcode_dto.rs"
 use nest_rs::http::input;
 
 #[input]

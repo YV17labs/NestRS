@@ -41,9 +41,12 @@ so namespacing changes which registry is wired, not how it is wired:
 ```rust title="crates/features/src/notifications/ws/gateway.rs"
 use nest_rs::ws::{WsClient, gateway, messages};
 
+use crate::authn::AuthnGuard;
+
 pub struct NotificationsNs;
 
 #[gateway(path = "/notify", namespace = NotificationsNs)]
+#[use_guards(AuthnGuard)]
 #[derive(Default)]
 pub struct NotificationsGateway;
 

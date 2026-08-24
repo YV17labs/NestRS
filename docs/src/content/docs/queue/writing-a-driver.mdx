@@ -171,7 +171,7 @@ impl Transport for YourWorker {
                         (job_id, attempt_no, payload) = /* your_pop_from_queue(method.queue) */ => {
                             // (3) The attempt is the port's — envelope, trace, span,
                             //     panic, classification, events and line included.
-                            match consume::attempt(method, payload, &job_id, attempt_no, container.clone()).await {
+                            match consume::attempt(method, payload, job_id, attempt_no, container.clone()).await {
                                 // (4) What you decide: how each outcome maps onto your
                                 //     backend — ack / retry-later / dead-letter.
                                 Attempt::Ok => { /* ack */ }

@@ -91,8 +91,5 @@
   "tutorial/http.mdx::fence-drift::crates/features/src/posts/service.rs shows `use nest_rs::seaorm::{Creatable, CrudService, Deletable, Upd` and demo/crates/features/src/posts/service.rs does not contain that line",
   "tutorial/security.mdx::fence-drift::apps/api/src/module.rs (abridged) shows `use features::authz::AuthzModule;` and demo/apps/api/src/module.rs does not contain that line",
   "tutorial/security.mdx::fence-drift::crates/features/src/authz/ability.rs shows `use crate::authn::Claims;` and demo/crates/features/src/authz/ability.rs does not contain that line",
-  "tutorial/security.mdx::fence-drift::crates/features/src/users/http/controller.rs shows `use nest_rs::authz::http::Authorize;` and demo/crates/features/src/users/http/controller.rs does not contain that line",
-  "websockets/index.mdx::fence-drift::crates/features/src/chat/ws/gateway.rs shows `use nest_rs::ws::{gateway, messages};` and demo/crates/features/src/chat/ws/gateway.rs does not contain that line",
-  "websockets/index.mdx::fence-drift::apps/live/src/module.rs shows `use nest_rs::ws::WsModule;` and demo/apps/live/src/module.rs does not contain that line",
-  "websockets/rooms.mdx::fence-drift::crates/features/src/chat/ws/gateway.rs shows `svc: Arc<RoomService>,` and demo/crates/features/src/chat/ws/gateway.rs does not contain that line"
+  "tutorial/security.mdx::fence-drift::crates/features/src/users/http/controller.rs shows `use nest_rs::authz::http::Authorize;` and demo/crates/features/src/users/http/controller.rs does not contain that line"
 ]

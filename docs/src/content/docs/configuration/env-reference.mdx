@@ -158,9 +158,13 @@ signing side.
 | `ALLOW_ANY_AUDIENCE` | opt out of that clause and accept a token minted for another service (default `false`). Refused beside `AUDIENCE`, and reported at `warn` once per boot |
 | `LEEWAY_SECS` | clock-skew leeway in seconds (default `30`) |
 | `EXPIRES_IN_SECS` | minted-token lifetime in seconds (default `3600`) |
+| `EXPLICIT_TYPING` | require the JWT `typ` header to name the token's type (default `true`) |
 
-`OAuthClientConfig` shares this namespace for the login flow's provider endpoints —
-every field is required, so an unconfigured app fails boot naming the field:
+## `oauth_client` — `NESTRS_OAUTH_CLIENT__*`
+
+The login flow's provider endpoints, read by `OAuthClientConfig` in
+`nest-rs-oauth-client`. Every field is required, so an unconfigured app fails
+boot naming the field:
 
 | Key | Meaning |
 |---|---|
@@ -171,13 +175,15 @@ every field is required, so an unconfigured app fails boot naming the field:
 | `USERINFO_URL` | provider endpoint the profile is fetched from |
 | `SCOPES` | comma-separated scopes requested at authorization (empty by default) |
 
-`OAuthResourceModule` shares the namespace too — it is what turns the app
-into a conformant OAuth 2.1 resource server (RFC 9728) and what an MCP server
-needs. Importing it makes `AUDIENCE` above **mandatory**: the boot fails without
-it rather than leaving the app unable to say which tokens are its own. (A token
-minted for *another named* audience is refused with or without the module — that
-is RFC 7519 §4.1.3. What the module adds is that a token carrying no `aud` at
-all is refused too.)
+## `oauth_resource` — `NESTRS_OAUTH_RESOURCE__*`
+
+`OAuthResourceModule` is what turns the app into a conformant OAuth 2.1
+resource server (RFC 9728) and what an MCP server needs. Importing it makes
+`NESTRS_AUTHN__AUDIENCE` **mandatory**: the boot fails without it rather than
+leaving the app unable to say which tokens are its own. (A token minted for
+*another named* audience is refused with or without the module — that is
+RFC 7519 §4.1.3. What the module adds is that a token carrying no `aud` at all
+is refused too.)
 
 | Key | Meaning |
 |---|---|
@@ -187,6 +193,8 @@ all is refused too.)
 | `BEARER_METHODS_SUPPORTED` | how a token may be presented — defaults to `header`, the only form accepted |
 | `RESOURCE_NAME` | human-readable name for a consent screen |
 | `RESOURCE_DOCUMENTATION` | URL of developer documentation for this resource |
+| `RESOURCE_POLICY_URI` | URL of this resource's privacy policy, advertised in the metadata document |
+| `RESOURCE_TOS_URI` | URL of this resource's terms of service, advertised in the metadata document |
 
 ## `mcp` — `NESTRS_MCP__*`
 
@@ -217,7 +225,7 @@ The endpoint URLs are provider constants, not config — see
 
 ## Other namespaces
 
-`graphql`, `openapi`, `ws`, `throttler`, `health`, and the `auth` app's `issuer` each read
+`graphql`, `openapi`, `ws`, `throttler`, `health`, and the demo feature library's `issuer` each read
 their own `NESTRS_<NAMESPACE>__*` keys — see the matching module page for the
 fields. The rule is uniform: the struct's field name uppercased is the key.
 

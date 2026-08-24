@@ -81,7 +81,7 @@ use nest_rs::config::ConfigService;
 let vault = Arc::new(
     VaultSource::fetch(&vault_client, "secret/api").await?,
 );
-let env = ConfigService::with_source("database", vault);
+let env = ConfigService::with_source("seaorm", vault);
 let db_config = SeaOrmConfig::from_env(&env, SeaOrmConfig::defaults())?;
 
 App::builder()

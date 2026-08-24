@@ -162,18 +162,18 @@ within that gate your provider's own `#[config]` decides its fate, per the table
 above. `SocialModule` itself takes no configuration, because it never learns
 which providers exist.
 
-## What is not documented yet
+## Where each contract is written
 
-Two ports expose a trait but carry no written contract beside it:
-`ThrottlerStore` and `Strategy`. Extending them is possible — the traits are
-public and the seams are real — but you would be working from the source, and the
-arbitration sentence is missing.
+Every port above carries its contract on the page that owns the concern, not in
+the crate's module docs — so start from the page rather than from docs.rs:
 
-The queue and the database each **do** have a full contract, at
-[queue / writing a driver](/queue/writing-a-driver/) and
-[database / writing a driver](/database/writing-a-driver/). Neither is named from
-the crate's own module docs, so start from those pages rather than from
-docs.rs.
+| Port | Contract |
+|---|---|
+| `JobProducer` | [queue / writing a driver](/queue/writing-a-driver/) |
+| `Repo` / the database binding | [database / writing a driver](/database/writing-a-driver/) |
+| `ThrottlerStore` | [rate limiting](/rate-limiting/), including the arbitration sentence `BACKEND_REMEDY` |
+| `Strategy` | [security / authentication](/security/authentication/) |
+| `SocialProvider` | [security / social login](/security/authentication/social-login/) |
 
 **`nest-rs-storage` is a different case, and the honest statement is that it is
 not extensible today.** It delegates to `object_store`, which drives S3, GCS,

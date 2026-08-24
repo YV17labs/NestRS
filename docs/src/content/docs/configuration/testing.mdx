@@ -124,7 +124,7 @@ let source = Arc::new(Map(HashMap::from([
     ("NESTRS_SEAORM__URL", "postgres://test/app"),
     ("NESTRS_SEAORM__MAX_CONNECTIONS", "5"),
 ])));
-let env = ConfigService::with_source("database", source);
+let env = ConfigService::with_source("seaorm", source);
 let cfg = SeaOrmConfig::from_env(&env, SeaOrmConfig::defaults()).unwrap();
 
 let app = TestApp::builder()

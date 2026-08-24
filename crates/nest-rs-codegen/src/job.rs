@@ -51,7 +51,7 @@ pub fn transactional_value(expr: &Expr) -> syn::Result<bool> {
 /// `expected =` names the grammar and not the key, and on a trigger it did not
 /// even land on the right decorator, the argument list parsing through a
 /// `Punctuated` whose failure is reported at the enclosing `#[scheduled]`.
-pub fn transactional_needs_a_value(attr: &str) -> String {
+fn transactional_needs_a_value(attr: &str) -> String {
     format!(
         "#[{attr}] `{TRANSACTIONAL}` needs a value — write `{TRANSACTIONAL} = true` or \
          `{TRANSACTIONAL} = false`. {WHAT_THE_VALUES_DO}"

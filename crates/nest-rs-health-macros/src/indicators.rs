@@ -69,8 +69,8 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
                 .any(|(name, _)| attr.path().is_ident(name))
         }) {
             let declared = [
-                nest_rs_codegen::role_name(attr.path()),
-                nest_rs_codegen::role_name(extra.path()),
+                nest_rs_codegen::key_as_written(attr.path()),
+                nest_rs_codegen::key_as_written(extra.path()),
             ];
             let accepted: Vec<&str> = PROBE_ATTRS.iter().map(|(name, _)| *name).collect();
             return syn::Error::new(

@@ -32,8 +32,8 @@ mod ty;
 pub mod versioning;
 
 pub use args::{
-    duplicate_argument, key_as_written, missing_argument, needs_a_value, once, one_role_per_method,
-    require_str_lit, role_name, unknown_argument, unknown_value, unmatched_meta,
+    duplicate_argument, key_as_written, missing_argument, needs_a_value, one_role_per_method,
+    reject_duplicate_argument, require_str_lit, unknown_argument, unknown_value, unmatched_meta,
 };
 pub use attrs::{reject_http_only_layers, take_flag_attr, take_path_list};
 pub use capability::guard_capability_bounds;

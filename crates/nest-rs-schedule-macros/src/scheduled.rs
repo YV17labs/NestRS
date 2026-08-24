@@ -66,8 +66,8 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
             .find(|attr| is_trigger_attr(attr.path()))
         {
             let declared = [
-                nest_rs_codegen::role_name(trigger_attr.path()),
-                nest_rs_codegen::role_name(extra.path()),
+                nest_rs_codegen::key_as_written(trigger_attr.path()),
+                nest_rs_codegen::key_as_written(extra.path()),
             ];
             return syn::Error::new(
                 extra.span(),

@@ -139,7 +139,12 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     // OpenAPI schema took whichever came last.
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
-            nest_rs_codegen::once(name.is_some(), &meta.path, "expose", "name")?;
+            nest_rs_codegen::reject_duplicate_argument(
+                name.is_some(),
+                &meta.path,
+                "expose",
+                "name",
+            )?;
             // A bare `#[expose(name)]` reaches `meta.value()` as syn's
             // `` expected `=` ``, which names the grammar and not the key.
             if !meta.input.peek(syn::Token![=]) {
@@ -148,26 +153,41 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             name = Some(meta.value()?.parse::<LitStr>()?.value());
             Ok(())
         } else if meta.path.is_ident("service") {
-            nest_rs_codegen::once(service.is_some(), &meta.path, "expose", "service")?;
+            nest_rs_codegen::reject_duplicate_argument(
+                service.is_some(),
+                &meta.path,
+                "expose",
+                "service",
+            )?;
             if !meta.input.peek(syn::Token![=]) {
                 return Err(meta.error(nest_rs_codegen::needs_a_value("expose", "service")));
             }
             service = Some(meta.value()?.parse::<Path>()?);
             Ok(())
         } else if meta.path.is_ident("complex") {
-            nest_rs_codegen::once(complex, &meta.path, "expose", "complex")?;
+            nest_rs_codegen::reject_duplicate_argument(complex, &meta.path, "expose", "complex")?;
             complex = true;
             Ok(())
         } else if meta.path.is_ident("graphql") {
-            nest_rs_codegen::once(graphql, &meta.path, "expose", "graphql")?;
+            nest_rs_codegen::reject_duplicate_argument(graphql, &meta.path, "expose", "graphql")?;
             graphql = true;
             Ok(())
         } else if meta.path.is_ident("soft_delete") {
-            nest_rs_codegen::once(soft_delete, &meta.path, "expose", "soft_delete")?;
+            nest_rs_codegen::reject_duplicate_argument(
+                soft_delete,
+                &meta.path,
+                "expose",
+                "soft_delete",
+            )?;
             soft_delete = true;
             Ok(())
         } else if meta.path.is_ident("timestamps") {
-            nest_rs_codegen::once(timestamps, &meta.path, "expose", "timestamps")?;
+            nest_rs_codegen::reject_duplicate_argument(
+                timestamps,
+                &meta.path,
+                "expose",
+                "timestamps",
+            )?;
             timestamps = true;
             Ok(())
         } else {

@@ -71,11 +71,21 @@ impl Parse for QueueArgs {
             input.parse::<Token![=]>()?;
             match key.to_string().as_str() {
                 "name" => {
-                    nest_rs_codegen::once(name.is_some(), &key, "queue", &key.to_string())?;
+                    nest_rs_codegen::reject_duplicate_argument(
+                        name.is_some(),
+                        &key,
+                        "queue",
+                        &key.to_string(),
+                    )?;
                     name = Some(input.parse()?);
                 }
                 "job" => {
-                    nest_rs_codegen::once(job.is_some(), &key, "queue", &key.to_string())?;
+                    nest_rs_codegen::reject_duplicate_argument(
+                        job.is_some(),
+                        &key,
+                        "queue",
+                        &key.to_string(),
+                    )?;
                     job = Some(input.parse()?);
                 }
                 other => {

@@ -1353,7 +1353,12 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                 .map_err(|_| syn::Error::new(input.span(), API_KEYS))?;
             match key.to_string().as_str() {
                 "summary" => {
-                    nest_rs_codegen::once(out.summary.is_some(), &key, "api", "summary")?;
+                    nest_rs_codegen::reject_duplicate_argument(
+                        out.summary.is_some(),
+                        &key,
+                        "api",
+                        "summary",
+                    )?;
                     input.parse::<Token![=]>()?;
                     out.summary = Some(require_str_lit(
                         &input.parse::<Expr>()?,
@@ -1363,7 +1368,12 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                     )?);
                 }
                 "description" => {
-                    nest_rs_codegen::once(out.description.is_some(), &key, "api", "description")?;
+                    nest_rs_codegen::reject_duplicate_argument(
+                        out.description.is_some(),
+                        &key,
+                        "api",
+                        "description",
+                    )?;
                     input.parse::<Token![=]>()?;
                     out.description = Some(require_str_lit(
                         &input.parse::<Expr>()?,
@@ -1373,17 +1383,27 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                     )?);
                 }
                 "response" => {
-                    nest_rs_codegen::once(out.response.is_some(), &key, "api", "response")?;
+                    nest_rs_codegen::reject_duplicate_argument(
+                        out.response.is_some(),
+                        &key,
+                        "api",
+                        "response",
+                    )?;
                     input.parse::<Token![=]>()?;
                     out.response = Some(input.parse()?);
                 }
                 "multipart" => {
-                    nest_rs_codegen::once(out.multipart.is_some(), &key, "api", "multipart")?;
+                    nest_rs_codegen::reject_duplicate_argument(
+                        out.multipart.is_some(),
+                        &key,
+                        "api",
+                        "multipart",
+                    )?;
                     input.parse::<Token![=]>()?;
                     out.multipart = Some(input.parse()?);
                 }
                 "response_content_type" => {
-                    nest_rs_codegen::once(
+                    nest_rs_codegen::reject_duplicate_argument(
                         out.response_content_type.is_some(),
                         &key,
                         "api",
@@ -1400,7 +1420,12 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                     out.response_content_type = Some(lit);
                 }
                 "tags" => {
-                    nest_rs_codegen::once(!out.tags.is_empty(), &key, "api", "tags")?;
+                    nest_rs_codegen::reject_duplicate_argument(
+                        !out.tags.is_empty(),
+                        &key,
+                        "api",
+                        "tags",
+                    )?;
                     let content;
                     syn::parenthesized!(content in input);
                     out.tags = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?

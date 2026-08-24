@@ -256,9 +256,10 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
         match meta {
             // The shared sentence. This decorator had three keys and two
             // wordings for one question: `namespace` went through
-            // `nest_rs_codegen::once` and the other two around it.
+            // `nest_rs_codegen::reject_duplicate_argument` and the other two
+            // around it.
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                nest_rs_codegen::once(path.is_some(), &nv, "gateway", "path")?;
+                nest_rs_codegen::reject_duplicate_argument(path.is_some(), &nv, "gateway", "path")?;
                 path = Some(require_str_lit(&nv.value, "gateway", "path", "/ws")?);
             }
             // Through `#[controller]`'s own parser, which is what the doc
@@ -294,7 +295,12 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
                 // namespace decides which `WsServer<N>` it fans out on, so a
                 // dropped second declaration is which sockets a broadcast
                 // reaches — decided by source order.
-                nest_rs_codegen::once(namespace.is_some(), &nv, "gateway", "namespace")?;
+                nest_rs_codegen::reject_duplicate_argument(
+                    namespace.is_some(),
+                    &nv,
+                    "gateway",
+                    "namespace",
+                )?;
                 namespace = Some(expr_path(&nv.value)?)
             }
             other => {

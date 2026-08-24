@@ -1,4 +1,6 @@
-use nest_rs_codegen::{key_as_written, once, require_str_lit, unknown_argument, unmatched_meta};
+use nest_rs_codegen::{
+    key_as_written, reject_duplicate_argument, require_str_lit, unknown_argument, unmatched_meta,
+};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -74,7 +76,7 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
         let key = key_as_written(&meta.path);
         match key.as_str() {
             "namespace" => {
-                once(namespace.is_some(), &meta.path, "config", "namespace")?;
+                reject_duplicate_argument(namespace.is_some(), &meta.path, "config", "namespace")?;
                 namespace = Some(require_str_lit(
                     &meta.value,
                     "config",
@@ -83,7 +85,7 @@ fn parse_args(args: TokenStream2) -> syn::Result<Args> {
                 )?)
             }
             "validate" => {
-                once(manual_validate, &meta.path, "config", "validate")?;
+                reject_duplicate_argument(manual_validate, &meta.path, "config", "validate")?;
                 let lit = require_str_lit(&meta.value, "config", "validate", "manual")?;
                 if lit.value() != "manual" {
                     return Err(syn::Error::new_spanned(

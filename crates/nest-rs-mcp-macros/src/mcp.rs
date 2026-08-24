@@ -214,20 +214,20 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
         // Accepting a repeat drops one of two declarations and source order
         // decides which — here that is the path a host joins, i.e. which peers
         // share its endpoint, and the identity a client is told it reached.
-        let once = |taken: bool, meta: &Meta, key: &str| -> syn::Result<()> {
-            nest_rs_codegen::once(taken, meta, "mcp", key)
+        let reject_duplicate = |taken: bool, meta: &Meta, key: &str| -> syn::Result<()> {
+            nest_rs_codegen::reject_duplicate_argument(taken, meta, "mcp", key)
         };
         match meta {
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                once(parsed.path.is_some(), &Meta::NameValue(nv.clone()), "path")?;
+                reject_duplicate(parsed.path.is_some(), &Meta::NameValue(nv.clone()), "path")?;
                 parsed.path = Some(require_str_lit(&nv.value, "mcp", "path", "/mcp")?)
             }
             Meta::NameValue(nv) if nv.path.is_ident("name") => {
-                once(parsed.name.is_some(), &Meta::NameValue(nv.clone()), "name")?;
+                reject_duplicate(parsed.name.is_some(), &Meta::NameValue(nv.clone()), "name")?;
                 parsed.name = Some(nv.value)
             }
             Meta::NameValue(nv) if nv.path.is_ident("title") => {
-                once(
+                reject_duplicate(
                     parsed.title.is_some(),
                     &Meta::NameValue(nv.clone()),
                     "title",

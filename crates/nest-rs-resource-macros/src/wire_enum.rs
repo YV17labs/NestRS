@@ -104,7 +104,12 @@ fn parse_args(args: TokenStream2) -> syn::Result<bool> {
     let mut graphql = false;
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("graphql") {
-            nest_rs_codegen::once(graphql, &meta.path, "wire_enum", "graphql")?;
+            nest_rs_codegen::reject_duplicate_argument(
+                graphql,
+                &meta.path,
+                "wire_enum",
+                "graphql",
+            )?;
             graphql = true;
             Ok(())
         } else {

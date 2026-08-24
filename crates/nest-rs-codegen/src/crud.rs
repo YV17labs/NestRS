@@ -186,27 +186,52 @@ impl Parse for CrudConfig {
             let key: Ident = input.parse()?;
             match key.to_string().as_str() {
                 "service" => {
-                    crate::once(service.is_some(), &key, "crud", &key.to_string())?;
+                    crate::reject_duplicate_argument(
+                        service.is_some(),
+                        &key,
+                        "crud",
+                        &key.to_string(),
+                    )?;
                     value_for(input, &key)?;
                     service = Some(input.parse()?);
                 }
                 "entity" => {
-                    crate::once(entity.is_some(), &key, "crud", &key.to_string())?;
+                    crate::reject_duplicate_argument(
+                        entity.is_some(),
+                        &key,
+                        "crud",
+                        &key.to_string(),
+                    )?;
                     value_for(input, &key)?;
                     entity = Some(input.parse()?);
                 }
                 "output" => {
-                    crate::once(output.is_some(), &key, "crud", &key.to_string())?;
+                    crate::reject_duplicate_argument(
+                        output.is_some(),
+                        &key,
+                        "crud",
+                        &key.to_string(),
+                    )?;
                     value_for(input, &key)?;
                     output = Some(input.parse()?);
                 }
                 "create" => {
-                    crate::once(create.is_some(), &key, "crud", &key.to_string())?;
+                    crate::reject_duplicate_argument(
+                        create.is_some(),
+                        &key,
+                        "crud",
+                        &key.to_string(),
+                    )?;
                     value_for(input, &key)?;
                     create = Some(input.parse()?);
                 }
                 "update" => {
-                    crate::once(update.is_some(), &key, "crud", &key.to_string())?;
+                    crate::reject_duplicate_argument(
+                        update.is_some(),
+                        &key,
+                        "crud",
+                        &key.to_string(),
+                    )?;
                     value_for(input, &key)?;
                     update = Some(input.parse()?);
                 }

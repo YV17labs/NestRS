@@ -308,11 +308,21 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
             // service loads the authorized subject**, so dropping one of two by
             // source order is the posture silently deciding itself.
             AuthorizeArg::Bind(p) => {
-                nest_rs_codegen::once(bind.is_some(), &p, "authorize", "bind")?;
+                nest_rs_codegen::reject_duplicate_argument(
+                    bind.is_some(),
+                    &p,
+                    "authorize",
+                    "bind",
+                )?;
                 bind = Some(p);
             }
             AuthorizeArg::IdArg(i) => {
-                nest_rs_codegen::once(id_arg.is_some(), &i, "authorize", "id_arg")?;
+                nest_rs_codegen::reject_duplicate_argument(
+                    id_arg.is_some(),
+                    &i,
+                    "authorize",
+                    "id_arg",
+                )?;
                 id_arg = Some(i);
             }
         }
@@ -814,8 +824,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         // other root has one. Silently keeping the first attribute would mount
         // the operation under a role the developer did not write.
         if let Some(second) = method.attrs.iter().find(|a| is_verb(a)) {
-            let first = nest_rs_codegen::role_name(verb_attr.path());
-            let second_role = nest_rs_codegen::role_name(second.path());
+            let first = nest_rs_codegen::key_as_written(verb_attr.path());
+            let second_role = nest_rs_codegen::key_as_written(second.path());
             // The `_entities` clause only when one of the two *is* `#[entity]`:
             // explaining `#[query]` + `#[mutation]` with the federation root is
             // an answer to a question the developer did not ask.

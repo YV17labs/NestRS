@@ -605,8 +605,8 @@ fn take_operations(item: &mut ItemImpl, base: &syn::Ident) -> syn::Result<Operat
             .collect();
         if let [(first, _), (second, _), ..] = roles.as_slice() {
             let declared = [
-                nest_rs_codegen::role_name(method.attrs[*first].path()),
-                nest_rs_codegen::role_name(method.attrs[*second].path()),
+                nest_rs_codegen::key_as_written(method.attrs[*first].path()),
+                nest_rs_codegen::key_as_written(method.attrs[*second].path()),
             ];
             return Err(syn::Error::new_spanned(
                 &method.attrs[*second],

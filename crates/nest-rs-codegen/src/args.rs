@@ -54,13 +54,18 @@ pub fn duplicate_argument(attr: &str, name: &str) -> String {
 /// Refuse an argument written twice, spanned at the second spelling.
 ///
 /// The guard half of [`duplicate_argument`], worded here because the sentence
-/// alone was not enough: six decorators wrapped it in their own `once`, and the
+/// alone was not enough: six decorators wrapped it in their own guard, and the
 /// four written for this change had already drifted apart — a `&Option<T>`, a
 /// `bool`, a closure over a `&Meta`, and an inline field test — so the span the
 /// caret lands on was decided six times. `at` is anything that carries tokens,
 /// which is the one axis that genuinely differs: the `Ident` a hand-rolled
 /// `ParseStream` loop holds, and the `Meta` or path a `Punctuated` one does.
-pub fn once<T: ToTokens>(taken: bool, at: &T, attr: &str, name: &str) -> syn::Result<()> {
+pub fn reject_duplicate_argument<T: ToTokens>(
+    taken: bool,
+    at: &T,
+    attr: &str,
+    name: &str,
+) -> syn::Result<()> {
     if taken {
         return Err(syn::Error::new_spanned(at, duplicate_argument(attr, name)));
     }
@@ -140,19 +145,6 @@ pub fn unknown_value(attr: &str, what: &str, name: &str, expected: &[&str]) -> S
 /// carries one for the same reason.
 pub fn missing_argument(attr: &str, key: &str, example: &str) -> String {
     format!("#[{attr}] requires `{key}` — write `{key} = {example}`")
-}
-
-/// The bare identifier an attribute was written with, for a refusal that quotes
-/// it back — `?` when the path is not a bare ident, because a refusal naming
-/// nothing is worse than one naming the shape.
-///
-/// Here rather than in each orchestrator: five of them extracted this by hand
-/// and three disagreed on the fallback, so a non-ident path was quoted back as
-/// `#[?]` at one site and as an empty `#[]` at two others.
-pub fn role_name(path: &syn::Path) -> String {
-    path.get_ident()
-        .map(ToString::to_string)
-        .unwrap_or_else(|| "?".to_owned())
 }
 
 /// The sentence an orchestrator prints for a method that declares two of the
@@ -240,8 +232,14 @@ pub fn unmatched_meta(attr: &str, meta: &Meta, expected: &[&str]) -> syn::Error 
 ///
 /// Public because the other attribute shape — `syn::meta::parser` /
 /// `parse_nested_meta`, which hands a `ParseNestedMeta` rather than a `Meta` —
-/// needs the same reader and cannot use [`unmatched_meta`]. Two shapes, one
-/// answer to "what did they actually write".
+/// needs the same reader and cannot use [`unmatched_meta`]. Three shapes, one
+/// answer to "what did they actually write": the third is an orchestrator
+/// naming the *role* attribute a method declared, for [`one_role_per_method`].
+///
+/// That third caller had its own copy, returning `?` for a non-ident path —
+/// the "nicer placeholder" the paragraph above condemns, ninety lines from the
+/// sentence condemning it. One fallback, because one of the two has to be
+/// right and a reader picking between them at a new call site had no basis.
 pub fn key_as_written(path: &syn::Path) -> String {
     path.get_ident()
         .map(ToString::to_string)

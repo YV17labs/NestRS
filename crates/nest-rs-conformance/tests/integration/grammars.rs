@@ -93,7 +93,8 @@ fn macro_crates(root: &Path) -> Vec<std::path::PathBuf> {
 /// Every string-literal argument of every call to one of `names`.
 ///
 /// **All of them, not the first**, because the position differs by helper:
-/// `unknown_argument(attr, …)` leads with it while `once(taken, at, attr, name)`
+/// `unknown_argument(attr, …)` leads with it while
+/// `reject_duplicate_argument(taken, at, attr, name)`
 /// carries it third, behind a `bool` and a token span. Reading position 0 said
 /// no decorator refuses a repeat, including the five that had just been taught
 /// to — a scan that answers "none" for a whole column is indistinguishable from
@@ -132,7 +133,8 @@ fn string_args_of(text: &str, names: &[&str]) -> Vec<String> {
 
 /// Whether any crate wording this decorator's grammar also refuses a repeat.
 ///
-/// `once` and `duplicate_argument` are the two spellings of one sentence — the
+/// `reject_duplicate_argument` and `duplicate_argument` are the two spellings
+/// of one sentence — the
 /// guard and the message — and either is the adoption.
 fn refuses_a_repeat(root: &Path, attr: &str, crates: &BTreeSet<String>) -> bool {
     macro_crates(root)
@@ -145,7 +147,7 @@ fn refuses_a_repeat(root: &Path, attr: &str, crates: &BTreeSet<String>) -> bool 
         .flat_map(|dir| rust_files(&dir.join("src")))
         .filter_map(|file| read(&file).ok())
         .any(|text| {
-            string_args_of(&text, &["once", "duplicate_argument"])
+            string_args_of(&text, &["reject_duplicate_argument", "duplicate_argument"])
                 .iter()
                 .any(|named| named == attr)
         })
@@ -184,7 +186,7 @@ fn every_key_value_grammar_refuses_the_four_ways_of_getting_it_wrong() {
         let unknown = format!("unknown #[{attr}] argument ");
         for (column, present) in [
             (
-                "a duplicate key refused, through the shared `once`",
+                "a duplicate key refused, through the shared `reject_duplicate_argument`",
                 refuses_a_repeat(&root, attr, crates),
             ),
             (

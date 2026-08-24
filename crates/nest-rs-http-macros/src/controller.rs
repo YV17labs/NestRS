@@ -225,9 +225,15 @@ fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>
             // The shared sentence, with the remedy appended where there is one
             // — never a second base wording. Both keys asked "declared twice?"
             // in this decorator's own words while `namespace` next door asked it
-            // in `nest_rs_codegen::once`'s, so one grammar had two answers.
+            // in `nest_rs_codegen::reject_duplicate_argument`'s, so one grammar
+            // had two answers.
             Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                nest_rs_codegen::once(path.is_some(), &nv, "controller", "path")?;
+                nest_rs_codegen::reject_duplicate_argument(
+                    path.is_some(),
+                    &nv,
+                    "controller",
+                    "path",
+                )?;
                 path = Some(require_str_lit(&nv.value, "controller", "path", "/users")?);
             }
             Meta::NameValue(nv) if nv.path.is_ident("version") => {

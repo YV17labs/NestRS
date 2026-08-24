@@ -170,7 +170,7 @@ fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
                 &["scope"],
             ));
         }
-        nest_rs_codegen::once(scope.is_some(), meta, "injectable", "scope")?;
+        nest_rs_codegen::reject_duplicate_argument(scope.is_some(), meta, "injectable", "scope")?;
         let value_text = quote!(#nv).to_string();
         let Expr::Path(path) = &nv.value else {
             return Err(syn::Error::new_spanned(

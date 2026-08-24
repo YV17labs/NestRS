@@ -376,7 +376,12 @@ impl Parse for ModuleArgs {
             // interprets accepting a spelling its siblings reject is the
             // asymmetry a shared sentence exists to remove: one list is what a
             // reader can see whole.
-            nest_rs_codegen::once(seen.contains(&name), &key, "module", &name)?;
+            nest_rs_codegen::reject_duplicate_argument(
+                seen.contains(&name),
+                &key,
+                "module",
+                &name,
+            )?;
             seen.push(name.clone());
             if input.parse::<Token![=]>().is_err() {
                 return Err(syn::Error::new(

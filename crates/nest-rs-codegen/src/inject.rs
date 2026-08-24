@@ -212,7 +212,7 @@ fn parse_inject_key(attr: &syn::Attribute) -> syn::Result<Option<syn::LitStr>> {
     let mut key: Option<syn::LitStr> = None;
     attr.parse_nested_meta(|meta| {
         if meta.path.is_ident("key") {
-            crate::once(key.is_some(), &meta.path, "inject", "key")?;
+            crate::reject_duplicate_argument(key.is_some(), &meta.path, "inject", "key")?;
             // `meta.value()` on a bare `#[inject(key)]` is syn's `` expected `=` ``,
             // which names the grammar and not the key — the silence
             // `needs_a_value` exists to end.
@@ -467,7 +467,7 @@ fn layer_label(item: &impl ToTokens) -> String {
 /// `::std::vec![...]` of `#[inject]` dependency `TypeId`s — body for
 /// [`dependencies_method`]/[`injected_method`] and for the inherent
 /// `__nestrs_injected()` a struct decorator emits.
-pub(crate) fn injected_keys_expr(dep_keys: &[TokenStream2]) -> TokenStream2 {
+fn injected_keys_expr(dep_keys: &[TokenStream2]) -> TokenStream2 {
     quote! { ::std::vec![ #(#dep_keys),* ] }
 }
 

@@ -65,12 +65,6 @@ pub fn relative(path: &Path, root: &Path) -> String {
         .to_string()
 }
 
-/// Compared by value, so the wrapping a `\` continuation introduces never
-/// decides whether two spellings are the same string.
-pub fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// A file parsed as Rust, or `None` when it is not (a fixture that must not
 /// compile, a generated stub). A join reads Rust with Rust's parser: a
 /// `\`-continued literal and a `#[cfg(test)]` block are the two things a text

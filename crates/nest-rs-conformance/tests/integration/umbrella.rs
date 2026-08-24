@@ -101,8 +101,8 @@ use std::path::Path;
 
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    UMBRELLA_AGGREGATES, crate_dirs, executed_tokens, exported_decorators, files_with_extension,
-    parsed, path_roots, read, repo_root, rust_files, spells_path, umbrella_matrix,
+    crate_dirs, executed_tokens, exported_decorators, files_with_extension, parsed, path_roots,
+    read, repo_root, rust_files, spells_path, umbrella_matrix,
 };
 use syn::{Item, UseTree};
 
@@ -130,6 +130,10 @@ const CRATE_FLOOR: usize = 28;
 /// `baseline::floor` makes the same argument for why the *sentence* is central
 /// and the *number* is not.
 const README_FLOOR: usize = 28;
+
+/// Four edges arm a guard crate today. Named like its two siblings above: this
+/// one was the file's single bare literal.
+const PAIRINGS_FLOOR: usize = 4;
 
 /// A capability, as the umbrella's own feature matrix declares it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -192,21 +196,17 @@ impl Capability {
 /// `default` and `full` are excluded: they activate nothing of their own and
 /// are documented as aggregates, which is the same reason [`capabilities`]
 /// skips them.
+///
+/// Reads `sources::umbrella_matrix` for the reason [`capabilities`] gives —
+/// two parsers for one table is how the two answers came to differ. This
+/// function was the second parser: it re-read the manifest and re-applied the
+/// aggregate filter line for line, in the file whose own doc argues against it.
 fn sub_features(root: &Path, capabilities: &[Capability]) -> BTreeSet<String> {
-    let manifest =
-        read(&root.join("crates/nest-rs/Cargo.toml")).expect("the umbrella has a manifest");
-    let doc: toml_edit::DocumentMut = manifest
-        .parse()
-        .expect("the umbrella manifest is valid TOML");
     let owned: BTreeSet<&str> = capabilities.iter().map(|c| c.feature.as_str()).collect();
-    let Some(features) = doc.get("features").and_then(|f| f.as_table()) else {
-        return BTreeSet::new();
-    };
-    features
-        .iter()
-        .map(|(name, _)| name.to_owned())
+    umbrella_matrix(root)
+        .features()
+        .into_iter()
         .filter(|name| !owned.contains(name.as_str()))
-        .filter(|name| !UMBRELLA_AGGREGATES.contains(&name.as_str()))
         .collect()
 }
 
@@ -644,7 +644,7 @@ fn every_edge_the_umbrella_arms_is_armed_on_every_guard_crate() {
         }
     }
 
-    baseline::floor(checked, 4, "edge/guard-crate pairings");
+    baseline::floor(checked, PAIRINGS_FLOOR, "edge/guard-crate pairings");
     assert!(
         offenders.is_empty(),
         "every `Guard::check_*` entry defaults to `Ok(())`, so an arm the \

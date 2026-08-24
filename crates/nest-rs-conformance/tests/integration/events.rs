@@ -17,13 +17,23 @@ use std::path::Path;
 
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    Named, declared_target, is_cfg_test, normalize, parsed, relative, repo_root, rust_files,
+    Named, declared_target, is_cfg_test, parsed, relative, repo_root, rust_files,
 };
 use proc_macro2::{TokenStream, TokenTree};
 use syn::visit::Visit;
 use syn::{Attribute, Expr, ItemConst, ItemFn, ItemMod, LitStr, Macro, Path as SynPath};
 
 const BASELINE: &str = "events-baseline.txt";
+
+/// Compared by value, so the wrapping a `\` continuation introduces never
+/// decides whether two spellings are the same string.
+///
+/// Here rather than in `sources`, which carries what more than one join needs:
+/// this join is the only reader, and a message is the only thing in the tree a
+/// `\` continuation wraps.
+fn normalize(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
 
 /// Below this the scan is reading the wrong tree and every "hole" it reports is
 /// an artefact. A join that can silently find nothing is worse than no join.

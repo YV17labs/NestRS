@@ -19,11 +19,33 @@ use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{crate_dirs, parsed, repo_root};
 use syn::Item;
 
-const BASELINE: &str = "naming-baseline.txt";
+/// One per gated join in this module. Named rather than written at the call
+/// site for the reason every interpreted string here is: a mistyped filename
+/// makes `compare` find no file, so `land` writes a fresh one and the failure
+/// reads as a legitimate first landing rather than as a typo — while the real
+/// baseline silently stops being read.
+const MODULES_BASELINE: &str = "naming-baseline.txt";
+const BINDINGS_BASELINE: &str = "bindings-baseline.txt";
+const NAMESPACE_BASELINE: &str = "namespace-baseline.txt";
 
-/// Below this the scan is reading the wrong tree and every agreement it reports
-/// is an artefact.
-const FLOOR: usize = 18;
+/// Below one of these the scan is reading the wrong tree and every agreement it
+/// reports is an artefact.
+///
+/// A floor belongs to the population it guards, so this module carries one per
+/// population rather than one number several joins share — the shape `canon`
+/// and `docs` already use. Six of these were bare literals at their call site,
+/// which is the one form that cannot be reviewed: a floor is all that stands
+/// between a scan that silently reads nothing and a baseline diff that looks
+/// green.
+mod floors {
+    pub const MODULE_TYPES: usize = 18;
+    pub const EDGE_ADAPTERS: usize = 12;
+    pub const DISPATCH_MARKERS: usize = 10;
+    pub const DISPATCH_ENTRIES: usize = 4;
+    pub const EDGE_FOLDER_FILES: usize = 60;
+    pub const BINDING_FOLDER_FILES: usize = 8;
+    pub const CONFIGS: usize = 10;
+}
 
 /// Fold a name to what it *says*, discarding how it was cased or separated:
 /// `oauth-client`, `OAuthClient` and `Oauth_Client` all fold to `oauthclient`.
@@ -181,9 +203,9 @@ fn every_module_type_is_named_for_its_path() {
         }
     }
 
-    baseline::floor(scanned, FLOOR, "module types");
+    baseline::floor(scanned, floors::MODULE_TYPES, "module types");
     baseline::gate(
-        BASELINE,
+        MODULES_BASELINE,
         &holes,
         scanned,
         "module types",
@@ -233,7 +255,7 @@ fn every_edge_adapter_is_named_for_the_module_it_adapts() {
             let Some(edge_at) = segments.len().checked_sub(2) else {
                 continue;
             };
-            if !crate::units::EDGES.contains(&segments[edge_at]) || edge_at == 0 {
+            if !crate::EDGES.contains(&segments[edge_at]) || edge_at == 0 {
                 continue;
             }
             let module = folded(segments[edge_at - 1]);
@@ -255,7 +277,7 @@ fn every_edge_adapter_is_named_for_the_module_it_adapts() {
         }
     }
 
-    baseline::floor(scanned, 12, "edge adapters");
+    baseline::floor(scanned, floors::EDGE_ADAPTERS, "edge adapters");
     assert!(
         offenders.is_empty(),
         "an adapter is named for the module it adapts, so a reader finds it from \
@@ -522,8 +544,16 @@ fn walk_dirs(dir: &Path, visit: &mut impl FnMut(&Path)) {
 fn no_file_under_an_edge_folder_answers_another_edge() {
     let root = repo_root();
     let (markers, entries) = edge_dispatch_vocabulary(&root);
-    baseline::floor(markers.len(), 10, "edge dispatch markers");
-    baseline::floor(entries.len(), 4, "edge dispatch entries");
+    baseline::floor(
+        markers.len(),
+        floors::DISPATCH_MARKERS,
+        "edge dispatch markers",
+    );
+    baseline::floor(
+        entries.len(),
+        floors::DISPATCH_ENTRIES,
+        "edge dispatch entries",
+    );
 
     let mut offenders = Vec::new();
     let mut scanned = 0usize;
@@ -543,7 +573,7 @@ fn no_file_under_an_edge_folder_answers_another_edge() {
                 .iter()
                 .take(segments.len() - 1)
                 .rev()
-                .find(|s| crate::units::EDGES.contains(s))
+                .find(|s| crate::EDGES.contains(s))
             else {
                 continue;
             };
@@ -579,7 +609,11 @@ fn no_file_under_an_edge_folder_answers_another_edge() {
         }
     }
 
-    baseline::floor(scanned, 60, "files under an edge folder");
+    baseline::floor(
+        scanned,
+        floors::EDGE_FOLDER_FILES,
+        "files under an edge folder",
+    );
     assert!(
         offenders.is_empty(),
         "an edge folder says the file serves that edge; answering another from \
@@ -640,7 +674,7 @@ fn edge_dispatch_vocabulary(
 /// The edge a `CamelCase` ident opens with — `WsGuard` is ws's, `Websocket`
 /// nobody's, because the word has to end where the next one starts.
 fn edge_opening(ident: &str) -> Option<String> {
-    crate::units::EDGES
+    crate::EDGES
         .iter()
         .find(|edge| {
             let lowered = ident.to_ascii_lowercase();
@@ -656,7 +690,7 @@ fn edge_opening(ident: &str) -> Option<String> {
 /// The edge a `snake_case` ident carries as a whole segment — `check_ws_message`
 /// is ws's, `http_status` is not a dispatch entry and never reaches here.
 fn edge_segment(ident: &str) -> Option<String> {
-    crate::units::EDGES
+    crate::EDGES
         .iter()
         .find(|edge| ident.split('_').any(|part| part == **edge))
         .map(|edge| (*edge).to_string())
@@ -764,9 +798,13 @@ fn no_binding_folder_names_a_sibling_bindings_type() {
         }
     }
 
-    baseline::floor(scanned, 8, "files under a binding folder");
+    baseline::floor(
+        scanned,
+        floors::BINDING_FOLDER_FILES,
+        "files under a binding folder",
+    );
     baseline::gate(
-        "bindings-baseline.txt",
+        BINDINGS_BASELINE,
         &holes,
         scanned,
         "files under a binding folder",
@@ -900,9 +938,9 @@ fn namespace_is_the_stem() {
         }
     }
 
-    baseline::floor(scanned, 10, "shipped `#[config]` structs");
+    baseline::floor(scanned, floors::CONFIGS, "shipped `#[config]` structs");
     baseline::gate(
-        "namespace-baseline.txt",
+        NAMESPACE_BASELINE,
         &holes,
         scanned,
         "shipped `#[config]` structs",

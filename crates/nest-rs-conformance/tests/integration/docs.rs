@@ -46,10 +46,6 @@ const BASELINE: &str = "docs-baseline.txt";
 /// reporting every member as undocumented.
 const CORPUS: &str = "docs/src/content/docs";
 
-/// Below this the corpus walk is reading the wrong tree, and every hole it
-/// reports is an artefact. 125 pages stand today.
-const PAGE_FLOOR: usize = 100;
-
 /// One floor per family, never one shared.
 ///
 /// A floor belongs to the population it guards — `baseline::floor` argues the
@@ -58,6 +54,9 @@ const PAGE_FLOOR: usize = 100;
 /// one here would mean a family shrinking to nothing while another's size held
 /// the check up.
 mod floors {
+    /// The corpus walk itself: 125 pages stand today. Declared here rather than
+    /// beside `CORPUS` so this module has one place a floor is read from.
+    pub const PAGES: usize = 100;
     pub const UNITS: usize = 8;
     pub const TARGETS: usize = 20;
     pub const ENV_KEYS: usize = 40;
@@ -95,7 +94,7 @@ const INTERNAL_TARGETS: [&str; 2] = ["nest_rs::container", "nest_rs::loader"];
 fn every_family_member_the_framework_declares_is_named_by_some_page() {
     let root = repo_root();
     let corpus = corpus(&root);
-    baseline::floor(corpus.len(), PAGE_FLOOR, "docs pages");
+    baseline::floor(corpus.len(), floors::PAGES, "docs pages");
 
     let mut holes = BTreeSet::new();
     let names = |name: &str| corpus.iter().any(|page| page.contains(name));

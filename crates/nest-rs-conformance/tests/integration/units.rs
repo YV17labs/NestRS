@@ -42,6 +42,11 @@ use syn::visit::Visit;
 /// reads exactly like a join that found nothing wrong.
 const FLOOR: usize = 8;
 
+/// The floor for the sites that *open* a unit, which is a different population
+/// from the sites that *name* one — a bare literal at its call site until it
+/// was named, and the only floor in this module a reader could not review.
+const OPENED_FLOOR: usize = 6;
+
 /// The two vocabularies a site may name, and the module each lives in.
 ///
 /// Checking the **module** rather than merely "is it a path" is what makes the
@@ -300,7 +305,11 @@ fn scan_all(root: &Path) -> Scan {
 fn a_unit_is_opened_only_by_the_crate_that_declares_it() {
     let root = repo_root();
     let opened = scan_all(&root).opened;
-    baseline::floor(opened.len(), 6, "`operation_span!` site(s) naming a unit");
+    baseline::floor(
+        opened.len(),
+        OPENED_FLOOR,
+        "`operation_span!` site(s) naming a unit",
+    );
 
     let mut holes = BTreeSet::new();
     for ((constant, prefix), files) in &opened {
@@ -468,22 +477,6 @@ fn every_unit_of_work_is_named_by_the_shared_constant() {
     );
 }
 
-/// The closed edge vocabulary (`architecture.md`), the only set a canonical
-/// name may take its namespace from.
-///
-/// The one list here that is **stated rather than derived**, and it has to be:
-/// the vocabulary is closed by an owner decision recorded in prose, so there is
-/// nothing in the tree to read it off — a crate named `nest-rs-grpc` would prove
-/// only that someone wrote one. Opening an edge therefore touches
-/// `architecture.md` and this line, which is the deliberate, reviewed act the
-/// closure exists to require. Shared with the `naming` join, which reads the
-/// same vocabulary to tell an edge adapter from a module-root role file — a
-/// second copy there would have made the reviewed act two lines. What *is* derived is everything the list is
-/// checked against: the members below come from the declarations themselves.
-pub(crate) const EDGES: [&str; 7] = [
-    "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
-];
-
 /// Below this the scan is reading the wrong tree — six edges declare a unit
 /// today and one of them declares three.
 const DECLARED_FLOOR: usize = 6;
@@ -509,7 +502,7 @@ fn every_declared_unit_name_is_an_edge_namespace_that_names_its_owner() {
             ));
             continue;
         };
-        if !EDGES.contains(&namespace) {
+        if !crate::EDGES.contains(&namespace) {
             wrong.push(format!(
                 "{at} declares `{name}`, whose namespace is outside the closed edge \
                  vocabulary; open `{namespace}` as an edge in `architecture.md` first",

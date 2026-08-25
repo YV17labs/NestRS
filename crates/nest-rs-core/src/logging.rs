@@ -44,7 +44,7 @@ use tracing_subscriber::registry::LookupSpan;
 
 use crate::env_prefix::EnvPrefix;
 use crate::request_scope::current_request_ctx;
-use crate::trace_context::Correlation;
+use crate::trace_context::{Correlation, field};
 
 /// The tails of the framework-wide logging variables, joined with the
 /// deployment's prefix by [`EnvPrefix::var`](crate::EnvPrefix::var).
@@ -248,7 +248,7 @@ impl Visit for FixedWidthDurations<'_> {
 /// `actor_id` once a guard resolved a principal:
 ///
 /// ```text
-/// 2026-08-18T14:49:16.529159Z DEBUG features::posts: creating post title="hello" trace_id=01a014ec214e7163844619af2aeaeca4 span_id=b0c095c368ba3d72
+/// 2026-08-18T14:49:16.529159Z DEBUG fixture::lane: creating post title="hello" trace_id=01a014ec214e7163844619af2aeaeca4 span_id=b0c095c368ba3d72
 /// ```
 ///
 /// That is the whole correlation mechanism: two lines belong to the same work
@@ -339,12 +339,16 @@ where
         with_current_correlation(|correlation| {
             write!(
                 writer,
-                " trace_id={} span_id={}",
+                " {}={} {}={}",
+                field::TRACE_ID,
                 correlation.trace_id(),
+                field::SPAN_ID,
                 correlation.span_id()
             )?;
             if let Some(actor_id) = correlation.actor_id() {
-                writer.write_str(" actor_id=")?;
+                writer.write_str(" ")?;
+                writer.write_str(field::ACTOR_ID)?;
+                writer.write_char('=')?;
                 writer.write_str(actor_id)?;
             }
             Ok(())
@@ -433,13 +437,18 @@ where
             // `.claude/rules/`.
             write!(
                 writer,
-                ",\"trace_id\":\"{}\",\"span_id\":\"{}\",\"trace_flags\":\"{}\"",
+                ",\"{}\":\"{}\",\"{}\":\"{}\",\"{}\":\"{}\"",
+                field::TRACE_ID,
                 correlation.trace_id(),
+                field::SPAN_ID,
                 correlation.span_id(),
+                field::TRACE_FLAGS,
                 correlation.flags()
             )?;
             if let Some(actor_id) = correlation.actor_id() {
-                writer.write_str(",\"actor_id\":\"")?;
+                writer.write_str(",\"")?;
+                writer.write_str(field::ACTOR_ID)?;
+                writer.write_str("\":\"")?;
                 write_json_escaped(&mut writer, actor_id)?;
                 writer.write_char('"')?;
             }
@@ -680,7 +689,7 @@ mod tests {
         let _request = request.enter();
         let operation = tracing::info_span!("mcp.operation");
         let _operation = operation.enter();
-        tracing::debug!(target: "features::posts", title = "hello", "creating post");
+        tracing::debug!(target: "fixture::lane", title = "hello", "creating post");
     }
 
     /// Renders `emit_service_event` under a real request context, and hands back
@@ -729,6 +738,16 @@ mod tests {
     /// reads no `#[cfg(test)]` emission, so nothing here joins the vocabulary
     /// either way.
     const FIXTURE_UNIT: &str = "fixture.line";
+
+    /// The fixture target, for the two assertions that take it as a value.
+    ///
+    /// `features::posts` stood here and is a **live** product target, so the
+    /// `filters` join — which ingests literals, fixtures included — read a
+    /// product target as one emitted from this file. A fixture stands in for a
+    /// target; it may not be one. The emission site still spells the string
+    /// because that join derives what it checks by *reading* `target:` arguments
+    /// out of the source, so a constant there is a target it cannot see.
+    const FIXTURE_TARGET: &str = "fixture::lane";
 
     /// One operation line, the shape every edge files through
     /// [`operation_log`](crate::operation_log) — a duration and a plain `f64`
@@ -828,7 +847,7 @@ mod tests {
         let (line, trace_id, span_id) = render_text(false, false).await;
 
         assert!(
-            line.contains(r#"features::posts: creating post title="hello""#),
+            line.contains(r#"fixture::lane: creating post title="hello""#),
             "{line}"
         );
         assert!(line.contains(&format!("trace_id={trace_id}")), "{line}");
@@ -871,7 +890,7 @@ mod tests {
         tracing::subscriber::with_default(Registry::default().with(layer), emit_service_event);
         let line = captured.take();
 
-        assert!(line.contains("features::posts: creating post"), "{line}");
+        assert!(line.contains("fixture::lane: creating post"), "{line}");
         assert!(!line.contains("trace_id"), "{line}");
         assert!(!line.contains("actor_id"), "{line}");
     }
@@ -891,7 +910,7 @@ mod tests {
             "{line}"
         );
         assert!(line.contains(&format!(r#""actor_id":"{ACTOR}""#)), "{line}");
-        assert!(line.contains(r#""target":"features::posts""#), "{line}");
+        assert!(line.contains(r#""target":"fixture::lane""#), "{line}");
         assert!(!line.contains(r#""span""#), "{line}");
         assert!(!line.contains(r#""spans""#), "{line}");
         assert!(!line.contains("url.path"), "{line}");
@@ -961,7 +980,7 @@ mod tests {
                 Some(*actor),
                 "the value round-trips rather than merely surviving: {line}",
             );
-            assert_eq!(parsed["target"].as_str(), Some("features::posts"));
+            assert_eq!(parsed["target"].as_str(), Some(FIXTURE_TARGET));
             assert!(parsed["fields"].is_object(), "{line}");
         }
     }
@@ -992,7 +1011,7 @@ mod tests {
     #[test]
     fn a_half_known_source_location_renders_without_a_dangling_separator() {
         let mut source = EventSource {
-            target: Cow::Borrowed("features::posts"),
+            target: Cow::Borrowed(FIXTURE_TARGET),
             file: None,
             line: Some(42),
             want_location: true,

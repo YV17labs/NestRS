@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use nest_rs_core::trace_context::field;
 use nest_rs_core::{Layer, injectable};
 use nest_rs_guards::{Denial, GrantedScopes, Guard, GuardPhase, PrincipalClaim};
 use nest_rs_http::HandlerMetadata;
@@ -52,11 +53,13 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         let is_public = Reflector::new(req).is_public();
         match self.strategy.authenticate(req).await {
             Ok(principal) => {
-                // Record the audit identity on the request span (the OTel
-                // interceptor pre-declares `actor_id`) so every downstream
-                // event — denials included — inherits who is calling.
+                // Record the audit identity on the request span so every
+                // downstream event — denials included — inherits who is
+                // calling. The field is declared by `operation_span!`, in the
+                // kernel, unconditionally — never by the observability crate,
+                // which an app may not install.
                 if let Some(actor_id) = crate::PrincipalIdentity::actor_id(&principal) {
-                    tracing::Span::current().record("actor_id", actor_id.as_str());
+                    tracing::Span::current().record(field::ACTOR_ID, actor_id.as_str());
                     // …and into the ambient context, so a service, the data
                     // layer or a queue producer below this guard can read it
                     // without the handler threading it down. Write-once.

@@ -249,30 +249,149 @@ impl fmt::Display for TraceFlags {
 pub struct TraceState(Option<Arc<str>>);
 
 impl TraceState {
-    /// The longest `tracestate` accepted. The spec sets no hard maximum but
-    /// asks that implementations "propagate at least 512 characters" and may
-    /// drop beyond that; refusing an unbounded one is what keeps a caller from
-    /// making every outbound request and every job envelope arbitrarily large.
+    /// The longest `tracestate` propagated. §3.3.1.5 asks implementations to
+    /// "propagate at least 512 characters of a combined header" — a **floor on
+    /// what must survive**, not a ceiling on what may arrive — so a longer one
+    /// is truncated rather than dropped. A bound there still has to exist: it
+    /// is what keeps a caller from making every outbound request and every job
+    /// envelope arbitrarily large.
     const MAX_LEN: usize = 512;
 
+    /// A list-member longer than this is the first thing §3.3.1.5 asks a
+    /// truncating implementation to drop.
+    const OVERSIZE_MEMBER: usize = 128;
+
+    /// §3.3.1.2: "There can be a maximum of 32 `list-member`s in a `list`."
+    /// Enforced only where this framework *builds* the value — see
+    /// [`truncate`](TraceState::truncate).
+    const MAX_MEMBERS: usize = 32;
+
     /// Adopt a `tracestate` header from a source the caller has decided to
-    /// trust. Refused whole when it is empty, over-long, or carries anything
-    /// outside the printable ASCII the grammar allows — a value echoed into
-    /// outbound headers and job envelopes is not somewhere to pass a newline on.
+    /// trust. Refused whole when it is empty, when it carries a byte a header
+    /// cannot hold — a value echoed into outbound headers and job envelopes is
+    /// not somewhere to pass a newline on — or when truncation leaves nothing:
+    /// a single member too large to keep is the whole value, so dropping it
+    /// drops everything.
+    ///
+    /// Length alone is *not* a refusal. An over-long value is truncated by
+    /// whole list-members, and what comes back is then this framework's own
+    /// value rather than the caller's — normalised, and capped at the 32
+    /// members §3.3.1.2 allows a list. Both of those are properties only the
+    /// truncated path has; a value that fits is forwarded exactly as it
+    /// arrived.
+    ///
+    /// The byte check is deliberately wider than the `list-member` grammar of
+    /// §3.3.1: it admits uppercase keys, `,` and `=` inside a value, and — on the
+    /// verbatim path — any number of members. That is not conformance overlooked — §4.1 makes
+    /// forwarding a `tracestate` this framework understands none of a MUST, so
+    /// a stricter reading would discard exactly the vendor state the header
+    /// exists to carry. What the bound is for is the one property forwarding
+    /// cannot survive: a byte that would terminate a header or a JSON string.
     pub fn adopt(raw: &str) -> Self {
         let raw = raw.trim();
-        let usable = !raw.is_empty()
-            && raw.len() <= Self::MAX_LEN
-            && raw
+        if raw.is_empty()
+            || !raw
                 .bytes()
-                .all(|b| b.is_ascii_graphic() || b == b' ' || b == b'\t');
-        Self(usable.then(|| Arc::from(raw)))
+                .all(|b| b.is_ascii_graphic() || b == b' ' || b == b'\t')
+        {
+            return Self(None);
+        }
+        if raw.len() <= Self::MAX_LEN {
+            return Self(Some(Arc::from(raw)));
+        }
+        Self(Self::truncate(raw).map(Arc::from))
+    }
+
+    /// Truncate to [`MAX_LEN`](TraceState::MAX_LEN) by **whole list-members**, in §3.3.1.5's own
+    /// order: members over [`OVERSIZE_MEMBER`](TraceState::OVERSIZE_MEMBER) characters first, then members
+    /// from the end of the list.
+    ///
+    /// Dropping the header whole instead would propagate zero characters of one
+    /// the spec says must survive to at least 512 — and would break the vendor
+    /// whose routing rides in it *through* us, which is the failure this type's
+    /// own documentation exists to prevent.
+    fn truncate(raw: &str) -> Option<String> {
+        let mut members: Vec<&str> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|member| !member.is_empty())
+            .collect();
+
+        // "Entries larger than `128` characters long SHOULD be removed first"
+        // — *first*, and only until the value fits: an oversize member is not
+        // itself illegal, so dropping every one of them would discard state the
+        // spec keeps. One `retain` pass rather than a scan per removal, because
+        // this runs on a header whose size the client chose.
+        let mut excess = (members.iter().map(|member| member.len()).sum::<usize>()
+            + members.len().saturating_sub(1))
+        .saturating_sub(Self::MAX_LEN);
+        members.retain(|member| {
+            let drop_it = excess > 0 && member.len() > Self::OVERSIZE_MEMBER;
+            if drop_it {
+                excess = excess.saturating_sub(member.len() + 1);
+            }
+            !drop_it
+        });
+
+        // "Then entries SHOULD be removed starting from the end of `tracestate`"
+        // — one forward walk keeping the prefix that fits, never a pop that
+        // re-measures the whole list behind it. `len` counts each kept member
+        // plus the separator that would follow it, so the joined length after
+        // `kept` members is `len - 1` and the separator arithmetic needs no
+        // special case for the first.
+        //
+        // §3.3.1.2 caps a list at 32 list-members, and it binds here rather than
+        // in `adopt`'s byte check: a header passed through verbatim is the
+        // caller's, and §4.1 makes forwarding it a MUST whatever it contains, but
+        // a truncated one is a value this framework *authors*.
+        let mut len = 0;
+        let mut kept = 0;
+        for member in &members {
+            if kept == Self::MAX_MEMBERS || len + member.len() > Self::MAX_LEN {
+                break;
+            }
+            len += member.len() + 1;
+            kept += 1;
+        }
+
+        (kept > 0).then(|| members[..kept].join(","))
     }
 
     /// The header value to forward, or `None` when there is no state to carry.
     pub fn as_str(&self) -> Option<&str> {
         self.0.as_deref()
     }
+}
+
+/// The canonical correlation field names, in the one place they are decided.
+///
+/// The same asymmetry [`operation_log::DURATION_MS`](crate::operation_log::DURATION_MS)
+/// records applies here, and it is why these constants exist for four of the
+/// five sites rather than all five: a field name is a literal token in
+/// `tracing`'s macro grammar, so the *declaration* half inside
+/// [`operation_span!`](crate::operation_span) spells each one out and cannot
+/// reference a constant. Every other half can — the `record` calls that fill a
+/// declared field, both console formatters, and the authentication guard that
+/// writes the actor from another crate — and each of those was a bare string
+/// until this module existed.
+///
+pub mod field {
+    /// The whole distributed operation. On every span and every log line.
+    pub const TRACE_ID: &str = "trace_id";
+    /// This unit of work inside the trace. On every span and every log line.
+    pub const SPAN_ID: &str = "span_id";
+    /// The unit of work that caused this one. A **span** field and never a line
+    /// field: OpenTelemetry's log data model carries no ancestry, and a line
+    /// that renders no span scope has no need of one.
+    pub const PARENT_SPAN_ID: &str = "parent_span_id";
+    /// Who the work is being served for — an audit identity, never an
+    /// authorization input. Absent means anonymous; no sentinel is ever written,
+    /// because `""` would be indistinguishable from an actor named that.
+    pub const ACTOR_ID: &str = "actor_id";
+    /// The sampling byte. JSON lines only, where a record may be joined against
+    /// an export whose existence that bit decides; a human at a console never
+    /// acts on it.
+    pub const TRACE_FLAGS: &str = "trace_flags";
 }
 
 /// One parsed `traceparent`: the trace, the span that sent it, and its flags.
@@ -302,10 +421,13 @@ impl TraceParent {
     /// - **version `00`** must be *exactly* 55 characters — trailing data is not
     ///   forward compatibility, it is a malformed header;
     /// - **a higher version** is parsed as version `00` for its first 55
-    ///   characters, and only when character 55 is a `-`. That rule is what lets
-    ///   a future version add fields without every existing implementation
-    ///   dropping the trace, and getting it wrong is how a deployment silently
-    ///   starts restarting every trace the day one hop upgrades.
+    ///   characters, and character 55 must be *either the end of the string or
+    ///   a `-`* — §3.2.4's own wording, and both halves matter: a future
+    ///   version whose first 55 characters are all it has is exactly as
+    ///   readable as one that appends fields. That rule is what lets a future
+    ///   version add fields without every existing implementation dropping the
+    ///   trace, and getting it wrong is how a deployment silently starts
+    ///   restarting every trace the day one hop upgrades.
     /// - **an all-zero trace-id or parent-id**, refused by their own parsers.
     ///
     /// `None` means *restart the trace*, never *fail the request*: a caller's
@@ -320,7 +442,9 @@ impl TraceParent {
             if raw.len() != VERSION_00_LEN {
                 return None;
             }
-        } else if raw.len() < VERSION_00_LEN || raw.as_bytes().get(VERSION_00_LEN) != Some(&b'-') {
+        } else if raw.len() < VERSION_00_LEN
+            || !matches!(raw.as_bytes().get(VERSION_00_LEN), None | Some(&b'-'))
+        {
             return None;
         }
         let mut fields = raw.get(..VERSION_00_LEN)?.split('-');
@@ -475,7 +599,7 @@ impl Correlation {
             actor: OnceLock::new(),
         };
         if let Some(actor) = actor {
-            let _ = shared.actor.set(Arc::from(actor));
+            set_actor(&shared, actor);
         }
         Self {
             trace_id,
@@ -596,15 +720,38 @@ pub fn current_actor_id() -> Option<String> {
     current_request_ctx(|ctx| ctx.correlation.actor_id().map(str::to_owned)).flatten()
 }
 
+/// The one gate on the write-once actor slot, so both writers pass it.
+///
+/// There are exactly two: [`set_actor_id`], which the authentication guard calls
+/// mid-request, and [`Correlation::open`], which fills the slot up front from a
+/// value that arrived with the work. The second is the one that matters here —
+/// `nest_rs_queue::envelope::open` reads an actor out of a job envelope and hands
+/// it to [`Correlation::continued`], so an empty one reaches this slot on a path
+/// where *nothing downstream can re-derive the actor*: a worker holds no
+/// credential to re-authenticate with. Guarding only the guard's side would have
+/// left that path open, which is a bandaid rather than a second layer.
+fn set_actor(shared: &Shared, actor_id: &str) {
+    if actor_id.is_empty() {
+        return;
+    }
+    let _ = shared.actor.set(Arc::from(actor_id));
+}
+
 /// Record who is calling, once. Called by the authentication guard the moment it
 /// resolves a principal — never by application code.
 ///
 /// Write-once: a second call is ignored rather than overwriting. Two different
 /// actors on one unit of work is not a state the framework has, and silently
 /// taking the later one would make an audit trail depend on layer order.
+///
+/// **An empty actor is refused** — by [`set_actor`], so every writer of the slot
+/// is held to it. `""` is indistinguishable from an actor named `""` once it is on
+/// a log line, which is the sentinel this framework does not have; and because the
+/// slot is write-once, storing one would *burn* it, leaving the real principal
+/// unrecordable for that unit of work with nothing anywhere saying so.
 #[doc(hidden)]
 pub fn set_actor_id(actor_id: &str) {
-    let _ = current_request_ctx(|ctx| ctx.correlation.shared.actor.set(Arc::from(actor_id)));
+    current_request_ctx(|ctx| set_actor(&ctx.correlation.shared, actor_id));
 }
 
 /// The current unit of work's correlation, for an edge that has to carry it
@@ -722,7 +869,8 @@ const fn unhex(byte: u8) -> Option<u8> {
 /// Open the framework's **operation span** — one per unit of work, carrying the
 /// canonical field vocabulary so every edge declares it identically.
 ///
-/// Three fields are always declared, and declaring them is the whole point:
+/// Five fields are always declared — `otel.kind` plus the four correlation
+/// names below — and declaring them is the whole point:
 /// `tracing` fixes a span's field set at creation, so a field nobody declared can
 /// never be recorded later. `AuthnGuard`'s
 /// `Span::current().record("actor_id", …)` is a **silent no-op** at any site
@@ -736,7 +884,9 @@ const fn unhex(byte: u8) -> Option<u8> {
 ///   when the work arrived from somewhere. Across a process boundary it is the
 ///   *only* place the cause is legible: a worker has no span stack to walk back
 ///   into the request that enqueued the job;
-/// - `actor_id` — declared [`Empty`](tracing::field::Empty), filled by the authn
+/// - `actor_id` — declared [`Empty`](tracing::field::Empty), filled here from an
+///   inherited correlation (a WS message on an authenticated socket, a job whose
+///   producer knew the caller), and otherwise filled by the authn
 ///   guard if and when it resolves a principal.
 ///
 /// `kind` is **required**, and it is OpenTelemetry's span kind (`"server"`,
@@ -806,14 +956,17 @@ macro_rules! operation_span {
         // the cause was in another process — a job's parent is not in any span
         // stack the worker has.
         if let Some(parent_span_id) = __correlation.parent_id() {
-            __span.record("parent_span_id", $crate::tracing::field::display(parent_span_id));
+            __span.record(
+                $crate::trace_context::field::PARENT_SPAN_ID,
+                $crate::tracing::field::display(parent_span_id),
+            );
         }
         // Already known on an inherited unit of work — a WS message on an
         // authenticated socket, a job whose producer knew the caller. Nothing
         // re-authenticates on those paths, so the span would otherwise declare
         // the field and never see it filled.
         if let Some(actor_id) = __correlation.actor_id() {
-            __span.record("actor_id", actor_id);
+            __span.record($crate::trace_context::field::ACTOR_ID, actor_id);
         }
         // Last, and only here: an installed observability stack links the remote
         // parent and records its sampler's verdict. Every edge inherits that by
@@ -936,6 +1089,16 @@ mod tests {
         let parsed = TraceParent::parse(future).expect("a future version is still readable");
         assert_eq!(parsed.trace_id.to_hex(), "4bf92f3577b34da6a3ce929d0e0e4736");
         assert!(parsed.flags.is_sampled());
+
+        // §3.2.4's other alternative, and the one a reading that only looks for
+        // a delimiter silently drops: a higher version that appends nothing is
+        // exactly 55 characters, so the flags end the string.
+        let minimal = "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        assert_eq!(minimal.len(), VERSION_00_LEN);
+        let parsed = TraceParent::parse(minimal)
+            .expect("flags at the end of the string are the spec's own alternative");
+        assert_eq!(parsed.parent_id.to_hex(), "00f067aa0ba902b7");
+        assert!(parsed.flags.is_sampled());
     }
 
     /// Reserved flag bits are somebody else's meaning. Dropping them would
@@ -1008,7 +1171,144 @@ mod tests {
         assert_eq!(
             TraceState::adopt(&"x".repeat(TraceState::MAX_LEN + 1)).as_str(),
             None,
-            "an unbounded state would ride into every outbound request",
+            "one member too large to keep leaves nothing to carry",
+        );
+    }
+
+    #[test]
+    fn an_over_long_tracestate_is_truncated_by_whole_members_not_dropped() {
+        // §3.3.1.5: "vendors MUST truncate whole entries", oversize entries
+        // first, then from the end. 512 is the floor on what survives.
+        let small = "a=1,b=2,c=3";
+        let oversize = format!("fat={}", "z".repeat(TraceState::OVERSIZE_MEMBER));
+        let filler: Vec<String> = (0..20)
+            .map(|i| format!("v{i}={}", "y".repeat(40)))
+            .collect();
+        let raw = format!("{small},{oversize},{}", filler.join(","));
+        assert!(raw.len() > TraceState::MAX_LEN);
+
+        let adopted = TraceState::adopt(&raw);
+        let kept = adopted.as_str().expect("vendor state survives truncation");
+
+        assert!(kept.len() <= TraceState::MAX_LEN);
+        assert!(
+            kept.starts_with(small),
+            "members are dropped from the end, so the front survives: {kept}",
+        );
+        assert!(
+            !kept.contains("fat="),
+            "the oversize member goes first: {kept}",
+        );
+        for member in kept.split(',') {
+            assert!(
+                raw.split(',')
+                    .map(str::trim)
+                    .any(|original| original == member),
+                "a kept member is a whole original member, never a slice: {member}",
+            );
+        }
+        assert!(
+            kept.split(',').count() <= TraceState::MAX_MEMBERS,
+            "§3.3.1.2 caps a list this framework authors at 32 members: {kept}",
+        );
+    }
+
+    #[test]
+    fn an_empty_actor_arriving_with_the_work_is_refused_too() {
+        // The path the guard's own check never covered: `envelope::open` reads an
+        // actor out of a job envelope and hands it to `continued`, which fills the
+        // slot up front. A worker holds no credential, so nothing downstream can
+        // re-derive the actor — burning the slot here is unrecoverable.
+        let parent = TraceParent {
+            trace_id: TraceId::mint(),
+            parent_id: SpanId::mint(),
+            flags: TraceFlags::started(),
+        };
+        let continued = Correlation::continued(parent, TraceState::default(), Some(""));
+        assert_eq!(continued.actor_id(), None);
+
+        let named = Correlation::continued(parent, TraceState::default(), Some("alice"));
+        assert_eq!(named.actor_id(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_actor_is_refused_and_does_not_burn_the_write_once_slot() {
+        // The slot is write-once, so storing `""` would not merely record a bad
+        // value — it would make the real principal unrecordable for the rest of
+        // the unit of work, with nothing anywhere saying so. An empty `sub` from
+        // a lenient issuer reaches this function through the authn guard.
+        let correlation = Correlation::mint();
+        crate::request_scope::with_request_scope(None, correlation, async {
+            set_actor_id("");
+            assert_eq!(
+                current_actor_id(),
+                None,
+                "an empty actor is absence, not an actor named `\"\"`",
+            );
+
+            set_actor_id("alice");
+            assert_eq!(
+                current_actor_id().as_deref(),
+                Some("alice"),
+                "the slot must still be free for the real principal",
+            );
+        })
+        .await;
+    }
+
+    #[test]
+    fn an_oversize_member_is_dropped_only_while_the_value_still_does_not_fit() {
+        // §3.3.1.5 removes oversize entries *first*, not categorically: being
+        // over 128 characters is not itself a defect, so once the value fits
+        // the removals stop. Dropping every oversize member instead is a
+        // silent one — it returns a well-formed, shorter, wronger answer, and
+        // for the input below it returns nothing at all where one member fits.
+        let raw = format!("big={},mid={}", "x".repeat(400), "y".repeat(200));
+        assert!(raw.len() > TraceState::MAX_LEN);
+
+        let adopted = TraceState::adopt(&raw);
+        let kept = adopted
+            .as_str()
+            .expect("dropping the larger member leaves one that fits");
+
+        assert!(kept.starts_with("mid="), "{kept}");
+        assert!(!kept.contains("big="), "{kept}");
+        assert!(kept.len() <= TraceState::MAX_LEN);
+    }
+
+    #[test]
+    fn truncating_a_hostile_header_costs_one_pass_not_one_per_member() {
+        // A regression test with a clock, because the defect it guards has no
+        // other signature: the first implementation of `truncate` re-measured
+        // every remaining member on each removal, so a header of many tiny
+        // members cost O(n²) — 5.3s in release and 187s in debug for 512KB,
+        // synchronously on the worker thread that accepted the request. It
+        // returned a *correct* answer the whole time, which is why nothing else
+        // here would ever have gone red.
+        //
+        // The bound is deliberately loose. It is three orders of magnitude
+        // below the old cost and two above the new one, so it cannot flake on a
+        // loaded machine and cannot pass if the quadratic shape comes back.
+        let mut hostile = "a,".repeat(262_144);
+        hostile.pop();
+        assert!(hostile.len() > 500_000, "{} bytes", hostile.len());
+
+        let started = std::time::Instant::now();
+        let adopted = TraceState::adopt(&hostile);
+        let elapsed = started.elapsed();
+
+        let kept = adopted
+            .as_str()
+            .expect("a hostile header still yields state");
+        assert!(kept.len() <= TraceState::MAX_LEN);
+        // The length bound alone would keep 256 of these one-character members, so
+        // this is the only fixture in which §3.3.1.2's cap is the binding constraint
+        // and the `kept == MAX_MEMBERS` break is exercised at all.
+        assert_eq!(kept.split(',').count(), TraceState::MAX_MEMBERS);
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "truncation went superlinear again: {elapsed:?} for {} bytes",
+            hostile.len(),
         );
     }
 

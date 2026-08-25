@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <strong>NestJS architecture, Rust performance.</strong><br>
-  Build production-grade Rust backends without fighting the Rust ecosystem — modules, decorators and dependency injection over a native core.<br>
+  <strong>The Rust framework for modular, scalable backends.</strong><br>
+  You write the business logic; the framework carries the rest — modules, decorators and dependency injection over a native core.<br>
   <sub>~25× less memory · ~23× faster cold starts · ×4 the throughput of NestJS, core for core — measured on a byte-identical contract, <a href="bench/">reproducible from the repo</a>.</sub>
 </p>
 

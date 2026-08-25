@@ -1,6 +1,6 @@
 # nest-rs
 
-**NestJS architecture, Rust performance.** Build production-grade Rust backends without fighting the Rust ecosystem: modules, decorators and dependency injection carry authentication, tenant isolation, field masking and transactions, and the wiring is verified at boot.
+**The Rust framework for modular, scalable backends.** You write the business logic; modules, decorators and dependency injection carry authentication, tenant isolation, field masking and transactions, and the wiring is verified at boot.
 
 NestRS framework umbrella — re-exports the core and the surface crates an app reaches for, with a `prelude` for the common case.
 

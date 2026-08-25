@@ -17,7 +17,7 @@ const asset = (path) => `${base}${path.replace(/^\//, '')}`;
 
 const defaultDescription = DEFAULT_DESCRIPTION;
 const ogImage = new URL(asset('social-preview.png'), site).href;
-const ogImageAlt = 'NestRS — NestJS architecture, Rust performance';
+const ogImageAlt = 'NestRS — The Rust framework for modular, scalable backends';
 
 export default defineConfig({
   site,
@@ -78,7 +78,7 @@ export default defineConfig({
         starlightLlmsTxt({
           projectName: 'NestRS',
           description:
-            'NestJS architecture, Rust performance — a declarative backend framework: multi-transport, boot-time wiring checks, scoped data access by composition.',
+            'The Rust framework for modular, scalable backends: declarative, multi-transport, boot-time wiring checks, scoped data access by composition.',
           details:
             'NestRS sits on top of hyper/tokio/poem. It is decorator-driven (procedural macros: #[module], #[controller], #[resolver], #[gateway], #[processor], #[scheduled], #[mcp]), with a flat type-id DI container verified at boot (the "access graph"), an ambient data context that installs a request-scoped executor and ability, row-level filtering and response masking via ability-based authorization, and per-binary subsets through module-gated discovery. NestRS is opinionated about layout and naming, and #[module] carries no "controllers" list, so a type\'s name is the only thing that says what it is for: read /architecture/ first and follow it when writing or reviewing NestRS code. A generated project commits the same rules as AGENTS.md at its root.',
           // The plugin's own default is `['index*']`; naming any value replaces

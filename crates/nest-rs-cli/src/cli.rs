@@ -6,7 +6,7 @@ use crate::commands;
 use crate::error::CliResult;
 use crate::naming::{Names, Transport};
 
-const PROJECT_TAGLINE: &str = "NestJS architecture, Rust performance.";
+const PROJECT_TAGLINE: &str = "The Rust framework for modular, scalable backends.";
 
 const AFTER_HELP: &str = concat!(
     "Documentation: ",
@@ -34,8 +34,8 @@ pub fn print_about() {
 #[command(
     name = "nestrs",
     about = PROJECT_TAGLINE,
-    long_about = "NestJS architecture, Rust performance — production-grade Rust backends \
-                  without fighting the Rust ecosystem.\n\n\
+    long_about = "The Rust framework for modular, scalable backends — you write the \
+                  business logic, it carries the rest.\n\n\
                   Scaffolds NestRS projects, features, transport adapters, and toolchain checks.",
     // `--version` / `-V` are intercepted in `main` so they print exactly what
     // `nestrs version` prints, rather than clap's `<bin> <ver>` rendering.

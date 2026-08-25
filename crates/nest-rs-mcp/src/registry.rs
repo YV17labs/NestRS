@@ -61,7 +61,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use nest_rs_core::{Container, ContainerBuilder, DiscoveryService};
+use nest_rs_core::{Container, ContainerBuilder, Discovery};
 use nest_rs_http::{HttpBootCheck, HttpEndpointMeta, normalize_mount_path};
 use poem::Route;
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo, Tool};
@@ -92,7 +92,7 @@ type StaticTools = fn() -> Vec<Tool>;
 /// One `#[mcp]` host's contribution to the endpoint at its path.
 ///
 /// Attached to the host provider by [`register_host`]; read back at mount and
-/// at boot through [`DiscoveryService::meta`].
+/// at boot through [`Discovery::meta`].
 pub struct McpHostMeta {
     path: String,
     host: &'static str,
@@ -324,7 +324,7 @@ fn resolve_identity(
 /// imported twice (registration is not deduplicated), so two *equal*
 /// declarations are that, not a conflict.
 fn declared_server(container: &Container) -> Option<Arc<McpIdentity>> {
-    DiscoveryService::new(container)
+    Discovery::new(container)
         .meta::<McpIdentity>()
         .into_iter()
         .map(|discovered| discovered.meta)
@@ -335,7 +335,7 @@ fn declared_server(container: &Container) -> Option<Arc<McpIdentity>> {
 /// merges, and what a test or a diagnostic asks to see the composition of an
 /// endpoint.
 pub fn hosts_on(container: &Container, path: &str) -> Vec<Arc<McpHostMeta>> {
-    DiscoveryService::new(container)
+    Discovery::new(container)
         .meta::<McpHostMeta>()
         .into_iter()
         .map(|discovered| discovered.meta)
@@ -593,10 +593,7 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
 /// get, and no per-path check can see this one: there is no path.
 pub(crate) fn server_reaches_a_host() -> HttpBootCheck {
     HttpBootCheck::new(|container| {
-        if !DiscoveryService::new(container)
-            .meta::<McpHostMeta>()
-            .is_empty()
-        {
+        if !Discovery::new(container).meta::<McpHostMeta>().is_empty() {
             return Ok(());
         }
         Err(
@@ -617,7 +614,7 @@ pub(crate) fn server_reaches_a_host() -> HttpBootCheck {
 /// remove.
 pub(crate) fn server_is_declared_once() -> HttpBootCheck {
     HttpBootCheck::new(|container| {
-        let declared = DiscoveryService::new(container).meta::<McpIdentity>();
+        let declared = Discovery::new(container).meta::<McpIdentity>();
         let mut seen: Option<&Arc<McpIdentity>> = None;
         for identity in declared.iter().map(|discovered| &discovered.meta) {
             match seen {

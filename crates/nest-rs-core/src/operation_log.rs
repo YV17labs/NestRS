@@ -40,15 +40,11 @@
 //! is per-edge vocabulary exactly as a span target is, so it obeys the rule
 //! [`target`](crate::target) states: the crate that owns the concern is the
 //! crate that names it, and a table here would have meant the kernel carrying
-//! names for six concerns it does not know exist. Each has exactly one reading
-//! crate, and the three-slot invariant holds inside it —
-//! `nest_rs_http::unit::REQUEST`, `nest_rs_ws::unit::{CONNECT, DISCONNECT,
-//! MESSAGE}`, `nest_rs_queue::unit::JOB` (declared by the contract crate,
-//! emitted by whichever backend runs the job), `nest_rs_schedule::unit::TICK`,
-//! `nest_rs_mcp::unit::OPERATION`, `nest_rs_graphql::unit::{OPERATION,
-//! SUBSCRIPTION}`, `nest_rs_events::unit::DISPATCH`. The
-//! `units` join in `nest-rs-conformance` is what holds the grammar over all of
-//! them, deriving its population from the source rather than from a list here.
+//! names for six concerns it does not know exist. Each edge declares its own as
+//! `<crate>::unit::<UNIT>`, and the three-slot invariant holds inside it — the
+//! kernel could neither link such a path nor notice the day one is added, so the
+//! `units` join in `nest-rs-conformance` holds the grammar over all of them and
+//! derives its population from the source rather than from a list here.
 //!
 //! **The shape is `<edge>.<unit>`, and it is the norm rather than ours.**
 //! Lowercase, dot-separated, namespace first: the form OpenTelemetry gives an

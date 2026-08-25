@@ -3,7 +3,7 @@
 use std::any::TypeId;
 use std::sync::Arc;
 
-use nest_rs_core::{Container, DiscoveryService};
+use nest_rs_core::{Container, Discovery};
 use nest_rs_http::{
     HttpConfig, HttpControllerMeta, controller, join_path, normalize_mount_path, routes,
 };
@@ -99,7 +99,7 @@ pub(crate) fn report_prefixed_probe_paths(container: &Container) {
     // Keyed on the provider's `TypeId` rather than on the controller's name or
     // its declared path: both are written in the decorator above, and a boot
     // line that names a path the decorator no longer mounts is worse than none.
-    let discovery = DiscoveryService::new(container);
+    let discovery = Discovery::new(container);
     let Some(meta) = discovery
         .meta::<HttpControllerMeta>()
         .into_iter()

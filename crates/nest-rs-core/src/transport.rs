@@ -16,7 +16,7 @@ use crate::container::Container;
 ///
 /// [`crate::App::run`] awaits `configure` on each transport in registration
 /// order (a transport scans its surfaces via
-/// [`DiscoveryService`](crate::DiscoveryService) here), then spawns every
+/// [`Discovery`](crate::Discovery) here), then spawns every
 /// `serve` future with a shared [`CancellationToken`] that SIGTERM/SIGINT
 /// triggers.
 #[async_trait]

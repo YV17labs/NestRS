@@ -1,4 +1,4 @@
-//! The read side of discovery — [`DiscoveryService`], the transport-agnostic
+//! The read side of discovery — [`Discovery`], the transport-agnostic
 //! facade over the container's metadata index that transports and applicative
 //! scanners (OpenAPI, cron, MCP, …) query to find the surfaces they mount.
 
@@ -10,11 +10,11 @@ use crate::container::Container;
 /// Read-side facade over the container's metadata index, used by transports
 /// and applicative scanners (OpenAPI, cron, MCP, …) without coupling to a
 /// specific transport.
-pub struct DiscoveryService<'a> {
+pub struct Discovery<'a> {
     container: &'a Container,
 }
 
-impl<'a> DiscoveryService<'a> {
+impl<'a> Discovery<'a> {
     /// Borrow a container to read discovery metadata from.
     pub fn new(container: &'a Container) -> Self {
         Self { container }

@@ -184,7 +184,7 @@ fn document_path(version: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_core::DiscoveryService;
+    use nest_rs_core::Discovery;
     use nest_rs_http::HttpConfig;
 
     // Count the self-mount edges `register` provided for the given `enabled`
@@ -197,7 +197,7 @@ mod tests {
                 ..OpenApiConfig::default()
             },
         );
-        DiscoveryService::new(&builder.snapshot())
+        Discovery::new(&builder.snapshot())
             .meta::<HttpEndpointMeta>()
             .len()
     }

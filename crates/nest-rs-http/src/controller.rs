@@ -238,7 +238,7 @@ type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
 
 /// Discovery metadata attached to every `#[controller]` + `#[routes]` type.
 /// [`crate::HttpTransport`] iterates these at boot via
-/// [`nest_rs_core::DiscoveryService::meta`]; apps can read the same metadata
+/// [`nest_rs_core::Discovery::meta`]; apps can read the same metadata
 /// to drive secondary concerns (OpenAPI rendering, route listings).
 pub struct HttpControllerMeta {
     /// The controller struct name (`UsersController`). Links a mounted route

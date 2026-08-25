@@ -11,6 +11,7 @@
 //! normally and the losing registration is simply gone. Nothing read these, so
 //! a module quietly shadowing another module's provider was invisible.
 
+use nest_rs_core::target;
 use std::sync::Arc;
 
 use nest_rs_core::Container;
@@ -33,7 +34,7 @@ fn a_second_registration_under_one_key_names_the_provider_and_the_key() {
         .expect("the keyed provider resolves");
     assert_eq!(pool.0, "second");
 
-    let event = logs.expect_one("nest_rs::container", "keyed provider override");
+    let event = logs.expect_one(target::CONTAINER, "keyed provider override");
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("key").as_deref(), Some("primary"));
     assert!(
@@ -54,7 +55,7 @@ fn a_singleton_shadowed_by_a_transient_of_the_same_type_is_reported() {
         .provide_transient(|_| Pool("transient"))
         .build();
 
-    let event = logs.expect_one("nest_rs::container", "provider scope conflict");
+    let event = logs.expect_one(target::CONTAINER, "provider scope conflict");
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("existing_kind").as_deref(), Some("singleton"));
     assert_eq!(event.field("new_kind").as_deref(), Some("transient"));
@@ -71,7 +72,7 @@ fn the_conflict_is_reported_from_either_direction() {
         .provide(Pool("singleton"))
         .build();
 
-    let event = logs.expect_one("nest_rs::container", "provider scope conflict");
+    let event = logs.expect_one(target::CONTAINER, "provider scope conflict");
     assert_eq!(event.field("existing_kind").as_deref(), Some("transient"));
     assert_eq!(event.field("new_kind").as_deref(), Some("singleton"));
 }
@@ -87,7 +88,7 @@ fn a_request_scoped_factory_replaced_by_another_says_which_kind_it_was() {
         .provide_scoped(|_| Pool("second"))
         .build();
 
-    let event = logs.expect_one("nest_rs::container", "provider override");
+    let event = logs.expect_one(target::CONTAINER, "provider override");
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("kind").as_deref(), Some("request_scoped"));
     assert!(

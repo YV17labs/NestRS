@@ -38,7 +38,7 @@ pub struct ProviderKey {
 
 impl ProviderKey {
     /// The bare (unkeyed) identity for a concrete type — the default path.
-    pub fn typed<T: Any>() -> Self {
+    pub(crate) fn typed<T: Any>() -> Self {
         Self {
             type_id: TypeId::of::<T>(),
             name: None,
@@ -56,7 +56,7 @@ impl ProviderKey {
     /// The bare identity for a raw `TypeId` — used internally where the type is
     /// only available as a `TypeId` (trait-object bindings keyed by
     /// `TypeId::of::<Arc<dyn Trait>>()`, the register-phase `contains` check).
-    pub fn of(type_id: TypeId) -> Self {
+    pub(crate) fn of(type_id: TypeId) -> Self {
         Self {
             type_id,
             name: None,
@@ -427,7 +427,7 @@ impl ContainerBuilder {
 
     /// Replace a concrete provider with a pre-shared `Arc<T>` without the
     /// override warning — the intentional swap path used by
-    /// [`AppBuilder::override_provider`](crate::AppBuilder::override_provider).
+    /// [`AppBuilder::override_arc`](crate::AppBuilder::override_arc).
     pub(crate) fn replace_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
         self.providers.insert(ProviderKey::typed::<T>(), value);
         self
@@ -507,7 +507,7 @@ impl ContainerBuilder {
     }
 
     /// Attach metadata of type `M` to the provider type `P`, discovered via
-    /// [`crate::DiscoveryService::meta`].
+    /// [`crate::Discovery::meta`].
     pub fn attach_meta<P: 'static, M: Any + Send + Sync>(mut self, meta: M) -> Self {
         self.metadata
             .entry(TypeId::of::<M>())
@@ -520,7 +520,7 @@ impl ContainerBuilder {
     }
 
     /// Metadata of type `M` attached **so far**, in attach order — the mid-build
-    /// read of what [`DiscoveryService::meta`](crate::DiscoveryService::meta)
+    /// read of what [`Discovery::meta`](crate::Discovery::meta)
     /// exposes once the container is frozen.
     ///
     /// One caller shape needs it: a surface that **aggregates** several

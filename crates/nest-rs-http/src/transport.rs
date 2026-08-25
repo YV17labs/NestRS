@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use nest_rs_core::{Container, DiscoveryService, Transport};
+use nest_rs_core::{Container, Discovery, Transport};
 use poem::endpoint::BoxEndpoint;
 use poem::http::header::{HeaderName, HeaderValue, SERVER};
 use poem::listener::{Listener, TcpListener};
@@ -383,7 +383,7 @@ impl HttpTransport {
 #[async_trait]
 impl Transport for HttpTransport {
     async fn configure(&mut self, container: &Container) -> Result<()> {
-        let discovery = DiscoveryService::new(container);
+        let discovery = Discovery::new(container);
         // Boot checks first — a misconfigured global layer pool (a spec whose
         // provider was never registered) must fail boot before anything
         // mounts; resolved-at-configure means dropped-silently otherwise.

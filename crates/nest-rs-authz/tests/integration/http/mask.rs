@@ -428,7 +428,7 @@ async fn a_non_json_response_passes_through() {
 #[tokio::test]
 async fn a_shaped_route_still_records_its_response_schema_and_says_it_is_masked() {
     let app = boot().await;
-    let discovery = nest_rs_core::DiscoveryService::new(app.container());
+    let discovery = nest_rs_core::Discovery::new(app.container());
     let controllers = discovery.meta::<nest_rs_http::HttpControllerMeta>();
     let routes: Vec<_> = controllers
         .iter()

@@ -76,6 +76,7 @@ pub mod discoverable;
 pub mod discovery;
 pub mod env_flag;
 pub mod env_prefix;
+pub mod error;
 mod identifier;
 pub mod layer;
 pub mod layer_chain;
@@ -91,27 +92,23 @@ pub mod target;
 pub mod trace_context;
 pub mod transport;
 
-// **The boot's error types, all of them, and none of its validators.** The list
-// had six of seven errors and one of three functions, so `ScopeViolationError`
-// was the one member of the family a caller could not name as
-// `nest_rs_core::…` while `AccessError::into_anyhow` deliberately preserves the
-// downcast to its siblings — and `validate_access_graph` was documented in this
-// crate's own front page while the root did not carry it. The three validators
-// have no caller outside `src/` in either workspace and are now `pub(crate)`:
-// *No backwards-compatibility shims — no public API to preserve yet*, and
-// visibility wider than its use is a promise nobody priced.
-pub use access::{
-    AccessError, AccessGraphError, ContestedDeclarationError, DuplicateProviderError,
-    FactoryCycleError, KeyedDependencyError, MissingDependencyError, ModuleDescriptor,
-    ProviderDescriptor, ProviderOrder, ReachableProviders, ScopeViolationError,
-    UnresolvedFactoryError,
-};
+// The three access-graph validators have no caller outside `src/` in either
+// workspace and are `pub(crate)`: visibility wider than its use is a promise
+// nobody priced. `AccessError` left this list for the same reason — it is the
+// bare pass's internal wrapper, discarded before any error leaves the crate, so
+// no public signature could hand a caller one. Why the eight below live in
+// `error` rather than beside the pass is that module's own doc.
+pub use access::{ModuleDescriptor, ProviderDescriptor, ProviderOrder, ReachableProviders};
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
 pub use discoverable::{Discoverable, INERT_HOST_HINT, ProviderResidency, is_framework_owned};
-pub use discovery::{Discovered, DiscoveryService};
+pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
+pub use error::{
+    AccessGraphError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
+    KeyedDependencyError, MissingDependencyError, ScopeViolationError, UnresolvedFactoryError,
+};
 pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;

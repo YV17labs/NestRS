@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_core::{DiscoveryService, module};
+use nest_rs_core::{Discovery, module};
 use nest_rs_http::HttpEndpointMeta;
 use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, GetPromptResult, Implementation, ListResourcesResult,
@@ -150,7 +150,7 @@ async fn shared_app() -> TestApp {
 async fn two_modules_on_one_path_share_a_single_mount() {
     let app = shared_app().await;
 
-    let mounts = DiscoveryService::new(app.container())
+    let mounts = Discovery::new(app.container())
         .meta::<HttpEndpointMeta>()
         .into_iter()
         .filter(|discovered| discovered.meta.label() == "mcp")
@@ -1053,7 +1053,7 @@ async fn a_declared_path_is_served_verbatim() {
 
 /// Every MCP mount an app assembled, as the transport sees it.
 fn mcp_mount_paths(app: &TestApp) -> Vec<String> {
-    DiscoveryService::new(app.container())
+    Discovery::new(app.container())
         .meta::<HttpEndpointMeta>()
         .into_iter()
         .filter(|discovered| discovered.meta.label() == "mcp")

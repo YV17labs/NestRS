@@ -161,8 +161,8 @@ impl TestAppBuilder {
     /// already holds the fake in an `Arc` — typically because it inspects the
     /// fake's state after a request — and would otherwise have to give up
     /// ownership through [`override_value`](Self::override_value).
-    pub fn override_provider<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
-        self.inner = self.inner.override_provider(value);
+    pub fn override_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+        self.inner = self.inner.override_arc(value);
         self
     }
 

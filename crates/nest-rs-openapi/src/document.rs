@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use nest_rs_core::{Container, DiscoveryService};
+use nest_rs_core::{Container, Discovery};
 use nest_rs_http::{
     ApiVersioning, GlobalGuardsActive, HttpConfig, HttpControllerMeta, HttpRouteMeta,
     MEDIA_TYPE_PARAM, declared_versions, join_path,
@@ -49,7 +49,7 @@ pub fn build_document(
     claims: Option<&str>,
     reported: &mut Reported,
 ) -> Value {
-    let discovery = DiscoveryService::new(container);
+    let discovery = Discovery::new(container);
     // OpenAPI 3.1 schema objects *are* JSON Schema 2020-12. The 3.0
     // `openapi3()` transforms (nullable/single-type rewrites) would corrupt the
     // output. Only `$ref`s are relocated to `#/components/schemas/...`.

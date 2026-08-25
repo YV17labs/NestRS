@@ -11,6 +11,7 @@
 //! a bare "task panicked" with nothing naming the surface.
 
 use anyhow::anyhow;
+use nest_rs_core::target;
 use nest_rs_core::{App, Container, ContainerBuilder, Module, Transport, TransportContribution};
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
@@ -77,7 +78,7 @@ async fn a_transport_that_returns_an_error_is_named_before_the_shutdown() {
         .expect_err("a failed transport is the app's error");
     assert!(err.to_string().contains("listener stopped"), "{err}");
 
-    let event = logs.expect_one("nest_rs::app", "transport failed; shutting down");
+    let event = logs.expect_one(target::APP, "transport failed; shutting down");
     assert_eq!(event.level, "error");
     assert!(
         event
@@ -101,7 +102,7 @@ async fn a_transport_task_that_panics_is_reported_as_a_panic_not_as_an_error() {
     // The distinction is what makes this worth its own line: a transport that
     // *returned* an error stopped on purpose, one that panicked did not, and
     // the two lead an operator to different places.
-    let event = logs.expect_one("nest_rs::app", "transport task panicked; shutting down");
+    let event = logs.expect_one(target::APP, "transport task panicked; shutting down");
     assert_eq!(event.level, "error");
     assert!(
         event.field("error").is_some(),

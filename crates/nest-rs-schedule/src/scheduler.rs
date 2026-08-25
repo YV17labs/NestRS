@@ -9,9 +9,7 @@ use chrono::Utc;
 use chrono_tz::Tz;
 use croner::Cron;
 use futures_util::FutureExt;
-use nest_rs_core::{
-    Container, DiscoveryService, ReachableProviders, Transport, inventory, panic_message,
-};
+use nest_rs_core::{Container, Discovery, ReachableProviders, Transport, inventory, panic_message};
 use nest_rs_worker::{JobContext, JobTransaction, Unhonoured, run_in_job_context};
 use tokio::task::JoinSet;
 use tokio::time::{MissedTickBehavior, interval, sleep};
@@ -146,7 +144,7 @@ impl Default for Scheduler {
 #[async_trait]
 impl Transport for Scheduler {
     async fn configure(&mut self, container: &Container) -> Result<()> {
-        let discovery = DiscoveryService::new(container);
+        let discovery = Discovery::new(container);
         // Path 1: `attach_meta::<…, CronJobMeta>` — direct registration the
         // crate's own tests use; also a hand-written escape hatch for an app
         // that wants to register a job without going through the macros.

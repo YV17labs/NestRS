@@ -60,12 +60,12 @@ impl Module for RedisWorkerModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_core::{Container, DiscoveryService};
+    use nest_rs_core::{Container, Discovery};
 
     #[test]
     fn registering_the_module_attaches_one_transport_contribution() {
         let container = RedisWorkerModule::register(Container::builder()).build();
-        let contributions = DiscoveryService::new(&container).meta::<TransportContribution>();
+        let contributions = Discovery::new(&container).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].meta.name, "RedisWorker");
     }

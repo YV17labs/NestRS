@@ -19,7 +19,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use nest_rs_core::{Container, DiscoveryService};
+use nest_rs_core::{Container, Discovery};
 
 use poem::http::uri::PathAndQuery;
 use poem::http::{HeaderName, StatusCode, Uri, header};
@@ -238,7 +238,7 @@ impl VersionSelector {
 /// and the OpenAPI module publishes a document per entry. Two walks of the same
 /// metadata would eventually disagree about what "declared" means.
 pub fn declared_versions(container: &Container) -> Vec<String> {
-    let mut versions: Vec<String> = DiscoveryService::new(container)
+    let mut versions: Vec<String> = Discovery::new(container)
         .meta::<crate::HttpControllerMeta>()
         .iter()
         .flat_map(|d| d.meta.versions)

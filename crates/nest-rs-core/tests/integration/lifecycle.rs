@@ -10,6 +10,7 @@
 //! twice**. The second is why the skip line names causes and prescribes no
 //! edit: double-listing is the repair it looks like, and is not one.
 
+use nest_rs_core::target;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nest_rs_core::{App, hooks, injectable, module};
@@ -131,7 +132,7 @@ async fn a_failing_shutdown_hook_is_named_at_error_and_does_not_abort_the_rest()
         .await
         .expect("a failed cleanup is swallowed: shutdown is best-effort");
 
-    let event = logs.expect_one("nest_rs::lifecycle", "lifecycle hook failed");
+    let event = logs.expect_one(target::LIFECYCLE, "lifecycle hook failed");
     assert_eq!(event.level, "error");
     assert!(
         event

@@ -12,13 +12,16 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::access::{
-    AccessError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
-    ProviderOrder, ReachableProviders, UnresolvedFactoryError, provider_order_from_inventory,
+    ProviderOrder, ReachableProviders, provider_order_from_inventory,
     reachable_provider_ids_from_inventory, validate_from_inventory, validate_keyed_from_inventory,
 };
 use crate::container::ProviderKey;
 use crate::container::{Container, ContainerBuilder, Registrar};
-use crate::discovery::DiscoveryService;
+use crate::discovery::Discovery;
+use crate::error::{
+    AccessError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
+    UnresolvedFactoryError,
+};
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
 use crate::transport::{Transport, TransportContribution};
@@ -90,14 +93,22 @@ impl App {
             TypeId::of::<ReachableProviders>(),
             TypeId::of::<ProviderOrder>(),
         ]);
-        // The actual registered set (singletons + scoped/transient factories +
-        // imperatively-provided values) — consulted so a dependency provided
-        // outside the declarative graph is not misreported as unmet.
         check_duplicate_providers(&builder)?;
+        // Before the queue check, and for the same reason the async path runs it
+        // before any factory: a contested declaration is a fact that **survives
+        // the remedy the queue check prescribes**. `UnresolvedFactoryError` says
+        // "boot with `App::builder()…` instead", so reporting it first hands the
+        // developer an edit whose only outcome is a second, different boot
+        // failure — while the framework already held the fact that explains it.
+        // A refusal lands at the earliest site that can see the fact.
+        check_contested_declarations(&builder)?;
         // `collect` ran but nothing drains the queue on this path, so anything a
         // module queued as an async factory would never exist — refuse rather
         // than boot a container with the hole in it.
         check_no_queued_factories(&builder)?;
+        // The actual registered set (singletons + scoped/transient factories +
+        // imperatively-provided values) — consulted so a dependency provided
+        // outside the declarative graph is not misreported as unmet.
         let registered = builder.registered_ids();
         let deferred = builder.scoped_or_transient_ids();
         validate_from_inventory(&roots, &global, &registered, &deferred)
@@ -156,7 +167,7 @@ impl App {
         );
 
         let mut transports: Vec<Box<dyn Transport>> = Vec::new();
-        for contribution in DiscoveryService::new(&container).meta::<TransportContribution>() {
+        for contribution in Discovery::new(&container).meta::<TransportContribution>() {
             let transport = (contribution.meta.build)(&container)?;
             tracing::info!(
                 target: crate::target::APP,
@@ -357,12 +368,10 @@ impl AppBuilder {
         self
     }
 
-    /// Replace a concrete provider with a pre-shared `Arc<T>` after the module
-    /// tree registers — the same swap as [`override_value`](Self::override_value)
-    /// for cases a test already has the value in an `Arc` (a fake holding state
-    /// the test inspects after the request, for instance). Eager-build caveat
-    /// applies (see [`override_value`](Self::override_value)).
-    pub fn override_provider<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
+    /// [`override_value`](Self::override_value) for a value the test already
+    /// holds in an `Arc` — a fake carrying state it inspects after the request,
+    /// for instance. Eager-build caveat applies.
+    pub fn override_arc<T: Any + Send + Sync>(mut self, value: Arc<T>) -> Self {
         self.overrides
             .push(Box::new(move |builder| builder.replace_arc(value)));
         self
@@ -809,7 +818,7 @@ mod tests {
             .expect("build succeeds");
         // The contribution lands in the container's metadata so `App::run`
         // can drain it at boot.
-        let contributions = DiscoveryService::new(app.container()).meta::<TransportContribution>();
+        let contributions = Discovery::new(app.container()).meta::<TransportContribution>();
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].meta.name, "NullTransport");
     }

@@ -225,9 +225,18 @@ The endpoint URLs are provider constants, not config — see
 
 ## Other namespaces
 
-`graphql`, `openapi`, `ws`, `throttler`, `health`, and the demo feature library's `issuer` each read
-their own `NESTRS_<NAMESPACE>__*` keys — see the matching module page for the
-fields. The rule is uniform: the struct's field name uppercased is the key.
+These read their own `NESTRS_<NAMESPACE>__*` keys. The rule is uniform: the
+struct's field name uppercased is the key. Two namespaces are not spelled the
+way their section is, so the page is named rather than left to a search:
+
+| Namespace | Documented on |
+|---|---|
+| `graphql` | [GraphQL configuration](/graphql/configuration/) |
+| `openapi` | [OpenAPI](/openapi/) |
+| `health` | [Health](/health/) |
+| `throttler` | [Rate limiting](/rate-limiting/) |
+| `ws` | [WebSockets](/websockets/) |
+| `issuer` | the demo feature library — [the Publish workspace](/publish/) |
 
 ## The `.env` cascade
 

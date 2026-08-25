@@ -1,5 +1,5 @@
 ---
-import { Code } from 'astro-expressive-code/components';
+import { Code } from '@astrojs/starlight/components';
 
 interface Tab {
   id: string;
@@ -15,7 +15,7 @@ const tabs: Tab[] = [
     label: 'Controller',
     file: 'hello/src/controller.rs',
     code: `use std::sync::Arc;
-use nest_rs_http::{controller, routes};
+use nest_rs::http::{controller, routes};
 
 use crate::service::HelloService;
 
@@ -38,7 +38,7 @@ impl HelloController {
     id: 'service',
     label: 'Service',
     file: 'hello/src/service.rs',
-    code: `use nest_rs_core::injectable;
+    code: `use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]
@@ -54,8 +54,8 @@ impl HelloService {
     id: 'module',
     label: 'Module',
     file: 'hello/src/module.rs',
-    code: `use nest_rs_core::module;
-use nest_rs_http::HttpModule;
+    code: `use nest_rs::core::module;
+use nest_rs::http::HttpModule;
 
 use crate::controller::HelloController;
 use crate::service::HelloService;
@@ -73,8 +73,8 @@ pub struct HelloModule;`,
     label: 'Main',
     file: 'hello/src/main.rs',
     code: `use anyhow::Result;
-use nest_rs_config::Environment;
-use nest_rs_core::App;
+use nest_rs::config::Environment;
+use nest_rs::core::App;
 
 use hello::HelloModule;
 

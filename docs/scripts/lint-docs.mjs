@@ -954,14 +954,16 @@ function guardedCurlRoot(command) {
   return m && GUARDED_ROUTE_ROOTS.has(m[1]) ? m[1] : null;
 }
 
-/// Every file under `dir` with one of `exts` — the docs corpus by default, and
-/// the framework's own sources for the checks that derive their rule from it.
-function walk(dir, exts = ['.md', '.mdx']) {
+/// Every page under `dir`. One caller, and one extension set: the second
+/// consumer this took a parameter for — a walk of `crates/**` for the checks
+/// that re-derived their rule from the source — is what `docs/canon.json`
+/// replaced, so the corpus is the only tree this reads.
+function walk(dir) {
   const out = [];
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...walk(p, exts));
-    else if (exts.some((ext) => name.endsWith(ext))) out.push(p);
+    if (statSync(p).isDirectory()) out.push(...walk(p));
+    else if (name.endsWith('.md') || name.endsWith('.mdx')) out.push(p);
   }
   return out;
 }
@@ -1384,6 +1386,15 @@ function lintTitles() {
 /// fires without running the gate — see the driver guard below.
 export function lint() {
   MIRRORS_SEEN.clear();
+  // Both accumulators, for the same reason. `PAGE_TITLES` is filled by
+  // `lintFile`, which the suite also calls directly against fixtures — so a
+  // `lint()` after those calls saw every fixture title as a second page
+  // claiming it, and reported one `title` violation per fixture. That result is
+  // what `no violation names a rule outside RULES` asserts on, and it stayed
+  // green because `title` is itself a member: the join passed for the wrong
+  // reason, which is the state `.claude/rules/testing.md` calls worse than an
+  // empty cell.
+  PAGE_TITLES.clear();
   // `(page) => …` and not a bare reference: `flatMap` passes the index second,
   // which `lintFile`'s injectable `src` would take as the page's contents.
   const current = [
@@ -1453,8 +1464,33 @@ function land(rule) {
   process.exit(1);
 }
 
+/// Fail closed on an unreadable baseline, for the reason `loadCanon` states
+/// thirty lines up: a missing file would silently disable whichever check reads
+/// it. A `[]` here is loud under the gate — every recorded violation goes fresh
+/// — and silent under `--land`, which writes `[...readBaseline(), ...added]`:
+/// one JSON typo plus one landing discarded every other rule's baseline and
+/// printed a success-shaped message. A genuinely absent file is still the
+/// starting state, so only that case returns empty.
 function readBaseline() {
-  try { return JSON.parse(readFileSync(BASELINE, 'utf8')); } catch { return []; }
+  let raw;
+  try {
+    raw = readFileSync(BASELINE, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`${relative(DOCS_ROOT, BASELINE)} is not valid JSON (${err.message}) — `
+      + 'read as empty it would report every baselined violation as new, and a --land would '
+      + 'overwrite the file with only the rule being landed');
+  }
+  if (!Array.isArray(parsed) || parsed.some((x) => typeof x !== 'string')) {
+    throw new Error(`${relative(DOCS_ROOT, BASELINE)} must be an array of violation strings`);
+  }
+  return parsed;
 }
 
 /// Compare today's violations against the recorded ones.
@@ -1476,6 +1512,16 @@ function compare(current, recorded) {
 /// Run the gate. Only reached when this file is the process entry point, so
 /// `import`ing it costs a canon read and a docs walk — never an `exit`.
 function main() {
+  // The floor first, and before `--land` above all. Landing is the only
+  // operation here that *writes*, and it was the one the floor did not guard:
+  // on a shrunken corpus it recorded a rule's violations from the wrong tree
+  // and called that the baseline it inherited.
+  if (PAGES.length < PAGE_FLOOR) {
+    console.error(`\n✖ the walk found ${PAGES.length} pages — below ${PAGE_FLOOR} it is reading `
+      + 'the wrong tree, and a clean run proves nothing.\n');
+    process.exit(1);
+  }
+
   const landing = landArgument();
   if (landing) {
     land(landing);
@@ -1498,12 +1544,6 @@ function main() {
       + `  ${relative(DOCS_ROOT, BASELINE)} by hand, in a commit a reviewer reads.\n`,
     );
     process.exit(2);
-  }
-
-  if (PAGES.length < PAGE_FLOOR) {
-    console.error(`\n✖ the walk found ${PAGES.length} pages — below ${PAGE_FLOOR} it is reading `
-      + 'the wrong tree, and a clean run proves nothing.\n');
-    process.exit(1);
   }
 
   const current = lint();

@@ -2980,7 +2980,7 @@
     "port": null,
     "lines": [
       "use std::time::{SystemTime, UNIX_EPOCH};",
-      "use nest_rs::core::DiscoveryService;",
+      "use nest_rs::core::Discovery;",
       "use nest_rs::http::HttpEndpointMeta;",
       "use nest_rs::testing::mcp::{initialize_request, open_session, post_message};",
       "use poem::http::StatusCode;",
@@ -2998,7 +2998,7 @@
       "#[tokio::test]",
       "async fn audio_tool_self_mounts_the_mcp_endpoint() {",
       "let (_db, app) = boot().await;",
-      "let endpoints = DiscoveryService::new(app.container()).meta::<HttpEndpointMeta>();",
+      "let endpoints = Discovery::new(app.container()).meta::<HttpEndpointMeta>();",
       "assert!(",
       "endpoints",
       ".iter()",

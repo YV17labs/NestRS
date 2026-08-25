@@ -13,7 +13,20 @@ export const onRequest = defineRouteMiddleware((context) => {
     { tag: 'meta', attrs: { name: 'twitter:description', content: description } }
   );
 
-  if (id !== 'index') return;
+  // The docs home, whose content-collection id is the empty string — `index.mdx`
+  // sits at the collection root, so the loader gives it no path segment. This
+  // read `id !== 'index'`, which is true of every page including this one, so
+  // the block below shipped on none of them. Nothing catches that: the linter
+  // walks `src/content/docs/**` only, and a `head.push` that never runs
+  // renders as an absent tag rather than as an error.
+  if (id !== '') return;
+
+  // The origin is the build's, never a literal. `ASTRO_SITE` exists so a
+  // preview or a fork deploy serves a different one, and a JSON-LD `@id` is an
+  // identity key — a preview build claiming to *be* nestrs.dev publishes
+  // structured data about a site it is not. Astro normalises `site` with a
+  // trailing slash, which is the form both `url` fields want.
+  const origin = context.site?.href ?? '/';
 
   head.push({
     tag: 'script',
@@ -23,8 +36,8 @@ export const onRequest = defineRouteMiddleware((context) => {
       '@graph': [
         {
           '@type': 'WebSite',
-          '@id': 'https://nestrs.dev/#website',
-          url: 'https://nestrs.dev/',
+          '@id': `${origin}#website`,
+          url: origin,
           name: 'NestRS',
           description: defaultDescription,
           inLanguage: 'en',
@@ -35,7 +48,7 @@ export const onRequest = defineRouteMiddleware((context) => {
           applicationCategory: 'DeveloperApplication',
           operatingSystem: 'Cross-platform',
           description: defaultDescription,
-          url: 'https://nestrs.dev/',
+          url: origin,
           offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
         },
       ],

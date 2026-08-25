@@ -51,7 +51,7 @@ function pageMeta(file) {
 /// One section: the pages of a single content directory, its `index` apart and
 /// the rest in sidebar order. `tiered` is the structural fact both readers act
 /// on — the threshold and the exemption are applied here and nowhere else.
-export function section(dir) {
+function section(dir) {
   const pages = [];
   let index = null;
   for (const name of readdirSync(join(CONTENT_ROOT, dir)).sort()) {

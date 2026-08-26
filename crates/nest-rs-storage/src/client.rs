@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use http::Method;
-use nest_rs_core::injectable;
+use nest_rs_core::{TaskContext, injectable};
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path;
 use object_store::signer::Signer;
@@ -139,9 +139,9 @@ impl Storage {
     /// carry the stored `Content-Type`, so it is not returned here. Callers that
     /// need the mime type should keep the value they supplied at
     /// upload-request time rather than relying on `head`.
-    pub async fn head(&self, key: &str) -> Result<Option<HeadMetadata>> {
+    pub async fn head(&self, key: &str) -> Result<Option<ObjectMetadata>> {
         match self.store()?.head(&Path::from(key)).await {
-            Ok(meta) => Ok(Some(HeadMetadata {
+            Ok(meta) => Ok(Some(ObjectMetadata {
                 byte_size: meta.size as i64,
             })),
             Err(object_store::Error::NotFound { .. }) => Ok(None),
@@ -354,6 +354,16 @@ impl Storage {
 struct UploadGuard {
     upload: Option<Box<dyn MultipartUpload>>,
     key: String,
+    /// The unit of work that opened the upload. `Drop` hands the abort to a
+    /// detached task, and [`TaskContext`] is what keeps the two events
+    /// `abort_upload` emits under it — cancellation is precisely the case where
+    /// the reader holds the timed-out request's `trace_id` and needs the
+    /// outcome line to carry it too.
+    ///
+    /// Captured at `new` rather than at `Drop`: a dropped future is not
+    /// guaranteed to be dropped on the task that owned it, and the span the
+    /// abort belongs to is the one that opened the upload either way.
+    context: TaskContext,
 }
 
 impl UploadGuard {
@@ -361,6 +371,7 @@ impl UploadGuard {
         Self {
             upload: Some(upload),
             key: key.to_owned(),
+            context: TaskContext::current(),
         }
     }
 
@@ -391,25 +402,31 @@ impl Drop for UploadGuard {
             return;
         };
         let key = std::mem::take(&mut self.key);
-        tracing::warn!(
-            target: crate::TARGET,
-            key = key.as_str(),
-            "multipart upload was cancelled mid-flight; discarding its parts",
-        );
+        let context = self.context.clone();
         // Only reachable from inside the runtime the upload was driven by, but
         // a `Drop` has no way to prove that — and panicking in a destructor
         // while unwinding a cancellation would replace a billing leak with a
         // crash.
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                handle.spawn(async move { abort_upload(&mut upload, &key).await });
-            }
-            Err(_) => tracing::warn!(
+        let runtime = tokio::runtime::Handle::try_current();
+        context.span().in_scope(|| {
+            tracing::warn!(
                 target: crate::TARGET,
                 key = key.as_str(),
-                "no runtime is available to discard them; they are left for the store's \
-                 lifecycle rule",
-            ),
+                "multipart upload was cancelled mid-flight; discarding its parts",
+            );
+            if runtime.is_err() {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    key = key.as_str(),
+                    "no runtime is available to discard them; they are left for the store's \
+                     lifecycle rule",
+                );
+            }
+        });
+        if let Ok(handle) = runtime {
+            // The abort is the outcome half of the event pair above, so it is
+            // filed under the same unit of work.
+            handle.spawn(context.carry(async move { abort_upload(&mut upload, &key).await }));
         }
     }
 }
@@ -445,7 +462,8 @@ async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str) {
 }
 
 /// Result of a `head` — the metadata we cache onto a stored-file record.
-pub struct HeadMetadata {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectMetadata {
     /// The object's size in bytes, as reported by S3.
     pub byte_size: i64,
 }
@@ -523,13 +541,13 @@ mod tests {
             );
 
             let cancelled = logs.expect_one(
-                "nest_rs::storage",
+                crate::TARGET,
                 "multipart upload was cancelled mid-flight; discarding its parts",
             );
             assert_eq!(cancelled.level, "warn");
 
             let leaked = logs.expect_one(
-                "nest_rs::storage",
+                crate::TARGET,
                 "no runtime is available to discard them; they are left for the store's \
                  lifecycle rule",
             );
@@ -573,7 +591,7 @@ mod tests {
 
         assert!(
             logs.find(
-                "nest_rs::storage",
+                crate::TARGET,
                 "no runtime is available to discard them; they are left for the store's \
                  lifecycle rule",
             )

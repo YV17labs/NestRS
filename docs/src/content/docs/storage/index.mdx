@@ -123,7 +123,7 @@ impl MediaService {
 
 <Aside type="caution">
 `head` reports the object's **size** but not its `Content-Type`:
-`object_store`'s `ObjectMeta` does not carry it, so `HeadMetadata` exposes
+`object_store`'s `ObjectMeta` does not carry it, so `ObjectMetadata` exposes
 only the byte size. Keep the mime type you were given at
 upload-request time rather than reading it back. `put_bytes` still
 *sets* the content type on write — only the `head` read-back path
@@ -153,7 +153,7 @@ originals: a short-lived signed `GET` URL the client fetches directly.
 | `bucket_name() -> &str` | the configured bucket |
 | `presign_put(key, expires) -> String` | signed `PUT` URL for direct client upload |
 | `presign_get(key, expires) -> String` | signed `GET` URL for serving private originals |
-| `head(key) -> Option<HeadMetadata>` | object size; `None` if absent |
+| `head(key) -> Option<ObjectMetadata>` | object size; `None` if absent |
 | `get_bytes(key) -> Bytes` | download full bytes (server-side) |
 | `get_stream(key) -> impl Stream<Item = Result<Bytes>>` | download chunk by chunk, never buffering the whole object |
 | `list(prefix) -> impl Stream<Item = Result<ObjectEntry>>` | the keys under a prefix, streamed page by page; `""` lists the bucket |
@@ -229,7 +229,7 @@ server.
 
 ### Reference
 
-- `crates/nest-rs-storage/` — `Storage`, `HeadMetadata`, `ObjectEntry`,
+- `crates/nest-rs-storage/` — `Storage`, `ObjectMetadata`, `ObjectEntry`,
   `StorageConfig`, `StorageModule`.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
   — presigns an upload URL, and the worker reads the stored object and writes

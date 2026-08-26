@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
-use nest_rs_storage::{MULTIPART_PART_SIZE, Storage, StorageConfig, StorageError};
+use nest_rs_storage::{MULTIPART_PART_SIZE, Storage, StorageConfig, StorageError, TARGET};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
@@ -99,7 +99,7 @@ impl Visit for Captured {
 
 impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Events {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().target() != "nest_rs::storage" {
+        if event.metadata().target() != TARGET {
             return;
         }
         let mut captured = Captured::default();
@@ -117,7 +117,8 @@ async fn presign_put_get_round_trip() {
     let http = reqwest::Client::new();
     ensure_bucket(&s, &http).await;
 
-    let key = "spike/object_store/hello.txt";
+    let key = unique("hello.txt");
+    let key = key.as_str();
     let body = b"object_store presign round-trip \xf0\x9f\x9a\x80".to_vec();
 
     // 1. Upload via a presigned PUT URL with a raw HTTP client.
@@ -171,20 +172,27 @@ async fn presign_put_get_round_trip() {
 
     // 5. head on a missing object returns Ok(None).
     let absent = s
-        .head("spike/object_store/does-not-exist")
+        .head(&unique("does-not-exist"))
         .await
         .expect("head absent");
     assert!(absent.is_none(), "expected None for absent object");
     eprintln!("head(absent)   -> None (Ok)");
 
     // 6. put_bytes server-side, then read it back, proving the write path too.
-    let key2 = "spike/object_store/variant.webp";
+    let key2 = unique("variant.webp");
+    let key2 = key2.as_str();
     s.put_bytes(key2, vec![1, 2, 3, 4], "image/webp")
         .await
         .expect("put_bytes");
     let rt = s.get_bytes(key2).await.expect("get_bytes key2");
     assert_eq!(rt.as_ref(), &[1, 2, 3, 4], "put_bytes round-trip mismatch");
     eprintln!("put_bytes/get  {} -> 4 bytes match", key2);
+
+    // The bucket is shared with every other suite in the devcontainer, and
+    // `list` asserts on an exact set — so this test cleans up after itself the
+    // way its four siblings already do.
+    s.delete(key).await.expect("delete key");
+    s.delete(key2).await.expect("delete key2");
 }
 
 #[tokio::test]

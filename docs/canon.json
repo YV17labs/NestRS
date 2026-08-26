@@ -333,8 +333,8 @@
       "type_key"
     ]
   },
-  "test_count": 2094,
-  "version_req": "5.1",
+  "test_count": 2101,
+  "version_req": "6.0",
   "otel_binding": "_otel",
   "envelope_keys": [
     "actor_id",

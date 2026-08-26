@@ -419,7 +419,7 @@ checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
- "rand_core 0.10.1",
+ "rand_core",
 ]
 
 [[package]]
@@ -653,12 +653,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
-
-[[package]]
-name = "data-encoding"
-version = "2.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
 name = "derive-where"
@@ -976,7 +970,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi 6.0.0",
- "rand_core 0.10.1",
+ "rand_core",
 ]
 
 [[package]]
@@ -1551,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "nest-rs-authz",
  "nest-rs-config",
@@ -1567,13 +1561,12 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-authz"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
  "nest-rs-http",
  "nest-rs-resource",
- "nest-rs-ws",
  "poem",
  "sea-orm",
  "serde",
@@ -1585,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-codegen"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1595,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-config"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "anyhow",
  "nest-rs-config-macros",
@@ -1607,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-config-macros"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1617,7 +1610,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-core"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1637,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-core-macros"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1647,14 +1640,14 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-database"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "nest-rs-exception-filters"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1664,7 +1657,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-filters"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1674,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-guards"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1683,7 +1676,6 @@ dependencies = [
  "nest-rs-http",
  "nest-rs-interceptors",
  "nest-rs-pipes",
- "nest-rs-ws",
  "poem",
  "serde_json",
  "tracing",
@@ -1691,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-http"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1716,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-http-macros"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1726,7 +1718,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-interceptors"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1736,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-pipes"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "nest-rs-core",
  "serde_json",
@@ -1747,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-resource"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1763,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-resource-macros"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1773,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-seaorm"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1802,40 +1794,9 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-worker"
-version = "5.1.0"
+version = "6.0.0"
 dependencies = [
  "tracing",
-]
-
-[[package]]
-name = "nest-rs-ws"
-version = "5.1.0"
-dependencies = [
- "async-trait",
- "futures-util",
- "nest-rs-config",
- "nest-rs-core",
- "nest-rs-http",
- "nest-rs-pipes",
- "nest-rs-ws-macros",
- "parking_lot",
- "poem",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "validator",
-]
-
-[[package]]
-name = "nest-rs-ws-macros"
-version = "5.1.0"
-dependencies = [
- "nest-rs-codegen",
- "proc-macro2",
- "quote",
- "syn 3.0.3",
 ]
 
 [[package]]
@@ -1997,7 +1958,6 @@ checksum = "9f977080932c87287147dca052951c3e2696f8759863f6b4e4c0c9ffe7a4cc8b"
 dependencies = [
  "anyhow",
  "async-compression",
- "base64",
  "bytes",
  "futures-util",
  "headers",
@@ -2024,7 +1984,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
- "tokio-tungstenite",
  "tokio-util",
  "tower",
  "tracing",
@@ -2050,15 +2009,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0103b1cef7ec0cf76490e969665504990193874ea05c85ff9bab8b911d0a0564"
 dependencies = [
  "zerovec",
-]
-
-[[package]]
-name = "ppv-lite86"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
-dependencies = [
- "zerocopy",
 ]
 
 [[package]]
@@ -2124,42 +2074,13 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
-dependencies = [
- "rand_chacha",
- "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
- "rand_core 0.10.1",
-]
-
-[[package]]
-name = "rand_chacha"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
-dependencies = [
- "getrandom 0.3.4",
+ "rand_core",
 ]
 
 [[package]]
@@ -2800,7 +2721,7 @@ dependencies = [
  "log",
  "md-5",
  "memchr",
- "rand 0.10.2",
+ "rand",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -3040,18 +2961,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-tungstenite"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "489a59b6730eda1b0171fcfda8b121f4bee2b35cba8645ca35c5f7ba3eb736c1"
-dependencies = [
- "futures-util",
- "log",
- "tokio",
- "tungstenite",
-]
-
-[[package]]
 name = "tokio-util"
 version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3201,23 +3110,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tungstenite"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eadc29d668c91fcc564941132e17b28a7ceb2f3ebf0b9dae3e03fd7a6748eb0d"
-dependencies = [
- "bytes",
- "data-encoding",
- "http",
- "httparse",
- "log",
- "rand 0.9.5",
- "sha1 0.10.7",
- "thiserror",
- "utf-8",
-]
-
-[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3282,12 +3174,6 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
-
-[[package]]
-name = "utf-8"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf8_iter"

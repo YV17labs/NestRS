@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-08-26
+
 ### Ports & Adapters — three module shapes, and a variable is a path too
 
 The framework now states what it is: **Ports & Adapters**, as practised — the
@@ -579,6 +581,119 @@ numbered the same until `seaorm` grew a second `dep:`.
   `docs` join derives the env prefix from `EnvPrefix::DEFAULT` rather than
   spelling it — which `env_names` had refused, correctly.
 
+### A driver carries its own subject, and a role file is named for its role
+
+The naming law reaching the last few types that read correctly in isolation and
+wrongly against their path. **Breaking, and all of it is a rename.**
+
+- **`nest_rs_storage::HeadMetadata` is `ObjectMetadata`**, and `Storage::head`
+  returns it. The old name described the *call* that produced the value; the
+  value is metadata about an object, and `head` is only one of the ways to
+  reach it. Same field, `byte_size`, now with `Debug`/`Clone`/`PartialEq` so a
+  test can assert on one.
+- **`nest_rs_seaorm::DbHealthIndicator` is `SeaOrmHealthIndicator`.** `Db` named
+  no backend — it is the bare capability word worn by one driver, which is
+  exactly what `RedisThrottlerModule` exists not to be. Its module,
+  `SeaOrmHealthModule`, already said the right thing; the indicator beside it
+  did not.
+- **`nest_rs_health::HealthController` is `pub(crate)`.** A mounted controller
+  is reached over HTTP, not by name: nothing in either workspace imported it,
+  and a `pub` on it promised an API nobody had priced.
+- **`exception.rs` is `exception_filter.rs`**, the role the naming tables give
+  the file. Internal — `ExceptionFilter` is exported from the crate root as
+  before.
+
+### A health probe's names are settled at boot, and a missing host is an outcome
+
+Two failures a probe could not previously report, both closed where the fact is
+known.
+
+- **Two reachable indicators claiming one name on one probe fail the boot,
+  naming both hosts.** The name is the probe body's JSON key and
+  `ProbeReport::from_indicators` folds by it, so a collision did not merely
+  shadow an entry: a `down` verdict could be overwritten by an `up` one and a
+  failing check would leave a readiness probe with nothing said anywhere. Which
+  of the two won was `inventory` link order, which nobody declared. The check is
+  **per probe, not per registry** — `#[readiness] fn db` beside `#[startup] fn
+  db` addresses nothing twice, which is the pair `nest-rs-seaorm` ships.
+- **An indicator whose host the container does not hold reports `down`, it does
+  not panic.** The thunk runs inside a probe request, where a panic takes the
+  response down; an `Err` is the outcome the crate already renders, with the
+  real sentence on `nest_rs::health`. The sentence is the kernel's
+  `INERT_HOST_HINT`, so the five causes are named and no unverifiable edit is
+  prescribed.
+
+### A task boundary carries the unit of work, through one seam
+
+`nest_rs_core::TaskContext` — capture the ambient span and request context at
+the hand-off, re-install both around the spawned work. **Both halves cross, and
+neither substitutes for the other**: the span is what puts `trace_id` on the
+events the spawned work emits, the ambient context is what makes
+`current_trace_id()` answer inside it. Carrying only the span leaves the events
+*looking* correlated while every accessor below answers `None` — the more
+expensive failure, because it reads as covered.
+
+Two sites, both of them previously hand-rolling it or missing it:
+
+- **A cancelled multipart upload's abort** is filed under the request that
+  opened it. Cancellation is precisely the case where the reader holds the
+  timed-out request's `trace_id` and needs the outcome line to carry it. The
+  context is captured at construction rather than at `Drop`, because a dropped
+  future is not guaranteed to be dropped on the task that owned it.
+- **The GraphQL dataloader batch** keeps the behaviour it had and stops spelling
+  it locally.
+
+### The test harness says which protocol it speaks, and stops hiding a dead socket
+
+- **Edge modules keep their namespace.** `nest_rs_testing::graphql::` and
+  `::ws::` are the paths; the root re-exports of `GraphqlSocket`,
+  `GraphqlSocketBuilder`, `WsApp`, `WsSocket`, `WsSocketBuilder`, `WsFrame` and
+  `CloseCode` are **gone**. Re-exporting both ways gave every type two paths,
+  and this crate was already spelling one of them two ways 200 lines apart.
+- **`CloseCode` is `nest_rs_ws::CloseCode`** — RFC 6455 §7.4.1's codes,
+  published by the crate that *chooses* them (a gateway closes with `Away`,
+  `Error` and `Policy`), so a caller writing a gateway and a caller testing one
+  name one path. `nest-rs-ws`'s own suite used to reach into `nest-rs-testing`
+  for it.
+- **Silence and a dead connection are different answers.** `WsSocket::read_within`
+  returns `WsRead::{Frame, Silent, Aborted}` and the GraphQL driver's
+  `GraphqlEvent`/`GraphqlRefusal` carry the same split. Folded into one `None`,
+  a socket that died mid-test satisfied `expect_silence`: the assertion "nothing
+  was sent" passed because nothing *could* be sent. `close()` now loops for the
+  peer's answer too — §5.5.1 obliges it to reply "as soon as practical", which
+  does not oblige it to reply *first*.
+- **The driver speaks `graphql-transport-ws`, and says so.** `graphql-ws` is the
+  *legacy* subprotocol identifier; the mount negotiates both and this driver
+  pins the modern one, whose refusal close codes (4400, 4401, 4403, 4408, 4409,
+  4429) `try_connect` now reports instead of mapping every one of them to `None`.
+- **`mcp::PROTOCOL_VERSION` is pinned to the SDK's own `LATEST`, by a test.**
+  It sat on `2024-11-05` for four revisions and nothing said so: rmcp accepts the
+  oldest revision forever, so every MCP suite in both workspaces passed while
+  negotiating a handshake no current client performs. A shared constant was never
+  the guard against that. `nest_rs_mcp::ProtocolVersion` is re-exported so the
+  comparison has something to make.
+
+### A global `ExceptionFilter` covers the route table, not the edge
+
+"Global" means a different thing for the two layer families, and only one of
+them said so. A global `Filter` attaches a wrap at the transport edge, so it maps
+errors raised where **no route matched**. A global `ExceptionFilter` is read
+**per route** by the `#[routes]` composer — so a 404, a self-mounted surface such
+as `/graphql` or `/mcp`, or a WS upgrade never reaches one, even when the error
+raised there is exactly the type it claims to catch. Use a `Filter` for those.
+
+Documented on the trait method, on `/fundamentals/exception-filters/`, and in the
+dedup section, which also stops describing the two as nesting: both compose
+through `compose_chain` into a single chain endpoint per route
+(`ExceptionFiltersEndpoint` for the typed catches, `FilterChain` for the untyped
+ones), so the dedup covers every pair of scopes including controller + method
+with no global in play.
+
+**`nest-rs-filters` no longer claims to span transports.** Its crates.io
+description and README said "on HTTP, GraphQL, and WS"; a `Filter` is bound at
+the HTTP edge and `reject_http_only_layers` is the compile error the other three
+edges already raise. The claim was read by everyone as true of them.
+
 ### Also
 
 - **`nest-rs-opentelemetry` loses five dependencies and gains a voice.**
@@ -598,6 +713,51 @@ numbered the same until `seaorm` grew a second `dep:`.
 - **The OpenAPI document lines file under `nest_rs::openapi`**, not
   `nest_rs::routes` — a target's one job is to say where an event came from,
   and the write happens in `nest-rs-openapi`.
+
+- **`nest_rs_core::unresolved_host` is the run-time half of `INERT_HOST_HINT`.**
+  Five decorators resolve their host with `Container::get::<Self>()`, so the
+  sentence they report belongs beside the boot-time one rather than inside
+  whichever capability wrote it first.
+- **`OpenTelemetryMeter` moves to `meter.rs` and `PipeError` to `error.rs`** —
+  a file exists for its own content, and errors live in `error.rs`.
+  `nest_rs_opentelemetry::parse_bool` is **no longer re-exported**; it is
+  `nest_rs_core::parse_bool` and always was.
+- **`nestrs doctor` reads the namespaces that exist.** It answered for
+  `NESTRS_DATABASE__URL` and `NESTRS_QUEUE__URL`, which no `#[config]` declares
+  any more — it now reports `NESTRS_SEAORM__URL` and `NESTRS_REDIS__URL`. Its
+  Rust floor is parsed from `CARGO_PKG_RUST_VERSION` rather than retyped, so the
+  toolchain sweep no longer compares the anchor against a stale copy of itself.
+- **A dry run says so in every sentence it prints.** `nestrs new` claimed
+  "Created …" and pinned an HTTP port directly above "Dry run — no files
+  written."; the tense is read off the report, which is the thing that knows.
+- **A scaffolded skeleton no longer restates the edge's own line.** The queue
+  processor and the scheduled tick each filed an `info` beside the one
+  `nest_rs::operation` already files per unit of work — the same work said twice,
+  on a target the documented toggle does not silence. `tracing` leaves those two
+  skeletons' generated manifests with it.
+- **`nestrs g mcp` names the tool after the resource, not its singular.**
+  `Names::tool()` read `singular` where its six siblings read `pascal`.
+- **A generated `mod.rs` exports the module and not the handler.** A controller
+  reachable as `features::posts::*` is a decision the generator was making for
+  every project at once.
+
+- **`LogCapture` can assert on what it could not see.** `CapturedEvent` carries
+  the event's `name:` — its metadata identity, which an OTLP log bridge exports
+  as `event.name` — so a line whose `name:` had drifted from its message no
+  longer passes every assertion in the repo; `CapturedSpan` carries `level`, so
+  the *Level per layer* contract is assertable for spans and not just events, and
+  it is exported from the crate root. The buffers survive a poisoned lock rather
+  than panicking a second time on top of the first failure.
+- **`EphemeralDatabase` stops dropping the host of a path-less URL.** RFC 3986
+  §3.2 terminates the authority at the *first* slash after the scheme, not the
+  last, so `postgres://host:5432` yielded `postgres://<db>` — surfacing much
+  later as a connection error naming a URL the developer never wrote. The
+  ephemeral name's prefix is one constant now, read by the reaper instead of a
+  hand-counted `_` offset that a rename would have shifted silently.
+- **`nest-rs-health` drops `nest-rs-interceptors`**, which it never named, and
+  `OpenTelemetry::init_for_tests` is `#[doc(hidden)]` — a harness entry point,
+  not a documented one. `nestrs info` stops printing a `CLI` row that
+  `nestrs version` already owns.
 
 ### The documented front door is compiled
 
@@ -4819,7 +4979,8 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
-[Unreleased]: https://github.com/YV17labs/NestRS/compare/v5.1.0...HEAD
+[Unreleased]: https://github.com/YV17labs/NestRS/compare/v6.0.0...HEAD
+[6.0.0]: https://github.com/YV17labs/NestRS/compare/v5.1.0...v6.0.0
 [5.1.0]: https://github.com/YV17labs/NestRS/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/YV17labs/NestRS/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/YV17labs/NestRS/compare/v3.1.0...v4.0.0

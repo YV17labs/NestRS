@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
 
-use crate::pipe::{Pipe, PipeError};
+use crate::{PipeError, pipe::Pipe};
 
 /// Split a comma-separated `String` into `Vec<T>`, parsing each item with
 /// `T: FromStr` (surrounding whitespace trimmed). Empty input yields an empty

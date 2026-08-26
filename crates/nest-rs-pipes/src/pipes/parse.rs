@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::str::FromStr;
 
-use crate::pipe::{Pipe, PipeError};
+use crate::{PipeError, pipe::Pipe};
 
 /// Parse a `String` into any `T: FromStr`. Covers integer, float, and bool
 /// parsing (aliases below) and any enum implementing `FromStr`.

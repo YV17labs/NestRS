@@ -1,10 +1,16 @@
 use uuid::{Uuid, Variant};
 
 use super::parse_uuid::ParseUuid;
-use crate::pipe::{Pipe, PipeError};
+use crate::{PipeError, pipe::Pipe};
 
-/// Parse a `String` into an RFC 4122 UUID of an exact `VERSION`. Aliases
+/// Parse a `String` into an RFC 9562 UUID of an exact `VERSION`. Aliases
 /// cover the common ones ([`ParseUuidV4`], [`ParseUuidV7`], …).
+///
+/// RFC 9562 obsoletes RFC 4122 and is the document that assigns versions 6,
+/// 7 and 8 — so the older number cannot be cited by a pipe whose headline
+/// alias is [`ParseUuidV7`]. §4.1 renames the `10x` bits this checks the
+/// "RFC 9562/RFC 4122 variant"; `uuid`'s `Variant::RFC4122` ident is
+/// upstream's and cannot move, but the sentence on the wire is ours.
 pub struct ParseUuidVersion<const VERSION: u8>;
 
 impl<const VERSION: u8> Pipe for ParseUuidVersion<VERSION> {
@@ -13,7 +19,7 @@ impl<const VERSION: u8> Pipe for ParseUuidVersion<VERSION> {
     fn transform(input: String) -> Result<Uuid, PipeError> {
         let uuid = ParseUuid::transform(input)?;
         if uuid.get_variant() != Variant::RFC4122 {
-            return Err(PipeError::new("must be an RFC 4122 UUID"));
+            return Err(PipeError::new("must be an RFC 9562 UUID"));
         }
         if uuid.get_version_num() != VERSION as usize {
             return Err(PipeError::new(format!("must be a UUID v{VERSION}")));

@@ -1,4 +1,4 @@
-use crate::pipe::{Pipe, PipeError};
+use crate::{PipeError, pipe::Pipe};
 
 /// Strip surrounding whitespace from a `String`.
 pub struct Trim;

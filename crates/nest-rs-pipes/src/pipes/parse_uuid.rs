@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::pipe::{Pipe, PipeError};
+use crate::{PipeError, pipe::Pipe};
 
 /// Parse a `String` into a [`Uuid`] of any version. To require a specific
 /// version use [`ParseUuidVersion`](super::parse_uuid_version::ParseUuidVersion)

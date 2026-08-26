@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use validator::Validate;
 
-use crate::pipe::{Pipe, PipeError};
+use crate::{PipeError, pipe::Pipe};
 
 /// Validate a value with `validator::Validate`, returning it unchanged on
 /// success and a field-level [`PipeError`] (the `validator` errors as `details`)

@@ -26,14 +26,16 @@
 //! with the pipes; the registration lives with the dispatch that runs it.
 #![warn(missing_docs)]
 
+mod error;
 mod global;
 mod pipe;
 mod piped;
 mod pipes;
 mod validate;
 
+pub use error::PipeError;
 pub use global::GlobalPipe;
-pub use pipe::{Pipe, PipeError};
+pub use pipe::Pipe;
 pub use piped::{Piped, Valid};
 pub use pipes::{
     Lowercase, Parse, ParseArray, ParseBool, ParseFloat, ParseInt, ParseUuid, ParseUuidV3,

@@ -42,7 +42,7 @@ use std::sync::Arc;
 
 use nest_rs_core::Layer;
 
-use crate::pipe::PipeError;
+use crate::PipeError;
 
 /// A request-body validator/transformer applied to every handler across
 /// every transport. Runs after `Guard`s, before the extractor (HTTP) or

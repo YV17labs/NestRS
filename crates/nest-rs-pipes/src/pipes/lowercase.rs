@@ -1,4 +1,4 @@
-use crate::pipe::{Pipe, PipeError};
+use crate::{PipeError, pipe::Pipe};
 
 /// Full Unicode lowercasing via `str::to_lowercase`: locale-independent, and
 /// can change the string's length (e.g. 'İ' → "i̇") — not a per-char ASCII fold.

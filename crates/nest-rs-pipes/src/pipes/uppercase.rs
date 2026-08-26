@@ -1,4 +1,4 @@
-use crate::pipe::{Pipe, PipeError};
+use crate::{PipeError, pipe::Pipe};
 
 /// Full Unicode uppercasing via `str::to_uppercase`: locale-independent, and
 /// can change the string's length (e.g. 'ß' → "SS") — not a per-char ASCII fold.

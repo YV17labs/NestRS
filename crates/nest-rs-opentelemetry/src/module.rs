@@ -1,5 +1,8 @@
 use nest_rs_core::{container::ContainerBuilder, module::Module};
 
+#[cfg(feature = "otlp")]
+use crate::meter::OpenTelemetryMeter;
+
 /// Registers the global OTel [`OpenTelemetryMeter`] as a provider, under the
 /// `otlp` feature.
 ///
@@ -26,7 +29,7 @@ impl Module for OpenTelemetryModule {
                 "OpenTelemetryModule was imported without calling `OpenTelemetry::init` first — \
                  the global tracer and meter are no-ops, so traces and metrics would be \
                  silently dropped. Add `let _otel = \
-                 nest_rs_opentelemetry::OpenTelemetry::init(\"<service>\")?;` at the top of `main`, \
+                 nest_rs::opentelemetry::OpenTelemetry::init(\"<service>\")?;` at the top of `main`, \
                  before building the app."
             );
         }
@@ -36,20 +39,5 @@ impl Module for OpenTelemetryModule {
             builder.provide_arc(std::sync::Arc::new(OpenTelemetryMeter(meter)))
         };
         builder
-    }
-}
-
-/// Injectable wrapper over the global OTel [`Meter`](opentelemetry::metrics::Meter),
-/// registered by [`OpenTelemetryModule`] under the `otlp` feature so feature
-/// services can create instruments without reaching for the global directly.
-/// Derefs to the inner meter.
-#[cfg(feature = "otlp")]
-pub struct OpenTelemetryMeter(pub opentelemetry::metrics::Meter);
-
-#[cfg(feature = "otlp")]
-impl std::ops::Deref for OpenTelemetryMeter {
-    type Target = opentelemetry::metrics::Meter;
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }

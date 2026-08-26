@@ -45,6 +45,7 @@ impl OpenTelemetry {
     /// guard. Log level honours `NESTRS_LOG` then `RUST_LOG`, default `warn`
     /// (noise control) — an invalid directive falls through rather than
     /// failing a test run over log config.
+    #[doc(hidden)]
     pub fn init_for_tests() {
         if initialized() {
             return;

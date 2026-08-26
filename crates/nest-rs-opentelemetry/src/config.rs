@@ -3,6 +3,7 @@ use std::time::Duration;
 use nest_rs_config::{ConfigService, env_var};
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
+use nest_rs_core::parse_bool;
 
 /// The OTel SDK's own metric export period, restated so it is a named,
 /// documented default rather than a number buried in a dependency.
@@ -84,7 +85,6 @@ fn warn_unparseable(name: &str, raw: &str) {
 /// rather than aliased so `nest_rs_opentelemetry::LogFormat` keeps naming the
 /// type a caller already writes.
 pub use nest_rs_core::logging::LogFormat;
-pub use nest_rs_core::parse_bool;
 
 impl OpenTelemetryConfig {
     /// Config with framework defaults and the given `service.name`. `log_format`

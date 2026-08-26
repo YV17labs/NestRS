@@ -30,6 +30,8 @@ mod id_generator;
 mod init;
 #[cfg(feature = "otlp")]
 mod linker;
+#[cfg(feature = "otlp")]
+mod meter;
 mod module;
 #[cfg(feature = "otlp")]
 mod otlp;
@@ -38,5 +40,5 @@ pub use config::{DEFAULT_METRIC_INTERVAL, LogFormat, OpenTelemetryConfig};
 pub use error::OpenTelemetryError;
 pub use init::OpenTelemetry;
 #[cfg(feature = "otlp")]
-pub use module::OpenTelemetryMeter;
+pub use meter::OpenTelemetryMeter;
 pub use module::OpenTelemetryModule;

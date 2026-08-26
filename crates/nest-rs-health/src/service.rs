@@ -25,7 +25,7 @@ const REASON_DEADLINE: &str = "probe deadline exceeded";
 
 /// Aggregates every reachable [`HealthIndicator`] submitted via `#[indicators]`
 /// into a per-probe [`ProbeReport`]. Apps don't usually touch this directly —
-/// they register indicators and the [`crate::HealthController`] consumes the
+/// they register indicators and the crate's probe controller consumes the
 /// reports.
 ///
 /// A probe with zero indicators reports `up` with an empty body: importing
@@ -83,17 +83,11 @@ impl HealthService {
             return ProbeReport::empty_up();
         };
 
-        let reachable = container.get::<ReachableProviders>();
-        let entries: Vec<&'static HealthIndicator> = inventory::iter::<HealthIndicator>()
+        // Silent about what it skips on purpose: `report_unreachable_indicators`
+        // named it at boot, so repeating per probe would be the same event said
+        // twice — once per request, in production.
+        let entries: Vec<&'static HealthIndicator> = reachable_indicators(container)
             .filter(|entry| entry.kind == kind)
-            // Silent here on purpose: `report_unreachable_indicators` named it
-            // at boot, so repeating per probe would be the same event said
-            // twice — once per request, in production.
-            .filter(|entry| {
-                reachable
-                    .as_ref()
-                    .is_none_or(|r| r.0.contains(&(entry.provider_type_id)()))
-            })
             .collect();
         if entries.is_empty() {
             return ProbeReport::empty_up();
@@ -178,6 +172,68 @@ async fn run_indicators(
             })
             .collect(),
     )
+}
+
+/// Two reachable indicators claiming one name on one probe is a **boot**
+/// failure naming both hosts.
+///
+/// The name is the addressable unit — the JSON key in the probe body and the
+/// `indicator` field on every line this crate emits — and
+/// [`ProbeReport::from_indicators`] folds by it. So a collision does not merely
+/// shadow an entry: a `down` verdict can be overwritten by an `up` one, and a
+/// failing check disappears from a readiness probe with nothing said. Which of
+/// the two wins is `inventory` link order, which nobody declared.
+///
+/// This is the one failure mode a merging surface introduces, and the framework
+/// answers it the same way everywhere it merges — `nest-rs-mcp`'s duplicate tool
+/// name inside an endpoint is the same check for the same reason.
+///
+/// **Per probe, not per registry**: two kinds never appear in one report, so
+/// `#[readiness] fn db` beside `#[startup] fn db` addresses nothing twice — the
+/// pair `nest-rs-seaorm` ships is deliberately of that shape.
+pub(crate) fn check_indicator_names(container: &Container) -> anyhow::Result<()> {
+    check_names(reachable_indicators(container))
+}
+
+/// Every linked indicator this app can actually run.
+///
+/// The fail-open branch is the decision, and it is one decision: no
+/// [`ReachableProviders`] means the access graph never ran — a hand-built
+/// container in a test — so every indicator is in scope rather than none.
+/// Spelled once because the boot check and the probe must agree; disagreeing,
+/// the boot would refuse a name collision between two indicators no probe would
+/// ever run.
+fn reachable_indicators(
+    container: &Container,
+) -> impl Iterator<Item = &'static HealthIndicator> + use<> {
+    let reachable = container.get::<ReachableProviders>();
+    inventory::iter::<HealthIndicator>().filter(move |entry| {
+        reachable
+            .as_ref()
+            .is_none_or(|r| r.0.contains(&(entry.provider_type_id)()))
+    })
+}
+
+/// The registry-free half of [`check_indicator_names`], extracted for the reason
+/// [`run_indicators`] and [`run_with_timeout`] are: `inventory` is process-wide,
+/// so a fixture submitted to exercise a collision would collide in every other
+/// test in the process too. Here the entries are handed in.
+fn check_names<'a>(entries: impl Iterator<Item = &'a HealthIndicator>) -> anyhow::Result<()> {
+    let mut claimed: std::collections::HashMap<(ProbeKind, &'static str), &'static str> =
+        std::collections::HashMap::new();
+    for entry in entries {
+        if let Some(first) = claimed.insert((entry.kind, entry.name), entry.origin) {
+            anyhow::bail!(
+                "duplicate health indicator {name:?} on the {kind:?} probe: {first} and \
+                 {second} both claim it. That name is the probe body's JSON key, so one \
+                 verdict would silently replace the other — rename one of the two methods",
+                name = entry.name,
+                kind = entry.kind,
+                second = entry.origin,
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Name the linked-but-unreachable indicators **once, at boot** — the same
@@ -488,6 +544,62 @@ mod tests {
             "probing must not repeat the boot notice: {:#?}",
             logs.events(),
         );
+    }
+
+    /// Two hosts claiming one name on one probe fail the boot, and the message
+    /// names **both** so the reader knows which two to look at. Without this the
+    /// fold keeps whichever `inventory` linked last, and a `down` verdict can be
+    /// replaced by an `up` one — a failing check leaving a readiness probe with
+    /// nothing said anywhere.
+    #[test]
+    fn two_hosts_claiming_one_name_on_one_probe_fail_the_boot() {
+        let ok: IndicatorRun = |_| Box::pin(async { Ok(()) });
+        let mine = HealthIndicator {
+            origin: "features::billing::health",
+            ..entry("db", ok)
+        };
+        let theirs = HealthIndicator {
+            origin: "nest_rs_seaorm::health::indicator",
+            ..entry("db", ok)
+        };
+        let err = check_names([&mine, &theirs].into_iter())
+            .expect_err("one name, one probe, two hosts must not boot");
+        let sentence = format!("{err:#}");
+        for named in [
+            "features::billing::health",
+            "nest_rs_seaorm::health::indicator",
+            "db",
+        ] {
+            assert!(
+                sentence.contains(named),
+                "the boot error names {named}: {sentence}"
+            );
+        }
+    }
+
+    /// The check is per **probe**, not per registry: two kinds never appear in
+    /// one report, so nothing is addressed twice. This is the shape
+    /// `nest-rs-seaorm` ships — one `db` on readiness, one on startup would both
+    /// be reachable and neither collides — and a registry-wide check would refuse
+    /// the framework's own indicator.
+    #[test]
+    fn one_name_on_two_probes_is_not_a_collision() {
+        let ok: IndicatorRun = |_| Box::pin(async { Ok(()) });
+        let ready = entry("db", ok);
+        let startup = HealthIndicator {
+            kind: ProbeKind::Startup,
+            ..entry("db", ok)
+        };
+        check_names([&ready, &startup].into_iter())
+            .expect("two probes never share a report, so the name is claimed once each");
+    }
+
+    /// Distinct names on one probe are the ordinary case and must stay silent.
+    #[test]
+    fn distinct_names_on_one_probe_boot() {
+        let ok: IndicatorRun = |_| Box::pin(async { Ok(()) });
+        let (a, b) = (entry("db", ok), entry("cache", ok));
+        check_names([&a, &b].into_iter()).expect("no name is claimed twice");
     }
 
     /// One indicator entry, built by hand rather than submitted: `inventory` is

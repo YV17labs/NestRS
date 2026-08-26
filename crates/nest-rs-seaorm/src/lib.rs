@@ -83,7 +83,7 @@ pub use time::now;
 pub use worker::WorkerDbContext;
 
 #[cfg(feature = "health")]
-pub use health::{DbHealthIndicator, SeaOrmHealthModule};
+pub use health::{SeaOrmHealthIndicator, SeaOrmHealthModule};
 #[cfg(feature = "http")]
 pub use http::{Bind, DbContext};
 

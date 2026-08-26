@@ -17,7 +17,6 @@ nest-rs-core.workspace = true
 nest-rs-guards.workspace = true
 nest-rs-health-macros.workspace = true
 nest-rs-http.workspace = true
-nest-rs-interceptors.workspace = true
 poem.workspace = true
 # The indicators of one probe run concurrently on the probe's own task — never
 # `spawn`, which would file their events under no unit of work — so the join is

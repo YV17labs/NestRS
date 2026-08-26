@@ -1,0 +1,5 @@
+error: #[indicators] methods must be `async fn`
+  --> tests/integration/diagnostics/indicators_on_a_blocking_method.rs:16:5
+   |
+16 |     fn blocking(&self) -> Result<(), std::io::Error> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

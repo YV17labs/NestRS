@@ -15,7 +15,7 @@ use crate::service::HealthService;
 /// Serves the Kubernetes-style probe endpoints under `/health`, delegating each
 /// to [`HealthService`].
 #[controller(path = "/health")]
-pub struct HealthController {
+pub(crate) struct HealthController {
     #[inject]
     svc: Arc<HealthService>,
 }

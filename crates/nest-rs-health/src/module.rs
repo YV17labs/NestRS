@@ -66,6 +66,10 @@ fn install_container(
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
     Box::pin(async move {
         if let Some(svc) = container.get::<HealthService>() {
+            // Before the registry is put to work: two reachable indicators
+            // claiming one name on one probe fail the boot naming both hosts,
+            // because the fold that follows would silently keep one verdict.
+            crate::service::check_indicator_names(container)?;
             svc.install_container(container.clone());
         }
         Ok(())

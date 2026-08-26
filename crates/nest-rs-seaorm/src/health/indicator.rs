@@ -1,6 +1,6 @@
 //! Pool ping wired through `nest-rs-health`'s indicator registry.
 //!
-//! [`DbHealthIndicator`] runs `DatabaseConnection::ping` on the readiness and
+//! [`SeaOrmHealthIndicator`] runs `DatabaseConnection::ping` on the readiness and
 //! startup probes, so an unreachable DB drops those probes to `503` until the
 //! connection comes back. [`SeaOrmHealthModule`](super::SeaOrmHealthModule)
 //! is the import seam that registers it.
@@ -14,13 +14,13 @@ use sea_orm::DatabaseConnection;
 /// Health indicator that pings the pool on the readiness and startup probes, so
 /// an unreachable database drops those probes to `503`.
 #[injectable]
-pub struct DbHealthIndicator {
+pub struct SeaOrmHealthIndicator {
     #[inject]
     db: Arc<DatabaseConnection>,
 }
 
 #[indicators]
-impl DbHealthIndicator {
+impl SeaOrmHealthIndicator {
     #[readiness]
     async fn db(&self) -> Result<(), sea_orm::DbErr> {
         self.db.ping().await

@@ -33,7 +33,7 @@ use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 pub struct AppModule;
 ```
 
-That's it. Importing the module registers `DbHealthIndicator` as both a
+That's it. Importing the module registers `SeaOrmHealthIndicator` as both a
 **readiness** and a **startup** indicator — `HealthModule` discovers them
 through the inventory seam and mounts the probes automatically.
 
@@ -43,8 +43,8 @@ Two endpoints exit the box with the database wired in:
 
 | Endpoint           | Indicator runs       | Failure              |
 |--------------------|----------------------|----------------------|
-| `GET /health/ready`   | `DbHealthIndicator::db`       | `503` while unreachable |
-| `GET /health/startup` | `DbHealthIndicator::db_ready` | `503` until first ping succeeds |
+| `GET /health/ready`   | `SeaOrmHealthIndicator::db`       | `503` while unreachable |
+| `GET /health/startup` | `SeaOrmHealthIndicator::db_ready` | `503` until first ping succeeds |
 
 The liveness probe (`GET /health/live`) deliberately does not depend on the
 database — a brief DB outage should not kill the pod.

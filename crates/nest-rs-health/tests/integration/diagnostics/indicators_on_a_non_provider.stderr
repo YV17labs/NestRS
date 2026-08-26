@@ -10,19 +10,9 @@ help: the trait `ProviderResidency` is not implemented for `Plain`
  9 | struct Plain;
    | ^^^^^^^^^^^^
    = note: those decorators resolve their host with `Container::get::<Self>()`, outside any request, so the host must be a provider the container holds under its own type. Add `#[injectable]` — or, on a provider registered by hand with `ContainerBuilder::provide`, write `impl ProviderResidency` for it with `const SINGLETON: bool = true`
-help: the following other types implement trait `ProviderResidency`
-  --> src/controller.rs
-   |
-   | #[controller(path = "/health")]
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HealthController`
-   |
-  ::: src/service.rs
+help: the trait `ProviderResidency` is implemented for `HealthService`
+  --> src/service.rs
    |
    | #[injectable]
-   | ^^^^^^^^^^^^^ `HealthService`
-   |
-  ::: $WORKSPACE/crates/nest-rs-ws/src/server.rs
-   |
-   | #[injectable]
-   | ^^^^^^^^^^^^^ `nest_rs_ws::server::WsServer<N>`
-   = note: this error originates in the attribute macro `controller` which comes from the expansion of the attribute macro `injectable` (in Nightly builds, run with -Z macro-backtrace for more info)
+   | ^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `injectable` (in Nightly builds, run with -Z macro-backtrace for more info)

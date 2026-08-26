@@ -1,8 +1,12 @@
 //! Integration tests mirroring `src/` (see CLAUDE.md).
 //!
 //! Documented gaps (no test file required): `src/lib.rs` re-exports only;
-//! `src/indicator.rs` is data + an `inventory::collect!` site, exercised
-//! through `service` below.
+//! `src/config.rs` is asserted by its own in-file `#[cfg(test)] mod tests`
+//! (the norm's item 4) and through the boot in `module` below.
+//!
+//! `indicator` covers `src/indicator.rs` — not the data, which `service`
+//! exercises through hand-built entries, but the `#[indicators]` expansion
+//! that fills it, which neither umbrella witness executes.
 //!
 //! `controller` is this capability's **composition witness** — the documented
 //! import, booted, answering. It used to be listed among the gaps above, on the
@@ -12,5 +16,6 @@
 //! capability rather than on its consumers.
 mod controller;
 mod diagnostics;
+mod indicator;
 mod module;
 mod service;

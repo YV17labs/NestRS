@@ -19,7 +19,7 @@ use serde::Serialize;
 
 /// Which Kubernetes-style probe an indicator participates in. A method's
 /// `#[liveness]` / `#[readiness]` / `#[startup]` attribute maps one-to-one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProbeKind {
     /// Liveness — is the process healthy enough to keep running?
@@ -117,8 +117,14 @@ impl ProbeReport {
     }
 }
 
+/// The boxed future one indicator check resolves to. Borrowed from the
+/// [`Container`] it was handed, so a check may hold a resolved provider across
+/// its own await points without cloning the container.
 pub type IndicatorFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
 
+/// The thunk stored in [`HealthIndicator::run`]: resolve the owning provider
+/// from the container, then invoke the check. A function pointer rather than a
+/// boxed closure because `inventory` submits it from a `const` context.
 pub type IndicatorRun = for<'a> fn(&'a Container) -> IndicatorFuture<'a>;
 
 /// One indicator submitted to the link-time registry by `#[indicators]`. The

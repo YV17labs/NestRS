@@ -118,12 +118,20 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
                     kind: ::nest_rs_health::ProbeKind::#kind_ident,
                     provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
                     run: |__container| ::std::boxed::Box::pin(async move {
-                        let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
-                            .expect(::std::concat!(
-                                "indicator provider `", #provider_name,
-                                "` is not registered — add it to a reachable module's \
-                                 `providers = [...]`",
-                            ));
+                        // Not an `expect`: this runs inside a probe request, so a
+                        // panic would take the response down where an `Err` is
+                        // reported as `down` with the reason on the crate's `warn`.
+                        // The sentence is the kernel's — see `unresolved_host`.
+                        let __provider = match ::nest_rs_core::Container::get::<#self_ty>(
+                            __container,
+                        ) {
+                            ::std::option::Option::Some(__host) => __host,
+                            ::std::option::Option::None => {
+                                return ::std::result::Result::Err(
+                                    ::nest_rs_health::unresolved_host(#provider_name),
+                                );
+                            }
+                        };
                         #invoke
                     }),
                 }

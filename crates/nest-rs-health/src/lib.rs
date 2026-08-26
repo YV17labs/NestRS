@@ -49,8 +49,20 @@ mod module;
 mod service;
 
 pub use config::HealthConfig;
-pub use controller::HealthController;
-pub use indicator::{HealthIndicator, IndicatorReport, IndicatorStatus, ProbeKind, ProbeReport};
+/// The kernel's, re-exported so `#[indicators]`' expansion reaches it through
+/// this crate rather than across to a sibling — the form `framework.md`
+/// sanctions for a `*-macros` crate.
+#[doc(hidden)]
+pub use nest_rs_core::unresolved_host;
+// `IndicatorFuture` and `IndicatorRun` are exported because `HealthIndicator`
+// is public and `run` is a public field of that type: `indicator` is a private
+// module, so without these the field's type is unnameable by a caller and
+// renders unlinked on docs.rs. They are the export contract of a public field,
+// not a surface anyone is expected to write.
+pub use indicator::{
+    HealthIndicator, IndicatorFuture, IndicatorReport, IndicatorRun, IndicatorStatus, ProbeKind,
+    ProbeReport,
+};
 pub use module::{HealthModule, HealthSetup};
 pub use nest_rs_health_macros::indicators;
 pub use service::HealthService;

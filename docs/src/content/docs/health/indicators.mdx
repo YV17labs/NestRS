@@ -93,7 +93,7 @@ app that does not import `HealthModule` does not pay for the
 indicator. The SeaORM pool ping is the first one to ship.
 
 `nest-rs-seaorm` exposes it as `SeaOrmHealthModule`, which registers
-`DbHealthIndicator`. The indicator runs `DatabaseConnection::ping` on
+`SeaOrmHealthIndicator`. The indicator runs `DatabaseConnection::ping` on
 both `#[readiness]` and `#[startup]` — exactly what most apps want and
 zero code in the app:
 

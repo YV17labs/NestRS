@@ -30,7 +30,7 @@ ws = ["dep:nest-rs-ws"]
 # MCP transport extractor: `McpDataContext` (the `McpToolContext` that
 # re-installs the request executor + ability inside each tool dispatch).
 mcp = ["dep:nest-rs-mcp"]
-# Liveness/readiness pool ping (`DbHealthIndicator`) wired through
+# Liveness/readiness pool ping (`SeaOrmHealthIndicator`) wired through
 # `nest-rs-health`'s `#[indicators]` registry. The connection's `ping`
 # round-trips a `SELECT 1`, so an unreachable DB drops the readiness probe
 # to `503`.
@@ -114,7 +114,12 @@ nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql"] }
 # `GraphqlAbilityBridge`, and the bridge lives behind authz's own `graphql`
 # feature. A dev-dep, so no consumer of this crate gains it.
 nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
-nest-rs-testing = { path = "../nest-rs-testing" }
+# `features = ["orm"]` so the framework workspace actually compiles
+# `EphemeralDatabase` — the fixture that migrates against *this* crate.
+# Without it nothing in the root workspace enables `nest-rs-testing/orm`, so
+# `cargo clippy --workspace --all-targets` never saw those 176 published
+# lines and only `demo/` (a separate workspace) built them.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["orm"] }
 # The by-id binding's swapped-parameter diagnostic is an upgrade contract: the
 # `on_unimplemented` notes are the only thing that names the 1.1.x order, since
 # rustc reports the two bound failures against the `#[crud]` attribute rather

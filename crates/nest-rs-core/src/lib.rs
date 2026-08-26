@@ -101,7 +101,9 @@ pub mod transport;
 pub use access::{ModuleDescriptor, ProviderDescriptor, ProviderOrder, ReachableProviders};
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
-pub use discoverable::{Discoverable, INERT_HOST_HINT, ProviderResidency, is_framework_owned};
+pub use discoverable::{
+    Discoverable, INERT_HOST_HINT, ProviderResidency, is_framework_owned, unresolved_host,
+};
 pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
@@ -117,7 +119,7 @@ pub use module::{DynamicModule, Module};
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
 pub use panic::panic_message;
 pub use request_scope::{
-    RequestContinuation, RequestScope, current_request_scope, with_request_scope,
+    RequestContinuation, RequestScope, TaskContext, current_request_scope, with_request_scope,
 };
 pub use trace_context::{
     Correlation, SpanId, TraceFlags, TraceId, TraceParent, TraceState, current_actor_id,

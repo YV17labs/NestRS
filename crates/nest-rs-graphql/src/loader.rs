@@ -14,7 +14,7 @@ use async_graphql::extensions::{
     Extension, ExtensionContext, ExtensionFactory, NextPrepareRequest,
 };
 use async_graphql::{Request, ServerResult};
-use nest_rs_core::{Container, ReachableProviders, RequestContinuation};
+use nest_rs_core::{Container, ReachableProviders, TaskContext};
 
 /// One DataLoader registration. `owner_type_id` is the `TypeId` of the
 /// `#[dataloader]` impl's `Self`; when the owner is not in
@@ -76,24 +76,15 @@ pub fn batch_spawner(container: &Container) -> GraphqlBatchSpawner {
 /// were rooted at nothing — the same defect MCP had across rmcp's spawn, at a
 /// site nobody looks at because the relation still resolves.
 ///
-/// **Both halves cross, and neither substitutes for the other.** The span is what
-/// puts `trace_id` on the events a batch emits; the ambient context is what makes
-/// `current_trace_id()` answer inside it, and a queue push from a loader seal the
-/// right envelope. Carrying only the span left the events *looking* correlated
-/// while every accessor below answered `None` — the more expensive failure of the
-/// two, because it reads as covered.
+/// Both halves cross, and neither substitutes for the other — the reasoning is
+/// [`TaskContext`]'s, which is where it is written and which this calls.
 ///
 /// Wrapping *here*, rather than asking every `GraphqlBatchContext` implementor
 /// to remember it, is the point: this is the one seam every batch goes through,
 /// bound or unbound.
 fn instrumented(inner: GraphqlBatchSpawner) -> GraphqlBatchSpawner {
     Box::new(move |fut| {
-        let span = tracing::Span::current();
-        let carried: crate::BoxFuture<'static, ()> = match RequestContinuation::current() {
-            Some(request) => Box::pin(async move { request.scope(fut).await }),
-            None => fut,
-        };
-        inner(Box::pin(tracing::Instrument::instrument(carried, span)));
+        inner(Box::pin(TaskContext::current().carry(fut)));
     })
 }
 

@@ -165,6 +165,30 @@ pub const INERT_HOST_HINT: &str = concat!(
     "imported through a `for_root`; it is registered by hand under a key or a trait",
 );
 
+/// The error a discovery thunk reports when the booted container does not hold
+/// its own host — the **run-time** half of the concern [`INERT_HOST_HINT`]
+/// answers at boot.
+///
+/// Here rather than in any one capability's crate, because five decorators
+/// resolve their host the same way (`#[hooks]`, `#[process]`, `#[indicators]`,
+/// `#[listeners]`, `#[scheduled]`) and the fact they report is one fact. Written
+/// at a capability, the second decorator to want it copies it — which is how two
+/// of the five came to print *"add it to a reachable module's `providers =
+/// [...]`"*, an imperative this module's own tests assert the shared sentence
+/// must never carry: following it constructs the provider twice.
+///
+/// An error rather than a panic wherever the caller can carry one: these thunks
+/// run inside a request or a tick, where a panic takes the response down while
+/// an `Err` is an outcome the surface already renders.
+///
+/// A `*-macros` crate reaches this through its own surface crate's re-export
+/// (`::nest_rs_health::unresolved_host`), never across to a sibling.
+pub fn unresolved_host(host: &str) -> anyhow::Error {
+    anyhow::Error::msg(format!(
+        "host `{host}` could not be resolved: {INERT_HOST_HINT}"
+    ))
+}
+
 /// Whether an inert operation belongs to the **framework** rather than to the
 /// app, read from the `module_path!()` its decorator recorded.
 ///

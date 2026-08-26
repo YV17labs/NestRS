@@ -168,6 +168,59 @@ impl RequestContinuation {
     }
 }
 
+/// Everything a unit of work has to carry across a **task boundary**, captured
+/// where the work is handed off and re-installed where it runs.
+///
+/// **Both halves cross, and neither substitutes for the other.** The span is
+/// what puts `trace_id` on the events the spawned work emits; the ambient
+/// context is what makes [`current_trace_id`](crate::current_trace_id) answer
+/// inside it, and a queue push from that work seal the right envelope. Carrying
+/// only the span leaves the events *looking* correlated while every accessor
+/// below answers `None` — the more expensive of the two failures, because it
+/// reads as covered.
+///
+/// Capture and application are separate steps on purpose: a guard that spawns
+/// its cleanup from `Drop` must capture at construction, since a dropped future
+/// is not guaranteed to be dropped on the task that owned it.
+#[derive(Clone)]
+pub struct TaskContext {
+    span: tracing::Span,
+    request: Option<RequestContinuation>,
+}
+
+impl TaskContext {
+    /// Capture whatever span and request context are ambient right now.
+    pub fn current() -> Self {
+        Self {
+            span: tracing::Span::current(),
+            request: RequestContinuation::current(),
+        }
+    }
+
+    /// The captured span, for the events a hand-off point emits synchronously
+    /// before it spawns — those belong to the same unit of work as the spawned
+    /// half, and `enter`ing it is how they get there.
+    pub fn span(&self) -> &tracing::Span {
+        &self.span
+    }
+
+    /// Wrap `fut` so it runs under the captured span and request context.
+    ///
+    /// The returned future is what goes to `spawn`: a bare `tokio::spawn`
+    /// starts with an empty span stack *and* empty task-locals, so work handed
+    /// to one without this is rooted at nothing.
+    pub async fn carry<F: std::future::Future>(self, fut: F) -> F::Output {
+        let Self { span, request } = self;
+        let carried = async move {
+            match request {
+                Some(request) => request.scope(fut).await,
+                None => fut.await,
+            }
+        };
+        tracing::Instrument::instrument(carried, span).await
+    }
+}
+
 thread_local! {
     /// Re-entrancy guard for request-scoped resolution: a scoped provider that
     /// (transitively) depends on itself would recurse forever. We catch the

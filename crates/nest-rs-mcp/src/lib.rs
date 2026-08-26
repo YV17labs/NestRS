@@ -130,6 +130,7 @@ pub use scope::Scoped;
 
 // --- The ergonomic surface: what a tool, prompt or resource host writes -----
 
+pub use rmcp::model::ProtocolVersion;
 pub use rmcp::{ErrorData as McpError, ServerHandler};
 /// Host decorators. rmcp owns them; `nest-rs-mcp` re-exports them so a host
 /// file imports one path. `#[tool_router]`/`#[prompt_router]` scan an inherent

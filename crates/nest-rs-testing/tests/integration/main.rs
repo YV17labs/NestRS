@@ -1,4 +1,6 @@
-//! Integration tests mirroring `src/` (see CLAUDE.md) — one binary, one module per concern.
+//! Integration tests organized by concern — the exception `CLAUDE.md`'s test-layout
+//! norm grants this crate rather than mirroring `src/`. One binary, one module per
+//! concern.
 
 mod access_contract;
 mod config;
@@ -14,6 +16,7 @@ mod interceptors;
 mod keyed_providers;
 mod layer_pool;
 mod lifecycle_hooks;
+mod mcp;
 mod pipes;
 mod reflector;
 mod request_scope;

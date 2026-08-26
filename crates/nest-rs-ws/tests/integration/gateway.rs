@@ -755,7 +755,9 @@ async fn one_path_and_one_version_shared_by_two_gateways_still_fails_boot() {
 // the connection task `on_upgrade` spawns, and none of them had a witness in
 // this workspace. `nest_rs_testing::ws` binds a real port so they do.
 
-use nest_rs_testing::{CloseCode, LogCapture, WsFrame};
+use nest_rs_testing::LogCapture;
+use nest_rs_testing::ws::WsFrame;
+use nest_rs_ws::CloseCode;
 use nest_rs_ws::{WsConfig, WsServer};
 use std::time::Duration;
 

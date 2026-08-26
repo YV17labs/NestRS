@@ -11,9 +11,9 @@
 //!   shaper — fails boot when global guards are active, unless the app
 //!   explicitly opts down to a warn with `fail_secure_strict(false)`.
 
-use nest_rs_core::{Layer, injectable, module};
+use nest_rs_core::{Layer, injectable, module, target};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
-use nest_rs_http::{HttpTransport, async_trait, controller, routes};
+use nest_rs_http::{async_trait, controller, routes};
 use nest_rs_interceptors::{Interceptor, Next, interceptor};
 use nest_rs_testing::TestApp;
 use poem::{Request, Response};
@@ -109,52 +109,12 @@ async fn an_unresolvable_global_interceptor_fails_boot() {
     );
 }
 
-#[tokio::test]
-async fn an_imperative_mount_under_global_guards_fails_boot() {
-    let result = TestApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_guards_global([guard::<WiredGuard>()])
-        .http(HttpTransport::new().mount("/raw", |_c| poem::endpoint::make_sync(|_req| "open")))
-        .build()
-        .await;
-    let err = boot_error(
-        result,
-        "an unshapable endpoint under global guards must fail boot in strict mode",
-    );
-    assert!(
-        err.to_string().contains("/raw"),
-        "the error names the offending mount path: {err}",
-    );
-}
-
-#[tokio::test]
-async fn fail_secure_strict_off_downgrades_the_mount_violation_to_a_warn() {
-    let app = TestApp::builder()
-        .module::<GuardOnlyModule>()
-        .use_guards_global([guard::<WiredGuard>()])
-        .http(
-            HttpTransport::new()
-                .fail_secure_strict(false)
-                .mount("/raw", |_c| poem::endpoint::make_sync(|_req| "open")),
-        )
-        .build()
-        .await
-        .expect("opting out of strict mode boots with a warn");
-    app.http().get("/raw").send().await.assert_status_is_ok();
-}
-
-#[tokio::test]
-async fn an_imperative_mount_without_global_guards_boots() {
-    // No global guards ⇒ nothing for the mount to bypass; strict mode has
-    // nothing to enforce.
-    let app = TestApp::builder()
-        .module::<GuardOnlyModule>()
-        .http(HttpTransport::new().mount("/raw", |_c| poem::endpoint::make_sync(|_req| "open")))
-        .build()
-        .await
-        .expect("boots");
-    app.http().get("/raw").send().await.assert_status_is_ok();
-}
+// The three imperative-mount cases — strict refusal, the `fail_secure_strict`
+// opt-out, and "no global pool, no violation" — live in
+// `nest-rs-http/tests/integration/fail_secure.rs`, the crate that owns
+// `HttpTransport::fail_secure_strict` and emits the warn. They were asserted in
+// both places, more weakly here; a duplicate in the convenient crate is what
+// hides a concern from anyone surveying the crate that owns it.
 
 /// A controller route with no guard and no `#[public]` marker — an *implicit*
 /// access decision. With no global guard pool to cover it, the transport warns
@@ -189,7 +149,7 @@ async fn an_unguarded_non_public_route_warns_but_boots_without_a_global_pool() {
     // which left the one thing that distinguishes this from a working app
     // unpinned. Single-thread runtime — `LogCapture` is thread-local.
     let event = logs
-        .find("nest_rs::layers", "unguarded routes detected")
+        .find(target::LAYERS, "unguarded routes detected")
         .into_iter()
         .next()
         .expect("a route deciding access implicitly is named at boot");

@@ -28,10 +28,27 @@ pub fn load_project_env() {
         // test would silently run as `development`.
         let env_var = Environment::var_name();
         if std::env::var_os(&env_var).is_none() {
-            // SAFETY: runs during single-threaded harness bootstrap, before
-            // any app task or transport spawns — no concurrent env reader
-            // exists. Test-harness env setup on the (non-test) lib build: the
-            // sole sanctioned unsafe.
+            // SAFETY: not discharged by a single-threaded-bootstrap claim,
+            // and it is worth saying why rather than repeating one. This runs
+            // from `TestApp::builder` and `EphemeralDatabase::create`, i.e.
+            // from inside a `#[tokio::test]` body — after the runtime built
+            // its pool. Suites do run it under `flavor = "multi_thread"`, and
+            // one connects to Postgres by hostname immediately after, which is
+            // the `ToSocketAddrs` reader `std::env::set_var`'s own docs name.
+            //
+            // What makes it sound *here* is the `Once` plus the position: this
+            // is the first statement of the first harness entry point a test
+            // process reaches, so the write lands before any task this process
+            // spawns can read the environment, and it never runs again. The
+            // residual race is with a reader spawned by an *earlier* test in
+            // the same process, which nextest's process-per-test model rules
+            // out (see `.claude/rules/testing.md`).
+            //
+            // The write is what `<PREFIX>_LOG` and `OpenTelemetry::init` read
+            // through bare `std::env::var`, which is the whole reason a
+            // resolution-only cascade is not enough. `load_cascade` below does
+            // one further `unsafe set_var` per key under its own note — so
+            // this is not the crate's only unsafe, only its first.
             #[allow(unsafe_code)]
             unsafe {
                 std::env::set_var(&env_var, "test")

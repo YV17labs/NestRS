@@ -35,7 +35,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tracing::field::{Field, Visit};
 use tracing::subscriber::DefaultGuard;
@@ -48,6 +48,16 @@ use tracing_subscriber::registry::Registry;
 pub struct CapturedEvent {
     /// The event's target — `nest_rs::orm`, `features::users`, …
     pub target: String,
+    /// The event's `name:` — its metadata identity, which an OTLP log bridge
+    /// exports as `event.name`.
+    ///
+    /// A unit of work is named three times (`CLAUDE.md`): by the
+    /// `operation_span!` that opens it, by the operation line's `name:`, and by
+    /// that line's `message`. Without this field a harness could match only the
+    /// message, so a line whose `name:` had drifted from it passed every
+    /// assertion in the repo. `tracing` defaults it to `event <file>:<line>`
+    /// where the macro states none.
+    pub name: String,
     /// The event's level, as its lowercase name (`warn`, `debug`, …).
     pub level: String,
     /// The `message` field: the constant event name, never interpolated data.
@@ -69,6 +79,9 @@ impl CapturedEvent {
 pub struct CapturedSpan {
     /// The span's target — `nest_rs::http`, `nest_rs::ws`, …
     pub target: String,
+    /// The span's level, as its lowercase name — the *Level per layer* contract
+    /// was assertable for events and not for spans.
+    pub level: String,
     /// The span's *name* as `tracing` fixes it (`http.request`), which is a
     /// literal and never the exported OTel name — that one is the `otel.name`
     /// field, because `tracing` cannot vary a name per instance.
@@ -167,7 +180,10 @@ impl LogCapture {
 
     /// Everything captured so far, in emission order.
     pub fn events(&self) -> Vec<CapturedEvent> {
-        self.events.lock().expect("log buffer").clone()
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Every event on `target` whose message is exactly `message`.
@@ -195,7 +211,10 @@ impl LogCapture {
 
     /// Every span captured so far, in creation order.
     pub fn spans(&self) -> Vec<CapturedSpan> {
-        self.spans.lock().expect("span buffer").clone()
+        self.spans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The single span on `target` named `name`, or a panic naming what was
@@ -259,9 +278,10 @@ where
         let mut visitor = FieldVisitor::default();
         attrs.record(&mut visitor);
         let meta = attrs.metadata();
-        let mut spans = self.spans.lock().expect("span buffer");
+        let mut spans = self.spans.lock().unwrap_or_else(PoisonError::into_inner);
         spans.push(CapturedSpan {
             target: meta.target().to_string(),
+            level: meta.level().as_str().to_lowercase(),
             name: meta.name().to_string(),
             fields: visitor.fields,
         });
@@ -281,7 +301,12 @@ where
         };
         let mut visitor = FieldVisitor::default();
         values.record(&mut visitor);
-        if let Some(captured) = self.spans.lock().expect("span buffer").get_mut(index) {
+        if let Some(captured) = self
+            .spans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(index)
+        {
             captured.fields.extend(visitor.fields);
         }
     }
@@ -290,12 +315,16 @@ where
         let mut visitor = FieldVisitor::default();
         event.record(&mut visitor);
         let meta = event.metadata();
-        self.events.lock().expect("log buffer").push(CapturedEvent {
-            target: meta.target().to_string(),
-            level: meta.level().as_str().to_lowercase(),
-            message: visitor.message.unwrap_or_default(),
-            fields: visitor.fields,
-        });
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(CapturedEvent {
+                target: meta.target().to_string(),
+                name: meta.name().to_string(),
+                level: meta.level().as_str().to_lowercase(),
+                message: visitor.message.unwrap_or_default(),
+                fields: visitor.fields,
+            });
     }
 }
 

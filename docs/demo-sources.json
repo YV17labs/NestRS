@@ -3562,7 +3562,7 @@
     "port": null,
     "lines": [
       "use nest_rs::http::poem::http::StatusCode;",
-      "use nest_rs::testing::CloseCode;",
+      "use nest_rs::ws::CloseCode;",
       "use serde_json::{Value, json};",
       "use super::harness::*;",
       "const QUIET: std::time::Duration = std::time::Duration::from_millis(150);",
@@ -3717,7 +3717,8 @@
       "use features::Role;",
       "use live::LiveModule;",
       "use nest_rs::authn::JwtConfig;",
-      "use nest_rs::testing::{TestApp, TestAppBuilder, WsApp, WsSocket};",
+      "use nest_rs::testing::ws::{WsApp, WsSocket};",
+      "use nest_rs::testing::{TestApp, TestAppBuilder};",
       "use serde_json::Value;",
       "use uuid::Uuid;",
       "pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};",
@@ -3772,7 +3773,7 @@
     "lines": [
       "use features::Role;",
       "use nest_rs::http::poem::http::StatusCode;",
-      "use nest_rs::testing::CloseCode;",
+      "use nest_rs::ws::CloseCode;",
       "use serde_json::Value;",
       "use uuid::Uuid;",
       "use super::harness::*;",

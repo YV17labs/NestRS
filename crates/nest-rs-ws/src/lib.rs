@@ -187,6 +187,13 @@ pub use serde_json;
 #[doc(hidden)]
 pub use tracing;
 
+/// The RFC 6455 §7.4.1 status codes, from the transport this crate serves
+/// sockets on. Published here because this crate *chooses* them — the
+/// gateway closes with `Away`, `Error` and `Policy` — so a caller writing a
+/// gateway and a caller testing one name one path. Until this existed, this
+/// crate's own suite reached into `nest-rs-testing` for it.
+pub use poem::web::websocket::CloseCode;
+
 pub use poem;
 
 // Re-exported so `#[messages]`-generated discovery metadata

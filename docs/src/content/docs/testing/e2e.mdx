@@ -305,9 +305,10 @@ not need it.
 ## Subscriptions
 
 `TestApp`'s client speaks HTTP, and a subscription does not. `graphql_socket`
-drives the graphql-ws protocol against the app's composed schema —
-`connection_init` → `connection_ack` → `subscribe` → `next` — with no
-socket bound:
+drives the **graphql-transport-ws** protocol against the app's composed schema
+— `connection_init` → `connection_ack` → `subscribe` → `next` — with no socket
+bound. (`graphql-ws` is the *legacy* subprotocol identifier, which the mount
+also negotiates and this driver does not speak.)
 
 ```rust title="tests/e2e/subscription.rs"
 let mut socket = app.graphql_socket().data(ability).open();
@@ -320,9 +321,10 @@ assert_eq!(item["data"]["postPublished"]["title"], "Launch");
 
 `data(..)` carries what the operation guard would install on a real
 upgrade — the caller's `Ability`. What this does *not* exercise is the
-upgrade itself: the guard that authenticates it, and the socket-lifetime
-ceiling that bounds it. Those need a real connection, so a suite that must
-cover them binds a transport (`build_headless` + `spawn_transport`) and
+upgrade itself: the guard that authenticates it, the socket-lifetime
+ceiling that bounds it, and `max_connection`. Those need a real connection, so
+a suite that must cover them binds a transport (`build_headless` +
+`spawn_transport`) and
 connects a WebSocket client to it.
 
 ## What ends an HTTP/GraphQL change

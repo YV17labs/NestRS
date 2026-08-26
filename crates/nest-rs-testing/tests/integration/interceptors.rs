@@ -259,7 +259,7 @@ async fn same_interceptor_controller_and_method_runs_once() {
     reset_counter();
 
     // Controller and method both declare `CounterInterceptor`. The per-route
-    // pool composer (`wrap_route_interceptors`) runs every layer kind through
+    // pool composer (`wrap_route_response_layers`) runs every layer kind through
     // the same `compose_chain` dedup as guards / pipes — broadest scope wins —
     // so the interceptor executes exactly once, no Global declaration needed.
     let app = TestApp::for_module::<DedupModule>().await.expect("boots");

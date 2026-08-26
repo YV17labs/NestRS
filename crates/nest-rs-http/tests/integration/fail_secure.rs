@@ -6,10 +6,9 @@
 //! endpoint, so when a global guard pool is active that endpoint is the one hole
 //! the pool cannot cover. Strict mode — the default — refuses to boot.
 //!
-//! Documented on `/http/configuration/` under *Fail-secure boot*, and until this
-//! module existed it was the one fail-closed guard in the release with no proof
-//! it ever fired: nothing in the corpus reaches `mount(...)`, so no QA pass
-//! could trigger it by following a page.
+//! Documented on `/http/configuration/` under *Fail-secure boot*. Nothing in
+//! the corpus reaches `mount(...)`, so no QA pass triggers this by following a
+//! page — it is proved here or nowhere.
 
 use nest_rs_core::{App, Transport, module};
 use nest_rs_http::{GlobalGuardsActive, HttpTransport, controller, routes};

@@ -115,14 +115,26 @@ impl Drop for EphemeralDatabase {
 
 static CREATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Five minutes — past this a `nest_rs_e2e_*` database is an orphan, not in
-/// use by a concurrent sibling.
+/// Five minutes — past this a [`PREFIX`]`*` database is an orphan, not in use
+/// by a concurrent sibling.
 const STALE_AFTER_NANOS: u128 = 5 * 60 * 1_000_000_000;
+
+/// The namespace every ephemeral database is created under, and the one the
+/// reaper sweeps.
+///
+/// A constant because two sites *interpret* it and must agree: `unique_name`
+/// writes it, `reap_stale` matches it, and `created_nanos` reads a timestamp
+/// out of what follows it. Spelled apart, a rename that looks cosmetic
+/// silently either strands every orphan forever or — if the new spelling holds
+/// a different number of `_` — makes the reaper misread the timestamp,
+/// classify every database as stale, and `DROP` a concurrently running
+/// sibling's live database.
+const PREFIX: &str = "nest_rs_e2e";
 
 async fn reap_stale(admin: &DatabaseConnection) {
     let stmt = Statement::from_string(
         DbBackend::Postgres,
-        "SELECT datname FROM pg_database WHERE datname LIKE 'nest_rs_e2e_%'".to_owned(),
+        format!("SELECT datname FROM pg_database WHERE datname LIKE '{PREFIX}\\_%'"),
     );
     let Ok(rows) = admin.query_all_raw(stmt).await else {
         return;
@@ -132,11 +144,8 @@ async fn reap_stale(admin: &DatabaseConnection) {
         let Ok(name) = row.try_get::<String>("", "datname") else {
             continue;
         };
-        // Name is `nest_rs_e2e_<pid>_<nanos>_<seq>`; the `nest_rs_e2e` prefix
-        // already spans split indices 0..=2, so `<nanos>` is at index 4 (index
-        // 3 is `<pid>`). An unexpected shape is an older (unknown) format,
-        // treated as stale.
-        let stale = match name.split('_').nth(4).and_then(|t| t.parse::<u128>().ok()) {
+        // An unexpected shape is an older (unknown) format, treated as stale.
+        let stale = match created_nanos(&name) {
             Some(created) => now.saturating_sub(created) > STALE_AFTER_NANOS,
             None => true,
         };
@@ -148,11 +157,23 @@ async fn reap_stale(admin: &DatabaseConnection) {
     }
 }
 
+/// The `<nanos>` of a [`unique_name`], read by stripping the prefix rather than
+/// by counting `_` across it — the count was derived by hand and a rename would
+/// have silently shifted it.
+fn created_nanos(name: &str) -> Option<u128> {
+    name.strip_prefix(PREFIX)?
+        .split('_')
+        .nth(2)?
+        .parse::<u128>()
+        .ok()
+}
+
 fn now_nanos() -> u128 {
+    // A clock before the epoch is not a thing a test fixture should panic over.
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
+        .map(|d| d.as_nanos())
+        .unwrap_or_default()
 }
 
 fn unique_name() -> String {
@@ -160,17 +181,59 @@ fn unique_name() -> String {
     // coarse-resolution timestamp; reaper still recovers the time from nanos.
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    format!("nest_rs_e2e_{}_{}_{}", std::process::id(), now_nanos(), seq)
+    format!("{PREFIX}_{}_{}_{}", std::process::id(), now_nanos(), seq)
 }
 
+/// The admin URL with its database name replaced.
+///
+/// RFC 3986 §3.2: the authority is introduced by `//` and terminated by the
+/// next `/`, `?` or `#` — so the path starts at the *first* slash after the
+/// scheme, never the last. Splitting on the last one dropped the host of any
+/// path-less URL (`postgres://host:5432` yielded `postgres://<db>`), surfacing
+/// much later as a connection error naming a URL the developer never wrote.
 fn swap_database(url: &str, db: &str) -> String {
     let (base, query) = match url.split_once('?') {
         Some((b, q)) => (b, Some(q)),
         None => (url, None),
     };
-    let prefix = base.rsplit_once('/').map(|(p, _)| p).unwrap_or(base);
+    let authority_at = base.find("//").map_or(0, |i| i + 2);
+    let prefix = match base[authority_at..].find('/') {
+        Some(offset) => &base[..authority_at + offset],
+        None => base,
+    };
     match query {
         Some(q) => format!("{prefix}/{db}?{q}"),
         None => format!("{prefix}/{db}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swapping_the_database_keeps_the_authority() {
+        assert_eq!(
+            swap_database("postgres://u:p@host:5432/postgres", "tmp"),
+            "postgres://u:p@host:5432/tmp",
+        );
+        // The regression: no path at all. The last `/` is the second one of
+        // `//`, so the host used to vanish.
+        assert_eq!(
+            swap_database("postgres://host:5432", "tmp"),
+            "postgres://host:5432/tmp",
+        );
+        assert_eq!(
+            swap_database("postgres://host/postgres?sslmode=require", "tmp"),
+            "postgres://host/tmp?sslmode=require",
+        );
+    }
+
+    #[test]
+    fn a_name_round_trips_through_the_reaper() {
+        let name = unique_name();
+        assert!(name.starts_with(PREFIX));
+        assert!(created_nanos(&name).is_some_and(|n| n > 0));
+        assert_eq!(created_nanos("nest_rs_e2e_nope"), None);
     }
 }

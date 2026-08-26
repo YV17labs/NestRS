@@ -23,15 +23,11 @@ graphql = ["dep:nest-rs-graphql", "dep:async-graphql"]
 # reason and one more: this is the only driver that binds a real port, so a
 # suite that never opens a socket should not link a client or turn poem's
 # non-default `websocket` feature on for the whole build.
-ws = ["dep:tokio-tungstenite", "dep:futures-util", "poem/websocket"]
+ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:nest-rs-ws", "poem/websocket"]
 
 [dependencies]
 nest-rs-core.workspace = true
-# The `ws_gateway_guards` test drives `GuardAsWsMessageCheck` (guards' WS
-# message-guard path, feature-gated). Enabling `guards/ws` forwards `ws` to the
-# filter/interceptor layer crates too, so the cross-crate WS wiring test builds
-# under default features (not only `--all-features`).
-nest-rs-guards = { workspace = true, features = ["ws"] }
+nest-rs-guards.workspace = true
 nest-rs-http.workspace = true
 nest-rs-interceptors.workspace = true
 nest-rs-filters.workspace = true
@@ -65,6 +61,11 @@ tracing-subscriber.workspace = true
 tokio-tungstenite = { workspace = true, optional = true }
 # `SinkExt`/`StreamExt` to drive that client.
 futures-util = { workspace = true, optional = true }
+# Behind `ws`: the port whose sockets this driver speaks to. `CloseCode` and
+# the `{ event, data }` envelope are the gateway's own vocabulary, so they are
+# read from it rather than re-spelled here — a copy of a wire grammar drifts
+# silently, because nothing joins the two spellings.
+nest-rs-ws = { workspace = true, optional = true }
 # Opt-in fixtures: OpenTelemetry (boot guard) and a throwaway database for e2e.
 nest-rs-opentelemetry = { workspace = true, optional = true }
 sea-orm = { workspace = true, optional = true }
@@ -76,22 +77,35 @@ sea-orm-migration = { workspace = true, optional = true }
 # (guards' fallbacks × graphql × mcp), so it lives here rather than in any
 # single surface crate — and dev-deps let it enable the two fallback features
 # without them reaching a consumer of the harness.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp"] }
+# `ws` rides here too, not in `[dependencies]`: it is the `ws_gateway_guards`
+# test that drives `GuardAsWsMessageCheck`, and `guards/ws` pulls `nest-rs-ws`
+# and turns on `poem/websocket` — which a consumer asserting on a log line
+# should not link, and which silently made this crate's own `ws` feature gate a
+# no-op.
+nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp", "ws"] }
 nest-rs-mcp = { path = "../nest-rs-mcp" }
+# `destructured_args` and `transport_parity` name `nest_rs_graphql` directly.
+# Without this the suite compiles only under `--workspace`, where feature
+# unification lends it `nest-rs-testing/graphql` from a crate two directories
+# away — so `cargo check -p nest-rs-testing --tests` fails on its own.
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+# `#[derive(SimpleObject)]` on the payload those two share.
+async-graphql.workspace = true
 tokio.workspace = true
 # The config DI test boots a module wiring `ConfigModule::for_feature` and a
 # service injecting the loaded config; `nest-rs-config` is already a normal
 # dependency. `validator` backs the `#[config]` struct's `#[validate]` derive.
 validator.workspace = true
-# The pipes test (`tests/pipes.rs`) needs the `GlobalPipe` trait + a
+# The pipes test (`tests/integration/pipes.rs`) needs the `GlobalPipe` trait + a
 # `serde_json::Value` body to observe a pipe rewriting it.
 nest-rs-pipes = { path = "../nest-rs-pipes" }
-# The exception-filters test (`tests/exception_filters.rs`) needs the
+# The exception-filters test (`tests/integration/exception_filters.rs`) needs the
 # trait + a typed error to throw and catch.
 thiserror.workspace = true
 async-trait.workspace = true
-# The WS gateway-guard dedup test (`tests/ws_gateway_guards.rs`) drives a
-# `#[gateway]` + `#[messages]` impl, so it needs the macros + `WsModule`.
+# `tests/integration/ws_gateway_guards.rs` drives a `#[gateway]` + `#[messages]`
+# impl over `TestClient` — no socket, hence no `ws` feature — so it needs the
+# macros and `WsModule` even when that feature is off.
 nest-rs-ws = { path = "../nest-rs-ws" }
 # `figment::Jail` isolates the real process env for the pinned-config override
 # test (the deployment tier of the precedence rule), matching how

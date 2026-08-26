@@ -14,6 +14,11 @@
 #![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]
 
+// An edge module keeps its namespace and gets no root re-export: `graphql::`
+// and `ws::` say which protocol a name belongs to, and that is the scheme every
+// multi-edge crate here already follows (`nest-rs-authz`, `nest-rs-seaorm`).
+// Re-exporting both ways gave each type two paths, and this crate was already
+// spelling one of them two ways 200 lines apart.
 mod app;
 mod env;
 mod headless;
@@ -25,21 +30,18 @@ mod database;
 #[cfg(feature = "orm")]
 pub use database::EphemeralDatabase;
 
-/// Driving a GraphQL subscription over graphql-ws (feature `graphql`).
+/// Driving a GraphQL subscription over graphql-transport-ws (feature
+/// `graphql`).
 #[cfg(feature = "graphql")]
 pub mod graphql;
-#[cfg(feature = "graphql")]
-pub use graphql::{GraphqlSocket, GraphqlSocketBuilder};
 
 /// Driving a WS gateway over a real upgrade (feature `ws`).
 #[cfg(feature = "ws")]
 pub mod ws;
-#[cfg(feature = "ws")]
-pub use ws::{CloseCode, WsApp, WsFrame, WsSocket, WsSocketBuilder};
 
 pub use app::{TestApp, TestAppBuilder};
 pub use env::load_project_env;
 pub use headless::{HeadlessApp, TransportHandle};
-pub use logs::{CapturedEvent, LogCapture};
+pub use logs::{CapturedEvent, CapturedSpan, LogCapture};
 
 pub use poem::test::{TestClient, TestForm, TestJson, TestRequestBuilder, TestResponse};

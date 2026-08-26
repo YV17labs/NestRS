@@ -37,7 +37,8 @@ use anyhow::{Context as _, Result};
 use futures_util::{SinkExt, StreamExt};
 use nest_rs_core::Container;
 use nest_rs_http::HttpTransport;
-use serde_json::{Value, json};
+use nest_rs_ws::WsEnvelope;
+use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
@@ -46,10 +47,12 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::headless::{HeadlessApp, TransportHandle};
 
-/// The WebSocket status codes RFC 6455 §7.4.1 defines, re-exported from the
-/// transport the framework serves the socket on — so a suite asserts against
-/// `CloseCode::Away` rather than the bare `1001` a reader has to look up.
-pub use poem::web::websocket::CloseCode;
+// The WebSocket status codes RFC 6455 §7.4.1 defines, from `nest-rs-ws` — the
+// crate that closes sockets with them, and the one path a suite names them
+// through (`nest_rs::ws::CloseCode`). Imported rather than re-exported: a
+// second nestrs-adjacent path to one wire constant is two authorities on it,
+// which is the duplication moving the type to `nest-rs-ws` removed.
+use nest_rs_ws::CloseCode;
 
 /// How long [`WsSocket::next_frame`] waits before reporting silence. Long
 /// enough that a loaded CI box does not flake, short enough that a test
@@ -236,6 +239,19 @@ pub enum WsFrame {
     Close(Option<(CloseCode, String)>),
 }
 
+/// What one read off the socket found — the three states `Option<WsFrame>`
+/// collapses into `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WsRead {
+    /// A frame arrived.
+    Frame(WsFrame),
+    /// Nothing arrived within the budget, and the socket is still open.
+    Silent,
+    /// The socket ended with no Close frame — §7.4.1's **1006 Abnormal
+    /// Closure** — carrying the transport error when there was one.
+    Aborted(Option<String>),
+}
+
 /// One live WebSocket connection, driven frame by frame.
 pub struct WsSocket {
     stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -244,9 +260,12 @@ pub struct WsSocket {
 
 impl WsSocket {
     /// Send one `{ event, data }` envelope — the gateway's whole wire grammar.
+    ///
+    /// Encoded by [`WsEnvelope`], the gateway's own encoder, so the driver
+    /// cannot frame an envelope the gateway would not.
     pub async fn send(&mut self, event: &str, data: Value) {
-        self.send_text(json!({ "event": event, "data": data }).to_string())
-            .await;
+        let frame = WsEnvelope::encode(event, &data).expect("a JSON value re-encodes");
+        self.send_text(frame).await;
     }
 
     /// Send a raw text frame, for a payload the envelope grammar would not let
@@ -294,30 +313,70 @@ impl WsSocket {
     /// [`next_frame`](Self::next_frame) with an explicit budget — use a short
     /// one when asserting that **nothing** arrives, so the test does not pay
     /// the full timeout to prove silence.
+    ///
+    /// `None` is **silence**, and nothing else. A socket that died without a
+    /// Close frame is [`WsRead::Aborted`] through
+    /// [`read_within`](Self::read_within) — see there for why the two must not
+    /// share a value.
     pub async fn next_frame_within(&mut self, within: Duration) -> Option<WsFrame> {
+        match self.read_within(within).await {
+            WsRead::Frame(frame) => Some(frame),
+            WsRead::Silent | WsRead::Aborted(_) => None,
+        }
+    }
+
+    /// The next frame, distinguishing the three outcomes `Option` collapses.
+    ///
+    /// The distinction is the whole reason this driver binds a socket. RFC 6455
+    /// §7.4.1 reserves **1006 Abnormal Closure** for "the connection was closed
+    /// abnormally, e.g., without sending or receiving a Close frame" — a
+    /// *different* state from an idle connection, and the one a gateway defect
+    /// produces. Folded into one `None`, a socket that died mid-test satisfied
+    /// [`expect_silence`](Self::expect_silence): the assertion "nothing was
+    /// sent" passed because nothing *could* be sent.
+    pub async fn read_within(&mut self, within: Duration) -> WsRead {
         let deadline = tokio::time::Instant::now() + within;
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let message = tokio::time::timeout(remaining, self.stream.next())
-                .await
-                .ok()??;
+            let Ok(next) = tokio::time::timeout(remaining, self.stream.next()).await else {
+                return WsRead::Silent;
+            };
+            let Some(message) = next else {
+                return WsRead::Aborted(None);
+            };
             match message {
-                Ok(ClientMessage::Text(text)) => return Some(WsFrame::Text(text.to_string())),
-                Ok(ClientMessage::Binary(bytes)) => return Some(WsFrame::Binary(bytes.into())),
-                Ok(ClientMessage::Close(frame)) => return Some(WsFrame::Close(frame.map(close))),
+                Ok(ClientMessage::Text(text)) => {
+                    return WsRead::Frame(WsFrame::Text(text.to_string()));
+                }
+                Ok(ClientMessage::Binary(bytes)) => {
+                    return WsRead::Frame(WsFrame::Binary(bytes.into()));
+                }
+                Ok(ClientMessage::Close(frame)) => {
+                    return WsRead::Frame(WsFrame::Close(frame.map(close)));
+                }
                 // Answered by the protocol layer; never an assertion's subject.
                 Ok(_) => continue,
-                // The stream ended without a Close frame — §7.4.1's 1006, and
-                // the state this driver exists to tell apart from a real one.
-                Err(_) => return None,
+                // No Close frame — §7.4.1's 1006. Also where tungstenite reports
+                // a peer that violated framing, which is a gateway defect and
+                // never a quiet connection.
+                Err(err) => return WsRead::Aborted(Some(err.to_string())),
             }
         }
     }
 
     /// Assert nothing reaches the client within `within`.
+    ///
+    /// Fails on an aborted socket as loudly as on an unexpected frame: a
+    /// connection that died proves nothing about what the gateway would have
+    /// sent.
     pub async fn expect_silence(&mut self, within: Duration) {
-        if let Some(frame) = self.next_frame_within(within).await {
-            panic!("expected silence, got {frame:?}");
+        match self.read_within(within).await {
+            WsRead::Silent => {}
+            WsRead::Frame(frame) => panic!("expected silence, got {frame:?}"),
+            WsRead::Aborted(err) => panic!(
+                "expected silence, but the socket died without a Close frame \
+                 (§7.4.1 reads that as 1006 Abnormal Closure): {err:?}"
+            ),
         }
     }
 
@@ -330,15 +389,19 @@ impl WsSocket {
     /// never an acceptable pass.
     pub async fn expect_close(&mut self) -> (CloseCode, String) {
         loop {
-            match self.next_frame().await {
-                Some(WsFrame::Close(Some(close))) => return close,
-                Some(WsFrame::Close(None)) => {
+            match self.read_within(self.timeout).await {
+                WsRead::Frame(WsFrame::Close(Some(close))) => return close,
+                WsRead::Frame(WsFrame::Close(None)) => {
                     panic!("the server closed with no status code at all (§7.4.1 reads that 1005)")
                 }
-                Some(_) => {}
-                None => panic!(
+                WsRead::Frame(_) => {}
+                WsRead::Aborted(err) => panic!(
                     "the socket ended with no Close frame — the peer reads that as 1006 Abnormal \
-                     Closure, which §7.4.1 reserves for a network fault",
+                     Closure, which §7.4.1 reserves for a network fault: {err:?}",
+                ),
+                WsRead::Silent => panic!(
+                    "no Close frame within {:?} — the server neither closed nor spoke",
+                    self.timeout,
                 ),
             }
         }
@@ -354,9 +417,17 @@ impl WsSocket {
             })))
             .await
             .expect("the socket accepts a close frame");
-        match self.next_frame().await {
-            Some(WsFrame::Close(close)) => close,
-            _ => None,
+        // §5.5.1 obliges the peer to answer "as soon as practical", which does
+        // not oblige it to answer *first* — a frame already in flight arrives
+        // ahead of the Close. Reading exactly one frame here reported that as
+        // "no Close frame", the same `None` as a peer that really sent none, so
+        // this loops exactly as `expect_close` does.
+        loop {
+            match self.read_within(self.timeout).await {
+                WsRead::Frame(WsFrame::Close(close)) => return close,
+                WsRead::Frame(_) => {}
+                WsRead::Silent | WsRead::Aborted(_) => return None,
+            }
         }
     }
 }

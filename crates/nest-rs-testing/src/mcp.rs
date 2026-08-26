@@ -14,9 +14,21 @@ use poem::Endpoint;
 use poem::test::{TestClient, TestResponse};
 use serde_json::{Value, json};
 
-/// The protocol version every suite negotiates. One constant so a bump is one
-/// edit, not a grep.
-pub const PROTOCOL_VERSION: &str = "2024-11-05";
+/// The protocol version every suite negotiates — rmcp's own `LATEST`.
+///
+/// One constant so a bump is one edit, not a grep. That alone let it rot four
+/// revisions behind the SDK, because nothing failed when the bump did not
+/// happen: rmcp keeps accepting the oldest revision forever, so every suite
+/// passed while asserting against a handshake no current client performs. So
+/// the constant is *pinned* rather than merely shared —
+/// `mcp::the_driver_negotiates_the_sdk_latest` compares it to
+/// `nest_rs_mcp::ProtocolVersion::LATEST` and fails the day rmcp moves.
+///
+/// `LATEST`, not `ProtocolVersion::STANDARD_HEADERS` (`2026-07-28`): SEP-2567
+/// serves that revision statelessly, which retires the `mcp-session-id` model
+/// [`open_session`] implements. A driver for the modern stateless path is a
+/// second driver, not a bump of this one.
+pub const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// The `initialize` request body, declaring no client capabilities.
 pub fn initialize_request() -> Value {

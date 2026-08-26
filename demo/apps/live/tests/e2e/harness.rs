@@ -1,7 +1,8 @@
 use features::Role;
 use live::LiveModule;
 use nest_rs::authn::JwtConfig;
-use nest_rs::testing::{TestApp, TestAppBuilder, WsApp, WsSocket};
+use nest_rs::testing::ws::{WsApp, WsSocket};
+use nest_rs::testing::{TestApp, TestAppBuilder};
 use serde_json::Value;
 use uuid::Uuid;
 

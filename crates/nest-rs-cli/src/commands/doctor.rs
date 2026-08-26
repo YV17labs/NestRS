@@ -3,7 +3,33 @@ use std::path::{Path, PathBuf};
 use crate::context::{ENV_PREFIX_VAR, EnvPrefixSource};
 use crate::error::{CliError, CliResult};
 
-const MIN_RUST_VERSION: (u32, u32) = (1, 97);
+/// The floor, **derived** from the manifest rather than retyped: this crate's
+/// `rust-version` is inherited from the workspace, so a bump moves the floor
+/// doctor certifies against with it. Hand-typed it was a second authority on a
+/// number Cargo already exports — and one that certified a toolchain the
+/// workspace no longer builds on, with every floor-derived fixture in this
+/// module still passing, because they read the stale constant too.
+const MIN_RUST_VERSION: (u32, u32) = parse_floor(env!("CARGO_PKG_RUST_VERSION"));
+
+/// `major.minor` of a `rust-version`, in const so a manifest that stops parsing
+/// is a compile error rather than a floor of zero.
+const fn parse_floor(raw: &str) -> (u32, u32) {
+    let bytes = raw.as_bytes();
+    let mut component = [0u32; 2];
+    let mut which = 0;
+    let mut i = 0;
+    while i < bytes.len() && which < 2 {
+        let byte = bytes[i];
+        if byte == b'.' {
+            which += 1;
+        } else {
+            assert!(byte.is_ascii_digit(), "rust-version is not major.minor");
+            component[which] = component[which] * 10 + (byte - b'0') as u32;
+        }
+        i += 1;
+    }
+    (component[0], component[1])
+}
 
 pub struct DoctorOptions {
     pub path: Option<PathBuf>,
@@ -57,8 +83,12 @@ pub struct EnvVar {
 /// The optional variables doctor answers for, as `(namespace, key, always
 /// reported)`.
 const CHECKED: &[(&str, &str, bool)] = &[
-    ("DATABASE", "URL", true),
-    ("QUEUE", "URL", true),
+    // The namespace is the config's stem, never a resource word: `seaorm` and
+    // `redis` are what `#[config(namespace = …)]` declares, so they are the
+    // only names a project can set. `DATABASE`/`QUEUE` named neither the crate
+    // nor the type that parses them, and nothing has ever read them.
+    ("SEAORM", "URL", true),
+    ("REDIS", "URL", true),
     ("HTTP", "HOST", false),
     ("HTTP", "PORT", false),
 ];

@@ -56,6 +56,7 @@ pub enum Command {
     ///   new monorepo       nestrs new hello       → ./hello/ + apps/hello/
     ///   new workspace app  nestrs new blog        → apps/blog/ (next free port)
     ///   single crate       nestrs new hello --standalone
+    #[command(verbatim_doc_comment)]
     New {
         /// Project name (kebab-case recommended, e.g. `hello` or `blog`).
         name: String,
@@ -135,6 +136,7 @@ pub enum Command {
     ///   nestrs run test     → just test
     ///   nestrs run db up    → just db up
     ///   nestrs run          → list available recipes
+    #[command(verbatim_doc_comment)]
     Run {
         /// Skip the first-run toolchain bootstrap (CI / offline).
         #[arg(long)]

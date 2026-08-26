@@ -139,7 +139,7 @@ fn print_next_steps(
     println!("  4. Add transports:  nestrs g graphql|ws {}", names.kebab);
     if scaffolded_auth {
         println!();
-        println!("Also created the auth adapter (identity/, authn/, authz/) the guards need,");
+        println!("Also created the auth adapter (authn/, authz/) the guards need,");
         println!("plus a development HS256 secret in `.env` — replace it before deploying.");
         println!();
         // The adapter includes a route that mints bearer tokens with no

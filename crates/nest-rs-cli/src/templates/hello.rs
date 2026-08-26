@@ -82,7 +82,6 @@ pub struct {{module}};
 pub const FEATURE_HTTP_MOD: &str = r#"mod controller;
 mod module;
 
-pub use controller::{{controller}};
 pub use module::{{http_module}};
 "#;
 

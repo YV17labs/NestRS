@@ -5,12 +5,12 @@ use std::process::{Command, Stdio};
 use crate::context::NestrsWorkspace;
 use crate::error::{CliError, CliResult};
 
-const CRATE_NAME: &str = "nest-rs-cli";
+const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 
 pub struct UpdateOptions {
     /// Reinstall from `crates/nest-rs-cli` in the nestrs monorepo instead of crates.io.
     pub from_path: bool,
-    /// Workspace root when using `--path` (default: auto-discover).
+    /// Workspace root when using `--workspace` (default: auto-discover).
     pub path: Option<PathBuf>,
     /// Reinstall even when already on the latest version (passes `--force` to cargo).
     pub force: bool,
@@ -122,8 +122,19 @@ fn latest_crates_io_version() -> CliResult<String> {
         .map_err(CliError::Io)?;
 
     if !output.status.success() {
+        // `cargo search` fails for reasons that are not the network — an
+        // unauthenticated private registry, a `[source]` replacement, a rate
+        // limit — and it says which on stderr. Swallowing it sends the reader
+        // to fix their connection while the registry is what refused them.
+        let said = String::from_utf8_lossy(&output.stderr);
+        let said = said.trim();
         return Err(CliError::Anyhow(anyhow::anyhow!(
-            "could not query crates.io for {CRATE_NAME} — check your network connection"
+            "could not query crates.io for {CRATE_NAME}{}",
+            if said.is_empty() {
+                " — check your network connection".to_owned()
+            } else {
+                format!(": {said}")
+            }
         )));
     }
 
@@ -149,23 +160,42 @@ fn parse_cargo_search_version(stdout: &str) -> Option<String> {
             continue;
         }
         let version = rest.trim().trim_start_matches('"').split('"').next()?;
-        return Some(version.to_string());
+        // Parsed at the edge, so an unreadable line is `None` and the caller
+        // says so. Waved through, it reached `version_cmp`'s `unwrap_or(0)` as
+        // `0.0.0` — and the CLI then reported itself *newer* than crates.io and
+        // exited 0, which is the shape `doctor` already records as a defect it
+        // fixed for `rustc`.
+        return is_semver_prefixed(version).then(|| version.to_string());
     }
     None
 }
 
+/// The `major.minor.patch` prefix, or `None` when any of the three is not a
+/// number — `1.2.3` and `1.2.3-rc.1` read, `1.x.0` and `5.1` do not.
+///
+/// One parser, because "readable version" is one fact: the rejection below and
+/// the comparison above it disagreeing is how `1.x.0` reached a comparison as
+/// `0.0.0` in the first place.
+fn semver_prefix(version: &str) -> Option<(u32, u32, u32)> {
+    let core = version.split(['-', '+']).next().unwrap_or(version);
+    let mut parts = core.split('.');
+    let mut component = || parts.next().and_then(|p| p.parse::<u32>().ok());
+    Some((component()?, component()?, component()?))
+}
+
+/// Whether the three leading components are numeric — `1.2.3`, `1.2.3-rc.1`.
+fn is_semver_prefixed(version: &str) -> bool {
+    semver_prefix(version).is_some()
+}
+
 /// Compares `major.minor.patch` semver prefixes (pre-release suffixes ignored).
+///
+/// An unreadable version sorts as `0.0.0`, which is only ever reached by a
+/// caller that did not filter through [`is_semver_prefixed`] first.
 fn version_cmp(left: &str, right: &str) -> Ordering {
-    fn parse(version: &str) -> (u32, u32, u32) {
-        let core = version.split(['-', '+']).next().unwrap_or(version);
-        let mut parts = core.split('.');
-        (
-            parts.next().and_then(|p| p.parse().ok()).unwrap_or(0),
-            parts.next().and_then(|p| p.parse().ok()).unwrap_or(0),
-            parts.next().and_then(|p| p.parse().ok()).unwrap_or(0),
-        )
-    }
-    parse(left).cmp(&parse(right))
+    semver_prefix(left)
+        .unwrap_or_default()
+        .cmp(&semver_prefix(right).unwrap_or_default())
 }
 
 fn cargo_available() -> bool {
@@ -185,6 +215,17 @@ mod tests {
     #[test]
     fn crate_name_matches_package() {
         assert_eq!(CRATE_NAME, "nest-rs-cli");
+    }
+
+    /// An unreadable version is `None`, not `0.0.0`: waved through, it made the
+    /// CLI announce itself newer than the registry and exit 0.
+    #[test]
+    fn an_unparseable_version_is_rejected_rather_than_read_as_zero() {
+        let stdout = "nest-rs-cli = \"1.x.0\"    # Scaffolding CLI.\n";
+        assert_eq!(parse_cargo_search_version(stdout), None);
+        assert!(is_semver_prefixed("5.1.0"));
+        assert!(is_semver_prefixed("5.1.0-rc.1"));
+        assert!(!is_semver_prefixed("5.1"));
     }
 
     #[test]

@@ -157,6 +157,17 @@ fn added_lines(old: &str, new: &str) -> Vec<String> {
 }
 
 impl Report {
+    /// The tense to announce this report in — `verb("Created", "Would create")`.
+    ///
+    /// Read off the report rather than off the caller's own `dry_run` flag,
+    /// because the two are one fact and only the commit knows it: a command
+    /// that got the flag right here and wrong there would print "Created"
+    /// directly above [`print`](Self::print)'s "Dry run — no files written.",
+    /// which reads as a bug in the tool.
+    pub fn verb(&self, past: &'static str, conditional: &'static str) -> &'static str {
+        if self.dry_run { conditional } else { past }
+    }
+
     /// Print the human-facing summary (`+ created`, `~ modified` + diff).
     pub fn print(&self, base: &Path) {
         if self.dry_run {

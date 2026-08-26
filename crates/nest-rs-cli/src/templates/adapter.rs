@@ -9,7 +9,7 @@
 //! (`list`/`page`/`access`/`create`/`update`/`delete`), so a skeleton calling
 //! `count()` on one does not compile. Each transport therefore renders one
 //! template with the differing handler supplied as `{{op}}` / `{{op_body}}` /
-//! `{{op_value}}` (see [`crud_vars`](super::crud_vars)), rather than a second
+//! `{{op_value}}` (see [`crud_vars`](super::crud::crud_vars)), rather than a second
 //! near-identical blob: the scaffolding, imports and path conventions have one
 //! home each. GraphQL is the exception that earns a second template
 //! ([`GRAPHQL_RESOLVER_CRUD`]) — over a resource it is not a stub but the full
@@ -20,7 +20,6 @@
 pub const MOD: &str = r#"mod {{handler_mod}};
 mod module;
 
-pub use {{handler_mod}}::{{handler}};
 pub use module::{{tmodule}};
 "#;
 
@@ -201,7 +200,7 @@ pub struct {{processor}};
 impl {{processor}} {
     #[process(queue = {{queue_name}}, retries = 3)]
     async fn handle(&self, job: {{command}}) -> Result<()> {
-        tracing::info!(target: "features::{{snake}}", id = %job.id, "processing job");
+        let _ = job;
         Ok(())
     }
 }
@@ -261,9 +260,6 @@ impl {{tasks}} {
     #[every("60s")]
     async fn tick(&self) -> Result<()> {
 {{op_body}}
-        // Every event carries at least one structured field: the cadence is what
-        // tells a reader which tick fired when several share this target.
-        tracing::info!(target: "features::{{snake}}", every = "60s", "scheduled tick");
         Ok(())
     }
 }

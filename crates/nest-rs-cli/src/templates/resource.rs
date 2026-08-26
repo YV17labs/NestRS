@@ -19,7 +19,7 @@ pub use entity::*;
 pub use module::{{module}};
 pub use service::{{service}};
 
-pub use http::{{{controller}}, {{http_module}}};
+pub use http::{{http_module}};
 "#;
 
 pub const ENTITY: &str = r#"use nest_rs::resource::expose;
@@ -104,7 +104,6 @@ pub struct {{module}};
 pub const HTTP_MOD: &str = r#"mod controller;
 mod module;
 
-pub use controller::{{controller}};
 pub use module::{{http_module}};
 "#;
 

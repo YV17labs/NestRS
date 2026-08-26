@@ -254,7 +254,7 @@ impl Names {
     }
 
     pub fn tool(&self) -> String {
-        format!("{}Tool", self.singular)
+        format!("{}Tool", self.pascal)
     }
 
     /// Entity/wire-model name — singular Pascal (`users` → `User`).

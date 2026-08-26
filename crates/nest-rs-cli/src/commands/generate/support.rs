@@ -24,7 +24,7 @@ pub(super) fn finish(s: Scaffold, dry_run: bool, base: &Path, what: &str) -> Cli
     if !dry_run {
         rustfmt(&report.rust_files());
     }
-    println!("{} {what}", if dry_run { "Would write" } else { "Wrote" });
+    println!("{} {what}", report.verb("Wrote", "Would write"));
     report.print(base);
     Ok(())
 }

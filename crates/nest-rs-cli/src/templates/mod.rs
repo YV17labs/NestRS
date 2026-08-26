@@ -1,7 +1,11 @@
-use crate::naming::Transport;
+//! Embedded project templates — one module per generated artifact.
+//!
+//! Every module here is `const` source strings; `crud.rs` holds the one
+//! computed set of placeholders, because it varies by transport.
 
 pub mod adapter;
 pub mod auth;
+pub mod crud;
 pub mod entity;
 pub mod feature;
 pub mod hello;
@@ -11,82 +15,58 @@ pub mod shared;
 pub mod standalone;
 pub mod workspace;
 
-/// The handler a transport adapter renders, as `{{op}}` / `{{op_body}}` /
-/// `{{op_value}}` / `{{op_description}}`.
+/// Every template module, as `(file name, source)` — **read from the
+/// directory**, never listed. A list is edited by a different hand than the one
+/// that adds a template, and the list this replaced had already lost `crud.rs`:
+/// the module that renders every adapter's handler body sat outside both guards
+/// below while the doc above them claimed the population was scanned.
 ///
-/// One template per transport, two bodies. Over a `g feature` port the handler
-/// delegates to the service's `count()`, showing the seam. Over a `g resource`
-/// port it cannot — a `CrudService` has no `count()`, and its rows are only
-/// reachable behind an ambient ability a skeleton must not fabricate — so the
-/// body is a placeholder naming the call to write. Only the handler differs
-/// between the two, so only the handler is a variable: the imports, the
-/// `#[gateway]`/`#[tool_router]` scaffolding and the `/ws/<feature>` path
-/// rationale keep one home each.
-pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, String)> {
-    if !crud_port {
-        return vec![
-            ("op", "count".to_owned()),
-            ("op_body", String::new()),
-            // An MCP tool answers with an owned `String`, so it renders the
-            // conversion rather than a borrow the generated project's own
-            // `clippy -D warnings` would reject.
+/// `include_str!` cannot glob, so the scan is a `read_dir` at test time. It is
+/// `#[cfg(test)]`-only, so nothing ships a runtime directory read.
+///
+/// **One scan, three guards.** `generate::cargo`'s Rust-floor sweep reads the
+/// same corpus, and the two spelled it apart: this one excluded `mod.rs` and
+/// checked a floor, that one did neither — so a change to what counts as a
+/// template file had to be made twice, or one guard silently stopped seeing
+/// part of the corpus. Which is the failure this scan exists to prevent.
+#[cfg(test)]
+pub(crate) fn sources() -> Vec<(String, String)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/templates");
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .expect("the templates directory")
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("rs"))
+        // The folder index is not a template: it declares the modules the
+        // others are.
+        .filter(|path| path.file_name().and_then(|n| n.to_str()) != Some("mod.rs"))
+        .collect();
+    files.sort();
+    let found: Vec<(String, String)> = files
+        .iter()
+        .map(|path| {
             (
-                "op_value",
-                match transport {
-                    Transport::Mcp => "self.svc.count().to_string()",
-                    _ => "&self.svc.count()",
-                }
-                .to_owned(),
-            ),
-            ("op_description", "Count {{kebab}} items.".to_owned()),
-        ];
-    }
-
-    let body = match transport {
-        // A skeleton over a resource port names the service and returns a
-        // placeholder: its rows are ability-scoped, and an ambient `Ability` is
-        // what the adapter's authz module installs — none of which a scaffold
-        // may fabricate. The generated `AGENTS.md` carries the posture each edge
-        // then declares; the placeholder is what keeps `svc` used until it does.
-        Transport::Ws | Transport::Schedule | Transport::Mcp => "        let _ = &self.svc;",
-        // These three render no `{{op_body}}` over a resource: HTTP and GraphQL
-        // take a template of their own (`resource::HTTP_CONTROLLER` /
-        // `GRAPHQL_RESOLVER_CRUD`), and the queue processor is driven by its
-        // payload type rather than by a read. Spelled out rather than left to
-        // `_` so a transport added later has to choose a body on purpose.
-        Transport::Http | Transport::Graphql | Transport::Queue => "",
-    };
-    let value = match transport {
-        Transport::Ws => "&Vec::<String>::new()",
-        Transport::Mcp => "\"[]\".to_owned()",
-        _ => "\"[]\".to_string()",
-    };
-    vec![
-        ("op", "list".to_owned()),
-        ("op_body", body.to_owned()),
-        ("op_value", value.to_owned()),
-        ("op_description", "List {{kebab}} items.".to_owned()),
-    ]
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+                std::fs::read_to_string(path).expect("a template source"),
+            )
+        })
+        .collect();
+    // Finding nothing reads exactly like finding nothing wrong, so the scan
+    // says it is still matching.
+    assert!(
+        found.len() >= 10,
+        "the templates scan found {} modules — it stopped matching, and a \
+         template added since would now pass every guard unread",
+        found.len(),
+    );
+    found
 }
 
 #[cfg(test)]
 mod tests {
-
-    /// Every template module, as source. Scanned rather than enumerated by
-    /// constant so a log added to a *new* template is covered without anyone
-    /// remembering to extend a list.
-    const SOURCES: &[(&str, &str)] = &[
-        ("adapter", include_str!("adapter.rs")),
-        ("auth", include_str!("auth.rs")),
-        ("entity", include_str!("entity.rs")),
-        ("feature", include_str!("feature.rs")),
-        ("hello", include_str!("hello.rs")),
-        ("migration", include_str!("migration.rs")),
-        ("resource", include_str!("resource.rs")),
-        ("shared", include_str!("shared.rs")),
-        ("standalone", include_str!("standalone.rs")),
-        ("workspace", include_str!("workspace.rs")),
-    ];
+    use super::sources;
 
     /// A template that spells `NESTRS_` writes a variable an `--env-prefix`
     /// project never reads — a `.env` key silently inert, or a generated tool
@@ -94,7 +74,8 @@ mod tests {
     /// the guard is mechanical rather than a review habit.
     #[test]
     fn templates_use_the_env_prefix_placeholder_not_a_literal() {
-        let literals: Vec<&str> = SOURCES
+        let scanned = sources();
+        let literals: Vec<&str> = scanned
             .iter()
             .flat_map(|(_, src)| src.lines())
             // Rust doc/line comments in the CLI's own source describe the
@@ -118,7 +99,8 @@ mod tests {
     /// mentioning `tracing::` never trips it.
     #[test]
     fn no_scaffolded_log_is_emitted_without_a_structured_field() {
-        let bare: Vec<&str> = SOURCES
+        let scanned = sources();
+        let bare: Vec<&str> = scanned
             .iter()
             .flat_map(|(_, src)| src.lines())
             .filter(|line| line.contains("tracing::") && line.contains("!(target: \""))

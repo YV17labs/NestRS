@@ -56,7 +56,6 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         });
     }
 
-    let handler = names.handler_for(transport);
     let tmodule = names.module_for(transport);
     // A CRUD port's service has no `count()`, and its rows are only reachable
     // behind an ability — both decide the handler this adapter renders, and
@@ -64,10 +63,10 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let is_graphql = transport == Transport::Graphql;
     let crud_port = is_crud_port(&ws, &names.snake);
     let mut r = Renderer::new(&names)
-        .with("handler", handler.clone())
+        .with("handler", names.handler_for(transport))
         .with("handler_mod", transport.handler_mod())
         .with("tmodule", tmodule.clone());
-    for (key, value) in crate::templates::crud_vars(crud_port, transport) {
+    for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
         r = r.with(key, value);
     }
     let (handler_tmpl, module_tmpl) = templates_for(transport, crud_port);
@@ -182,12 +181,7 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     // port `Command` created above) — one edit, since each `s.edit` re-reads
     // the file from disk.
     port_lines.push(format!("pub mod {};", transport.folder()));
-    port_lines.push(format!(
-        "pub use {}::{{{}, {}}};",
-        transport.folder(),
-        handler,
-        tmodule
-    ));
+    port_lines.push(format!("pub use {}::{};", transport.folder(), tmodule));
     s.edit(feature_root.join("mod.rs"), ensure_lines(port_lines));
 
     // Wire the adapter module into the current app, when the cursor is in one —

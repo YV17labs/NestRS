@@ -52,7 +52,6 @@ pub fn run(opts: InfoOptions) -> CliResult<()> {
             .as_deref()
             .unwrap_or("rustc not found"),
     );
-    row("CLI", env!("CARGO_PKG_VERSION"));
     Ok(())
 }
 

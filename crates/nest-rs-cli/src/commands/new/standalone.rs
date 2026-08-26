@@ -53,7 +53,11 @@ pub fn scaffold(output: &Path, names: &Names, env_prefix: &str, dry_run: bool) -
         rustfmt(&report.rust_files());
     }
 
-    println!("Created standalone nestrs app at {}", root.display());
+    println!(
+        "{} standalone nestrs app at {}",
+        report.verb("Created", "Would create"),
+        root.display()
+    );
     report.print(output);
     print_next_steps(&root);
     Ok(())

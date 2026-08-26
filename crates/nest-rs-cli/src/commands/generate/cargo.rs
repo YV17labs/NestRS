@@ -86,12 +86,13 @@ const ASYNC_GRAPHQL: Dep = Dep {
     workspace_value: "{ version = \"7.2\", features = [\"dataloader\"] }",
     features: &[],
 };
-// Every adapter skeleton that logs (`queue`, `schedule`, `ws`) writes a
-// `tracing::` call in the handler body, and `queue`/`schedule` return
-// `anyhow::Result`. `templates::workspace` now ships both from `nestrs new`, so
-// on a scaffolded tree these two entries are idempotent no-ops; they stay for
-// the workspace assembled by hand, where the generator is the only thing that
-// knows what its own skeleton names.
+// `ws` writes a `tracing::warn!` for a failed broadcast — the one scaffolded
+// event that is not the edge's own operation line, and now the only skeleton
+// naming this crate at all. `queue`/`schedule` return `anyhow::Result`.
+// `templates::workspace` now ships both from `nestrs new`, so on a scaffolded
+// tree these two entries are idempotent no-ops; they stay for the workspace
+// assembled by hand, where the generator is the only thing that knows what its
+// own skeleton names.
 const TRACING: Dep = Dep {
     name: "tracing",
     workspace_value: "\"0.1\"",
@@ -172,8 +173,8 @@ pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
         // derives rather than `#[input]` — a producer↔worker contract has to
         // accept a field a newer producer added, and `deny_unknown_fields`
         // would dead-letter those jobs on their first attempt.
-        Transport::Queue => vec![&REDIS, &ANYHOW, &TRACING, &SERDE],
-        Transport::Schedule => vec![&SCHEDULE, &ANYHOW, &TRACING],
+        Transport::Queue => vec![&REDIS, &ANYHOW, &SERDE],
+        Transport::Schedule => vec![&SCHEDULE, &ANYHOW],
         Transport::Mcp => vec![&MCP],
     }
 }
@@ -421,7 +422,7 @@ mod tests {
             .with("handler", names.handler_for(transport))
             .with("handler_mod", transport.handler_mod())
             .with("tmodule", names.module_for(transport));
-        for (key, value) in crate::templates::crud_vars(crud_port, transport) {
+        for (key, value) in crate::templates::crud::crud_vars(crud_port, transport) {
             r = r.with(key, value);
         }
         r.render(handler)
@@ -582,12 +583,16 @@ mod tests {
         // the shape rather than in a second list: a list is edited by a
         // different hand than the one that renames a marker, and a `matches!`
         // that stops matching turns its presence check into a silent no-op.
-        const SHAPES: [(&str, Pin, bool); 9] = [
+        // `doctor`'s floor is **not** on this list, and its absence is the
+        // finding rather than a gap: `MIN_RUST_VERSION` is now parsed from
+        // `CARGO_PKG_RUST_VERSION`, so it is derived from the workspace
+        // `rust-version` this scan anchors on and cannot disagree with it. A
+        // row here would compare the anchor against itself.
+        const SHAPES: [(&str, Pin, bool); 8] = [
             ("rust-version = \"", Pin::Exact, true),
             ("channel = \"", Pin::Exact, true),
             ("ARG RUST_VERSION=", Pin::Exact, true),
             ("toolchain: '", Pin::Exact, false),
-            ("const MIN_RUST_VERSION: (u32, u32) = (", Pin::Tuple, false),
             ("FROM rust:", Pin::Image, true),
             ("**Rust ", Pin::Prose, false),
             ("pins Rust ", Pin::Prose, false),
@@ -623,10 +628,7 @@ mod tests {
                 for chunk in raw.split(marker).skip(1) {
                     // `MIN_RUST_VERSION` spells the pair as a tuple; every other
                     // shape spells it dotted.
-                    let read = match kind {
-                        Pin::Tuple => read_version(&chunk.replacen(", ", ".", 1)),
-                        _ => read_version(chunk),
-                    };
+                    let read = read_version(chunk);
                     match read.as_deref().filter(|value| is_major_minor(value)) {
                         Some(value) => {
                             seen[shape] += 1;
@@ -729,8 +731,6 @@ mod tests {
         /// that is not a bare `major.minor` is a malformed or stale pin, never
         /// prose — and is reported rather than skipped.
         Exact,
-        /// [`Pin::Exact`], spelled as the Rust tuple `(major, minor)`.
-        Tuple,
         /// A base image tag: either the floor, or the `ARG` carrying it.
         Image,
         /// The marker is English that *may* open a version. Only a leading
@@ -787,22 +787,13 @@ mod tests {
     /// scaffold's `rust-toolchain.toml` declares no dependency and its Dockerfile
     /// is not TOML at all, so the two pins a developer inherits most directly
     /// would both have been invisible to the test written to guard them.
+    ///
+    /// The corpus comes from [`crate::templates::sources`] — the one scan, so
+    /// this sweep and the two guards beside it cannot disagree about what
+    /// counts as a template file.
     fn template_bodies() -> Vec<(String, String)> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/templates");
-        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
-            .expect("the templates directory")
-            .filter_map(|entry| entry.ok().map(|e| e.path()))
-            .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("rs"))
-            .collect();
-        files.sort();
         let mut found = Vec::new();
-        for path in files {
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_owned();
-            let source = std::fs::read_to_string(&path).expect("a template source");
+        for (name, source) in crate::templates::sources() {
             for (index, body) in raw_string_bodies(&source).into_iter().enumerate() {
                 found.push((format!("templates:{name}#{index}"), body));
             }

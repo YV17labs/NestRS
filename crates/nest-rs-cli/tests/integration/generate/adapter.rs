@@ -21,8 +21,11 @@ fn generate_http_adapter_wires_feature_mod() {
 
     let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
     assert!(mod_rs.contains("pub mod http;"));
-    assert!(mod_rs.contains("PostsController"));
     assert!(mod_rs.contains("PostsHttpModule"));
+    // The index exports the module and never the handler: `mod.rs` is the
+    // export contract, and a controller reachable as `features::posts::*` is
+    // a decision the generator would be making for every project at once.
+    assert!(!mod_rs.contains("PostsController"), "{mod_rs}");
 }
 
 /// Every route declares a posture — the `hello` starter and the GraphQL adapter
@@ -219,9 +222,12 @@ fn generate_ws_over_a_resource_port_does_not_call_count() {
     );
 }
 
-/// The schedule skeleton logs too — same class as the ws and queue ones.
+/// The schedule skeleton files no line of its own: `nest-rs-schedule` already
+/// emits one `info` per tick — "the only place a tick says it ran at all" — so
+/// a second one is the same unit of work said twice, on a target
+/// `nest_rs::operation=off` does not silence.
 #[test]
-fn generate_schedule_adapter_brings_tracing() {
+fn generate_schedule_adapter_does_not_restate_the_tick_line() {
     let dir = tempfile::tempdir().unwrap();
     write_fake_workspace(dir.path());
     let path = dir.path().to_str().unwrap();
@@ -234,18 +240,18 @@ fn generate_schedule_adapter_brings_tracing() {
             .join("crates/features/src/posts/schedule/tasks.rs"),
     )
     .unwrap();
-    assert!(tasks_rs.contains("tracing::"), "the skeleton logs");
-    // …and carries a field while doing it: a bare event is a defect the
-    // generator would ship into every project (`templates::tests` pins this for
-    // every template; this is the end-to-end half).
     assert!(
-        tasks_rs.contains(r#"every = "60s""#),
-        "the scaffolded tick must log with a structured field: {tasks_rs}",
+        !tasks_rs.contains("tracing::"),
+        "the tick's own line is the scheduler's to file: {tasks_rs}",
     );
+    // …and the dependency goes with the line: a `tracing` entry written into a
+    // hand-assembled workspace for a skeleton that names it nowhere is a
+    // manifest line the generator cannot account for.
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
     assert!(
-        features_cargo.contains("tracing"),
-        "…so `tracing` has to be a dependency: {features_cargo}"
+        !features_cargo.contains("tracing"),
+        "the schedule skeleton writes no `tracing::` call, so it brings no \
+         `tracing` dependency: {features_cargo}"
     );
 }
 
@@ -348,9 +354,10 @@ fn generate_queue_adapter_module_imports_the_port() {
         "the queue adapter module must import its port: {module_rs}"
     );
 
-    // The skeleton logs, so `tracing` has to come with it.
+    // The processor's own line is the queue's to file, so the skeleton writes no
+    // `tracing::` call — and therefore brings no `tracing` dependency either.
     let features_cargo = fs::read_to_string(dir.path().join("crates/features/Cargo.toml")).unwrap();
-    assert!(features_cargo.contains("tracing"), "{features_cargo}");
+    assert!(!features_cargo.contains("tracing"), "{features_cargo}");
 }
 
 /// C1: `/queue/producing-jobs/` wires `RedisModule` + `RedisQueueModule` from `nest_rs::redis`

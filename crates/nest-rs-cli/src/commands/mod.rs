@@ -1,3 +1,9 @@
+//! One module per command the CLI dispatches to.
+//!
+//! `version` and `about` are the exception and live in [`crate::cli`]: both are
+//! four `println!`s over compile-time metadata, and `about`'s tagline is shared
+//! with clap's own `about =` attribute.
+
 mod doctor;
 mod generate;
 mod info;

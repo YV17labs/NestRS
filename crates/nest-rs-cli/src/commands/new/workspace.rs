@@ -72,7 +72,11 @@ pub fn scaffold_root(
         rustfmt(&report.rust_files());
     }
 
-    println!("Created nestrs workspace at {}", root.display());
+    println!(
+        "{} nestrs workspace at {}",
+        report.verb("Created", "Would create"),
+        root.display()
+    );
     report.print(output);
     print_root_next_steps(&root);
     Ok(())
@@ -119,11 +123,16 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
     }
 
     println!(
-        "Created workspace app `{}` at {}",
+        "{} workspace app `{}` at {}",
+        report.verb("Created", "Would create"),
         names.kebab,
         root.display()
     );
-    println!("HTTP port: {port} (pinned in src/module.rs)");
+    // The pin is a claim about a file on disk, so it is only true once one is.
+    println!(
+        "HTTP port: {port} ({} in src/module.rs)",
+        report.verb("pinned", "would be pinned"),
+    );
     report.print(&ws.root);
     print_app_next_steps(ws, names, port);
     Ok(())

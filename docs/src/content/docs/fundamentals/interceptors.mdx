@@ -94,7 +94,7 @@ or per handler.
 
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
-| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs::interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level `HttpInterceptorMeta` wrap + the per-route shaper |
+| **Global** | `App::builder().use_interceptors_global([interceptor::<Tracer>()])` in `main`, with `use nest_rs::interceptors::AppBuilderInterceptorsExt;` in scope | A transport-level `HttpEndpointWrap` wrap + the per-route shaper |
 | **Controller / Resolver / Gateway** | `#[use_interceptors(Tracer)]` on the struct | The container, at mount |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 
@@ -121,7 +121,7 @@ second's.
 
 Like every other [`Layer`](/fundamentals/request-lifecycle/), an `Interceptor` declared
 globally and redeclared on the controller or method runs **exactly
-once** per request — the transport-level `HttpInterceptorMeta` wrap
+once** per request — the transport-level `HttpEndpointWrap` wrap
 carries the single execution, the inner wraps are skipped at mount
 time. The full rationale and the cross-transport wiring details live
 on the guards page; the same rules apply here.

@@ -1,5 +1,5 @@
-//! [`ExceptionFilter`] — catches a single typed exception across every
-//! transport that can carry one.
+//! [`ExceptionFilter`] — catches a single typed exception on HTTP, the only
+//! transport that dispatches to one today.
 
 use std::error::Error as StdError;
 
@@ -31,5 +31,9 @@ pub trait ExceptionFilter: Layer {
 
     /// HTTP entry — required. Called with the typed `Exception`
     /// extracted from a `poem::Error` via downcast.
+    ///
+    /// The returned `Response` *replaces* the error outright: the
+    /// `poem::Error`'s status and anything it carried via `set_data` are
+    /// discarded. Read what you need off `exception` itself.
     async fn catch(&self, exception: Self::Exception) -> Response;
 }

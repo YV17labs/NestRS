@@ -150,7 +150,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 
             /// Controller-level `#[use_interceptors(...)]`, exposed for the
             /// `#[routes]` macro to compose into each route's interceptor pool
-            /// (`wrap_route_interceptors`). Empty when none are declared.
+            /// (`wrap_route_response_layers`). Empty when none are declared.
             #[doc(hidden)]
             pub fn __nestrs_controller_interceptor_specs()
                 -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedInterceptorSpec>
@@ -160,7 +160,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 
             /// Controller-level `#[use_filters(...)]`, exposed for the
             /// `#[routes]` macro to compose into each route's filter pool
-            /// (`wrap_route_filters`). Empty when none are declared.
+            /// (`wrap_route_response_layers`). Empty when none are declared.
             #[doc(hidden)]
             pub fn __nestrs_controller_filter_specs()
                 -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedFilterSpec>

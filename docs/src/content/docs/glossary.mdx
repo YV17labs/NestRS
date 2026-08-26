@@ -53,7 +53,7 @@ deep on each.
   inner chain raises. Bound with `#[use_filters(...)]`. Transparent on
   the success path.
 - **[Exception filter](/fundamentals/exception-filters/#typed-catches-via-exceptionfilter)** —
-  typed catch via downcast inside `RouteShaper`; bound with
+  typed catch via downcast inside `ExceptionFiltersEndpoint`; bound with
   `#[use_exception_filters(...)]`. Only fires when the error matches
   `Self::Exception`.
 - **Ability shaper** — the `Authorize<A, S>` wrapper the `#[routes]`
@@ -61,8 +61,9 @@ deep on each.
   response masking after a 2xx. Innermost per-route layer, just outside
   the handler. [Layer order](/fundamentals/guards/#where-guards-run-in-the-chain).
 - **RouteShaper** — the per-route orchestrator inside `nest-rs-guards`;
-  runs guards and body pipes on the way in, exception filters when the
-  handler returns `Err`. Documented on [Guards](/fundamentals/guards/).
+  runs guards and body pipes on the way in. The response-side families
+  wrap the endpoint outside it, not within. Documented on
+  [Guards](/fundamentals/guards/).
 - **[Reflector](/http/extractors/)** — the request-time reader that
   pulls back the values a handler attached with `#[meta(EXPR)]`; how a
   guard inspects per-route metadata.

@@ -67,7 +67,9 @@ Per route, innermost → outermost: **handler → ability shaper → exception-f
 pool → scoped filters → scoped interceptors → `RouteShaper` (guard pool → pipe
 pool) → `#[meta]`/`#[public]` route data**. At the transport edge
 (innermost → outermost band): **routing → DbContext (−10) → global filter pool
-(50) → global interceptor pool (90) → infra `#[interceptor]` (100)**.
+(50) → error resolution (70) → global interceptor pool (90) → infra
+`#[interceptor]` (100)**. The error-resolution band is what makes a global
+filter see a raw `Err` while a global interceptor sees a `Response`.
 
 The operation span is outside all of it: the transport opens it before routing,
 so every stage above logs under one `trace_id` — see

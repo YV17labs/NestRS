@@ -15,7 +15,7 @@ async-trait.workspace = true
 poem.workspace = true
 nest-rs-core.workspace = true
 # `use_interceptors_global` attaches its transport-level wrap via
-# `HttpInterceptorMeta`. Safe direction (nest-rs-http depends on no
+# `HttpEndpointWrap`. Safe direction (nest-rs-http depends on no
 # trait crate any more).
 nest-rs-http.workspace = true
 

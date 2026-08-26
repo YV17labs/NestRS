@@ -49,7 +49,8 @@ resolver — carries across intact.
 | `@ApiProperty()` / `@Field()` per property | one `#[expose]` on the column, schemas derived |
 | `@Inject('TOKEN')` provider token | inject `Arc<dyn Trait>`, provider listed `as dyn Trait` |
 | `@UseGuards(...)` | `#[use_guards(...)]` |
-| `@UseInterceptors(...)` / `@UseFilters(...)` | `#[use_interceptors(...)]` / `#[use_filters(...)]` |
+| `@UseInterceptors(...)` | `#[use_interceptors(...)]` |
+| `@UseFilters(...)` (binds `@Catch(...)` classes) | `#[use_exception_filters(...)]` — `#[use_filters(...)]` is the *unconditional* mapper, not the typed catch |
 | `@Resolver()` operation | `#[operations]` + per-op `#[authorize(Action, Entity)]` / `#[public]` |
 | `OnModuleInit` interface | `#[hooks] impl` + `#[on_module_init]` on the method |
 | `ConfigModule.forRoot()` + `registerAs` | `#[config(namespace = "…")]` + `NESTRS_<NS>__<KEY>` |

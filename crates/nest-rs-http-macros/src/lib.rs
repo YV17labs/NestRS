@@ -101,7 +101,10 @@ pub fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - `#[public]` — the route is reachable anonymously; global guards still run
 ///   and read the marker.
 /// - `#[use_guards(...)]` — container-resolved guards, first listed outermost.
-/// - `#[use_filters(...)]` — exception filters, wrap *outside* the guards.
+/// - `#[use_filters(...)]` — container-resolved error-mapping filters; they
+///   wrap *inside* the guards, so a denial short-circuits before them.
+/// - `#[use_exception_filters(...)]` — container-resolved typed catches, tried
+///   innermost of the response families.
 /// - `#[use_interceptors(...)]` — container-resolved interceptors.
 /// - `#[meta(EXPR)]` (repeatable) — typed metadata read back by a guard with
 ///   `nest_rs_http::Reflector` (value type: `Clone + Send + Sync + 'static`).

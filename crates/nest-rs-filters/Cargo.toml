@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Transport-spanning error-mapping filters for NestRS — one Layer System sub-trait that turns inner errors into responses on HTTP, GraphQL, and WS, declared globally via `use_filters_global` or per-scope through `#[use_filters]`."
+description = "HTTP error-mapping filters for NestRS — one Layer System sub-trait that turns inner errors into responses, declared globally via `use_filters_global` or per-scope through `#[use_filters]`."
 keywords = ["framework", "nestrs", "filters", "error-handling", "web"]
 categories = ["web-programming", "rust-patterns"]
 
@@ -15,7 +15,7 @@ async-trait.workspace = true
 poem.workspace = true
 nest-rs-core.workspace = true
 # `use_filters_global` attaches its transport-level wrap via
-# `HttpInterceptorMeta`. Safe direction.
+# `HttpEndpointWrap`. Safe direction.
 nest-rs-http.workspace = true
 
 [dev-dependencies]

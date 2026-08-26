@@ -9,7 +9,8 @@ use crate::registry::{ExceptionFilterSpec, ExceptionFilterSpecs};
 /// Adds `.use_exception_filters_global(...)` to [`AppBuilder`].
 ///
 /// ```rust,ignore
-/// use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
+/// use nest_rs::prelude::App;
+/// use nest_rs::exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
 ///
 /// App::builder()
 ///     .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
@@ -18,8 +19,14 @@ use crate::registry::{ExceptionFilterSpec, ExceptionFilterSpecs};
 ///     .run().await
 /// ```
 pub trait AppBuilderExceptionFiltersExt: Sized {
-    /// Register `specs` as the global exception-filter chain — the transport-wide
-    /// pool, deduped by type against controller/method-scope declarations.
+    /// Register `specs` as the global exception-filter chain — the pool every
+    /// **route** composes in, deduped by type against controller/method-scope
+    /// declarations.
+    ///
+    /// Scope note: unlike a global `Filter` (`nest_rs_filters`), which attaches
+    /// a wrap at the transport edge, these are read per route by the `#[routes]`
+    /// composer. An error raised where no route matched — a 404, a self-mounted
+    /// surface such as `/graphql` or `/mcp`, a WS upgrade — never reaches them.
     fn use_exception_filters_global<I>(self, specs: I) -> Self
     where
         I: IntoIterator<Item = ExceptionFilterSpec>;

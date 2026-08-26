@@ -12,7 +12,8 @@ use crate::registry::{FilterSpec, FilterSpecs};
 /// Adds `.use_filters_global(...)` to [`AppBuilder`].
 ///
 /// ```rust,ignore
-/// use nest_rs_filters::{AppBuilderFiltersExt, filter};
+/// use nest_rs::prelude::App;
+/// use nest_rs::filters::{AppBuilderFiltersExt, filter};
 ///
 /// App::builder()
 ///     .use_filters_global([filter::<ProblemDetailsFilter>()])

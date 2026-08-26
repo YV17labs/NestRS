@@ -49,8 +49,8 @@
 //! ## Registering globally
 //!
 //! ```rust,ignore
-//! use nest_rs::App;
-//! use nest_rs_filters::{AppBuilderFiltersExt, filter};
+//! use nest_rs::prelude::App;
+//! use nest_rs::filters::{AppBuilderFiltersExt, filter};
 //!
 //! App::builder()
 //!     .use_filters_global([filter::<ProblemDetailsFilter>()])

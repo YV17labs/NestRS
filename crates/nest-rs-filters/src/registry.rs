@@ -19,6 +19,8 @@ pub type FilterSpec = LayerSpec<dyn Filter>;
 /// Construct a [`FilterSpec`] for the given filter type.
 ///
 /// ```rust,ignore
+/// use nest_rs::filters::{AppBuilderFiltersExt, filter};
+///
 /// App::builder()
 ///     .use_filters_global([filter::<ProblemDetailsFilter>()])
 ///     .module::<AppModule>()

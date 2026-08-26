@@ -241,6 +241,15 @@ That answers `422` with `caught: domain failure: boom`. Drop the
 its `ResponseError` status: the filter replaces the default, it does not
 create it.
 
+:::caution[A global `ExceptionFilter` covers the route table, not the edge]
+"Global" means a different thing for the two families. A global `Filter`
+attaches a wrap at the transport edge, so it maps errors from paths no
+route matched. A global `ExceptionFilter` is read **per route** by the
+`#[routes]` composer, so a 404, a self-mounted surface such as `/graphql`
+or `/mcp`, or a WS upgrade never reaches one — even when the error raised
+there is exactly the type it claims. Use a `Filter` for those.
+:::
+
 ## TypeId dedup — redeclaration is free
 
 Both `Filter` and `ExceptionFilter` are
@@ -248,17 +257,17 @@ Both `Filter` and `ExceptionFilter` are
 layer kind: a global declaration and a per-scope redeclaration collapse
 to one execution.
 
-- **`ExceptionFilter`** rides the `RouteShaper` chain (global +
-  controller + method scopes resolved through `compose_chain`), so the
-  dedup covers every pair of scopes — including controller + method
-  without a global in play.
-- **`Filter`** dedups against the global chain at mount time: a
-  controller- or method-scope wrap is skipped when its TypeId is
-  already seeded as Global, and the transport-level
-  `HttpInterceptorMeta` wrap carries the single execution. With no
-  global in play the per-scope wraps still nest, but the inner wrap
-  rewrites the error to a successful `Response`, so the outer wrap
-  only ever sees the success path — net effect, one execution.
+Both are composed the same way, so the dedup covers every pair of scopes
+— including controller + method with no global in play. `compose_chain`
+resolves global + controller + method by `TypeId` and the survivors go
+into a single chain endpoint per route (`ExceptionFiltersEndpoint` for
+the typed catches, `FilterChain` for the untyped ones). The per-scope
+wraps do not nest; there is one wrap holding a deduped list.
+
+A global `Filter` additionally attaches a transport-edge
+`HttpEndpointWrap`, which is what lets it map errors from paths no route
+matched. A global `ExceptionFilter` has no such wrap — see the scope note
+above.
 
 The same defense-in-depth rationale as
 [guards](/fundamentals/guards/#declare-on-the-provider)

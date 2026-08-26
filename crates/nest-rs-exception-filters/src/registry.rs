@@ -23,6 +23,8 @@ pub type ExceptionFilterSpec = LayerSpec<dyn ExceptionFilterErased>;
 /// Construct an [`ExceptionFilterSpec`] for the given filter type.
 ///
 /// ```rust,ignore
+/// use nest_rs::exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
+///
 /// App::builder()
 ///     .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
 ///     .module::<AppModule>()

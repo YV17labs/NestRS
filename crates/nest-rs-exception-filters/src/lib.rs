@@ -51,8 +51,8 @@
 //! ## Registering globally
 //!
 //! ```rust,ignore
-//! use nest_rs::App;
-//! use nest_rs_exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
+//! use nest_rs::prelude::App;
+//! use nest_rs::exception_filters::{AppBuilderExceptionFiltersExt, exception_filter};
 //!
 //! App::builder()
 //!     .use_exception_filters_global([exception_filter::<DomainErrorFilter>()])
@@ -63,12 +63,12 @@
 
 mod builder;
 mod erased;
-mod exception;
+mod exception_filter;
 mod registry;
 
 pub use builder::AppBuilderExceptionFiltersExt;
 pub use erased::ExceptionFilterErased;
-pub use exception::ExceptionFilter;
+pub use exception_filter::ExceptionFilter;
 pub use registry::{ExceptionFilterSpec, ExceptionFilterSpecs, exception_filter};
 // Re-exported so a crate writing an `ExceptionFilter` impl needs no direct
 // `async-trait` dependency of its own. `nest-rs-http`, `nest-rs-queue` and

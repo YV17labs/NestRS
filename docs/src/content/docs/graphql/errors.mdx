@@ -3,7 +3,6 @@ title: GraphQL errors
 description: async-graphql Result, extensions, codes — and how a ServiceError lands on the wire as a typed GraphQL error.
 tier: basics
 sidebar:
-  label: Errors
   order: 7
 ---
 
@@ -19,7 +18,7 @@ service result and the wire shape just works.
 
 ## The smallest error
 
-```rust
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 use async_graphql::{Error, Result};
 use nest_rs::graphql::{operations, resolver};
 
@@ -59,7 +58,7 @@ On the wire:
 `extensions` carry structured data — a stable code clients can branch
 on without parsing the message:
 
-```rust
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 use async_graphql::{Error, Result};
 
 #[query]
@@ -109,7 +108,7 @@ pub enum ServiceError {
 
 A resolver propagates that into a GraphQL `Result<T>` with `?`:
 
-```rust
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 use async_graphql::Result;
 use nest_rs::authz::Read;
 use nest_rs::graphql::{operations, resolver};
@@ -132,7 +131,7 @@ SQL fragment never leaks. The `Validation` variant forwards through
 
 For a richer envelope, wrap the conversion to attach a code:
 
-```rust
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 use async_graphql::{Error, ErrorExtensions, Result};
 use nest_rs::seaorm::ServiceError;
 
@@ -166,7 +165,7 @@ error frame.
 `Opaque` is the seam for that, and it reads the same on every client-facing
 transport — HTTP, GraphQL, WebSockets and MCP:
 
-```rust
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 use nest_rs::graphql::Opaque;
 
 #[query]
@@ -213,7 +212,7 @@ The bind helper follows this rule: `bind::<Read, UsersService>(ctx,
 &id).await?` returns `Result<Option<User>>` — `None` means absent
 (404 equivalent), `Err` means denied or broken.
 
-```rust
+```rust title="crates/features/src/users/graphql/resolver.rs"
 #[query]
 #[authorize(Read, UserEntity)]
 async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {

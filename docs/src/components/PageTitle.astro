@@ -1,0 +1,68 @@
+---
+/**
+ * The page heading, with the trail that leads to it.
+ *
+ * Starlight ships no breadcrumb, and the sidebar is the only place a reader is
+ * told which section they are in — which the mobile layout hides entirely. The
+ * trail is read out of the hydrated sidebar rather than from frontmatter, so a
+ * page moved in `astro.config.mjs` moves its breadcrumb with it.
+ *
+ * The lede is the page's own `description`, which Starlight otherwise spends
+ * only on the `<meta>` tag. The design opens every page on that sentence, and
+ * the two cannot drift because there is one of them.
+ */
+// Starlight does not export `constants.ts` from its package, so the anchor id
+// is spelled here — it is `_top`, and the site's own `#_top` links depend on it.
+const PAGE_TITLE_ID = '_top';
+
+type Entry = { type: string; label: string; isCurrent?: boolean; entries?: Entry[] };
+
+/**
+ * The current page's place in the menu: the groups above it, outermost first,
+ * and **its own menu label** — not its title.
+ *
+ * The two differ on every section index, and the trail is navigation: it says
+ * where the reader is, in the words the menu just used. Reading `entry.data.title`
+ * instead printed the section's name twice in a row — `HTTP / HTTP` — because the
+ * group is named after the section and the index page carries the section's
+ * title. One page, one name, wherever the site is pointing at it.
+ */
+function trail(entries: Entry[], above: string[] = []): { above: string[]; label: string } | null {
+  for (const entry of entries) {
+    if (entry.type === 'link') {
+      if (entry.isCurrent) return { above, label: entry.label };
+      continue;
+    }
+    const found = trail(entry.entries ?? [], [...above, entry.label]);
+    if (found) return found;
+  }
+  return null;
+}
+
+const { entry, sidebar } = Astro.locals.starlightRoute;
+const here = trail(sidebar as unknown as Entry[]);
+const crumbs = here?.above ?? [];
+// A page the menu does not carry has no trail to render; the title is the
+// fallback only for the last crumb, never a reason to invent the groups above it.
+const current = here?.label ?? entry.data.title;
+---
+
+{
+  crumbs.length > 0 && (
+    <nav class="rs-breadcrumb" aria-label="Breadcrumb">
+      {crumbs.map((label) => (
+        <>
+          <span>{label}</span>
+          <span class="rs-breadcrumb-sep" aria-hidden="true">
+            /
+          </span>
+        </>
+      ))}
+      <span class="rs-breadcrumb-current">{current}</span>
+    </nav>
+  )
+}
+
+<h1 id={PAGE_TITLE_ID}>{entry.data.title}</h1>
+
+{entry.data.description && <p class="rs-lede">{entry.data.description}</p>}

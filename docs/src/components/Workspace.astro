@@ -1,0 +1,93 @@
+---
+/**
+ * Two cards, side by side: what a workspace is (public tier, shared features,
+ * private tier) and how each app scales on its own signal.
+ */
+interface Lane {
+  app: string;
+  port: string;
+  signal: string;
+  replicas: number;
+  factor: string;
+  kind: 'api' | 'api-steady' | 'worker' | 'worker-light';
+}
+
+const lanes: Lane[] = [
+  { app: 'App A', port: ':3000', signal: 'demand · high traffic', replicas: 5, factor: '×5', kind: 'api' },
+  { app: 'App B', port: ':3001', signal: 'demand · steady', replicas: 2, factor: '×2', kind: 'api-steady' },
+  { app: 'App C', port: '', signal: 'queue · backlog', replicas: 4, factor: '×4', kind: 'worker' },
+  { app: 'App D', port: '', signal: 'queue · light', replicas: 2, factor: '×2', kind: 'worker-light' },
+];
+---
+
+<div class="rs-workspace not-content">
+  <div class="rs-card rs-tiers">
+    <div class="rs-tier rs-tier--public">
+      <div class="rs-tier-head">
+        <span class="rs-tier-label">PUBLIC</span>
+        <span class="rs-tier-hint">exposed to clients</span>
+      </div>
+      <div class="rs-tier-apps">
+        <div class="rs-tier-app">
+          <span class="rs-tier-app-name">App A <span class="rs-port">:3000</span></span>
+          <span class="rs-tier-app-role">a public surface</span>
+        </div>
+        <div class="rs-tier-app">
+          <span class="rs-tier-app-name">App B <span class="rs-port">:3001</span></span>
+          <span class="rs-tier-app-role">another public surface</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="rs-shared">
+      <span class="rs-shared-label">shared features</span>
+      <span class="rs-shared-sub">one model — every app builds on it</span>
+    </div>
+
+    <div class="rs-tier rs-tier--private">
+      <div class="rs-tier-head">
+        <span class="rs-tier-label">PRIVATE</span>
+        <span class="rs-tier-hint">off the request path</span>
+      </div>
+      <div class="rs-tier-apps">
+        <div class="rs-tier-app">
+          <span class="rs-tier-app-name">App C</span>
+          <span class="rs-tier-app-role">background work</span>
+        </div>
+        <div class="rs-tier-app">
+          <span class="rs-tier-app-name">App D</span>
+          <span class="rs-tier-app-role">more background work</span>
+        </div>
+      </div>
+    </div>
+
+    <p class="rs-card-note">
+      Who runs where is a composition choice in each app's <code>module.rs</code>, not a fork of
+      entities and services.
+    </p>
+  </div>
+
+  <div class="rs-card rs-scale">
+    <div class="rs-card-title">Scale each workload on its own signal</div>
+    {
+      lanes.map((l) => (
+        <div class:list={['rs-lane', `rs-lane--${l.kind}`]}>
+          <span class="rs-lane-app">
+            {l.app} {l.port && <span class="rs-port">{l.port}</span>}
+          </span>
+          <span class="rs-lane-signal">{l.signal}</span>
+          <span class="rs-lane-pills" aria-hidden="true">
+            {Array.from({ length: l.replicas }, (_, i) => (
+              <i data-replica={i} />
+            ))}
+            <span class="rs-lane-factor">{l.factor}</span>
+          </span>
+        </div>
+      ))
+    }
+    <p class="rs-card-note">
+      Same binary, more replicas, per app — a hot public surface follows demand, background apps
+      follow queue depth. No single "scale the monolith" knob.
+    </p>
+  </div>
+</div>

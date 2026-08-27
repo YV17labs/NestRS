@@ -17,7 +17,7 @@ keyset-paginated unless you opt out.
 
 A `#[crud]` list — REST or GraphQL — is keyset-paginated out of the box:
 
-```rust title="src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs"
 #[crud(
     service = svc,
     entity = PostEntity,
@@ -59,7 +59,7 @@ unparseable cursor pages from the start — never an error.
 The generated list query takes the same two cursor arguments and returns a
 plain list — the body stays maskable, exactly like REST:
 
-```graphql
+```graphql title="the query a client sends"
 query {
   posts(first: 20) {
     id
@@ -77,7 +77,7 @@ the end.
 
 The keyset shape, before serialization:
 
-```rust
+```rust title="nest_rs::seaorm::Page"
 pub struct Page<M> {
     pub items: Vec<M>,
     pub next_cursor: Option<Uuid>,
@@ -99,7 +99,7 @@ after)`.
 When the auto-emitted `page` does not match — say you want only one
 author's posts — call `Repo::scoped` and the same cursor helpers:
 
-```rust
+```rust title="crates/features/src/posts/service.rs"
 impl PostsService {
     pub async fn page_by_author(
         &self,

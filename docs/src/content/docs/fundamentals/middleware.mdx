@@ -47,7 +47,7 @@ Three shapes cover it. Pick the one that matches.
 
 That's an interceptor.
 
-```rust
+```rust title="apps/api/src/interceptor.rs"
 #[injectable]
 #[derive(Default)]
 pub struct NoIndex;
@@ -79,7 +79,7 @@ line or a queued job are filed under.
 
 That's a guard. Gate the request, return `Err(Denial)` on rejection.
 
-```rust
+```rust title="apps/api/src/guard.rs"
 use nest_rs::guards::prelude::*;
 use nest_rs::http::poem::Request as HttpRequest;
 
@@ -111,7 +111,7 @@ or globally via
 
 A guard does that too. The guard borrows the request mutably:
 
-```rust
+```rust title="crates/features/src/authn/guard.rs"
 #[async_trait]
 impl Guard for AuthnGuard {
     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {

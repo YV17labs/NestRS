@@ -20,7 +20,7 @@ relation cannot leak across orgs.
 
 ## The declaration
 
-```rust title="src/users/entity.rs"
+```rust title="crates/features/src/users/entity.rs"
 use nest_rs::resource::expose;
 use sea_orm::entity::prelude::*;
 
@@ -43,7 +43,7 @@ pub struct Model {
 }
 ```
 
-```rust title="src/orgs/entity.rs"
+```rust title="crates/features/src/orgs/entity.rs"
 #[expose(name = "Org", service = super::service::OrgsService, graphql)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
@@ -88,7 +88,7 @@ Per `#[expose(service = …)]`:
 
 The schema you get:
 
-```graphql
+```graphql title="the SDL it produces"
 type User {
     id: ID!
     orgId: ID!
@@ -213,7 +213,7 @@ give you — a filtered or sorted subset, extra edge fields, a projection.
 Cursor pagination is **not** on that list any more: the auto-emitted
 field already is a connection.
 
-```rust
+```rust title="crates/features/src/orgs/entity.rs"
 #[expose(name = "Org", service = …, graphql)]
 #[sea_orm::model]
 pub struct Model {
@@ -241,7 +241,7 @@ auto-resolved relations, the single-`ComplexObject` rule applies — see
 
 When the unexposed relation opens the slot, write the replacement on the resolver:
 
-```rust title="src/orgs/graphql/resolver.rs"
+```rust title="crates/features/src/orgs/graphql/resolver.rs"
 use async_graphql::{Context, Result};
 use nest_rs::graphql::{operations, resolver};
 
@@ -272,7 +272,7 @@ A child can point at the same parent twice — a ticket with a `reporter_id`
 **and** an `assignee_id`. Nothing in the *type* of that relation tells the
 parent's side which column to follow, so it says so:
 
-```rust title="src/people/entity.rs"
+```rust title="crates/features/src/people/entity.rs"
 #[sea_orm(has_many, relation_enum = "Reported", via_rel = "Reporter")]
 #[expose(via = "reporter_id")]
 pub reported: HasMany<crate::tickets::Entity>,

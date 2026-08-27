@@ -1,51 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 600">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 206 96" role="img" aria-label="NestRS">
 <defs>
-  <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+  <linearGradient id="rs-grad" x1="0%" y1="0%" x2="100%" y2="100%">
     <stop offset="0%" stop-color="#ff4d5f"/>
     <stop offset="100%" stop-color="#ff7a59"/>
   </linearGradient>
 </defs>
-
-<!-- icon: the existing logo, scaled and centered at the top -->
-<g transform="translate(46,24) scale(0.82)">
-  <g transform="translate(256,256)">
-    <!-- outer rust-inspired ring -->
-    <path d="
-    M0,-180
-    L28,-160 L65,-168 L92,-140 L130,-136
-    L146,-100 L180,-82 L176,-42 L198,0
-    L176,42 L180,82 L146,100 L130,136
-    L92,140 L65,168 L28,160 L0,180
-    L-28,160 L-65,168 L-92,140 L-130,136
-    L-146,100 L-180,82 L-176,42 L-198,0
-    L-176,-42 L-180,-82 L-146,-100 L-130,-136
-    L-92,-140 L-65,-168 L-28,-160 Z"
-    fill="#111111" stroke="#ff7a59" stroke-width="1.5" stroke-opacity="0.4" stroke-linejoin="round"/>
-
-    <circle r="120" fill="#0f0f0f"/>
-
-    <!-- modern brand-mark center -->
-    <path d="M0,-110
-             C60,-80 88,-25 72,55
-             L0,110
-             L-72,55
-             C-88,-25 -60,-80 0,-110Z"
-          fill="url(#grad)"/>
-
-    <!-- subtle inner cut -->
-    <path d="M0,-55
-             C25,-40 40,-10 34,30
-             L0,58
-             L-34,30
-             C-40,-10 -25,-40 0,-55Z"
-          fill="#111111"/>
-  </g>
-</g>
-
-<!-- wordmark below the icon -->
-<text x="256" y="548" text-anchor="middle"
-      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
-      font-size="112" font-weight="700" letter-spacing="-2">
-  <tspan fill="#111111" stroke="#ff7a59" stroke-width="1.5" stroke-opacity="0.4" stroke-linejoin="round" paint-order="stroke">Nest</tspan><tspan fill="url(#grad)">RS</tspan>
-</text>
+<rect width="206" height="96" rx="18" fill="#121114"/>
+<text x="116" y="60" text-anchor="end" font-family="'Schibsted Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="38" font-weight="700" letter-spacing="-0.38" fill="#e8e4dc">Nest</text>
+<text x="116" y="60" font-family="'Schibsted Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="39" font-weight="800" font-style="italic" letter-spacing="-1.17" fill="url(#rs-grad)">RS</text>
+<g transform="translate(142.0,74.2)"><rect x="-22.0" y="-2.5" width="44.0" height="5.0" rx="2.5" fill="url(#rs-grad)" transform="skewX(-18)"/></g>
+<g transform="translate(176.0,74.2)"><rect x="-6.0" y="-2.5" width="12.0" height="5.0" rx="2.5" fill="#ff7a59" opacity="0.45" transform="skewX(-18)"/></g>
 </svg>

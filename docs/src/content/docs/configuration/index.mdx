@@ -2,6 +2,7 @@
 title: Configuration
 description: Typed, namespaced configuration loaded from environment variables — written by hand, validated on the way in.
 sidebar:
+  label: Overview
   order: 1
 ---
 
@@ -32,7 +33,7 @@ cargo add nest-rs --features config
 The common case is three short blocks: a `#[config]` struct, a derived
 `Validate`, and a `from_env` that maps one line per variable.
 
-```rust title="src/posts/config.rs"
+```rust title="crates/features/src/posts/config.rs"
 use nest_rs::config::{config, Config, ConfigService};
 
 #[config(namespace = "posts")]
@@ -101,7 +102,7 @@ overridden in deployment. Both, always.
 **base** the environment overlays — never the final answer. So this, the
 shape `nestrs new` scaffolds:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
 ```
 
@@ -167,7 +168,7 @@ bases for one config fail the boot naming it.
 
 Most modules take the config itself:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 GraphqlModule::for_root(None),                                  // all from the environment
 HttpModule::for_root(HttpConfig { port: 3000, ..Default::default() }),
 ```
@@ -176,7 +177,7 @@ A module that also carries a declaration with **no env twin** — the app's own
 MCP name and version — takes an `Options` struct instead, so the two still
 travel in one value:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 McpModule::for_root(McpOptions {
     config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
     server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
@@ -216,7 +217,7 @@ leave it empty to mean "nothing, whatever the files below say".
 The wiring is two module imports. The feature owns its config; the root
 module imports `ConfigModule::for_root()` once.
 
-```rust title="src/posts/module.rs"
+```rust title="crates/features/src/posts/module.rs"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use super::config::PostsConfig;
@@ -229,7 +230,7 @@ use super::service::PostsService;
 pub struct PostsModule;
 ```
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 
@@ -261,7 +262,7 @@ pub struct AppModule;
 A consumer injects `Arc<PostsConfig>` like any provider — the type is
 the token.
 
-```rust title="src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 #[injectable]
 pub struct PostsService {
     #[inject]

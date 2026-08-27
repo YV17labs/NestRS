@@ -48,7 +48,7 @@ dead".
 The worker imports the substrate, both queue bindings and the feature's queue
 adapter. That's it — `AudioQueueModule` pulls in the `AudioModule` port itself.
 
-```rust title="apps/worker/src/module.rs"
+```rust title="apps/worker/src/module.rs (from the demo)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
@@ -88,7 +88,7 @@ A producer-only binary imports `RedisModule::for_root(...)` and
 `Arc<dyn JobProducer>` to push with — and no worker spawn, no drained
 inventory, no apalis monitor.
 
-```rust title="apps/api/src/module.rs (abridged)"
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::http::HttpModule;

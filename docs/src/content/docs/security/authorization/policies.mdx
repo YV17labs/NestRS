@@ -22,7 +22,7 @@ the response check accepts cannot diverge.
 
 ## A minimal policy
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs (from the demo)"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
@@ -50,7 +50,7 @@ response-side check on every loaded row.
 A subject is any type that implements `nest_rs::authz::Subject`. The
 crate ships a blanket impl for every `sea_orm::EntityTrait`:
 
-```rust
+```rust title="nest_rs::authz::Subject"
 pub trait Subject: 'static {}
 impl<E: sea_orm::EntityTrait> Subject for E {}
 ```
@@ -68,7 +68,7 @@ every other action on that same subject.
 
 Five variants, four typed markers:
 
-```rust
+```rust title="nest_rs::authz::Action"
 pub enum Action { Read, Create, Update, Delete, Manage }
 ```
 
@@ -80,7 +80,7 @@ other action on the same subject. Each variant has a type marker
 
 A grant on `Read` does not imply `Update`. A grant on `Manage` does.
 
-```rust
+```rust title="crates/features/src/authz/ability.rs"
 ab.can(Action::Manage, org::Entity); // covers Read, Create, Update, Delete
 ```
 
@@ -90,7 +90,7 @@ ab.can(Action::Manage, org::Entity); // covers Read, Create, Update, Delete
 (denial). Each returns a `RuleSpec` that commits on drop — bind it
 to a variable only if you want to defer the commit:
 
-```rust
+```rust title="crates/features/src/authz/ability.rs"
 ab.can(Action::Read, user::Entity)
     .when(|p| p.eq(user::Column::OrgId, actor.org_id))
     .fields([user::Column::Id, user::Column::Name]);
@@ -113,7 +113,7 @@ time. A rule scoped to `user::Entity` cannot accidentally reference
 
 ## Predicates — the shared AST
 
-```rust
+```rust title="nest_rs::authz::Predicate"
 pub enum Predicate<E: EntityTrait> {
     Always,
     Eq(E::Column, Value),
@@ -129,7 +129,7 @@ pub enum Predicate<E: EntityTrait> {
 
 `PredicateBuilder` exposes the constructors:
 
-```rust
+```rust title="crates/features/src/authz/ability.rs"
 ab.can(Action::Read, user::Entity).when(|p| {
     p.all([
         p.eq(user::Column::OrgId, actor.org_id),
@@ -166,7 +166,7 @@ belongs to a conversation, and the conversation carries the `org_id`.
 through a variant of `E`'s SeaORM `Relation` enum; the closure builds
 the sub-condition with `R`'s own typed columns:
 
-```rust
+```rust title="crates/features/src/authz/ability.rs"
 // `message` has no `org_id`; its tenant is the parent conversation's.
 ab.can(Action::Read, message::Entity).when(|p| {
     p.related::<conversation::Entity, _>(
@@ -204,7 +204,7 @@ permitted fields across every matching grant — so an admin grant
 with no `.fields` clears the field restriction even if a narrower
 grant existed.
 
-```rust
+```rust title="crates/features/src/authz/ability.rs"
 ab.can(Action::Read, user::Entity)
     .when(|p| p.eq(user::Column::OrgId, actor.org_id))
     .fields([user::Column::Id, user::Column::Name]);
@@ -218,7 +218,7 @@ member should not see.
 
 The exemplar in `crates/features/src/authz/ability.rs`:
 
-```rust
+```rust title="crates/features/src/authz/ability.rs"
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
@@ -258,7 +258,7 @@ A `cannot` rule that matches a row overrides every matching grant on
 the same action+subject. Use it sparingly — the common case is a
 narrow grant, not a broad grant clawed back.
 
-```rust
+```rust title="crates/features/src/authz/ability.rs"
 ab.can(Action::Read, user::Entity);
 ab.cannot(Action::Read, user::Entity)
     .when(|p| p.eq(user::Column::Status, "banned"));

@@ -43,7 +43,7 @@ GraphQL field auto-resolved through a dataloader. The macro emits:
 - a `#[ComplexObject]` field resolver on the wire DTO that calls the
   matching loader and returns the related object.
 
-```rust title="crates/features/src/posts/entities/post.rs (abridged)"
+```rust title="crates/features/src/posts/entities/post.rs (from the demo, abridged)"
 #[expose(name = "Post", service = super::super::service::PostsService, graphql)]
 #[sea_orm::model]
 #[derive(Clone, Debug, DeriveEntityModel)]
@@ -89,7 +89,7 @@ auto-resolved relation on the same entity — pick one source per
 relation — `by_name`, `by_tag`, a denormalized lookup. The signature is
 fixed by the trait:
 
-```rust title="src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 use std::collections::HashMap;
 use nest_rs::authz::Action;
 use nest_rs::graphql::dataloader;
@@ -128,7 +128,7 @@ Three properties make this loader correct:
 A resolver injects the loader and calls `.load_one(key)` per parent — the
 runtime batches every call into a single query:
 
-```rust
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 #[field_resolver]
 async fn by_name(
     &self,

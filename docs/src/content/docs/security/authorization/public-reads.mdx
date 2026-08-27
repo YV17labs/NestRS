@@ -13,7 +13,7 @@ that caller live in the same `AbilityFactory` as everything else, in a
 second branch: `define_visitor`. It receives no actor because there is
 none, and it grants nothing until you write a rule into it.
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs (from the demo)"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 impl AbilityFactory for AuthzAbility {
@@ -36,7 +36,7 @@ on the route, and the field set the response mask keeps.
 
 The route declares two things, and it needs both.
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 #[get("/")]
 #[public]
 async fn list(&self, _authz: Authorize<Read, post::Entity>) -> Result<Json<Vec<Post>>> {
@@ -49,7 +49,7 @@ async fn list(&self, _authz: Authorize<Read, post::Entity>) -> Result<Json<Vec<P
 crosses the wire, so the service returns `Result<Vec<Post>, ServiceError>` and
 the handler stays a delegation.
 
-```rust title="crates/features/src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs (from the demo)"
 pub async fn feed(&self) -> Result<Vec<Post>, ServiceError> {
     Ok(self.list().await?.iter().map(Post::from).collect())
 }

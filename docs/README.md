@@ -36,6 +36,7 @@ search index, and the `llms.txt` family). `npm run preview` serves it.
 | `canon.json` | **generated** — the framework facts the linter checks pages against |
 | `demo-sources.json` | **generated** — every `demo/` file a fence may quote, with the port it pins |
 | `src/sidebar.mjs` | the Basics / All options tier split — threshold, vocabulary, exemption |
+| `src/components/Sidebar.astro` | the menu: two levels, and only the section you are in lists its pages |
 | `src/redirects.mjs` | one entry per route that ever shipped and moved |
 
 **The two `*.json` are written by `cargo nextest run -p nest-rs-conformance`, never
@@ -51,39 +52,57 @@ wrong first.
 
 1. **Never repeat — link.** Every concept has exactly one canonical page. Other
    pages get one sentence and a link.
-2. **Every code example must compile.** A fence titled with a real repo path is
-   an excerpt of that file — byte-for-byte, or it says "(abridged)". An
-   illustrative snippet carries a generic `src/…` title, never a real-looking
-   path. §F lists what the linter greps for, each rule filed against a shipped
-   release by a reader following a page verbatim.
+2. **Every code example must compile, and every one says which file it is.**
+   Every path is workspace-shaped, because that is what `nestrs new` produces
+   by default: `crates/features/src/<module>/<role>.rs` for feature code,
+   `apps/<app>/src/…` for composition. No page mixes in the `--standalone`
+   `src/…` shape. A block quoting the demo says so in words —
+   `(from the demo)`, `(from the demo, abridged)` — and that marker, not the
+   path, is what makes it an excerpt the linter checks line by line. §F lists
+   what the linter greps for, each rule filed against a shipped release by a
+   reader following a page verbatim.
 3. **A "Why this design" subsection on every non-trivial concept.** NestRS's
    value is in the *decisions* — make them legible.
 
 ## Sections
 
-Nine doors: a newcomer reads the group labels as a path, and the tutorial sits
+**The menu is two deep and never three**: a group is a section, its items are
+that section's pages. Sixteen doors, read as a path — and the tutorial sits
 second because the fastest way into the framework is to build something.
 
 ```
 Start here      index, why, why-not-axum, benchmarks, coming-from-nestjs,
                 getting-started, cli, publish
-Tutorial        build a users feature end to end
-Concepts        architecture, fundamentals/, configuration/
-Transports      http/, graphql/, websockets/, mcp/, openapi/
-Data            database/, storage/
-Security        overview, two guides, authentication/, authorization/, threat-model
-Background work queue/, schedule/, events/
-Operations      testing/, opentelemetry/, server-timing, health/, rate-limiting/
+Tutorial        build a posts feature end to end
+Fundamentals    architecture, fundamentals/
+Configuration   configuration/
+HTTP            http/, openapi
+GraphQL         graphql/
+WebSockets      websockets/
+MCP             mcp/
+Data            database/, storage
+Security        overview, two guides, threat-model
+Authentication  security/authentication/
+Authorization   security/authorization/
+Background work queue/, schedule, events
+Testing         testing/
+Operations      opentelemetry/, server-timing, health/, rate-limiting
 Reference       packages, decorators, glossary
 ```
 
-A section of **five or more non-index pages** presents two groups — **Basics**
-then **All options** — in the sidebar and in its index's "In this section" list.
-A page declares which one it is in with `tier:` in its frontmatter; nothing in
-`astro.config.mjs` has to be touched to add one. `tutorial/` is exempt at any
-size: its pages are steps 1..n, so a tier boundary mid-sequence would claim
-something false. `STYLE.md` §G is the norm, `src/sidebar.mjs` owns the threshold,
-and the linter gates it.
+A group whose pages are one directory is `autogenerate`d from each page's
+frontmatter `sidebar.order`, so adding a page touches no config. A group
+gathering several directories lists them in reading order, and `Security` names
+its four pages by slug — autogenerating it would nest `authentication/` under it,
+which is the third level again.
+
+A section of **five or more non-index pages** presents two lists — **Basics**
+then **All options** — in its index's "In this section" prose. A page declares
+which one it is in with `tier:` in its frontmatter. That split is *not* a menu
+level: it is a reading of one section, offered where the reader of that section
+already is. `tutorial/` is exempt at any size: its pages are steps 1..n, so a
+tier boundary mid-sequence would claim something false. `STYLE.md` §G is the
+norm, `src/sidebar.mjs` owns the threshold, and the linter gates it.
 
 ## Deploying
 

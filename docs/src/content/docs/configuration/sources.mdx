@@ -17,7 +17,7 @@ Store, an in-process map for tests.
 
 ## The trait
 
-```rust
+```rust title="nest_rs::config::ConfigSource"
 pub trait ConfigSource: Send + Sync + 'static {
     fn get(&self, var: &str) -> Option<String>;
 }
@@ -36,7 +36,7 @@ during a factory phase, then serves `get` from that map.
 
 A Vault source that hits the API once at startup and caches the result:
 
-```rust title="src/vault.rs"
+```rust title="apps/api/src/vault.rs"
 use std::collections::HashMap;
 use std::sync::Arc;
 use nest_rs::config::{ConfigService, ConfigSource};
@@ -75,7 +75,7 @@ to a pin.
 Wire it in by building the `ConfigService` directly and calling
 `Config::from_env` yourself — bypassing `ConfigModule::for_feature`:
 
-```rust title="src/main.rs"
+```rust title="apps/api/src/main.rs"
 use nest_rs::config::ConfigService;
 
 let vault = Arc::new(
@@ -169,7 +169,7 @@ implications:
 
 A dispatching source for two backends:
 
-```rust
+```rust title="apps/api/src/dispatch.rs"
 pub struct Dispatch {
     vault: VaultSource,
     env: EnvSource,

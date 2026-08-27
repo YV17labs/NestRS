@@ -75,7 +75,7 @@ shape surfaces immediately.
 producer to implement. Per-job options, batching, scheduled jobs,
 priority hints — those are your driver's own API on the same struct.
 
-```rust
+```rust title="crates/yourqueue/src/queue/producer.rs"
 use nest_rs::queue::async_trait;
 use nest_rs::queue::QueueError;
 
@@ -129,7 +129,7 @@ One contract is *not* a storage decision: a `#[process]` method runs
 your receive loop, the way `nest-rs-redis` does, so a handler behaves the
 same whichever driver is underneath it.
 
-```rust
+```rust title="crates/yourqueue/src/worker/transport.rs"
 use nest_rs::core::{Container, Transport};
 use nest_rs::queue::async_trait;
 use nest_rs::queue::consume::{self, Attempt};
@@ -215,7 +215,7 @@ crate root; `queue/producer.rs` + `queue/module.rs`; `worker/consumer.rs` +
 `nats` at the root, `nats__worker` in the binding folder — which is what keeps
 your variables findable from your types and your types from your variables.
 
-```rust
+```rust title="the three modules — substrate, producer, consumer"
 use std::sync::Arc;
 
 use nest_rs::config::{ConfigModule, ConfigSetup};
@@ -293,7 +293,7 @@ and pinned in code — the framework-wide dual-path rule.
 Application code stays put. The swap is three lines in the app's
 `module.rs`, and they read like `nest-rs-redis`'s:
 
-```rust
+```rust title="two binaries, one integration"
 // Producer-only API binary:
 #[module(imports = [YourModule::for_root(None), YourQueueModule, /* features */])]
 pub struct ApiModule;

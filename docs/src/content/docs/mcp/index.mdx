@@ -2,6 +2,7 @@
 title: MCP
 description: Expose services to language models via the Model Context Protocol — declared like a controller.
 sidebar:
+  label: Overview
   order: 1
 ---
 
@@ -47,7 +48,7 @@ A host that needs the raw SDK reaches it through `nest_rs::mcp::rmcp`.
 
 The fastest way to see the shape: one tool, one string in, one string out.
 
-```rust title="src/hello/tool.rs"
+```rust title="crates/features/src/hello/mcp/tool.rs"
 use nest_rs::mcp::{McpError, Parameters, input, mcp, tools};
 
 #[input]
@@ -86,7 +87,7 @@ registered, `mode="global_guard_pool"` once a pool is.
 
 A *deliberately* public tool has to say so, by binding `AllowAllMcpGuard`:
 
-```rust title="src/hello/module.rs"
+```rust title="crates/features/src/hello/module.rs"
 use nest_rs::core::module;
 use nest_rs::mcp::{AllowAllMcpGuard, McpOperationGuard};
 
@@ -163,7 +164,7 @@ provider.
 Each `#[tool]` method becomes its own callable. Share state through `&self` —
 `#[inject]` once, every tool reuses it.
 
-```rust
+```rust title="crates/features/src/weather/mcp/tool.rs"
 #[mcp(path = "/mcp/weather")]
 #[derive(Clone)]
 pub struct WeatherTool {
@@ -206,7 +207,7 @@ is already typed. For extra checks beyond shape — ranges, enums, mutual
 exclusion — add `validate(...)` attributes: `#[input]` already carries the
 `validator` derive, so no extra import and no extra manifest line.
 
-```rust title="src/weather/coords.rs"
+```rust title="crates/features/src/weather/coords.rs"
 use nest_rs::mcp::input;
 
 #[derive(Debug)]
@@ -223,7 +224,7 @@ pub struct Coords {
 Wrap the arguments in `Valid<T>` and the check runs before the body — the same
 [pipe](/fundamentals/pipes/) binding GraphQL, WebSockets and queue handlers use:
 
-```rust title="src/weather/tool.rs (abridged)"
+```rust title="crates/features/src/weather/mcp/tool.rs (abridged)"
 #[tool(description = "Return the current weather at the given GPS coordinates (Open-Meteo).")]
 #[public]
 async fn current_weather(
@@ -259,7 +260,7 @@ A tool body talks to a **language model**, and an error's `Display` is handed to
 it verbatim: a `DbErr` carries schema, column names and sometimes row values.
 So a failure the model has no business reading goes through `opaque`:
 
-```rust
+```rust title="crates/features/src/weather/mcp/tool.rs"
 let rows = self.svc.list().await.opaque()?;
 ```
 

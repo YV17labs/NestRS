@@ -1,0 +1,23 @@
+---
+/**
+ * The wordmark: `Nest` plain, `RS` italic in the brand gradient, underscored by
+ * two skewed bars — a long one under the letters and a short one trailing past
+ * them.
+ *
+ * Markup rather than an image, because an `<img>` renders neither the webfont
+ * nor the gradient clipped to the glyphs. The SVGs under `assets/` carry the
+ * same lockup for everything outside the page: the README, the social card, and
+ * — reduced to the `RS` and its bars alone — the favicon.
+ */
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="site-title sl-flex" aria-label={siteTitle}>
+  <span class="rs-lockup" translate="no">
+    <span class="rs-nest">Nest</span><span class="rs-rs"
+      >RS<i class="rs-bar rs-bar--long" aria-hidden="true"></i><i
+        class="rs-bar rs-bar--short"
+        aria-hidden="true"></i></span
+    >
+  </span>
+</a>

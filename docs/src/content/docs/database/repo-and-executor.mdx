@@ -31,7 +31,7 @@ transaction object to thread through the call stack.
 `Repo<E>` is generic over the entity. Every method runs against the ambient
 executor, every read carries the ambient ability filter:
 
-```rust
+```rust title="nest_rs::seaorm::Repo"
 Repo::<Posts>::conn()?;                    // raw handle for a custom query
 Repo::<Posts>::all().await?;               // every readable row
 Repo::<Posts>::find_by_id(id).await?;      // None if absent OR out of scope
@@ -54,7 +54,7 @@ through.
 installed in a `tokio::task_local!` for the duration of the handler. Three
 variants:
 
-```rust
+```rust title="nest_rs::seaorm::Executor"
 pub enum Executor {
     Pool(DatabaseConnection),
     Txn(Arc<DatabaseTransaction>),
@@ -71,7 +71,7 @@ for a transaction something already opened.
 an error naming the `DbContext` interceptor — a service called with no
 ambient executor is a wiring bug, not a silent miss.
 
-```rust
+```rust title="crates/features/src/posts/service.rs"
 let conn = Repo::<Posts>::conn()?;
 let row = Posts::find().filter(Column::Title.eq(name)).one(&conn).await?;
 ```
@@ -197,7 +197,7 @@ that needs scoping wraps its body in `with_ability(...)` explicitly.
 `transactional = false` runs the job on the pool, where every statement
 commits on its own:
 
-```rust
+```rust title="crates/features/src/audio/queue/processor.rs"
 #[process(queue = AudioQueue, retries = 3, transactional = false)]
 async fn transcode(&self, job: TranscodeCommand) -> anyhow::Result<()> { /* ... */ }
 ```
@@ -226,7 +226,7 @@ has closed, a one-shot CLI command bootstrapped outside `App::run` — has
 no task-local to read. That is the one documented `Repo` bypass: inject
 an `Arc<DatabaseConnection>` and call SeaORM directly.
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 #[hooks]
 impl UsersService {
     #[on_application_shutdown]

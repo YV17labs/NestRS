@@ -25,7 +25,7 @@ The tests reconstruct an `Ability` the way the guard does: an
 `AbilityBuilder`, the app policy's `define`, then `build`. Small
 role-shaped helpers keep each assertion to one line.
 
-```rust title="crates/features/src/authz/ability.rs (abridged)"
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 use nest_rs::authz::{Ability, AbilityBuilder, FieldSet};
 use sea_orm::{DatabaseBackend, EntityTrait, QueryFilter, QueryTrait};
 
@@ -47,7 +47,7 @@ fn member(org_id: Uuid) -> Ability { ability_for(vec![Role::User], org_id) }
 that must not — including columns with no `#[expose]`, which never reach
 the wire even under a full field grant.
 
-```rust title="crates/features/src/authz/ability.rs (abridged)"
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 #[test]
 fn member_mask_strips_admin_only_fields() {
     let org = Uuid::now_v7();
@@ -70,7 +70,7 @@ every read and by-id write. Render it with SeaORM's query builder and
 assert on the SQL. A granted action scopes by tenant; an **un**granted
 action pre-filters to nothing — the fail-closed `1 = 0`, not `TRUE`.
 
-```rust title="crates/features/src/authz/ability.rs (abridged)"
+```rust title="crates/features/src/authz/ability.rs (from the demo, abridged)"
 #[test]
 fn member_read_scopes_to_own_org() {
     let org = Uuid::now_v7();

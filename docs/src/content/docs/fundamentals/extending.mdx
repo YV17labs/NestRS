@@ -67,7 +67,7 @@ supersedes it wherever it sits in `imports`; two vendor bindings contest, and
 the boot fails naming both — where the binding declares itself; see the caveat
 below.
 
-```rust
+```rust title="apps/api/src/module.rs"
 ThrottlerModule::for_root(None),   // the port: policy, guard, counters in this process
 RedisThrottlerModule,              // the binding: counters shared across instances
 ```
@@ -76,7 +76,7 @@ RedisThrottlerModule,              // the binding: counters shared across instan
 host is instantiated with it. No arbitration exists and none is owed: two
 instantiations are two distinct types, so nothing can be contested.
 
-```rust
+```rust title="crates/features/src/authn/strategy.rs"
 pub type AuthnStrategy = JwtStrategy<Claims>;
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 ```

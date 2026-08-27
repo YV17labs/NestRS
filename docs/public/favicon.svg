@@ -1,41 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="NestRS">
 <defs>
-  <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+  <linearGradient id="rs-grad" x1="0%" y1="0%" x2="100%" y2="100%">
     <stop offset="0%" stop-color="#ff4d5f"/>
     <stop offset="100%" stop-color="#ff7a59"/>
   </linearGradient>
 </defs>
-
-<!-- outer rust-inspired ring -->
-<g transform="translate(256,256)">
-  <path d="
-  M0,-180
-  L28,-160 L65,-168 L92,-140 L130,-136
-  L146,-100 L180,-82 L176,-42 L198,0
-  L176,42 L180,82 L146,100 L130,136
-  L92,140 L65,168 L28,160 L0,180
-  L-28,160 L-65,168 L-92,140 L-130,136
-  L-146,100 L-180,82 L-176,42 L-198,0
-  L-176,-42 L-180,-82 L-146,-100 L-130,-136
-  L-92,-140 L-65,-168 L-28,-160 Z"
-  fill="#111111" stroke="#ff7a59" stroke-width="1.5" stroke-opacity="0.4" stroke-linejoin="round"/>
-
-  <circle r="120" fill="#0f0f0f"/>
-
-  <!-- modern brand-mark center -->
-  <path d="M0,-110
-           C60,-80 88,-25 72,55
-           L0,110
-           L-72,55
-           C-88,-25 -60,-80 0,-110Z"
-        fill="url(#grad)"/>
-
-  <!-- subtle inner cut -->
-  <path d="M0,-55
-           C25,-40 40,-10 34,30
-           L0,58
-           L-34,30
-           C-40,-10 -25,-40 0,-55Z"
-        fill="#111111"/>
-</g>
+<!-- The reduced mark: the `RS` and its two bars, and nothing else — the half a
+     16px tab can still read. The trailing bar carries a little more of the
+     brand's orange here than in the lockup, where the wordmark holds the eye. -->
+<rect width="64" height="64" rx="14" fill="#121114"/>
+<text x="4.9" y="36.0" font-family="'Schibsted Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="32" font-weight="800" font-style="italic" letter-spacing="-0.96" fill="url(#rs-grad)">RS</text>
+<g transform="translate(26.2,46.4)"><rect x="-18.0" y="-2.0" width="36.1" height="4.1" rx="2.0" fill="url(#rs-grad)" transform="skewX(-18)"/></g>
+<g transform="translate(54.1,46.4)"><rect x="-4.9" y="-2.0" width="9.9" height="4.1" rx="2.0" fill="#ff7a59" opacity="0.55" transform="skewX(-18)"/></g>
 </svg>

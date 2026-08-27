@@ -2,6 +2,7 @@
 title: Authentication
 description: A Strategy turns a request into a principal — bearer tokens, OAuth redirects, basic credentials. AuthnGuard runs it and Ctx<P> reads it back.
 sidebar:
+  label: Overview
   order: 1
 ---
 
@@ -34,7 +35,7 @@ over the strategy, and the framework ships
 [`JwtStrategy`](/security/authentication/jwt/) — a resource-server app
 ships two short files — the aliases, and the module that provides them:
 
-```rust title="crates/features/src/authn/strategy.rs"
+```rust title="crates/features/src/authn/strategy.rs (from the demo)"
 use nest_rs::authn::JwtStrategy;
 
 use super::Claims;
@@ -44,7 +45,7 @@ pub type AuthnStrategy = JwtStrategy<Claims>;
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 ```
 
-```rust title="crates/features/src/authn/module.rs"
+```rust title="crates/features/src/authn/module.rs (from the demo)"
 use nest_rs::core::module;
 
 use super::strategy::{AuthnGuard, AuthnStrategy};
@@ -59,7 +60,7 @@ pub struct AuthnModule;
 Bind the guard on the controller, and every route under it requires a
 valid principal:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController { /* ... */ }
@@ -71,7 +72,7 @@ pub struct UsersController { /* ... */ }
 runs. The handler reads it with `Ctx<P>` — same primitive as any
 other guard-attached context.
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::http::Ctx;
 
 async fn me(&self, auth: Ctx<Claims>) -> Json<User> {
@@ -93,7 +94,7 @@ why it could not (`Err`). A strategy never issues a transport response
 itself — a redirect-style flow (OAuth `/authorize`) is a plain handler,
 so authentication stays a pure request → principal mapping.
 
-```rust
+```rust title="crates/features/src/authn/strategies/api_key.rs"
 use nest_rs::authn::{AuthError, PrincipalIdentity, Strategy};
 use nest_rs::core::{async_trait, injectable};
 use nest_rs::http::poem::Request;
@@ -139,7 +140,7 @@ input: what a caller may *do* is the ambient `Ability`, decided in a guard. See
 
 ## One return type — principal or error
 
-```rust
+```rust title="nest_rs::authn::Strategy"
 async fn authenticate(&self, req: &mut Request) -> Result<Self::Principal, AuthError>;
 ```
 
@@ -174,7 +175,7 @@ anonymous — otherwise an outage would silently downgrade every
 authenticated caller to a visitor, and a `#[public]` route's visitor
 rules would decide what they see.
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[get("/health")]
 #[public]
 async fn health(&self) -> &'static str { "ok" }

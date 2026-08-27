@@ -19,7 +19,7 @@ than that is bolted on top.
 
 ## The basic shape
 
-```rust
+```rust title="crates/features/src/audio/queue/processor.rs"
 #[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
     self.svc.transcode(&job.file).await
@@ -75,7 +75,7 @@ between attempts, or use a circuit breaker in the service.
 If you need a different retry curve, today the path is to wrap the
 business call in the service:
 
-```rust
+```rust title="crates/features/src/audio/service.rs"
 impl AudioService {
     pub async fn transcode(&self, file: &str) -> Result<()> {
         let mut attempt = 0;
@@ -129,7 +129,7 @@ the work and republishes the payload to a dedicated queue (e.g.
 on `audio.dead` then runs your DLQ logic. That's the same pattern any
 non-Redis backend would expose.
 
-```rust
+```rust title="crates/features/src/audio/queue/processor.rs"
 #[process(queue = AudioQueue, retries = 3)]
 async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
     match self.svc.transcode(&job.file).await {

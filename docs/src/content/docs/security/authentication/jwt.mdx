@@ -24,7 +24,7 @@ configures the algorithm without taking a direct dependency.
 
 A resource-server app declares a type alias and a tiny module:
 
-```rust title="crates/features/src/authn/strategy.rs"
+```rust title="crates/features/src/authn/strategy.rs (from the demo)"
 use nest_rs::authn::JwtStrategy;
 
 use super::Claims;
@@ -34,7 +34,7 @@ pub type AuthnStrategy = JwtStrategy<Claims>;
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 ```
 
-```rust title="crates/features/src/authn/module.rs"
+```rust title="crates/features/src/authn/module.rs (from the demo)"
 use nest_rs::core::module;
 
 use super::strategy::{AuthnGuard, AuthnStrategy};
@@ -86,7 +86,7 @@ The framework's `JwtStrategy<C>` is generic. `C` is any
 `DeserializeOwned + PrincipalIdentity + Clone + Send + Sync + 'static` type —
 usually a struct with the standard `sub`, `exp`, plus whatever your app needs:
 
-```rust title="crates/features/src/authn/claims.rs"
+```rust title="crates/features/src/authn/claims.rs (from the demo)"
 use nest_rs::authn::PrincipalIdentity;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -115,7 +115,7 @@ the struct and the impl.
 
 The handler reads them back through `Ctx<Claims>`:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>)
     -> Result<Json<User>>
 {
@@ -129,7 +129,7 @@ async fn create(&self, auth: Ctx<Claims>, body: Valid<Json<CreateUser>>)
 
 A login or OAuth callback injects `Arc<JwtService>` and calls `sign`:
 
-```rust
+```rust title="crates/features/src/authn/service.rs"
 let claims = Claims {
     sub: Some(user.id),
     org_id: user.org_id,
@@ -152,7 +152,7 @@ verify a token manually — say, the OAuth transaction cookie, or a
 queue job carrying a signed envelope — injects `Arc<JwtService>` and
 calls `verify`:
 
-```rust
+```rust title="crates/features/src/authn/service.rs"
 let claims: Claims = self.jwt.verify(token)?;
 ```
 

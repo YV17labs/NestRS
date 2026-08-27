@@ -13,7 +13,7 @@ payload** (a JSON blob in one variable) and a **rule spanning the whole
 struct**. This is the real `IssuerConfig` from `features/oauth` (signs
 the OAuth clients accepted by `apps/auth`) — it needs both:
 
-```rust title="crates/features/src/oauth/config.rs (abridged)"
+```rust title="crates/features/src/oauth/config.rs (from the demo, abridged)"
 use nest_rs::oauth::server::RegisteredClient;
 use nest_rs::config::{config, Config, ConfigError, ConfigService};
 use uuid::Uuid;
@@ -77,7 +77,7 @@ impl Config for IssuerConfig {
 Wiring and consumption do not change — the same `for_feature` import,
 the same `Arc<IssuerConfig>` injection:
 
-```rust title="crates/features/src/oauth/module.rs"
+```rust title="crates/features/src/oauth/module.rs (from the demo)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use super::config::IssuerConfig;
@@ -90,7 +90,7 @@ use super::service::OAuthFlow;
 pub struct OAuthModule;
 ```
 
-```rust title="apps/auth/src/module.rs"
+```rust title="apps/auth/src/module.rs (from the demo)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 
@@ -103,7 +103,7 @@ use nest_rs::core::module;
 pub struct AuthModule;
 ```
 
-```rust title="crates/features/src/oauth/service.rs"
+```rust title="crates/features/src/oauth/service.rs (from the demo)"
 #[injectable]
 pub struct OAuthFlow {
     #[inject]
@@ -153,7 +153,7 @@ Error: configuration validation failed for 'issuer'
 when a field's *safe* value differs by profile — the framework does this for
 three of its own:
 
-```rust
+```rust title="apps/auth/src/config.rs"
 use nest_rs::config::Environment;
 
 /// Two lines, written per crate: the framework's own copies are private, so

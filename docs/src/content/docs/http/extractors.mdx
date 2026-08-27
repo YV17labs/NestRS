@@ -29,7 +29,7 @@ Works as a return type too — serializes `T`, sets
 `Content-Type: application/json`, and feeds the OpenAPI document with
 the same schema:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::poem::web::Json;
 use nest_rs::http::input;
 
@@ -54,7 +54,7 @@ inner extractor produced. The `E` is usually `Json<T>`, but `Path<T>`
 and `Query<T>` work the same way — every poem extractor that exposes
 `IntoInner` is composable:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::http::{Valid, input};
 use nest_rs::http::poem::web::Json;
 
@@ -73,7 +73,7 @@ OpenAPI document, and not to come back out as `Json<T>`. A DTO derived by hand
 carries all four itself; adding one of them *next to* `#[input]` is a
 conflicting impl (`E0119`).
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[post("/users")]
 async fn create(&self, Valid(body): Valid<Json<CreateUser>>) -> Json<User> {
     Json(self.svc.create(body))
@@ -88,7 +88,7 @@ apply any [transport-agnostic pipe](/fundamentals/pipes/) to whatever
 the inner extractor produced. `Valid<Json<T>>` is exactly
 `Piped<ValidationPipe<T>, Json<T>>`:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::Piped;
 use nest_rs::pipes::ParseUuid;
 use nest_rs::http::poem::web::Path;
@@ -112,7 +112,7 @@ field marking the header optional. Lookup is case-insensitive, as HTTP
 header names are, and values are parsed into the field's type — a
 `u32` field is an integer, not a string you parse in the handler.
 
-```rust
+```rust title="crates/features/src/notify/http/controller.rs"
 use nest_rs::http::{Header, SseStream};
 use serde::Deserialize;
 use schemars::JsonSchema;
@@ -149,7 +149,7 @@ the whole body into [`Bytes`](https://docs.rs/bytes), capped at
 `413 Payload Too Large` — never silently truncates, never buffers
 unbounded memory.
 
-```rust
+```rust title="crates/features/src/notify/http/controller.rs"
 use nest_rs::http::{ClientIp, RawBody};
 use nest_rs::http::poem::Result;
 
@@ -163,7 +163,7 @@ async fn stripe(&self, body: RawBody, ip: ClientIp) -> Result<&'static str> {
 
 For a tighter cap on a specific route, take the body manually:
 
-```rust
+```rust title="crates/features/src/notify/http/controller.rs"
 use nest_rs::http::RawBody;
 use nest_rs::http::poem::{Result, RequestBody};
 
@@ -180,7 +180,7 @@ Anything that can deserialize through `Json<T>` should use that instead —
 
 ## `ClientIp` — best-effort, observation-grade
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::http::ClientIp;
 
 #[get("/whoami")]
@@ -233,7 +233,7 @@ useful for anything that should not outlive the response (a SQL
 transaction handle, a per-request audit batch, a user-specific cache).
 `Scoped<T>` is how a handler reads it back:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::core::injectable;
 use nest_rs::http::Scoped;
 
@@ -268,7 +268,7 @@ A guard runs before the handler, can short-circuit with a response, and
 can attach a typed value to the request. `Ctx<T>` is how the handler reads
 that value back:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::Ctx;
 use crate::Claims;
 
@@ -303,7 +303,7 @@ decorator attaches; the reader picks it up by type.
 
 Attach metadata on the route:
 
-```rust
+```rust title="crates/features/src/authn/http/controller.rs"
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
 #[post("/login")]
@@ -320,7 +320,7 @@ Everything below is for the **guard author**, not the handler — a
 handler only attaches metadata; the guard reads it back at decision
 time:
 
-```rust
+```rust title="crates/features/src/authn/guard.rs"
 use nest_rs::http::Reflector;
 use nest_rs::http::poem::Request;
 
@@ -359,7 +359,7 @@ framework itself does *not* act on the marker — `AuthnGuard`, for
 example, still runs the strategy on a `#[public]` route, but lets an
 anonymous request through instead of returning `401`.
 
-```rust
+```rust title="crates/features/src/authn/http/controller.rs"
 #[post("/login")]
 #[public]
 #[use_guards(ThrottlerGuard)]

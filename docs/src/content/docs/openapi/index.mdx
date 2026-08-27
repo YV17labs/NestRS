@@ -27,7 +27,7 @@ cargo add nest-rs --features openapi
 Add `OpenApiModule::for_root` to the app root, alongside the controllers it
 should document:
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
 use nest_rs::openapi::OpenApiModule;
 
@@ -91,7 +91,7 @@ Swagger UI — try a request straight from the browser.
 The document is complete without annotations, but `#[api(...)]` adds a summary,
 a longer description, and tags to any handler:
 
-```rust title="crates/features/src/users/http/controller.rs"
+```rust title="crates/features/src/users/http/controller.rs (from the demo)"
 #[post("/")]
 #[api(
     summary = "Create a user in the caller's org",
@@ -122,7 +122,7 @@ paginated list is the case in the framework itself: it returns a `Response` so
 it can carry `x-next-cursor`, and declares
 `#[api(response = Vec<Post>)]` so the document still types the collection.
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[get("/")]
 #[api(summary = "List Users", response = Vec<User>)]
 async fn list(&self, _authz: Authorize<Read, UserEntity>) -> Result<Response> { /* ... */ }
@@ -133,7 +133,7 @@ async fn list(&self, _authz: Authorize<Read, UserEntity>) -> Result<Response> { 
 `multipart = Type` and `response_content_type = "…"` are the two escape hatches
 for a body `Json<T>` cannot describe — an upload form, a streamed download.
 
-```rust
+```rust title="crates/features/src/audio/http/controller.rs"
 #[post("/uploads/direct")]
 #[api(
     summary = "Upload an audio file directly as multipart/form-data",
@@ -169,7 +169,7 @@ A handler that reads headers binds them as a DTO — `Header<T>`, the header-map
 twin of `Query<T>` — and each property becomes an `in: header` parameter, an
 `Option<_>` field being an optional one:
 
-```rust
+```rust title="crates/features/src/notify/http/controller.rs"
 #[derive(Deserialize, JsonSchema)]
 pub struct StreamResumeDto {
     #[serde(rename = "Last-Event-ID")]
@@ -201,7 +201,7 @@ default tag equal to its **controller struct name**, so out of the box your
 routes group sensibly with no annotation. Override per-operation with
 `tags(...)`:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[get("/")]
 #[api(tags("User", "Public"))]
 async fn list_public(&self) -> Result<Json<Vec<User>>> { /* ... */ }
@@ -247,7 +247,7 @@ $ NESTRS_OPENAPI__TITLE="Acme API" \
 Or pass an `OpenApiConfig` at the import site instead of reading the
 environment:
 
-```rust
+```rust title="apps/api/src/module.rs"
 use nest_rs::openapi::{OpenApiConfig, OpenApiModule};
 
 OpenApiModule::for_root(OpenApiConfig {

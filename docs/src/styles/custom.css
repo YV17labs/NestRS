@@ -1,1924 +1,2140 @@
-/* NestRS brand — gradient #ff4d5f → #ff7a59. Dark mode uses anthracite, not pure black. */
+/* NestRS — the 6.0 visual system.
+ *
+ * Two faces (Schibsted Grotesk for prose, Martian Mono for code, labels and
+ * figures), one accent (#ff6e5a) over the brand gradient, and a page built out
+ * of hairline-separated bands rather than floating cards. Every colour below is
+ * a token: the dark palette is the design, the light one mirrors it, and no
+ * rule reaches for a literal.
+ */
+
+/* ---------------------------------------------------------------------------
+   Tokens
+   --------------------------------------------------------------------------- */
 
 :root {
   --nestrs-coral: #ff4d5f;
   --nestrs-orange: #ff7a59;
+  --nestrs-accent: #ff6e5a;
   --nestrs-teal: #45c4b0;
   --nestrs-gradient: linear-gradient(135deg, #ff4d5f 0%, #ff7a59 100%);
   --nestrs-gradient-soft: linear-gradient(135deg, rgba(255, 77, 95, 0.16) 0%, rgba(255, 122, 89, 0.16) 100%);
   --nestrs-shared-soft: linear-gradient(135deg, rgba(69, 196, 176, 0.14) 0%, rgba(69, 196, 176, 0.08) 100%);
 
-  --sl-font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-  --sl-font-mono: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, Monaco,
-    Consolas, 'Liberation Mono', monospace;
+  /* The band grid: 1200px of content, 32px of gutter, 88px of air. */
+  --rs-max: 1200px;
+  --rs-gutter: 2rem;
+  --rs-band-y: 5.5rem;
+
+  --sl-font: 'Schibsted Grotesk', ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --sl-font-mono: 'Martian Mono', ui-monospace, 'JetBrains Mono', SFMono-Regular,
+    Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+
+  --sl-nav-height: 3.8125rem; /* 61px — the design's sticky bar */
+  --sl-sidebar-width: 16.5rem; /* 264px */
+  --sl-content-width: 47rem;
 }
 
-/* Dark theme — anthracite, not black. The brand logo reads on this background. */
+/* Dark — the design's own palette, verbatim. */
 :root[data-theme='dark'] {
+  --rs-bg: #121114;
+  --rs-bg-alt: #141317;
+  --rs-card: #1a191d;
+  --rs-terminal: #0e0d10;
+  --rs-inline: #1f1d22;
+  --rs-track: #1c1a1f;
+
+  --rs-hairline: #26242a;
+  --rs-hairline-strong: #2e2c30;
+  --rs-hairline-hover: #3a373c;
+  --rs-muted-bar: #4a474c;
+
+  --rs-text: #e8e4dc;
+  --rs-prose: #c9c4bb;
+  --rs-text-2: #a39e94;
+  --rs-text-3: #7d786f;
+  --rs-text-4: #5f5b54;
+
   --sl-color-accent-low: #2a1418;
-  --sl-color-accent: #ff4d5f;
+  --sl-color-accent: var(--nestrs-accent);
   --sl-color-accent-high: #ff8c6e;
 
-  --sl-color-bg: #161619;          /* main canvas — anthracite */
-  --sl-color-bg-nav: #161619;      /* top nav blends into canvas */
-  --sl-color-bg-sidebar: #161619;  /* sidebar matches canvas */
-  --sl-color-bg-inline-code: #26262b;
+  --sl-color-bg: var(--rs-bg);
+  --sl-color-bg-nav: color-mix(in srgb, var(--rs-bg) 85%, transparent);
+  --sl-color-bg-sidebar: var(--rs-bg);
+  --sl-color-bg-inline-code: var(--rs-inline);
 
-  --sl-color-hairline: #2a2a2e;
-  --sl-color-hairline-light: #34343a;
-  --sl-color-hairline-shade: #202024;
+  --sl-color-hairline: var(--rs-hairline);
+  --sl-color-hairline-light: var(--rs-hairline-strong);
+  --sl-color-hairline-shade: var(--rs-hairline);
 
-  --sl-color-text: #e7e7ea;
-  --sl-color-text-accent: #ff8c6e;
+  --sl-color-white: var(--rs-text);
+  --sl-color-text: var(--rs-prose);
+  --sl-color-text-accent: var(--nestrs-accent);
+  --sl-color-gray-1: var(--rs-text);
+  --sl-color-gray-2: var(--rs-text-2);
+  --sl-color-gray-3: var(--rs-text-3);
+  --sl-color-gray-4: var(--rs-text-4);
+  --sl-color-gray-5: var(--rs-hairline-strong);
+  --sl-color-gray-6: var(--rs-card);
+  --sl-color-gray-7: var(--rs-bg-alt);
 
-  --nestrs-card-bg: rgba(255, 255, 255, 0.022);
-  --nestrs-card-border: rgba(255, 255, 255, 0.08);
-  --nestrs-surface: rgba(255, 255, 255, 0.03);
+  --nestrs-card-bg: var(--rs-card);
+  --nestrs-card-border: var(--rs-hairline);
+  --nestrs-surface: var(--rs-bg-alt);
 
-  --nestrs-code-bg: #1b1b20;       /* code canvas — a touch above the page */
-  --nestrs-code-tabbar: #161619;   /* tab bar — flush with the page */
+  --nestrs-code-bg: var(--rs-card);
+  --nestrs-code-tabbar: var(--rs-bg-alt);
+
+  --rs-syn-kw: #8ab4d8;
+  --rs-syn-str: #9fc490;
+  --rs-syn-err: #e0705f;
 }
 
-/* Light theme. */
+/* Light — the same structure read on paper: one accent, hairlines, no glass. */
 :root[data-theme='light'] {
+  --rs-bg: #fbfaf9;
+  --rs-bg-alt: #f4f2f0;
+  --rs-card: #ffffff;
+  --rs-terminal: #f7f5f3;
+  --rs-inline: #f0edea;
+  --rs-track: #e8e4e0;
+
+  --rs-hairline: #e3dfda;
+  --rs-hairline-strong: #d5d0ca;
+  --rs-hairline-hover: #b9b3ac;
+  --rs-muted-bar: #c4bfb9;
+
+  --rs-text: #1a181c;
+  --rs-prose: #3c3a3f;
+  --rs-text-2: #5f5b54;
+  --rs-text-3: #7d786f;
+  --rs-text-4: #969087;
+
   --sl-color-accent-low: #ffe2dc;
-  --sl-color-accent: #d63a4a;
+  --sl-color-accent: #d64a34;
   --sl-color-accent-high: #a82d1a;
-  --sl-color-text-accent: #d63a4a;
+  --sl-color-text-accent: #d64a34;
 
-  --nestrs-card-bg: rgba(0, 0, 0, 0.015);
-  --nestrs-card-border: rgba(0, 0, 0, 0.08);
-  --nestrs-surface: rgba(0, 0, 0, 0.02);
+  --sl-color-bg: var(--rs-bg);
+  --sl-color-bg-nav: color-mix(in srgb, var(--rs-bg) 85%, transparent);
+  --sl-color-bg-sidebar: var(--rs-bg);
+  --sl-color-bg-inline-code: var(--rs-inline);
 
-  --nestrs-code-bg: #fbfafa;
-  --nestrs-code-tabbar: #f1f0ef;
+  --nestrs-card-bg: var(--rs-card);
+  --nestrs-card-border: var(--rs-hairline);
+  --nestrs-surface: var(--rs-bg-alt);
+
+  --nestrs-code-bg: var(--rs-card);
+  --nestrs-code-tabbar: var(--rs-bg-alt);
+
+  --rs-syn-kw: #2f6f9f;
+  --rs-syn-str: #4a7c40;
+  --rs-syn-err: #b3402c;
+
+  --sl-color-white: var(--rs-text);
+  --sl-color-text: var(--rs-prose);
+  --sl-color-gray-1: var(--rs-text);
+  --sl-color-gray-2: var(--rs-text-2);
+  --sl-color-gray-3: var(--rs-text-3);
+  --sl-color-gray-4: var(--rs-text-4);
+  --sl-color-gray-5: var(--rs-hairline-strong);
+  --sl-color-gray-6: var(--rs-bg-alt);
+  --sl-color-gray-7: var(--rs-inline);
+  --sl-color-hairline: var(--rs-hairline);
+  --sl-color-hairline-light: var(--rs-hairline-strong);
+  --sl-color-hairline-shade: var(--rs-hairline);
+}
+
+/* The accent a light page uses is darker than the brand's, so every rule reads
+   one token rather than choosing per theme. */
+:root[data-theme='light'] {
+  --nestrs-accent: #d64a34;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background: var(--rs-bg);
+  color: var(--rs-text);
 }
 
 /* ---------------------------------------------------------------------------
-   Hero — brand wordmark, layered glow, punchy copy
-   Splash pages have no sidebar → Starlight sets --sl-content-width: 67.5rem.
-   Fill that column (same as other pages); don't clamp narrower in custom CSS.
+   Nav — sticky 61px bar, blurred backdrop, one hairline under it
    --------------------------------------------------------------------------- */
 
-.hero {
-  position: relative;
-  isolation: isolate;
-  width: 100%;
-  max-width: none;
-  display: flex !important;
-  flex-direction: column !important;
-  align-items: stretch !important;
-  gap: 0 !important;
-  padding-block: clamp(1.5rem, calc(0.5rem + 4vmin), 3rem) clamp(2rem, 4vw, 3rem) !important;
-  padding-inline: 0;
+/* `header.header`, never `.header`: Starlight nests a `div.header` grid inside
+   the `<header>` and both carry the class, so an unqualified rule drew the
+   hairline twice — once across the viewport and once across the padded grid. */
+header.header {
+  border-bottom: 1px solid var(--rs-hairline);
+  background: var(--sl-color-bg-nav);
+  backdrop-filter: blur(10px);
+  padding-inline: 1.75rem;
 }
 
-/* The pad — the nest at rest, behind the lockup. Everything else in the field
-   is in flight; this one ring is the structure it all left from. */
-.hero-pad {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  z-index: -1;
-  width: min(96vmin, 56rem);
-  aspect-ratio: 1;
-  transform: translate(-50%, -26%);
-  pointer-events: none;
+/* The splash opens on the hero, not on a rule: the landing's nav sits on the
+   page rather than above a divided column, and the first hairline a reader
+   meets is the one that opens `01 — SECURITY`. Transparent rather than `none`,
+   so the bar keeps its height and nothing below it shifts. */
+:root[data-has-hero] header.header {
+  border-bottom-color: transparent;
 }
 
-.hero-pad svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  animation: nestrs-pad-orbit 150s linear infinite;
-}
-
-.hero-pad-ring {
-  fill: none;
-  stroke: var(--nestrs-orange);
-  stroke-width: 2;
-  stroke-linejoin: round;
-  opacity: 0.12;
-}
-
-.hero-pad-orbit {
-  fill: none;
-  stroke: var(--nestrs-coral);
-  stroke-width: 1;
-  opacity: 0.08;
-}
-
-@keyframes nestrs-pad-orbit {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Logo + wordmark — one visual unit; keep emblem → NestRS tight. */
-.hero-lockup {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: clamp(0.75rem, 1.6vw, 1.15rem);
-  width: 100%;
-  margin-bottom: clamp(1.1rem, 2.2vw, 1.6rem);
-}
-
-/* Residual heat under the emblem — a long breath, not a blink. */
-.hero-lockup::before {
-  content: '';
-  position: absolute;
-  top: -14%;
-  left: 50%;
-  z-index: -1;
-  width: min(36rem, 92%);
-  aspect-ratio: 1 / 0.7;
-  transform: translateX(-50%);
-  background: radial-gradient(
-    closest-side,
-    rgba(255, 122, 89, 0.17) 0%,
-    rgba(255, 77, 95, 0.07) 55%,
-    transparent 78%
-  );
-  filter: blur(12px);
-  pointer-events: none;
-  animation: nestrs-heat 11s ease-in-out infinite alternate;
-}
-
-@keyframes nestrs-heat {
-  from {
-    opacity: 0.7;
-    transform: translateX(-50%) scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(-50%) scale(1.07);
-  }
-}
-
-.hero-lockup > img,
-.hero-lockup > .hero-html {
-  object-fit: contain;
-  width: clamp(7.5rem, 14vw, 10.5rem) !important;
-  height: auto;
-  max-height: min(24vh, 10.5rem);
-  margin: 0;
-  filter: drop-shadow(0 24px 70px rgba(255, 77, 95, 0.12));
-  animation: nestrs-ignition 1.15s cubic-bezier(0.16, 0.84, 0.28, 1) both;
-}
-
-/* Ignition — one shot on load; the emblem settles, it never loops. */
-@keyframes nestrs-ignition {
-  0% {
-    opacity: 0;
-    transform: translateY(1.4rem) scale(0.9);
-    filter: drop-shadow(0 0 0 rgba(255, 77, 95, 0));
-  }
-  60% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 1;
-    transform: none;
-    filter: drop-shadow(0 24px 70px rgba(255, 77, 95, 0.12));
-  }
-}
-
-.hero-lockup h1 {
-  margin: 0;
-  padding: 0;
-}
-
-/* Starlight caps every .copy child at 50ch — too narrow for our tagline. */
-:root[data-has-hero] .hero .copy > * {
-  max-width: none;
-}
-
-/* Stack + copy — column everywhere; desktop only shifts alignment left. */
-.hero .stack {
-  min-width: 0;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: clamp(1.25rem, 4vw, 1.75rem);
-}
-
-.hero .copy {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: clamp(1rem, 1.8vw, 1.35rem);
-}
-
-/* Ambient glow — centered behind the stacked logo + copy */
-.hero::before {
-  content: '';
-  position: absolute;
-  inset: -25% -10% -35% -10%;
-  z-index: -1;
-  background:
-    radial-gradient(55% 70% at 50% 38%, rgba(255, 77, 95, 0.13) 0%, transparent 70%),
-    radial-gradient(50% 60% at 50% 32%, rgba(255, 122, 89, 0.07) 0%, transparent 72%);
-  filter: blur(20px);
-  pointer-events: none;
-  animation: hero-drift 26s ease-in-out infinite alternate;
-}
-
-@keyframes hero-drift {
-  from { transform: translate3d(-1.2%, -0.8%, 0) scale(1); }
-  to   { transform: translate3d(1.6%, 1.2%, 0) scale(1.05); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hero::before {
-    animation: none;
-  }
-}
-
-/* Headline — the promise carries the largest type; the brand word takes the
-   gradient, so the logo lockup keeps its identity without spending the slot. */
-.hero h1 {
-  letter-spacing: -0.03em;
-  font-weight: 700;
-  font-size: clamp(2.4rem, calc(0.9rem + 4.6vw), 4.15rem);
-  line-height: 1.04;
-  width: 100%;
-  max-width: 22ch;
-  margin-inline: auto;
-  text-align: center;
-  text-wrap: balance;
-}
-
-.hero h1 .accent {
-  background: var(--nestrs-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-}
-
-/* Tagline — lead line, support copy, transport/auth tags. */
-.hero .tagline {
-  display: flex;
-  flex-direction: column;
-  gap: clamp(1.15rem, 2vw, 1.5rem);
-  width: 100%;
-  max-width: none;
-  color: var(--sl-color-gray-2);
-}
-.hero .hero-sub {
-  font-size: clamp(1.02rem, calc(0.85rem + 0.6vw), 1.28rem);
-  line-height: 1.5;
-  width: 100%;
-  max-width: 60ch;
-  margin-inline: auto;
-  text-align: center;
-  color: var(--sl-color-gray-2);
-}
-.hero .hero-sub strong {
-  color: var(--sl-color-text-accent);
-  font-weight: 700;
-}
-
-/* Stat strip — the numbers are the argument, so they get the type, not a
-   paragraph. Last tile turns the security posture into a figure too. */
-.hero .hero-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.6rem;
-  width: 100%;
-}
-.hero .stat {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0.1rem;
-  padding: 0.9rem 0.65rem;
-  text-align: center;
-  border: 1px solid var(--nestrs-card-border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--sl-color-gray-6) 32%, transparent);
-}
-.hero .stat b {
-  font-size: clamp(1.9rem, calc(0.9rem + 2.6vw), 3.1rem);
-  font-weight: 750;
-  line-height: 1;
-  letter-spacing: -0.02em;
-  background: var(--nestrs-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-}
-.hero .stat-label {
-  color: var(--sl-color-white);
-  font-weight: 600;
-  font-size: 0.95rem;
-  line-height: 1.25;
-}
-.hero .stat small {
-  color: var(--sl-color-gray-3);
-  font-size: 0.76rem;
-  line-height: 1.35;
-}
-.hero .stat--wide {
-  grid-column: 1 / -1;
-  flex-direction: row;
+/* The lockup — `Nest`, then `RS` in the gradient over its two skewed bars. */
+.site-title {
   align-items: baseline;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 0.15rem 0.6rem;
-  padding-block: 0.7rem;
-  border-color: color-mix(in srgb, var(--nestrs-coral) 38%, transparent);
-  background: color-mix(in srgb, var(--nestrs-coral) 8%, var(--nestrs-surface));
+  gap: 0;
+  color: var(--rs-text);
+  text-decoration: none;
 }
-.hero .stat--wide b {
-  font-size: clamp(1.7rem, calc(0.9rem + 1.8vw), 2.5rem);
+
+/* The bars hang below the wordmark's own box, and Starlight clips the title
+   wrapper 4px past it (its focus-ring allowance) — which shaved the last pixel
+   off the long bar. Four more pixels of room, pulled straight back out. */
+.title-wrapper {
+  padding-bottom: 0.5rem;
+  margin-bottom: -0.5rem;
 }
-.hero .hero-stats + .hero-proof {
-  margin-top: -0.55rem;
-}
-.hero .hero-proof {
-  font-size: 0.82rem;
-  line-height: 1.45;
-  text-align: center;
-  color: var(--sl-color-gray-3);
-}
-/* The hero tagline renders outside .sl-markdown-content, so anchors here fall
-   back to the UA blue — then purple once visited. Same trap as the landing
-   .not-content blocks below. */
-.hero .hero-proof a {
-  color: var(--sl-color-text-accent);
-  text-underline-offset: 0.2em;
-}
-.hero .hero-proof a:hover {
-  color: var(--sl-color-white);
-}
-.hero .hero-stack {
+
+.rs-lockup {
   display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: center;
-  gap: 0.45rem;
-  margin-top: clamp(0.35rem, 0.8vw, 0.65rem);
-  padding-top: clamp(0.5rem, 1vw, 0.85rem);
-  border-top: 1px solid color-mix(in srgb, var(--nestrs-card-border) 65%, transparent);
-  width: 100%;
+  align-items: baseline;
+  line-height: 1;
 }
-.hero .hero-stack > span {
+
+.rs-nest {
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--rs-text);
+}
+
+/* The bars are children of the clipped span, so they keep their own fill: the
+   clip applies to this element's background, never to a descendant's. */
+.rs-rs {
+  position: relative;
+  padding-right: 4px;
+  font-style: italic;
+  font-weight: 800;
+  font-size: 19.5px;
+  letter-spacing: -0.03em;
+  background: var(--nestrs-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+.rs-bar {
+  position: absolute;
+  bottom: -5px;
+  height: 2.5px;
+  border-radius: 2px;
+  transform: skewX(-18deg);
+}
+
+.rs-bar--long {
+  left: 2px;
+  width: 22px;
+  background: var(--nestrs-gradient);
+}
+
+.rs-bar--short {
+  left: 27px;
+  width: 6px;
+  background: var(--nestrs-orange);
+  opacity: 0.45;
+}
+
+/* Right-hand group — section links, then the GitHub button. */
+.rs-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1.375rem;
+  font-size: 0.875rem;
+}
+
+.rs-nav-link {
+  color: var(--rs-text-2);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.rs-nav-link:hover {
+  color: var(--rs-text);
+}
+
+.rs-nav-button {
   display: inline-flex;
   align-items: center;
-  flex: 0 0 auto;
-  padding: 0.22rem 0.55rem;
-  border-radius: 6px;
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  border: 1px solid var(--nestrs-card-border);
-  background: color-mix(in srgb, var(--sl-color-gray-6) 35%, transparent);
-  color: var(--sl-color-gray-3);
-}
-.hero .hero-stack-accent {
-  border-color: color-mix(in srgb, var(--nestrs-coral) 35%, transparent);
-  background: color-mix(in srgb, var(--nestrs-coral) 10%, var(--nestrs-surface));
-  color: var(--sl-color-text-accent);
+  gap: 0.5rem;
+  padding: 0.375rem 0.8125rem;
+  border: 1px solid var(--rs-hairline-strong);
+  border-radius: 8px;
+  color: var(--rs-text);
   font-weight: 600;
+  font-size: 0.84375rem;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-/* ---------------------------------------------------------------------------
-   Buttons — primary gets the gradient + glow; minimal gets a subtle border
-   --------------------------------------------------------------------------- */
-
-/* Hero action buttons — centered row, full content width above. */
-.hero .actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.65rem 1.25rem;
-  width: 100%;
-  margin-top: clamp(0.25rem, 0.6vw, 0.5rem);
+.rs-nav-button:hover {
+  border-color: color-mix(in srgb, var(--nestrs-accent) 45%, var(--rs-hairline-strong));
+  background: color-mix(in srgb, var(--nestrs-accent) 7%, transparent);
 }
 
-.hero .actions .sl-link-button {
-  padding-block: 0.85rem;
-  padding-inline: 1.6rem;
-  font-size: 1.02rem;
-  border-radius: 999px;
-}
-
-/* Breakpoints last: these carry the same specificity as the hero base rules
-   above and win by source order alone — moved up, the overrides go dead. */
-@media (min-width: 50rem) {
-  .hero .stack {
-    gap: clamp(1.5rem, 2.5vw, 2rem);
-  }
-
-  .hero .tagline {
-    width: 100%;
-    max-width: none;
-  }
-
-  .hero .hero-stack {
-    flex-wrap: nowrap;
-  }
-
-  .hero .actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.65rem;
-    width: 100%;
-  }
-}
-
-@media (max-width: 49.99rem) {
-  .hero {
-    padding-block: clamp(1rem, 3vw, 1.75rem) clamp(1.75rem, 5vw, 2.5rem) !important;
-  }
-
-  .hero-lockup {
-    margin-bottom: clamp(1.25rem, 4vw, 1.75rem);
-  }
-
-  .hero-lockup > img,
-  .hero-lockup > .hero-html {
-    width: min(52%, 10.5rem) !important;
-  }
-
-  .hero h1 {
-    font-size: clamp(1.85rem, calc(0.7rem + 6.4vw), 2.7rem);
-  }
-
-  .hero .tagline {
-    align-items: center;
-    gap: clamp(1rem, 3.5vw, 1.25rem);
-  }
-
-  .hero .hero-sub {
-    font-size: 0.9375rem;
-    line-height: 1.55;
-  }
-
-  .hero .hero-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.5rem;
-  }
-
-  .hero .stat {
-    padding: 0.7rem 0.5rem;
-  }
-
-  .hero .stat--wide {
-    flex-direction: column;
-    align-items: center;
-    gap: 0.15rem;
-  }
-
-  .hero .hero-stack {
-    justify-content: center;
-    gap: 0.35rem 0.32rem;
-    margin-top: 0.15rem;
-    padding-top: 0.85rem;
-  }
-
-  .hero .hero-stack > span {
-    font-size: 0.675rem;
-    padding: 0.2rem 0.48rem;
-  }
-
-  .hero .stack {
-    gap: clamp(1.35rem, 4.5vw, 1.75rem);
-  }
-
-  .hero .actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.55rem;
-    width: 100%;
-    max-width: none;
-    margin-inline: 0;
-    margin-top: 0;
-  }
-
-  .hero .actions .sl-link-button {
-    justify-content: center;
-    min-width: 0;
-    padding-block: 0.82rem;
-    padding-inline: 0.85rem;
-    font-size: 0.9rem;
-  }
-
-  .hero .actions .sl-link-button:first-child {
-    grid-column: 1 / -1;
-  }
-
-  .hero .actions .sl-link-button.minimal {
-    padding-inline: 0.65rem;
-    font-size: 0.8rem;
-  }
-
-  :root[data-has-hero] .sl-markdown-content > :first-child {
-    margin-top: 0.25rem;
-  }
-}
-
-@media (max-width: 22.49rem) {
-  .hero .actions {
-    grid-template-columns: 1fr;
-  }
-
-  .hero .actions .sl-link-button:first-child {
-    grid-column: auto;
-  }
-}
-
-.sl-link-button.primary {
-  background: var(--nestrs-gradient);
-  border: none;
-  color: #fff;
-  box-shadow: 0 6px 18px -10px rgba(255, 77, 95, 0.35);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
-}
-.sl-link-button.primary:hover {
-  filter: brightness(1.04);
-  transform: translateY(-1px);
-  box-shadow: 0 10px 24px -12px rgba(255, 77, 95, 0.45);
-}
-.sl-link-button.minimal {
-  border: 1px solid var(--nestrs-card-border);
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
-}
-.sl-link-button.minimal:hover {
-  border-color: color-mix(in srgb, var(--nestrs-coral) 28%, transparent);
-  background: var(--nestrs-surface);
-  transform: translateY(-1px);
-}
-
-/* ---------------------------------------------------------------------------
-   Section headings on the splash — a gradient tick before each h2
-   --------------------------------------------------------------------------- */
-
-.sl-markdown-content h2 {
-  position: relative;
-  letter-spacing: -0.02em;
-  scroll-margin-top: 6rem;
-}
-
-/*
- * Gradient tick — on the heading wrapper (not the h2) so wrapped lines on
- * mobile stay clear of the bar; Starlight lays out h2 + anchor in a flex row.
- */
-:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-}
-
-:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2::before {
-  content: '';
-  flex: 0 0 4px;
-  width: 4px;
-  align-self: stretch;
-  margin-top: 0.12em;
-  margin-bottom: 0.12em;
-  border-radius: 4px;
-  background: var(--nestrs-gradient);
-}
-
-:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 h2 {
-  display: block;
-  flex: 1;
-  min-width: 0;
-  padding-left: 0;
-  padding-inline-end: 0;
-}
-
-:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 .sl-anchor-link {
-  flex: 0 0 auto;
-  align-self: flex-start;
-  margin-inline-start: 0;
-  margin-top: 0.15em;
-}
-
-:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 h2::before {
+/* Starlight's own divider between the social group and the theme select reads
+   as a stray tick beside a button row. */
+.header .social-icons::after {
   display: none;
 }
 
-/* ---------------------------------------------------------------------------
-   Feature cards — glass surface, gradient icon chip, hover lift + glow
-   --------------------------------------------------------------------------- */
-
-.card-grid {
+.header .right-group {
   gap: 1.25rem;
 }
 
-.card {
-  position: relative;
-  border: 1px solid var(--nestrs-card-border) !important;
-  background: var(--nestrs-card-bg) !important;
-  border-radius: 16px;
-  backdrop-filter: blur(6px);
-  padding: clamp(1.25rem, calc(0.5rem + 2vw), 2rem) !important;
-  overflow: hidden;
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease,
-    background 0.2s ease;
+/* Search — the centred field with its Ctrl K chip. Starlight gives the middle
+   column all the free space; the design gives the field 420px of it, centred. */
+.header > div:nth-child(2) {
+  justify-content: center;
 }
 
-/* A faint gradient seam along the top edge, brightened on hover. */
-.card::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 2px;
-  background: var(--nestrs-gradient);
-  opacity: 0.16;
-  transition: opacity 0.2s ease;
+.header > div:nth-child(2) > * {
+  width: 100%;
+  max-width: 26.25rem;
 }
 
-/* Soft radial glow that fades in on hover. */
-.card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: radial-gradient(60% 80% at 50% -10%, rgba(255, 122, 89, 0.06), transparent 70%);
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  pointer-events: none;
+/* Search — the centred field with its Ctrl K chip. */
+.header [data-open-modal] button,
+site-search button[data-open-modal] {
+  border-color: var(--rs-hairline);
+  background: var(--rs-card);
+  border-radius: 9px;
+  color: var(--rs-text-4);
+  font-size: 0.84375rem;
+  transition: border-color 0.15s ease;
 }
 
-.card:hover {
-  transform: translateY(-3px);
-  border-color: color-mix(in srgb, var(--nestrs-coral) 22%, transparent) !important;
-  box-shadow: 0 16px 36px -24px rgba(0, 0, 0, 0.5);
-  background: var(--nestrs-surface) !important;
-}
-.card:hover::before { opacity: 0.55; }
-.card:hover::after { opacity: 1; }
-
-/* Icon chip on card titles — fixed size so glyphs do not collapse after HMR */
-.card .title > svg.icon {
-  flex-shrink: 0;
-  box-sizing: content-box;
-  display: block;
-  width: 1.35rem !important;
-  height: 1.35rem !important;
-  min-width: 1.35rem;
-  min-height: 1.35rem;
-  padding: 0.45rem !important;
-  color: var(--nestrs-orange) !important;
-  background: color-mix(in srgb, var(--nestrs-coral) 16%, var(--sl-color-bg)) !important;
-  border: 1px solid color-mix(in srgb, var(--nestrs-coral) 30%, transparent) !important;
-  border-radius: 10px !important;
-  box-shadow: none;
+.header [data-open-modal] button:hover,
+site-search button[data-open-modal]:hover {
+  border-color: var(--rs-hairline-hover);
 }
 
-.card .title {
-  align-items: center;
-  gap: 0.85rem;
-}
-.card .body {
-  color: var(--sl-color-gray-2);
-  line-height: 1.6;
-}
-.card .body strong {
-  color: var(--sl-color-white);
-}
-
-/* ---------------------------------------------------------------------------
-   Prose links inside landing `.not-content` wrappers
-   The splash blocks (.nestrs-reveal / .mono / .scale) opt out of
-   .sl-markdown-content for the reveal animation, which also drops Starlight's
-   link color — leaving raw browser anchors (blue, then purple once visited).
-   Restore the brand accent so they read like every other in-content link.
-   Interactive component anchors (code tabs, terminals, CTA buttons) keep their
-   own styling.
-   --------------------------------------------------------------------------- */
-.sl-markdown-content .not-content a:not(.sl-link-button):not(:where([role='tab'], .nestrs-code-tabs *, .nestrs-terminal *, .frame *, starlight-file-tree *)) {
-  color: var(--sl-color-text-accent);
-}
-.sl-markdown-content .not-content a:not(.sl-link-button):not(:where([role='tab'], .nestrs-code-tabs *, .nestrs-terminal *, .frame *, starlight-file-tree *)):hover {
-  color: var(--sl-color-white);
-}
-
-/* ---------------------------------------------------------------------------
-   Benchmark — gradient meters instead of a flat table
-   --------------------------------------------------------------------------- */
-
-.bench {
-  margin: 1.5rem 0 2rem;
-  border: 1px solid var(--nestrs-card-border);
-  border-radius: 16px;
-  background: var(--nestrs-card-bg);
-  padding: 0.5rem clamp(0.75rem, 2vw, 1.5rem) 1rem;
-  backdrop-filter: blur(6px);
-}
-
-.bench-legend {
-  display: flex;
-  gap: 1.25rem;
-  justify-content: flex-end;
-  padding: 0.75rem 0.25rem 0.5rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-.bench-key {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  color: var(--sl-color-gray-2);
-}
-.bench-key::before {
-  content: '';
-  width: 0.7rem;
-  height: 0.7rem;
-  border-radius: 3px;
-}
-.bench-key.nestrs::before { background: var(--nestrs-gradient); }
-.bench-key.node::before { background: var(--sl-color-gray-5); }
-
-.bench-row {
-  display: grid;
-  grid-template-columns: minmax(7rem, 1fr) minmax(10rem, 2.6fr) auto;
-  align-items: center;
-  gap: 0.75rem 1.5rem;
-  padding: 1rem 0.25rem;
-  border-top: 1px solid var(--nestrs-card-border);
-}
-
-.bench-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-}
-.bench-label > span {
-  font-weight: 650;
-  color: var(--sl-color-white);
-}
-.bench-label > small {
-  font-size: 0.72rem;
-  color: var(--sl-color-gray-3);
-}
-
-/* Two competing bars stacked per metric. */
-.bench-bars {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-.bench-line {
-  display: grid;
-  grid-template-columns: 3.8rem 1fr 4.5rem;
-  align-items: center;
-  gap: 0.7rem;
-}
-.bench-who {
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--sl-color-gray-3);
-}
-.bench-who.nestrs {
-  color: var(--sl-color-text-accent);
-}
-
-.bench-meter {
-  height: 10px;
-  border-radius: 999px;
-  background: var(--nestrs-surface);
-  overflow: hidden;
-  border: 1px solid var(--nestrs-card-border);
-}
-.bench-fill {
-  display: block;
-  height: 100%;
-  width: var(--w);
-  min-width: 6px;
-  border-radius: 999px;
-}
-.bench-fill.nestrs {
-  background: var(--nestrs-gradient);
-}
-.bench-fill.node {
-  background: var(--sl-color-gray-5);
-}
-
-.bench-num {
+site-search kbd {
   font-family: var(--sl-font-mono);
-  font-size: 0.78rem;
-  text-align: right;
-  white-space: nowrap;
-  color: var(--sl-color-gray-3);
-}
-.bench-num.nestrs {
-  color: var(--sl-color-white);
-  font-weight: 600;
+  font-size: 0.65625rem;
+  border: 1px solid var(--rs-hairline-strong);
+  border-radius: 5px;
+  padding: 2px 6px;
+  background: transparent;
+  color: var(--rs-text-3);
 }
 
-.bench-mult {
+@media (max-width: 61.9375rem) {
+  .rs-nav-links {
+    gap: 1rem;
+  }
+  .rs-nav-link--crates {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Sidebar — mono group labels, an accent bar on the page you are reading
+   --------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------
+   Documentation layout — 264px sidebar, fluid column, 220px table of contents
+   --------------------------------------------------------------------------- */
+
+/*
+ * Starlight centres the reading column and lets the table of contents absorb
+ * whatever is left, so the column narrows and the rail widens as the window
+ * grows. The design fixes both rails and gives the middle everything else,
+ * which is what puts the prose where the mockup has it.
+ */
+@media (min-width: 72rem) {
+  :root[data-has-sidebar] .right-sidebar-container {
+    width: 13.75rem;
+  }
+
+  /* `.right-sidebar` is `position: fixed`, so its `width: 100%` resolves
+     against the viewport rather than the rail it sits in — which let long
+     headings run off the page instead of wrapping in 220px. */
+  :root[data-has-sidebar] .right-sidebar {
+    width: 13.75rem;
+    border-inline-start: none;
+  }
+
+  :root[data-has-sidebar] .right-sidebar-panel {
+    padding: 2.75rem 1.5rem 3.75rem 0.5rem;
+  }
+
+  /* The panel's inner container carries a width derived from the *left*
+     sidebar, plus a max-width Starlight's own comment calls a magic number.
+     Both predate the fixed rail; the rail is the width now. */
+  :root[data-has-sidebar] .right-sidebar-panel .sl-container {
+    width: 100%;
+    max-width: none;
+  }
+
+  /* `100%` here is the two-column row, which already starts after the left
+     sidebar — so the reading column gives back the table of contents, not the
+     sidebar a second time. */
+  :root[data-has-sidebar][data-has-toc] .main-pane {
+    width: calc(100% - 13.75rem);
+  }
+
+  :root[data-has-sidebar] .sl-container {
+    max-width: none;
+    margin-inline: 0;
+  }
+}
+
+/* One flow, not two panels: the rule Starlight draws between the title block
+   and the body is a seam the design does not have. */
+:root[data-has-sidebar] .content-panel {
+  padding: 0 3.5rem;
+  border-top: none;
+}
+
+:root[data-has-sidebar] .content-panel:first-of-type {
+  padding-top: 2.75rem;
+}
+
+:root[data-has-sidebar] .content-panel + .content-panel {
+  padding-top: 2rem;
+  padding-bottom: 5.625rem;
+}
+
+.sidebar-pane {
+  border-inline-end: 1px solid var(--rs-hairline);
+}
+
+.sidebar-content {
+  padding: 1.75rem 1.25rem 3.75rem;
+}
+
+/* Group labels — Martian Mono, uppercase, spaced. Top level only: a nested
+   group is a page's parent, and shouting it would flatten the hierarchy the
+   indentation draws. */
+.sidebar-content ul.top-level > li > .group-label > .large,
+.sidebar-content ul.top-level > li > a.large {
+  display: block;
+  padding-left: 0.625rem;
+  margin-bottom: 0.625rem;
+  font-family: var(--sl-font-mono);
+  font-size: 0.65625rem;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--rs-text-3);
+}
+
+/* The lists are ours now, so their reset is too — Starlight's lived inside the
+   component this one replaces. */
+.sidebar-content ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sidebar-content ul.top-level > li + li {
+  margin-top: 1.625rem;
+}
+
+.sidebar-content li + li {
+  margin-top: 1px;
+}
+
+/* A nested group is a heading over its own list, not a second kind of item:
+   quiet, unindented, and without the rail that made three levels read as five.
+   A section's pages sit at the label's own margin — the label is the grouping,
+   exactly as the design draws it — and only a third level takes a step. */
+.sidebar-content ul ul {
+  padding-inline-start: 0;
+}
+
+.sidebar-content ul ul ul {
+  padding-inline-start: 0.5rem;
+}
+
+.sidebar-content ul ul li {
+  border-inline-start: 0;
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+}
+
+.sidebar-content ul ul .large {
+  display: block;
+  font-family: var(--sl-font);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--rs-text-2);
+  padding: 0.375rem 0.625rem 0.25rem;
+}
+
+.sidebar-content ul ul li + li:has(> .group-label) {
+  margin-top: 0.75rem;
+}
+
+/* A section's name: a link that reads as a heading. The one holding the page
+   being read takes the page's own ink, so the column says where you are before
+   you reach the highlighted item. */
+.sidebar-content a.group-label {
+  display: block;
+  text-decoration: none;
+  padding: 0;
+}
+
+.sidebar-content a.group-label:hover .large {
+  color: var(--rs-text);
+}
+
+.sidebar-content ul.top-level > li > a.group-label.is-open .large {
+  color: var(--rs-text-2);
+}
+
+.sidebar-content a {
+  display: block;
+  font-size: 0.84375rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: 7px;
+  color: var(--rs-text-2);
+  text-decoration: none;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.sidebar-content a:hover {
+  background: var(--rs-card);
+  color: var(--rs-text);
+}
+
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  color: var(--nestrs-accent);
   font-weight: 700;
-  font-size: 1.05rem;
-  letter-spacing: -0.02em;
-  text-align: right;
-  background: var(--nestrs-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  background: color-mix(in srgb, var(--nestrs-accent) 8%, transparent);
+  box-shadow: inset 2px 0 0 var(--nestrs-accent);
 }
+
+/* The caret is a control, not a heading — it reads at the label's weight. */
+.sidebar-content ul.top-level > li > details > summary .caret {
+  color: var(--rs-text-4);
+}
+
+
 
 /* ---------------------------------------------------------------------------
-   Scroll reveal — one fade/slide when the block enters view, then static
+   Table of contents — mono heading, one rule, an accent bar on the active entry
    --------------------------------------------------------------------------- */
 
-@media (prefers-reduced-motion: no-preference) {
-  html.nestrs-reveal-ready .nestrs-reveal:not(.is-revealed) {
-    opacity: 0;
-    transform: translate3d(0, 12px, 0);
-  }
-
-  html.nestrs-reveal-ready .nestrs-reveal.is-revealed {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-    transition:
-      opacity 0.5s cubic-bezier(0.22, 0.61, 0.36, 1),
-      transform 0.5s cubic-bezier(0.22, 0.61, 0.36, 1);
-  }
-
-  html.nestrs-reveal-ready .nestrs-reveal--stagger:not(.is-revealed) .card {
-    opacity: 0;
-    transform: translate3d(0, 10px, 0);
-  }
-
-  html.nestrs-reveal-ready .nestrs-reveal--stagger.is-revealed .card {
-    opacity: 1;
-    transform: translate3d(0, 0, 0);
-    transition:
-      opacity 0.45s cubic-bezier(0.22, 0.61, 0.36, 1),
-      transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1);
-  }
-
-  .nestrs-reveal--stagger.is-revealed .card:nth-child(2) {
-    transition-delay: 0.05s;
-  }
-  .nestrs-reveal--stagger.is-revealed .card:nth-child(3) {
-    transition-delay: 0.1s;
-  }
-  .nestrs-reveal--stagger.is-revealed .card:nth-child(4) {
-    transition-delay: 0.15s;
-  }
-  .nestrs-reveal--stagger.is-revealed .card:nth-child(5) {
-    transition-delay: 0.2s;
-  }
-  .nestrs-reveal--stagger.is-revealed .card:nth-child(6) {
-    transition-delay: 0.25s;
-  }
-  .nestrs-reveal--stagger.is-revealed .card:nth-child(7) {
-    transition-delay: 0.3s;
-  }
-  .nestrs-reveal--stagger.is-revealed .card:nth-child(8) {
-    transition-delay: 0.35s;
-  }
-}
-
-/* Sober one-time grow-in. Armed by JS only (no-JS keeps bars at full width);
-   disabled entirely under reduced-motion via the matchMedia guard. */
-.bench-animate .bench-fill {
-  width: 0;
-  transition: width 0.85s cubic-bezier(0.22, 0.61, 0.36, 1);
-  transition-delay: var(--d, 0s);
-}
-.bench-animate.is-visible .bench-fill {
-  width: var(--w);
-}
-
-@media (max-width: 50rem) {
-  .bench-row {
-    grid-template-columns: 1fr auto;
-    grid-template-areas:
-      'label mult'
-      'bars  bars';
-    gap: 0.6rem 1rem;
-  }
-  .bench-label { grid-area: label; }
-  .bench-mult { grid-area: mult; align-self: start; }
-  .bench-bars { grid-area: bars; }
-}
-
-/* ---------------------------------------------------------------------------
-   Deploy layout — shared domain + focused binaries (no connector lines)
-   --------------------------------------------------------------------------- */
-
-.mono {
-  margin: 1.75rem 0 2rem;
-}
-
-.mono-deploy {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  padding: 1.15rem 1rem;
-  border-radius: 14px;
-  border: 1px solid var(--nestrs-card-border);
-  background: var(--nestrs-card-bg);
-}
-
-.mono-tier {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  padding: 0.85rem 0.85rem 0.85rem 0.75rem;
-  border-radius: 12px;
-}
-
-.mono-tier--public {
-  border: 1px solid color-mix(in srgb, var(--nestrs-coral) 28%, var(--nestrs-card-border));
-  background: color-mix(in srgb, var(--nestrs-coral) 6%, var(--nestrs-surface));
-}
-
-.mono-tier--private {
-  border: 1px dashed color-mix(in srgb, var(--sl-color-gray-4) 55%, var(--nestrs-card-border));
-  background: var(--nestrs-surface);
-}
-
-.mono-tier--private .mono-tier-label {
-  color: var(--sl-color-gray-2);
-}
-
-.mono-tier-head {
-  flex: none;
-  width: 6.5rem;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.2rem;
-  text-align: left;
-}
-
-.mono-tier-label {
+.right-sidebar-panel h2,
+starlight-toc > nav > h2 {
   font-family: var(--sl-font-mono);
-  font-size: 0.72rem;
-  font-weight: 650;
-  letter-spacing: 0.05em;
+  font-size: 0.65625rem;
+  font-weight: 500;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--sl-color-white);
+  color: var(--rs-text-3);
+  margin-bottom: 0.875rem;
 }
 
-.mono-tier--public .mono-tier-label {
-  color: var(--sl-color-text-accent);
+starlight-toc nav > ul {
+  border-inline-start: 1px solid var(--rs-hairline);
 }
 
-.mono-tier-hint {
-  font-size: 0.76rem;
-  color: var(--sl-color-gray-3);
+starlight-toc nav ul a {
+  display: block;
+  font-size: 0.78125rem;
+  padding: 0.3125rem 0 0.3125rem 0.875rem;
+  margin-inline-start: -1px;
+  border-inline-start: 2px solid transparent;
+  color: var(--rs-text-3);
+  text-decoration: none;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
 
-/* Shared-features layer — teal band between public (coral) and private tiers */
-.mono-shared-mid {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.2rem;
-  text-align: center;
-  padding: 0.7rem 1rem;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--nestrs-teal) 42%, var(--nestrs-card-border));
-  background: var(--nestrs-shared-soft);
+starlight-toc nav ul a:hover {
+  color: var(--rs-text);
 }
 
-.mono-shared-mid-label {
-  font-family: var(--sl-font-mono);
+starlight-toc nav a[aria-current='true'] {
+  color: var(--nestrs-accent);
   font-weight: 600;
-  font-size: 0.82rem;
+  border-inline-start-color: var(--nestrs-accent);
+}
+
+/* Mobile TOC bar. */
+mobile-starlight-toc nav > button {
+  border-color: var(--rs-hairline);
+  background: var(--rs-card);
+}
+
+/* ---------------------------------------------------------------------------
+   Documentation page — the reading column
+   --------------------------------------------------------------------------- */
+
+.content-panel {
+  border-top-color: var(--rs-hairline);
+}
+
+.sl-markdown-content {
+  font-size: 0.96875rem; /* 15.5px */
+  line-height: 1.75;
+  color: var(--rs-prose);
+}
+
+/* The reading measure. An aside's title is a paragraph too and is a header
+   rather than prose, so it keeps the card's full width. */
+.sl-markdown-content :is(p, ul, ol, blockquote):not(.starlight-aside__title) {
+  max-width: 70ch;
+}
+
+.sl-markdown-content strong {
+  color: var(--rs-text);
+  font-weight: 600;
+}
+
+/* Scoped off the splash: the hero's `h1` also carries `#_top`, and an id
+   outranks `.hero h1` — which is how the landing's 76px headline had been
+   rendering at a documentation page's 42px. */
+:root:not([data-has-hero]) .content-panel h1#_top,
+:root:not([data-has-hero]) .sl-markdown-content h1 {
+  font-size: clamp(2rem, calc(1.2rem + 2vw), 2.625rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--rs-text);
+}
+
+/* The lede — the page's own description, set under the h1 by `PageTitle`. */
+.rs-lede {
+  font-size: 1.125rem;
+  line-height: 1.6;
+  color: var(--rs-text-2);
+  max-width: 68ch;
+  margin: 1.25rem 0 0;
+}
+
+.sl-markdown-content h2 {
+  font-size: 1.6875rem;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--rs-text);
+  scroll-margin-top: 6rem;
+}
+
+.sl-markdown-content h3 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--rs-text);
+  scroll-margin-top: 6rem;
+}
+
+/* Gradient tick before every h2 — on the wrapper, not the h2, so a wrapped
+   line on mobile stays clear of the bar. */
+/* The tick is the heading's full height, so the row must be the heading's
+   height: Starlight's heading line-height lives on the wrapper, where the
+   anchor link inherits it and stretches the row past the text it marks. */
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  line-height: 1.2;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 + * {
+  margin-top: 1rem;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2::before {
+  content: '';
+  flex: 0 0 4px;
+  width: 4px;
+  border-radius: 4px;
+  background: var(--nestrs-gradient);
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 h2 {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 .sl-anchor-link {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-top: 0;
+  line-height: 1;
+}
+
+/* The thesis quote — an accent rule and a wash, never a grey slab. */
+.sl-markdown-content blockquote {
+  border-inline-start: 3px solid var(--nestrs-accent);
+  border-radius: 0 12px 12px 0;
+  background: color-mix(in srgb, var(--nestrs-accent) 5%, transparent);
+  padding: 1.125rem 1.5rem;
+  font-size: 1.03125rem;
+  font-style: italic;
+  font-weight: 600;
+  color: var(--rs-text);
+}
+
+.sl-markdown-content blockquote p {
+  margin: 0;
+}
+
+/* Asides — a card with a mono accent header, matching the code cards. */
+.sl-markdown-content .starlight-aside {
+  border: 1px solid var(--rs-hairline);
+  border-inline-start-width: 1px;
+  border-radius: 12px;
+  background: var(--rs-card);
+  padding: 0;
+  overflow: hidden;
+}
+
+.sl-markdown-content .starlight-aside__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.625rem 1.125rem;
+  border-bottom: 1px solid var(--rs-hairline);
+  font-family: var(--sl-font-mono);
+  font-size: 0.65625rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nestrs-accent);
+}
+
+.sl-markdown-content .starlight-aside__content {
+  padding: 1rem 1.25rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--rs-text-2);
+}
+
+.sl-markdown-content .starlight-aside--caution .starlight-aside__title,
+.sl-markdown-content .starlight-aside--danger .starlight-aside__title {
+  color: #e0705f;
+}
+
+.sl-markdown-content .starlight-aside--tip .starlight-aside__title {
   color: var(--nestrs-teal);
 }
 
-.mono-shared-mid-sub {
-  font-size: 0.74rem;
-  color: color-mix(in srgb, var(--nestrs-teal) 55%, var(--sl-color-gray-3));
+/* Tables — hairline grid, mono figures. */
+.sl-markdown-content table {
+  font-size: 0.875rem;
 }
 
-.mono-apps {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 0.55rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  align-items: stretch;
-}
-
-/* Starlight prose adds margin between adjacent <li> — breaks grid alignment */
-.sl-markdown-content .mono .mono-apps > li {
-  margin: 0;
-  padding: 0;
-}
-
-.mono-apps--pair {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: auto;
-  align-items: stretch;
-}
-
-.mono-app {
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 0.3rem;
-  min-height: 5.5rem;
-  padding: 0.5rem 0.4rem;
-  text-align: center;
-  border-radius: 10px;
-  border: 1px solid var(--nestrs-card-border);
-  background: var(--nestrs-card-bg);
-}
-
-.mono-apps--pair > .mono-app {
-  height: 6rem;
-  min-height: 6rem;
-}
-
-.mono-tier--public .mono-app {
-  border-color: color-mix(in srgb, var(--nestrs-coral) 18%, var(--nestrs-card-border));
-}
-
-.mono-tier--private .mono-app {
-  border-style: dashed;
-  background: color-mix(in srgb, var(--sl-color-gray-6) 40%, var(--nestrs-card-bg));
-}
-
-.mono-app-name {
+.sl-markdown-content th {
   font-family: var(--sl-font-mono);
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: var(--sl-color-white);
-}
-
-.mono-app-port {
-  font-family: var(--sl-font-mono);
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--sl-color-text-accent);
-  letter-spacing: 0.02em;
-}
-
-.mono-app-role {
-  display: block;
-  max-width: 100%;
-  font-size: 0.72rem;
-  line-height: 1.35;
-  color: var(--sl-color-gray-3);
-}
-
-.mono-note {
-  margin: 1.1rem 0 0;
-  max-width: none;
-  text-align: start;
-  font-size: 0.85rem;
-  color: var(--sl-color-gray-3);
-}
-
-@media (max-width: 50rem) {
-  .mono-tier {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.6rem;
-  }
-
-  .mono-tier-head {
-    width: auto;
-    align-items: center;
-    text-align: center;
-  }
-
-  .mono-apps--pair {
-    grid-template-columns: 1fr;
-  }
-
-  .mono-apps--pair > .mono-app {
-    height: auto;
-    min-height: 5rem;
-  }
-}
-
-/* ---------------------------------------------------------------------------
-   Scale — horizontal replicas per signal (separate from role layout)
-   --------------------------------------------------------------------------- */
-
-.scale {
-  margin: 1.25rem 0 2rem;
-  padding: 1.1rem 1rem 1rem;
-  border-radius: 14px;
-  border: 1px solid var(--nestrs-card-border);
-  background: var(--nestrs-card-bg);
-}
-
-.scale-lanes {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.scale-lanes--four {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.scale-lane {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-  padding: 0.85rem 0.75rem;
-  border-radius: 12px;
-  border: 1px solid var(--nestrs-card-border);
-  background: var(--nestrs-surface);
-}
-
-.scale-lane--api {
-  border-color: color-mix(in srgb, var(--nestrs-coral) 24%, var(--nestrs-card-border));
-}
-
-.scale-lane--api.scale-lane--steady {
-  border-color: color-mix(in srgb, var(--nestrs-coral) 14%, var(--nestrs-card-border));
-}
-
-.scale-lane--worker {
-  border-style: dashed;
-}
-
-.scale-lane--worker.scale-lane--light {
-  opacity: 0.92;
-}
-
-.scale-lane-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem 0.5rem;
-  text-align: center;
-}
-
-.scale-app {
-  font-family: var(--sl-font-mono);
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--sl-color-white);
-}
-
-.scale-port {
-  font-family: var(--sl-font-mono);
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--sl-color-text-accent);
-}
-
-.scale-signal {
-  font-size: 0.76rem;
-  font-weight: 600;
-  color: var(--sl-color-gray-2);
-}
-
-.scale-arrow {
-  font-family: var(--sl-font-mono);
-  font-size: 0.85rem;
-  color: var(--sl-color-text-accent);
-}
-
-.scale-replicas {
-  font-family: var(--sl-font-mono);
-  font-size: 0.88rem;
-  font-weight: 700;
-  color: var(--sl-color-text-accent);
-}
-
-.scale-target {
-  font-family: var(--sl-font-mono);
-  font-size: 0.8rem;
-  font-weight: 650;
-  color: var(--sl-color-white);
-}
-
-.scale-pills {
-  display: flex;
-  flex-wrap: nowrap;
-  justify-content: center;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-.scale-pills > span:not(.scale-pill-more) {
-  display: block;
-  width: 1.15rem;
-  height: 1.4rem;
-  border-radius: 4px;
-  border: 1px solid var(--nestrs-card-border);
-  background: var(--nestrs-card-bg);
-}
-
-.scale-lane--api .scale-pills > span:not(.scale-pill-more) {
-  border-color: color-mix(in srgb, var(--nestrs-coral) 22%, var(--nestrs-card-border));
-  background: color-mix(in srgb, var(--nestrs-coral) 10%, var(--nestrs-card-bg));
-}
-
-.scale-lane--steady .scale-pills > span:not(.scale-pill-more) {
-  opacity: 0.85;
-}
-
-.scale-pills--worker > span:not(.scale-pill-more) {
-  border-style: dashed;
-}
-
-.scale-pills--worker > span:not(.scale-pill-more):nth-child(n + 4) {
-  opacity: 0.75;
-}
-
-.scale-lane--light .scale-pills--worker > span:not(.scale-pill-more) {
-  opacity: 0.7;
-}
-
-.scale-pill-more {
-  font-family: var(--sl-font-mono);
-  font-size: 0.85rem;
-  font-weight: 700;
-  line-height: 1.4rem;
-  color: var(--sl-color-text-accent);
-}
-
-.scale-aside {
-  margin: 0.85rem 0 0;
-  text-align: start;
-  font-size: 0.8rem;
-  color: var(--sl-color-gray-3);
-}
-
-@media (max-width: 50rem) {
-  .scale-lanes {
-    grid-template-columns: 1fr;
-  }
-
-  .scale-lane-top {
-    justify-content: flex-start;
-    text-align: start;
-  }
-
-  .scale-pills {
-    justify-content: flex-start;
-  }
-}
-
-/* ---------------------------------------------------------------------------
-   Misc — sidebar weight, inline code accent
-   --------------------------------------------------------------------------- */
-
-.sidebar nav > ul > li > details > summary,
-.sidebar nav > ul > li > a {
-  font-weight: 600;
-}
-
-:root[data-theme='dark'] :not(pre) > code {
-  color: #ff8c6e;
-}
-:root[data-theme='light'] :not(pre) > code {
-  color: #d63a4a;
-}
-
-/* Code frames — brand-tinted border, the active file tab reads as a chip. */
-.expressive-code .frame {
-  border: 1px solid var(--nestrs-card-border);
-}
-.expressive-code .frame .header {
-  font-weight: 600;
-}
-
-/* `.not-content` strips Starlight's prose margins, so adjacent code blocks
-   collapse against each other. Restore vertical spacing between them. */
-.nestrs-reveal .expressive-code {
-  margin-block: 1.25rem;
-}
-.nestrs-reveal .expressive-code:first-child {
-  margin-block-start: 0;
-}
-
-/* ---------------------------------------------------------------------------
-   Terminal session — command vs output on the splash hello demo
-   --------------------------------------------------------------------------- */
-
-.nestrs-terminal {
-  margin-block: 1.25rem;
-  width: 100%;
-  border: 1px solid var(--nestrs-card-border);
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.55);
-  background: var(--nestrs-code-bg);
-  font-family: var(--sl-font-mono);
-  font-size: 0.8125rem;
-  line-height: 1.45;
-  text-align: left;
-}
-
-.nestrs-reveal .nestrs-terminal {
-  margin-block: 1.25rem;
-  width: 100%;
-  align-self: stretch;
-}
-
-.sl-markdown-content .nestrs-terminal pre {
-  margin: 0;
-  text-align: left;
-}
-
-.nestrs-terminal__titlebar {
-  display: flex;
-  gap: 0.45rem;
-  padding: 0.65rem 0.85rem;
-  background: var(--nestrs-code-tabbar);
-  border-bottom: 1px solid var(--nestrs-card-border);
-}
-
-.nestrs-terminal__dot {
-  width: 0.65rem;
-  height: 0.65rem;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--sl-color-gray-4) 70%, transparent);
-}
-
-.nestrs-terminal__label {
-  margin-left: auto;
-  font-family: var(--sl-font);
   font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 500;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--sl-color-gray-3);
+  color: var(--rs-text-3);
 }
 
-.nestrs-terminal--compact {
-  margin-block: 0;
-  box-shadow: 0 10px 28px -14px rgba(0, 0, 0, 0.45);
+.sl-markdown-content :is(th, td) {
+  border-color: var(--rs-hairline);
 }
 
-.nestrs-terminal--compact .nestrs-terminal__body {
-  padding: 0.65rem 0.85rem;
-  font-size: 0.78125rem;
-}
-
-/* Home hello demo — scaffold → source → run */
-.nestrs-hello-demo {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-block: 1.25rem;
-}
-
-.nestrs-reveal .nestrs-hello-demo {
-  margin-block: 1.25rem;
-  width: 100%;
-  align-self: stretch;
-}
-
-.nestrs-hello-demo .nestrs-code-tabs,
-.nestrs-hello-demo .nestrs-terminal {
-  margin-block: 0;
-}
-
-.nestrs-terminal__body {
-  margin: 0;
-  padding: 0.85rem 1rem;
-  overflow-x: auto;
-  text-align: left;
-  white-space: pre;
-  tab-size: 2;
-  background: transparent;
-  border: none;
-}
-
-.nestrs-terminal__body code {
-  display: block;
-  background: none;
-  padding: 0;
-  border: none;
-  font-size: inherit;
-  font-family: inherit;
-  line-height: inherit;
-  color: var(--t-fg);
-  text-align: left;
-  white-space: inherit;
-}
-
-/* Cargo / tracing palette — aligned with one-dark-pro terminal output */
-.nestrs-terminal {
-  --t-fg: #abb2bf;
-  --t-dim: #5c6370;
-  --t-prompt: #e06c75;
-  --t-cmd: #56b6c2;
-  --t-green: #98c379;
-  --t-blue: #61afef;
-  --t-yellow: #e5c07b;
-  --t-red: #e06c75;
-  --t-res: #d7dae0;
-}
-
-:root[data-theme='light'] .nestrs-terminal {
-  --t-fg: #383a42;
-  --t-dim: #696c77;
-  --t-prompt: #e45649;
-  --t-cmd: #007fa8;
-  --t-green: #50a14f;
-  --t-blue: #4078f2;
-  --t-yellow: #c18401;
-  --t-red: #e45649;
-  --t-res: #24292e;
-}
-
-.t-prompt {
-  color: var(--t-prompt);
-}
-
-.t-omit {
-  color: var(--t-dim);
-  letter-spacing: 0.12em;
-  user-select: none;
-}
-
-.t-cmd {
-  color: var(--t-cmd);
-  font-weight: 600;
-}
-
-.t-cargo-ok {
-  color: var(--t-green);
-  font-weight: 700;
-}
-
-.t-ts,
-.t-mod {
-  color: var(--t-dim);
-}
-
-.t-lvl-info {
-  color: var(--t-green);
-}
-
-.t-lvl-debug {
-  color: var(--t-blue);
-}
-
-.t-lvl-warn {
-  color: var(--t-yellow);
-}
-
-.t-lvl-error {
-  color: var(--t-red);
-}
-
-.t-val {
-  font-style: italic;
-  color: var(--t-fg);
-}
-
-.t-res {
-  color: var(--t-res);
-  font-weight: 600;
-}
-
-/* ---------------------------------------------------------------------------
-   Hello demo — tabbed source (Controller → Service → Module → Main)
-   --------------------------------------------------------------------------- */
-
-.nestrs-code-tabs {
-  margin-block: 1.25rem;
-  width: 100%;
-  border: 1px solid var(--nestrs-card-border);
+/* Pagination and page footer. */
+.pagination-links a {
+  border: 1px solid var(--rs-hairline);
   border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.55);
-  background: var(--nestrs-code-bg);
-  text-align: left;
-}
-
-.nestrs-reveal .nestrs-code-tabs {
-  margin-block: 1.25rem;
-  width: 100%;
-  align-self: stretch;
-}
-
-.nestrs-reveal .nestrs-code-tabs:first-child {
-  margin-block-start: 0;
-}
-
-.nestrs-code-tabs__chrome {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.65rem 1rem;
-  padding: 0.55rem 0.85rem;
-  background: var(--nestrs-code-tabbar);
-  border-bottom: 1px solid var(--nestrs-card-border);
-}
-
-.nestrs-code-tabs__dots {
-  display: flex;
-  gap: 0.45rem;
-  flex-shrink: 0;
-}
-
-.nestrs-code-tabs__dots span {
-  width: 0.65rem;
-  height: 0.65rem;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--sl-color-gray-4) 70%, transparent);
-}
-
-.nestrs-code-tabs__tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.nestrs-code-tabs__tab {
-  appearance: none;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 0.28rem 0.65rem;
-  font-family: var(--sl-font);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1.3;
-  color: var(--sl-color-gray-2);
+  padding: 1rem 1.25rem;
   background: transparent;
-  cursor: pointer;
-  transition:
-    color 0.15s ease,
-    background 0.15s ease,
-    border-color 0.15s ease;
+  box-shadow: none;
+  transition: border-color 0.15s ease;
 }
 
-.nestrs-code-tabs__tab:hover {
-  color: var(--sl-color-white);
-  background: color-mix(in srgb, var(--sl-color-gray-5) 55%, transparent);
+.pagination-links a:hover {
+  border-color: color-mix(in srgb, var(--nestrs-accent) 40%, var(--rs-hairline));
 }
 
-.nestrs-code-tabs__tab.is-active {
-  color: var(--sl-color-white);
-  background: var(--nestrs-code-bg);
-  border-color: var(--nestrs-card-border);
-  box-shadow: inset 0 -2px 0 var(--nestrs-orange);
+.pagination-links svg {
+  color: var(--rs-text-3);
 }
 
-:root[data-theme='light'] .nestrs-code-tabs__tab {
-  color: var(--sl-color-gray-3);
-}
-
-:root[data-theme='light'] .nestrs-code-tabs__tab:hover,
-:root[data-theme='light'] .nestrs-code-tabs__tab.is-active {
-  color: var(--sl-color-black);
-}
-
-.nestrs-code-tabs__path {
-  font-family: var(--sl-font-mono);
+.pagination-links span:first-of-type {
   font-size: 0.75rem;
-  color: var(--sl-color-gray-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1 1 auto;
+  color: var(--rs-text-3);
 }
 
-.nestrs-code-tabs__label {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-family: var(--sl-font);
+.pagination-links .link-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--rs-text);
+}
+
+.content-panel .meta,
+.content-panel footer :is(a, time) {
+  font-size: 0.78125rem;
+  color: var(--rs-text-3);
+}
+
+.site-credit {
+  font-family: var(--sl-font-mono);
   font-size: 0.6875rem;
-  font-weight: 600;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--sl-color-gray-3);
+  color: var(--rs-text-4);
 }
 
-.nestrs-code-tabs__body {
+/* Inline code reads as a chip, not as coloured prose. */
+:not(pre) > code {
+  font-size: 0.86em;
+  padding: 0.15em 0.4em;
+  border-radius: 5px;
+  background: var(--rs-inline);
+  color: var(--sl-color-accent-high);
+}
+
+/* A link looks like a link, whatever it wraps.
+ *
+ * `text-decoration` is painted by the element that declares it — the `<a>`, in
+ * its accent — while an inner `<strong>` or `<code>` paints its own glyphs in
+ * its own colour. So `[**Publish**](/publish/)` came out white type under an
+ * orange rule, and a linked code chip came out at the chip's colour: 229 links
+ * across 76 pages wearing two colours each, with the underline as the only
+ * thing saying they were links at all. The inner element inherits, so the pair
+ * agrees — including on hover, where the `<a>` goes white and the inside
+ * follows. */
+.sl-markdown-content a strong,
+.sl-markdown-content a em,
+.sl-markdown-content a code {
+  color: inherit;
+}
+
+/* ---------------------------------------------------------------------------
+   Code cards — one frame everywhere: filename header, hairline, dark canvas
+   --------------------------------------------------------------------------- */
+
+/* The card is one surface, header included — the design paints `#1a191d` on
+   the wrapper and gives the header nothing but a rule underneath. Left without
+   a background here, the header was a window onto the page behind it, two
+   shades off the code it captions. */
+.expressive-code .frame {
+  border: 1px solid var(--rs-hairline);
+  border-radius: 12px;
+  overflow: hidden;
   background: var(--nestrs-code-bg);
 }
 
-.nestrs-code-tabs__panel .expressive-code {
-  margin: 0 !important;
-}
-
-.nestrs-code-tabs__panel .expressive-code .frame {
-  border: none !important;
-  border-radius: 0 !important;
-  box-shadow: none !important;
-}
-
-.nestrs-code-tabs__panel .expressive-code pre {
-  margin: 0;
+/* One border, and it is the card's.
+ *
+ * Expressive Code draws three more inside it, all in the same colour, so each
+ * reads as a second curve a hairline within the first. The reported one is the
+ * `<pre>`'s — same width, same 12px radius — whose top edge EC cancels only
+ * when a frame `has-title`, because there the tab is what closes the card. Our
+ * header is drawn on every block, titled or not, so the *untitled* ones kept a
+ * fully rounded `<pre>` inside a fully rounded card, and no others did: that is
+ * why it showed on some blocks and not others.
+ *
+ * The other two are the terminal titlebar's border and the editor tab bar's
+ * `::before`, and they are the same defect at the two frames nobody
+ * screenshotted — found at one member, presumed at the rest until checked.
+ * The frame carries the shape; nothing inside it carries any. */
+.expressive-code .frame pre {
+  border: none;
   border-radius: 0;
 }
 
+/* The terminal titlebar's box, minus the three sides that duplicate the card —
+ * and **not** its bottom, which is the header rule every other block draws from
+ * `.frame .header` above. Expressive Code draws that rule with a `::after`, and
+ * this stylesheet spends `::after` on the language tag, so a blanket
+ * `border: none` here left 163 shell blocks as the only cards with no line
+ * under their caption. One card, one rule, whatever the frame. */
+.expressive-code .frame.is-terminal .header {
+  border-top: none;
+  border-inline: none;
+  border-radius: 0;
+}
+
+/* The copy button rides in the header row, and the caption makes room for it.
+ *
+ * Expressive Code positions it absolutely from the card's top edge by
+ * `--button-spacing`, a value it sets per frame type for frames whose header is
+ * a tab. Ours is a caption bar on every block, so the untitled ones put a 32px
+ * button on top of the language tag — the two overlapped on hover, which is the
+ * state a reader sees whenever they reach for the button. Zeroing the offset
+ * centres it in the header instead, and the end padding reserves its width so
+ * the tag never sits under it. */
+.expressive-code .frame {
+  --button-spacing: 0rem;
+}
+
+/* The tab bar's, drawn as a pseudo-element that inherits the card's radius, so
+   it traced the same arc a hairline inside it on every titled block. The header
+   rule below the caption is the `border-bottom` above; this one was never
+   anything but the card's border, said twice. */
+.expressive-code .frame.has-title:not(.is-terminal) .header::before {
+  display: none;
+}
+
+/* One window, everywhere.
+ *
+ * A code block is a card with a header rule: the file on the left, the language
+ * on the right. Expressive Code draws a second kind for shell blocks — the
+ * three traffic lights of a desktop terminal — and the documentation design has
+ * no such window; its every block is that one card. The landing's own console
+ * keeps its dots, because that is what the design draws there, and it is
+ * markup we write rather than a frame Expressive Code picks.
+ */
+.expressive-code .frame .header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding-inline: 1.125rem;
+  /* The copy button's width, reserved — see `--button-spacing` above. Said in
+     this rule rather than its own: a later `padding-inline` shorthand on the
+     same selector would silently put it back, which is exactly what a separate
+     block did. */
+  padding-inline-end: 3rem;
+  padding-block: 0.625rem;
+  border-bottom: 1px solid var(--rs-hairline);
+  background: transparent;
+  font-family: var(--sl-font-mono);
+  /* 11px on its own leading, which is the documentation design's caption — not
+     the landing card's 11.5px on 12px of padding. The two mockups draw the
+     header at different heights on purpose, and this frame serves the docs. */
+  font-size: 0.6875rem;
+  line-height: normal;
+  font-weight: 400;
+  color: var(--rs-text-3);
+}
+
+.expressive-code .frame .title {
+  color: var(--rs-text-3);
+  padding: 0;
+  background: none;
+  border: none;
+}
+
+.expressive-code .frame .title::after {
+  display: none;
+}
+
+/* The traffic lights, drawn by a box-shadow on the caption. */
+.expressive-code .frame.is-terminal .header::before {
+  display: none;
+}
+
+/* Expressive Code positions this pseudo-element absolutely for its own frame
+   trim, which parks the tag at the left edge whatever margin it is given. Back
+   into the flex row first, then push it to the end. */
+.expressive-code .frame .header::after {
+  position: relative;
+  inset: auto;
+  margin-left: auto;
+  align-self: center;
+  font-family: var(--sl-font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  color: var(--rs-text-4);
+}
+
+/* `data-language` sits on the `<pre>`, which no selector can read backwards
+   from the caption — so `:has()` asks the frame, and the tag is spelled per
+   language. Every fence language the corpus uses has a row. */
+.expressive-code .frame:has(pre[data-language='rust']) .header::after {
+  content: 'RUST';
+}
+.expressive-code .frame:has(pre[data-language='bash']) .header::after {
+  content: 'BASH';
+}
+.expressive-code .frame:has(pre[data-language='sh']) .header::after {
+  content: 'SH';
+}
+.expressive-code .frame:has(pre[data-language='console']) .header::after {
+  content: 'CONSOLE';
+}
+.expressive-code .frame:has(pre[data-language='toml']) .header::after {
+  content: 'TOML';
+}
+.expressive-code .frame:has(pre[data-language='json']) .header::after {
+  content: 'JSON';
+}
+.expressive-code .frame:has(pre[data-language='sql']) .header::after {
+  content: 'SQL';
+}
+.expressive-code .frame:has(pre[data-language='graphql']) .header::after {
+  content: 'GRAPHQL';
+}
+.expressive-code .frame:has(pre[data-language='yaml']) .header::after {
+  content: 'YAML';
+}
+.expressive-code .frame:has(pre[data-language='ts']) .header::after {
+  content: 'TS';
+}
+.expressive-code .frame:has(pre[data-language='http']) .header::after {
+  content: 'HTTP';
+}
+.expressive-code .frame:has(pre[data-language='text']) .header::after {
+  content: 'TEXT';
+}
+
+
+
 /* ---------------------------------------------------------------------------
-   Ascent field — one heading for the whole page. The world falls (three
-   parallax star planes), the marks climb along a single lean, each behind its
-   own exhaust. Crafts fly the splash only; doc pages keep the stars alone.
+   Landing — full-bleed bands on one 1200px column
    --------------------------------------------------------------------------- */
-
-.nestrs-brand-bg {
-  --nestrs-star-rgb: 255 255 255;
-  /* One heading for every craft; --drift is tan(--lean) over the 132vh travel. */
-  --lean: 9deg;
-  --drift: 21vh;
-  --craft-gain: 1;
-}
-
-:root[data-theme='light'] .nestrs-brand-bg {
-  --nestrs-star-rgb: 92 94 108;
-  --craft-gain: 1.4;
-}
 
 .nestrs-page-shell {
   position: relative;
   isolation: isolate;
+  /* The bands break out of the reading column; `clip` keeps that from becoming
+     a horizontal scrollbar, and unlike `hidden` it leaves sticky alone. */
+  overflow-x: clip;
 }
 
-.nestrs-page-shell > .nestrs-brand-bg {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  overflow: hidden;
-  /* Clear the reading column; the field lives at the edges and behind it. */
-  -webkit-mask-image: radial-gradient(
-    ellipse 82% 78% at 50% 46%,
-    transparent 0%,
-    transparent 28%,
-    rgba(0, 0, 0, 0.5) 54%,
-    #000 94%
-  );
-  mask-image: radial-gradient(
-    ellipse 82% 78% at 50% 46%,
-    transparent 0%,
-    transparent 28%,
-    rgba(0, 0, 0, 0.5) 54%,
-    #000 94%
-  );
-}
-
-/* Content sits above the field. `:global()` is not valid in a plain stylesheet
-   — the selector is dropped, so this must stay a bare class. */
 .nestrs-page-shell > .page {
   position: relative;
   z-index: 0;
 }
 
-/*
- * Star planes — one tile of gradients, repeated, translated by exactly one
- * tile height so the loop is seamless whatever the viewport.
- */
-.nestrs-stars {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: calc(-1 * var(--tile));
-  height: calc(100% + 2 * var(--tile));
-  background-repeat: repeat;
-  background-size: var(--tile) var(--tile);
-  opacity: var(--layer-opacity);
-  will-change: transform;
-  animation: nestrs-starfall var(--dur) linear infinite;
+/* Splash pages have no sidebar and no table of contents: the bands are the
+   structure, so Starlight's content padding goes. */
+:root[data-has-hero] .content-panel {
+  border: none;
+  padding: 0;
 }
 
-.nestrs-stars--far {
-  --tile: 340px;
-  --dur: 82s;
-  --layer-opacity: 0.8;
+:root[data-has-hero] .sl-container {
+  max-width: none;
+  margin-inline: 0;
 }
 
-.nestrs-stars--mid {
-  --tile: 460px;
-  --dur: 48s;
-  --layer-opacity: 0.9;
+:root[data-has-hero] .sl-markdown-content > * {
+  margin-top: 0;
 }
 
-.nestrs-stars--near {
-  --tile: 600px;
-  --dur: 27s;
-  --layer-opacity: 1;
+.hero,
+.rs-band {
+  width: auto;
+  margin-inline: calc(50% - 50vw);
+  padding-inline: max(var(--rs-gutter), calc(50vw - var(--rs-max) / 2));
 }
 
-/* Off the splash the field is barely there — prose wins. */
-.nestrs-brand-bg:not(.is-full) .nestrs-stars {
-  --layer-opacity: 0.28;
-  --dur: 120s;
-}
-
-.nestrs-brand-bg:not(.is-full) .nestrs-stars--near {
-  --layer-opacity: 0.32;
-  --dur: 64s;
-}
-
-@keyframes nestrs-starfall {
-  from {
-    transform: translate3d(0, 0, 0);
-  }
-  to {
-    transform: translate3d(0, var(--tile), 0);
-  }
-}
-
-/*
- * Craft — the mark alone, never the nest. Nose locked to the shared lean,
- * scale rising with the climb so depth reads without a second cue.
- */
-.craft {
-  position: absolute;
-  top: 50%;
-  left: var(--x);
-  width: var(--w);
-  height: var(--w);
-  margin-top: calc(var(--w) / -2);
-  margin-left: calc(var(--w) / -2);
-  opacity: 0;
-  filter: blur(var(--depth-blur, 0px));
-  will-change: transform, opacity;
-  animation: nestrs-ascend var(--dur) linear var(--delay) infinite;
-}
-
-.craft-mark {
+.hero {
   display: block;
-  width: 100%;
-  height: 100%;
-  filter: drop-shadow(0 0 calc(var(--w) * 0.07) rgba(255, 110, 90, 0.55));
+  padding-block: var(--rs-band-y) 4.5rem;
+  animation: rs-fade-up 0.6s ease both;
 }
 
-/* Nozzle bloom — the light the exhaust throws, spilling past the trail. */
-.craft::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 34%;
-  width: 150%;
-  height: 110%;
-  transform: translateX(-50%);
-  background: radial-gradient(
-    ellipse 26% 34% at 50% 30%,
-    rgba(255, 150, 106, 0.45) 0%,
-    rgba(255, 77, 95, 0.14) 48%,
-    transparent 74%
-  );
-  filter: blur(calc(var(--w) * 0.05));
+.rs-band {
+  border-top: 1px solid var(--rs-hairline);
+  padding-block: var(--rs-band-y);
 }
 
-/*
- * Trail — a lens (border-radius 50%) rather than a clipped polygon, so it
- * tapers at both ends with no hard edge; blur scales with the craft or the
- * near planes read as cut paper.
- */
-.craft-plume {
-  position: absolute;
-  left: 50%;
-  top: 58%;
-  width: 20%;
-  height: 250%;
-  transform: translateX(-50%);
-  border-radius: 50%;
-  background: linear-gradient(
-    to bottom,
-    rgba(255, 190, 148, 0.9) 0%,
-    rgba(255, 122, 89, 0.55) 18%,
-    rgba(255, 77, 95, 0.24) 44%,
-    rgba(255, 77, 95, 0) 88%
-  );
-  filter: blur(calc(var(--w) * 0.05));
+.rs-band--alt {
+  background: var(--rs-bg-alt);
 }
 
-/* A tighter, brighter core inside the trail — without it the streak is a smudge. */
-.craft-plume::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 0;
-  width: 34%;
-  height: 52%;
-  transform: translateX(-50%);
-  border-radius: 50%;
-  background: linear-gradient(
-    to bottom,
-    rgba(255, 226, 196, 0.95) 0%,
-    rgba(255, 138, 96, 0.5) 40%,
-    rgba(255, 122, 89, 0) 100%
-  );
-  filter: blur(calc(var(--w) * 0.02));
-}
-
-@keyframes nestrs-ascend {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, 66vh, 0) rotate(var(--lean)) scale(0.82);
-  }
-  11% {
-    opacity: calc(var(--craft-opacity) * var(--craft-gain));
-  }
-  85% {
-    opacity: calc(var(--craft-opacity) * var(--craft-gain));
-  }
-  100% {
-    opacity: 0;
-    transform: translate3d(var(--drift), -66vh, 0) rotate(var(--lean)) scale(1.12);
-  }
-}
-
-/* Depth ladder: nearer ⇒ larger, faster, brighter, sharper. */
-.craft--1 {
-  --x: 7%;
-  --w: min(11vw, 122px);
-  --dur: 13s;
-  --delay: -2.4s;
-  --craft-opacity: 0.62;
-}
-
-.craft--2 {
-  --x: 91%;
-  --w: min(12vw, 136px);
-  --dur: 12s;
-  --delay: -8.1s;
-  --craft-opacity: 0.65;
-}
-
-.craft--3 {
-  --x: 63%;
-  --w: min(8vw, 88px);
-  --dur: 16.5s;
-  --delay: -5.2s;
-  --craft-opacity: 0.46;
-  --depth-blur: 0.4px;
-}
-
-.craft--4 {
-  --x: 24%;
-  --w: min(6vw, 66px);
-  --dur: 19s;
-  --delay: -12.6s;
-  --craft-opacity: 0.34;
-  --depth-blur: 0.7px;
-}
-
-.craft--5 {
-  --x: 79%;
-  --w: min(4.6vw, 50px);
-  --dur: 23s;
-  --delay: -3.7s;
-  --craft-opacity: 0.25;
-  --depth-blur: 1px;
-}
-
-.craft--6 {
-  --x: 43%;
-  --w: min(3.6vw, 40px);
-  --dur: 27s;
-  --delay: -17.3s;
-  --craft-opacity: 0.19;
-  --depth-blur: 1.3px;
-}
-
-/* Under the Starlight lg breakpoint: keep the stars, park the fleet. */
-@media (max-width: 50rem) {
-  .nestrs-brand-bg .craft {
-    display: none;
-  }
-
-  .nestrs-brand-bg .nestrs-stars {
-    --layer-opacity: 0.38;
-  }
+@keyframes rs-fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .nestrs-stars,
-  .craft,
-  .hero-pad svg,
-  .hero-lockup::before,
-  .hero-lockup > img,
-  .hero-lockup > .hero-html {
-    animation: none;
-    will-change: auto;
-  }
+  .hero { animation: none; }
+}
 
-  /* The fleet is mid-flight rather than absent. */
-  .craft {
-    opacity: calc(var(--craft-opacity) * var(--craft-gain));
-    transform: rotate(var(--lean));
+/* The `NN — LABEL` chip that opens every band. */
+.rs-label {
+  font-family: var(--sl-font-mono);
+  font-size: 0.71875rem;
+  letter-spacing: 0.08em;
+  color: var(--nestrs-accent);
+  margin: 0 0 1.125rem;
+}
+
+/* The label sets its own distance to the heading; Starlight's stacking margin
+   would add a second one on top of it. */
+.rs-label + .sl-heading-wrapper {
+  margin-top: 0;
+}
+
+/* The gradient tick is a documentation-page mark; the landing's bands are
+   already labelled, so it would be a second cue for one heading. */
+:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2::before {
+  display: none;
+}
+
+:root[data-has-hero] .sl-markdown-content .sl-heading-wrapper.level-h2 {
+  gap: 0;
+}
+
+:root[data-has-hero] .sl-markdown-content h2 {
+  font-size: clamp(1.85rem, 4vw, 2.375rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin: 0 0 1rem;
+}
+
+/* A band's own prose — the sentence under its heading, and the line under a
+   figure. `.rs-label` is a paragraph too, so it is excluded by name. */
+.rs-band-inner > p:not(.rs-label),
+.rs-split > div > p {
+  font-size: 1.03125rem;
+  line-height: 1.6;
+  color: var(--rs-text-2);
+  max-width: 40rem;
+}
+
+.rs-band-inner > p:not(.rs-label) + * {
+  margin-top: 2rem;
+}
+
+.rs-band-inner > :is(.rs-caps, .rs-reasons, .rs-bench, .rs-workspace) + p {
+  margin-top: 2rem;
+}
+
+/* The methodology disclosure under the benchmark. */
+.rs-band-inner details {
+  margin-top: 2rem;
+  font-size: 0.875rem;
+  color: var(--rs-text-3);
+}
+
+.rs-band-inner details summary {
+  font-family: var(--sl-font-mono);
+  font-size: 0.71875rem;
+  letter-spacing: 0.06em;
+  color: var(--rs-text-3);
+  cursor: pointer;
+}
+
+.rs-band-inner details summary:hover {
+  color: var(--rs-text);
+}
+
+.rs-band-inner details > :not(summary) {
+  max-width: 46rem;
+}
+
+/* The heading row: the claim on the left, the caveat set small on the right. */
+.rs-band-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2rem;
+  margin-bottom: 3rem;
+}
+
+:root[data-has-hero] .rs-band-head .sl-heading-wrapper.level-h2,
+:root[data-has-hero] .rs-band-head h2 {
+  margin: 0;
+}
+
+.rs-band-head .rs-band-aside {
+  max-width: 27.5rem;
+}
+
+.rs-band-head .rs-band-aside p {
+  margin: 0;
+  font-size: 0.90625rem;
+  line-height: 1.55;
+  color: var(--rs-text-3);
+  max-width: none;
+}
+
+.rs-band-head .rs-band-aside code {
+  background: none;
+  padding: 0;
+  color: var(--rs-text-2);
+}
+
+/* The line under a grid — the count, and where to enumerate it. */
+.rs-band-inner > .rs-band-foot {
+  margin-top: 2rem;
+}
+
+.rs-band-inner > .rs-band-foot p {
+  margin: 0;
+  font-size: 0.84375rem;
+  color: var(--rs-text-3);
+  max-width: none;
+}
+
+.rs-band-foot strong {
+  color: var(--rs-text);
+}
+
+.sl-markdown-content .rs-band-foot a {
+  color: var(--nestrs-accent);
+  text-decoration: none;
+}
+
+.sl-markdown-content .rs-band-foot a:hover {
+  color: var(--sl-color-accent-high);
+}
+
+/* The link that closes an argument column. */
+.sl-markdown-content a.rs-more {
+  display: inline-block;
+  color: var(--nestrs-accent);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  text-decoration: none;
+}
+
+.sl-markdown-content a.rs-more:hover {
+  color: var(--sl-color-accent-high);
+}
+
+/* --- Hero -------------------------------------------------------------- */
+
+.rs-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin: 0 0 2rem;
+  padding: 0.375rem 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--nestrs-accent) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nestrs-accent) 7%, transparent);
+  font-family: var(--sl-font-mono);
+  font-size: 0.71875rem;
+  line-height: 1.2;
+  color: var(--nestrs-accent);
+}
+
+.rs-eyebrow-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--nestrs-accent);
+}
+
+/* 76px flat wherever the column is wide enough for it, as the design sets it —
+   the viewport only takes it down, never up. */
+.hero h1 {
+  font-size: clamp(2.25rem, 9vw, 4.75rem);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  font-weight: 800;
+  margin: 0 0 1.75rem;
+  max-width: 56.25rem;
+  color: var(--rs-text);
+}
+
+.hero h1 .accent {
+  color: var(--nestrs-accent);
+}
+
+.rs-hero-sub {
+  font-size: clamp(1.0625rem, calc(0.9rem + 0.6vw), 1.25rem);
+  line-height: 1.55;
+  color: var(--rs-text-2);
+  max-width: 42.5rem;
+  margin: 0 0 2.5rem;
+}
+
+.rs-hero-sub strong {
+  color: var(--rs-text);
+  font-weight: 600;
+}
+
+.rs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.875rem;
+  margin-bottom: 4rem;
+}
+
+.rs-actions .sl-link-button {
+  border-radius: 10px;
+  font-size: 0.9375rem;
+  box-shadow: none;
+}
+
+.rs-actions .sl-link-button.primary {
+  background: var(--nestrs-accent);
+  border: none;
+  color: #121114;
+  font-weight: 700;
+  padding: 0.8125rem 1.625rem;
+  transition: filter 0.15s ease;
+}
+
+.rs-actions .sl-link-button.primary:hover {
+  filter: brightness(1.08);
+  color: #121114;
+}
+
+.rs-actions .sl-link-button.minimal {
+  border: 1px solid var(--rs-hairline-strong);
+  color: var(--rs-text);
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  transition: border-color 0.15s ease;
+}
+
+.rs-actions .sl-link-button.minimal:hover {
+  border-color: var(--rs-hairline-hover);
+  background: transparent;
+}
+
+/* The install chip — a command, so it is set in the code face. */
+.rs-actions .sl-link-button.rs-chip {
+  margin-left: 0.875rem;
+  border: 1px solid var(--rs-hairline);
+  background: var(--rs-card);
+  color: var(--rs-text-2);
+  font-family: var(--sl-font-mono);
+  font-size: 0.78125rem;
+  font-weight: 400;
+  padding: 0.6875rem 1.125rem;
+}
+
+.rs-actions .sl-link-button.rs-chip:hover {
+  border-color: color-mix(in srgb, var(--nestrs-accent) 40%, var(--rs-hairline));
+  color: var(--rs-text);
+}
+
+/* --- Stat strip -------------------------------------------------------- */
+
+.rs-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-top: 1px solid var(--rs-hairline);
+}
+
+.rs-stat {
+  padding: 1.625rem 1.5rem 0 0;
+  margin-right: 1.5rem;
+  border-right: 1px solid var(--rs-hairline);
+  min-width: 0;
+}
+
+.rs-stat:last-child {
+  border-right: none;
+  margin-right: 0;
+}
+
+.rs-stat-big {
+  font-family: var(--sl-font-mono);
+  font-size: 1.875rem;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--nestrs-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.rs-stat-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
+  margin-top: 0.375rem;
+  color: var(--rs-text);
+}
+
+.rs-stat-sub {
+  font-size: 0.78125rem;
+  line-height: 1.45;
+  color: var(--rs-text-3);
+  margin-top: 0.25rem;
+}
+
+.rs-hero-proof {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--rs-text-4);
+  margin: 1.25rem 0 0;
+  max-width: none;
+}
+
+.rs-hero-proof a {
+  color: var(--rs-text-3);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.rs-hero-proof a:hover {
+  color: var(--rs-text);
+}
+
+@media (max-width: 60rem) {
+  .rs-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 1rem;
   }
+  .rs-stat {
+    padding-right: 1rem;
+    margin-right: 1rem;
+  }
+  .rs-stat:nth-child(2n) {
+    border-right: none;
+    margin-right: 0;
+  }
+  .rs-actions .sl-link-button.rs-chip {
+    margin-left: 0;
+  }
+}
+
+/* --- Code cards -------------------------------------------------------- */
+
+.rs-code {
+  border: 1px solid var(--rs-hairline);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--rs-card);
+}
+
+.rs-code--terminal {
+  background: var(--rs-terminal);
+}
+
+.rs-code-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.125rem;
+  border-bottom: 1px solid var(--rs-hairline);
+}
+
+.rs-code--terminal .rs-code-head {
+  border-bottom-color: var(--rs-inline);
+}
+
+.rs-code-file {
+  font-family: var(--sl-font-mono);
+  font-size: 0.71875rem;
+  color: var(--rs-text-3);
+}
+
+.rs-code-note {
+  margin-left: auto;
+  font-family: var(--sl-font-mono);
+  font-size: 0.65625rem;
+  color: var(--rs-text-4);
+}
+
+.rs-code-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rs-hairline-hover);
+}
+
+.rs-code-label {
+  margin-left: 0.5rem;
+  font-family: var(--sl-font-mono);
+  font-size: 0.6875rem;
+  color: var(--rs-text-4);
+}
+
+.sl-markdown-content .rs-code-body {
+  margin: 0;
+  padding: 1.25rem 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--sl-font-mono);
+  font-size: 0.78125rem;
+  line-height: 1.85;
+  color: var(--rs-prose);
+  overflow-x: auto;
+}
+
+.sl-markdown-content .rs-code--terminal .rs-code-body {
+  padding: 1.25rem 1.375rem;
+  line-height: 1.8;
+  color: var(--rs-text-2);
+}
+
+.rs-code-line {
+  display: block;
+  padding: 0 1.375rem;
+}
+
+.rs-code--terminal .rs-code-line {
+  padding: 0;
+}
+
+/* The line the argument turns on: an accent wash, a bar, and its legend number. */
+.rs-code-line.is-marked {
+  background: color-mix(in srgb, var(--nestrs-accent) 7%, transparent);
+  box-shadow: inset 2px 0 0 var(--nestrs-accent);
+}
+
+/* Flex, so the number sits at the end of the line it belongs to rather than
+   floating onto one of its own; the code keeps its own `pre` whitespace. */
+.rs-code-line.has-marker {
+  display: flex;
+  align-items: baseline;
+}
+
+.rs-code-src {
+  white-space: pre;
+}
+
+.rs-code-marker {
+  margin-left: auto;
+  padding-left: 1rem;
+  color: var(--nestrs-accent);
+  font-size: 0.65625rem;
+  opacity: 0.85;
+}
+
+.rs-t-kw { color: var(--rs-syn-kw); }
+.rs-t-str { color: var(--rs-syn-str); }
+.rs-t-com { color: var(--rs-text-4); }
+.rs-t-attr { color: var(--nestrs-accent); }
+.rs-t-bright { color: var(--rs-text); }
+.rs-t-dim { color: var(--rs-text-4); }
+.rs-t-err { color: var(--rs-syn-err); }
+
+/* --- Two-column band (heading + argument | evidence) -------------------- */
+
+.rs-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(23.75rem, 1fr));
+  gap: 4rem;
+  align-items: start;
+}
+
+.rs-split > * {
+  min-width: 0;
+}
+
+.rs-split .rs-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.rs-split .rs-evidence > * {
+  margin: 0;
+}
+
+/* Numbered explanations — a counter, so the markdown stays paragraphs. */
+.rs-steps {
+  counter-reset: rs-step;
+  display: flex;
+  flex-direction: column;
+  gap: 1.125rem;
+  margin: 1.75rem 0 2rem;
+}
+
+.rs-steps p {
+  counter-increment: rs-step;
+  position: relative;
+  margin: 0;
+  padding-left: 2.25rem;
+  font-size: 0.90625rem;
+  line-height: 1.55;
+  color: var(--rs-text-2);
+  max-width: none;
+}
+
+.rs-steps p::before {
+  content: counter(rs-step);
+  position: absolute;
+  left: 0;
+  top: 0.05em;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--nestrs-accent) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--nestrs-accent) 45%, transparent);
+  color: var(--nestrs-accent);
+  font-family: var(--sl-font-mono);
+  font-size: 0.6875rem;
+}
+
+.rs-steps p strong {
+  color: var(--rs-text);
+}
+
+/* --- Benchmarks -------------------------------------------------------- */
+
+.rs-bench {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2.5rem 4.5rem;
+  margin-top: 3rem;
+}
+
+.rs-bench-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.875rem;
+  gap: 1rem;
+}
+
+.rs-bench-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--rs-text);
+}
+
+.rs-bench-factor {
+  font-family: var(--sl-font-mono);
+  font-size: 0.75rem;
+  color: var(--nestrs-accent);
+  white-space: nowrap;
+}
+
+.rs-bench-row {
+  display: grid;
+  grid-template-columns: 4.625rem 1fr 5.25rem;
+  align-items: center;
+  gap: 0.875rem;
+  margin-bottom: 0.5625rem;
+}
+
+.rs-bench-who {
+  font-size: 0.78125rem;
+  color: var(--rs-text-3);
+}
+
+.rs-bench-row.is-nestrs .rs-bench-who {
+  color: var(--rs-text);
+  font-weight: 700;
+}
+
+.rs-bench-track {
+  display: block;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--rs-track);
+  overflow: hidden;
+}
+
+.rs-bench-fill {
+  display: block;
+  height: 100%;
+  width: var(--w);
+  border-radius: 5px;
+  background: var(--rs-muted-bar);
+}
+
+.rs-bench-row.is-nestrs .rs-bench-fill {
+  background: var(--nestrs-gradient);
+}
+
+.rs-bench-num {
+  font-family: var(--sl-font-mono);
+  font-size: 0.75rem;
+  text-align: right;
+  color: var(--rs-text-2);
+}
+
+/* Armed by JS only — no-JS keeps the bars at their measured width. */
+.rs-bench--armed .rs-bench-fill {
+  width: 0;
+  transition: width 0.8s ease;
+}
+
+.rs-bench--armed.is-visible .rs-bench-fill {
+  width: var(--w);
+}
+
+/* --- Capabilities ------------------------------------------------------ */
+
+.rs-caps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.875rem;
+  margin-top: 3rem;
+}
+
+/* A capability card is a card, not a link in prose: it takes the page's own ink
+   and answers on its border. Spelled with the anchor so it outranks the
+   markdown link colour that would otherwise reach every name here. */
+.rs-caps a.rs-cap {
+  color: var(--rs-text);
+}
+
+.rs-cap {
+  display: block;
+  padding: 1.25rem 1.375rem;
+  border: 1px solid var(--rs-hairline);
+  border-radius: 12px;
+  background: var(--rs-card);
+  color: var(--rs-text);
+  text-decoration: none;
+  transition: border-color 0.15s ease;
+}
+
+.rs-cap:hover {
+  border-color: color-mix(in srgb, var(--nestrs-accent) 45%, var(--rs-hairline));
+}
+
+.rs-cap-name {
+  display: block;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  margin-bottom: 0.375rem;
+}
+
+.rs-cap-desc {
+  display: block;
+  font-size: 0.78125rem;
+  line-height: 1.5;
+  color: var(--rs-text-3);
+}
+
+/* --- Guarantees -------------------------------------------------------- */
+
+.rs-reasons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 3rem;
+  background: var(--rs-hairline);
+  border: 1px solid var(--rs-hairline);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.rs-reason {
+  background: var(--rs-bg);
+  padding: 1.875rem 1.75rem;
+}
+
+.rs-reason-glyph {
+  font-family: var(--sl-font-mono);
+  font-size: 1.25rem;
+  color: var(--nestrs-accent);
+  margin-bottom: 0.875rem;
+}
+
+.rs-reason-title {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--rs-text);
+}
+
+.rs-reason-desc {
+  font-size: 0.84375rem;
+  line-height: 1.6;
+  color: var(--rs-text-2);
+  margin: 0;
+  max-width: none;
+}
+
+/* --- Workspace and scale ----------------------------------------------- */
+
+.rs-workspace {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(23.75rem, 1fr));
+  gap: 1.5rem;
+  align-items: stretch;
+  margin-top: 3rem;
+}
+
+.rs-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 1.375rem;
+  border: 1px solid var(--rs-hairline);
+  border-radius: 16px;
+  background: var(--rs-card);
+}
+
+.rs-card-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+  color: var(--rs-text);
+}
+
+.rs-card-note {
+  margin: 0.375rem 0.25rem 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--rs-text-4);
+  max-width: none;
+}
+
+.rs-card-note code {
+  font-family: var(--sl-font-mono);
+  font-size: 0.9em;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.rs-tier {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.875rem 1rem;
+  border-radius: 12px;
+}
+
+.rs-tier--public {
+  border: 1px solid color-mix(in srgb, var(--nestrs-accent) 35%, var(--rs-hairline));
+  background: color-mix(in srgb, var(--nestrs-accent) 6%, transparent);
+}
+
+.rs-tier--private {
+  border: 1px dashed var(--rs-hairline-hover);
+}
+
+.rs-tier-head {
+  flex: 0 0 5.75rem;
+}
+
+.rs-tier-label {
+  display: block;
+  font-family: var(--sl-font-mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--rs-text-2);
+}
+
+.rs-tier--public .rs-tier-label {
+  color: var(--nestrs-accent);
+}
+
+.rs-tier-hint {
+  display: block;
+  font-size: 0.71875rem;
+  color: var(--rs-text-3);
+  margin-top: 0.1875rem;
+}
+
+.rs-tier-apps {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.rs-tier-app {
+  border: 1px solid var(--rs-hairline-strong);
+  border-radius: 10px;
+  padding: 0.75rem;
+  text-align: center;
+}
+
+.rs-tier--private .rs-tier-app {
+  border-style: dashed;
+}
+
+.rs-tier-app-name {
+  display: block;
+  font-family: var(--sl-font-mono);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--rs-text);
+}
+
+.rs-tier-app-role {
+  display: block;
+  font-size: 0.71875rem;
+  color: var(--rs-text-3);
+  margin-top: 0.1875rem;
+}
+
+.rs-port {
+  color: var(--nestrs-accent);
+}
+
+.rs-shared {
+  text-align: center;
+  border: 1px solid color-mix(in srgb, var(--nestrs-teal) 42%, var(--rs-hairline));
+  background: color-mix(in srgb, var(--nestrs-teal) 8%, transparent);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+}
+
+.rs-shared-label {
+  display: block;
+  font-family: var(--sl-font-mono);
+  font-size: 0.78125rem;
+  font-weight: 600;
+  color: var(--nestrs-teal);
+}
+
+.rs-shared-sub {
+  display: block;
+  font-size: 0.71875rem;
+  color: var(--rs-text-3);
+  margin-top: 0.1875rem;
+}
+
+.rs-lane {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.8125rem 1rem;
+  border: 1px solid var(--rs-hairline);
+  border-radius: 12px;
+}
+
+.rs-lane--api {
+  border-color: color-mix(in srgb, var(--nestrs-accent) 30%, var(--rs-hairline));
+}
+
+.rs-lane--api-steady {
+  border-color: color-mix(in srgb, var(--nestrs-accent) 18%, var(--rs-hairline));
+}
+
+.rs-lane--worker,
+.rs-lane--worker-light {
+  border-style: dashed;
+  border-color: var(--rs-hairline-hover);
+}
+
+.rs-lane-app {
+  flex: 0 0 7.375rem;
+  font-family: var(--sl-font-mono);
+  font-size: 0.78125rem;
+  font-weight: 700;
+  color: var(--rs-text);
+}
+
+.rs-lane-signal {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--rs-text-3);
+}
+
+.rs-lane-pills {
+  display: flex;
+  align-items: center;
+  gap: 0.3125rem;
+}
+
+.rs-lane-pills i {
+  display: block;
+  width: 16px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--rs-hairline-strong);
+}
+
+.rs-lane--api .rs-lane-pills i {
+  border-color: color-mix(in srgb, var(--nestrs-accent) 40%, var(--rs-hairline));
+  background: color-mix(in srgb, var(--nestrs-accent) 12%, transparent);
+}
+
+.rs-lane--api-steady .rs-lane-pills i {
+  border-color: color-mix(in srgb, var(--nestrs-accent) 28%, var(--rs-hairline));
+  background: color-mix(in srgb, var(--nestrs-accent) 8%, transparent);
+}
+
+.rs-lane--worker .rs-lane-pills i,
+.rs-lane--worker-light .rs-lane-pills i {
+  border-style: dashed;
+  border-color: var(--rs-hairline-hover);
+}
+
+.rs-lane-factor {
+  font-family: var(--sl-font-mono);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--nestrs-accent);
+  margin-left: 0.375rem;
+}
+
+/* --- Closing bands ----------------------------------------------------- */
+
+.rs-band--cta {
+  background: linear-gradient(180deg, var(--rs-bg-alt), var(--rs-bg));
+  text-align: center;
+  padding-block: 6.25rem 6.875rem;
+}
+
+:root[data-has-hero] .rs-band--cta .sl-heading-wrapper.level-h2 {
+  justify-content: center;
+}
+
+:root[data-has-hero] .rs-band--cta h2 {
+  font-size: clamp(2.125rem, calc(1.2rem + 2.4vw), 2.875rem);
+  letter-spacing: -0.03em;
+}
+
+:root[data-has-hero] .rs-band--cta > .rs-band-inner > p {
+  margin-inline: auto;
+  max-width: 32.5rem;
+  font-size: 1.0625rem;
+}
+
+.rs-cta-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.875rem;
+  margin-top: 2.5rem;
+}
+
+.rs-cta-row code {
+  font-family: var(--sl-font-mono);
+  font-size: 0.875rem;
+  color: var(--rs-text);
+  background: var(--rs-card);
+  border: 1px solid var(--rs-hairline-strong);
+  padding: 0.875rem 1.5rem;
+  border-radius: 10px;
+}
+
+.rs-cta-row code .rs-prompt {
+  color: var(--rs-text-4);
+}
+
+.rs-cta-row .rs-cta-button {
+  display: inline-block;
+  background: var(--nestrs-accent);
+  color: #121114;
+  font-weight: 700;
+  font-size: 0.9375rem;
+  padding: 0.875rem 1.75rem;
+  border-radius: 10px;
+  text-decoration: none;
+  transition: filter 0.15s ease;
+}
+
+.rs-cta-row .rs-cta-button:hover {
+  filter: brightness(1.08);
+  color: #121114;
+}
+
+/* --- Landing responsive ------------------------------------------------ */
+
+@media (max-width: 62.5rem) {
+  .rs-caps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rs-reasons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rs-bench {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2rem;
+  }
+  .rs-split {
+    gap: 3rem;
+  }
+}
+
+@media (max-width: 45rem) {
+  :root {
+    --rs-band-y: 3.5rem;
+    --rs-gutter: 1.25rem;
+  }
+  .rs-caps,
+  .rs-reasons {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rs-band-head {
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .rs-tier {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .rs-tier-head {
+    flex: none;
+    text-align: center;
+  }
+  .rs-lane {
+    flex-wrap: wrap;
+  }
+  .rs-lane-app {
+    flex: 0 0 auto;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Footer — the credit row every page closes on
+   --------------------------------------------------------------------------- */
+
+.rs-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2.5rem;
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--rs-hairline);
+  font-size: 0.8125rem;
+  color: var(--rs-text-4);
+}
+
+.rs-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+}
+
+.rs-footer a {
+  color: var(--rs-text-3);
+  text-decoration: none;
+}
+
+.rs-footer a:hover {
+  color: var(--rs-text);
+}
+
+/* The splash closes on its own CTA. Starlight's page furniture — the edit
+   link, the last-updated stamp, the prev/next pair — answers a question a
+   reader of a documentation page has and a visitor to the landing does not. */
+:root[data-has-hero] .sl-container > footer {
+  display: none;
+}
+
+/* On the splash the footer is a band of its own, so it spans the page. */
+:root[data-has-hero] .rs-footer {
+  margin-top: 0;
+  padding-block: 1.75rem;
+  margin-inline: calc(50% - 50vw);
+  padding-inline: max(var(--rs-gutter), calc(50vw - var(--rs-max) / 2));
+}
+
+/* The trail above an h1 — the section a page sits in, the page itself in
+   accent. Rendered by `PageTitle.astro`, which reads the hydrated sidebar. */
+.rs-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-bottom: 1.125rem;
+  font-family: var(--sl-font-mono);
+  font-size: 0.6875rem;
+  color: var(--rs-text-3);
+}
+
+.rs-breadcrumb-sep {
+  color: var(--rs-hairline-hover);
+}
+
+.rs-breadcrumb-current {
+  color: var(--nestrs-accent);
 }

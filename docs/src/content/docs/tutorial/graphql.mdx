@@ -30,7 +30,7 @@ which builds on top of [async-graphql](https://async-graphql.github.io/async-gra
 Schema discovery, dataloader registration, and the authz bridge come
 from the framework crate; the schema model itself is async-graphql's.
 
-```rust title="crates/features/src/users/graphql/resolver.rs"
+```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
 use std::sync::Arc;
 
 use async_graphql::{Context, Result};
@@ -112,7 +112,7 @@ The adapter imports the port (`UsersModule`), the authz bridge
 `belongs_to` org relation (next section) — the org port whose service
 hosts the auto-emitted loader:
 
-```rust title="crates/features/src/users/graphql/module.rs"
+```rust title="crates/features/src/users/graphql/module.rs (from the demo)"
 use nest_rs::core::module;
 
 use super::resolver::UsersResolver;
@@ -127,7 +127,7 @@ use crate::users::UsersModule;
 pub struct UsersGraphqlModule;
 ```
 
-```rust title="crates/features/src/users/graphql/mod.rs"
+```rust title="crates/features/src/users/graphql/mod.rs (from the demo)"
 mod module;
 mod resolver;
 
@@ -137,7 +137,7 @@ pub use resolver::UsersResolver;
 
 And the feature root:
 
-```rust title="crates/features/src/users/mod.rs" {7, 12}
+```rust title="crates/features/src/users/mod.rs (from the demo)" {7, 12}
 mod entity;
 mod module;
 mod service;
@@ -158,7 +158,7 @@ pub use http::{UsersController, UsersHttpModule};
 The app root imports `GraphqlModule::for_root(None)` to mount the HTTP
 endpoint, and the feature's GraphQL adapter for the operations.
 
-```rust title="apps/api/src/module.rs" {14-15}
+```rust title="apps/api/src/module.rs (from the demo)" {14-15}
         UsersGraphqlModule,
         GraphqlModule::for_root(None),
 ```

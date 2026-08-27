@@ -30,7 +30,7 @@ A regular `#[injectable]` service with one decorated method. The `#[scheduled]`
 attribute marks the impl block; `#[every("5s")]` marks the method as a
 recurring job.
 
-```rust title="crates/features/src/audio/schedule/tasks.rs (abridged)"
+```rust title="crates/features/src/audio/schedule/tasks.rs (from the demo, abridged)"
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -76,7 +76,7 @@ This is the pattern the framework is built for. A single `#[injectable]`
 owns the deps once, and as many decorated methods as you need share them.
 Mix triggers freely:
 
-```rust title="crates/features/src/audio/schedule/tasks.rs (abridged)"
+```rust title="crates/features/src/audio/schedule/tasks.rs (from the demo, abridged)"
 use nest_rs::core::injectable;
 use nest_rs::schedule::{scheduled, CronExpression};
 
@@ -150,7 +150,7 @@ the job and the offending value — never silently skipped.
 
 The provider goes in its feature module like any other `#[injectable]`:
 
-```rust title="crates/features/src/audio/schedule/module.rs"
+```rust title="crates/features/src/audio/schedule/module.rs (from the demo)"
 use nest_rs::core::module;
 
 use super::tasks::AudioTasks;
@@ -168,7 +168,7 @@ dependency — the same Rust-visibility rule every other adapter follows.
 The app activates the scheduler by importing `ScheduleModule` —
 `ScheduleModule` contributes the scheduler to `App::run` itself:
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
 use nest_rs::schedule::ScheduleModule;
 use features::audio::{AudioHttpModule, AudioScheduleModule};
@@ -181,7 +181,7 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
 pub struct ApiModule;
 ```
 
-```rust title="apps/api/src/main.rs"
+```rust title="apps/api/src/main.rs (from the demo)"
 use nest_rs::core::App;
 use api::ApiModule;
 
@@ -257,7 +257,7 @@ run on the pool instead, which is right for a tick that brackets long work
 that is not the database's. See
 [Repo and the executor](/database/repo-and-executor/).
 
-```rust
+```rust title="crates/features/src/posts/schedule/tasks.rs"
 #[injectable]
 pub struct CleanupTasks {
     #[inject]

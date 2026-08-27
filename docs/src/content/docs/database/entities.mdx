@@ -111,7 +111,7 @@ to:
 | `updated_at` | `DateTimeWithTimeZone` | Stamped on every save by `timestamps`. Read-only on the wire. |
 | `deleted_at` | `Option<DateTimeWithTimeZone>` | The soft-delete tombstone. **Left unexposed** — it's server-side state, never a wire field. |
 
-```rust
+```rust title="crates/features/src/posts/entity.rs"
 #[sea_orm(primary_key, auto_increment = false)]
 #[expose]
 pub id: Uuid,
@@ -170,7 +170,7 @@ An exposed column whose type is your own enum passes through to the wire
 `Serialize`, `Deserialize`, `JsonSchema`, and under `graphql`
 `async_graphql::Enum`, plus the `Clone`/`Copy`/`Eq` shape those require:
 
-```rust title="src/posts/entities/post.rs"
+```rust title="crates/features/src/posts/entities/post.rs"
 use nest_rs::resource::{expose, wire_enum};
 
 #[wire_enum(graphql)]
@@ -208,7 +208,7 @@ single boundary suffix fits. `validate(...)` attaches a
 [`validator`](https://docs.rs/validator) rule, re-emitted verbatim onto the
 input field:
 
-```rust
+```rust title="crates/features/src/posts/entity.rs"
 #[expose(input(create, update), validate(length(min = 1)))]
 pub title: String,
 
@@ -233,7 +233,7 @@ A SeaORM `belongs_to` / `has_many` field, typed `HasOne<E>` /
 `HasMany<E>` and marked `#[expose]`, becomes a GraphQL field
 **auto-resolved by a dataloader** — no `#[field_resolver]` to write:
 
-```rust
+```rust title="crates/features/src/users/entity.rs"
 #[sea_orm(belongs_to, from = "org_id", to = "id")]
 #[expose]
 pub org: HasOne<crate::orgs::Entity>,
@@ -322,7 +322,7 @@ empty `impl ActiveModelBehavior for ActiveModel {}` yourself.
 The columns it reads must exist in a migration — including the
 lifecycle columns, with their database-side defaults:
 
-```rust
+```rust title="crates/migrations/src/m20260101_000001_create_post.rs"
 .col(ColumnDef::new(Post::CreatedAt)
     .timestamp_with_time_zone().not_null()
     .default(Expr::current_timestamp()))

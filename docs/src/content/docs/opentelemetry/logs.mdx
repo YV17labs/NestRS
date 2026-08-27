@@ -40,7 +40,7 @@ appear under the default `info` filter. A production deploy should respect
 
 ## Structured fields
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 tracing::info!(
     target: "features::users",
     user_id = %id,
@@ -69,7 +69,7 @@ process, and **inside a streaming response**, which is the one that surprises
 people: an `#[sse]` stream is written after its handler returned, and it still
 runs under the request that opened it.
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 let trace_id = nest_rs::core::current_trace_id();
 let span_id = nest_rs::core::current_span_id();
 // `None` for an anonymous caller — absence is the answer, not a missing one.
@@ -116,7 +116,7 @@ DEBUG http.request{otel.kind="server" trace_id=01a014ec…a4 span_id=5fcb…b7 h
 Reading the context instead of the scope is what makes the line self-contained,
 and it is the same read your own code does:
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 let trace_id = nest_rs::core::current_trace_id();
 let span_id = nest_rs::core::current_span_id();
 let actor_id = nest_rs::core::current_actor_id();

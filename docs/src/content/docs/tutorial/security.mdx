@@ -46,7 +46,7 @@ A resource server pins a single alias once. The reference feature's
 `Claims` carries an org id and a role set — exactly what authz reads
 back.
 
-```rust title="crates/features/src/authn/strategy.rs"
+```rust title="crates/features/src/authn/strategy.rs (from the demo)"
 pub type AuthnStrategy = JwtStrategy<Claims>;
 
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
@@ -67,7 +67,7 @@ so it cannot ship a `Claims` or an `AuthzAbility` for you.
 Admins manage their org's users; plain users read a scoped, redacted
 view. The reference policy fits in one method:
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs (from the demo)"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
@@ -110,7 +110,7 @@ Two patterns to read here:
 The controller declaration changes by two attributes — one for the
 guard chain, one for the by-id extractor.
 
-```rust title="crates/features/src/users/http/controller.rs" {3-9, 13, 16-19, 23-29}
+```rust title="crates/features/src/users/http/controller.rs (from the demo)" {3-9, 13, 16-19, 23-29}
 use std::sync::Arc;
 
 use nest_rs::authz::http::Authorize;
@@ -121,8 +121,8 @@ use nest_rs::http::poem::Result;
 use nest_rs::http::poem::web::Json;
 
 use crate::Claims;
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use features::authn::AuthnGuard;
+use features::authz::AuthzGuard;
 use crate::users::{CreateUser, Entity as UserEntity, UpdateUser, User, UsersService};
 
 #[controller(path = "/users")]
@@ -168,7 +168,7 @@ is no placeholder to fill in and no way to spoof the tenant.
 
 The HTTP adapter now needs the authz bridge:
 
-```rust title="crates/features/src/users/http/module.rs" {3, 7}
+```rust title="crates/features/src/users/http/module.rs (from the demo)" {3, 7}
 use nest_rs::core::module;
 
 use super::controller::UsersController;
@@ -190,7 +190,7 @@ than running silently unprotected.
 The app root — `api`, not `blog` — imports `AuthnModule` and
 `AuthzModule` once:
 
-```rust title="apps/api/src/module.rs (abridged)"
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use features::authn::AuthnModule;
 use features::authz::AuthzModule;
 use features::users::UsersHttpModule;
@@ -275,7 +275,7 @@ Rewriting `define` in `crates/features/src/authz/ability.rs` turns it into a
 policy, using only the columns `blog` already has (the actor comes first — the
 trait's own order):
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs (from the demo)"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 
 use crate::authn::Claims;

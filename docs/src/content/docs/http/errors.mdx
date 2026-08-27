@@ -3,7 +3,6 @@ title: HTTP errors
 description: Map handler errors to HTTP responses — ResponseError on a feature error enum, ProblemDetails for one-off RFC 9457 bodies.
 tier: basics
 sidebar:
-  label: Errors
   order: 5
 ---
 
@@ -24,7 +23,7 @@ unconditional mapping, the `ResponseError` default), see
 The pattern is `thiserror::Error` for the error type,
 [poem](https://docs.rs/poem)'s `ResponseError` for the status:
 
-```rust
+```rust title="crates/features/src/hello/error.rs"
 use nest_rs::http::poem::http::StatusCode;
 use nest_rs::http::poem::error::ResponseError;
 use thiserror::Error;
@@ -74,7 +73,7 @@ A glue route that doesn't own a feature error enum can still emit a
 structured error body conforming to
 [RFC 9457 — Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457.html):
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::ProblemDetails;
 use nest_rs::http::poem::Result;
 use nest_rs::http::poem::web::Json;
@@ -142,7 +141,7 @@ type has no such discipline imposed on it**, and a `Display` that wraps a
 driver error carries SQL, column names and sometimes row values into the
 response body.
 
-```rust
+```rust title="crates/features/src/reports/http/controller.rs"
 use nest_rs::http::Opaque;
 
 #[get("/reports/:id")]

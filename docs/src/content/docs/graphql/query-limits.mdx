@@ -34,7 +34,7 @@ Both are on by default (`max_depth = 15`, `max_complexity = 2000`).
 Keep both — depth alone misses wide queries, complexity alone misses
 queries that depth-bomb the parser before the visitor even runs.
 
-```rust title="src/module.rs — production pin"
+```rust title="apps/api/src/module.rs — production pin"
 use nest_rs::core::module;
 use nest_rs::graphql::{GraphqlConfig, GraphqlModule};
 
@@ -128,7 +128,7 @@ denial drops that to zero, so no fanout penalty is needed. That means
 
 `#[expose(complexity = …)]` overrides the auto-emitted factor:
 
-```rust title="src/orgs/entity.rs"
+```rust title="crates/features/src/orgs/entity.rs"
 #[expose(name = "Org", service = …, graphql)]
 #[sea_orm::model]
 pub struct Model {
@@ -186,7 +186,7 @@ and `after`, which is why its default formula can be argument-aware at
 all. A hand-written `#[field_resolver]` taking its own arguments does the
 same with a regular `#[graphql(complexity = …)]`:
 
-```rust
+```rust title="the entity, then the resolver"
 // No #[expose] => no auto-emission; own it on the resolver.
 #[sea_orm(has_many)]
 pub posts: HasMany<crate::posts::Entity>,

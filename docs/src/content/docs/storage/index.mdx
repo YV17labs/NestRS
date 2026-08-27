@@ -40,7 +40,7 @@ cargo add nest-rs --features storage
 from `NESTRS_STORAGE__*`) and registers `Storage` as a singleton
 provider. Import it where a feature needs storage:
 
-```rust title="src/media/module.rs"
+```rust title="crates/features/src/media/module.rs"
 use nest_rs::core::module;
 use nest_rs::storage::StorageModule;
 
@@ -60,7 +60,7 @@ Every field is settable via `NESTRS_STORAGE__*` env **or** a pinned
 composition root; the environment still overlays it per field, so a bucket
 in the source does not freeze the credentials against the deployment:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 StorageModule::for_root(StorageConfig {
     bucket: "acme-media".into(),
     ..Default::default()
@@ -94,7 +94,7 @@ The canonical flow keeps bytes off the API. A handler injects `Storage`
 and returns a signed `PUT` URL; the client uploads straight to the
 object store; a later call reads the object's metadata to finalize.
 
-```rust title="src/media/service.rs"
+```rust title="crates/features/src/media/service.rs"
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -135,7 +135,7 @@ lacks it.
 Workers that transform objects (e.g. generating a WebP variant) read
 and write bytes directly:
 
-```rust
+```rust title="crates/features/src/media/service.rs"
 let original = self.storage.get_bytes(key).await?;   // -> bytes::Bytes
 let webp = transcode(&original)?;
 self.storage
@@ -174,7 +174,7 @@ get to pick its own HTTP status, so `?`-ing one straight out of a handler does
 not compile. Wrap it in the feature's own error, which is where the status
 belongs:
 
-```rust title="src/media/error.rs"
+```rust title="crates/features/src/media/error.rs"
 use nest_rs::http::poem::error::ResponseError;
 use nest_rs::http::poem::http::StatusCode;
 use nest_rs::storage::StorageError;
@@ -197,7 +197,7 @@ for the shape with a `ProblemDetails` body and the `error` log.
 A `StorageError` does convert into `std::io::Error`, so a `get_stream` feeds
 `poem::Body::from_bytes_stream` directly:
 
-```rust
+```rust title="crates/features/src/media/http/controller.rs"
 let Some(stream) = self.storage.get_stream(key).await.ok() else {
     return Ok(ProblemDetails::not_found().into_response());
 };

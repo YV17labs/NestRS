@@ -24,7 +24,7 @@ review checklist into a structural property.
 
 A service method that lists rows:
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 async fn list(&self) -> Result<Vec<entity::Model>, DbErr> {
     Repo::<entity::Entity>::all().await
 }
@@ -34,7 +34,7 @@ async fn list(&self) -> Result<Vec<entity::Model>, DbErr> {
 ambient `Ability` granting `Read` on `entity::Entity` when
 `org_id = $caller_org_id`, the emitted SQL is:
 
-```sql
+```sql title="what reaches Postgres"
 -- Before: a naive list query
 SELECT * FROM users;
 
@@ -152,7 +152,7 @@ should not see. With the filter joined at the `Repo` layer, that
 class of bug stops compiling: the handler does not write the
 predicate, so it cannot get it wrong.
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 // What this prevents — a hand-written list query that forgets the org filter.
 let everyone = user::Entity::find().all(&conn).await?;
 //                              ^^^^ leaks every row across every tenant
@@ -169,7 +169,7 @@ Sometimes a handler builds a query the `CrudService` cannot express
 condition as a handler parameter via `Scope<E, A>` and join it
 yourself:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::authz::{Read, http::Scope};
 
 #[get("/users/search")]

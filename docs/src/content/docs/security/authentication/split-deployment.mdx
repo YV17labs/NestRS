@@ -109,7 +109,7 @@ NESTRS_AUTHN__PUBLIC_KEY"`.
 
 ## Two `main` files, one feature set
 
-```rust title="apps/auth/src/module.rs"
+```rust title="apps/auth/src/module.rs (from the demo)"
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -132,7 +132,7 @@ The issuer imports the OAuth flow controller (`OAuthHttpModule`) and
 the throttler. It does **not** import `UsersHttpModule` — the issuer
 mints tokens, not users.
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -221,7 +221,7 @@ the MCP authorization spec require: it serves
 `/.well-known/oauth-protected-resource`, and it stamps a pointer to
 that document onto every `401` the app emits.
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(imports = [
     HttpModule::for_root(None),
     AuthnModule::for_root(None),

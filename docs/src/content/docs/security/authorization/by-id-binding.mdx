@@ -27,7 +27,7 @@ there".
 
 ## What it looks like
 
-```rust title="crates/features/src/users/http/controller.rs"
+```rust title="crates/features/src/users/http/controller.rs (from the demo)"
 use nest_rs::authz::Read;
 use nest_rs::seaorm::Bind;
 
@@ -76,7 +76,7 @@ fails at request time with this 500.
 `Bind<A, S>` calls `S::access(action, id)` from the service. The
 default `CrudService::access` is (simplified):
 
-```rust
+```rust title="(expanded by #[crud] — you don't write this)"
 async fn access(&self, action: Action, id: Uuid)
     -> Result<Access<Model>, DbErr>
 {
@@ -118,7 +118,7 @@ Two things to notice:
 
 ## The `Access` outcome
 
-```rust
+```rust title="nest_rs::seaorm::Access"
 pub enum Access<M> {
     Found(M),
     Denied,
@@ -130,7 +130,7 @@ A handler that does not use `Bind` (a service that authorizes its
 own load, a worker job touching one row) returns `Access<M>` directly
 and maps it to a wire shape:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 match self.svc.access(Action::Read, id).await.map_err(ServiceError::from)? {
     Access::Found(user) => Ok(Json(User::from(&user))),
     Access::Denied => Err(Forbidden),
@@ -146,7 +146,7 @@ analog (`nest_rs::seaorm::graphql::bind`) does the same for resolvers.
 For mutating actions, `Bind<Update, S>` (or `Delete`) loads the row
 the caller is about to touch and refuses early if the policy says no:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[delete("/:id")]
 async fn delete(&self, user: Bind<Delete, UsersService>) -> StatusCode {
     self.svc.delete_by_id(user.id).await?;
@@ -179,7 +179,7 @@ For a public-facing API where existence itself is sensitive (private
 content, draft media), collapse the 403 path into a 404 in your
 handler:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 #[get("/:id")]
 async fn get(&self, id: Path<Uuid>) -> Result<Json<Post>, Error> {
     match self.svc.access(Action::Read, id.0).await.map_err(ServiceError::from)? {

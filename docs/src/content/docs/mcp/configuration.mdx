@@ -2,7 +2,6 @@
 title: MCP configuration
 description: McpConfig and its NESTRS_MCP__* keys, plus how a failing operation answers a language model without leaking.
 sidebar:
-  label: Configuration
   order: 5
 ---
 
@@ -15,7 +14,7 @@ import { Aside } from '@astrojs/starlight/components';
 Importing `McpModule` is what resolves it; without the import every mount runs
 on the defaults.
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(imports = [
     HttpModule::for_root(None),
     McpModule::for_root(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
@@ -27,7 +26,7 @@ Pinning options *and* declaring the app's identity is the same one call — an `
 converts into an `McpOptions` whose `server` is empty, so write the whole value
 out when you need both:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 McpModule::for_root(McpOptions {
     config: Some(McpConfig::default().with_allowed_hosts(["mcp.example.com"])),
     server: Some(McpIdentity::new("acme-assistant", env!("CARGO_PKG_VERSION"))),
@@ -80,7 +79,7 @@ Six constructors cover the common cases:
 
 A typical adapter for a domain error:
 
-```rust
+```rust title="crates/features/src/weather/mcp/tool.rs"
 fn internal<E: std::fmt::Display>(e: E) -> McpError {
     McpError::internal_error(e.to_string(), None)
 }

@@ -2,6 +2,7 @@
 title: WebSockets
 description: Gateways that self-mount on the HTTP transport, with a JSON envelope and per-event handlers.
 sidebar:
+  label: Overview
   order: 1
 ---
 
@@ -41,7 +42,7 @@ the manifest stops at one line. `nestrs g ws <feature>` writes it.
 
 The smallest possible gateway: one event, one reply.
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::{gateway, messages};
 
 #[gateway(path = "/ws")]
@@ -66,12 +67,12 @@ same event name.
 
 Wire it in like any other provider:
 
-```rust
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::ws::WsModule;
 
-use crate::chat::gateway::PingGateway;
+use features::chat::PingGateway;
 
 #[module(
     imports = [

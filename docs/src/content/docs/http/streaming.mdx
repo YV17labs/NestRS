@@ -12,7 +12,7 @@ memory, or a live Server-Sent Events feed the browser reads with
 untouched — no wrapper, no schema requirement; an events feed is its own
 decorator, `#[sse]`.
 
-```rust title="crates/features/src/audio/http/controller.rs (abridged)" {6-8}
+```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {6-8}
 #[get("/download")]
 async fn download(&self, query: Valid<Query<TranscodeDto>>) -> Result<Response> {
     let file = query.into_inner().file;
@@ -42,7 +42,7 @@ server without ever sitting whole in process memory.
 The handler returns an `SseStream` of `SseEvent`s and nothing else — the
 decorator owns the response, the keep-alive and the connection ceiling.
 
-```rust title="crates/features/src/audio/http/controller.rs (abridged)"
+```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
 #[sse("/events")]
 async fn events(&self, query: Valid<Query<TranscodeDto>>) -> SseStream {
     let stream = /* a Stream<Item = SseEvent> polling the job */;

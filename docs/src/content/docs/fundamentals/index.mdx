@@ -2,6 +2,7 @@
 title: Fundamentals
 description: Modules, providers, guards, pipes, interceptors, filters — the vocabulary every NestRS app is built from.
 sidebar:
+  label: Overview
   order: 1
 ---
 
@@ -46,7 +47,7 @@ Step ① of the `blog` story, in the **standalone** shape — one crate, handler
 under `src/`. (A workspace app crate keeps no `service.rs` / `controller.rs`:
 those live in `crates/features/`, which is where step ② moves them.)
 
-```rust title="src/service.rs"
+```rust title="crates/features/src/blog/service.rs"
 use nest_rs::core::injectable;
 
 #[injectable]
@@ -63,10 +64,10 @@ impl BlogService {
 A service is an injectable struct. Anything decorated with `#[injectable]`
 is registered with the container and shared as `Arc<T>`.
 
-```rust title="src/controller.rs"
+```rust title="crates/features/src/blog/http/controller.rs"
 use std::sync::Arc;
 use nest_rs::http::{controller, routes};
-use crate::service::BlogService;
+use crate::blog::BlogService;
 
 #[controller(path = "/")]
 pub struct BlogController {
@@ -91,11 +92,11 @@ one, and an unguarded route with no posture is flagged at boot
 (`unguarded routes detected`). This tagline is open on purpose, so it says so;
 [Guards](/fundamentals/guards/) covers the other half.
 
-```rust title="src/module.rs"
+```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
-use crate::controller::BlogController;
-use crate::service::BlogService;
+use features::blog::BlogController;
+use features::blog::BlogService;
 
 #[module(
     imports = [HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() })],
@@ -104,7 +105,7 @@ use crate::service::BlogService;
 pub struct BlogModule;
 ```
 
-```rust title="src/main.rs"
+```rust title="apps/blog/src/main.rs"
 use nest_rs::core::App;
 
 #[tokio::main]

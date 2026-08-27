@@ -71,7 +71,7 @@ The framework exposes two pieces, deliberately split:
 NESTRS_SEAORM__OBSERVE_SERIALIZATION_CONFLICTS=true
 ```
 
-```rust
+```rust title="apps/api/src/module.rs"
 SeaOrmModule::for_root(SeaOrmConfig {
     observe_serialization_conflicts: true,
     ..Default::default()
@@ -99,7 +99,7 @@ For an actually-retried operation, wrap a replayable closure in
 `retry_on_conflict` inside a service method that owns its programmatic
 transaction boundary:
 
-```rust title="src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 use std::sync::Arc;
 use std::time::Duration;
 use nest_rs::seaorm::retry::{

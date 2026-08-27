@@ -20,7 +20,7 @@ the gateway to a private registry by giving it a **namespace marker**.
 
 `WsServer` is generic over a zero-sized type:
 
-```rust
+```rust title="nest_rs::ws::WsServer"
 pub struct WsServer<N: 'static = Global> { /* ... */ }
 ```
 
@@ -30,7 +30,7 @@ distinct connection maps, distinct room sets, distinct push surfaces.
 A marker is just a unit struct — no traits, no methods, no runtime
 data:
 
-```rust
+```rust title="crates/features/src/notifications/ws/gateway.rs"
 pub struct NotificationsNs;
 ```
 
@@ -38,7 +38,7 @@ Attach it to a gateway with `#[gateway(namespace = NotificationsNs)]`. The
 registry comes from `WsModule` — the same module that provides the default one,
 so namespacing changes which registry is wired, not how it is wired:
 
-```rust title="crates/features/src/notifications/ws/gateway.rs"
+```rust title="crates/features/src/notifications/ws/gateway.rs (from the demo)"
 use nest_rs::ws::{WsClient, gateway, messages};
 
 use crate::authn::AuthnGuard;
@@ -71,13 +71,13 @@ A service that wants to push to one namespace injects the typed
 registry directly — the marker is exported by the edge that declares it, so
 nothing but the type crosses the module boundary:
 
-```rust
+```rust title="crates/features/src/admin/notifier.rs"
 use std::sync::Arc;
 
 use nest_rs::core::injectable;
 use nest_rs::ws::WsServer;
 
-use features::notifications::NotificationsNs;
+use crate::notifications::NotificationsNs;
 
 #[injectable]
 pub struct AdminNotifier {
@@ -95,7 +95,7 @@ impl AdminNotifier {
 Its module imports `WsModule`, exactly as it would to inject the default
 registry:
 
-```rust
+```rust title="crates/features/src/admin/module.rs"
 #[module(imports = [WsModule], providers = [AdminNotifier])]
 pub struct AdminModule;
 ```

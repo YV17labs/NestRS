@@ -34,7 +34,7 @@ an entity crate declares none of them. `nestrs g resource` writes the file.
 
 ## The entity
 
-```rust title="src/posts/entity.rs"
+```rust title="crates/features/src/posts/entity.rs"
 use nest_rs::resource::expose;
 use nest_rs::seaorm::sea_orm;
 use nest_rs::seaorm::sea_orm::entity::prelude::*;
@@ -87,7 +87,7 @@ REST/OpenAPI adopters can compile without pulling in GraphQL:
 cargo add nest-rs --features http,seaorm,authz
 ```
 
-```rust title="src/posts/entity.rs"
+```rust title="crates/features/src/posts/entity.rs"
 #[expose(name = "Post", service = super::service::PostsService)]
 // no `graphql` flag — wire DTO + CRUD inputs only
 pub struct Model {
@@ -103,7 +103,7 @@ GraphQL surface when you need it:
 cargo add nest-rs --features seaorm,graphql
 ```
 
-```rust
+```rust title="crates/features/src/posts/entity.rs"
 #[expose(name = "Post", service = super::service::PostsService, graphql)]
 ```
 
@@ -115,7 +115,7 @@ unexposed (no `#[expose]`).
 
 ## The service
 
-```rust title="src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 use nest_rs::authz::Action;
 use nest_rs::core::injectable;
 use nest_rs::seaorm::{Creatable, CrudService, Deletable, Repo, ServiceError, Updatable};
@@ -166,7 +166,7 @@ documented exception, covered on [Repo and executor](/database/repo-and-executor
 
 ## The module
 
-```rust title="src/posts/module.rs"
+```rust title="crates/features/src/posts/module.rs"
 use nest_rs::core::module;
 use super::service::PostsService;
 
@@ -176,14 +176,14 @@ pub struct PostsModule;
 
 The HTTP adapter sits in its own folder and imports the port:
 
-```rust title="src/posts/http/module.rs"
+```rust title="crates/features/src/posts/http/module.rs"
 #[module(imports = [PostsModule], providers = [PostsController])]
 pub struct PostsHttpModule;
 ```
 
 The app root activates the database and lists the slice:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         SeaOrmModule::for_root(None),

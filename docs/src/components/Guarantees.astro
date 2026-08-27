@@ -1,0 +1,62 @@
+---
+/**
+ * Six reasons, on a 1px hairline grid — the gaps are the page showing through,
+ * so the block reads as one table rather than six cards.
+ *
+ * The glyphs are the design's, with two substitutions: `⛨` (U+26E8) and `⏻`
+ * (U+23FB) are absent from every font a Linux or Windows reader is likely to
+ * have, and a tofu box is worse than a plainer mark that renders.
+ */
+interface Reason {
+  glyph: string;
+  title: string;
+  desc: string;
+}
+
+const reasons: Reason[] = [
+  {
+    glyph: '◈',
+    title: 'Secure by composition',
+    desc: 'Authn, row-level filtering, response masking, transaction scope — turned on by importing a module, never by remembering to call them.',
+  },
+  {
+    glyph: '↯',
+    title: 'Boot, not 3am',
+    desc: 'The DI graph is checked at boot: a bad import fails startup with the missing wire named. No resolution error five minutes after deploy.',
+  },
+  {
+    glyph: '#[',
+    title: 'Declarative decorators',
+    desc: '66 decorators expanding to plain Rust you can read with cargo expand — no reflection, no magic strings.',
+  },
+  {
+    glyph: 'τ',
+    title: "Types you don't fight",
+    desc: 'Rust types end to end — entity, DTO, handler, schema, OpenAPI doc. No any, no casts at the boundaries.',
+  },
+  {
+    glyph: '▲',
+    title: 'Native throughput',
+    desc: '×2.5 NestJS-on-Fastify — its best case — with sub-millisecond p99 and no GC pauses.',
+  },
+  {
+    glyph: '▢',
+    title: 'One lean artifact',
+    desc: 'A static native binary for a distroless image — ~8 MB under load, milliseconds to boot, probes for the orchestrator.',
+  },
+];
+---
+
+<div class="rs-reasons not-content">
+  {
+    reasons.map((r) => (
+      <div class="rs-reason">
+        <div class="rs-reason-glyph" aria-hidden="true">
+          {r.glyph}
+        </div>
+        <div class="rs-reason-title">{r.title}</div>
+        <p class="rs-reason-desc">{r.desc}</p>
+      </div>
+    ))
+  }
+</div>

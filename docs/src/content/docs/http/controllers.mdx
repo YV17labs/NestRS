@@ -56,7 +56,7 @@ impl HelloController {
   with none, it falls back to `Default`. rustc names the fix, but the case only
   shows up on a controller that reaches for nothing:
 
-  ```rust
+  ```rust title="crates/features/src/greetings/http/controller.rs"
   #[controller(path = "/greetings")]
   #[derive(Default)]
   pub struct GreetingsController;
@@ -89,7 +89,7 @@ event rather than against the attribute.
 
 ## Adding a path parameter
 
-```rust
+```rust title="crates/features/src/hello/http/controller.rs"
 use nest_rs::http::poem::web::Path;
 
 #[get("/:name")]
@@ -116,7 +116,7 @@ Hello, Ada!
 
 ## Reading query parameters
 
-```rust
+```rust title="crates/features/src/hello/http/controller.rs"
 use nest_rs::http::poem::web::Query;
 use nest_rs::http::input;
 
@@ -141,7 +141,7 @@ Bonjour le monde
 
 ## Accepting a JSON body, validated
 
-```rust
+```rust title="crates/features/src/hello/http/controller.rs"
 use nest_rs::http::poem::Result;
 use nest_rs::http::poem::web::Json;
 use nest_rs::http::{Valid, input};
@@ -202,7 +202,7 @@ $ curl -sX POST http://localhost:3000/ \
 `Json<T>` works as a return type as well — the framework serializes `T`
 and sets `Content-Type: application/json`:
 
-```rust
+```rust title="crates/features/src/hello/http/controller.rs"
 #[get("/me")]
 async fn me(&self) -> Json<GreetReply> {
     Json(GreetReply { greeting: self.svc.greeting() })

@@ -53,7 +53,7 @@ A controller imports the matching module along with its feature
 module. The transports transitively bring every layer the feature
 needs.
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 #[module(
     imports = [
         SeaOrmModule::for_root(None),
@@ -75,7 +75,7 @@ pub struct ApiModule;
 HTTP is the simplest because guards run on the actual request before
 the handler:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController { /* ... */ }
@@ -94,7 +94,7 @@ operations, so per-operation auth cannot run as plain HTTP guards. What
 you write is unchanged in spirit: import `AuthzGraphqlModule`, bind the
 **marker** on the resolver, and declare each operation's posture:
 
-```rust
+```rust title="crates/features/src/users/graphql/resolver.rs"
 #[resolver]
 #[use_guards(AuthzGuard)]
 pub struct UsersResolver { /* ... */ }
@@ -134,7 +134,7 @@ not because a marker was missing.
 The seeding is done by `GraphqlAbilityBridge`, registered as the
 `dyn GraphqlOperationGuard`:
 
-```rust
+```rust title="nest_rs::authz::graphql::GraphqlAbilityBridge"
 #[injectable]
 pub struct GraphqlAbilityBridge<A: Guard, G: Guard> {
     #[inject] auth: Arc<A>,
@@ -161,7 +161,7 @@ duration of the operation. The marker itself is a
 `dyn GraphqlResolverGuard` that fails closed if `Arc<Ability>` is
 absent from the operation's data:
 
-```rust
+```rust title="nest_rs::authz::graphql::GraphqlAbilityBridge"
 async fn check(&self, ctx: &Context<'_>) -> Result<()> {
     match ctx.data_opt::<Arc<Ability>>() {
         Some(_) => Ok(()),
@@ -182,7 +182,7 @@ A WS connection is one HTTP upgrade; messages arrive over a long-
 lived socket and dispatch into separate handlers. Each message needs
 its own ambient ability:
 
-```rust title="crates/features/src/authz/ws/module.rs"
+```rust title="crates/features/src/authz/ws/module.rs (from the demo)"
 #[module(
     imports = [AuthzModule, WsModule],
     providers = [WsDataContext as dyn SocketContext],
@@ -203,7 +203,7 @@ validates them like any HTTP binding (omit `AuthzWsModule` ⇒ the
 guards are unreachable ⇒ boot fails). An optional per-message check
 binds a real `Guard` beside the message:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[gateway(path = "/ws")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct ChatGateway { /* ... */ }
@@ -254,7 +254,7 @@ leg's denial is returned **as raised**, so a `401`, a `403` and a throttler's
 `429` + `Retry-After` all reach the client intact. Import `AuthzMcpModule`
 beside the feature module, the same shape as the other transports.
 
-```rust
+```rust title="nest_rs::authz::mcp::McpAbilityBridge"
 #[injectable]
 pub struct McpAbilityBridge<A: Guard, G: Guard> {
     #[inject] auth: Arc<A>,
@@ -270,7 +270,7 @@ adds the executor and the per-operation transaction; it is not what installs the
 ability). Any custom `McpOperationGuard` can wrap the dispatch the same way —
 the default impl is a pass-through:
 
-```rust
+```rust title="nest_rs::authz::mcp::McpAbilityBridge"
 // Snapshot on the request, while it still exists…
 fn capture(&self, req: &Request) -> Option<Captured> {
     req.extensions()
@@ -325,7 +325,7 @@ A handler is "public" by **not** binding the transport's authz
 module's guard. The whole module import then becomes optional — the
 app lists `AuthzModule` only if other handlers need it.
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[get("/health")]
 #[public]
 async fn health(&self) -> &'static str { "ok" }

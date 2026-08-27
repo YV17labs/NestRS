@@ -28,7 +28,7 @@ sub-traits — one method each, on HTTP — and dedup by
 [`TypeId`](https://doc.rust-lang.org/std/any/struct.TypeId.html) across
 the global / controller / method scopes.
 
-```rust
+```rust title="nest_rs::filters::Filter · nest_rs::exception_filters::ExceptionFilter"
 #[async_trait]
 pub trait Filter: Layer {
     /// HTTP entry — required, no default: a filter that targets HTTP
@@ -83,7 +83,7 @@ boundary; the impl decides status and body. Every row above implements poem's
 `Result<Json<T>>` propagates any of them with no `map_err`. No per-feature
 `error.rs` for these — the framework owns them once, every feature reuses them.
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 use nest_rs::seaorm::ServiceError;
 
 impl UsersService {
@@ -123,7 +123,7 @@ Sometimes the mapping depends on the *route*, not the error. Maybe
 `/v1/widgets/boom` should return an `I'm a teapot` while every other
 500 stays a 500. That's what `#[use_filters(...)]` is for.
 
-```rust
+```rust title="apps/api/src/filter.rs"
 use nest_rs::core::{Layer, injectable};
 use nest_rs::filters::{Filter, RequestSnapshot, async_trait};
 use nest_rs::http::poem::{http::StatusCode, Error, Response};
@@ -146,7 +146,7 @@ impl Filter for TeapotFilter {
 
 Bind it per route or per controller — or globally:
 
-```rust
+```rust title="the three scopes — global, controller, route"
 // Global, in main.rs
 App::builder()
     .use_filters_global([filter::<TeapotFilter>()])
@@ -186,7 +186,7 @@ the `Exception` associated type and only fires on a matching downcast;
 unmatched errors fall through to the next exception filter, then to any
 outer `Filter`, then to the transport's default renderer.
 
-```rust
+```rust title="apps/api/src/exception_filter.rs"
 use nest_rs::core::{Layer, injectable};
 use nest_rs::exception_filters::{ExceptionFilter, async_trait};
 use nest_rs::http::poem::error::ResponseError;
@@ -228,7 +228,7 @@ on a controller with `#[use_exception_filters(DomainErrorFilter)]`, or
 beside a verb. The handler raises the exception the way it raises any
 other error:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[get("/domain")]
 #[use_exception_filters(DomainErrorFilter)]
 async fn domain(&self) -> Result<&'static str, DomainError> {

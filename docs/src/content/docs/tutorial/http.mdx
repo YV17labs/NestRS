@@ -27,7 +27,7 @@ it provides `CrudService`, `Repo`, `ServiceError`, and the SeaORM
 integration. SeaORM stays the source of truth for the column types and
 the active-model semantics.
 
-```rust title="crates/features/src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs (from the demo)"
 use nest_rs::core::injectable;
 use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 
@@ -69,7 +69,7 @@ data layer installs it before the handler runs
 
 Register the service in the port module:
 
-```rust title="crates/features/src/posts/module.rs"
+```rust title="crates/features/src/posts/module.rs (from the demo)"
 use nest_rs::core::module;
 
 use super::service::PostsService;
@@ -90,7 +90,7 @@ a silent no-op — a forgotten write path fails to compile. You don't
 write handler bodies unless you need domain logic the trait doesn't
 cover.
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
@@ -140,7 +140,7 @@ the app, appends a development `NESTRS_AUTHN__SECRET` to `.env`, and gives you
 `POST /auth/dev-token` — the route the next page gets its bearer token from.
 Then grant the ability — the policy starts empty, so `Post` needs a rule:
 
-```rust title="crates/features/src/authz/ability.rs" {2, 8}
+```rust title="crates/features/src/authz/ability.rs (from the demo)" {2, 8}
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use crate::posts as post;
 
@@ -163,7 +163,7 @@ The feature's HTTP adapter is a separate module. It imports the port
 (`PostsModule`) and `AuthzModule`, which is what makes the ability guard
 reachable — omit it and the access graph fails the boot by name.
 
-```rust title="crates/features/src/posts/http/module.rs"
+```rust title="crates/features/src/posts/http/module.rs (from the demo)"
 use nest_rs::core::module;
 
 use super::controller::PostsController;
@@ -177,7 +177,7 @@ use crate::posts::PostsModule;
 pub struct PostsHttpModule;
 ```
 
-```rust title="crates/features/src/posts/http/mod.rs"
+```rust title="crates/features/src/posts/http/mod.rs (from the demo)"
 mod controller;
 mod module;
 
@@ -187,7 +187,7 @@ pub use module::PostsHttpModule;
 
 Add the adapter to the feature root:
 
-```rust title="crates/features/src/posts/mod.rs"
+```rust title="crates/features/src/posts/mod.rs (from the demo)"
 mod entity;
 mod module;
 mod service;
@@ -236,7 +236,7 @@ them.
 
 Add `features` to `apps/blog/Cargo.toml`:
 
-```toml title="apps/blog/Cargo.toml" {3}
+```toml title="apps/blog/Cargo.toml (from the demo)" {3}
 [dependencies]
 nest-rs.workspace = true
 features.workspace = true

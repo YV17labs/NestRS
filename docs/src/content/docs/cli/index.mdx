@@ -195,7 +195,7 @@ Ports: the CLI scans existing `apps/*/src/module.rs` and pins the next free one
 in code (same pattern as `auth` → 3001, `api` → 3002, …). Workspace `.env` files
 do **not** set `NESTRS_HTTP__PORT` — ports live in each app's `module.rs`:
 
-```rust
+```rust title="apps/api/src/module.rs"
 HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() })
 ```
 
@@ -336,7 +336,7 @@ generator prints the import line and the app-level module each transport needs
 
 When the cursor isn't inside an app, wire the edge module by hand:
 
-```rust
+```rust title="apps/api/src/module.rs"
 use features::posts::PostsHttpModule;
 use nest_rs::core::module;
 

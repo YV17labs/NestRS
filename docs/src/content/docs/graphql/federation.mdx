@@ -13,7 +13,7 @@ two things a client never does: *what does your schema look like* (`_service`)
 and *give me these objects by their keys* (`_entities`). Turn it on with one
 config flag, write one new kind of operation, and the schema answers both.
 
-```rust title="src/posts/graphql/resolver.rs"
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 #[operations]
 impl PostsResolver {
     #[entity]

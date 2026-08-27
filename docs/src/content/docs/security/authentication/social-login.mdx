@@ -24,7 +24,7 @@ cargo add nest-rs --features social
 The `social` feature implies `authn`: the authorization-code machinery
 `SocialModule` drives (`OAuthClient`, `TokenSet`) arrives with it.
 
-```rust
+```rust title="apps/auth/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::social::SocialModule;
 
@@ -111,7 +111,7 @@ Two legs, both dispatched by a `:provider` path segment:
   guard's denial is absorbed and the failure surfaces as a missing principal
   instead.
 
-```rust title="crates/features/src/oauth/http/controller.rs (abridged)"
+```rust title="crates/features/src/oauth/http/controller.rs (from the demo, abridged)"
 #[controller(path = "/")]
 pub struct OAuthController {
     #[inject]
@@ -158,7 +158,7 @@ behind a public trait, discovered at link time. Two files, three steps.
 **1. Implement the trait.** `authorize` and `exchange` default to the
 shared flow, so a standard provider writes only `profile`:
 
-```rust title="src/provider.rs"
+```rust title="crates/features/src/social/provider.rs"
 impl SocialProvider for AcmeProvider {
     fn key(&self) -> &'static str { "acme" }
     fn client(&self) -> &OAuthClient { &self.client }
@@ -182,7 +182,7 @@ change.
 **2. Declare the config.** A `#[config]` type plus the one question the
 registry asks before it separates *inert* from *misconfigured*:
 
-```rust title="src/config.rs"
+```rust title="crates/features/src/social/config.rs"
 impl SocialProviderConfig for AcmeSocialConfig {
     fn is_unconfigured(&self) -> bool {
         self.client_id.is_empty()
@@ -199,7 +199,7 @@ Report `false` for a *partially* set config — that is what makes it fail
 `build`: a provided instance wins, then a provided config, then the
 environment.
 
-```rust title="src/provider.rs"
+```rust title="crates/features/src/social/provider.rs"
 nest_rs::core::inventory::submit! {
     SocialProviderEntry {
         key: "acme",

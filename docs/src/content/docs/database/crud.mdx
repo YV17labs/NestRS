@@ -26,7 +26,7 @@ cargo add nest-rs --features seaorm
 
 ## A full REST CRUD, 22 lines
 
-```rust title="crates/features/src/orgs/http/controller.rs"
+```rust title="crates/features/src/orgs/http/controller.rs (from the demo)"
 use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
@@ -91,7 +91,7 @@ that is the one knob, and it makes the field nullable on the wire too.
 
 ## What `#[crud]` needs
 
-```rust
+```rust title="crates/features/src/orgs/http/controller.rs"
 #[crud(
     service = svc,        // the field on the struct holding Arc<…Service>
     entity = OrgEntity,   // the SeaORM entity (used in authz Authorize<A, S>)
@@ -125,7 +125,7 @@ impl OrgsController {}
 `#[crud]` only generates the operations you did **not** write. Hand-write
 the ones that need custom logic — the rest are filled in:
 
-```rust title="crates/features/src/users/http/controller.rs"
+```rust title="crates/features/src/users/http/controller.rs (from the demo)"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
@@ -171,7 +171,7 @@ The same attribute, with `query`/`mutation` names derived from the output
 type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
 `delete_user`:
 
-```rust title="crates/features/src/users/graphql/resolver.rs"
+```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
 #[resolver]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersResolver {
@@ -219,7 +219,7 @@ other operation — a **visible `#[authorize(Action, Entity)]`** — then loads
 the row in the body with `bind_required`, which returns the
 `Authorized<A, E>` proof to hand straight to the service:
 
-```rust title="crates/features/src/posts/graphql/resolver.rs"
+```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo)"
 #[crud(service = svc, entity = PostEntity, output = Post, /* … */)]
 impl PostsResolver {
     #[mutation]
@@ -262,7 +262,7 @@ the container-resolved service, so the body never calls `bind_required` itself.
 It also **synthesises the `id: String!` SDL argument** — so the method must not
 declare an `id` parameter of its own:
 
-```rust title="crates/features/src/posts/graphql/resolver.rs"
+```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo)"
 use nest_rs::seaorm::Authorized;
 
 #[mutation]
@@ -329,12 +329,12 @@ DB round-trip.
 impl block is what `#[controller]` / `#[resolver]` already discover. List
 the controller (and the service it injects) like any other provider:
 
-```rust title="src/orgs/module.rs"
+```rust title="crates/features/src/orgs/module.rs"
 #[module(providers = [OrgsService])]
 pub struct OrgsModule;
 ```
 
-```rust title="src/orgs/http/module.rs"
+```rust title="crates/features/src/orgs/http/module.rs"
 #[module(imports = [OrgsModule, AuthzModule], providers = [OrgsController])]
 pub struct OrgsHttpModule;
 ```
@@ -349,7 +349,7 @@ split this framework is built around.
 
 Opt in on the entity — never imposed on every table (join tables, lookups):
 
-```rust title="src/posts/entity.rs"
+```rust title="crates/features/src/posts/entity.rs"
 #[expose(
     name = "Post",
     service = super::service::PostsService,
@@ -372,7 +372,7 @@ Activate on the service. `CrudService` carries the **read** half plus
 `Updatable`, `Deletable` only for the operations the resource offers (the
 framework cannot infer opt-in per service without specialization):
 
-```rust title="src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 impl CrudService for PostsService {
     type Entity = Posts;
 
@@ -395,7 +395,7 @@ impl Deletable for PostsService {}
 
 Migration snippet (Postgres):
 
-```sql
+```sql title="the migration, in SQL"
 ALTER TABLE post
   ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -1,0 +1,67 @@
+---
+/**
+ * The stat strip under the hero — five columns, hairline separated, the figure
+ * carried by Martian Mono rather than by a sentence.
+ *
+ * The numbers count up once on load. `data-to` is the target and `data-format`
+ * says how to render the tween, so the markup ships the final value and a
+ * reader with no JS (or `prefers-reduced-motion`) sees it immediately.
+ */
+interface Stat {
+  big: string;
+  to: number;
+  format: 'x1' | 'xint' | 'f2' | 'plain';
+  label: string;
+  sub: string;
+}
+
+const stats: Stat[] = [
+  { big: '×4.2', to: 4.2, format: 'x1', label: 'throughput', sub: '241k req/s on one core · ×2.5 vs Fastify' },
+  { big: '×25', to: 25, format: 'xint', label: 'less memory', sub: '8 MB under load · NestJS ~200 MB' },
+  { big: '×23', to: 23, format: 'xint', label: 'faster cold start', sub: '~15 ms · NestJS ~350 ms' },
+  { big: '0.42', to: 0.42, format: 'f2', label: 'p99 latency, ms', sub: '×3 lower · no GC pauses' },
+  { big: '0', to: 0, format: 'plain', label: 'unguarded routes', sub: 'an ungated, unmasked surface cannot ship' },
+];
+---
+
+<div class="rs-stats">
+  {
+    stats.map((s) => (
+      <div class="rs-stat">
+        <div class="rs-stat-big" data-to={s.to} data-format={s.format}>
+          {s.big}
+        </div>
+        <div class="rs-stat-label">{s.label}</div>
+        <div class="rs-stat-sub">{s.sub}</div>
+      </div>
+    ))
+  }
+</div>
+
+<script>
+  (() => {
+    const cells = document.querySelectorAll<HTMLElement>('.rs-stat-big[data-to]');
+    if (!cells.length) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const render = (format: string, v: number) => {
+      if (format === 'x1') return '×' + v.toFixed(1);
+      if (format === 'xint') return '×' + Math.round(v);
+      if (format === 'f2') return v.toFixed(2);
+      return String(Math.round(v));
+    };
+
+    const start = performance.now();
+    const DURATION = 1500;
+    const step = (now: number) => {
+      const p = Math.min(1, (now - start) / DURATION);
+      const t = 1 - Math.pow(1 - p, 3);
+      for (const cell of cells) {
+        const to = Number(cell.dataset.to);
+        cell.textContent = render(cell.dataset.format ?? 'plain', to * t);
+      }
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  })();
+</script>

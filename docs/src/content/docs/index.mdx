@@ -9,431 +9,172 @@ head:
       content: website
 hero:
   title: |
-    The <span class="accent">Rust</span> framework<br />for modular, scalable backends.
+    The Rust framework for <span class="accent">modular, scalable</span> backends.
   tagline: |
-    <span class="hero-sub">You write the business logic; NestRS carries authentication, tenant isolation, field masking and transactions — declared as decorators, verified at boot.</span>
-    <span class="hero-stats">
-      <span class="stat"><b>×4.2</b><span class="stat-label">throughput</span><small>241k req/s on one core · ×2.5 vs Fastify</small></span>
-      <span class="stat"><b>×25</b><span class="stat-label">less memory</span><small>8 MB under load · NestJS ~200 MB</small></span>
-      <span class="stat"><b>×23</b><span class="stat-label">faster cold start</span><small>~15 ms · NestJS ~350 ms</small></span>
-      <span class="stat"><b>×3</b><span class="stat-label">lower p99</span><small>0.42 ms · no GC pauses</small></span>
-      <span class="stat stat--wide"><b>0</b><span class="stat-label">unguarded routes</span><small>an ungated, unmasked surface cannot ship</small></span>
-    </span>
-    <span class="hero-proof">Per core against NestJS 11, byte-identical contract — <a href="/benchmarks/">reproducible from the repo</a>.</span>
-    <span class="hero-stack">
-      <span>HTTP</span><span>OpenAPI</span><span>GraphQL</span><span>WebSockets</span><span>MCP</span>
-      <span>Database</span><span>Storage</span><span>Queue</span><span>Schedule</span><span>Health</span><span>OpenTelemetry</span>
-      <span class="hero-stack-accent">Authentication</span><span class="hero-stack-accent">OAuth2</span><span class="hero-stack-accent">Authorization</span>
-    </span>
-  image:
-    alt: NestRS logo
-    file: ../../assets/logo.svg
+    You write the business logic; NestRS carries authentication, tenant isolation, field masking and transactions — declared as decorators, <strong>verified at boot</strong>.
   actions:
     - text: Get started
       link: /getting-started/
-      icon: right-arrow
       variant: primary
     - text: Why NestRS
       link: /why/
       variant: minimal
-    - text: View on GitHub
-      link: https://github.com/YV17labs/NestRS
-      icon: external
+    - text: cargo add nest-rs --features http,seaorm ↗
+      link: https://crates.io/search?q=nest-rs
       variant: minimal
+      attrs:
+        class: rs-chip
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import Band from '../../components/Band.astro';
 import Bench from '../../components/Bench.astro';
-import HelloCodeTabs from '../../components/HelloCodeTabs.astro';
-import TerminalSession from '../../components/TerminalSession.astro';
+import Capabilities from '../../components/Capabilities.astro';
+import CodeCard from '../../components/CodeCard.astro';
+import Guarantees from '../../components/Guarantees.astro';
+import Workspace from '../../components/Workspace.astro';
+
+<Band label="01 — SECURITY" alt>
+<div class="rs-split">
+<div>
 
 ## The part you cannot forget
 
-<div class="nestrs-reveal not-content">
+A controller that looks like any controller — the security is in what you
+*don't* write. Two declarations, and every route is authenticated, tenant-scoped
+and field-masked.
 
-Authenticated, tenant-scoped, transactional, field-masked — and the `impl`
-block is empty on purpose. The two guards declare the posture, `#[crud]`
-generates the five routes.
+<div class="rs-steps">
 
-```rust title="crates/features/src/orgs/http/controller.rs (abridged)"
-#[controller(path = "/orgs")]
-#[use_guards(AuthnGuard, AuthzGuard)]
-pub struct OrgsController {
-    #[inject]
-    svc: Arc<OrgsService>,
-}
+**Two guards on the struct.** Every route below requires a valid token and an
+ability — forgetting one is a boot error, not a 3am incident.
 
-#[crud(service = svc, entity = OrgEntity, output = Org,
-       create = CreateOrg, update = UpdateOrg)]
-impl OrgsController {}
-```
+**The handler is plain Rust.** No security code inside — rows are filtered and
+fields masked on the way out, automatically.
 
-One ability decides the rows and the fields, in one place:
-
-```rust title="crates/features/src/authz/ability.rs (abridged)"
-ab.can(Action::Read, user::Entity)
-    .when(|p| p.eq(user::Column::OrgId, actor.org_id))
-    .fields([user::Column::Id, user::Column::Name]);
-```
-
-Same route, same handler — the caller's token does the rest:
-
-<TerminalSession
-  label="Two tokens, one route"
-  lines={[
-    { kind: 'input', text: 'curl :3002/users -H "authorization: Bearer $ADMIN"   # admin' },
-    { kind: 'response', text: '[{ "id": "…ac00", "name": "Acme Admin", "email": "admin@acme.test", … }, …]' },
-    { kind: 'input', text: 'curl :3002/users -H "authorization: Bearer $MEMBER"  # plain member' },
-    { kind: 'response', text: '[{ "id": "…ac00", "name": "Acme Admin" }, …]   # email masked, org-scoped' },
-    { kind: 'input', text: 'curl -o /dev/null -w "%{http_code}" :3002/users/<globex-id> -H "…$MEMBER"' },
-    { kind: 'response', text: '403   # cross-tenant read refused, decided by the framework' },
-  ]}
-/>
-
-Posture is mandatory, not a convention: a GraphQL operation with neither
-`#[authorize]` nor `#[public]` does not compile, and an HTTP controller whose
-guard wiring is missing fails at boot. Behind the guards sits the full stack — JWT on
-EdDSA keys, OAuth2 with PKCE, Argon2id passwords, social login — each a module
-import ([Security](/security/)).
-
-**[See it live — the security checkpoint →](/tutorial/checkpoint/)**
+**Policy lives in one place.** Which rows, which fields, for whom — one ability
+rule, applied to every transport.
 
 </div>
 
-## A complete service, one app
+<a class="rs-more" href="/tutorial/checkpoint/">See it live — the security checkpoint →</a>
 
-<div class="nestrs-reveal not-content">
+</div>
+<div class="rs-evidence">
 
-No wiring file, no config, no boilerplate. The hard parts of framework Rust —
-lifetimes in middleware, trait gymnastics, generic bounds — stay inside the
-framework; your files hold structs, decorators and async fns.
-
-<div class="nestrs-hello-demo">
-
-<TerminalSession
-  variant="compact"
-  label="Scaffold"
+<CodeCard
+  file="users/http/controller.rs"
+  note="a normal controller"
   lines={[
-    { kind: 'input', text: 'nestrs new hello --standalone' },
-    { kind: 'output', text: 'Created standalone nestrs app at ./hello' },
-    { kind: 'output', text: '  + hello/Cargo.toml' },
-    { kind: 'output', text: '  + hello/rust-toolchain.toml' },
-    { kind: 'output', text: '  + hello/.gitignore' },
-    { kind: 'omit' },
-    { kind: 'output', text: '  + hello/src/service.rs' },
-    { kind: 'output', text: '  + hello/src/controller.rs' },
-    { kind: 'output', text: '  + hello/tests/integration/main.rs' },
-    { kind: 'output', text: '  + hello/tests/e2e/main.rs' },
-    { kind: 'output', text: '' },
-    { kind: 'output', text: 'Mode: standalone (one crate, logic in src/)' },
-    { kind: 'output', text: '' },
-    { kind: 'output', text: 'Next steps:' },
-    { kind: 'output', text: '  cd ./hello' },
-    { kind: 'output', text: '  nestrs run dev' },
-    { kind: 'output', text: '  Open http://localhost:3000/ in your browser' },
+    { code: '#[controller(path = "/users")]' },
+    { code: '#[use_guards(AuthnGuard, AuthzGuard)]', mark: true, marker: 1 },
+    { code: 'pub struct UsersController {' },
+    { code: '    #[inject] svc: Arc<UsersService>,' },
+    { code: '}' },
+    { code: '' },
+    { code: '#[routes]' },
+    { code: 'impl UsersController {' },
+    { code: '    #[get("/")]' },
+    { code: '    async fn list(&self) -> Result<Vec<User>> {' },
+    { code: '        self.svc.list().await', mark: true, marker: 2 },
+    { code: '    }' },
+    { code: '}' },
   ]}
 />
 
-<HelloCodeTabs />
-
-<TerminalSession
-  label="Run"
+<CodeCard
+  file="authz/ability.rs"
+  note="one place for policy"
   lines={[
-    { kind: 'input', text: 'nestrs run dev' },
-    { kind: 'output', text: '    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s' },
-    { kind: 'output', text: '     Running `target/debug/hello`' },
-    { kind: 'output', text: '2026-04-29T12:00:00.799422Z  INFO nest_rs::module: module dependencies initialized module="HelloModule"' },
-    { kind: 'output', text: '2026-04-29T12:00:00.799862Z  INFO nest_rs::routes: mounted route controller="HelloController" method="GET" path="/" handler="hello"' },
-    { kind: 'omit' },
-    { kind: 'output', text: '2026-04-29T12:00:00.802100Z  INFO poem::server: listening addr=socket://0.0.0.0:3000' },
-    { kind: 'output', text: '2026-04-29T12:00:00.802552Z  INFO poem::server: server started' },
-    { kind: 'output', text: '2026-04-29T12:00:00.803011Z  INFO nest_rs::operation: http.request method=GET path="/" status=200 bytes=11 duration_ms=0.189 trace_id=01a014a761597910a10b2d568b170da5 span_id=493b44fac57aef19 client_ip=127.0.0.1 forwarded=false user_agent="curl/8.7.1"' },
-    { kind: 'input', text: 'curl http://localhost:3000' },
-    { kind: 'response', text: 'Hello World' },
+    { code: 'ab.can(Action::Read, user::Entity)' },
+    { code: '    .when(|p| p.eq(user::OrgId, actor.org_id))  // your org only' },
+    { code: '    .fields([user::Id, user::Name]);  // email never leaves', mark: true, marker: 3 },
   ]}
 />
 
-<p class="nestrs-firstbuild-note">As with any Rust dependency, the first <code>nestrs run dev</code> compiles the crate graph once. Every run after is the sub-second incremental rebuild shown above.</p>
+<CodeCard
+  terminal="two tokens, one route"
+  lines={[
+    { segs: [{ t: '❯', c: 'dim' }, { t: ' curl :3002/users -H ' }, { t: '"…Bearer $ADMIN"', c: 'str' }] },
+    { segs: [{ t: '[{ "name": "Acme Admin", ' }, { t: '"email": "admin@acme.test"', c: 'bright' }, { t: ', … }]' }] },
+    { segs: [] },
+    { segs: [{ t: '❯', c: 'dim' }, { t: ' curl :3002/users -H ' }, { t: '"…Bearer $MEMBER"', c: 'str' }] },
+    { segs: [{ t: '[{ "name": "Acme Admin" }]  ' }, { t: '# email masked, org-scoped', c: 'attr' }] },
+    { segs: [] },
+    { segs: [{ t: '❯', c: 'dim' }, { t: ' curl :3002/users/<globex-id> -H ' }, { t: '"…$MEMBER"', c: 'str' }] },
+    { segs: [{ t: '403', c: 'err' }, { t: '  ' }, { t: '# cross-tenant read refused, by the framework', c: 'dim' }] },
+  ]}
+/>
 
 </div>
-
-Scaffold a standalone crate, [grow into a workspace](/cli/#grow-a-standalone-crate-into-a-workspace)
-when you add apps — the same inject-and-decorate model carries every surface:
-HTTP, GraphQL, WebSockets, queues, scheduled jobs, MCP.
-**[Get started →](/getting-started/)** · **[Why NestRS →](/why/)**
-
 </div>
+</Band>
 
-## Everything a backend needs, in one framework
-
-Not a router with plugins to assemble. Each concern below is a module you
-import, documented on this site, and shipped as a Cargo feature you can leave
-off — a headless worker compiles no HTTP stack.
-
-| Concern | What ships | Read more |
-|---|---|---|
-| HTTP | Controllers, routing, versioning, extractors, uploads, streaming, compression, CORS, TLS | [HTTP](/http/) |
-| API contract | OpenAPI 3 document and Swagger UI derived from the route table | [OpenAPI](/openapi/) |
-| GraphQL | Resolvers, dataloaders, relations, subscriptions, federation, query limits | [GraphQL](/graphql/) |
-| Realtime | WebSocket gateways, namespaces, rooms, server push | [WebSockets](/websockets/) |
-| Agents | MCP server — tools, prompts, resources and tasks under the same guards | [MCP](/mcp/) |
-| Database | Entities, `Repo`, ambient transactions, pagination, migrations, seeding | [Database](/database/) |
-| Authentication | JWT on EdDSA keys, OAuth2 with PKCE, Argon2id passwords, social login | [Authentication](/security/authentication/) |
-| Authorization | Abilities, row-level filtering, per-field masking, one policy per transport | [Authorization](/security/authorization/) |
-| Background work | Redis-backed queues with retries, cron schedules, in-process events | [Queue](/queue/) · [Schedule](/schedule/) · [Events](/events/) |
-| Object storage | S3-compatible client, presigned URLs, streamed read and write | [Storage](/storage/) |
-| Configuration | Typed `#[config]` structs, `.env` cascade, every field reachable from the environment | [Configuration](/configuration/) |
-| Operations | Liveness, readiness and startup probes, rate limiting, graceful shutdown | [Health](/health/) · [Rate limiting](/rate-limiting/) |
-| Observability | OpenTelemetry logs, traces, metrics, W3C propagation, `Server-Timing` | [OpenTelemetry](/opentelemetry/) |
-| Testing | In-process harness booting the real DI graph; e2e against live backends | [Testing](/testing/) |
-| Tooling | `nestrs` — scaffold a project, generate a feature or an adapter, run it | [CLI](/cli/) |
-
-**31 capabilities**, one dependency to install them:
-`cargo add nest-rs --features http,seaorm`. The [Packages](/packages/) page maps
-every feature to the crate behind it.
+<Band label="02 — PERFORMANCE">
+<div class="rs-band-head">
 
 ## How fast, exactly
 
-The same service written twice, each side the way its own CLI scaffolds it, on
-**both Fastify and Express**. Both serve a byte-identical HTTP contract at the
-same stack depth, and a conformance gate verifies the bytes before anything is
-measured. One pinned core each — the regime that favours Node.
+<div class="rs-band-aside">
+
+Same service, byte-identical contract, one pinned core each — the regime that
+favours Node. Reproduce with `just bench`.
+
+</div>
+
+</div>
 
 <Bench />
 
-<details>
-<summary>How these numbers were taken</summary>
+</Band>
 
-The harness lives in [`bench/`](https://github.com/YV17labs/NestRS/tree/main/bench)
-— provider manifests, the byte-for-byte conformance gate, and the runner.
-Server and load generator ([oha](https://github.com/hatoo/oha)) are pinned to
-disjoint CPU sets; each tier gets a discarded warmup, then repeated timed runs
-whose medians are reported; every result embeds its machine fingerprint (CPU,
-kernel, toolchains, resolved dependency versions). Node runs `NODE_ENV=production`
-on Node 24; NestRS is a release build.
+<Band label="03 — BATTERIES" alt>
 
-Per-core is the honest comparison: in production Node scales out by clustering
-— one ~200 MB process per core — while one NestRS binary takes every core in a
-single single-digit-MB process. The published run comes from a 4-core / 8 GB
-Docker VM (Apple Silicon) — virtualized, so these figures are a floor rather
-than a ceiling. One command reproduces the table on your hardware:
+## Everything a backend needs
 
-```bash
-cd bench && just bench
-```
+Not a router with plugins to assemble. Each concern is a module you import,
+shipped as a Cargo feature you can leave off — a headless worker compiles no
+HTTP stack.
 
-The [benchmark page](/benchmarks/) documents the contract, the full protocol
-and its limits.
+<Capabilities />
 
-</details>
+<div class="rs-band-foot">
 
-## What holds it up
+**31 capabilities**, one dependency to install them. [Packages →](/packages/)
 
-A backend framework is judged on what it keeps correct over years, not on what
-it demonstrates in one file. Each property below is one you can check from a
-clone of the repository.
+</div>
 
-- **66 decorators** — everything you write, from `#[module]` to `#[authorize]`,
-  expanding to plain Rust you can print with `cargo expand`. The
-  [index](/decorators/) lists every one with the position it goes in.
-- **1,800+ tests** in the framework workspace, and the end-to-end suites run
-  against live Postgres, Redis and S3 rather than mocks — wiring bugs are the
-  ones unit tests never see.
-- **Conformance joins.** The families the framework declares — its decorator
-  pairs, its `for_root` seams, the `warn`-level events that record a denial —
-  are derived from the source and joined against the suites that cover them, so
-  a member no test names fails the suite instead of passing unnoticed.
-- **Documentation gated against the code.** 120+ pages, and a linter that reads
-  the framework's own source: config key tables, trait signatures, version pins,
-  the imports a snippet needs to compile. A page that contradicts the code fails
-  the lint.
-- **A public API frozen for the major.** Every `nest-rs-*` crate publishes at
-  the same version in lockstep, so one NestRS version names exactly one
-  compatible resolution — down to the third-party crates that surface in your
-  own signatures.
-- **One artifact to operate.** `cargo build --release` produces a native binary
-  for a distroless image: configuration through the environment, probes for the
-  orchestrator, SIGTERM draining connections and running your shutdown hooks.
+</Band>
+
+<Band label="04 — GUARANTEES">
 
 ## Why developers pick NestRS
 
-<div class="nestrs-reveal nestrs-reveal--stagger not-content">
+<Guarantees />
 
-<CardGrid>
-  <Card title="Secure & transactional by composition" icon="approve-check-circle">
-    Authn, authorization, row-level filtering, response masking, transaction
-    scope — turned on by importing a module, never by remembering to call them.
-  </Card>
-  <Card title="Wiring you find out about at boot, not at 3am" icon="warning">
-    The DI graph is checked at boot: a bad import fails startup with the missing
-    wire named. No reflection, no resolution error five minutes after deploy.
-  </Card>
-  <Card title="Declarative, decorator-driven" icon="puzzle">
-    `#[module]`, `#[controller]`, `#[resolver]`, `#[processor]`, `#[gateway]`,
-    `#[scheduled]`, `#[mcp]` — expanding to plain Rust you can read with
-    [`cargo expand`](/why-not-axum/#the-macro-question).
-  </Card>
-  <Card title="Types you don't fight" icon="approve-check">
-    Rust types end to end — entity, DTO, handler, dataloader, GraphQL schema,
-    OpenAPI doc. No `any`, no `unknown`, no casts at the boundaries.
-  </Card>
-  <Card title="Native throughput" icon="rocket">
-    **×2.5** NestJS-on-Fastify — its best case — and **×4.2** Express, with
-    **sub-millisecond p99** and no GC pauses ([benchmarks](/benchmarks/)).
-  </Card>
-  <Card title="An order of magnitude less RAM" icon="laptop">
-    **~8 MB under load** where the same NestJS service holds **~200 MB**.
-    Smaller instances, higher density, a materially lighter cloud bill.
-  </Card>
-  <Card title="Boots in milliseconds" icon="bars">
-    Each deployable is a static native binary with no runtime to warm up —
-    autoscaling and cold starts stop hurting.
-  </Card>
-  <Card title="Batteries included, opt-in by crate" icon="setting">
-    HTTP, GraphQL, OpenAPI, WebSockets, queues, scheduling, events, MCP,
-    authorization, health probes, OpenTelemetry — each an opt-in crate, so a
-    worker compiles no HTTP stack at all ([Packages](/packages/)).
-  </Card>
-</CardGrid>
+</Band>
 
-Every capability above ships today, each with a reference section on this site.
-
-</div>
+<Band label="05 — SCALABILITY" alt>
 
 ## One domain, several workloads
 
-**Microservice scaling without the distributed-systems tax.** Entities,
-services and policy are written once in a shared `features` crate; each app
+Entities, services and policy live once in a shared `features` crate; each app
 under `apps/*` is a thin composition root importing only the transports it
-serves, so a worker never compiles the HTTP stack. Self-contained tokens and a
-shared database — no chatty RPC, no service mesh to get started.
+serves. Microservice scaling without the distributed-systems tax.
 
-Who runs where is a composition choice in each app's `module.rs`, not a fork of
-entities and services — schematically:
+<Workspace />
 
-<div class="mono nestrs-reveal not-content">
-  <div class="mono-deploy">
-    <div class="mono-tier mono-tier--public">
-      <header class="mono-tier-head">
-        <span class="mono-tier-label">Public</span>
-        <span class="mono-tier-hint">exposed to clients and partners</span>
-      </header>
-      <ul class="mono-apps mono-apps--pair">
-        <li class="mono-app">
-          <span class="mono-app-name">App A</span>
-          <span class="mono-app-port">:3000</span>
-          <span class="mono-app-role">a public surface</span>
-        </li>
-        <li class="mono-app">
-          <span class="mono-app-name">App B</span>
-          <span class="mono-app-port">:3001</span>
-          <span class="mono-app-role">another public surface</span>
-        </li>
-      </ul>
-    </div>
+</Band>
 
-    <div class="mono-shared-mid">
-      <span class="mono-shared-mid-label">shared features</span>
-      <span class="mono-shared-mid-sub">one model — every app above and below builds on it</span>
-    </div>
-
-    <div class="mono-tier mono-tier--private">
-      <header class="mono-tier-head">
-        <span class="mono-tier-label">Private</span>
-        <span class="mono-tier-hint">non-public · off the client request path</span>
-      </header>
-      <ul class="mono-apps mono-apps--pair">
-        <li class="mono-app">
-          <span class="mono-app-name">App C</span>
-          <span class="mono-app-role">background work</span>
-        </li>
-        <li class="mono-app">
-          <span class="mono-app-name">App D</span>
-          <span class="mono-app-role">more background work</span>
-        </li>
-      </ul>
-    </div>
-  </div>
-  <p class="mono-note">Same domain, shared features — one monorepo or several; which app runs where is an operational choice, not a rewrite of business logic.</p>
-</div>
-
-## Scale each workload on its own signal
-
-Each app scales horizontally on **its own** signal — a hot public surface
-follows demand, background apps follow queue depth. Same binary, more replicas,
-per app; no single "scale the monolith" knob.
-
-<div class="scale nestrs-reveal not-content">
-  <div class="scale-lanes scale-lanes--four">
-    <article class="scale-lane scale-lane--api">
-      <div class="scale-lane-top">
-        <span class="scale-app">App A</span>
-        <span class="scale-port">:3000</span>
-        <span class="scale-signal">demand · high traffic</span>
-        <span class="scale-arrow" aria-hidden="true">→</span>
-        <span class="scale-replicas">×5</span>
-      </div>
-      <div class="scale-pills" aria-hidden="true">
-        <span></span><span></span><span></span><span></span><span></span>
-      </div>
-    </article>
-    <article class="scale-lane scale-lane--api scale-lane--steady">
-      <div class="scale-lane-top">
-        <span class="scale-app">App B</span>
-        <span class="scale-port">:3001</span>
-        <span class="scale-signal">demand · steady</span>
-        <span class="scale-arrow" aria-hidden="true">→</span>
-        <span class="scale-replicas">×2</span>
-      </div>
-      <div class="scale-pills scale-pills--compact" aria-hidden="true">
-        <span></span><span></span>
-      </div>
-    </article>
-    <article class="scale-lane scale-lane--worker">
-      <div class="scale-lane-top">
-        <span class="scale-app">App C</span>
-        <span class="scale-signal">queue · backlog</span>
-        <span class="scale-arrow" aria-hidden="true">→</span>
-        <span class="scale-replicas">×4</span>
-      </div>
-      <div class="scale-pills scale-pills--worker" aria-hidden="true">
-        <span></span><span></span><span></span><span></span>
-      </div>
-    </article>
-    <article class="scale-lane scale-lane--worker scale-lane--light">
-      <div class="scale-lane-top">
-        <span class="scale-app">App D</span>
-        <span class="scale-signal">queue · light</span>
-        <span class="scale-arrow" aria-hidden="true">→</span>
-        <span class="scale-replicas">×2</span>
-      </div>
-      <div class="scale-pills scale-pills--worker scale-pills--compact" aria-hidden="true">
-        <span></span><span></span>
-      </div>
-    </article>
-  </div>
-  <p class="scale-aside">One product, four apps — A scales on traffic spikes, B stays lean, C follows backlog, D only when needed.</p>
-</div>
+<Band variant="rs-band--cta">
 
 ## Start where you are
 
-- **You write NestJS and want Rust's runtime cost.** The vocabulary carries
-  over — module, provider, controller, guard, resolver — and
-  [Coming from NestJS](/coming-from-nestjs/) maps each reflex to its
-  decorator, including the four that changed on purpose.
-- **You write Rust and axum is lower-level than your application.** Routing is
-  the part you already have; tenancy, policy, transactions and masking are the
-  parts that drift. [Why not axum](/why-not-axum/) compares the two on that
-  axis, and says where a bare router is still the right call.
-- **You are starting a service that has to hold its shape.** Scaffold it with
-  [Getting started](/getting-started/), then build a feature end to end in the
-  [tutorial](/tutorial/).
+Coming from NestJS, the vocabulary carries over. Coming from Rust, the
+drift-prone parts stop being yours to police.
 
-## Going further
+<div class="rs-cta-row not-content">
+  <code><span class="rs-prompt">❯</span> nestrs new hello {'--standalone'}</code>
+  <a class="rs-cta-button" href="/getting-started/">Get started</a>
+</div>
 
-- [Getting started](/getting-started/) — scaffold and run your first app.
-- [Tutorial](/tutorial/) — build a posts feature end to end.
-- [Why NestRS](/why/) — the thesis and the structural properties behind it.
-- [Threat model](/security/threat-model/) — the boundary each layer enforces,
-  and how it composes with your deployment's own controls.
-- [The Publish workspace](/publish/) — the product universe every example is drawn from.
+</Band>

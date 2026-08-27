@@ -18,7 +18,7 @@ handler). One call, both sides of the boundary.
 The continuation builds on [`poem`](https://crates.io/crates/poem)'s endpoint
 chain. One method, one transport:
 
-```rust
+```rust title="nest_rs::interceptors::Interceptor"
 #[async_trait]
 pub trait Interceptor: Layer {
     /// HTTP entry. Per-route, runs once per request.
@@ -64,7 +64,7 @@ matches the `#[async_trait]`-declared trait. A crate mid-upgrade can also depend
 on `async-trait = "0.1"` directly and `use async_trait::async_trait;` — both
 spellings must resolve to the same 0.1 macro.
 
-```rust
+```rust title="apps/api/src/interceptor.rs"
 use nest_rs::core::{Layer, injectable};
 use nest_rs::interceptors::{Interceptor, Next, async_trait};
 use nest_rs::http::poem::{Request, Response, Result};
@@ -98,7 +98,7 @@ or per handler.
 | **Controller / Resolver / Gateway** | `#[use_interceptors(Tracer)]` on the struct | The container, at mount |
 | **Per-handler** | `#[use_interceptors(Tracer)]` beside a verb / `#[query]` / `#[subscribe_message]` | The container, at mount |
 
-```rust
+```rust title="crates/features/src/api/http/controller.rs"
 #[controller(path = "/api")]
 #[use_interceptors(Tracer)]                        // controller scope
 pub struct ApiController {

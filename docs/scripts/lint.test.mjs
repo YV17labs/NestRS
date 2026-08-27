@@ -121,13 +121,18 @@ nest-rs = { version = "${CANON_VERSION}", features = ["http", "graphql"] }
   )],
   [RULES.bareLog, 'sample.mdx', page('```rust', 'tracing::info!("started");', '```')],
   [RULES.forRootForm, 'sample.mdx', page('```rust', 'HttpModule::for_root(Some(cfg))', '```')],
+  // Both carry `(from the demo)`: the marker is what makes a title a claim about
+  // `demo/`, so a fixture without it exercises nothing — which is what this join
+  // reported the moment the rules stopped keying on the path prefix.
   [RULES.fenceDrift, 'sample.mdx', page(
-    '```rust title="apps/api/src/module.rs"', 'pub struct NotInThatFile;', '```',
+    '```rust title="apps/api/src/module.rs (from the demo)"', 'pub struct NotInThatFile;', '```',
   )],
   [RULES.fenceTitle, 'sample.mdx', page(
-    '```rust title="apps/api/src/module.rs"', '/// a doc comment the demo workspace forbids',
+    '```rust title="apps/api/src/module.rs (from the demo)"',
+    '/// a doc comment the demo workspace forbids',
     'pub struct ApiModule;', '```',
   )],
+  [RULES.fenceUntitled, 'sample.mdx', page('```rust', 'pub struct Untitled;', '```')],
   [RULES.testLayout, 'sample.mdx', page('| Suite | `tests/e2e.rs` |')],
   [RULES.configTable, 'storage/index.mdx', page('The keys are `ENDPOINT` and nothing else.')],
   [RULES.architectureDrift, 'architecture.mdx', page('No role table, no reserved block.')],

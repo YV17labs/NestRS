@@ -12,7 +12,7 @@ handler argument, so a direct upload is the single-round-trip alternative
 to the [presigned flow](/storage/): the client posts the bytes, the server
 stores them.
 
-```rust title="crates/features/src/audio/http/controller.rs (abridged)" {2}
+```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)" {2}
 #[post("/uploads/direct")]
 async fn upload_direct(&self, mut form: Multipart) -> Result<Json<PresignedUrlDto>> {
     while let Some(part) = form.next_field().await.map_err(bad_request)? {
@@ -40,7 +40,7 @@ handler sees any of it. That is right for a form value and wrong for a file.
 `PartExt::into_byte_stream()` is the other half — the part as it arrives, in the
 shape [`Storage::put_stream`](/storage/) consumes:
 
-```rust title="crates/features/src/audio/service.rs (abridged)"
+```rust title="crates/features/src/audio/service.rs (from the demo, abridged)"
 use nest_rs::http::PartExt;
 
 pub async fn store_upload(
@@ -72,7 +72,7 @@ Nothing in a `Multipart` handler states what the form's parts are, so
 `#[api(multipart = Type)]` declares them and the
 [OpenAPI document](/openapi/) files the schema under `multipart/form-data`:
 
-```rust
+```rust title="crates/features/src/media/http/controller.rs"
 #[derive(JsonSchema)]
 pub struct DirectUploadDto {
     #[schemars(extend("format" = "binary"))]

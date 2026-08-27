@@ -14,7 +14,7 @@ deliberate — you should know both.
 Isolation starts where every request enters: bind the two guards on the
 controller, and the caller's org scope flows through every layer below.
 
-```rust title="crates/features/src/users/http/controller.rs"
+```rust title="crates/features/src/users/http/controller.rs (from the demo)"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
@@ -55,7 +55,7 @@ reason, and each is a place a reviewer must look.
 `Repo::conn()` is `pub`. It hands you the ambient executor for a custom
 query. A `find()` against it that skips `scope_for` runs **unfiltered**:
 
-```rust
+```rust title="crates/features/src/posts/service.rs"
 // Escape hatch: an unfiltered read across every tenant. A review trigger.
 let every_post = posts::Entity::find()
     .all(&Repo::<posts::Entity>::conn()?)
@@ -66,7 +66,7 @@ An injected `Arc<DatabaseConnection>` goes one step further — it has no
 executor and no ability at all, the sanctioned bypass for a truly
 contextless path such as a shutdown hook:
 
-```rust
+```rust title="crates/features/src/sessions/reaper.rs"
 #[injectable]
 pub struct SessionReaper {
     #[inject]
@@ -132,7 +132,7 @@ application cannot bypass: a Postgres Row-Level Security policy keyed on
 `find()`, a processor that forgot its `org_id` predicate — returns
 nothing, because the database itself refuses the rows.
 
-```sql
+```sql title="the policy, in SQL"
 ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_isolation ON posts

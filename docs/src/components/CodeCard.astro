@@ -1,0 +1,169 @@
+---
+/**
+ * A code card as the landing draws it: a header naming the file (and what the
+ * reader is meant to notice), then the lines — with the ones that carry the
+ * argument washed in accent, barred on the left, and numbered against the
+ * legend beside them.
+ *
+ * The snippets here are *illustrations*, not quotations of a repo file, so they
+ * are markup rather than a fenced block: a fence gives no way to float a marker
+ * against a line, and Expressive Code's frame is an editor tab rather than the
+ * flat header the design draws. The pages that quote real files keep their
+ * fences — and their byte-for-byte gate — untouched.
+ */
+type Tone = 'kw' | 'str' | 'com' | 'attr' | 'bright' | 'dim' | 'err';
+
+interface Seg {
+  t: string;
+  c?: Tone;
+}
+
+export interface Line {
+  /** Rust source; tokenized here. Mutually exclusive with `segs`. */
+  code?: string;
+  /** Pre-toned segments, for terminal lines the tokenizer has no grammar for. */
+  segs?: Seg[];
+  /** Accent wash + left bar: this is the line the argument turns on. */
+  mark?: boolean;
+  /** The number in the legend beside the card. */
+  marker?: number;
+}
+
+interface Props {
+  /** File chrome: the path on the left, the aside on the right. */
+  file?: string;
+  note?: string;
+  /** Terminal chrome: three dots and a label. */
+  terminal?: string;
+  lines: Line[];
+}
+
+const { file, note, terminal, lines } = Astro.props;
+
+/** `await`, not `self`: the design colours the operator and leaves the receiver. */
+const KEYWORDS = new Set([
+  'pub', 'struct', 'impl', 'async', 'fn', 'let', 'mut', 'await', 'use', 'mod',
+  'const', 'enum', 'trait', 'where', 'as', 'dyn', 'match', 'if', 'else', 'for',
+  'in', 'return',
+]);
+
+function tokenize(text: string): Seg[] {
+  const out: Seg[] = [];
+  let buf = '';
+  const flush = () => {
+    if (buf) out.push({ t: buf });
+    buf = '';
+  };
+  let i = 0;
+  while (i < text.length) {
+    const rest = text.slice(i);
+    if (rest.startsWith('//')) {
+      flush();
+      out.push({ t: rest, c: 'com' });
+      return out;
+    }
+    const str = text[i] === '"' && rest.match(/^"(?:[^"\\]|\\.)*"/);
+    if (str) {
+      flush();
+      out.push({ t: str[0], c: 'str' });
+      i += str[0].length;
+      continue;
+    }
+    const word = rest.match(/^[A-Za-z_][A-Za-z0-9_]*/);
+    if (word) {
+      if (KEYWORDS.has(word[0])) {
+        flush();
+        out.push({ t: word[0], c: 'kw' });
+      } else {
+        buf += word[0];
+      }
+      i += word[0].length;
+      continue;
+    }
+    buf += text[i];
+    i += 1;
+  }
+  flush();
+  return out;
+}
+
+/**
+ * An attribute wears the accent on its `#[name` and on its closing `]`, and
+ * nothing in between — so the bracket is matched rather than guessed, and
+ * `#[inject] svc: …` colours only the attribute it opens.
+ */
+function rustLine(text: string): Seg[] {
+  const at = text.indexOf('#[');
+  const ident = at === -1 ? null : text.slice(at + 2).match(/^[a-z_]+/);
+  if (at !== -1 && !text.slice(0, at).trim() && ident) {
+    let depth = 0;
+    for (let k = at + 1; k < text.length; k += 1) {
+      const ch = text[k];
+      if (ch === '[' || ch === '(') depth += 1;
+      else if (ch === ']' || ch === ')') {
+        depth -= 1;
+        if (depth === 0 && ch === ']') {
+          const indent = text.slice(0, at);
+          return [
+            ...(indent ? [{ t: indent }] : []),
+            { t: `#[${ident[0]}`, c: 'attr' as Tone },
+            ...tokenize(text.slice(at + 2 + ident[0].length, k)),
+            { t: ']', c: 'attr' as Tone },
+            ...tokenize(text.slice(k + 1)),
+          ];
+        }
+      }
+    }
+  }
+  return tokenize(text);
+}
+
+const rendered = lines.map((line) => ({
+  ...line,
+  segs: line.segs ?? rustLine(line.code ?? ''),
+}));
+
+const ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+const escape = (text: string) => text.replace(/[&<>]/g, (c) => ESCAPES[c]);
+
+/**
+ * Emitted as one HTML string rather than as JSX children: inside a `<pre>`
+ * every newline the template would introduce between elements is content, and
+ * a line-per-block layout would grow a blank line between every pair.
+ */
+const body = rendered
+  .map((line) => {
+    const marker =
+      line.marker === undefined ? '' : `<span class="rs-code-marker">● ${line.marker}</span>`;
+    const inner = line.segs
+      .map((s) => (s.c ? `<span class="rs-t-${s.c}">${escape(s.t)}</span>` : escape(s.t)))
+      .join('');
+    const cls = [
+      'rs-code-line',
+      line.mark ? 'is-marked' : '',
+      line.marker === undefined ? '' : 'has-marker',
+    ].filter(Boolean).join(' ');
+    const code = line.marker === undefined ? inner : `<span class="rs-code-src">${inner}</span>`;
+    return `<span class="${cls}">${code || '&nbsp;'}${marker}</span>`;
+  })
+  .join('');
+---
+
+<div class:list={['rs-code', { 'rs-code--terminal': terminal }]}>
+  {
+    terminal ? (
+      <div class="rs-code-head">
+        <span class="rs-code-dot" />
+        <span class="rs-code-dot" />
+        <span class="rs-code-dot" />
+        <span class="rs-code-label">{terminal}</span>
+      </div>
+    ) : (
+      <div class="rs-code-head">
+        <span class="rs-code-file">{file}</span>
+        {note && <span class="rs-code-note">{note}</span>}
+      </div>
+    )
+  }
+  <pre class="rs-code-body" set:html={body} />
+</div>

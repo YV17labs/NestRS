@@ -46,7 +46,7 @@ service method below are the three things you add.
 
 The handler validates the body, delegates to the service, returns the token:
 
-```rust title="crates/features/src/oauth/http/controller.rs (you write this)"
+```rust title="crates/features/src/oauth/http/controller.rs (from the demo — you write this)"
 #[post("/login")]
 #[use_guards(ThrottlerGuard)]
 #[meta(Throttle::per_minute(10))]
@@ -83,7 +83,7 @@ secret; split later without touching your features. See
 
 The two guards are project-local aliases written **once**:
 
-```rust title="crates/features/src/authn/strategy.rs"
+```rust title="crates/features/src/authn/strategy.rs (from the demo)"
 use nest_rs::authn::JwtStrategy;
 
 pub type AuthnStrategy = JwtStrategy<Claims>;
@@ -91,7 +91,7 @@ pub type AuthnStrategy = JwtStrategy<Claims>;
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 ```
 
-```rust title="crates/features/src/authz/guard.rs"
+```rust title="crates/features/src/authz/guard.rs (from the demo)"
 use nest_rs::authz::AbilityGuard;
 
 use crate::authz::AuthzAbility;
@@ -107,7 +107,7 @@ Then protecting a controller is one attribute — `AuthnGuard` turns the
 bearer token into a principal, `AuthzGuard` turns the principal into the
 request's `Ability`:
 
-```rust title="crates/features/src/users/http/controller.rs (excerpt)"
+```rust title="crates/features/src/users/http/controller.rs (from the demo)"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
@@ -118,8 +118,11 @@ pub struct UsersController {
 
 And the feature's HTTP module imports the authz adapter:
 
-```rust title="crates/features/src/users/http/module.rs (excerpt)"
-#[module(imports = [UsersModule, AuthzModule], providers = [UsersController])]
+```rust title="crates/features/src/users/http/module.rs (from the demo, abridged)"
+#[module(
+    imports = [UsersModule, AuthzModule],
+    providers = [UsersController],
+)]
 pub struct UsersHttpModule;
 ```
 

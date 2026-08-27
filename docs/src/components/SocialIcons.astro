@@ -1,0 +1,44 @@
+---
+/**
+ * The nav's right-hand group. Starlight has no "header links" concept, and this
+ * is the slot that already sits where the design puts them — so the section
+ * links live here beside the GitHub button rather than behind a full `Header`
+ * override that would fork Starlight's grid.
+ *
+ * The two navs carry different links, as the design draws them: the landing
+ * sends a reader into the site (Docs, Tutorial, Benchmarks, Why NestRS), while
+ * a documentation page already has the sidebar for that and points outward
+ * instead (Benchmarks, crates.io).
+ */
+const hasSidebar = Astro.locals.starlightRoute.hasSidebar;
+
+const links = [
+  { label: 'Docs', href: '/getting-started/', onDocs: false, external: false },
+  { label: 'Tutorial', href: '/tutorial/', onDocs: false, external: false },
+  { label: 'Benchmarks', href: '/benchmarks/', onDocs: true, external: false },
+  { label: 'Why NestRS', href: '/why/', onDocs: false, external: false },
+  { label: 'crates.io', href: 'https://crates.io/search?q=nest-rs', onDocs: true, external: true },
+];
+---
+
+<nav class="rs-nav-links" aria-label="Sections">
+  {
+    links
+      .filter((l) => (hasSidebar ? l.onDocs : !l.external))
+      .map((l) => (
+        <a
+          href={l.href}
+          class="rs-nav-link"
+          target={l.external ? '_blank' : undefined}
+          rel={l.external ? 'noopener' : undefined}>
+          {l.label}
+        </a>
+      ))
+  }
+  <a
+    href="https://github.com/YV17labs/NestRS"
+    class="rs-nav-button"
+    target="_blank"
+    rel="noopener me">GitHub <span aria-hidden="true">↗</span></a
+  >
+</nav>

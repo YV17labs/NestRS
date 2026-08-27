@@ -37,7 +37,7 @@ per crate.
 
 ## Custom spans
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[get("/{id}")]
 #[tracing::instrument(skip(self), fields(user_id = %id.0))]
 async fn read(&self, id: Path<Uuid>) -> Result<Json<User>> {
@@ -85,7 +85,7 @@ NESTRS_OPENTELEMETRY__SAMPLE_RATIO=0.1
 
 Or pinned:
 
-```rust
+```rust title="apps/api/src/module.rs"
 OpenTelemetryConfig::new("api").with_trace_sample_ratio(0.1)
 ```
 

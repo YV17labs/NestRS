@@ -42,7 +42,7 @@ flags](#feature-flags) below.
 
 ## Wire it in
 
-```rust title="apps/auth/src/main.rs"
+```rust title="apps/auth/src/main.rs (from the demo)"
 use anyhow::Result;
 use nest_rs::config::Environment;
 use nest_rs::core::App;
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-```rust title="apps/auth/src/module.rs (abridged)"
+```rust title="apps/auth/src/module.rs (from the demo, abridged)"
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -143,7 +143,7 @@ whether the binary serves HTTP at all.
 nest-rs = { workspace = true, features = ["opentelemetry"] }
 ```
 
-```toml title="apps/auth/Cargo.toml"
+```toml title="apps/auth/Cargo.toml (from the demo)"
 nest-rs = { workspace = true, features = ["http", "opentelemetry"] }
 ```
 
@@ -165,7 +165,7 @@ binary locally.
 
 ## Tests
 
-```rust
+```rust title="apps/api/tests/e2e/users.rs"
 use nest_rs::testing::TestApp;
 
 #[tokio::test]

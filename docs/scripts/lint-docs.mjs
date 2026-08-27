@@ -17,14 +17,15 @@
 // **Code-truth** — `version-pin`, `unauthed-curl`, `crud-error`, `bind-order`, `queue-name`,
 // `install-stanza`, `otel-guard`, `decorator-import`, `decorator-index`, `layer-impl`,
 // `trait-surface`, `exception-response-error`, `bare-log`, `config-table`, `for-root-form`,
-// `fence-title`, `test-layout`, `architecture-drift`, `envelope-drift`, `landing-claim`. Each
+// `fence-title`, `fence-untitled`, `test-layout`, `architecture-drift`, `envelope-drift`,
+// `landing-claim`. Each
 // is documented on its constant below and each was filed as a shipped defect first.
 //
 // Every code-truth check reads `docs/canon.json`, which `nest-rs-conformance`'s `canon` join
 // derives from the tree and publishes. **Nothing here opens a file outside `docs/`** — see the
 // `CANON` doc below for what that buys and why it is the whole point.
 
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 import { REDIRECTS } from '../src/redirects.mjs';
@@ -101,7 +102,7 @@ function loadCanon() {
 // The same root the sidebar reads, so the two never disagree about what a page is.
 const CONTENT = CONTENT_ROOT;
 // Every page, walked once. Two consumers — the per-file lint pass, and the
-// landing's `N+ pages` floor, which is *checked against this number*: a second
+// `N+ pages` floor on `/why/`, which is *checked against this number*: a second
 // walk would be a second answer to the question the claim is gated on.
 const PAGES = walk(CONTENT).sort();
 const BASELINE = join(HERE, 'lint-baseline.json');
@@ -112,6 +113,12 @@ const GOING_FURTHER_EXEMPT = new Set([
   'glossary.mdx',
   'decorators.mdx',
   'configuration/env-reference.mdx', // env-var reference (step 10)
+  // The landing is a splash, not a reference page: it closes on its call to
+  // action, and every door a `Going further` block would list is already a
+  // capability card, a nav link or the footer. The rule exists so a reader is
+  // never left at the end of a page with nowhere to go — which is a question
+  // the splash answers six times before it ends.
+  'index.mdx',
 ]);
 
 const BANNED_HEADINGS = [
@@ -188,6 +195,7 @@ export const RULES = Object.freeze({
   configTable: 'config-table',
   forRootForm: 'for-root-form',
   fenceTitle: 'fence-title',
+  fenceUntitled: 'fence-untitled',
   fenceDrift: 'fence-drift',
   testLayout: 'test-layout',
   architectureDrift: 'architecture-drift',
@@ -205,6 +213,7 @@ const MIRRORED_PAGES = new Map([
   ['architecture.mdx', { rule: RULES.architectureDrift, check: (src) => architectureDrift(src) }],
   ['decorators.mdx', { rule: RULES.decoratorIndex, check: (src) => decoratorIndexDrift(src) }],
   ['index.mdx', { rule: RULES.landingClaim, check: (src) => landingClaims(src) }],
+  ['why.mdx', { rule: RULES.landingClaim, check: (src) => thesisClaims(src) }],
   ['queue/writing-a-driver.mdx', { rule: RULES.envelopeDrift, check: (src) => envelopeDrift(src) }],
 ]);
 const MIRRORS_SEEN = new Set();
@@ -301,41 +310,83 @@ function documentedDecorators() {
 /// past it the page undersells a framework that grew, which is the same defect
 /// pointing the other way.
 const CLAIM_BAND = new Map([['tests', 600], ['pages', 30]]);
-function landingClaims(src) {
-  const out = [];
-  const claim = (re) => {
-    const m = src.match(re);
-    return m ? Number(m[1].replace(/,/g, '')) : null;
-  };
-  const exact = [
-    ['capabilities', claim(/\*\*(\d[\d,]*) capabilities\*\*/), CANON.capabilities.length],
-    ['decorators', claim(/\*\*(\d[\d,]*) decorators\*\*/), documentedDecorators()],
-  ];
-  for (const [what, claimed, actual] of exact) {
-    if (claimed === null) {
-      out.push(`no \`**N ${what}**\` claim on the landing — the figure is gated against the `
-        + `repo, so removing it removes the gate; say what the repo holds (${actual})`);
-    } else if (claimed !== actual) {
-      out.push(`the landing claims ${claimed} ${what}, the repo holds ${actual}`);
-    }
+
+/// **A page's surface is its source plus the components it renders.** The
+/// landing is MDX that imports `src/components/*.astro`, and half its figures
+/// are inside those components — read the MDX alone and the gate reports a
+/// claim the reader can see on the page. Still `docs/**` exactly, so the
+/// workflow's `paths:` filter stays a true declaration.
+function surfaceOf(src) {
+  const parts = [src];
+  for (const m of src.matchAll(/from '(?:\.\.\/)+components\/([\w.-]+\.astro)'/g)) {
+    const file = join(DOCS_ROOT, 'src', 'components', m[1]);
+    if (existsSync(file)) parts.push(readFileSync(file, 'utf8'));
   }
-  const floors = [
-    ['tests', claim(/\*\*(\d[\d,]*)\+ tests\*\*/), TEST_COUNT],
-    ['pages', claim(/(\d[\d,]*)\+ pages/), PAGES.length],
-  ];
-  for (const [what, claimed, actual] of floors) {
-    const band = CLAIM_BAND.get(what);
+  return parts.join('\n');
+}
+
+/// One figure, checked two ways.
+///
+/// An **exact** claim names a set the reader can enumerate on another page of
+/// this site, so any drift is a contradiction. A **floor** (`2,000+ tests`) may
+/// lag what the repo holds — that is what the `+` says — but only within a
+/// band: past it the page undersells a framework that grew, which is the same
+/// defect pointing the other way.
+///
+/// The emphasis is optional because a figure is not always markdown: the
+/// decorator count is a sentence inside a component, where `**` would render
+/// as two asterisks.
+function figureDrift(surface, where, specs) {
+  const out = [];
+  for (const [what, shape, actual] of specs) {
+    const floor = shape === 'floor';
+    const re = floor
+      ? new RegExp(`(?:\\*\\*)?(\\d[\\d,]*)\\+ ${what}`)
+      : new RegExp(`(?:\\*\\*)?(\\d[\\d,]*) ${what}`);
+    const m = surface.match(re);
+    const claimed = m ? Number(m[1].replace(/,/g, '')) : null;
     if (claimed === null) {
-      out.push(`no \`N+ ${what}\` claim on the landing — the figure is gated against the repo, `
-        + `so removing it removes the gate; say what the repo holds (${actual})`);
-    } else if (claimed > actual) {
-      out.push(`the landing claims ${claimed}+ ${what}, the repo holds ${actual}`);
+      out.push(`no \`${floor ? 'N+' : 'N'} ${what}\` claim on ${where} — the figure is gated `
+        + `against the repo, so removing it removes the gate; say what the repo holds (${actual})`);
+      continue;
+    }
+    if (!floor) {
+      if (claimed !== actual) out.push(`${where} claims ${claimed} ${what}, the repo holds ${actual}`);
+      continue;
+    }
+    const band = CLAIM_BAND.get(what);
+    if (claimed > actual) {
+      out.push(`${where} claims ${claimed}+ ${what}, the repo holds ${actual}`);
     } else if (actual - claimed > band) {
-      out.push(`the landing claims ${claimed}+ ${what} and the repo holds ${actual} — past `
+      out.push(`${where} claims ${claimed}+ ${what} and the repo holds ${actual} — past `
         + `${band} the floor undersells; raise it`);
     }
   }
   return out;
+}
+
+/// The landing sells the framework on what a reader can go and enumerate: the
+/// capability count under the capability grid, the decorator count in the
+/// guarantee that names them.
+function landingClaims(src) {
+  return figureDrift(surfaceOf(src), 'the landing', [
+    ['capabilities', 'exact', CANON.capabilities.length],
+    ['decorators', 'exact', documentedDecorators()],
+  ]);
+}
+
+/// `/why/` argues that the framework holds its shape over years, so the two
+/// figures that measure *that* are gated where the argument is made.
+///
+/// They sat on the landing until 6.1, and moved because the redesigned splash
+/// states neither — a figure with no home on a page is a gate with no subject,
+/// and the honest repair is to gate it where the site does make the claim, not
+/// to delete the check.
+function thesisClaims(src) {
+  return figureDrift(surfaceOf(src), '/why/', [
+    ['tests', 'floor', TEST_COUNT],
+    ['pages', 'floor', PAGES.length],
+  ]);
 }
 
 /// `/architecture/` deliberately restates the role table and the reserved
@@ -451,7 +502,26 @@ const FLAT_TEST_TARGET = /\btests\/[A-Za-z0-9_*]+\.rs\b/g;
 /// - **A port.** `split-deployment.mdx` pinned `3000` in a block
 ///   titled `apps/api/src/module.rs` while the app listens on `3002` — and
 ///   `curl`ed `3002` forty lines down.
+/// The words a title uses to say it is quoting the demo workspace — and the
+/// whole basis on which this file resolves one.
+///
+/// **The claim is the marker, never the path.** `src/posts/entity.rs` says
+/// where the file goes in *your* project and asserts nothing about ours, so a
+/// page may illustrate it freely; the same title plus `(from the demo)` says
+/// the block is an excerpt of the Publish workspace, and that is what gets
+/// checked. Keying on the prefix instead made one string mean two things — the
+/// reader's layout and our provenance — and a page then showed the same file at
+/// two roots with nothing saying why. Promoting every illustration to the long
+/// prefix reported 135 violations across 47 pages, which is the measurement
+/// that settled it: the prefix was carrying the provenance all along.
+const DEMO_MARKER = /\((from the demo)(?:[,—][^)]*)?\)\s*$/;
+
+/// The one prefix a feature file does not carry is `crates/features/`: it is
+/// the same on every one, so the title drops it and this map puts it back. A
+/// prefix that *varies* — the app, the workspace crate — stays in the title,
+/// because there it is information.
 const DEMO_TITLE_PREFIXES = [
+  [/^src\//, 'demo/crates/features/src/'],
   [/^crates\//, 'demo/crates/'],
   [/^apps\//, 'demo/apps/'],
 ];
@@ -460,7 +530,8 @@ const DEMO_TITLE_PREFIXES = [
 /// not in demo shape. The path is a *key into the canon*, never something this
 /// file opens — `demo_files` carries every one that exists.
 function demoPathFor(title) {
-  const clean = title.replace(/\s*\(abridged\)\s*$/, '').trim();
+  if (!DEMO_MARKER.test(title)) return null;
+  const clean = title.replace(DEMO_MARKER, '').trim();
   for (const [re, prefix] of DEMO_TITLE_PREFIXES) {
     if (re.test(clean)) return clean.replace(re, prefix);
   }
@@ -526,7 +597,20 @@ function fenceTitleDrift(blocks) {
     const abs = demoPathFor(title);
     if (!abs) continue;
     const real = demoPort(abs);
-    if (real === undefined) continue;
+    // The claim's own precondition: the canon indexes **every** `.rs` under
+    // `demo/` — 217 of 217 — so a marked title naming one it does not hold names
+    // a file that does not exist. `fence-drift` cannot see this: it skips a path
+    // it cannot look up, which is how `apps/blog/` — an app the demo has never
+    // had — carried the marker on thirteen fences. Non-`.rs` (a manifest, an
+    // `.env`, a compose file) is outside the canon and outside this probe.
+    if (real === undefined) {
+      if (abs.endsWith('.rs')) {
+        out.push(`${title} says it is from the demo, which has no ${abs} — either the file `
+          + 'moved and the title did not, or the block is an illustration and the marker is a '
+          + 'claim it cannot keep');
+      }
+      continue;
+    }
 
     const comment = block.body.match(/^\s*(\/\/\/?!?[^\n]*)/m);
     // `// …` is the elision mark an excerpt uses; it claims nothing about the file.
@@ -931,6 +1015,17 @@ function fencedBlocks(src) {
 /// The fence languages that hold a pasteable shell command.
 const SHELL_INFO = /^(bash|sh|shell|console|zsh)\b/;
 
+/// The fence languages whose blocks are the *contents of a file*, and which
+/// therefore owe a `title=` saying which one.
+///
+/// The complement is the point: a shell block is a command and has no file, a
+/// `json`/`http`/`text` block is a payload or an output the reader reads rather
+/// than writes, and `mermaid` is a picture. Those four say nothing by having no
+/// title. A `rust` block that says nothing leaves the reader holding code with
+/// nowhere to put it, which is the defect this rule was filed for — 244 fences
+/// across 71 pages, on the pages a newcomer opens first.
+const FILE_CONTENT_INFO = /^(rust|toml|sql|graphql|ts|yaml|yml)\b/;
+
 /// The lines of a shell block as a reader would run them: continuations folded
 /// so an argument on the next line still belongs to its command, and a `$`
 /// prompt stripped.
@@ -1131,9 +1226,10 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
       if (!quoted && /\s#/.test(raw)) add(RULES.description, 'unquoted-hash (YAML truncation)');
       if (value.length > 160) add(RULES.description, `too-long (${value.length}>160)`);
     }
-    // 1b. A tier places a page inside its section's groups. A page that is in no
-    // section — the hand-listed roots of `Start here` and `Reference` — has no
-    // group to be placed in, so the key would sit there saying nothing.
+    // 1b. A tier places a page inside one of its section index's two lists. A
+    // page that is in no section — the hand-listed roots of `Start here` and
+    // `Reference` — has no index to be placed in, so the key would sit there
+    // saying nothing.
     if (!rel.includes('/') && /^tier:/m.test(fm)) {
       add(RULES.tier, 'a page in no section declares a tier — nothing would group it');
     }
@@ -1296,9 +1392,15 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
       + 'and every scaffold write the bare value; keep `None` for the env-only call');
   }
 
-  // 20. A fence titled with a real file quotes it.
+  // 20. A fence titled with a real file quotes it, and a fence of file content
+  //     says which file (STYLE.md § C).
   for (const detail of fenceTitleDrift(blocks)) add(RULES.fenceTitle, detail);
   for (const detail of fenceDrift(blocks)) add(RULES.fenceDrift, detail);
+  for (const block of blocks) {
+    if (!FILE_CONTENT_INFO.test(block.info) || /title="/.test(block.info)) continue;
+    add(RULES.fenceUntitled, `a \`${block.info.split(/\s/)[0]}\` fence with no \`title=\` — `
+      + 'a reader cannot place code that does not say where it goes');
+  }
 
   // 21. A published trait signature does not invent a method.
   for (const block of blocks) {
@@ -1330,14 +1432,19 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
 
 /// 19. The Basics / All options split (STYLE.md §G), checked per **section** —
 /// the one invariant no single page can carry. A section past the threshold
-/// presents two lists, so every page in it says which one it is in, and both
-/// have to hold something: a section that declares one tier is the flat list
-/// with a header on it, which is the state the split exists to replace.
+/// presents two lists on its index, so every page in it says which one it is in,
+/// and both have to hold something: a section that declares one tier is the
+/// undivided list with a header on it, which is the state the split exists to
+/// replace.
 ///
 /// Below the threshold the rule inverts — a `tier` there is a page claiming a
-/// grouping the sidebar will not render, and the reader never sees it.
-/// Violations are filed against the page that carries the wrong frontmatter,
-/// and a missing tier against the `index` that frames the section.
+/// grouping nothing renders, and the reader never sees it. Violations are filed
+/// against the page that carries the wrong frontmatter, and a missing tier
+/// against the `index` that frames the section.
+///
+/// The sidebar reads none of this: it is two deep, a group being a section and
+/// its items that section's pages. So this rule is the split's only gate, where
+/// it used to share the job with a build that failed on an unsorted page.
 function lintSections() {
   const out = [];
   const add = (rel, detail) => out.push(`${rel}::${RULES.tier}::${detail}`);
@@ -1348,13 +1455,13 @@ function lintSections() {
         ? `${dir}/ is an ordered path, exempt from the split at any size`
         : `${dir}/ has ${pages.length} pages, under the ${TIER_THRESHOLD} a split needs`;
       for (const page of pages.filter((p) => p.tier)) {
-        add(page.rel, `\`tier: ${page.tier}\` on a page in a flat section — ${why}`);
+        add(page.rel, `\`tier: ${page.tier}\` on a page in an undivided section — ${why}`);
       }
       continue;
     }
     for (const page of pages) {
       if (!page.tier) {
-        add(page.rel, `no tier — ${dir}/ presents ${pages.length} pages in two groups, so `
+        add(page.rel, `no tier — ${dir}/index presents ${pages.length} pages in two lists, so `
           + `each one declares \`tier: ${TIERS.join('` or `tier: ')}\``);
       } else if (!TIERS.includes(page.tier)) {
         add(page.rel, `unknown tier \`${page.tier}\` — the tiers are `
@@ -1364,7 +1471,7 @@ function lintSections() {
     for (const tier of TIERS.filter((t) => !pages.some((p) => p.tier === t))) {
       add(index ? index.rel : `${dir}/index.mdx`,
         `${dir}/ declares no ${TIER_LABELS[tier]} page — a section split into one tier is `
-        + 'the flat list with a header on it');
+        + 'the undivided list with a header on it');
     }
   }
   return out;

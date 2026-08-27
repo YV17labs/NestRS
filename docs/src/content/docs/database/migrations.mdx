@@ -23,7 +23,7 @@ One file per migration, named `m<utc-date>_<seq>_<what>.rs`.
 enum names the table and its columns so there are no stringly-typed
 identifiers. Fill in the columns the generator stubbed:
 
-```rust title="crates/migrations/src/m20260526_000000_create_org.rs"
+```rust title="crates/migrations/src/m20260526_000000_create_org.rs (from the demo)"
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -67,7 +67,7 @@ replay to roll back cleanly.
 A later migration references an earlier table by adding a foreign key — the
 `user` table hangs off `org`:
 
-```rust title="crates/migrations/src/m20260526_000001_create_user.rs"
+```rust title="crates/migrations/src/m20260526_000001_create_user.rs (from the demo)"
 .col(ColumnDef::new(User::OrgId).uuid().not_null())
 .foreign_key(
     ForeignKey::create()
@@ -85,7 +85,7 @@ Two registrations, both written by `g migration`: the `mod` line in `lib.rs`,
 and the ordered vec in `migrator.rs`. Migrations run top to bottom, so a table
 must appear after anything it references.
 
-```rust title="crates/migrations/src/lib.rs"
+```rust title="crates/migrations/src/lib.rs (from the demo)"
 mod m20260526_000000_create_org;
 mod m20260526_000001_create_user;
 mod migrator;
@@ -96,7 +96,7 @@ pub use migrator::{Migrator, migrate};
 `migrator.rs` is **regenerated** from that `mod` list on every
 `g migration`, so the vec can never fall behind the files:
 
-```rust title="crates/migrations/src/migrator.rs"
+```rust title="crates/migrations/src/migrator.rs (from the demo)"
 use sea_orm_migration::prelude::*;
 
 use super::{m20260526_000000_create_org, m20260526_000001_create_user};

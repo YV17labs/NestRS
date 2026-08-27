@@ -1,0 +1,38 @@
+---
+/**
+ * The capability grid — one card per concern, each linking to the section of
+ * this site that documents it. Twelve cards, thirty-one features: the cards
+ * group what a reader shops for, the figure below them is the gated count.
+ */
+interface Capability {
+  name: string;
+  desc: string;
+  href: string;
+}
+
+const caps: Capability[] = [
+  { name: 'HTTP', desc: 'Controllers, versioning, extractors, streaming, TLS', href: '/http/' },
+  { name: 'GraphQL', desc: 'Resolvers, dataloaders, subscriptions, federation', href: '/graphql/' },
+  { name: 'OpenAPI', desc: 'Spec + Swagger UI derived from the route table', href: '/openapi/' },
+  { name: 'WebSockets', desc: 'Gateways, namespaces, rooms, server push', href: '/websockets/' },
+  { name: 'MCP', desc: 'Tools, prompts and resources under the same guards', href: '/mcp/' },
+  { name: 'Database', desc: 'Entities, Repo, ambient transactions, migrations', href: '/database/' },
+  { name: 'Authentication', desc: 'JWT on EdDSA, OAuth2 + PKCE, Argon2id, social', href: '/security/authentication/' },
+  { name: 'Authorization', desc: 'Abilities, row-level filtering, field masking', href: '/security/authorization/' },
+  { name: 'Queue & Schedule', desc: 'Redis-backed queues, retries, cron, events', href: '/queue/' },
+  { name: 'Storage', desc: 'S3-compatible client, presigned URLs, streaming', href: '/storage/' },
+  { name: 'Observability', desc: 'OpenTelemetry logs, traces, metrics, probes', href: '/opentelemetry/' },
+  { name: 'Testing & CLI', desc: 'In-process harness on the real DI graph; nestrs', href: '/testing/' },
+];
+---
+
+<div class="rs-caps not-content">
+  {
+    caps.map((c) => (
+      <a class="rs-cap" href={c.href}>
+        <span class="rs-cap-name">{c.name}</span>
+        <span class="rs-cap-desc">{c.desc}</span>
+      </a>
+    ))
+  }
+</div>

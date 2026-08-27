@@ -20,7 +20,7 @@ A `#[mcp]` path is not a namespace the host owns the way a `#[controller]`'s
 is — nothing nests under it. It names the one endpoint the host joins, which is
 exactly why peers share it.
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(imports = [WeatherModule, AuthzMcpModule], providers = [WeatherTool])]
 pub struct WeatherMcpModule;   // #[mcp]
 
@@ -78,7 +78,7 @@ children. Two declarations answer for it, each owned by whoever can know it.
 **The app says who it is and how its server is used**, once, for every endpoint
 it exposes:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::mcp::{McpIdentity, McpModule, McpOptions};
 
@@ -110,7 +110,7 @@ what the model reads when it chooses between them.
 
 **A host says which endpoint stands apart**, on the file that serves it:
 
-```rust title="src/weather/mcp/tool.rs"
+```rust title="crates/features/src/weather/mcp/tool.rs"
 #[mcp(path = "/mcp/weather", name = "acme-weather")]
 #[derive(Clone)]
 pub struct WeatherTool { /* … */ }

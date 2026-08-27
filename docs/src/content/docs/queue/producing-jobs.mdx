@@ -22,7 +22,7 @@ type that satisfies those bounds. No derive, no trait to write. The
 convention is to keep payloads small: a reference to the work, not the
 work itself.
 
-```rust title="crates/features/src/audio/command.rs"
+```rust title="crates/features/src/audio/command.rs (from the demo)"
 use nest_rs::queue::{QueueName, queue};
 use serde::{Deserialize, Serialize};
 
@@ -67,7 +67,7 @@ controller, the GraphQL resolver, the scheduled producer — all of them
 delegate. They do **not** hold the producer and do **not** know the queue
 name.
 
-```rust title="crates/features/src/audio/service.rs"
+```rust title="crates/features/src/audio/service.rs (from the demo)"
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -141,7 +141,7 @@ Declare the DTO with `#[input]`: a `Json<T>` handler argument requires
 derives it along with `Deserialize` and `Validate`. A hand-derived DTO needs
 `#[derive(schemars::JsonSchema)]` and the `schemars` dependency to go with it.
 
-```rust title="crates/features/src/audio/dtos/transcode_dto.rs"
+```rust title="crates/features/src/audio/dtos/transcode_dto.rs (from the demo)"
 use nest_rs::http::input;
 
 #[input]
@@ -150,7 +150,7 @@ pub struct TranscodeDto {
 }
 ```
 
-```rust title="crates/features/src/audio/http/controller.rs"
+```rust title="crates/features/src/audio/http/controller.rs (from the demo)"
 use std::sync::Arc;
 
 use nest_rs::http::{controller, routes};

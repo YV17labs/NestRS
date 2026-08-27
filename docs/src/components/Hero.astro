@@ -1,86 +1,45 @@
 ---
-import { Image } from 'astro:assets';
+/**
+ * The landing hero — eyebrow pill, headline, promise, three calls to action,
+ * then the stat strip. No logo image: the lockup lives in the nav, and the
+ * headline is what the first screen is for.
+ */
 import DraftContentNotice from 'virtual:starlight/components/DraftContentNotice';
 import { LinkButton } from '@astrojs/starlight/components';
+import Stats from './Stats.astro';
 
 const { data } = Astro.locals.starlightRoute.entry;
-const { title = data.title, tagline, image, actions = [] } = data.hero || {};
-
-/** The nest stays on the ground — the pad every craft in the field left from. */
-const padRing = `M0,-180
-  L28,-160 L65,-168 L92,-140 L130,-136
-  L146,-100 L180,-82 L176,-42 L198,0
-  L176,42 L180,82 L146,100 L130,136
-  L92,140 L65,168 L28,160 L0,180
-  L-28,160 L-65,168 L-92,140 L-130,136
-  L-146,100 L-180,82 L-176,42 L-198,0
-  L-176,-42 L-180,-82 L-146,-100 L-130,-136
-  L-92,-140 L-65,-168 L-28,-160 Z`;
-
-const imageAttrs = {
-  loading: 'eager' as const,
-  decoding: 'async' as const,
-  width: 400,
-  height: 400,
-  alt: image?.alt || '',
-};
-
-let darkImage: ImageMetadata | undefined;
-let lightImage: ImageMetadata | undefined;
-let rawHtml: string | undefined;
-if (image) {
-  if ('file' in image) {
-    darkImage = image.file;
-  } else if ('dark' in image) {
-    darkImage = image.dark;
-    lightImage = image.light;
-  } else {
-    rawHtml = image.html;
-  }
-}
+const { title = data.title, tagline, actions = [] } = data.hero || {};
 ---
 
 <div class="hero">
-  <div class="hero-pad" aria-hidden="true">
-    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-      <g transform="translate(256,256)">
-        <path class="hero-pad-ring" d={padRing} />
-        <circle class="hero-pad-orbit" r="120" />
-      </g>
-    </svg>
-  </div>
-  <div class="hero-lockup">
-    {
-      darkImage && (
-        <Image
-          src={darkImage}
-          {...imageAttrs}
-          class:list={{ 'light:sl-hidden': Boolean(lightImage) }}
-        />
-      )
-    }
-    {lightImage && <Image src={lightImage} {...imageAttrs} class="dark:sl-hidden" />}
-    {rawHtml && <div class="hero-html sl-flex" set:html={rawHtml} />}
-    <h1 id="_top" data-page-title set:html={title} />
-  </div>
-  <div class="sl-flex stack">
-    <div class="sl-flex copy">
-      {data.draft && <DraftContentNotice />}
-      {tagline && <div class="tagline" set:html={tagline} />}
-    </div>
-    {
-      actions.length > 0 && (
-        <div class="sl-flex actions">
-          {actions.map(
-            ({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
-              <LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
-                {text}
-                {icon?.html && <Fragment set:html={icon.html} />}
-              </LinkButton>
-            )
-          )}
-        </div>
-      )
-    }
-  </div>
+  <p class="rs-eyebrow"><span class="rs-eyebrow-dot" aria-hidden="true"></span>Rust · NestJS-style modules &amp; decorators</p>
+
+  <h1 id="_top" data-page-title set:html={title} />
+
+  {data.draft && <DraftContentNotice />}
+  {tagline && <div class="rs-hero-sub" set:html={tagline} />}
+
+  {
+    actions.length > 0 && (
+      <div class="rs-actions">
+        {actions.map(
+          ({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
+            <LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
+              {text}
+              {icon?.html && <Fragment set:html={icon.html} />}
+            </LinkButton>
+          )
+        )}
+      </div>
+    )
+  }
+
+  <Stats />
+
+  <p class="rs-hero-proof">
+    Per core against NestJS 11, byte-identical contract — <a href="/benchmarks/"
+      >reproducible from the repo</a
+    >.
+  </p>
 </div>

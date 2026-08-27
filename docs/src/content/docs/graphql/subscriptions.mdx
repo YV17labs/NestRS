@@ -15,7 +15,7 @@ the path it already serves `POST` on. What you get at the end: a socket
 clients can subscribe to, gated at subscribe and filtered on every item
 pushed afterwards.
 
-```rust title="crates/features/src/posts/graphql/resolver.rs (abridged)"
+```rust title="crates/features/src/posts/graphql/resolver.rs (from the demo, abridged)"
 #[subscription]
 #[authorize(Read, PostEntity)]
 async fn post_published(&self) -> Result<impl Stream<Item = Post>, Error> {
@@ -33,7 +33,7 @@ Nothing beyond what a query needs. `GraphqlModule` mounts the graphql-ws
 socket on the same path as the POST endpoint the moment a `#[subscription]
 ` is discovered:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(imports = [GraphqlModule::for_root(None), PostsGraphqlModule])]
 pub struct ApiModule;
 ```
@@ -56,7 +56,7 @@ against the ability captured at subscribe — the row rules first, then the
 field grants. An item the subscriber may not read is **dropped**, not
 delivered with its fields nulled:
 
-```rust title="src/posts/graphql/resolver.rs"
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 // two subscribers, one stream
 #[subscription]
 #[authorize(Read, PostEntity)]
@@ -78,7 +78,7 @@ emits: `PostsService` emits `PostPublishedEvent` on publish, a
 `#[listeners]` host fans the published post into a broadcast channel, and
 the subscription reads that channel.
 
-```rust title="crates/features/src/posts/events/listener.rs"
+```rust title="crates/features/src/posts/events/listener.rs (from the demo)"
 #[listeners]
 impl PostsListener {
     #[on_event]

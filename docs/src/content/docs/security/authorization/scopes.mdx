@@ -22,7 +22,7 @@ Roles and scopes answer different questions, and both have to hold:
 
 ## Declare the scope on the rule it conditions
 
-```rust title="crates/features/src/authz/ability.rs" {5,9}
+```rust title="crates/features/src/authz/ability.rs (from the demo)" {5,9}
 impl AbilityFactory for AuthzAbility {
     type Actor = Claims;
 
@@ -62,7 +62,7 @@ Scopes reach the ability layer from the principal. Implement
 space-delimited `scope` claim with the `serde` helper the framework
 ships:
 
-```rust title="crates/features/src/authn/claims.rs" {6-11,19-21}
+```rust title="crates/features/src/authn/claims.rs (from the demo)" {6-11,19-21}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: Option<Uuid>,
@@ -160,7 +160,7 @@ happening.
 A [non-CRUD route](/security/authorization/policies/) gated by a
 capability-only guard raises the same denial directly:
 
-```rust
+```rust title="crates/features/src/audio/guard.rs"
 Err(Denial::insufficient_scope(["audio:transcode"], "forbidden"))
 ```
 

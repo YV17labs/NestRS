@@ -3,7 +3,6 @@ title: WebSocket guards
 description: Connection-level guards on the upgrade and per-message guards on each envelope — one Guard trait, two scopes.
 tier: basics
 sidebar:
-  label: Guards
   order: 3
 ---
 
@@ -40,7 +39,7 @@ event name, and a `warn!` lands in `nest_rs::ws`.
 A connection-level guard runs once per connection, against the upgrade
 request, like any HTTP guard:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::{gateway, messages};
 use crate::auth::AuthnGuard;
 
@@ -71,7 +70,7 @@ fails closed — would see `None` once the upgrade request had unwound.
 A per-message guard runs every time the envelope's `event` matches a
 handler the guard is attached to:
 
-```rust
+```rust title="crates/features/src/chat/ws/guard.rs"
 use nest_rs::ws::{messages, WsClient};
 use nest_rs::ws::serde_json::Value;
 use nest_rs::core::{Layer, injectable};
@@ -130,7 +129,7 @@ where that distinction stops being folklore.
 
 Bind it beside the message it gates:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
@@ -162,7 +161,7 @@ listed on a specific message runs **once** per dispatch — there is no cost to
 redeclaring on a provider, and a feature crate moved to an app that doesn't
 share the same globals still carries its own.
 
-```text
+```text frame="none"
 ConnUpgrade ── check_http ── on_connect
                                   │
                                   ├── Envelope ── check_ws_message (global ∪ message, dedup) ── dispatch

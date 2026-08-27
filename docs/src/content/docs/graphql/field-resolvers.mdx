@@ -20,7 +20,7 @@ derived value, a cross-service shape, a non-default cardinality.
 The first non-`self`, non-`ctx` argument is the parent object; the
 return is the field's value.
 
-```rust title="src/users/resolver.rs"
+```rust title="crates/features/src/users/graphql/resolver.rs"
 use async_graphql::SimpleObject;
 use nest_rs::graphql::{operations, resolver};
 
@@ -64,7 +64,7 @@ Beyond `parent`, a `#[field_resolver]` accepts the same shapes a
 `#[query]` does: `ctx: &Context<'_>`, plain argument types, and
 `#[inject]`ed services on the host resolver.
 
-```rust
+```rust title="crates/features/src/users/graphql/resolver.rs"
 use std::sync::Arc;
 use async_graphql::{Context, Result, SimpleObject};
 use nest_rs::graphql::{operations, resolver};
@@ -139,7 +139,7 @@ non-`ctx` argument by reference. Every other argument becomes a
 GraphQL input or, when it's an `#[inject]`ed dependency, comes from
 the container.
 
-```rust
+```rust title="crates/features/src/users/graphql/resolver.rs"
 #[field_resolver]
 async fn display_name(
     &self,
@@ -151,7 +151,7 @@ async fn display_name(
 }
 ```
 
-```graphql
+```graphql title="the SDL it produces"
 type User {
     displayName(upper: Boolean!): String!
 }

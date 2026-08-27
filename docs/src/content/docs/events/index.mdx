@@ -29,7 +29,7 @@ A regular `#[injectable]` provider with one decorated method. The
 method as a listener for the event type read from its parameter. Here the
 `notifications` slice reacts to a fact the `posts` slice publishes:
 
-```rust title="crates/features/src/notifications/events/listener.rs (abridged)"
+```rust title="crates/features/src/notifications/events/listener.rs (from the demo, abridged)"
 use nest_rs::core::injectable;
 use nest_rs::events::listeners;
 
@@ -69,7 +69,7 @@ The pattern the framework is built for: one `#[injectable]` declares the
 deps once, multiple decorated methods share them. Two methods can even
 listen to the *same* event; both run, in registration order:
 
-```rust title="src/notifications/events/listener.rs"
+```rust title="crates/features/src/notifications/events/listener.rs"
 #[injectable]
 pub struct NotificationsListener {
     #[inject]
@@ -106,7 +106,7 @@ provider in the same block — same convention as `#[routes]`,
 The payload is a plain `Clone` struct at the producer's port
 (`event.rs`) — the same feature that emits it owns its definition:
 
-```rust title="crates/features/src/posts/event.rs (abridged)"
+```rust title="crates/features/src/posts/event.rs (from the demo, abridged)"
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -126,7 +126,7 @@ parameter is `PostPublishedEvent` subscribes to it.
 The emitter injects `Arc<EventBus>` like any other dep and calls `emit`
 once the work is done:
 
-```rust title="src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 #[injectable]
 pub struct PostsService {
     #[inject]
@@ -159,7 +159,7 @@ their own module — the bus is a shared singleton, so a diamond import is
 built once. The producer's `PostsModule` lists `imports = [EventsModule]`
 to inject `Arc<EventBus>`; the listener's module does the same:
 
-```rust title="crates/features/src/notifications/events/module.rs"
+```rust title="crates/features/src/notifications/events/module.rs (from the demo)"
 use nest_rs::core::module;
 use nest_rs::events::EventsModule;
 
@@ -175,7 +175,7 @@ pub struct NotificationsEventsModule;
 The app composes the producer and the listener; `EventsModule` arrives
 transitively through both (registration is idempotent):
 
-```rust title="apps/api/src/module.rs (abridged)"
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
 
 use features::notifications::NotificationsEventsModule;

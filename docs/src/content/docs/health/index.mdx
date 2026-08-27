@@ -32,7 +32,7 @@ Every `#[readiness]` / `#[liveness]` / `#[startup]` method returns
 
 ## Mount it
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 
@@ -150,7 +150,7 @@ Indicators run **concurrently**, so a probe costs the slowest check
 rather than their sum, and adding a fifth indicator does not move the
 response's worst case.
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use std::time::Duration;
 use nest_rs::core::module;
 use nest_rs::health::{HealthConfig, HealthModule};

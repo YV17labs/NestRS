@@ -2,7 +2,6 @@
 title: MCP authorization
 description: The operation guard every MCP capability is gated by, the mandatory posture, and what a deny-all endpoint looks like.
 sidebar:
-  label: Authorization
   order: 2
 ---
 
@@ -21,7 +20,7 @@ the resulting `Ability` around the call — the same guards HTTP and GraphQL run
 in the same order, from the same `run_ability_chain`, nothing re-implemented per
 transport.
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         HttpModule::for_root(None),
@@ -70,7 +69,7 @@ and its `actor_id`. See [Logs](/opentelemetry/logs/).
 Each operation then declares what it is, with the same two attributes a
 `#[query]` takes:
 
-```rust title="src/users/mcp/tool.rs"
+```rust title="crates/features/src/users/mcp/tool.rs"
 #[tools]
 impl UsersTool {
     #[tool(description = "List the people the caller may see.")]
@@ -93,7 +92,7 @@ operation instead. `#[use_guards(...)]` works per host and per operation, and
 the app-wide pool joins them in one chain deduplicated by type, so a guard
 declared at two scopes still checks the operation once:
 
-```rust title="src/audio/mcp/tool.rs"
+```rust title="crates/features/src/audio/mcp/tool.rs"
     #[tool(description = "Report whether an uploaded file has been transcoded.")]
     #[public]
     #[use_guards(TranscodeGuard)]
@@ -115,7 +114,7 @@ Guarding the endpoint closes it; it does not tell a client how to open it. The
 MCP authorization spec requires the server to publish that, so add
 `OAuthResourceModule` and name the deployment:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 imports = [/* … */, OAuthResourceModule::for_root(None)]
 ```
 

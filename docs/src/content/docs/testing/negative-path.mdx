@@ -34,7 +34,7 @@ catch bugs the happy path can't:
 
 ## Auth refused
 
-```rust title="apps/api/tests/e2e/http.rs (abridged)"
+```rust title="apps/api/tests/e2e/http.rs (from the demo, abridged)"
 use nest_rs::http::poem::http::{StatusCode, header};
 
 use super::harness::*;
@@ -70,7 +70,7 @@ returns `403` — the row exists, the caller cannot see it. `404` would
 [route model binding](/security/authorization/by-id-binding/)); `500`
 would mean `Ability::condition_for` never installed.
 
-```rust
+```rust title="apps/api/tests/e2e/users.rs"
 #[tokio::test]
 async fn get_other_tenants_user_returns_403() {
     let (db, app) = boot().await;
@@ -92,7 +92,7 @@ async fn get_other_tenants_user_returns_403() {
 
 ## Validation failed
 
-```rust
+```rust title="apps/api/tests/e2e/users.rs"
 #[tokio::test]
 async fn create_with_invalid_email_returns_400_with_field_errors() {
     let (_db, app) = boot().await;
@@ -127,7 +127,7 @@ keys a validation test reads.
 A passing happy-path test confirms the transaction wraps; a failing
 test next to it confirms it unwinds:
 
-```rust
+```rust title="apps/api/tests/e2e/users.rs"
 #[tokio::test]
 async fn handler_error_rolls_back_the_create() {
     let (db, app) = boot().await;

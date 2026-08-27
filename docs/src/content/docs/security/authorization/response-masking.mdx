@@ -21,7 +21,7 @@ rather than shipping unmasked. The route never calls `mask` itself.
 Declare it as a parameter; the `#[routes]` orchestrator detects it and
 installs the shaper:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::authz::{Read, http::Authorize};
 use sea_orm::EntityTrait;
 
@@ -163,7 +163,7 @@ Each step has a defined failure mode:
 
 ### `Ability::mask` — what it strips
 
-```rust
+```rust title="nest_rs::authz::Ability::mask"
 pub fn mask<E>(&self, action: Action, model: &E::Model) -> serde_json::Value
 ```
 
@@ -171,7 +171,7 @@ Serializes the model, then keeps only the fields permitted by the
 matching grants. The rule shape (`.fields([cols])`) decides; the
 union across matching grants wins.
 
-```rust
+```rust title="nest_rs::authz::Ability::mask_many"
 pub fn mask_many<'m, E>(
     &self,
     action: Action,
@@ -194,7 +194,7 @@ permitted. A grant with `.fields([Id, Name])` returns
 After `Ability::mask` produces a `serde_json::Value`, the shaper
 drops keys absent from the original wire body:
 
-```rust
+```rust title="inside the framework — you don't write this"
 fn retain_wire_keys(masked: &mut Value, wire: &Value) {
     let (Some(masked_obj), Some(wire_obj)) = (masked.as_object_mut(), wire.as_object()) else {
         return;
@@ -216,7 +216,7 @@ To run `Ability::mask` the shaper needs a typed `S::Model`. The wire
 body, by design, omits every unexposed column. `WireModelDefaults`
 fills them with placeholder values so deserialization succeeds:
 
-```rust
+```rust title="nest_rs::resource::WireModelDefaults"
 pub trait WireModelDefaults: EntityTrait {
     fn fill_wire_defaults(_map: &mut Map<String, Value>) {}
 }
@@ -239,7 +239,7 @@ A few column types the macro cannot default automatically:
 
 Hand-write a `WireModelDefaults` impl for those entities:
 
-```rust
+```rust title="crates/features/src/invoices/entity.rs"
 impl WireModelDefaults for invoice::Entity {
     fn fill_wire_defaults(map: &mut Map<String, Value>) {
         map.entry("amount").or_insert(serde_json::json!("0"));

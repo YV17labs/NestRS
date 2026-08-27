@@ -3,7 +3,6 @@ title: GraphQL configuration
 description: GraphqlConfig — mount path, playground, SDL emission, with production-safe defaults and the env / pinned dual path.
 tier: all-options
 sidebar:
-  label: Configuration
   order: 2
 ---
 
@@ -77,7 +76,7 @@ off in `.env.production`.
 
 Every module's config follows this rule (framework-wide):
 
-```rust title="src/module.rs — env-driven"
+```rust title="apps/api/src/module.rs — env-driven"
 use nest_rs::core::module;
 use nest_rs::graphql::GraphqlModule;
 
@@ -91,7 +90,7 @@ NESTRS_GRAPHQL__EMIT_SDL=true
 NESTRS_GRAPHQL__SCHEMA_PATH=./schema.graphql
 ```
 
-```rust title="src/module.rs — pinned at the import site"
+```rust title="apps/api/src/module.rs — pinned at the import site"
 use nest_rs::core::module;
 use nest_rs::graphql::{GraphqlConfig, GraphqlModule};
 use std::path::PathBuf;

@@ -36,7 +36,7 @@ Each layer ships its own guard. Bind them in order — the authn guard
 runs first and attaches the principal; the authz guard reads it and
 installs the ambient `Ability`.
 
-```rust title="crates/features/src/users/http/controller.rs"
+```rust title="crates/features/src/users/http/controller.rs (from the demo)"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
@@ -68,7 +68,7 @@ point — see [Per-transport bridges](/security/authorization/per-transport-brid
 
 The wiring sketch for an app that serves all three transports:
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 #[module(
     imports = [
         SeaOrmModule::for_root(None),

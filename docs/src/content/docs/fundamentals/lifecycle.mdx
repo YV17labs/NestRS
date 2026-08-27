@@ -21,7 +21,7 @@ collects every hook at link time and drains them phase by phase — init
 phases after wiring and before serving, shutdown phases after the
 transports stop.
 
-```rust
+```rust title="crates/features/src/blog/service.rs"
 use nest_rs::core::{hooks, injectable};
 
 #[injectable]
@@ -67,7 +67,7 @@ your decorator already wrote is a coherence error. A provider you
 register by hand with `ContainerBuilder::provide` is the one case nothing
 has spoken for, and it says so itself:
 
-```rust
+```rust title="apps/api/src/provider.rs"
 impl ProviderResidency for MyHandWrittenProvider {
     const SINGLETON: bool = true;
 }
@@ -111,7 +111,7 @@ A hook method is **`async fn`** and takes `&self`. Its return is either:
 - **`Result<(), E>`** where `E: Into<anyhow::Error>` — the hook can
   fail, and the framework folds the error into the phase outcome.
 
-```rust
+```rust title="fallible and infallible hooks"
 #[on_module_init]
 async fn check(&self) -> Result<(), MyError> { /* ... */ Ok(()) }   // fallible
 

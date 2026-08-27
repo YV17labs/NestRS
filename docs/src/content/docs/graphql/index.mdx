@@ -2,6 +2,7 @@
 title: GraphQL
 description: A self-composing schema, resolvers as structs, queries and mutations on one impl block.
 sidebar:
+  label: Overview
   order: 1
 ---
 
@@ -36,7 +37,7 @@ macro expands against *your* prelude — so the decorator pins that expansion to
 the framework's re-export (`crate = "::nest_rs::graphql::async_graphql"`).
 Reach async-graphql's types the same way and the line above stays the only one:
 
-```rust
+```rust title="crates/features/src/greeting/graphql/resolver.rs"
 use nest_rs::graphql::async_graphql::{Context, Result};
 ```
 
@@ -46,7 +47,7 @@ expands against your prelude, exactly like `serde`'s.
 
 ## The minimal resolver
 
-```rust title="src/greeting/resolver.rs"
+```rust title="crates/features/src/greeting/graphql/resolver.rs"
 use nest_rs::graphql::{operations, resolver};
 
 #[resolver]
@@ -83,16 +84,16 @@ come from `nest_rs::graphql`.
 
 Mount the GraphQL transport once at the app root:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::graphql::GraphqlModule;
-use crate::greeting::GreetingModule;
+use features::greeting::GreetingModule;
 
 #[module(imports = [GreetingModule, GraphqlModule::for_root(None)])]
 pub struct GreetingsAppModule;
 ```
 
-```rust title="src/greeting/module.rs"
+```rust title="crates/features/src/greeting/module.rs"
 use nest_rs::core::module;
 use super::resolver::GreetingResolver;
 
@@ -120,7 +121,7 @@ playground.
 
 A resolver injects providers like any other struct:
 
-```rust
+```rust title="crates/features/src/greeting/graphql/resolver.rs"
 use std::sync::Arc;
 use nest_rs::graphql::{operations, resolver};
 use crate::greeting::service::GreetingService;

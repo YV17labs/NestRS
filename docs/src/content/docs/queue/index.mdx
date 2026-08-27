@@ -54,7 +54,7 @@ One declaration, at the feature **port** — beside the payload, not inside
 the `queue/` adapter. The producer is usually the port's own service, so
 this is the artifact both sides reach for:
 
-```rust title="crates/features/src/audio/command.rs"
+```rust title="crates/features/src/audio/command.rs (from the demo)"
 use nest_rs::queue::{QueueName, queue};
 use serde::{Deserialize, Serialize};
 
@@ -79,7 +79,7 @@ A regular `#[injectable]` service with one decorated method. The
 `#[processor]` attribute marks the impl block; `#[process]` marks the
 method as a queue consumer.
 
-```rust title="crates/features/src/audio/queue/processor.rs"
+```rust title="crates/features/src/audio/queue/processor.rs (from the demo)"
 use std::sync::Arc;
 
 use nest_rs::core::anyhow::Result;
@@ -195,7 +195,7 @@ same service:
 Three queues, so three `#[queue]` declarations at the port — each pairing
 a wire name with the payload it carries:
 
-```rust
+```rust title="crates/features/src/audio/command.rs"
 #[queue(name = "audio", job = TranscodeCommand)]
 pub struct AudioQueue;
 
@@ -206,7 +206,7 @@ pub struct AudioPreviewQueue;
 pub struct AudioCleanupQueue;
 ```
 
-```rust title="crates/features/src/audio/queue/processor.rs"
+```rust title="crates/features/src/audio/queue/processor.rs (from the demo)"
 #[injectable]
 pub struct AudioProcessor {
     #[inject] audio_svc: Arc<AudioService>,
@@ -261,7 +261,7 @@ Three modules, three roles:
   apalis worker per method, and shuts them down with the app. A
   producer-only app does NOT import this.
 
-```rust title="apps/worker/src/module.rs"
+```rust title="apps/worker/src/module.rs (from the demo)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
@@ -283,7 +283,7 @@ lists only the adapter — registration is idempotent.
 
 `main` is the universal skeleton:
 
-```rust title="apps/worker/src/main.rs"
+```rust title="apps/worker/src/main.rs (from the demo)"
 use nest_rs::core::anyhow::Result;
 use nest_rs::core::App;
 

@@ -13,7 +13,7 @@ same thing.
 
 ## Mount one controller under a version
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 use nest_rs::http::{controller, routes};
 
 #[controller(path = "/posts", version = "1")]
@@ -50,7 +50,7 @@ you have a reason not to.
 Most of a v2 is v1. `version = ["1", "2"]` mounts the whole controller at both
 prefixes, and the routes that actually differ say so themselves:
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 #[controller(path = "/posts", version = ["1", "2"])]
 pub struct PostsController {
     #[inject]
@@ -87,7 +87,7 @@ registers, appears in the document and answers nothing.
 
 When the two versions share nothing but a URL, a controller each is clearer:
 
-```rust title="crates/features/src/posts/http/module.rs"
+```rust title="crates/features/src/posts/http/module.rs (from the demo)"
 use nest_rs::core::module;
 
 use super::controller::{PostsV1Controller, PostsV2Controller};
@@ -105,7 +105,7 @@ Both controllers live in the feature's `http/controller.rs` — a version is a
 wire concern, not a second feature, and the app crate holds no controllers at
 all.
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 #[controller(path = "/posts", version = "1")]
 pub struct PostsV1Controller { /* … */ }
 

@@ -48,7 +48,7 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
 
 Each test module reaches for that `boot()` and the token helpers beside it:
 
-```rust title="apps/api/tests/e2e/users.rs (abridged)"
+```rust title="apps/api/tests/e2e/users.rs (from the demo, abridged)"
 use super::harness::*;
 
 #[tokio::test]
@@ -103,7 +103,7 @@ apps/api/
 
 `tests/e2e/main.rs` is a flat index:
 
-```rust title="apps/api/tests/e2e/main.rs"
+```rust title="apps/api/tests/e2e/main.rs (from the demo)"
 mod harness;
 
 mod audio;
@@ -150,7 +150,7 @@ admin URL comes from `NESTRS_SEAORM__URL`.
 container, short-circuiting `SeaOrmDatabaseModule`'s `for_root` factory. The
 rest of the app builds normally.
 
-```rust
+```rust title="apps/api/tests/e2e/users.rs"
 let db = EphemeralDatabase::create::<migrations::Migrator>().await?;
 let app = TestApp::builder()
     .module::<ApiModule>()
@@ -173,7 +173,7 @@ timeout you pin on the module is what the suite exercises. Pin the `HttpConfig`
 on the module to test one; `TestAppBuilder::http(transport)` is for a transport
 the app does not declare at all.
 
-```rust
+```rust title="apps/api/tests/e2e/openapi.rs"
 let resp = app.http().get("/api-json").send().await;
 resp.assert_status_is_ok();
 let paths = resp.json().await.value().object().get("paths").object();
@@ -192,7 +192,7 @@ and guards pick it up.
 | `override_dyn::<T>(Arc<T>)` | `Arc<dyn Trait>` | The provider is registered behind a `pub trait` |
 | `override_arc::<T>(Arc<T>)` | `Arc<T>` (concrete) | The test still holds the fake to read its state |
 
-```rust
+```rust title="apps/api/tests/e2e/weather.rs"
 struct StubWeather;
 
 #[async_trait]
@@ -220,7 +220,7 @@ the fake recorded — wrap it in `Arc` once, hand the same handle to the
 container *and* the test, then assert against the shared state after the
 request:
 
-```rust
+```rust title="apps/api/tests/e2e/users.rs"
 use std::sync::Arc;
 
 use nest_rs::core::injectable;
@@ -280,7 +280,7 @@ asserting on a fiction; use `EphemeralDatabase` instead.
 schedulers, or any binary without an HTTP surface. The four-phase build
 still runs, so the access-graph check still fires.
 
-```rust
+```rust title="apps/api/tests/e2e/worker.rs"
 let app = TestApp::builder()
     .module::<RedisWorkerModule>()
     .provide_arc(db.connection())
@@ -310,7 +310,7 @@ drives the **graphql-transport-ws** protocol against the app's composed schema
 bound. (`graphql-ws` is the *legacy* subprotocol identifier, which the mount
 also negotiates and this driver does not speak.)
 
-```rust title="tests/e2e/subscription.rs"
+```rust title="apps/api/tests/e2e/subscription.rs"
 let mut socket = app.graphql_socket().data(ability).open();
 socket.connect().await;
 socket.subscribe("1", "subscription { postPublished { id title } }");

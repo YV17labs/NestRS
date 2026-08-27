@@ -2,6 +2,7 @@
 title: Authorization
 description: AuthzAbility compiles your policy into an Ability per request — the framework reads it from the query filter, the by-id binding, and the response mask.
 sidebar:
+  label: Overview
   order: 1
 ---
 
@@ -35,7 +36,7 @@ a `task_local!` for the data layer.
 
 A minimal policy is one statement — "members read their org's users":
 
-```rust title="crates/features/src/authz/ability.rs"
+```rust title="crates/features/src/authz/ability.rs (from the demo)"
 use nest_rs::authz::{AbilityBuilder, AbilityFactory, Action};
 use nest_rs::core::injectable;
 
@@ -58,7 +59,7 @@ That one line lands the class-level gate, the SQL pre-filter
 every loaded row. The next step is a role matrix — same builder,
 branched on the principal:
 
-```rust
+```rust title="crates/features/src/authz/ability.rs"
 fn define(&self, actor: &Claims, ab: &mut AbilityBuilder) {
     if actor.is_admin() {
         ab.can(Action::Manage, user::Entity)
@@ -93,7 +94,7 @@ exported from `nest_rs::authz`. Import `AuthzGuard` from your feature crate, or
 use `AbilityGuard<YourAbility>` directly from `nest_rs::authz`. Bind it
 after `AuthnGuard`:
 
-```rust title="crates/features/src/users/http/controller.rs"
+```rust title="crates/features/src/users/http/controller.rs (from the demo)"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
@@ -129,7 +130,7 @@ it and builds the `Ability`. Every handler downstream sees an ambient
 A handler that builds its own query (rare — prefer letting `Repo`
 scope itself) reads the `Condition` via `Scope<E, A>`:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::authz::{Read, http::Scope};
 
 #[get("/users/search")]
@@ -150,7 +151,7 @@ async fn search(
 A service method or any code running under the request's task-local
 reads the ability directly:
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 use nest_rs::authz::current_ability;
 
 if let Some(ab) = current_ability() {
@@ -168,7 +169,7 @@ it does not.
 
 ## What an `Ability` exposes
 
-```rust
+```rust title="nest_rs::authz::Ability"
 ability.can_class(Action::Read, TypeId::of::<user::Entity>())
 ability.condition_for::<user::Entity>(Action::Read)
 ability.can::<user::Entity>(Action::Update, &model)

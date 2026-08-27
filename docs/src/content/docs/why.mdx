@@ -93,7 +93,7 @@ struct decorated with an attribute macro. The decorator carries the entire
 integration contract. There is no service locator to call, no registration list
 to keep in sync, no central manifest a contributor has to remember to edit.
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
 pub struct UsersController {
     #[inject]
@@ -119,7 +119,7 @@ before the handler runs. The service reaches the database only through
 automatically — commit on `2xx`/`3xx`, rollback otherwise. Worker contexts
 install a per-attempt transaction on the same code path.
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 // Ambient executor — no per-method ceremony.
 impl UsersService {
     pub async fn rename(&self, id: Uuid, name: String) -> Result<User, ServiceError> {
@@ -175,6 +175,12 @@ On the [benchmarks page](/benchmarks/), the same service — idiomatic on both
 sides, byte-identical contract — measures at **×2.5** the throughput of
 NestJS on Fastify (its best case), **×4.2** on Express, in **~25× less RAM**,
 cold-starting **~23× faster**.
+
+Six guarantees are worth what checks them. **2,000+ tests** cover the framework
+workspace, and the end-to-end suites run against live Postgres, Redis and S3
+rather than mocks — wiring bugs are the ones unit tests never see. The 120+ pages
+on this site are linted against the framework's own source, so a page that
+contradicts the code fails the build instead of shipping.
 
 ## What this is not
 

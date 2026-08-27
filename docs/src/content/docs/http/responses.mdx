@@ -20,7 +20,7 @@ body.
 `Content-Type: application/json`, and feeds the OpenAPI document with
 the same JSON schema:
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 use nest_rs::http::poem::web::Json;
 use nest_rs::http::input;
 
@@ -41,7 +41,7 @@ Tuples up to `(StatusCode, Headers, Body)` are valid responses — useful
 when one route returns `202 Accepted` and another stays on the default
 `200`:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::poem::http::StatusCode;
 
 #[post("/queue")]
@@ -59,7 +59,7 @@ When the handler body would otherwise return `Ok(value)` and the only
 thing changing is the status, a header, or a redirect, three attribute
 macros sit beside the verb attribute:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::{http_code, response_header, redirect};
 use nest_rs::http::poem::web::Json;
 
@@ -113,7 +113,7 @@ appear in the source, but each one targets a different facet of the
 response (status, headers, body), so the order rarely matters in
 practice:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 #[post("/posts")]
 #[http_code(201)]
 #[response_header("x-cache-status", "miss")]
@@ -140,7 +140,7 @@ the response wiring is genuinely conditional — the status depends on
 whether an entity already existed, the headers depend on the resolved
 user — go back to a plain tuple return and let the handler decide:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::poem::http::StatusCode;
 use nest_rs::http::poem::IntoResponse;
 

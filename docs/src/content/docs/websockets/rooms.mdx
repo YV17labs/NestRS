@@ -25,7 +25,7 @@ handler can take `&WsClient` in any non-receiver position. The macro
 spots the reference (distinct from an owned payload) and passes the
 current connection's handle:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::{gateway, messages, WsClient};
 
 #[gateway(path = "/ws")]
@@ -74,7 +74,7 @@ frame. A closed outbox returns `false` / `0` silently — the writer
 task drops the channel on disconnect, so the dispatch loop never blocks
 on a slow client.
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("say")]
 #[public]
 async fn say(&self, msg: SendMessage, client: &WsClient) {
@@ -102,7 +102,7 @@ The `chat` gateway uses all four scopes — joining at connect,
 moving rooms by event, broadcasting peer-visible events, replying with
 a payload:
 
-```rust title="crates/features/src/chat/ws/gateway.rs"
+```rust title="crates/features/src/chat/ws/gateway.rs (from the demo)"
 #[gateway(path = "/ws")]
 #[use_guards(AuthnGuard)]
 pub struct ChatGateway {

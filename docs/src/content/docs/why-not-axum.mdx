@@ -19,7 +19,7 @@ you never write it.
 Here is a full authenticated, tenant-scoped, transactional, field-masked CRUD
 resource for orgs. The `impl` block is empty on purpose.
 
-```rust title="demo/crates/features/src/orgs/http/controller.rs (abridged)"
+```rust title="crates/features/src/orgs/http/controller.rs (from the demo, abridged)"
 #[controller(path = "/orgs")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct OrgsController {

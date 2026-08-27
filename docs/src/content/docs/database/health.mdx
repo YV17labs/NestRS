@@ -3,7 +3,6 @@ title: Database health
 description: Gate readiness on a real round-trip to the database — one module import wires the indicator.
 tier: all-options
 sidebar:
-  label: Health
   order: 11
 ---
 
@@ -17,7 +16,7 @@ handler to write.
 
 Import `SeaOrmHealthModule` alongside `HealthModule`:
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::health::HealthModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};

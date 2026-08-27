@@ -24,7 +24,7 @@ fire-and-forget, request/response, server pushes, and error replies.
 `#[subscribe_message("event")]` binds a method to that event name in the
 envelope:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[messages]
 impl ChatGateway {
     #[subscribe_message("message")]
@@ -53,7 +53,7 @@ optional — see the next section.
 Each `#[subscribe_message]` carries exactly one of two attributes, and a
 message that carries neither **does not compile**:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("message")]
 #[public]                          // no gate, no mask
 async fn on_message(&self, msg: SendMessageDto) -> ChatMessageDto { /* ... */ }
@@ -112,7 +112,7 @@ and log a `warn` on `nest_rs::authz`.
 Whatever you put in `data` arrives in your handler typed. The macro
 calls `serde_json::from_value` under the hood:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[derive(serde::Deserialize)]
 struct SendMessageDto {
     author: String,
@@ -131,7 +131,7 @@ frame on the same event name (see below). Richer checks bind a
 `validator` rules, `Piped<P, T>` names a custom transform — a rejection
 is an error frame, and the handler body never runs.
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("trim")]
 #[public]
 async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
@@ -142,7 +142,7 @@ async fn trim_handler(&self, name: Piped<Trim, String>) -> String {
 A handler that takes no payload accepts `null` or a missing `data` key
 — the envelope defaults `data` to `null` on deserialize:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("history")]
 #[public]
 async fn history(&self) -> Vec<ChatMessageDto> {
@@ -217,7 +217,7 @@ a query.
 When the failure is one the client is owed no explanation for, do not rely
 on the error type being polite — say so:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 use nest_rs::ws::Opaque;
 
 #[subscribe_message("users.list")]
@@ -239,7 +239,7 @@ is the opposite case and travels as itself.
 **Fire-and-forget** — record state, broadcast a derived event later,
 no reply to the sender:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("typing")]
 #[public]
 async fn typing(&self, msg: SendMessageDto, client: &WsClient) {
@@ -254,7 +254,7 @@ event on a different event name — see [Rooms](/websockets/rooms/).
 **Request/response** — the client asks, the server answers on the same
 event:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[subscribe_message("presence")]
 #[public]
 async fn presence(&self) -> usize {
@@ -275,7 +275,7 @@ response.
 **Explicit failure** — the operation can fail and the client needs to
 see why:
 
-```rust
+```rust title="crates/features/src/chat/ws/gateway.rs"
 #[derive(thiserror::Error, Debug)]
 enum SendError {
     #[error("text must not be empty")]
@@ -307,7 +307,7 @@ The wire shape stays the same envelope — clients branch on the presence of
 If you ever need to build or parse a frame by hand (a custom adapter,
 a test harness), `nest_rs::ws::WsEnvelope` is the canonical shape:
 
-```rust
+```rust title="nest_rs::ws::WsEnvelope"
 use nest_rs::ws::WsEnvelope;
 
 let frame = WsEnvelope::encode("ping", &"pong")?;

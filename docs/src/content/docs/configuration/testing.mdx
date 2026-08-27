@@ -24,7 +24,7 @@ skipped, so a developer's personal secrets cannot leak in.
 matches a config registered via `ConfigModule::for_feature::<C>()`, the
 seed wins and the factory never runs.
 
-```rust title="tests/e2e/token.rs"
+```rust title="apps/api/tests/e2e/token.rs"
 use nest_rs::testing::TestApp;
 use uuid::Uuid;
 
@@ -70,7 +70,7 @@ a test must not read the environment at all, seed the value with `.provide()`
 (above): a seed short-circuits the resolving factory outright.
 </Aside>
 
-```rust title="tests/e2e/http.rs"
+```rust title="apps/api/tests/e2e/http.rs"
 use nest_rs::http::{HttpConfig, HttpModule};
 
 let app = TestApp::builder()
@@ -80,7 +80,7 @@ let app = TestApp::builder()
     .await?;
 ```
 
-```rust title="src/module.rs"
+```rust title="apps/api/src/module.rs"
 #[module(
     imports = [
         HttpModule::for_root(HttpConfig {
@@ -107,7 +107,7 @@ isolate config loading from `std::env` entirely, build the
 `ConfigService` yourself with a [custom source](/configuration/sources/)
 and seed the loaded `Config`:
 
-```rust title="tests/integration/config.rs"
+```rust title="crates/features/tests/integration/config.rs"
 use std::collections::HashMap;
 use std::sync::Arc;
 use nest_rs::config::{Config, ConfigService, ConfigSource};
@@ -155,7 +155,7 @@ through `figment::Jail`. The jail is a `dev-dependency` borrowed from
 the `figment` crate; it scopes every `set_env` / `create_file` call to
 the test closure and restores `std::env` on drop.
 
-```rust title="crates/features/src/oauth/config.rs"
+```rust title="crates/features/src/oauth/config.rs (from the demo)"
 #[cfg(test)]
 mod tests {
     use super::*;

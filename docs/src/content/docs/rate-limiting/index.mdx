@@ -57,7 +57,7 @@ cargo add nest-rs --features redis-throttler
 
 ## Mount the throttler
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
 use nest_rs::throttler::ThrottlerModule;
 
@@ -86,7 +86,7 @@ NESTRS_HTTP__TRUSTED_PROXIES=10.0.0.1,10.0.0.2
 
 ## Guard a controller
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 use nest_rs::http::controller;
 use nest_rs::throttler::ThrottlerGuard;
 
@@ -100,7 +100,7 @@ default limit applies unless a handler overrides it.
 
 ## Override per route
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 use nest_rs::http::{controller, routes};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 
@@ -197,7 +197,7 @@ cross-process store ships too.
 
 Enable it at the top of this page, then:
 
-```rust
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::redis::{RedisModule, RedisThrottlerModule};
 use nest_rs::throttler::ThrottlerModule;
@@ -227,7 +227,7 @@ so it is atomic across replicas with no check-then-act race. A backend failure
 
 ### Writing your own
 
-```rust
+```rust title="crates/mythrottler/src/throttler/store.rs"
 use async_trait::async_trait;
 use nest_rs::throttler::{Decision, Throttle, ThrottlerStore};
 

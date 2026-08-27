@@ -1,10 +1,15 @@
-// The Basics / All options tier split — the sidebar shape STYLE.md §G defines.
+// The Basics / All options tier split — the partition STYLE.md §G defines.
 //
-// One implementation, two readers: `astro.config.mjs` renders it and
-// `scripts/lint-docs.mjs` gates it, so the threshold, the vocabulary and the
-// exemption are spelled once. Ordering is deliberately *not* here — it stays in
-// each page's frontmatter `sidebar.order`, which is what Starlight already read.
-// A tier partitions a section; it never re-states its order.
+// One implementation, two readers: `scripts/lint-docs.mjs` gates it and
+// `src/content.config.ts` validates the key, so the threshold, the vocabulary
+// and the exemption are spelled once. Ordering is deliberately *not* here — it
+// stays in each page's frontmatter `sidebar.order`, which is what Starlight
+// already read. A tier partitions a section; it never re-states its order.
+//
+// **It is not a sidebar level.** The menu is two deep — a group is a section,
+// its items are that section's pages — so a tier is rendered by the section
+// index's "In this section" list and nowhere else. Here because the reading it
+// encodes is worth gating; in `astro.config.mjs` it was a third level.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -22,9 +27,9 @@ export const TIERS = ['basics', 'all-options'];
 
 export const TIER_LABELS = { basics: 'Basics', 'all-options': 'All options' };
 
-/// Non-index pages a section needs before splitting it pays. Under it the flat
-/// list is the better sidebar: two headers over three links cost a reader more
-/// than they save, which is the state this whole mechanism replaces.
+/// Non-index pages a section needs before splitting it pays. Under it the one
+/// undivided list is the better read: two headers over three links cost a reader
+/// more than they save.
 export const TIER_THRESHOLD = 5;
 
 /// Sections that stay flat at any size. `tutorial/` is a path, not a menu — its
@@ -34,9 +39,9 @@ export const UNTIERED_SECTIONS = new Set(['tutorial']);
 
 const PAGE = /\.mdx?$/;
 
-/// The two frontmatter fields the sidebar reads. Parsed rather than imported:
-/// this module is loaded by the Astro config, before the content collection
-/// exists.
+/// The two frontmatter fields a section is derived from. Parsed rather than
+/// imported: this module is loaded by the Astro config, before the content
+/// collection exists.
 function pageMeta(file) {
   // The capture keeps its trailing newline: `sidebar:` is the last key on most
   // pages, and a line-anchored read of a block whose final line has no `\n`
@@ -49,7 +54,7 @@ function pageMeta(file) {
 }
 
 /// One section: the pages of a single content directory, its `index` apart and
-/// the rest in sidebar order. `tiered` is the structural fact both readers act
+/// the rest in sidebar order. `tiered` is the structural fact its readers act
 /// on — the threshold and the exemption are applied here and nowhere else.
 function section(dir) {
   const pages = [];
@@ -76,7 +81,7 @@ function section(dir) {
 }
 
 /// Every directory under the docs root that holds pages. The root itself is not
-/// a section — its pages are hand-listed across three sidebar groups, so no
+/// a section — its pages are hand-listed across several sidebar groups, so no
 /// single tier split describes them.
 export function sections(dir = '') {
   const out = [];
@@ -86,38 +91,4 @@ export function sections(dir = '') {
     out.push(section(child), ...sections(child));
   }
   return out;
-}
-
-/// One section's sidebar entries. A flat section keeps `autogenerate` — the
-/// same list Starlight built before, from the same frontmatter. A tiered one
-/// puts its `index` above the two groups, because the page that frames the
-/// split belongs above it.
-///
-/// Fails the build rather than the reader. A page with no tier would otherwise
-/// drop out of the sidebar entirely, and an empty group would publish a header
-/// over nothing — both read as a claim about the section that nobody made.
-export function sidebarSection(dir) {
-  const { index, pages, tiered } = section(dir);
-  if (!tiered) return [{ autogenerate: { directory: dir } }];
-  if (!index) throw new Error(`${dir}/ is tiered but has no index page to sit above the groups`);
-
-  const stray = pages.filter((p) => !TIERS.includes(p.tier));
-  if (stray.length) {
-    throw new Error(
-      `${stray.map((p) => p.rel).join(', ')}: no tier — every page of a ${pages.length}-page ` +
-        `section declares \`tier: ${TIERS.join('\` or \`tier: ')}\` (STYLE.md §G)`,
-    );
-  }
-  const groups = TIERS.map((tier) => ({
-    label: TIER_LABELS[tier],
-    items: pages.filter((p) => p.tier === tier).map((p) => ({ slug: p.slug })),
-  }));
-  const empty = groups.filter((g) => !g.items.length);
-  if (empty.length) {
-    throw new Error(
-      `${dir}/ declares no ${empty.map((g) => g.label).join(' and no ')} page — a section split ` +
-        'into one tier is the flat list with a header on it (STYLE.md §G)',
-    );
-  }
-  return [{ slug: index.slug }, ...groups];
 }

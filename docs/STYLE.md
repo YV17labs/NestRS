@@ -73,10 +73,52 @@ Skeletons live in `docs/templates/`.
   footgun with consequences. **≤ 3 Asides total per page** (`asides`).
 - `<Steps>` for any numbered procedure.
 - `<Tabs syncKey=…>` only for genuine alternatives (workspace/standalone).
-- Code fence titles: a `title="…"` naming a real repo path must match that file byte-for-byte or
-  say "(abridged)". Fictional examples get generic `src/…` titles, never a real-looking repo path.
-  Fence titles cite the **user's** workspace shape (`crates/features/…`); GitHub URLs use the real
-  repo paths (`demo/crates/features/…`).
+- **Every fence of file content carries a `title=`** — `rust`, `toml`, `sql`, `graphql`, `ts`,
+  `yaml` (`fence-untitled`). Code with no file name is code the reader cannot place. A `bash`
+  block is a command, a `json`/`http`/`text` block is a payload or an output, `mermaid` is a
+  picture: none is a file, so none takes one.
+
+  The title is **one of three shapes, and there is no fourth**:
+
+  | Shape | When | Example |
+  |---|---|---|
+  | a **file path** | the reader writes this into a file | `src/posts/http/controller.rs` |
+  | a **framework path** | the fence shows the framework's own surface, or its use | `nest_rs::pipes::Pipe` |
+  | a short **lowercase label** | the fence spans several files, or is not code you write | `from the macro expansion` |
+
+  A path title obeys the architecture rules like any other path — `src/users/graphql/resolver.rs`,
+  never `src/users/resolver.rs` — because a title is the one place a page states the layout it is
+  teaching.
+
+  **Every path is workspace-shaped. There is no standalone path in the docs.** `nestrs new`
+  produces a workspace by default — `crates/features/` plus thin `apps/*` — and that is the
+  layout the docs teach, so every title sits under it: feature code at
+  `crates/features/src/<module>/<role>.rs`, composition and bootstrap at `apps/<app>/src/…`,
+  end-to-end suites at `apps/<app>/tests/e2e/…`, a driver the reader writes at
+  `crates/<vendor>/src/…`. `--standalone` exists and its `src/…` shape is real, but a page that
+  shows both teaches neither: the reader cannot tell a different layout from a different file.
+  One shape, and it is the one we recommend.
+
+  It binds the code as well as the caption. An `apps/…` fence reaches a feature through the
+  `features` crate — `use features::blog::BlogService;` — and never `use crate::`, which is what
+  the same file would say in the standalone layout and what three pages were still showing.
+
+  **Provenance is a word, not a prefix: `(from the demo)`.** A title carrying it claims the block
+  is an excerpt of the Publish workspace, and that claim is what `fence-drift` and `fence-title`
+  check — the file exists at all (the canon indexes every `.rs` under `demo/`, so a marker on a
+  path it lacks is provably false), every non-elided line in the real file, in order, no comment
+  the demo does not carry, no port it does not listen on. Add `, abridged` when the excerpt is trimmed:
+  `src/posts/entity.rs (from the demo, abridged)`. Without the marker a title is an illustration
+  the reader adapts, and it asserts nothing about `demo/`.
+
+  Recorded because it was decided against the obvious alternative: the prefix used to *be* the
+  claim, so one string meant two things — the reader's layout and our provenance — and a page
+  showed the same file at two roots with nothing saying why (21 such conflicts, on 20 pages).
+  Promoting every illustration to the long prefix so the site read one way reported **135
+  violations across 47 pages**, which is the measurement that settled it: the prefix was carrying
+  the provenance, and only the provenance needed saying.
+
+  GitHub URLs still use the real repo paths (`demo/crates/features/…`) — a URL has to resolve.
 - Terminal transcripts: `$`-prefixed input lines, trimmed output (≤ ~8 meaningful lines), no
   fabricated sequencing (a log line never appears before the command that causes it).
 - One `Piped` destructuring style, one boot-log format across pages.
@@ -235,16 +277,23 @@ outside `docs/`.
   nothing to pose. Which *page* publishes a table is a docs-side fact and stays in
   `CONFIG_TABLES`; what the struct holds comes from the canon. Add a page there when it grows
   such a table.
-- **`landing-claim`** — the landing sells the framework on figures, so the figures are read out of
-  the repo rather than typed once and left there: the capability count and the test floor from
-  the canon, the decorator count from the decorator index — itself gated against the canon's
-  decorator list — and the page count from this content tree. **A capability is a feature a
-  developer can name in `--features`**, not a crate; the two number the same today and did not
-  before `seaorm` grew a second `dep:`, which is the drift that produced this paragraph. Two shapes, on purpose: an
+- **`landing-claim`** — the site sells the framework on figures, so the figures are read out of
+  the repo rather than typed once and left there. Four of them, on the two pages that make the
+  claim: `/` carries the **capability count** (from the canon) and the **decorator count** (from
+  the decorator index, itself gated against the canon's decorator list); `/why/` carries the
+  **test floor** (from the canon) and the **page count** (from this content tree), because that is
+  the page arguing the framework holds its shape, and the redesigned splash states neither — a
+  figure with no home on a page is a gate with no subject, and the repair is to gate it where the
+  claim is made rather than to delete the check. **A capability is a feature a developer can name
+  in `--features`**, not a crate; the two number the same today and did not before `seaorm` grew a
+  second `dep:`, which is the drift that produced this paragraph. Two shapes, on purpose: an
   **exact** count names a set the reader can enumerate elsewhere on the site, so drift is a
   contradiction; a `+` **floor** may lag what the repo holds, but only inside a band, past which
   the page undersells a framework that grew. A missing figure is reported too — dropping the claim
   is dropping the gate, which is how a marketing page starts drifting from the product again.
+  **A page's surface is its source plus the components it renders**: the landing is MDX importing
+  `src/components/*.astro`, and the decorator count is a sentence inside one of them, so the check
+  reads both — still `docs/**` exactly.
 - **`decorator-index`** — `/decorators/` opens by calling itself the index of every decorator the
   framework ships, so every name in the canon's decorator list owes a row. Derived, because a
   hand-kept index is wrong the day a decorator lands and nothing says so.
@@ -263,6 +312,12 @@ outside `docs/`.
   quoting one publishes code the repo forbids writing) and a `port:` disagreeing with the app's.
   The strict form would report 134 pages at once and the signal would be gone; the narrowing is
   deliberate and this sentence is where it is stated.
+- **`fence-untitled`** — a fence whose language is the *content of a file* — `rust`, `toml`,
+  `sql`, `graphql`, `ts`, `yaml` — carries a `title=`. A reader who cannot see where a snippet
+  goes cannot use it, and 244 fences across 71 pages said nothing. The complement is the
+  argument: a `bash` block is a command, a `json`/`http`/`text` block is a payload or an output,
+  `mermaid` is a picture — none of them is a file, and none owes a title. See § C for the three
+  shapes a title may take.
 - **`test-layout`** — a test target is a directory (`tests/<suite>/main.rs`), so a page
   prescribing a flat `tests/<x>.rs` in a fence title or a table cell teaches a suite that escapes
   the `binary(e2e)` gate. Scoped to prescriptive lines, because naming the flat form is exactly
@@ -306,24 +361,60 @@ it**, never by its content mix. `/http/extractors/` reads as a reference and is 
 opened to write a handler. `/queue/retries-and-failure/` teaches a contract and is All options:
 it is opened once the jobs already run.
 
+**The split is a reading, not a menu level.** It is drawn by the section index's "In this
+section" list (§B) and nowhere else. **The sidebar is two deep and never three**: a group is a
+section, its items are that section's pages. Drawn in the menu as well, the split was the third
+of four levels, and it charged every reader on the site a level to tell one reader which half of
+one section a page sits in — the index is where that reader already is.
+
 The tier is declared **per page, in frontmatter** — `tier: basics` or `tier: all-options` — on
 every non-index page of a tiered section. The section `index` declares none: it frames the
 split and sits above both groups. Order stays in `sidebar.order`; a tier **partitions** a
 section and never restates its order.
 
-**Under five non-index pages a section stays flat**, and a `tier` there is a violation, not a
-no-op: two headers over three links cost a reader more than they save. One section is exempt at
+**Under five non-index pages a section stays undivided**, and a `tier` there is a violation, not
+a no-op: two headers over three links cost a reader more than they save. One section is exempt at
 any size — `tutorial/` is an ordered path, where a tier boundary mid-sequence would claim
 something false.
 
-`docs/src/sidebar.mjs` owns the vocabulary, the threshold and that exemption; `astro.config.mjs`
-renders it, `src/content.config.ts` validates the key, and the linter's `tier` rule gates it —
-an undeclared page, an unknown tier, or a section that declares only one fails CI. Both sides
-fail closed: an undeclared page would drop out of the sidebar, so the **build** stops too.
+`docs/src/sidebar.mjs` owns the vocabulary, the threshold and that exemption;
+`src/content.config.ts` validates the key, and the linter's `tier` rule gates it — an unknown
+tier fails the **build**, and an undeclared page or a section declaring only one fails CI.
 
 This is §D made structural. §D budgets one page against drowning the reader; §G budgets the
-section, so the long tail is one click away instead of one line away. A T-INDEX page's "In this
-section" list (§B) is the same navigation in prose, so it carries the same two tiers.
+section, so the page that frames it says which half a reader came for.
+
+## H. The menu — two levels, everything shown, no name said twice
+
+**The sidebar lists every section and every page in it, always.** Nothing unfolds: a group is a
+section, its items are that section's pages, and the reader sees the whole map rather than the
+branch they happen to be standing on.
+
+That has one consequence and it is the whole of this section: **a label is read against the
+entire column, not against its own header.** Two rules follow, and both are absolute.
+
+- **No item repeats its group's label.** A section's index would otherwise say the section's
+  name directly under the section's name — `HTTP › HTTP`, nine times over. When the group is
+  named after the section, its index is labelled **`Overview`**, which is what the design draws
+  and what the reader is actually being offered. Where the group is *broader* than its index the
+  index keeps its own name, because there it carries information the header does not:
+  `Data › Database`, `Background work › Queue`, `Operations › OpenTelemetry`.
+- **No two items share a label.** A short label was only ever legible because the rest of the
+  menu was hidden. `Configuration` under HTTP, GraphQL and MCP — with a top-level
+  `Configuration` group in the same column — is three pages and a section wearing one word. The
+  page's own qualified `title` is the fix: `HTTP configuration`, `GraphQL errors`,
+  `WebSocket guards`. A short `sidebar.label` is for a name nothing else in the menu claims.
+
+**A page has one navigation name, and the breadcrumb uses it too.** The trail is read out of the
+hydrated sidebar, so its last segment is the page's menu label rather than its `title`. Those
+differ on every section index — the title is the section's name, the label is `Overview` — and
+taking the title printed the section twice in a row: `HTTP / HTTP`, which is the same defect the
+menu had, one component further along. The `title` stays what the `<h1>` and the search index
+show.
+
+Not gated: the group labels live in `astro.config.mjs` and the item labels in frontmatter, and
+joining the two would mean the linter importing the Astro config. Checked by reading the built
+menu and the built breadcrumbs — `dist/**` carries both — and by this section.
 
 ## Running the linter
 

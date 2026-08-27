@@ -50,7 +50,7 @@ pub struct BlogModule;
 
 Add the crate to the app's `Cargo.toml`:
 
-```toml title="apps/blog/Cargo.toml"
+```toml title="apps/blog/Cargo.toml (from the demo)"
 nest-rs = { workspace = true, features = ["http", "seaorm"] }
 ```
 
@@ -80,7 +80,7 @@ nestrs g migration create_post
 
 Fill in the columns it stubbed:
 
-```rust title="crates/migrations/src/m20260609_000000_create_post.rs"
+```rust title="crates/migrations/src/m20260609_000000_create_post.rs (from the demo)"
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -121,7 +121,7 @@ enum Post {
 The generator already registered it. `lib.rs` is the `mod` list; `migrator.rs`
 is regenerated from that list, so the two can never disagree:
 
-```rust title="crates/migrations/src/lib.rs"
+```rust title="crates/migrations/src/lib.rs (from the demo)"
 mod m20260609_000000_create_post;
 mod migrator;
 

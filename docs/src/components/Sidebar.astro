@@ -1,0 +1,108 @@
+---
+/**
+ * The sidebar as the design draws it: short, flat, and static.
+ *
+ * Two decisions, and the second is the one that makes the first affordable.
+ *
+ * **Nothing opens or closes.** Starlight renders each group as a `<details>`
+ * with a caret — a control that collapses, remembers what it collapsed across
+ * pages, and moves under the reader as they navigate. The design has none of
+ * that: a section is a heading with its pages under it. So this replaces the
+ * component rather than styling it.
+ *
+ * **Every section lists its pages, always.** The column is the whole map: a
+ * reader sees where they are *and* what else exists, without a click that
+ * reveals it. That is the owner's call over the shorter alternative — showing
+ * only the open section — and it is what makes the two levels worth having:
+ * a category and its pages, both visible, nothing to unfold.
+ *
+ * A section's name is a link to its own first page.
+ *
+ * **Two levels, and the config is what keeps it that way.** The recursion below
+ * renders whatever depth `astro.config.mjs` declares; that file declares a
+ * group per section and pages under it, and STYLE.md §G says why the Basics /
+ * All options split is drawn on the section index instead of here. A third
+ * level added there would render — silently, and nowhere else would say so.
+ */
+import MobileMenuFooter from 'virtual:starlight/components/MobileMenuFooter';
+
+interface Entry {
+  type: 'link' | 'group';
+  label: string;
+  href?: string;
+  isCurrent?: boolean;
+  attrs?: Record<string, unknown>;
+  entries?: Entry[];
+}
+
+interface Props {
+  /** Recursion only: the top-level render reads the route's own sidebar. */
+  sublist?: Entry[];
+  nested?: boolean;
+}
+
+/** Does this entry, or anything under it, name the page being read? */
+function holdsCurrent(entry: Entry): boolean {
+  return entry.type === 'link' ? Boolean(entry.isCurrent) : (entry.entries ?? []).some(holdsCurrent);
+}
+
+/** The first page under an entry — where its name points. */
+function firstLink(entry: Entry): Entry | undefined {
+  if (entry.type === 'link') return entry;
+  for (const child of entry.entries ?? []) {
+    const found = firstLink(child);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+const {
+  sublist = Astro.locals.starlightRoute.sidebar as unknown as Entry[],
+  nested = false,
+} = Astro.props;
+---
+
+<ul class:list={{ 'top-level': !nested }}>
+  {
+    sublist.map((entry) => {
+      const { class: className, ...attrs } = entry.attrs ?? {};
+
+      if (entry.type === 'link') {
+        return (
+          <li>
+            <a
+              href={entry.href}
+              aria-current={entry.isCurrent ? 'page' : undefined}
+              class:list={[{ large: !nested }, className]}
+              {...attrs}>
+              {entry.label}
+            </a>
+          </li>
+        );
+      }
+
+      // Always. `holdsCurrent` still decides the header's own state, so the
+      // section the reader is in reads as the current one without hiding the
+      // rest.
+      const here = holdsCurrent(entry);
+      const target = firstLink(entry);
+
+      return (
+        <li>
+          <a class:list={['group-label', { 'is-open': here }]} href={target?.href}>
+            <span class="large">{entry.label}</span>
+          </a>
+          <Astro.self sublist={entry.entries} nested />
+        </li>
+      );
+    })
+  }
+</ul>
+
+{
+  !nested && (
+    <div class="md:sl-hidden">
+      <MobileMenuFooter />
+    </div>
+  )
+}

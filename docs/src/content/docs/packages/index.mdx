@@ -151,7 +151,7 @@ Turn on its **feature**. There is one framework line, and adding a transport
 never adds a second — this is the real `apps/api/Cargo.toml` (REST + GraphQL +
 DB + authz), trimmed to the framework line:
 
-```toml title="apps/api/Cargo.toml"
+```toml title="apps/api/Cargo.toml (from the demo)"
 [dependencies]
 nest-rs = { workspace = true, features = [
     "http", "config", "seaorm", "graphql", "openapi", "authn", "authz", "health",

@@ -26,7 +26,7 @@ A provider is any struct the container can build. Mark it
 `#[injectable]`, list it in a module's `providers = [...]`, declare
 dependencies as `#[inject]` fields.
 
-```rust title="crates/features/src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs (from the demo)"
 use std::sync::Arc;
 use nest_rs::core::injectable;
 use sea_orm::DatabaseConnection;
@@ -50,7 +50,7 @@ container when you build me — typically seeded by
 Controllers, resolvers, and gateways are providers too — they just also
 mount on a transport:
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 use std::sync::Arc;
 use nest_rs::http::{controller, routes};
 
@@ -69,12 +69,12 @@ impl PostsController {
 }
 ```
 
-```rust title="crates/features/src/posts/module.rs"
+```rust title="crates/features/src/posts/module.rs (from the demo)"
 #[module(providers = [PostsService])]
 pub struct PostsModule;
 ```
 
-```rust title="crates/features/src/posts/http/module.rs"
+```rust title="crates/features/src/posts/http/module.rs (from the demo)"
 #[module(
     imports = [PostsModule],
     providers = [PostsController],
@@ -113,7 +113,7 @@ import tree reaches ([Modules](/fundamentals/modules/#compose-the-root-module)).
 
 ## Scopes — singleton, request, transient
 
-```rust
+```rust title="three providers, three scopes"
 #[injectable]                    // singleton — default
 pub struct PostsService { /* ... */ }
 
@@ -137,7 +137,7 @@ boot, injected as `Arc<T>`.
 inject request-scoped types (they exist before any request). Reach them
 through the request boundary, not `#[inject]` on a singleton:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 use nest_rs::http::Scoped;
 
 #[get("/trace")]
@@ -184,7 +184,7 @@ infrastructure (DB pool, config, …).
 
 Typical mistake — controller registered without importing the port:
 
-```rust
+```rust title="crates/features/src/posts/http/module.rs"
 // ✗ PostsModule not in imports — PostsService unreachable here
 #[module(providers = [PostsController])]
 pub struct PostsHttpModule;
@@ -225,7 +225,7 @@ flowchart TB
 When another feature must call into `posts/` without naming the concrete
 struct, expose a `pub trait` and keep the impl module-private:
 
-```rust title="crates/features/src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs (from the demo)"
 use std::sync::Arc;
 
 use nest_rs::core::{async_trait, injectable};
@@ -245,7 +245,7 @@ pub(crate) struct PostsServiceImpl {
 impl PostsService for PostsServiceImpl { /* ... */ }
 ```
 
-```rust title="posts/module.rs"
+```rust title="crates/features/src/posts/module.rs"
 #[module(providers = [PostsServiceImpl as dyn PostsService])]
 pub struct PostsModule;
 ```
@@ -265,7 +265,7 @@ concrete type.
 
 ## The runtime escape hatch
 
-```rust
+```rust title="apps/api/src/main.rs"
 let svc: Arc<PostsService> = container.get::<PostsService>().unwrap();
 ```
 

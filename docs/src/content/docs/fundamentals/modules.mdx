@@ -40,8 +40,8 @@ At the smallest scale, handlers live in the app itself:
 ```rust title="apps/blog/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
-use crate::controller::BlogController;
-use crate::service::BlogService;
+use features::blog::BlogController;
+use features::blog::BlogService;
 
 #[module(
     imports = [HttpModule::for_root(HttpConfig { port: 3005, ..Default::default() })],
@@ -144,7 +144,7 @@ Framework and feature modules appear in `imports` two ways.
 **Dynamic** — a call expression returning a `DynamicModule`, usually
 with configuration at the import site:
 
-```rust
+```rust title="apps/blog/src/module.rs"
 SeaOrmModule::for_root(None)
 
 HttpModule::for_root(HttpConfig {
@@ -157,7 +157,7 @@ HttpModule::for_root(HttpConfig {
 **Static** — a bare type, no parameters. Feature adapters like
 `PostsHttpModule` import this way:
 
-```rust
+```rust title="apps/blog/src/module.rs"
 PostsHttpModule
 ```
 
@@ -172,7 +172,7 @@ Pass `None` for env-only; pass a config to set defaults in code that the
 environment can still override **per field** — never a lock, see
 [the dual-path rule](/configuration/#the-dual-path-rule). For the imports above:
 
-```rust
+```rust title="apps/blog/src/module.rs"
 SeaOrmModule::for_root(None)
 HttpModule::for_root(None)
 ```
@@ -267,7 +267,7 @@ runs, then short-circuits on later calls. A **diamond import** — two
 branches that both reach the same module — still builds that module's
 providers once:
 
-```rust
+```rust title="a diamond in the import graph"
 #[module(imports = [Common])]
 pub struct B;
 

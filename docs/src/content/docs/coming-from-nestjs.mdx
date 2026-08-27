@@ -10,7 +10,7 @@ home. You still write a module, a service, a thin controller, and let
 decorators carry the wiring. This page maps the vocabulary you already know
 onto its NestRS equivalent, then shows where the machine underneath diverges.
 
-```rust
+```rust title="crates/features/src/users/http/controller.rs"
 #[controller(path = "/users")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct UsersController {
@@ -69,7 +69,7 @@ NestJS controller is a different kind of citizen — not injectable, never
 exported. NestRS keeps one. `#[module]` accepts exactly two keys, `imports` and
 `providers`, and an unknown key is a compile error naming the two.
 
-```rust title="crates/features/src/users/http/module.rs"
+```rust title="crates/features/src/users/http/module.rs (from the demo)"
 use nest_rs::core::module;
 
 use super::controller::UsersController;
@@ -272,7 +272,7 @@ crates, one lockfile at the root, local packages wired by path.
 The same slice — a users controller with an injected service and one guarded
 route. The NestJS sketch:
 
-```ts
+```ts title="users.controller.ts"
 @Controller('users')
 @UseGuards(AuthnGuard, AuthzGuard)
 export class UsersController {

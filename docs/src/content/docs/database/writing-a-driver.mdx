@@ -48,7 +48,7 @@ whichever mode the request is in. Two variants: one for ordinary work,
 one carrying a transaction. A store with no transaction primitive
 collapses to a single variant — the seam absorbs that too.
 
-```rust
+```rust title="crates/yourdb/src/executor.rs"
 use std::any::Any;
 
 /// Your driver's handle, threaded through the framework's task-local.
@@ -83,7 +83,7 @@ or rolls back. The framework owns the task-local install, the `Arc`
 lifecycle, and the response branching. The five numbered comments mark the
 five places you write store-specific code.
 
-```rust
+```rust title="crates/yourdb/src/interceptor.rs"
 use std::sync::Arc;
 use nest_rs::core::async_trait;
 use nest_rs::core::{Layer, injectable};
@@ -168,7 +168,7 @@ system work.
 `scope` is handed the job's declared `JobTransaction` and an `inner` that
 yields **whether the job succeeded**, and answers with a `JobSettlement`:
 
-```rust
+```rust title="crates/yourdb/src/worker/context.rs"
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -265,7 +265,7 @@ worker context to `dyn JobContext`. Every field of the config is settable
 from both the environment (`NESTRS_<NAMESPACE>__<KEY>`) and a pinned
 struct — the framework-wide dual-path rule.
 
-```rust
+```rust title="crates/yourdb/src/module.rs"
 use std::sync::Arc;
 use nest_rs::config::ConfigModule;
 use nest_rs::core::{ContainerBuilder, DynamicModule};
@@ -305,7 +305,7 @@ Services don't touch the task-local directly — they call a small helper
 your driver ships. The helper reads the current executor, downcasts to
 your enum, and hands the caller a store-native handle.
 
-```rust
+```rust title="crates/yourdb/src/executor.rs"
 pub fn current_executor() -> Option<Executor> {
     nest_rs::database::current_executor()?
         .as_any()

@@ -1,0 +1,24 @@
+---
+/**
+ * One full-bleed section of the landing. Bands alternate background and are
+ * separated by a single hairline, so the page reads as a stack of statements
+ * rather than a column of floating cards.
+ */
+interface Props {
+  /** The `NN — LABEL` chip above the heading. */
+  label?: string;
+  /** Alternate (slightly lifted) canvas. */
+  alt?: boolean;
+  /** Extra class on the section, for the one-off bands (hero CTA, footer). */
+  variant?: string;
+}
+
+const { label, alt = false, variant } = Astro.props;
+---
+
+<section class:list={['rs-band', { 'rs-band--alt': alt }, variant]}>
+  <div class="rs-band-inner">
+    {label && <p class="rs-label">{label}</p>}
+    <slot />
+  </div>
+</section>

@@ -25,7 +25,7 @@ cargo add nest-rs --features server-timing
 
 ## Mount it
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
 use nest_rs::server_timing::ServerTimingModule;
 
@@ -51,7 +51,7 @@ Pull `Timings` out of the request extensions and call `record` (or
 recorded entry into the final header, with `total` appended on the way
 out:
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 use std::time::Instant;
 
 use nest_rs::http::{controller, routes};

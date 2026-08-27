@@ -64,7 +64,7 @@ feature's `mod.rs` re-exports is what the rest of the workspace can reach;
 everything else stays `pub(crate)` or private, and a type nobody can name is a
 type nobody can inject.
 
-```rust title="crates/features/src/users/mod.rs"
+```rust title="crates/features/src/users/mod.rs (from the demo)"
 mod entity;
 mod module;
 mod service;

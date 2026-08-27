@@ -39,7 +39,7 @@ as its shared flow.
 infrastructure, configured via `NESTRS_OAUTH_CLIENT__*` env vars. Pin the
 config in code by passing an `OAuthClientConfig`.
 
-```rust title="src/module.rs"
+```rust title="apps/auth/src/module.rs"
 #[module(
     imports = [
         ConfigModule::for_root(),
@@ -53,7 +53,7 @@ pub struct AuthModule;
 A controller then exposes the two HTTP legs. The exemplar in
 `crates/features/src/oauth/` ships the full handler:
 
-```rust
+```rust title="crates/features/src/authn/http/controller.rs"
 #[controller(path = "/")]
 pub struct OAuthController {
     #[inject]
@@ -138,7 +138,7 @@ crate's own guidance.
 `authorize` produces the URL the browser follows and the signed
 transaction cookie that ties the round-trip together:
 
-```rust
+```rust title="crates/features/src/authn/http/controller.rs"
 let auth = self.client.authorize(&self.jwt, "github")?;
 // auth.url        — the provider redirect URL
 // auth.transaction — short-lived JWT cookie: CSRF state + PKCE verifier
@@ -166,7 +166,7 @@ query parameters. `exchange` verifies the cookie's signature,
 compares its CSRF state to the query string, and only then trades
 the code for a `TokenSet`:
 
-```rust
+```rust title="crates/features/src/authn/http/controller.rs"
 let tokens = self.client.exchange(
     &self.jwt,
     "github",              // the same provider the transaction was minted for
@@ -190,7 +190,7 @@ mismatch")` and the flow stops.
 token as a bearer and deserializes the body into your app's
 provider-specific shape:
 
-```rust
+```rust title="crates/features/src/authn/http/controller.rs"
 #[derive(Debug, Deserialize)]
 struct GoogleUser {
     sub: String,
@@ -208,7 +208,7 @@ principal type.
 
 ## `AuthorizationRedirect` — the redirect leg's return value
 
-```rust
+```rust title="nest_rs::oauth::client::AuthorizationRedirect"
 pub struct AuthorizationRedirect {
     pub url: String,
     pub transaction: String,

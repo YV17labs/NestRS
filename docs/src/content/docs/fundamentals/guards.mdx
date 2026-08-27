@@ -56,7 +56,7 @@ so guards plug into dedup-by-`TypeId` and declaration-order chaining.
 
 ### A minimal custom guard
 
-```rust title="src/posts/guard.rs"
+```rust title="crates/features/src/posts/guard.rs"
 use nest_rs::guards::prelude::*;
 use nest_rs::http::poem::Request as HttpRequest;
 
@@ -100,7 +100,7 @@ Other guards on the same route still run.
 | `check_ws_message` | WS | per inbound message, after the upgrade |
 | `check_mcp` | MCP | per operation, inside rmcp's dispatch — the ability is ambient |
 
-```rust
+```rust title="nest_rs::guards::Guard"
 #[async_trait]
 pub trait Guard: Layer {
     async fn check_http(&self, _req: &mut HttpRequest) -> Result<(), Denial> { Ok(()) }
@@ -118,7 +118,7 @@ lives under `posts/http/`. Binding guards on the struct is how you gate
 every route on that controller — and declare the auth modules the access
 graph must reach.
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 use std::sync::Arc;
 use nest_rs::authz::Read;
 use nest_rs::http::{controller, routes};
@@ -164,7 +164,7 @@ the posture — a guard, or `#[public]` — is what makes it intentional.
 The HTTP adapter imports the auth bridges transitively — same pattern as
 `UsersHttpModule` in the repo:
 
-```rust title="crates/features/src/posts/http/module.rs"
+```rust title="crates/features/src/posts/http/module.rs (from the demo)"
 #[module(
     imports = [PostsModule, AuthzModule],
     providers = [PostsController],
@@ -172,7 +172,7 @@ The HTTP adapter imports the auth bridges transitively — same pattern as
 pub struct PostsHttpModule;
 ```
 
-```rust title="crates/features/src/authn/module.rs"
+```rust title="crates/features/src/authn/module.rs (from the demo)"
 #[module(
     imports = [nest_rs::authn::AuthnModule::for_root(None)],
     providers = [AuthnStrategy, AuthnGuard],
@@ -180,7 +180,7 @@ pub struct PostsHttpModule;
 pub struct AuthnModule;
 ```
 
-```rust title="crates/features/src/authz/module.rs"
+```rust title="crates/features/src/authz/module.rs (from the demo)"
 #[module(
     imports = [AuthnModule],
     providers = [AuthzAbility, AuthzGuard],
@@ -240,8 +240,8 @@ first — the first listed sees the request before the second.
 
 ```rust title="apps/blog/src/main.rs"
 use nest_rs::guards::{AppBuilderGuardsExt, guard};
-use crate::authn::AuthnGuard;
-use crate::authz::AuthzGuard;
+use features::authn::AuthnGuard;
+use features::authz::AuthzGuard;
 
 App::builder()
     .use_guards_global([guard::<AuthnGuard>(), guard::<AuthzGuard>()])
@@ -268,7 +268,7 @@ Guards are pooled by `TypeId` and execute **once per request**, post-routing at 
 Guards often do more than gate — they produce values the handler needs.
 Attach on the way in; read with `Ctx<T>`:
 
-```rust
+```rust title="the guard writes, the handler reads"
 #[async_trait]
 impl Guard for AuthnGuard<MyStrategy> {
     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
@@ -297,7 +297,7 @@ the value is large.
 For per-route policy — required roles, rate-limit quotas — `#[meta(...)]`
 attaches a typed payload; `Reflector` reads it inside the guard:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 #[get("/admin/audit")]
 #[use_guards(AuthnGuard, RolesGuard)]
 #[meta(Roles(&["admin", "auditor"]))]
@@ -328,7 +328,7 @@ App::builder()
     .module::<BlogModule>()
 ```
 
-```rust title="crates/features/src/posts/http/controller.rs"
+```rust title="crates/features/src/posts/http/controller.rs (from the demo)"
 #[controller(path = "/posts")]
 #[use_guards(AuthnGuard, AuthzGuard)]
 pub struct PostsController { /* ... */ }
@@ -344,7 +344,7 @@ Dedup is what makes redeclaring free, so the one thing it takes away is
 running a guard *twice on purpose*. `#[force_guards(...)]` is the opt-out,
 and it takes the same list `#[use_guards]` does:
 
-```rust
+```rust title="crates/features/src/posts/http/controller.rs"
 #[patch("/:id/publish")]
 #[force_guards(FreshTokenGuard)]        // replay, even though the pool ran it
 #[authorize(Update, PostEntity)]
@@ -437,7 +437,7 @@ that has a `check_graphql`. Authentication is not bound here: the bridge
 already ran it in band before the operation, so listing an `AuthnGuard`
 on a resolver would bind a guard with nothing to do.
 
-```rust
+```rust title="crates/features/src/posts/graphql/resolver.rs"
 #[resolver]
 #[use_guards(AuthzGuard)] // AbilityGuard<AuthzAbility> — has check_graphql
 pub struct PostResolver { /* ... */ }
@@ -459,7 +459,7 @@ per-message check binds a real `Guard` beside the
 `AuthzGuard` (the app's `AbilityGuard<AuthzAbility>` alias) denies,
 fail-closed, when no ambient ability is present.
 
-```rust
+```rust title="crates/features/src/posts/ws/gateway.rs"
 #[gateway(path = "/posts/live")]
 #[use_guards(AuthnGuard, AuthzGuard)] // real guards — run once, at the upgrade
 pub struct PostGateway { /* ... */ }

@@ -3,7 +3,6 @@ title: HTTP configuration
 description: HttpConfig — host, port, TLS, CORS, the framework header — settable both via NESTRS_HTTP__* env vars and pinned in code.
 tier: all-options
 sidebar:
-  label: Configuration
   order: 2
 ---
 
@@ -26,7 +25,7 @@ use features::hello::HelloHttpModule;
 pub struct HelloModule;
 ```
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
@@ -118,7 +117,7 @@ Inline PEM has no source to watch, so it is loaded once, as before.
 Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
 tests (production deploys carry secrets in the environment):
 
-```rust
+```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule, TlsConfig};
 
@@ -152,7 +151,7 @@ NESTRS_HTTP__CORS_CREDENTIALS=true
 NESTRS_HTTP__CORS_MAX_AGE=3600
 ```
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use std::time::Duration;
 
 use nest_rs::core::module;
@@ -191,7 +190,7 @@ NESTRS_HTTP__GLOBAL_PREFIX=/api
 
 or pin it in code with `with_global_prefix`:
 
-```rust title="apps/api/src/module.rs"
+```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
 
@@ -217,7 +216,7 @@ and nginx use):
 NESTRS_HTTP__SERVER_HEADER=true
 ```
 
-```rust
+```rust title="apps/api/src/module.rs"
 HttpModule::for_root(HttpConfig {
     server_header: true,
     ..Default::default()
@@ -305,7 +304,7 @@ NESTRS_HTTP__HSTS=                                     # empty ⇒ drop just HST
 NESTRS_HTTP__CONTENT_SECURITY_POLICY="default-src 'self'"
 ```
 
-```rust
+```rust title="apps/api/src/module.rs"
 use nest_rs::http::{HttpConfig, HttpModule, SecurityHeadersConfig};
 
 HttpModule::for_root(HttpConfig {

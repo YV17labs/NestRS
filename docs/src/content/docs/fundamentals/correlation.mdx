@@ -13,7 +13,7 @@ the framework starts or continues for you. You read it from any code the
 framework carries — a handler, a service under it, the data layer — and it is
 already on every event you log.
 
-```rust title="src/features/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs"
 impl PostService {
     pub async fn publish(&self, id: Uuid) -> Result<Post, ServiceError> {
         let post = self.repo.publish(id).await?;
@@ -52,7 +52,7 @@ DEBUG features::posts: creating post title="hello" trace_id=01a01569ae687353bc03
 Read them from code when you need the **value** — a `created_by` column, an
 outbound header, an audit row:
 
-```rust
+```rust title="crates/features/src/users/service.rs"
 let trace_id = nest_rs::core::current_trace_id();
 let span_id = nest_rs::core::current_span_id();
 // `None` for an anonymous caller. Absence is the answer, not a gap.
@@ -130,7 +130,7 @@ The framework ships no general outbound HTTP client, by decision — wrapping on
 costs you every option it has and buys a module. So you inject your own, and
 propagating the trace is one line in it:
 
-```rust title="src/features/media/client.rs"
+```rust title="crates/features/src/media/client.rs"
 let mut request = self.http.get(url);
 if let Some(traceparent) = nest_rs::core::current_traceparent() {
     request = request.header("traceparent", traceparent.to_string());

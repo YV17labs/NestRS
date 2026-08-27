@@ -16,7 +16,7 @@ the user picks) and **resources** (documents the model can list and fetch).
 A prompt is a `#[prompt]` method in the same decorated block as your tools —
 one `impl`, both routers:
 
-```rust title="src/weather/mcp/tool.rs"
+```rust title="crates/features/src/weather/mcp/tool.rs"
 #[tools]
 impl WeatherTool {
     #[tool(description = "Return the current temperature for a city.")]

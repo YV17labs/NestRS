@@ -397,6 +397,30 @@ site-search kbd {
   }
 }
 
+/*
+ * Above the design's own width the layout stops growing and centres.
+ *
+ * The three columns are 264 / fluid / 220, so on a wide window the fluid one
+ * takes every extra pixel: code blocks and tables stretch to fill it while the
+ * prose stays at its reading measure, and the page pulls apart. The design caps
+ * the whole grid at 1440 and centres it (`max-width:1440px; margin:0 auto`), so
+ * a wide window buys page margin rather than a wider column — which is what
+ * keeps a code card the same width as the paragraph above it.
+ *
+ * The sidebar and the table of contents are `position: fixed`, so the cap is
+ * applied to their insets rather than to a wrapper.
+ */
+@media (min-width: 90rem) {
+  :root[data-has-sidebar] .sidebar-pane {
+    inset-inline-start: calc((100vw - 90rem) / 2);
+  }
+
+  :root[data-has-sidebar] .main-frame {
+    padding-inline-start: calc((100vw - 90rem) / 2 + var(--sl-sidebar-width));
+    padding-inline-end: calc((100vw - 90rem) / 2);
+  }
+}
+
 /* One flow, not two panels: the rule Starlight draws between the title block
    and the body is a seam the design does not have. */
 :root[data-has-sidebar] .content-panel {
@@ -593,11 +617,13 @@ mobile-starlight-toc nav > button {
   color: var(--rs-prose);
 }
 
-/* The reading measure. An aside's title is a paragraph too and is a header
-   rather than prose, so it keeps the card's full width. */
-.sl-markdown-content :is(p, ul, ol, blockquote):not(.starlight-aside__title) {
-  max-width: 70ch;
-}
+/* The column is the measure.
+ *
+ * The design sets prose to 70ch, which at this size stops about 210px short of
+ * the code cards beside it — and with the layout capped at the design's own
+ * 1440px the column can no longer run away from the text, so the narrower
+ * measure just reads as a paragraph that gave up early. One width for
+ * everything in the column: prose ends where a code block ends. */
 
 .sl-markdown-content strong {
   color: var(--rs-text);
@@ -621,7 +647,6 @@ mobile-starlight-toc nav > button {
   font-size: 1.125rem;
   line-height: 1.6;
   color: var(--rs-text-2);
-  max-width: 68ch;
   margin: 1.25rem 0 0;
 }
 

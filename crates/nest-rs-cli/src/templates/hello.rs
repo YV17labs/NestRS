@@ -1,19 +1,18 @@
-//! The **hello** module — the one thing every scaffold ships, in every layout.
+//! The **hello** module — the one thing every scaffold ships.
 //!
 //! A freshly created project has to prove it started. A `404` on `/` proves
 //! nothing: the process may be healthy and the transport mounted, but the
 //! developer cannot tell that from a browser. So every path out of
-//! `nestrs new` — greenfield monorepo, app added to an existing workspace,
-//! standalone crate — writes a service with a greeting and one `#[public]`
-//! `GET /` that returns it. There is no template flag and no routeless variant:
+//! `nestrs new` — greenfield monorepo, or an app added to an existing
+//! workspace — writes a service with a greeting and one `#[public]` `GET /`
+//! that returns it. There is no template flag and no routeless variant:
 //! this *is* the starter.
 //!
-//! [`SERVICE`] and [`CONTROLLER`] are layout-agnostic and shared verbatim; the
-//! `FEATURE_*` wrappers below adapt them to the workspace's
-//! `crates/features/src/<name>/` shape. Standalone puts the same two files
-//! directly under `src/` (see [`super::standalone`]).
+//! [`SERVICE`] and [`CONTROLLER`] carry no layout of their own; the `FEATURE_*`
+//! wrappers below adapt them to the workspace's `crates/features/src/<name>/`
+//! shape.
 
-/// The greeting. Identical in both layouts — a provider with one method.
+/// The greeting — a provider with one method.
 pub const SERVICE: &str = r#"use nest_rs::core::injectable;
 
 #[injectable]
@@ -27,14 +26,13 @@ impl {{service}} {
 }
 "#;
 
-/// `GET /`. `{{service_use}}` is the full `use` path the layout puts the
-/// service at — `crate::service::HelloService` standalone,
-/// `crate::hello::HelloService` in a feature — so one template serves both.
+/// `GET /`. The service sits at `crate::<feature>::<Service>`, both halves
+/// already seeded from the project name.
 pub const CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, routes};
 
-use {{service_use}};
+use crate::{{snake}}::{{service}};
 
 #[controller(path = "/")]
 pub struct {{controller}} {

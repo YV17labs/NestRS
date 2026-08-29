@@ -3,7 +3,7 @@ title: Getting started
 description: Install the toolchain, scaffold a project, and start it.
 ---
 
-import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Steps } from '@astrojs/starlight/components';
 
 ## Prerequisites
 
@@ -32,11 +32,8 @@ Every build after that is an incremental, sub-second rebuild.
 
 ## Scaffold and start
 
-Pick a layout — a **workspace** (monorepo: shared `crates/features/`, one binary
-per app under `apps/`) or a **standalone** crate (everything in `src/`).
-
-<Tabs syncKey="getting-started-cli">
-<TabItem label="Workspace">
+One layout, no flag to weigh: a monorepo with your domain in a shared
+`crates/features/` and one binary per app under `apps/`.
 
 <Steps>
 
@@ -58,33 +55,8 @@ per app under `apps/`) or a **standalone** crate (everything in `src/`).
 
 </Steps>
 
-</TabItem>
-<TabItem label="Standalone">
-
-<Steps>
-
-1. Scaffold.
-
-   ```bash
-   nestrs new hello --standalone
-   cd hello
-   ```
-
-2. Start it.
-
-   ```bash
-   nestrs run dev
-   ```
-
-   Open **http://localhost:3000/** — `Hello World`, from `src/`.
-
-</Steps>
-
-</TabItem>
-</Tabs>
-
-Planning to follow the [tutorial](/tutorial/) next? Scaffold the
-**workspace** — the tutorial adds a second app to it.
+A second workload is another `nestrs new` inside the same tree, sharing the
+same features — which is what the [tutorial](/tutorial/) does next.
 
 Hello World needs **nothing else** — no database, no containers, no config.
 Verify it, then look at what you got (bare `nestrs run` lists every recipe):
@@ -96,10 +68,9 @@ Hello World
 
 ## What you just generated
 
-One thin controller over one service — the shape every feature follows, and the
-**same `hello` module in both layouts**. Every path out of `nestrs new` writes
-it, so a fresh project always proves itself with a browser hit instead of a
-`404`:
+One thin controller over one service — the shape every feature follows. Every
+path out of `nestrs new` writes it, so a fresh project always proves itself
+with a browser hit instead of a `404`:
 
 ```rust title="crates/features/src/hello/http/controller.rs"
 use std::sync::Arc;
@@ -126,9 +97,7 @@ impl HelloController {
 }
 ```
 
-Standalone puts the same two files at `src/controller.rs` and `src/service.rs`,
-importing `crate::service::HelloService` instead. The `#[public]` is not
-decoration: a route with no posture is flagged at boot
+The `#[public]` is not decoration: a route with no posture is flagged at boot
 (`unguarded routes detected`), and this one is open on purpose.
 
 The scaffold depends on `nest-rs` and enables the features it needs — one
@@ -137,9 +106,8 @@ crate; see [Packages](/packages/) for the full menu.
 
 ## Make your first change
 
-Edit the greeting — `crates/features/src/hello/service.rs` in a workspace,
-`src/service.rs` standalone — save, and `nestrs run dev` hot-reloads. Then curl
-again:
+Edit the greeting in `crates/features/src/hello/service.rs`, save, and
+`nestrs run dev` hot-reloads. Then curl again:
 
 ```rust title="crates/features/src/hello/service.rs"
 fn greeting(&self) -> String {

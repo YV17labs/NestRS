@@ -487,7 +487,7 @@ Three consequences are load-bearing enough to repeat here:
   |---|---|
   | a `nest-rs-*` framework crate | `nest_rs::<concern>` — `nest_rs::http`, `nest_rs::orm` |
   | the shared feature library | `features::<feature>` — `features::users` |
-  | an app crate, or a standalone crate | `<app>::<concern>` — `api::users` |
+  | an app crate, or a single-crate project | `<app>::<concern>` — `api::users` |
 
   **A crate in a family roots its target at the family**, so the target and the
   path a caller types are the same string: `nest-rs-oauth-client` emits on

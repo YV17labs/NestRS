@@ -35,12 +35,7 @@ pub fn scaffold_root(
     s.create(root.join("README.md"), r.render(workspace::README));
     // A workspace writes its domain logic in the shared feature library, so the
     // span-target example is rooted there rather than at the app.
-    queue_agent_files(
-        &mut s,
-        &root,
-        &r.clone().with("span_target", "features::users"),
-        shared::AGENTS_WORKSPACE_HEAD,
-    );
+    queue_agent_files(&mut s, &root, &r);
     s.create(
         root.join("crates/features/Cargo.toml"),
         r.render(workspace::FEATURES_CARGO),
@@ -142,10 +137,7 @@ pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliRe
 /// the shared [`hello`] templates in the workspace's feature layout. Every
 /// identifier derives from `names`, so `hello` and any later app are one shape.
 fn queue_hello_feature(s: &mut Scaffold, feature_root: &Path, names: &Names) {
-    let r = Renderer::new(names).with(
-        "service_use",
-        format!("crate::{}::{}", names.snake, names.service()),
-    );
+    let r = Renderer::new(names);
     s.create(feature_root.join("mod.rs"), r.render(hello::FEATURE_MOD));
     s.create(
         feature_root.join("module.rs"),
@@ -201,14 +193,14 @@ fn queue_root_files(s: &mut Scaffold, base: &Path, names: &Names, env_prefix: &s
     // process `nestrs run` starts, so a renderer that does not know it would
     // write the placeholder out verbatim.
     let r = with_env_prefix(Renderer::new(names), env_prefix);
-    queue_env_files(s, base, &r, "nestrs workspace", shared::ENV_WORKSPACE);
+    queue_env_files(s, base, &r);
     s.create_if_missing(base.join("Justfile"), r.render(workspace::JUSTFILE));
     s.create_if_missing(base.join("test.just"), r.render(workspace::TEST_JUSTFILE));
     s.create_if_missing(base.join("db.just"), r.render(shared::DB_JUSTFILE));
     s.create_if_missing(base.join("compose.yml"), r.render(shared::COMPOSE));
     s.create_if_missing(base.join(".gitignore"), r.render(shared::GITIGNORE));
-    // No `.dockerignore`: workspace mode ships no Dockerfile, so there is
-    // nothing for it to scope. Standalone mode, which does, writes one.
+    // No `.dockerignore`: the scaffold ships no Dockerfile, so there is
+    // nothing for it to scope.
 }
 
 fn print_root_next_steps(root: &Path) {

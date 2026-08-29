@@ -5,7 +5,7 @@ paths:
 
 # nestrs CLI — scaffolds mirror the exemplar
 
-Command surface: `new` (monorepo / workspace app / `--standalone`),
+Command surface: `new` (monorepo / workspace app),
 `generate`/`g` (`feature`, `resource`, `entity`, `auth`, `migration`, and the
 adapters `http` / `graphql` / `ws` / `queue` / `schedule` / `mcp`),
 `run` (forwards to `just` in the product workspace), `doctor`, `update`,
@@ -26,18 +26,16 @@ one `#[public] GET /`. A freshly created project must prove it started,
 and a `404` proves nothing to the developer looking at a browser — so
 there is no routeless variant, and adding one back is a regression.
 
-Workspace mode writes it as a **feature named after the app**
+It is written as a **feature named after the app**
 (`crates/features/src/<app>/`), because the layout keeps no `service.rs`
-/ `controller.rs` in an app crate; standalone writes the same two files
-under `src/`. The service and controller templates are shared verbatim
-between the two — only `{{service_use}}` differs. `nestrs new <name>`
-refuses when a feature already owns that name.
+/ `controller.rs` in an app crate. `nestrs new <name>` refuses when a
+feature already owns that name.
 
 ## Scaffold architecture
 
 Templates are `const` strings with `{{placeholder}}`s in
 `src/templates/` (`hello`, `feature`, `resource`, `auth`, `migration`,
-`adapter`, `workspace`, `standalone`, `shared`).
+`adapter`, `workspace`, `shared`).
 
 **One exception, and the criterion is narrow:** a template becomes a
 *file* only when a second consumer must read the **same bytes**. Today

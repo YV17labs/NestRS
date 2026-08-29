@@ -43,9 +43,9 @@ every binary leans on:
 
 ## A minimal app, end to end
 
-Step ① of the `blog` story, in the **standalone** shape — one crate, handlers
-under `src/`. (A workspace app crate keeps no `service.rs` / `controller.rs`:
-those live in `crates/features/`, which is where step ② moves them.)
+Step ① of the `blog` story. The domain lives in `crates/features/`, where
+every app can reach it; the app crate under `apps/` only wires modules
+together, which is why no `service.rs` or `controller.rs` appears there.
 
 ```rust title="crates/features/src/blog/service.rs"
 use nest_rs::core::injectable;

@@ -109,8 +109,7 @@ pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
     }
 
     // Read from *this* environment, which is the same source the app reads —
-    // no project file to disagree with. The layout is irrelevant here: a
-    // workspace and a standalone crate resolve the prefix identically.
+    // no project file to disagree with.
     report.env_prefix_source = EnvPrefixSource::detect();
 
     // One cascade read for all four, rather than up to four files per variable.
@@ -174,7 +173,7 @@ fn print_report(report: &DoctorReport) {
     } else if report.in_nestrs_workspace {
         println!("  nestrs workspace: yes");
     } else {
-        println!("  nestrs workspace: no (standalone project or outside a clone)");
+        println!("  nestrs workspace: no (outside a nestrs workspace)");
     }
 
     println!();

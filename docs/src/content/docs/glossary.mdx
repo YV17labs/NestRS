@@ -189,11 +189,10 @@ deep on each.
   operational job (the HTTP API, the WS server, the token issuer, the
   queue worker). One product splits into several workloads that share
   `crates/features` and the database but never RPC each other.
-- **[Standalone vs workspace](/cli/)** — the two shapes `nestrs new`
-  scaffolds: a *standalone* single-crate app, or a *workspace* monorepo
-  hosting several apps under `apps/<name>/` plus shared
-  `crates/features`. The workspace is the default once a product grows
-  past one workload.
+- **[Workspace](/cli/)** — the shape `nestrs new` scaffolds: a monorepo
+  hosting one binary per app under `apps/<name>/`, over a shared
+  `crates/features`. One app is the starting point; a second workload is
+  another `nestrs new` inside it, never a second repository.
 - **[Marker guard](/security/authorization/per-transport-bridges/)** —
   a unit guard with no logic that exists so the access graph can
   prove a transport's authz seam is wired; omitting the authz module

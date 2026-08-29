@@ -1,5 +1,5 @@
-//! `nestrs new` — the standalone crate, the greenfield workspace, and adding an
-//! app to an existing one.
+//! `nestrs new` — the greenfield workspace, and adding an app to an existing
+//! one.
 
 use crate::harness::{
     assert_env_example_points_test_overrides_somewhere_loaded, run_ok, write_fake_workspace,
@@ -7,100 +7,85 @@ use crate::harness::{
 use std::fs;
 use std::process::Command;
 
-#[test]
-fn new_standalone_hello_template() {
-    let dir = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_nestrs"))
-        .args(["new", "demo-api", "--standalone"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let app = dir.path().join("demo-api");
-    assert!(app.join("src/main.rs").is_file());
-    assert!(app.join("src/lib.rs").is_file());
-    assert!(app.join("src/controller.rs").is_file());
-    // The scaffolded smoke test needs no live infra ⇒ `integration` suite.
-    assert!(app.join("tests/integration/main.rs").is_file());
-    // …and an empty `e2e` suite beside it: the test recipes filter on
-    // `binary(e2e)`, which nextest refuses to parse when nothing matches.
-    assert!(app.join("tests/e2e/main.rs").is_file());
-    assert!(app.join("Cargo.toml").is_file());
-    assert!(app.join("Dockerfile").is_file());
-    assert!(app.join(".dockerignore").is_file());
-    assert!(app.join("rust-toolchain.toml").is_file());
-    assert_agents_md_carries_the_conventions(
-        &app,
-        "## Layout — one crate",
-        "demo_api::users",
-        false,
-    );
-    assert!(app.join(".env").is_file());
-    assert!(app.join(".env.development").is_file());
-    let dev_env = fs::read_to_string(app.join(".env.development")).unwrap();
-    assert!(dev_env.contains("NESTRS_LOG=debug"));
-    assert_env_example_points_test_overrides_somewhere_loaded(&app);
-
-    let main_rs = fs::read_to_string(app.join("src/main.rs")).unwrap();
-    // Baseline logging is nest-rs-core's job now — a scaffold must not pull
-    // the observability stack; it stays a documented opt-in.
-    assert!(!main_rs.contains("OpenTelemetry"));
-    assert!(main_rs.contains("Environment::init"));
-
-    let module_rs = fs::read_to_string(app.join("src/module.rs")).unwrap();
-    assert!(!module_rs.contains("OpenTelemetryModule"));
-
-    let cargo = fs::read_to_string(app.join("Cargo.toml")).unwrap();
-    assert!(cargo.contains("[workspace]"));
-    // One entry, capabilities as features — `http` carries guards, pipes and
-    // the layer crates the decorators expand into.
-    assert!(cargo.contains("nest-rs"), "{cargo}");
-    assert!(cargo.contains("\"http\""), "{cargo}");
-    // R12 L-1, standalone half: `src/service.rs` is where a `tracing::debug!`
-    // lands here, so the façade ships with the crate that holds it.
-    assert!(cargo.contains("tracing = "), "{cargo}");
-    assert!(!cargo.contains("nest-rs-opentelemetry"));
-    assert!(app.join(".gitignore").is_file());
-    assert!(app.join("Justfile").is_file());
-    let justfile = fs::read_to_string(app.join("Justfile")).unwrap();
-    assert!(justfile.contains("build:"));
-    assert!(justfile.contains("cargo build --release"));
-    assert!(justfile.contains("mod test"));
-    // The db verbs drive the workspace's `migrations`/`seed` crates, which a
-    // single crate has nowhere to put — so neither the module nor the file.
-    assert!(!justfile.contains("mod db"));
-    assert!(!app.join("db.just").exists());
-    assert!(app.join("test.just").is_file());
-    let test_just = fs::read_to_string(app.join("test.just")).unwrap();
-    assert!(test_just.contains("unit:"));
-    assert!(test_just.contains("e2e:"));
-    assert!(test_just.contains("doc:"));
-    assert!(test_just.contains("cargo test --doc"));
-    assert_cov_names_its_prerequisite(&test_just);
-}
-
-/// R9-2: `cov` is the only recipe that needs something the CLI's first-run
-/// bootstrap does not install — `cargo-llvm-cov` shells out to the LLVM tools,
-/// which a non-rustup toolchain simply does not have. It failed with a raw
-/// `failed to find llvm-tools-preview` and nothing in the project said why, so
-/// the recipe carries the prerequisite next to the command.
+/// R9-2: `cov` used to be the one recipe a fresh project could not run —
+/// `cargo-llvm-cov` was outside the bootstrap and the LLVM tools it shells out
+/// to were pinned nowhere, so the recipe's own comment told the developer to run
+/// two installs by hand. Both halves are wired now, and that sentence is the
+/// defect this asserts is gone: a scaffold that asks for a manual step has not
+/// delivered "one command".
 #[track_caller]
-fn assert_cov_names_its_prerequisite(test_just: &str) {
+fn assert_cov_asks_for_no_manual_install(test_just: &str) {
     assert!(test_just.contains("cov:"), "{test_just}");
     assert!(
-        test_just.contains("llvm-tools-preview"),
-        "the `cov` recipe names the rustup component it needs: {test_just}",
+        !test_just.contains("rustup component add") && !test_just.contains("cargo install"),
+        "the `cov` recipe sends the developer off to install something by hand — \
+         `cargo-llvm-cov` is bootstrapped and `llvm-tools-preview` is pinned in \
+         `rust-toolchain.toml`: {test_just}",
     );
     assert!(
-        test_just.contains("LLVM_COV"),
-        "…and the escape hatch for a toolchain without rustup: {test_just}",
+        test_just.contains("rust-toolchain.toml"),
+        "…and it says where the LLVM tools come from: {test_just}",
     );
+    assert!(
+        test_just.contains("LLVM_COV") && test_just.contains("LLVM_PROFDATA"),
+        "…keeping the escape hatch for a toolchain that ignores that file: {test_just}",
+    );
+}
+
+/// `just --list` renders the **last** comment line above a recipe and nothing
+/// else, so a two-line explanation leaves `nestrs run test` describing the
+/// recipe with whatever fragment happened to wrap last — `cov` read
+/// `# entirely — set LLVM_COV / LLVM_PROFDATA there.` and `e2e` read
+/// `# `--no-tests=pass` keeps this green until you write the first one.`. The
+/// summary therefore goes at the *bottom* of a block, however odd that reads in
+/// the file.
+///
+/// Asserted as the property rather than per recipe: the line `just` renders must
+/// open a sentence, which it does when the block is one line or when the line
+/// before it closed one. A recipe that grows a second comment line later is
+/// covered without anyone remembering this.
+#[track_caller]
+fn assert_every_recipe_is_listed_by_a_whole_sentence(test_just: &str) {
+    let lines: Vec<&str> = test_just.lines().map(str::trim).collect();
+    for (index, line) in lines.iter().enumerate() {
+        // A recipe header, and not `_default`, which `--list` hides.
+        if line.starts_with('#') || line.starts_with('_') || !line.contains(':') || index < 2 {
+            continue;
+        }
+        let (doc, before) = (lines[index - 1], lines[index - 2]);
+        if !doc.starts_with('#') || !before.starts_with('#') {
+            continue;
+        }
+        assert!(
+            before.ends_with('.'),
+            "`just --list` documents `{line}` with `{doc}`, which continues the \
+             line before it — put the one-sentence summary last in the block",
+        );
+    }
+}
+
+/// The generated `rust-toolchain.toml` is what makes `nestrs run lint` and
+/// `nestrs run test cov` work on a project minutes old, and it does so silently:
+/// `clippy` and `rustfmt` happen to be in rustup's default profile, so a
+/// scaffold declaring nothing works on most machines and fails on a minimal one
+/// with an error naming rustup rather than the recipe. `llvm-tools-preview` is
+/// the one nobody has by default, and it is pinned here rather than installed
+/// per machine because `llvm-profdata` only reads a `.profraw` written by the
+/// LLVM that rustc was built with — the component has to follow `channel`.
+///
+/// Asserted on the written file rather than on the const: a component silently
+/// dropped from the list is exactly the drift nothing else here would catch.
+#[track_caller]
+fn assert_toolchain_pins_what_the_recipes_shell_out_to(root: &std::path::Path) {
+    let toolchain = fs::read_to_string(root.join("rust-toolchain.toml")).unwrap();
+    for component in ["clippy", "rustfmt", "llvm-tools-preview"] {
+        assert!(
+            toolchain.contains(&format!("\"{component}\"")),
+            "`rust-toolchain.toml` pins no `{component}`, so a recipe that shells \
+             out to it fails on a toolchain that does not happen to carry it: \
+             {toolchain}",
+        );
+    }
 }
 
 /// `AGENTS.md` is the only place a generated project states its layout and
@@ -108,25 +93,14 @@ fn assert_cov_names_its_prerequisite(test_just: &str) {
 /// scaffold that drops it hands the next contributor, human or agent, a blank
 /// slate, and the conventions get re-derived differently in every project.
 ///
-/// Asserts the load-bearing parts rather than the prose: the layout section for
-/// this shape, the four naming levels, the provider procedure, the reserved
-/// vocabulary, and a fully rendered span target (an unsubstituted placeholder
-/// would ship as advice).
-///
-/// `crate_table` is what keeps the shared half honest: the crate-type table
-/// describes `apps/` + `crates/features`, which a standalone project does not
-/// have, so it belongs to the workspace layout header and must be **absent**
-/// from the other. Shipping doctrine about a layout the reader does not have is
-/// worse than shipping none.
+/// Asserts the load-bearing parts rather than the prose: the layout section, the
+/// four naming levels, the provider procedure, the reserved vocabulary, the
+/// crate-type table, and a fully rendered span target (an unsubstituted
+/// placeholder would ship as advice).
 #[track_caller]
-fn assert_agents_md_carries_the_conventions(
-    root: &std::path::Path,
-    layout_heading: &str,
-    span_target: &str,
-    crate_table: bool,
-) {
+fn assert_agents_md_carries_the_conventions(root: &std::path::Path) {
     let agents = fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md is scaffolded");
-    assert!(agents.contains(layout_heading), "{agents}");
+    assert!(agents.contains("## Layout — two homes"), "{agents}");
     // Claude Code reads CLAUDE.md and nothing else, so the conventions reach it
     // only through the import. A symlink would need Developer Mode on Windows.
     let claude = fs::read_to_string(root.join("CLAUDE.md")).expect("CLAUDE.md is scaffolded");
@@ -154,14 +128,13 @@ fn assert_agents_md_carries_the_conventions(
             "AGENTS.md is missing {rule}:\n{agents}"
         );
     }
-    assert_eq!(
+    assert!(
         agents.contains("## Crates — a type, and a direction"),
-        crate_table,
-        "the crate-type table belongs to the workspace layout only:\n{agents}"
+        "the crate-type table is what says which crate may depend on which:\n{agents}"
     );
     assert!(
-        agents.contains(span_target),
-        "the span-target example must be rendered for this layout:\n{agents}"
+        agents.contains("features::users"),
+        "the span-target example must be rendered:\n{agents}"
     );
     assert!(
         !agents.contains("{{"),
@@ -206,12 +179,7 @@ fn new_workspace_greenfield() {
     assert!(root.join("crates/migrations/src/bin/migrate.rs").is_file());
     assert!(root.join("crates/migrations/src/migrator.rs").is_file());
     assert!(root.join("crates/seed/src/main.rs").is_file());
-    assert_agents_md_carries_the_conventions(
-        &root,
-        "## Layout — two homes",
-        "features::users",
-        true,
-    );
+    assert_agents_md_carries_the_conventions(&root);
     // No Dockerfile ships in workspace mode, so nothing to ignore for.
     assert!(!root.join(".dockerignore").exists());
     assert!(root.join("Justfile").is_file());
@@ -222,12 +190,14 @@ fn new_workspace_greenfield() {
     assert!(justfile.contains(r#"if app == "--all""#));
     assert!(justfile.contains("mod test"));
     assert!(justfile.contains("mod db"));
+    assert_toolchain_pins_what_the_recipes_shell_out_to(&root);
 
     let test_just = fs::read_to_string(root.join("test.just")).unwrap();
     assert!(test_just.contains("unit:"));
     assert!(test_just.contains("e2e:"));
     assert!(test_just.contains("cargo test --workspace --doc"));
-    assert_cov_names_its_prerequisite(&test_just);
+    assert_cov_asks_for_no_manual_install(&test_just);
+    assert_every_recipe_is_listed_by_a_whole_sentence(&test_just);
     let db_just = fs::read_to_string(root.join("db.just")).unwrap();
     assert!(db_just.contains("up:"));
     assert!(db_just.contains("reset: fresh seed"));
@@ -441,13 +411,6 @@ fn the_scaffolded_smoke_test_boots_the_feature_not_the_app_root() {
         !smoke.contains("module::<HelloModule>"),
         "booting the app root drags in every connection it later imports: {smoke}",
     );
-
-    // Standalone has no separate feature crate — its root module *is* the one
-    // that serves the greeting, so the narrowest boot is unchanged there.
-    let solo = tempfile::tempdir().unwrap();
-    run_ok(solo.path(), &["new", "solo", "--standalone"]);
-    let smoke = fs::read_to_string(solo.path().join("solo/tests/integration/main.rs")).unwrap();
-    assert!(smoke.contains("TestApp::builder()"), "{smoke}");
 }
 
 /// P3 / G15, inverted: `validator` used to need a pin matching the framework's
@@ -458,11 +421,8 @@ fn the_scaffolded_smoke_test_boots_the_feature_not_the_app_root() {
 /// second copy back in the graph, which is the defect it was invented to avoid.
 #[test]
 fn the_scaffold_leaves_validator_to_the_framework() {
-    for args in [vec!["new", "acme"], vec!["new", "solo", "--standalone"]] {
-        let name = args[1];
-        let dir = tempfile::tempdir().unwrap();
-        run_ok(dir.path(), &args);
-        let cargo = fs::read_to_string(dir.path().join(name).join("Cargo.toml")).unwrap();
-        assert!(!cargo.contains("validator"), "{cargo}");
-    }
+    let dir = tempfile::tempdir().unwrap();
+    run_ok(dir.path(), &["new", "acme"]);
+    let cargo = fs::read_to_string(dir.path().join("acme/Cargo.toml")).unwrap();
+    assert!(!cargo.contains("validator"), "{cargo}");
 }

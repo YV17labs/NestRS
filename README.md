@@ -69,7 +69,7 @@ Try it on your machine:
 
 ```bash
 cargo install --locked nest-rs-cli
-nestrs new hello --standalone && cd hello
+nestrs new hello && cd hello
 nestrs run dev   # → Hello World on :3000
 ```
 

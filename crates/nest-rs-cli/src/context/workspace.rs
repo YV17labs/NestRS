@@ -106,57 +106,6 @@ impl NestrsWorkspace {
     }
 }
 
-/// A single-crate nestrs project — what `nestrs new --standalone` writes: a
-/// `[package]` manifest naming the umbrella, with no `apps/` and no shared
-/// feature library.
-///
-/// Only ever asked for once [`NestrsWorkspace::discover`] has answered `None`.
-/// A crate *inside* a workspace is a member, not a project, and reporting it as
-/// one would answer "where am I" with the wrong root.
-#[derive(Debug, Clone)]
-pub struct StandaloneCrate {
-    pub root: PathBuf,
-    /// The manifest's `[package] name` — the project's own name.
-    pub name: String,
-}
-
-impl StandaloneCrate {
-    pub fn discover(start: &Path) -> CliResult<Option<Self>> {
-        let mut dir = start.canonicalize().map_err(CliError::Io)?;
-        loop {
-            if let Some(found) = read_standalone(&dir)? {
-                return Ok(Some(found));
-            }
-            if !dir.pop() {
-                return Ok(None);
-            }
-        }
-    }
-}
-
-fn read_standalone(dir: &Path) -> CliResult<Option<StandaloneCrate>> {
-    let Some(doc) = read_manifest(dir)? else {
-        return Ok(None);
-    };
-    let Some(package) = doc.get("package").and_then(Item::as_table) else {
-        return Ok(None);
-    };
-    // The umbrella is what makes it a *nestrs* crate rather than any Rust crate
-    // the cursor happens to sit in — the same single-dependency install surface
-    // every scaffold writes.
-    if dependency(&doc, &["dependencies"], "nest-rs").is_none() {
-        return Ok(None);
-    }
-    Ok(Some(StandaloneCrate {
-        root: dir.to_path_buf(),
-        name: package
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned(),
-    }))
-}
-
 /// The `nest-rs` version requirement a manifest pins — the framework line the
 /// project builds against, which is not necessarily the one this CLI would
 /// scaffold ([`crate::version::framework_req`]).

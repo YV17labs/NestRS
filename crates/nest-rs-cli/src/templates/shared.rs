@@ -1,4 +1,4 @@
-//! Files shared by standalone and workspace scaffolds (env cascade, gitignore, …).
+//! Files every scaffold writes (env cascade, gitignore, agent rules, …).
 
 pub const RUST_TOOLCHAIN: &str = r#"[toolchain]
 channel = "1.97"
@@ -97,21 +97,13 @@ export {{env_prefix_var}} := "{{env_prefix}}"
 
 "#;
 
-/// Why the `dev` recipe sets `<PREFIX>_ENV` on the command line — the workspace
-/// and standalone Justfiles differ in every other line of that recipe, but this
-/// story is one story and drifts the moment it is told twice.
+/// Why the `dev` recipe sets `<PREFIX>_ENV` on the command line. Told once and
+/// rendered into the recipe, because a story drifts the moment it is told
+/// twice.
 pub const DEV_RECIPE_NOTE: &str = r#"# `{{env_prefix}}_ENV` is set here rather than in `.env`: it selects the `.env`
 # cascade, so it has to exist before any file is read. It also arms every
 # development-only affordance (the `POST /auth/dev-token` route `nestrs g auth`
 # writes), which is why absence has to mean "not development" everywhere else."#;
-
-/// The same, baked into the image — overridable at `docker run` time, so one
-/// image can still be run under another prefix.
-pub const ENV_PREFIX_DOCKERFILE: &str = r#"
-# Every framework variable carries this prefix. Override at `docker run`
-# time to run the same image under another one.
-ENV {{env_prefix_var}}={{env_prefix}}
-"#;
 
 pub const GITIGNORE: &str = r#"/target
 **/*.rs.bk
@@ -131,29 +123,7 @@ pub const GITIGNORE: &str = r#"/target
 .DS_Store
 "#;
 
-pub const DOCKERIGNORE: &str = r#"target/
-.git/
-.env.local
-.env.*.local
-"#;
-
-pub const ENV: &str = r#"# {{env_label}} — committed base config (`.env` cascade).
-#
-# Only overrides live here; omitted keys use in-code defaults. Real environment
-# variables always win. Per-machine secrets go in `.env.local` (git-ignored);
-# see `.env.example`.
-#
-# Precedence (highest first):
-#   real env  >  pinned in `module.rs`  >  .env.<{{env_prefix}}_ENV>.local  >  .env.local
-#   >  .env.<{{env_prefix}}_ENV>  >  .env
-
-# HTTP server listen port (default: 3000).
-{{env_prefix}}_HTTP__PORT=3000
-"#;
-
-/// Workspace root `.env` — the HTTP port's *default* lives in each app's
-/// `module.rs`, but every `<PREFIX>_HTTP__*` key stays live over it.
-pub const ENV_WORKSPACE: &str = r#"# {{env_label}} — committed base config (`.env` cascade).
+pub const ENV: &str = r#"# nestrs workspace — committed base config (`.env` cascade).
 #
 # Each app's root `module.rs` sets its own HTTP defaults
 # (`HttpConfig { port: …, ..Default::default() }`). Those are defaults, not a
@@ -172,7 +142,7 @@ pub const ENV_WORKSPACE: &str = r#"# {{env_label}} — committed base config (`.
 #   >  .env.<{{env_prefix}}_ENV>  >  .env
 "#;
 
-pub const ENV_DEVELOPMENT: &str = r#"# {{env_label}} — development-only overrides. An unset {{env_prefix}}_ENV still loads
+pub const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides. An unset {{env_prefix}}_ENV still loads
 # this cascade, but arms no development-only affordance: those need it set, on the
 # process, to development, dev or test — `nestrs run dev` does it. Setting it here
 # would be too late and is refused at boot.
@@ -204,9 +174,8 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 "#;
 
 /// The scaffolded smoke test. `{{smoke_use}}` / `{{smoke_module}}` name the
-/// **narrowest** module that serves the greeting — the feature's HTTP module in
-/// workspace mode, the crate's root module standalone (where they are the same
-/// thing). In-process through `TestApp`, no live infra, so it belongs to the
+/// **narrowest** module that serves the greeting — the feature's HTTP module.
+/// In-process through `TestApp`, no live infra, so it belongs to the
 /// `integration` suite.
 ///
 /// Booting the app *root* here was the trap: the moment a resource is wired the
@@ -265,28 +234,7 @@ folder nobody can navigate.
 
 "#;
 
-pub const AGENTS_STANDALONE_HEAD: &str = r#"## Layout — one crate
-
-```
-src/
-  main.rs        boot only — App::builder().module::<{{module}}>()
-  lib.rs         `mod` + `pub use`, no logic
-  module.rs      the root DI module — composition
-  service.rs     domain logic
-  controller.rs  the HTTP edge, thin
-tests/
-  integration/   in-process, no live infrastructure
-  e2e/           needs Postgres / Redis / object storage
-```
-
-A concern that grows past one service and one handler moves into its own
-folder — `src/<feature>/{module,service,controller}.rs` — and `src/module.rs`
-imports it. `nestrs g` needs a workspace, so features here are written by
-hand; run `nestrs new <name>` beside this crate to grow into one once a second
-binary needs the same logic.
-"#;
-
-pub const AGENTS_WORKSPACE_HEAD: &str = r#"## Layout — two homes, and the rule that divides them
+pub const AGENTS_LAYOUT: &str = r#"## Layout — two homes, and the rule that divides them
 
 ```
 apps/<app>/src/     main.rs + module.rs only — pure composition
@@ -478,14 +426,14 @@ nothing the day it changes, and the compiler never notices. Build it
 ## Observability
 
 A constant event-name message plus structured fields, never interpolation —
-the output is JSON. `tracing::info!(target: "{{span_target}}", user_id = %id,
+the output is JSON. `tracing::info!(target: "features::users", user_id = %id,
 "created user")`, not a formatted sentence. **Every event carries at least one
 field**; a bare log is a defect, and the events queried under an incident are
 exactly the ones people emit bare. Controllers log `info` on success, services
 `debug`, denials and security events `warn` or above.
 
 **The target is rooted at the crate that emits, never at the product.** One
-target per concern per crate: `{{span_target}}` here. A crate whose name is
+target per concern per crate: `features::users` here. A crate whose name is
 not the product's keeps its own root anyway — the target's one job is to say
 where the event came from.
 

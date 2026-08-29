@@ -583,6 +583,9 @@ mod tests {
         // the shape rather than in a second list: a list is edited by a
         // different hand than the one that renames a marker, and a `matches!`
         // that stops matching turns its presence check into a silent no-op.
+        // The two image shapes are `false` because the scaffold writes no
+        // Dockerfile: the repo's own images still carry them and are still
+        // compared, but a packaged crate has none to find.
         // `doctor`'s floor is **not** on this list, and its absence is the
         // finding rather than a gap: `MIN_RUST_VERSION` is now parsed from
         // `CARGO_PKG_RUST_VERSION`, so it is derived from the workspace
@@ -591,9 +594,9 @@ mod tests {
         const SHAPES: [(&str, Pin, bool); 8] = [
             ("rust-version = \"", Pin::Exact, true),
             ("channel = \"", Pin::Exact, true),
-            ("ARG RUST_VERSION=", Pin::Exact, true),
+            ("ARG RUST_VERSION=", Pin::Exact, false),
             ("toolchain: '", Pin::Exact, false),
-            ("FROM rust:", Pin::Image, true),
+            ("FROM rust:", Pin::Image, false),
             ("**Rust ", Pin::Prose, false),
             ("pins Rust ", Pin::Prose, false),
             ("`rustc` \u{2265} ", Pin::Prose, false),
@@ -784,9 +787,9 @@ mod tests {
     ///
     /// `generated_manifests` keeps only bodies that parse as TOML **and** declare
     /// dependencies — right for a requirement rule, wrong for this one: the
-    /// scaffold's `rust-toolchain.toml` declares no dependency and its Dockerfile
-    /// is not TOML at all, so the two pins a developer inherits most directly
-    /// would both have been invisible to the test written to guard them.
+    /// scaffold's `rust-toolchain.toml` declares no dependency at all, so the
+    /// pin a developer inherits most directly would have been invisible to the
+    /// test written to guard it.
     ///
     /// The corpus comes from [`crate::templates::sources`] — the one scan, so
     /// this sweep and the two guards beside it cannot disagree about what

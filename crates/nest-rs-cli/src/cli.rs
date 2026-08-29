@@ -55,15 +55,10 @@ pub enum Command {
     /// proves the project started. Layout is inferred from the directory tree:
     ///   new monorepo       nestrs new hello       → ./hello/ + apps/hello/
     ///   new workspace app  nestrs new blog        → apps/blog/ (next free port)
-    ///   single crate       nestrs new hello --standalone
     #[command(verbatim_doc_comment)]
     New {
         /// Project name (kebab-case recommended, e.g. `hello` or `blog`).
         name: String,
-
-        /// Single-crate layout (logic in `src/`) instead of the default monorepo.
-        #[arg(long)]
-        standalone: bool,
 
         /// Parent directory (default: current directory).
         #[arg(long, short = 'o', default_value = ".")]
@@ -71,8 +66,8 @@ pub enum Command {
 
         /// Prefix every framework env var carries, instead of `NESTRS`
         /// (e.g. `ACME` ⇒ `ACME_ENV`, `ACME_HTTP__PORT`). Uppercase ASCII.
-        /// Written into the Justfile and Dockerfile, which set it on the
-        /// processes they start; your deployment must set it too.
+        /// Written into the Justfile, which sets it on the processes it
+        /// starts; your deployment must set it too.
         #[arg(long, value_name = "PREFIX")]
         env_prefix: Option<String>,
 
@@ -240,7 +235,6 @@ pub fn run(cli: Cli) -> CliResult<()> {
     match cli.command {
         Command::New {
             name,
-            standalone,
             output,
             env_prefix,
             check,
@@ -250,13 +244,12 @@ pub fn run(cli: Cli) -> CliResult<()> {
             let opts = commands::NewOptions {
                 name,
                 output: output.clone(),
-                standalone,
                 env_prefix,
                 dry_run,
             };
             commands::run_new(opts.clone())?;
             if check && !dry_run {
-                run_check(&opts, &names, standalone, &output)?;
+                run_check(&names, &output)?;
             }
             Ok(())
         }
@@ -340,15 +333,8 @@ fn adapter(transport: Transport, t: GenTarget) -> CliResult<()> {
     )
 }
 
-fn run_check(
-    opts: &commands::NewOptions,
-    names: &Names,
-    standalone: bool,
-    output: &std::path::Path,
-) -> CliResult<()> {
-    let project = commands::project_dir_for_check(opts, names)?;
-    let ws_root = crate::context::NestrsWorkspace::discover(output)?;
-    if let Some(ws) = ws_root.filter(|_| !standalone) {
+fn run_check(names: &Names, output: &std::path::Path) -> CliResult<()> {
+    if let Some(ws) = crate::context::NestrsWorkspace::discover(output)? {
         let status = std::process::Command::new("cargo")
             .args(["check", "-p", &names.kebab])
             .current_dir(&ws.root)
@@ -361,7 +347,7 @@ fn run_check(
             )));
         }
     } else {
-        commands::run_cargo_check(&project)?;
+        commands::run_cargo_check(&output.join(&names.kebab))?;
     }
     println!("cargo check passed.");
     Ok(())

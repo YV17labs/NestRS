@@ -12,7 +12,6 @@ pub mod hello;
 pub mod migration;
 pub mod resource;
 pub mod shared;
-pub mod standalone;
 pub mod workspace;
 
 /// Every template module, as `(file name, source)` — **read from the

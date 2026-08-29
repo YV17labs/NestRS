@@ -1,5 +1,6 @@
 //! The `nestrs new` command: infer the layout from the tree and scaffold it
-//! through one of the [`standalone`] / [`workspace`] strategies.
+//! through the [`workspace`] strategy — a fresh monorepo, or an app added to
+//! one that already exists.
 
 //! **One starter, no template flag.** Every layout writes the shared
 //! [`hello`](crate::templates::hello) module — a service with a greeting and a
@@ -10,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{standalone, workspace};
+use super::workspace;
 use crate::context::{DEFAULT_ENV_PREFIX, NestrsWorkspace};
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;
@@ -21,7 +22,6 @@ use crate::templates::shared;
 pub struct NewOptions {
     pub name: String,
     pub output: PathBuf,
-    pub standalone: bool,
     /// `None` ⇒ the framework default (`NESTRS`).
     pub env_prefix: Option<String>,
     pub dry_run: bool,
@@ -39,10 +39,6 @@ pub fn run(opts: NewOptions) -> CliResult<()> {
             .map_err(|e| CliError::Anyhow(anyhow::anyhow!(e)))?;
     }
     let env_prefix = opts.env_prefix.as_deref().unwrap_or(DEFAULT_ENV_PREFIX);
-
-    if opts.standalone {
-        return standalone::scaffold(&opts.output, &names, env_prefix, opts.dry_run);
-    }
 
     if let Some(ws) = NestrsWorkspace::discover(&opts.output)? {
         // The prefix belongs to the deployment, not to a crate: an app added to
@@ -113,42 +109,15 @@ pub(crate) fn prefix_vars(env_prefix: &str) -> Vec<(&'static str, String)> {
                 fill(shared::ENV_PREFIX_JUSTFILE)
             },
         ),
-        (
-            "env_prefix_env",
-            if default {
-                String::new()
-            } else {
-                fill(shared::ENV_PREFIX_DOCKERFILE)
-            },
-        ),
     ]
-}
-
-pub fn project_dir_for_check(opts: &NewOptions, names: &Names) -> CliResult<PathBuf> {
-    if opts.standalone {
-        return Ok(opts.output.join(&names.kebab));
-    }
-    if let Some(ws) = NestrsWorkspace::discover(&opts.output)? {
-        return Ok(ws.apps_root().join(&names.kebab));
-    }
-    Ok(opts.output.join(&names.kebab))
 }
 
 /// Queue the committed `.env` cascade (`.env`, `.env.development`, `.env.example`).
 ///
 /// Every key in those files is written through `{{env_prefix}}`, so a project
 /// created with `--env-prefix` gets a cascade its app actually reads.
-pub(crate) fn queue_env_files(
-    s: &mut Scaffold,
-    base: &Path,
-    r: &Renderer,
-    env_label: &str,
-    env_template: &str,
-) {
-    // The caller's renderer, which already carries the prefix — building a
-    // second one here is how the two could be seeded from different values.
-    let r = r.clone().with("env_label", env_label);
-    s.create_if_missing(base.join(".env"), r.render(env_template));
+pub(crate) fn queue_env_files(s: &mut Scaffold, base: &Path, r: &Renderer) {
+    s.create_if_missing(base.join(".env"), r.render(shared::ENV));
     s.create_if_missing(
         base.join(".env.development"),
         r.render(shared::ENV_DEVELOPMENT),
@@ -160,14 +129,14 @@ pub(crate) fn queue_env_files(
 /// format every coding agent reads, and a `CLAUDE.md` that imports it (Claude
 /// Code reads only the latter).
 ///
-/// One helper rather than the same twelve lines in both scaffolds: the document
-/// is `INTRO + <layout head> + AGENTS_BODY`, and only the head differs. A third
-/// layout, or a rename, then lands in one place.
-pub(crate) fn queue_agent_files(s: &mut Scaffold, base: &Path, r: &Renderer, layout_head: &str) {
+/// The document is `INTRO + LAYOUT + BODY`, assembled here so the three pieces
+/// stay separately editable — the middle one is the layout a project is handed,
+/// and the last embeds the architecture rules verbatim.
+pub(crate) fn queue_agent_files(s: &mut Scaffold, base: &Path, r: &Renderer) {
     let body = format!(
         "{}{}{}",
         shared::AGENTS_INTRO,
-        layout_head,
+        shared::AGENTS_LAYOUT,
         shared::AGENTS_BODY
     );
     s.create(base.join("AGENTS.md"), r.render(&body));
@@ -191,7 +160,7 @@ pub fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use crate::templates::{hello, standalone, workspace};
+    use crate::templates::{hello, workspace};
 
     /// The starter's whole promise: whichever layout renders it, the controller
     /// mounts `/` and declares its posture. A template that stopped emitting
@@ -203,11 +172,10 @@ mod tests {
         assert!(hello::CONTROLLER.contains("#[public]"));
     }
 
-    /// Both layouts must actually reach it — the standalone crate through its
-    /// `providers` list, a workspace app through the feature's HTTP module.
+    /// The app must actually reach it: the app module imports the feature's
+    /// HTTP module, and that module lists the controller as a provider.
     #[test]
-    fn both_layouts_wire_the_hello_controller_in() {
-        assert!(standalone::MODULE.contains("providers = [{{service}}, {{controller}}]"));
+    fn the_app_wires_the_hello_controller_in() {
         assert!(workspace::APP_MODULE.contains("{{http_module}},"));
         assert!(hello::FEATURE_HTTP_MODULE.contains("providers = [{{controller}}]"));
     }

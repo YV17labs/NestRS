@@ -33,7 +33,7 @@ pub use generate::{
 };
 pub use info::{InfoOptions, run as run_info};
 pub use lint::{LintOptions, run as run_lint};
-pub use new::{NewOptions, project_dir_for_check, run as run_new, run_cargo_check};
+pub use new::{NewOptions, run as run_new, run_cargo_check};
 // The prefix-dependent renderer keys, seeded by `Renderer::new` and re-seeded by
 // `--env-prefix` from the same list.
 pub(crate) use new::prefix_vars;

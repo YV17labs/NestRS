@@ -70,20 +70,6 @@ fn info_says_so_plainly_outside_a_project() {
     assert!(stdout.contains("not inside a nestrs"), "{stdout}");
 }
 
-#[test]
-fn info_recognises_a_standalone_crate() {
-    let dir = tempfile::tempdir().unwrap();
-    run_ok(dir.path(), &["new", "solo", "--standalone"]);
-
-    let stdout = run_ok(&dir.path().join("solo"), &["info"]);
-
-    assert!(stdout.contains("standalone crate"), "{stdout}");
-    assert!(stdout.contains("solo"), "{stdout}");
-    // The framework line the manifest pins — what this project builds against,
-    // which is not necessarily what this CLI would scaffold today.
-    assert!(stdout.contains("nest-rs "), "{stdout}");
-}
-
 /// The two commands exist because they answer different questions: `about` is
 /// the framework and is identical on every machine; `info` is the tree in front
 /// of you. Neither may drift into the other, or one of them is redundant.

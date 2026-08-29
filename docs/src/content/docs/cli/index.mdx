@@ -3,13 +3,13 @@ title: CLI
 description: Install the nestrs binary, scaffold projects, generate features, and verify your toolchain.
 ---
 
-import { Aside, Steps, FileTree, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside, Steps, FileTree } from '@astrojs/starlight/components';
 
-The **`nestrs`** CLI scaffolds projects in **two layouts** — [standalone](#layout-detection)
-(one crate) or [workspace](#layout-detection) (monorepo with
-`crates/features/` + `apps/*`). **`nestrs new` picks the layout automatically**
-from the directory tree — no mode flags, no config file. Generated code follows
-the same decorators as the framework repo (`users/` for features,
+The **`nestrs`** CLI scaffolds one layout: a workspace — `crates/features/` for
+your domain, `apps/*` for the binaries that serve it. **`nestrs new` reads the
+directory tree** to know whether it is creating that workspace or adding an app
+to one you already have; there are no mode flags and no config file. Generated
+code follows the same decorators as the framework repo (`users/` for features,
 `api/` for composition apps).
 
 <Aside type="caution">
@@ -44,7 +44,6 @@ current directory (or `-o` path) and reads that manifest.
 |---|---|---|
 | Outside a nestrs workspace | `nestrs new hello` | Monorepo at `./hello/` + `apps/hello/` on port **3000** |
 | Inside a nestrs workspace | `nestrs new blog` | Thin app at `apps/blog/` — **next free port** in `module.rs` |
-| Anywhere (explicit) | `nestrs new hello --standalone` | Single crate at `./hello/` |
 
 If `apps/blog/` already exists, the CLI stops with **`app blog already
 exists`** — it does not overwrite.
@@ -57,19 +56,7 @@ exists`** — it does not overwrite.
   default.
 </Aside>
 
-### Standalone vs workspace
-
-| | **Standalone** (`--standalone`) | **Workspace** (default) |
-|---|---|---|
-| **Layout** | One crate — logic in `src/` | Monorepo — `crates/features/` + `apps/*` |
-| **Deps** | `nest-rs-*` from crates.io | Same, via `[workspace.dependencies]` |
-| **Grow** | Copy patterns by hand | `nestrs g feature` / `g resource` / `g <transport>`, `nestrs new <app>` |
-| **When** | One binary, no shared product crate | Several apps sharing features |
-
 ## Create a project
-
-<Tabs syncKey="project-kind">
-<TabItem label="Workspace">
 
 ```bash
 nestrs new hello
@@ -93,6 +80,8 @@ Open **http://localhost:3000/** — `Hello World`. Logic in
   - .gitignore
   - rust-toolchain.toml
   - README.md
+  - AGENTS.md the conventions every coding agent reads
+  - CLAUDE.md imports AGENTS.md
   - crates/
     - features/
       - Cargo.toml
@@ -125,54 +114,22 @@ nestrs new blog
 nestrs g resource posts
 ```
 
-</TabItem>
-<TabItem label="Standalone">
 
-```bash
-nestrs new hello --standalone
-cd hello
-nestrs run dev
-```
+**`rust-toolchain.toml`** is what makes every recipe run on a project minutes
+old. It pins Rust 1.97 as the toolchain `channel`, plus three components, each
+because a recipe shells out to it:
 
-Open **http://localhost:3000/** — `Hello World`. Service and controller live
-in `src/` (no `features` crate).
+- **`clippy` and `rustfmt`** are what `nestrs run lint` runs. Undeclared, they
+  are present only because rustup's *default* profile happens to install them —
+  so the recipe works on your machine and fails on a `minimal` one.
+- **`llvm-tools-preview`** carries the `llvm-cov` and `llvm-profdata` behind
+  `nestrs run test cov`. Those two read a `.profraw` only when they come from
+  the same LLVM as the rustc that wrote it, so they are pinned here, beside
+  `channel`, rather than installed once per machine: following the channel is
+  what keeps the two versions married.
 
-<FileTree>
-- hello/
-  - Cargo.toml
-  - Dockerfile
-  - .dockerignore
-  - Justfile
-  - test.just
-  - .env
-  - .env.development
-  - .env.example
-  - src/
-    - controller.rs
-    - service.rs
-    - module.rs
-    - main.rs
-  - tests/
-    - integration/main.rs
-    - e2e/main.rs
-</FileTree>
-
-No `db.just` here: the database verbs drive the workspace's `migrations` and
-`seed` crates, which a single crate has nowhere to put.
-
-**Every `generate` subcommand is workspace-only** — not just the database ones.
-`g feature`, `g resource`, `g auth`, `g migration` and the six adapters all
-resolve paths against `crates/features/` and wire the serving app's `module.rs`,
-neither of which exists here; outside a workspace they refuse with
-`not inside a nestrs workspace`. `nestrs generate --help` says the same in its
-header. In standalone mode you copy the shapes by hand — the layout is two
-files per concern, and the [Publish workspace](/publish/) is the reference.
-
-</TabItem>
-</Tabs>
-
-**`Dockerfile`** and **`.dockerignore`** ship in **standalone** mode only.
-**`rust-toolchain.toml`** pins Rust 1.97 in both modes.
+Rustup is what reads that file. On a toolchain installed any other way it is
+inert — point `LLVM_COV` and `LLVM_PROFDATA` at your own binaries instead.
 
 ### One starter, no template flag
 
@@ -184,7 +141,6 @@ returns it:
 |---|---|---|
 | `nestrs new acme` | monorepo + `hello` feature + `apps/hello/` on 3000 | `200 Hello World` |
 | `nestrs new blog` (inside one) | `blog` feature + `apps/blog/` on the next free port | `200 Hello World` |
-| `nestrs new solo --standalone` | one crate, `service.rs` + `controller.rs` | `200 Hello World` |
 
 A freshly created project has to prove it started, and a `404` proves nothing to
 someone looking at a browser — so there is no routeless variant to pick. Delete
@@ -246,9 +202,6 @@ Release binaries land in `target/release/`. **`nestrs run start`** compiles and
 starts the server; use **`nestrs run build`** when you only need the artifact
 (Docker, CI, or copying the binary elsewhere).
 
-<Tabs syncKey="project-kind">
-<TabItem label="Workspace">
-
 ```bash
 nestrs run build              # default app (hello)
 nestrs run build blog         # after nestrs new blog
@@ -256,23 +209,9 @@ nestrs run build --all          # every app in the workspace
 nestrs run start hello        # build + run in release
 ```
 
-</TabItem>
-<TabItem label="Standalone">
-
-```bash
-nestrs run build    # target/release/hello
-nestrs run start    # build + run in release
-```
-
-The standalone **`Dockerfile`** runs `cargo build --release` in a
-multi-stage image — same output path as `nestrs run build`.
-
-</TabItem>
-</Tabs>
-
 ## Generate features and adapters
 
-Monorepo only. Generators scaffold under `crates/features/src/<name>/`, register
+Generators scaffold under `crates/features/src/<name>/`, register
 `pub mod …` in `crates/features/src/lib.rs`, and — when you run them from inside
 an app — wire the edge module into that app's `module.rs`. Every command takes
 **`--dry-run`** (print what would change, write nothing) and a **`-p`** path
@@ -489,9 +428,9 @@ nestrs update --from-path
 | Command | Description |
 |---------|-------------|
 | `nestrs new <name>` | Monorepo at `./<name>/`, or app at `apps/<name>/` when already inside one |
-| `nestrs new <name> --standalone` | Single crate in `./<name>/` |
 | `nestrs new <name> --check` | Run `cargo check` after scaffolding |
 | `nestrs doctor` | Toolchain and env sanity check |
+| `nestrs lint` | Every file named for what it declares |
 | `nestrs version` | Print the CLI version |
 | `nestrs about` | Print NestRS metadata (tagline, docs, license, author) |
 | `nestrs info` | Report the project the current directory sits in |
@@ -507,12 +446,14 @@ nestrs update --from-path
 
 Every generator accepts **`--dry-run`** and **`-p <path>`**.
 Aliases: **`nestrs g`** = **`nestrs generate`**.
-**All of them require a workspace** — see the standalone note above.
+**All of them require a workspace**, which is what `nestrs new` writes.
 
-## Grow a standalone crate into a workspace
+## Move an existing crate into a workspace
 
-There is no `nestrs migrate`: the move is a handful of file relocations, and
-doing it by hand keeps you in control of the app boundary you are introducing.
+Bringing a crate you already have — a small service, a prototype — under
+`crates/features/` is a handful of file relocations. There is no `nestrs
+migrate` for it: doing it by hand keeps you in control of the app boundary you
+are introducing.
 
 The one thing to know before you start: **`nestrs new <workspace>` already
 writes a `hello` feature and a `hello` app** — the starter that proves the
@@ -521,7 +462,7 @@ not warn about overwriting, and `nestrs new` initialises no git repository, so
 a collision has nothing to recover from.
 
 ```bash frame="terminal"
-# 1. Scaffold the workspace beside the standalone crate.
+# 1. Scaffold the workspace beside the crate you are moving.
 nestrs new acme && cd acme
 
 # 2. Give the incoming crate its own feature folder, with the adapter
@@ -541,7 +482,7 @@ Then the edits a move cannot do:
 1. **`crates/features/src/lib.rs`** — add `pub mod posts;`.
 2. **`crates/features/src/posts/mod.rs`** (new) — the folder index:
    `mod service; mod module; pub mod http;` plus the `pub use` lines.
-   Standalone had no `mod.rs` because `main.rs` declared the modules.
+   A single crate needs none, because `main.rs` declares its modules.
 3. **`crates/features/src/posts/http/mod.rs`** (new) — `mod controller; mod
    module;` plus its `pub use` lines, and a `http/module.rs` holding
    `#[module(imports = [PostsModule], providers = [PostsController])]`.

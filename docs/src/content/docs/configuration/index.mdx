@@ -320,9 +320,10 @@ image runs in staging and in production, and each container names its own
 variables. The CLI reads the same variable from its own environment, so
 `nestrs doctor` and `nestrs g auth` speak your names, not ours.
 
-`nestrs new acme --env-prefix ACME` sets it in the generated `Justfile` (which
-is what `nestrs run` starts every process through) and in the `Dockerfile`, and
-writes the `.env` cascade under the new names.
+`nestrs new acme --env-prefix ACME` sets it in the generated `Justfile` — which
+is what `nestrs run` starts every process through — and writes the `.env`
+cascade under the new names. Your own image and your deployment must set it
+too; it belongs to the process, not to a file it reads.
 
 Three things are worth knowing:
 

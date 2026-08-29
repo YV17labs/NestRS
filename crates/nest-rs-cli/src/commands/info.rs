@@ -15,8 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::context::{
-    Context, DEFAULT_ENV_PREFIX, ENV_PREFIX_VAR, EnvPrefixSource, NestrsWorkspace, StandaloneCrate,
-    framework_pin,
+    Context, DEFAULT_ENV_PREFIX, ENV_PREFIX_VAR, EnvPrefixSource, NestrsWorkspace, framework_pin,
 };
 use crate::error::CliResult;
 
@@ -25,21 +24,14 @@ pub struct InfoOptions {
 }
 
 pub fn run(opts: InfoOptions) -> CliResult<()> {
-    let start = opts
-        .path
-        .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
+    let start = super::resolve_start(opts.path);
     let here = start.canonicalize().unwrap_or_else(|_| start.clone());
     let ctx = Context::detect(&start)?;
 
     println!("NestRS project");
     match &ctx.workspace {
         Some(ws) => print_workspace(ws, &ctx, &here)?,
-        // A crate inside a workspace is a member, so the standalone probe only
-        // runs once workspace discovery has come back empty.
-        None => match StandaloneCrate::discover(&start)? {
-            Some(krate) => print_standalone(&krate, &here)?,
-            None => row("Layout", "none — not inside a nestrs workspace or crate"),
-        },
+        None => row("Layout", "none — not inside a nestrs workspace"),
     }
 
     // Read from *this* environment, which is the source an app started here
@@ -67,14 +59,6 @@ fn print_workspace(ws: &NestrsWorkspace, ctx: &Context, here: &Path) -> CliResul
     if let Some(app) = ctx.current_app.as_ref().and_then(|app| app.file_name()) {
         row("Current app", &app.to_string_lossy());
     }
-    Ok(())
-}
-
-fn print_standalone(krate: &StandaloneCrate, here: &Path) -> CliResult<()> {
-    row("Layout", "standalone crate");
-    row("Name", &krate.name);
-    row("Root", &relative(&krate.root, here));
-    row("Framework", &framework_line(&krate.root)?);
     Ok(())
 }
 

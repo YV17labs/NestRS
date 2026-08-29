@@ -1,11 +1,10 @@
 //! `nestrs new <name>` — infer the layout from the tree and scaffold it:
-//! a fresh monorepo, an app inside an existing workspace, or a single crate
-//! (`--standalone`). All three commit through a transactional `Scaffold`.
+//! a fresh monorepo, or an app inside an existing workspace. Both commit
+//! through a transactional `Scaffold`.
 
 mod command;
-mod standalone;
 mod workspace;
 
-pub use command::{NewOptions, project_dir_for_check, run, run_cargo_check};
+pub use command::{NewOptions, run, run_cargo_check};
 
 pub(crate) use command::{prefix_vars, queue_agent_files, queue_env_files};

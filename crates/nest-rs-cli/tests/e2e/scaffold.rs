@@ -104,7 +104,7 @@ fn scaffold_write_and_check(generate: &[&[&str]], write: &[(&str, &str)], what: 
 
 /// The same, with the `nestrs new` invocation, the environment every `nestrs`
 /// runs under, and an inspection hook over the generated tree — for a flag whose
-/// effect is spread across the Justfile, the Dockerfile and the `.env` cascade.
+/// effect is spread across the Justfile and the `.env` cascade.
 fn scaffold_write_and_check_in(
     new: &[&str],
     generate: &[&[&str]],

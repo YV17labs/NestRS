@@ -161,7 +161,7 @@ impl SpanId {
             return None;
         }
         let mut bytes = [0_u8; 8];
-        for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+        for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
             *byte = (unhex(pair[0])? << 4) | unhex(pair[1])?;
         }
         (bytes != [0; 8]).then_some(Self(bytes))
@@ -844,7 +844,7 @@ pub fn link_span(span: &crate::tracing::Span, correlation: &Correlation) {
 /// of every request the framework serves.
 fn hex<'a>(bytes: &[u8], out: &'a mut [u8]) -> &'a str {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    for (byte, pair) in bytes.iter().zip(out.chunks_exact_mut(2)) {
+    for (byte, pair) in bytes.iter().zip(out.as_chunks_mut::<2>().0) {
         pair[0] = DIGITS[usize::from(byte >> 4)];
         pair[1] = DIGITS[usize::from(byte & 0x0f)];
     }

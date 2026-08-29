@@ -45,6 +45,7 @@ mod floors {
     pub const EDGE_FOLDER_FILES: usize = 60;
     pub const BINDING_FOLDER_FILES: usize = 8;
     pub const CONFIGS: usize = 10;
+    pub const VOCABULARY_FILES: usize = 150;
 }
 
 /// Fold a name to what it *says*, discarding how it was cased or separated:
@@ -368,12 +369,16 @@ fn no_module_invents_a_folder_to_group_things_that_go_together() {
 /// one. So the population is the folders directly under a product `src/`, which
 /// is where a module lives.
 ///
-/// The reserved list is parsed out of `architecture.md` itself. Recopying it
-/// here would be the second copy `CLAUDE.md` says that file exists to prevent.
+/// The reserved list is derived from `architecture.md` itself, by the CLI that
+/// ships that file — recopying it, or re-parsing it, would be the second copy
+/// `CLAUDE.md` says that file exists to prevent.
 #[test]
 fn no_module_takes_a_name_from_the_structural_vocabulary() {
     let root = repo_root();
-    let reserved = reserved_vocabulary(&root);
+    // Read through `nest_rs_cli`, which derives it from the same
+    // `architecture.md` it embeds into every scaffolded project. A second
+    // parser here would be the copy that file exists to prevent.
+    let reserved = nest_rs_cli::reserved_words();
     assert!(
         reserved.len() > 20,
         "parsed {} reserved words out of architecture.md — the block moved and \
@@ -398,7 +403,7 @@ fn no_module_takes_a_name_from_the_structural_vocabulary() {
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            if reserved.contains(&name) {
+            if reserved.contains(name.as_str()) {
                 offenders.push(nest_rs_conformance::sources::relative(&entry.path(), &root));
             }
         }
@@ -410,30 +415,24 @@ fn no_module_takes_a_name_from_the_structural_vocabulary() {
     );
 }
 
-/// The `reserved_block` of `architecture.md`, split into words.
+/// The one rule in `architecture.md` a path cannot derive: a vocabulary file's
+/// stem against the types it declares.
 ///
-/// Read from `crates/nest-rs-cli/src/templates/architecture.md`, which is the
-/// **real file** — `.claude/rules/architecture.md` is a symlink to it, and the
-/// CLI `include_str!`s it into every scaffolded project.
-fn reserved_vocabulary(root: &Path) -> BTreeSet<String> {
-    let path = root.join("crates/nest-rs-cli/src/templates/architecture.md");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return BTreeSet::new();
-    };
-    let Some(after) = text.split("## Reserved vocabulary").nth(1) else {
-        return BTreeSet::new();
-    };
-    let Some(block) = after.split("```").nth(1) else {
-        return BTreeSet::new();
-    };
-    block
-        .split_whitespace()
-        // The block is a table: each line opens with its category
-        // (`structure`, `roles`, `plurals`, `edges`), which is a label rather
-        // than a reserved word.
-        .filter(|w| !["structure", "roles", "plurals", "edges"].contains(w))
-        .map(str::to_owned)
-        .collect()
+/// Run here through `nest_rs_cli::lint`, which is the same code `nestrs lint`
+/// runs in a developer's project — not a second implementation of it. A rule
+/// the framework ships and does not itself pass is the failure that matters,
+/// and re-deriving it here is exactly how the two would come to disagree with
+/// nobody positioned to notice.
+///
+/// No baseline: the tree is clean today, and the whole value is that it stays.
+#[test]
+fn every_file_is_named_for_what_it_declares() {
+    let root = repo_root();
+    let scan = nest_rs_cli::lint::scan(&root);
+    baseline::floor(scan.checked, floors::VOCABULARY_FILES, "vocabulary files");
+
+    let offenders: Vec<String> = scan.findings.iter().map(ToString::to_string).collect();
+    assert!(offenders.is_empty(), "{}", offenders.join("\n\n"),);
 }
 
 /// Every directory under `dir`, recursively, skipping build output.

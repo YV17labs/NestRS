@@ -4,7 +4,7 @@
 //! kebab/snake/pascal forms, the singular entity name (`users` → `User`),
 //! the CRUD form names, and the per-transport module names.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 /// The transports a feature can expose. Drives adapter folder names,
@@ -128,8 +128,17 @@ static RESERVED: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLock::new(
 
 /// The category claiming `word`, or `None` when the layout has no meaning for
 /// it. Test-visible so the derivation is asserted rather than assumed.
-fn reserved_category(word: &str) -> Option<&'static str> {
+pub(crate) fn reserved_category(word: &str) -> Option<&'static str> {
     RESERVED.get(word).copied()
+}
+
+/// Every word the structural vocabulary claims, derived from the rules file.
+///
+/// Public because `nest-rs-conformance` holds the framework to the same block
+/// this CLI refuses a feature name with: a second parser over the same markdown
+/// is how the two would come to disagree about what is reserved.
+pub fn reserved_words() -> BTreeSet<&'static str> {
+    RESERVED.keys().copied().collect()
 }
 
 /// How a category's words are already spent, in the sentence a refusal reads.
@@ -392,7 +401,7 @@ pub fn command_file(stem: &str, total: usize) -> String {
     port_role_file("command", stem, total)
 }
 
-fn to_kebab(raw: &str) -> String {
+pub(crate) fn to_kebab(raw: &str) -> String {
     let mut out = String::new();
     for (i, ch) in raw.chars().enumerate() {
         if ch.is_whitespace() || ch == '_' {

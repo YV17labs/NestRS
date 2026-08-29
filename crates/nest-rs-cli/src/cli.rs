@@ -92,6 +92,17 @@ pub enum Command {
         path: Option<PathBuf>,
     },
 
+    /// Check that every file is named for what it declares.
+    ///
+    /// One shape is refused: a file whose stem reaches nothing it declares.
+    /// That file was named for a slot rather than a subject, and a slot fills.
+    #[command(verbatim_doc_comment)]
+    Lint {
+        /// Project directory to inspect (default: current directory).
+        #[arg(long, short = 'p')]
+        path: Option<PathBuf>,
+    },
+
     /// Print the CLI version.
     Version,
 
@@ -251,6 +262,10 @@ pub fn run(cli: Cli) -> CliResult<()> {
         }
         Command::Doctor { path } => {
             commands::run_doctor(commands::DoctorOptions { path })?;
+            Ok(())
+        }
+        Command::Lint { path } => {
+            commands::run_lint(commands::LintOptions { path })?;
             Ok(())
         }
         Command::Version => {

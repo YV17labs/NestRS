@@ -31,6 +31,13 @@ toml_edit = { workspace = true }
 # `canon` writes the facts file the docs linter reads, so it serializes. A join
 # that only asserts needs neither, which is why they stay a dev edge.
 [dev-dependencies]
+# The naming join runs `nestrs lint`'s own code rather than a second copy of it:
+# the rule the framework ships and the rule it is held to are then one symbol.
+# This is the one dependency here that widens the graph — the CLI brings clap
+# and its own tree behind the test binaries, so a CLI edit relinks them. Taken
+# deliberately: a second implementation of the rule is the cost on the other
+# side, and it is paid in silence.
+nest-rs-cli = { path = "../nest-rs-cli" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

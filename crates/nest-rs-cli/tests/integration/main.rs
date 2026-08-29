@@ -9,4 +9,5 @@ mod doctor;
 mod generate;
 mod harness;
 mod info;
+mod lint;
 mod new;

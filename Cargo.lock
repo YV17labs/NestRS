@@ -2713,6 +2713,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "syn 3.0.3",
  "tempfile",
  "thiserror 2.0.20",
  "toml_edit 0.25.13+spec-1.1.0",
@@ -2758,6 +2759,7 @@ dependencies = [
 name = "nest-rs-conformance"
 version = "6.0.0"
 dependencies = [
+ "nest-rs-cli",
  "proc-macro2",
  "quote",
  "serde",

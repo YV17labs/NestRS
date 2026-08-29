@@ -27,7 +27,8 @@
 use std::path::{Path, PathBuf};
 
 use super::cargo::{ensure_features_deps, ensure_workspace_deps, entity_deps};
-use super::support::{finish, resolve_start};
+use super::support::finish;
+use crate::commands::resolve_start;
 use crate::context::Context;
 use crate::error::{CliError, CliResult};
 use crate::naming::Names;

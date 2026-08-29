@@ -434,7 +434,87 @@ A recognised word beats an invented one: `Factory`, `Client`, `Store`,
 
 **Vocabulary.** Not registered anywhere: an enum, a struct, a type alias, a set
 of constants. Named for *what it declares* — a role suffix on vocabulary is
-noise. Shared test doubles are the one crate-root file: `testing.rs`, behind
+noise, and *what it declares* is not a matter of taste:
+
+**The file and its folder, read together, spell the type.** One of the two
+names the *kind*, never both and never neither, and every shape that takes is
+already in the framework you import — so each one below is a path you can open:
+
+- **The kind is the subject**, so neither word has to add one — `seaorm/src/repo.rs`
+  is `Repo`, `core/src/container.rs` is `Container`, `queue/src/queue_name.rs`
+  is `QueueName`.
+- **The file names the kind**, and the type prepends the subject —
+  `redis/src/connection.rs` is `RedisConnection`, `events/src/bus.rs` is
+  `EventBus`, `worker/src/context.rs` is `JobContext`.
+- **The folder names the kind**, and the file names the subject —
+  `pipes/src/pipes/validation.rs` is `ValidationPipe`,
+  `oauth/strategies/oauth.rs` is `OAuthStrategy`.
+
+**One shape is refused, and only one: a stem that appears nowhere in what the
+file declares.** No example of it is given above, and that is the point — the
+framework holds none, because a real one is a defect to fix rather than a case
+to publish, so this is the half of the rule that has to be *applied* rather
+than recognised. Apply it as a question: **does either name reach the other?** When
+no word of the stem reaches the type and no word of the type reaches the stem,
+the file was named for a *slot* — "who acts", "what we pass around" — instead of
+a subject, and a slot has no admission test, so the next type about that slot
+lands there too. It is `shared/` at the scale of a file, and it is invisible
+from outside: both names read perfectly well on their own, and only the pair is
+wrong.
+
+Everything short of that passes, and the tolerance is deliberate — a tighter
+test, the stem as the type's first or last word, reads well and is false on a
+third of this framework:
+
+- **The shared word may come from the folder rather than the file.**
+  `throttler/store.rs` holds `RedisThrottler`, `worker/consumer.rs` holds
+  `RedisWorker`: a binding file names the *seam*, the type names the *thing
+  that fills it*, and it is the adapter's own vocabulary — `InMemoryThrottler`
+  beside `RedisThrottler` — that a reader matches on.
+- **An inflection is the same word**, and so is a word in the middle:
+  `scope.rs` holds `Scoped`, `logging.rs` holds `LogFormat`, `token.rs` holds
+  `AccessTokenRequest`. This is why the rule is *read* and not run — `naming.rs`
+  mechanises what a path derives, and English morphology is not that.
+- **A recognised word is a role, not vocabulary.** `registry.rs`, `client.rs`,
+  `store.rs`, `factory.rs`, `source.rs`, `bridge.rs` and `inventory.rs` are
+  named by the custom-provider paragraph above and take its pairing
+  (`<Subject>Registry`); this rule is for the files no table names.
+
+**Executed, not merely written.** `nestrs lint` runs this pairing over a
+project's `src/`, and the framework's conformance suite runs *the same code*
+over its own tree — so the rule shipped and the rule met are one symbol rather
+than two implementations that drift. It refuses only what this paragraph
+refuses; every tolerance below is a pass, and files a table already names are
+skipped.
+
+**A file whose principal export is not a type is a namespace, and owes nothing
+above.** `queue/src/consume.rs` exports `consume::discover` and
+`consume::attempt`; the `Attempt` it also declares is that procedure's
+vocabulary rather than the file's subject. The stem names what a caller
+*calls*, and the call site reads it as part of the name. A file whose subject
+*is* a type owes the pairing.
+
+**Vocabulary sits flat at the module root.** It is never gathered into
+`types/`, `model/`, `common/` or `shared/`: a folder named for who uses it has
+no admission test, so nothing can ever be refused from it and it fills. A
+module root that feels crowded is a module to split, not vocabulary to bury.
+
+**The same holds one level up, and rules out a `shared` crate.** The crate
+table names a crate for *what it holds*; "shared" and "common" name *who
+reaches for it*, so they admit anything and refuse nothing. A substrate crate
+is shared *because* it holds the substrate, never the other way round — and if
+the subject cannot be named in one noun, the sharing is accidental: the
+vocabulary belongs to the module that owns it, and a second consumer is the
+signal that two modules were drawn wrong.
+
+**`core` is the one positional word that survives, and it survives on a test.**
+It names the kernel rather than an audience, and a kernel is checkable: *every
+other crate in the workspace composes on it, and it composes on none of them*.
+`nest-rs-core` passes — the container, the module system, the access graph, the
+lifecycle and the trace context, depended on by all and depending on no
+sibling. A `core` that fails that test is a `shared` wearing a better word.
+
+Shared test doubles are the one crate-root file: `testing.rs`, behind
 `#[cfg(test)]`, doubles only.
 
 ## Precedence — when a type carries a primitive role *and* logic
@@ -447,7 +527,11 @@ health indicator: a lifecycle hook or a scheduled tick never renames a service.
 
 ## Several of the same role
 
-Pluralized sub-folder; the singular trait file stays at the parent.
+Pluralized sub-folder; the singular trait file stays at the parent. **The
+folder exists to carry *several*, so one of a kind is a file**: `dtos/` holds
+`login_dto.rs` beside `signup_dto.rs`, while a module with a single transfer
+object writes `dto.rs` at its root. A plural folder holding one file names a
+collection that is not there.
 
 | Folder | File | Type |
 |---|---|---|
@@ -523,6 +607,7 @@ roles       mod  module  service  controller  resolver  gateway  tool
             processor  tasks  listener  guard  strategy  pipe  config
             interceptor  filter
             entity  error  constants  testing
+singulars   dto  command  event
 plurals     services  entities  dtos  commands  events  strategies  pipes
 edges       http  graphql  ws  queue  schedule  mcp  events
 ```

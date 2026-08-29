@@ -333,7 +333,7 @@
       "type_key"
     ]
   },
-  "test_count": 2101,
+  "test_count": 2111,
   "version_req": "6.0",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -607,6 +607,6 @@
       "| WS message payload | `Dto` — `SendMessageDto` |",
       "| GraphQL input, hand-written | `Input` |"
     ],
-    "reserved_block": "structure   apps  crates  features  src  tests\nroles       mod  module  service  controller  resolver  gateway  tool\n            processor  tasks  listener  guard  strategy  pipe  config\n            interceptor  filter\n            entity  error  constants  testing\nplurals     services  entities  dtos  commands  events  strategies  pipes\nedges       http  graphql  ws  queue  schedule  mcp  events\n"
+    "reserved_block": "structure   apps  crates  features  src  tests\nroles       mod  module  service  controller  resolver  gateway  tool\n            processor  tasks  listener  guard  strategy  pipe  config\n            interceptor  filter\n            entity  error  constants  testing\nsingulars   dto  command  event\nplurals     services  entities  dtos  commands  events  strategies  pipes\nedges       http  graphql  ws  queue  schedule  mcp  events\n"
   }
 }

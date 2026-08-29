@@ -11,7 +11,8 @@
 use std::path::PathBuf;
 
 use super::cargo::{auth_deps, ensure_features_deps, ensure_workspace_deps};
-use super::support::{finish, resolve_start, wire_into_app};
+use super::support::{finish, wire_into_app};
+use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
 use crate::error::{CliError, CliResult};
 use crate::naming::Transport;

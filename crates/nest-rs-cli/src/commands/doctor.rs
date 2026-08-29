@@ -94,9 +94,7 @@ const CHECKED: &[(&str, &str, bool)] = &[
 ];
 
 pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
-    let start = opts
-        .path
-        .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
+    let start = super::resolve_start(opts.path);
 
     let mut report = DoctorReport {
         rustc: rustc_probe(),

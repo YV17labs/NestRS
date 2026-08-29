@@ -1,14 +1,6 @@
-mod cli;
-mod commands;
-mod context;
-mod error;
-mod naming;
-mod port;
-mod scaffold;
-mod templates;
-mod version;
-
 use clap::Parser;
+
+use nest_rs_cli::cli;
 
 fn main() {
     // `nestrs version` is the documented spelling, but `--version` / `-V` is

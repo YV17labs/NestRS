@@ -409,6 +409,48 @@ Checks:
 
 Use it after install and before running DB- or Redis-backed apps.
 
+## Lint
+
+```bash
+nestrs lint
+```
+
+Doctor asks whether the machine is right; lint asks whether the code is. It
+runs the one naming rule of your project's `AGENTS.md` that a path cannot
+derive: **a file's stem against the types it declares**.
+
+One shape is refused, and only one — a stem that reaches *nothing* the file
+declares:
+
+```
+nestrs lint
+
+  crates/features/src/desks/principal.rs
+    `principal` reaches none of `DeskOperator`
+    name the file from the type, or split it — a stem that reaches nothing
+    is a slot, and a slot fills
+```
+
+That file was named for a *slot* — "who acts", "what we pass around" — rather
+than for a subject. A slot has no admission test, so the next type about that
+slot lands there too; it is a `shared/` folder at the scale of a file. And it
+is invisible from outside, because both names read perfectly well alone and
+only the pair is wrong.
+
+Everything short of that passes. The word may come from the folder rather than
+the file (`throttler/store.rs` holding `RedisThrottler`), an inflection is the
+same word (`scope.rs` holding `Scoped`), an abbreviation is too (`context.rs`
+holding `Ctx`), and a file whose principal export is a function is a namespace
+that owes no pairing at all (`queue/consume.rs` exporting `consume::attempt`).
+Files a table already names — `service.rs`, `controller.rs`, `registry.rs` —
+are named by that table and are not this rule's business.
+
+It exits non-zero on a finding, so it belongs in CI: the scaffolded `lint`
+recipe already runs it, and `nestrs run lint` is the front door.
+
+The framework holds itself to it through the same code, from its own
+conformance suite — a rule shipped and not met is the failure that matters.
+
 ## Version, about, info, and update
 
 ```bash

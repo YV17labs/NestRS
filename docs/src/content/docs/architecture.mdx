@@ -151,9 +151,53 @@ the clock is the only thing that calls it and the work lives in a service;
 otherwise it is a service that happens to have a trigger. A lifecycle hook
 never renames a service.
 
+## The name everything else takes
+
+The table above covers what the framework dispatches to. Everything else — a
+custom provider, an enum, a value object, a set of constants — is named by one
+rule:
+
+**The file and its folder, read together, spell the type.** One of the two
+names the *kind*, never both and never neither — and every shape that takes is
+already in the crates you import. The kind is the subject in
+`seaorm/src/repo.rs` → `Repo` and `core/src/container.rs` → `Container`, so
+neither word has to add one. The file names the kind in
+`redis/src/connection.rs` → `RedisConnection` and `events/src/bus.rs` →
+`EventBus`, and the type prepends the subject. The folder names it in
+`pipes/src/pipes/validation.rs` → `ValidationPipe`, and the file names the
+subject.
+
+**One shape is refused, and only one: a stem that appears nowhere in what the
+file declares.** No example of it appears above, and that is the point — the
+framework holds none, because a real one is a defect to fix rather than a case
+to publish. So this half of the rule is applied rather than recognised, as a
+question: **does either name reach the other?** When no word of the stem
+reaches the type and no word of the type reaches the stem, the file was named
+for a *slot* — "who acts", "what we pass around" — instead of a subject, and a
+slot has no admission test, so the next type about that slot lands there too.
+It is a `shared/` folder at the scale of a file, and it is invisible from
+outside: both names read perfectly well alone, and only the pair is wrong.
+
+Everything short of that passes, and the tolerance is deliberate. The shared
+word may come from the folder rather than the file — `throttler/store.rs` holds
+`RedisThrottler`, because a binding file names the seam and the type names the
+thing that fills it. An inflection is the same word, and so is a word in the
+middle: `scope.rs` holds `Scoped`, `token.rs` holds `AccessTokenRequest`.
+
+A file whose principal export is **not** a type is a namespace instead, and
+owes nothing above: `queue/src/consume.rs` exports `consume::discover` and
+`consume::attempt`, and the `Attempt` it also declares is that procedure's
+vocabulary rather than the file's subject. The stem names what a caller
+*calls*, and the call site reads it as part of the name. A file whose subject
+*is* a type owes the pairing.
+
 ## When a role repeats
 
-Pluralized sub-folder. The singular trait file stays at the parent.
+Pluralized sub-folder. The singular trait file stays at the parent — and the
+folder exists to carry *several*, so one of a kind is a file: a module with a
+single transfer object writes `dto.rs` at its root rather than a `dtos/` holding
+one entry. A plural folder with one file in it names a collection that is not
+there.
 
 | Folder | File | Type |
 |---|---|---|
@@ -178,6 +222,19 @@ third kind. A folder invented to group things that go together — `contract/`,
 one of them already has a name. A folder that feels too full means the module
 is too big.
 
+The same reasoning rules out a `shared` crate one level up. A crate is named
+for *what it holds*; "shared" and "common" name *who reaches for it*, so they
+admit anything and refuse nothing. A substrate crate is shared *because* it
+holds the substrate, never the other way round — and if the subject cannot be
+named in one noun, the sharing is accidental: the vocabulary belongs to the
+module that owns it, and a second consumer is the signal that two modules were
+drawn wrong.
+
+`core` is the one positional word that survives, and it survives on a test: it
+names the kernel rather than an audience, and a kernel is checkable — *every
+other crate composes on it, and it composes on none of them*. A `core` that
+fails that test is a `shared` wearing a better word.
+
 Module names themselves avoid the structural vocabulary, because reusing one
 makes every path ambiguous:
 
@@ -187,6 +244,7 @@ roles       mod  module  service  controller  resolver  gateway  tool
             processor  tasks  listener  guard  strategy  pipe  config
             interceptor  filter
             entity  error  constants  testing
+singulars   dto  command  event
 plurals     services  entities  dtos  commands  events  strategies  pipes
 edges       http  graphql  ws  queue  schedule  mcp  events
 ```

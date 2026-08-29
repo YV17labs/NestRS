@@ -194,7 +194,20 @@ Hunt these before anything generic.
   authority.
 - **A name off the tables.** `*_module.rs`, an invented folder (`core/`,
   `shared/`, `types/`), a role suffix on vocabulary, a project or app name
-  below its level, a `Service` that owns no domain logic.
+  below its level, a `Service` that owns no domain logic. For a file no table
+  names, one shape is refused and only one: **a stem that appears nowhere in
+  what the file declares**. The tree holds no instance to match against — a
+  real one is a defect, not an example — so apply it as a question: *does
+  either name reach the other?* Neither reaching means the file was named for a
+  slot rather than a subject, which is `shared/` at the scale of a file. Read
+  it, never run it: the word may come from the folder (`throttler/store.rs`
+  holds `RedisThrottler`), an inflection is the same word (`scope.rs` holds
+  `Scoped`), and a file whose principal export is a function is a namespace
+  that owes nothing (`queue/src/consume.rs`). A tighter test — the stem as the
+  type's first or last word — is false on a third of this framework, so a
+  finding against it is noise. `nestrs lint` executes exactly this, and the
+  `naming` join runs the same code over both workspaces, so a finding here is
+  one the tolerances cover and the argument is *why they should not*.
 - **A name outside its namespace or hierarchy.** A name is read *with* its
   path, and the two spell the meaning exactly once: an item restating its
   module (`target::TARGET_ACCESS_GRAPH`) is redundancy, an item ignoring it is

@@ -11,6 +11,10 @@ keywords = ["framework", "nestrs", "cli", "scaffolding", "generator"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
 
+[lib]
+name = "nest_rs_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "nestrs"
 path = "src/main.rs"
@@ -20,6 +24,10 @@ anyhow.workspace = true
 # `g migration` stamps the migration filename with today's date.
 chrono.workspace = true
 clap.workspace = true
+# `lint` pairs a file's stem against the types it declares, and reads them with
+# Rust's own parser: a `pub struct` inside a template string is what a text scan
+# counts and a parser does not, and this crate ships such a string.
+syn.workspace = true
 thiserror.workspace = true
 toml_edit.workspace = true
 

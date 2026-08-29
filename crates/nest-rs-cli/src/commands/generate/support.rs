@@ -1,16 +1,11 @@
-//! Shared steps for the `g` generators: resolve the working directory, commit
-//! a generator's scaffold, and wire a generated module into the current app.
+//! Shared steps for the `g` generators: commit a generator's scaffold, and
+//! wire a generated module into the current app.
 
 use std::path::{Path, PathBuf};
 
 use crate::context::Context;
 use crate::error::CliResult;
 use crate::scaffold::{Scaffold, ensure_module_imports, rustfmt};
-
-/// Resolve a generator's working directory (explicit `-p` or the cwd).
-pub(super) fn resolve_start(path: Option<PathBuf>) -> PathBuf {
-    path.unwrap_or_else(|| std::env::current_dir().expect("cwd"))
-}
 
 /// Commit a generator's scaffold, format the touched files, and print the
 /// one-line summary plus the change report.

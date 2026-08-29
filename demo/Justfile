@@ -29,6 +29,7 @@ mod test
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo fmt --all --check
+    nestrs lint
 
 # Apply rustfmt across the workspace
 fmt:

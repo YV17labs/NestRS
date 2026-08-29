@@ -19,7 +19,8 @@ use super::cargo::{
     adapter_deps, app_host_deps, auth_deps, ensure_features_deps, ensure_workspace_deps,
     graphql_port_deps,
 };
-use super::support::{finish, resolve_start, wire_into_app};
+use super::support::{finish, wire_into_app};
+use crate::commands::resolve_start;
 use crate::context::{Context, NestrsWorkspace};
 use crate::error::{CliError, CliResult};
 use crate::naming::{Names, Transport, command_file};

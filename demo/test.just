@@ -15,10 +15,12 @@ unit:
 e2e:
     cargo nextest run --workspace -E 'binary(e2e)'
 
-# Coverage on the full suite (includes the e2e binary). The one recipe with a
-# prerequisite beyond the CLI bootstrap: `cargo install cargo-llvm-cov` plus the
-# LLVM tools it shells out to — `rustup component add llvm-tools-preview`. On a
-# toolchain without rustup, set LLVM_COV / LLVM_PROFDATA instead.
+# Nothing to install by hand: `cargo-llvm-cov` comes with the CLI's first-run
+# bootstrap, and the `llvm-cov` / `llvm-profdata` it shells out to come from the
+# `llvm-tools-preview` component pinned in `rust-toolchain.toml`. A toolchain
+# without rustup ignores that file entirely — set LLVM_COV / LLVM_PROFDATA there.
+# `just --list` shows the line above a recipe, so the summary goes last.
+# Coverage on the full suite (includes the e2e binary).
 cov:
     cargo llvm-cov nextest --workspace
 

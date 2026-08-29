@@ -2,6 +2,12 @@
 
 pub const RUST_TOOLCHAIN: &str = r#"[toolchain]
 channel = "1.97"
+# `llvm-tools-preview` carries the `llvm-cov` / `llvm-profdata` that
+# `nestrs run test cov` shells out to. It is pinned per toolchain rather than
+# installed once per machine because those binaries only read a `.profraw`
+# written by the LLVM that rustc itself was built with — following `channel` is
+# what marries the two versions.
+components = ["clippy", "rustfmt", "llvm-tools-preview"]
 "#;
 
 /// `db.just` — shipped in every project so the database verbs are present from

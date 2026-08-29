@@ -29,9 +29,9 @@ umbrella — there is no `--features cli`.
 
 Requires **Rust 1.97+** (edition 2024). That single install is all you need: the
 first time you call [`nestrs run`](#running-tasks), the CLI installs the dev
-toolchain it drives — `just`, `bacon`, `cargo-nextest` — once. Run **`nestrs
-doctor`** after install to check the Rust toolchain and list optional `NESTRS_*`
-environment variables.
+toolchain it drives — `just`, `bacon`, `cargo-nextest`, `cargo-llvm-cov` — once.
+Run **`nestrs doctor`** after install to check the Rust toolchain and list
+optional `NESTRS_*` environment variables.
 
 ## Layout detection
 
@@ -235,9 +235,10 @@ same way — `nestrs run deploy`, `nestrs run docker-up`, whatever you write. Th
 framework owns the recipes it ships; you own the rest.
 
 The **first** `nestrs run` installs the toolchain it drives (`just`, `bacon`,
-`cargo-nextest`) once. On CI, where you provision tools yourself, set
-`NESTRS_NO_BOOTSTRAP=1` or pass `--no-bootstrap` — a missing tool then fails
-with the manual install command instead of fetching anything.
+`cargo-nextest`, `cargo-llvm-cov`) once — all of it, whichever recipe you asked
+for, so no recipe is ever a step behind. On CI, where you provision tools
+yourself, set `NESTRS_NO_BOOTSTRAP=1` or pass `--no-bootstrap` — a missing tool
+then fails with the manual install command instead of fetching anything.
 
 ## Build
 

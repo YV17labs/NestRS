@@ -1,3 +1,7 @@
 [toolchain]
 channel = "1.97"
-components = ["clippy", "rustfmt"]
+# `llvm-tools-preview` carries the `llvm-cov` / `llvm-profdata` that
+# `nestrs run test cov` shells out to in `demo/`. Pinned per toolchain rather
+# than installed once per machine: those binaries only read a `.profraw` written
+# by the LLVM that rustc itself was built with.
+components = ["clippy", "rustfmt", "llvm-tools-preview"]

@@ -19,8 +19,8 @@ use nest_rs_mcp::McpOperationContext;
 #[cfg(feature = "ws")]
 use nest_rs_ws::WsClient;
 
-use crate::rate::Throttle;
 use crate::store::ThrottlerStore;
+use crate::throttle::Throttle;
 
 /// The edge a bucket belongs to — the leading segment of every key, and the
 /// `transport` field on every denial.

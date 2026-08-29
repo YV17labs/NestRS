@@ -1,5 +1,5 @@
 mod controller;
-mod extract;
 mod module;
+mod uploaded_audio;
 
 pub use module::AudioHttpModule;

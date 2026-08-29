@@ -23,10 +23,10 @@ pub struct HygieneBatchError;
 /// Minimal batch host.
 #[injectable]
 #[derive(Default)]
-pub struct HygieneLoaders;
+pub struct HygieneDataloaders;
 
 #[dataloader]
-impl HygieneLoaders {
+impl HygieneDataloaders {
     /// The fallible form: the error type is taken from the `Result`, so the
     /// generated `Loader::Error` is this one.
     async fn labels(&self, keys: &[String]) -> Result<HashMap<String, String>, HygieneBatchError> {

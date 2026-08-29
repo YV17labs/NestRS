@@ -4305,7 +4305,7 @@
       "use poem::http::StatusCode;",
       "use poem::web::{Json, Query};",
       "use poem::{Body, Error, Response, Result};",
-      "use super::extract::UploadedAudio;",
+      "use super::uploaded_audio::UploadedAudio;",
       "use crate::audio::TranscodeGuard;",
       "use crate::audio::{",
       "AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,",
@@ -4462,7 +4462,30 @@
       "}"
     ]
   },
-  "demo/crates/features/src/audio/http/extract.rs": {
+  "demo/crates/features/src/audio/http/mod.rs": {
+    "port": null,
+    "lines": [
+      "mod controller;",
+      "mod module;",
+      "mod uploaded_audio;",
+      "pub use module::AudioHttpModule;"
+    ]
+  },
+  "demo/crates/features/src/audio/http/module.rs": {
+    "port": null,
+    "lines": [
+      "use nest_rs::core::module;",
+      "use super::controller::AudioController;",
+      "use crate::audio::AudioModule;",
+      "use crate::authz::AuthzModule;",
+      "#[module(",
+      "imports = [AudioModule, AuthzModule],",
+      "providers = [AudioController],",
+      ")]",
+      "pub struct AudioHttpModule;"
+    ]
+  },
+  "demo/crates/features/src/audio/http/uploaded_audio.rs": {
     "port": null,
     "lines": [
       "use poem::http::StatusCode;",
@@ -4499,29 +4522,6 @@
       "))",
       "}",
       "}"
-    ]
-  },
-  "demo/crates/features/src/audio/http/mod.rs": {
-    "port": null,
-    "lines": [
-      "mod controller;",
-      "mod extract;",
-      "mod module;",
-      "pub use module::AudioHttpModule;"
-    ]
-  },
-  "demo/crates/features/src/audio/http/module.rs": {
-    "port": null,
-    "lines": [
-      "use nest_rs::core::module;",
-      "use super::controller::AudioController;",
-      "use crate::audio::AudioModule;",
-      "use crate::authz::AuthzModule;",
-      "#[module(",
-      "imports = [AudioModule, AuthzModule],",
-      "providers = [AudioController],",
-      ")]",
-      "pub struct AudioHttpModule;"
     ]
   },
   "demo/crates/features/src/audio/mcp/mod.rs": {

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use parking_lot::Mutex;
 
-use crate::rate::Throttle;
+use crate::throttle::Throttle;
 
 /// Cap distinct throttle keys to resist unbounded memory growth. Held across
 /// the whole store: each of the [`SHARDS`] shards carries `MAX_KEYS / SHARDS`,

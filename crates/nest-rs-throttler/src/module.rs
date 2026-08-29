@@ -14,8 +14,8 @@ use nest_rs_core::{ContainerBuilder, DynamicModule};
 
 use crate::config::ThrottlerConfig;
 use crate::guard::ThrottlerGuard;
-use crate::rate::{DEFAULT_THROTTLE, Throttle};
 use crate::store::{InMemoryThrottler, ThrottlerStore};
+use crate::throttle::{DEFAULT_THROTTLE, Throttle};
 
 /// The throttler port: policy, guard, and the in-process default store. Wire
 /// with `ThrottlerModule::for_root(None)` (env-driven, default

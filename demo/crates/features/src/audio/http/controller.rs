@@ -9,7 +9,7 @@ use poem::http::StatusCode;
 use poem::web::{Json, Query};
 use poem::{Body, Error, Response, Result};
 
-use super::extract::UploadedAudio;
+use super::uploaded_audio::UploadedAudio;
 use crate::audio::TranscodeGuard;
 use crate::audio::{
     AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,

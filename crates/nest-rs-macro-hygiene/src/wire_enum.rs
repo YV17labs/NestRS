@@ -17,7 +17,7 @@ use nest_rs::resource::wire_enum;
 /// below, and the one an HTTP-only app compiles.
 #[wire_enum]
 #[serde(rename_all = "snake_case")]
-pub enum HygieneTier {
+pub enum HygieneWireTier {
     /// A variant.
     Free,
     /// Another, so the rename actually has something to rename.

@@ -7,6 +7,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-08-29
+
+### `nestrs lint` — a file's stem, read against what it declares
+
+Every naming rule in `architecture.md` is *derivable* from a path: a `module.rs`
+under `redis/queue/` is a `RedisQueueModule` whatever it holds, so the
+conformance suite reads the path and compares. One rule is not. Nothing about
+`principal.rs` predicts `Principal` — only reading the file says whether the two
+meet — and that rule is now a command:
+
+```text
+nestrs lint
+
+  crates/features/src/desks/principal.rs
+    `principal` reaches none of `DeskOperator`
+    name the file from the type, or split it — a stem that reaches nothing
+    is a slot, and a slot fills
+```
+
+- **One shape is refused, and only one:** a stem that reaches *nothing* the file
+  declares. That file was named for a slot — "who acts", "what we pass around" —
+  rather than for a subject, and a slot has no admission test, so the next type
+  about that slot lands there too. It is a `shared/` folder at the scale of a
+  file, and it is invisible from outside: both names read perfectly well alone,
+  and only the pair is wrong.
+- **Everything short of that passes, and the tolerance is deliberate.** The
+  tighter test — the stem as the type's first or last word — reads well and is
+  false on a third of this framework: the shared word may come from the folder
+  (`throttler/store.rs` holds `RedisThrottler`), an inflection is the same word
+  (`scope.rs` holds `Scoped`), an abbreviation is one too, and a file whose
+  principal export is a function is a namespace that owes no pairing at all
+  (`queue/consume.rs` exports `consume::attempt`). Files a table already names —
+  `service.rs`, `controller.rs`, `registry.rs` — are that table's business.
+- **The rule shipped and the rule met are one symbol.** `nest-rs-cli` grows a
+  library target, and `nest-rs-conformance` calls `nest_rs_cli::lint::scan` over
+  both workspaces instead of carrying a second implementation — which is how the
+  two would come to disagree with nobody positioned to notice. The reserved
+  vocabulary goes the same way: `nest_rs_cli::reserved_words()` derives it from
+  the `architecture.md` the CLI embeds, and the suite reads it from there rather
+  than re-parsing the markdown.
+- **Declarations are read with `syn`, not with a text scan.** A `pub struct`
+  inside a template string is what a scan counts and a parser does not, and this
+  repo ships such strings.
+- **It exits non-zero on a finding**, so it belongs in CI. The scaffolded `lint`
+  recipe runs it, behind `nestrs run lint`.
+
+Nothing here is an install surface: `nestrs` is still reached with
+`cargo install --locked nest-rs-cli`, and the library exposes only what a second
+caller needs — `lint` and `reserved_words`.
+
+Four files in this repo were named for a slot and now pair with what they hold:
+`nest-rs-throttler`'s `rate.rs` → `throttle.rs` (a private module; `Throttle` and
+`DEFAULT_THROTTLE` are re-exported from the crate root as before), the demo's
+`audio/http/extract.rs` → `uploaded_audio.rs`, and the hygiene crate's
+`HygieneLoaders` → `HygieneDataloaders`, `HygieneTier` → `HygieneWireTier`.
+
+**`dto`, `command` and `event` join the reserved vocabulary** as a `singulars`
+row: they name role files, so a module wearing one makes every path ambiguous.
+`nestrs new dto` and `nestrs g feature event` now refuse, as the plurals and the
+edges already did.
+
+### The scaffold keeps one layout, and it is the workspace
+
+**Removed: `nestrs new --standalone`.** It wrote a shape the rest of the CLI then
+refused to serve — every generator resolves paths against `crates/features/` and
+wires the serving app's `module.rs`, so `g feature`, `g resource`, `g auth`,
+`g migration` and the six adapters all failed inside a single crate with
+`not inside a nestrs workspace`. A starter whose next command cannot run is not a
+second layout, it is a dead end, and growing out of it was a documented page of
+hand-moved files.
+
+`nestrs new` writes one thing: `crates/features/` for the domain, `apps/*` for
+the binaries that serve it. A second workload is another `nestrs new` inside it,
+never a second repository.
+
+- **The templates lose the standalone service, controller, manifest and `main`**,
+  and with them the `{{service_use}}` seam that existed only so one template
+  could serve two shapes.
+- **`Dockerfile` and `.dockerignore` are no longer scaffolded.** They shipped in
+  standalone mode alone, and a workspace image has to name which app it builds —
+  a decision the scaffold cannot make for you. The repo's own images are
+  unaffected and still hold their pins.
+- **`nestrs info` drops the standalone row**; outside a workspace it says so
+  plainly.
+
+If you carry a crate scaffolded that way, nothing in it stops working — it is an
+ordinary Cargo crate. The CLI page keeps the file-by-file move under *Move an
+existing crate into a workspace*.
+
+### `nestrs run test cov` works on a project minutes old
+
+The recipe shipped; the tool behind it did not, and coverage failed on a freshly
+generated project. **`cargo-llvm-cov` joins the first-run bootstrap** beside
+`just`, `bacon` and `cargo-nextest` — all of it at once, whichever recipe was
+asked for, because a project's own recipes are forwarded without the CLI knowing
+what they run. Whoever wants to pay nothing still has `--no-bootstrap` /
+`NESTRS_NO_BOOTSTRAP`.
+
+- **A cargo subcommand is probed through its verb.** `cargo-llvm-cov --version`
+  answers `expected subcommand 'llvm-cov'` and exits `1`, so a probe assuming the
+  bare flag would call an installed tool missing and reinstall it on every
+  `nestrs run`. The arguments are now read off the tool.
+- **`llvm-tools-preview` is pinned in `rust-toolchain.toml`** — this repo's and
+  every scaffold's. It is not a crate and never lands on PATH, so the bootstrap
+  could not own it; and `llvm-cov` reads a `.profraw` only when it comes from the
+  LLVM that rustc itself was built with, which is exactly what following the
+  `channel` guarantees. A scaffold's copy now declares `clippy` and `rustfmt`
+  as well — it pinned the channel alone, so those two were present only because
+  rustup's *default* profile installs them, and `nestrs run lint` worked on your
+  machine while failing on a `minimal` one.
+- On a toolchain installed outside rustup the file is inert — point `LLVM_COV`
+  and `LLVM_PROFDATA` at your own binaries.
+
+### Also
+
+- **The docs site wears its own design.** Logo, wordmark, favicon and social
+  preview redrawn; every code fence names the file it comes from; and above
+  1440px the layout caps and centres instead of stretching code blocks and tables
+  while the prose held its measure — a wide window buys margin, not a wider
+  column.
+- **`architecture.md` gains the vocabulary-pairing rule**, the reason a `shared`
+  crate is refused where `core` survives (a kernel is checkable: everything
+  composes on it and it composes on nothing), and the note that a pluralized
+  folder exists to carry several — one of a kind is `dto.rs`, not `dtos/` with a
+  single entry.
+- `resolve_start` — the `-p` / cwd fallback every path-taking command repeats —
+  moves up to `commands`, one spelling for the four of them.
+- `nest_rs_core`'s hex codecs read `as_chunks::<2>` rather than `chunks_exact`,
+  so the pair indexing is bounds-checked once at the split.
+
 ## [6.0.0] - 2026-08-26
 
 ### Ports & Adapters — three module shapes, and a variable is a path too
@@ -4979,7 +5109,8 @@ validation, discovery, lifecycle).
 - Rust 1.95 / edition 2024; tag-based release CI with the `mold` linker on
   Linux.
 
-[Unreleased]: https://github.com/YV17labs/NestRS/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/YV17labs/NestRS/compare/v6.1.0...HEAD
+[6.1.0]: https://github.com/YV17labs/NestRS/compare/v6.0.0...v6.1.0
 [6.0.0]: https://github.com/YV17labs/NestRS/compare/v5.1.0...v6.0.0
 [5.1.0]: https://github.com/YV17labs/NestRS/compare/v5.0.0...v5.1.0
 [5.0.0]: https://github.com/YV17labs/NestRS/compare/v4.0.0...v5.0.0

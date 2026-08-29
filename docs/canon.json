@@ -334,7 +334,7 @@
     ]
   },
   "test_count": 2111,
-  "version_req": "6.0",
+  "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [
     "actor_id",

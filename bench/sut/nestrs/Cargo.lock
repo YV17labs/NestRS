@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "nest-rs-authz",
  "nest-rs-config",
@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-authz"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "nest-rs-core",
  "nest-rs-guards",
@@ -1578,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-codegen"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-config"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "anyhow",
  "nest-rs-config-macros",
@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-config-macros"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1610,7 +1610,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-core"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1630,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-core-macros"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1640,14 +1640,14 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-database"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "nest-rs-exception-filters"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1657,7 +1657,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-filters"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-guards"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1683,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-http"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1708,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-http-macros"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1718,7 +1718,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-interceptors"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "async-trait",
  "nest-rs-core",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-pipes"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "nest-rs-core",
  "serde_json",
@@ -1739,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-resource"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-resource-macros"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "nest-rs-codegen",
  "proc-macro2",
@@ -1765,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-seaorm"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1794,7 +1794,7 @@ dependencies = [
 
 [[package]]
 name = "nest-rs-worker"
-version = "6.0.0"
+version = "6.1.0"
 dependencies = [
  "tracing",
 ]

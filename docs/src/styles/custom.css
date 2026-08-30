@@ -23,7 +23,7 @@
   /* The band grid: 1200px of content, 32px of gutter, 88px of air. */
   --rs-max: 1200px;
   --rs-gutter: 2rem;
-  --rs-band-y: 5.5rem;
+  --rs-band-y: clamp(3.5rem, 8vw, 5.5rem);
 
   --sl-font: 'Schibsted Grotesk', ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -1339,22 +1339,32 @@ mobile-starlight-toc nav > button {
 
 /* --- Stat strip -------------------------------------------------------- */
 
+/* The vertical rules are not drawn by the items: they are the container's own
+ * background showing through a 1px column gap. A gap exists only between two
+ * neighbours, so no rule can ever hang into the empty half of a short line —
+ * whatever the count of figures. `flex: 1 1 15rem` then hands the leftover
+ * width to whoever is on that line, so the last row fills instead of leaving a
+ * dead cell. The hole is not corrected; it is impossible.
+ *
+ * `background: var(--rs-bg)` on the cells assumes the strip sits on the page
+ * ground — inside a `.rs-band--alt` it would owe `--rs-bg-alt`, or `inherit`
+ * with the ground carried by the section.
+ */
 .rs-stats {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  border-top: 1px solid var(--rs-hairline);
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 1px;
+  row-gap: 0;
+  background: var(--rs-hairline);
+  margin-inline: -1.25rem; /* = the phone gutter, so the cells never overflow */
 }
 
 .rs-stat {
-  padding: 1.625rem 1.5rem 0 0;
-  margin-right: 1.5rem;
-  border-right: 1px solid var(--rs-hairline);
+  flex: 1 1 15rem;
   min-width: 0;
-}
-
-.rs-stat:last-child {
-  border-right: none;
-  margin-right: 0;
+  background: var(--rs-bg);
+  border-block-start: 1px solid var(--rs-hairline);
+  padding: 1.625rem 1.25rem 1.5rem;
 }
 
 .rs-stat-big {
@@ -1401,18 +1411,6 @@ mobile-starlight-toc nav > button {
 }
 
 @media (max-width: 60rem) {
-  .rs-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0 1rem;
-  }
-  .rs-stat {
-    padding-right: 1rem;
-    margin-right: 1rem;
-  }
-  .rs-stat:nth-child(2n) {
-    border-right: none;
-    margin-right: 0;
-  }
   .rs-actions .sl-link-button.rs-chip {
     margin-left: 0;
   }
@@ -2069,7 +2067,6 @@ mobile-starlight-toc nav > button {
 
 @media (max-width: 45rem) {
   :root {
-    --rs-band-y: 3.5rem;
     --rs-gutter: 1.25rem;
   }
   .rs-caps,

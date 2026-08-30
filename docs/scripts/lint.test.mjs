@@ -139,6 +139,10 @@ nest-rs = { version = "${CANON_VERSION}", features = ["http", "graphql"] }
   [RULES.decoratorIndex, 'decorators.mdx', page('An index with no rows.')],
   [RULES.landingClaim, 'index.mdx', page('No figures at all.')],
   [RULES.envelopeDrift, 'queue/writing-a-driver.mdx', page('```json', '{}', '```')],
+  [RULES.referenceOrder, 'sample.mdx', OK.replace(
+    '\n- [Testing](/testing/)\n', '\n- [Testing](/testing/)\n\n### Reference\n\n- `crates/nest-rs-core/`\n',
+  )],
+  [RULES.asideType, 'sample.mdx', page('<Aside>Untyped.</Aside>')],
 ];
 
 for (const [rule, rel, src] of FIXTURES) {
@@ -161,7 +165,11 @@ for (const [rule, rel, src] of FIXTURES) {
 /// What is asserted instead is that both rules are *reachable*: the functions
 /// run over the real tree on every gate, and obligation 3 below proves nothing
 /// else can file under their names.
-const CORPUS_SCOPED = new Set([RULES.tier, RULES.title]);
+///
+/// `section-index` joins them: it is computed by `lintSections` over a whole
+/// directory — its index read against the tiers its siblings declare — so no
+/// single page can produce it either.
+const CORPUS_SCOPED = new Set([RULES.tier, RULES.title, RULES.sectionIndex]);
 
 /// The anchor cases that decide `slugify`, pinned because the algorithm is
 /// written out rather than imported — see the `link` rule's note on the

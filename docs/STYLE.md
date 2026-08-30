@@ -28,8 +28,15 @@ implementing the framework. Four operating rules:
 
 Structural section headings use **only** these names, in canonical order where present:
 
-`Install` → `Run it` → `Wire it in` → *(page-specific content sections)* → `Configuration` →
+`Install` → `Wire it in` → `Run it` → *(page-specific content sections)* → `Configuration` →
 `Limits` → `What fails if you get it wrong` → `Reference` → `Going further`
+
+Recorded because it was written the other way round and every page disagreed: the order used to
+put `Run it` above `Wire it in`, and not one of the pages carrying both followed it — you cannot
+run what is not yet mounted. The pages were right and the sentence was wrong, so the sentence
+moved. `Reference` before `Going further` is the half that was *not* followed — sixteen pages
+nested a `### Reference` inside the closing block — and that one is now the `reference-order`
+rule rather than a convention.
 
 Page-specific *content* headings are free. Structural blocks use only the controlled names.
 
@@ -37,7 +44,7 @@ Page-specific *content* headings are free. Structural blocks use only the contro
 
 | Banned | Use instead |
 |---|---|
-| Wiring it up, Wire it into the app | Wire it in |
+| Wiring it up, Wire it into the app, Mount it | Wire it in |
 | Where to go next, Next steps, See also, Going deeper | Going further |
 
 A heading from the left column is the `heading` rule. Frontmatter is `frontmatter` (present at
@@ -47,6 +54,13 @@ sidebar shows half a sentence).
 The normative closing block is **`## Going further`** (`going-further`; the majority convention). Utility/terminal
 pages are exempt (see the linter's exempt list): `404`, `glossary`, `decorators`, env-var
 reference.
+
+**It is 2–4 doors wide**, and the same rule counts them: a closing block is where a reader leaves
+the page, not a second copy of what the page contained. A section index whose `Going further` had
+grown to nine links was listing its own pages under the wrong header — that list is `## In this
+section` (§ G), and a run of repository paths is `## Reference`. A bullet naming three sibling
+transports is one door; a step in `tutorial/` points at the next step only, so one door is right
+there and the rule leaves it alone.
 
 ## B. One template per page type
 
@@ -70,7 +84,9 @@ Skeletons live in `docs/templates/`.
 ## C. Component conventions
 
 - `<Aside type="tip">` = optional shortcut; `note` = context the reader may skip; `caution` =
-  footgun with consequences. **≤ 3 Asides total per page** (`asides`).
+  footgun with consequences. **≤ 3 Asides total per page** (`asides`), and **every one declares
+  its `type`** (`aside-type`) — an untyped `<Aside>` renders as a note while asserting nothing,
+  which is what twenty-six of them did, several being real cautions.
 - `<Steps>` for any numbered procedure.
 - `<Tabs syncKey=…>` only for genuine alternatives (workspace/standalone).
 - **Every fence of file content carries a `title=`** — `rust`, `toml`, `sql`, `graphql`, `ts`,
@@ -127,8 +143,17 @@ Skeletons live in `docs/templates/`.
 
 1. **Page budgets.** A reference page: ≤ ~250–300 lines, answers **one question** (the one its
    frontmatter description states). A tutorial page: ≤ ~250 lines, ends on a runnable checkpoint.
-   Per page: ≤ 3 Asides; scattered cautions consolidate into **one `Limits` section**; the first
-   screen is one working snippet (≤ ~15 lines) with **no Aside above it**.
+   Per page: ≤ 3 Asides; the first screen is one working snippet (≤ ~15 lines) with **no Aside
+   above it**.
+
+   **A caution is placed by what it warns about, not by where the page ends.** One anchored to the
+   snippet above it stays there — that is the moment the reader can act on it, and moving it to a
+   list at the bottom is how a footgun becomes a footnote. `Limits` collects the constraints that
+   have **no single anchor**: what the feature will not do, when to leave it off, what a proxy in
+   front of it changes. The earlier wording said every scattered caution consolidates, and the
+   corpus disagreed with it in the right direction — fifty-one cautions, nearly all of them
+   correctly anchored — so the rule now says what the good pages do. What stays capped is the
+   *count*: three Asides is the budget, and a page needing more is a page to split.
 2. **Evidence placement.** Proof follows the promise it proves. Never a failure demo before the
    reader's first success. Boot/compile errors live under `What fails if you get it wrong` *after*
    the 80% case. Verbatim outputs are real (run it once, paste it), trimmed to ≤ ~8 lines. **Each
@@ -380,6 +405,14 @@ something false.
 `docs/src/sidebar.mjs` owns the vocabulary, the threshold and that exemption;
 `src/content.config.ts` validates the key, and the linter's `tier` rule gates it — an unknown
 tier fails the **build**, and an undeclared page or a section declaring only one fails CI.
+
+**The other half is gated too, and it is the half that was missing: `section-index`.** A tiered
+section's index must carry `## In this section` with a `### Basics` and an `### All options`
+under it. Eight of the ten tiered sections shipped without that list — `tier:` in the frontmatter
+of some fifty pages, validated by the schema, gated by the linter, and rendered to the reader
+nowhere at all. A tier declared and never drawn is not a weaker split; it is no split, plus the
+cost of maintaining one. `/http/` and `/graphql/` are the two that had it, and they are the
+shape to copy.
 
 This is §D made structural. §D budgets one page against drowning the reader; §G budgets the
 section, so the page that frames it says which half a reader came for.

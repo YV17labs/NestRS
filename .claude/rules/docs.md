@@ -23,12 +23,19 @@ On conflict about prose, `STYLE.md` wins; about code or naming,
 
 - **≤ 3 Asides per page.** Reference page ≤ ~250–300 lines answering
   ONE question; tutorial ≤ ~250 lines ending on a runnable checkpoint.
+  A caution stays anchored to the snippet it warns about; `Limits`
+  collects only the constraints with no single anchor.
 - First screen: one working snippet ≤ ~15 lines, **no Aside above it**.
 - Verbatim outputs real (run once, paste), trimmed to ≤ ~8 lines.
-- Controlled H2 vocabulary in canonical order (`Install` → `Run it` →
-  `Wire it in` → … → `Configuration` → `Limits` → `What fails if you
+- Controlled H2 vocabulary in canonical order (`Install` → `Wire it in`
+  → `Run it` → … → `Configuration` → `Limits` → `What fails if you
   get it wrong` → `Reference` → `Going further`); the closing block is
-  `## Going further` (utility pages exempt).
+  `## Going further` (utility pages exempt), it is **2–4 doors wide**,
+  and `Reference` sits **above** it — `reference-order` gates that.
+- **Every `<Aside>` declares a `type`** (`tip` / `note` / `caution`).
+- **A tiered section's index draws the split** — `## In this section`
+  with `### Basics` and `### All options`. Without it the `tier:` on
+  every page in the section renders nowhere.
 - Banned words: *blazing(ly), powerful, seamless(ly), simply,
   effortless(ly), easy, magic(al)*. No exclamation marks in prose.
 - **Example canon = the Publish universe only** (hello, blog/posts,

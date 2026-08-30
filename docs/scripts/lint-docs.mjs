@@ -122,7 +122,7 @@ const GOING_FURTHER_EXEMPT = new Set([
 ]);
 
 const BANNED_HEADINGS = [
-  'wiring it up', 'wire it into the app', 'where to go next',
+  'wiring it up', 'wire it into the app', 'mount it', 'where to go next',
   'next steps', 'see also', 'going deeper',
 ];
 
@@ -175,7 +175,10 @@ export const RULES = Object.freeze({
   bannedWord: 'banned-word',
   exclamation: 'exclamation',
   goingFurther: 'going-further',
+  referenceOrder: 'reference-order',
   asides: 'asides',
+  asideType: 'aside-type',
+  sectionIndex: 'section-index',
   canon: 'canon',
   link: 'link',
   // Code-truth — these read `docs/canon.json` and nothing else.
@@ -1251,9 +1254,44 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
   // Exclamation marks in prose (exclude "!=" and markup).
   if (/[A-Za-z0-9,)"'’]!(\s|$)/m.test(prose)) add(RULES.exclamation, 'prose ! found');
 
-  // 4. Closing "## Going further".
+  // 4. Closing "## Going further" — present, and no wider than four doors.
+  //
+  // The width half is the one that drifted: a section index whose closing block
+  // had grown into a second copy of its own page list (nine links on
+  // `/database/`, seven on `/http/controllers/`), which is the "In this section"
+  // list wearing the wrong header. A block with *one* link is left alone —
+  // T-TUTORIAL says a step points at the next step only.
   if (!GOING_FURTHER_EXEMPT.has(rel)) {
-    if (!/^##\s+Going further\s*$/m.test(src)) add(RULES.goingFurther, 'missing closing block');
+    const block = src.split(/^##\s+Going further\s*$/m)[1];
+    if (block === undefined) add(RULES.goingFurther, 'missing closing block');
+    else {
+      // Doors, not links: a bullet naming three sibling transports is one door,
+      // and it is the bullet count a reader scans.
+      const doors = (block.split(/^##\s/m)[0].match(/^-\s/gm) || []).length;
+      if (doors > 4) {
+        add(RULES.goingFurther, `${doors} doors — a closing block is 2–4 of them; a longer `
+          + 'list is the section index\'s "In this section" filed under the wrong header, or '
+          + 'a `## Reference` that never got one');
+      }
+    }
+  }
+
+  // 4a. `Reference` sits *above* the closing block, and is an H2.
+  //
+  // § A's canonical order ends `… → Reference → Going further`, and sixteen
+  // pages had it the other way round — an `### Reference` nested inside the
+  // closing block, so the page's last word was a reference list the reader met
+  // after being sent elsewhere.
+  const refH3 = /^###\s+Reference\s*$/m.exec(src);
+  if (refH3) {
+    add(RULES.referenceOrder, '`### Reference` — a structural block is an H2, not a '
+      + 'sub-heading of `## Going further`');
+  }
+  const refAt = src.search(/^##\s+Reference\s*$/m);
+  const gfAt = src.search(/^##\s+Going further\s*$/m);
+  if (refAt !== -1 && gfAt !== -1 && refAt > gfAt) {
+    add(RULES.referenceOrder, '`## Reference` after `## Going further` — the closing block '
+      + 'closes the page');
   }
 
   // 4b. A page that restates a shipped file may not drift from it.
@@ -1263,9 +1301,19 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
     for (const detail of mirror.check(src)) add(mirror.rule, detail);
   }
 
-  // 5. ≤3 Asides.
+  // 5. ≤3 Asides, each declaring which of the three it is.
+  //
+  // § C gives `tip`, `note` and `caution` distinct meanings — an optional
+  // shortcut, context the reader may skip, a footgun with consequences — so an
+  // untyped `<Aside>` renders as a note while asserting nothing. Twenty-six
+  // shipped that way, several of them real cautions.
   const asides = (src.match(/<Aside\b/g) || []).length;
   if (asides > 3) add(RULES.asides, `${asides} > 3`);
+  for (const m of src.matchAll(/<Aside\b([^>]*)>/g)) {
+    if (!/\btype\s*=/.test(m[1])) {
+      add(RULES.asideType, 'an `<Aside>` with no `type=` — one of `tip`, `note`, `caution`');
+    }
+  }
 
   // 6. Example-canon ban list.
   for (const term of CANON_BANLIST) {
@@ -1472,6 +1520,24 @@ function lintSections() {
       add(index ? index.rel : `${dir}/index.mdx`,
         `${dir}/ declares no ${TIER_LABELS[tier]} page — a section split into one tier is `
         + 'the undivided list with a header on it');
+    }
+
+    // § G: the index's "In this section" list is where the split is *drawn*,
+    // and the only place — the menu is two deep and never three. Without it
+    // every `tier:` in the section is frontmatter no reader ever sees, which is
+    // the state eight of the ten tiered sections shipped in.
+    const idx = index ? join(CONTENT_ROOT, index.rel) : null;
+    const src = idx && existsSync(idx) ? readFileSync(idx, 'utf8') : null;
+    if (src === null) continue;
+    const missing = [
+      [/^##\s+In this section\s*$/m, '`## In this section`'],
+      ...TIERS.map((t) => [new RegExp(`^###\\s+${TIER_LABELS[t]}\\s*$`, 'm'),
+        `\`### ${TIER_LABELS[t]}\``]),
+    ].filter(([re]) => !re.test(src)).map(([, label]) => label);
+    if (missing.length) {
+      out.push(`${index.rel}::${RULES.sectionIndex}::${dir}/ is tiered and its index does not `
+        + `draw the split — missing ${missing.join(', ')}. The tier is rendered here and `
+        + 'nowhere else, so without this list every `tier:` in the section is invisible');
     }
   }
   return out;

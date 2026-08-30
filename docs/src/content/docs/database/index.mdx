@@ -195,12 +195,12 @@ The app root activates the database and lists the slice:
 pub struct AppModule;
 ```
 
-Two lines, two shapes: `SeaOrmModule::for_root(None)` opens the one pool —
-it reads `NESTRS_SEAORM__URL` (and the other `NESTRS_SEAORM__*` keys) from the
-environment, or a `SeaOrmConfig` you pass to set those values in code, still
-overridable per field by the environment (see
-[the dual-path rule](/configuration/#the-dual-path-rule)) — and
-`SeaOrmDatabaseModule`, a bare import, binds the data layer over it. The
+Two lines, two shapes. `SeaOrmModule::for_root(None)` opens the one pool: it
+reads `NESTRS_SEAORM__URL` and the other `NESTRS_SEAORM__*` keys from the
+environment, or a `SeaOrmConfig` you pass to set those values in code —
+still overridable per field by the environment (see [the dual-path
+rule](/configuration/#the-dual-path-rule)). `SeaOrmDatabaseModule`, a bare
+import, then binds the data layer over it. The
 variable is named for the crate that parses it, exactly as the type is: from
 `NESTRS_SEAORM__URL` you find `SeaOrmConfig`, and from `SeaOrmModule` you find
 the variable.
@@ -219,20 +219,40 @@ slice inherits, without writing any of them:
 - **Audited choke point.** Controllers, resolvers, dataloader code call
   the service; the service touches the DB only through `Repo`.
 
-## Going further
+## In this section
 
+### Basics
+
+- [Entities](/database/entities/) — `#[expose]` on a SeaORM model, and the
+  DTO, inputs, schema and loaders it emits.
+- [Entity checklist](/database/entity-checklist/) — every decision one
+  entity asks of you, one line each.
 - [Repo and executor](/database/repo-and-executor/) — the ambient executor,
   the `DbContext` interceptor, the contextless-path escape hatch.
-- [Dataloaders](/database/dataloaders/) — `#[dataloader]` batches, the
-  auto-emitted PK and FK loaders, the relations that resolve themselves.
+- [Migrations](/database/migrations/) — write one, register it, run it with
+  `nestrs run db`.
+- [CRUD](/database/crud/) — `#[crud(...)]` on a controller or a resolver.
 - [Pagination](/database/pagination/) — the keyset `Page<M>` cursor, REST
   and GraphQL.
-- [Transactions](/database/transactions/) — auto-commit, the
-  `observe_serialization_conflicts` flag, the `retry_on_conflict` primitive.
-- [Health](/database/health/) — `SeaOrmHealthModule` and the readiness
-  probe.
-- [CRUD](/database/crud/) — `#[crud(...)]` on a controller or resolver.
-- [Migrations](/database/migrations/) and [Seeding](/database/seeding/) —
-  schema and demo data.
+
+### All options
+
+- [Dataloaders](/database/dataloaders/) — `#[dataloader]` batches, and the
+  PK and FK loaders `#[expose]` emits.
+- [Transactions](/database/transactions/) — auto-commit, conflict
+  observation, the `retry_on_conflict` primitive.
+- [Seeding](/database/seeding/) — idempotent demo data through the seed
+  crate.
+- [Database health](/database/health/) — `SeaOrmHealthModule` and the
+  readiness probe.
 - [Writing a driver](/database/writing-a-driver/) — plugging a non-SeaORM
   store into the same seams.
+
+## Going further
+
+- [Authorization](/security/authorization/) — the ability every `Repo` read
+  is filtered by, and the mask every response goes through.
+- [GraphQL](/graphql/) — the other consumer of the same entity, relations
+  and loaders.
+- [Testing](/testing/) — driving this layer against a live Postgres rather
+  than a mock.

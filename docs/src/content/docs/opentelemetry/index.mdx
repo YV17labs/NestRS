@@ -188,22 +188,20 @@ idempotent; the first test to run wins, the rest no-op. It is gated by the
 
 A test that does **not** import `OpenTelemetryModule` does not need it.
 
-## Going further
-
-- **[Correlation](/fundamentals/correlation/)** — the request span carries
-  `trace_id` and `span_id` always, and `actor_id` once a guard resolved a
-  principal. None of it waits on this crate. Layer your own fields with
-  `tracing::info!(target: "features::users", actor = %auth.sub, …)`.
-- **`Server-Timing`** — the companion `nest-rs-server-timing` crate adds a
-  `Server-Timing` header summarising the request's main spans. Mount with
-  `ServerTimingModule`.
-- **Module lifecycle** — `tracing::info!` on `nest_rs::module` fires once per
-  module when its providers register, so the boot trace shows your import
-  tree in resolution order.
-
 ## Reference
 
 - `crates/nest-rs-opentelemetry/` — `OpenTelemetry::init`,
   `OpenTelemetryConfig`, `OpenTelemetryModule`, `OpenTelemetryMeter`,
   `LogFormat`.
 - `crates/nest-rs-server-timing/` — the `Server-Timing` header middleware.
+
+## Going further
+
+- [Traces](/opentelemetry/traces/) — the spans this exporter ships, and
+  what each edge opens.
+- [Logs](/opentelemetry/logs/) — the record shape, and the ids every line
+  carries.
+- [Correlation](/fundamentals/correlation/) — the trace context underneath,
+  which waits on no crate.
+- [Server-Timing](/server-timing/) — the companion header summarising a
+  request's main spans.

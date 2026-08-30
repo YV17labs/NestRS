@@ -6,8 +6,6 @@ sidebar:
   order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 MCP (Model Context Protocol) is the spec language models use to call tools.
 In the [**Publish**](/publish/) workspace, the assistant lives in
 [`assistant`](/publish/) on port **3003**.
@@ -279,12 +277,9 @@ the access graph rejects accidental coupling at boot.
 
 ## Going further
 
-- [Authorization](/mcp/authorization/) — the bridge every tool call is gated by,
-  and the posture each operation declares.
+- [Authorization](/mcp/authorization/) — the bridge every tool call is
+  gated by, and the posture each operation declares.
 - [Endpoints](/mcp/endpoints/) — several features on one URL, and what the
   client is told the server is.
-- [Resources and prompts](/mcp/resources-and-prompts/) — the two capabilities
-  beside tools, and the host shape they need.
-- [Configuration](/mcp/configuration/) — , the env keys, and how a
-  failing operation talks to a model.
-- [Guards](/fundamentals/guards/) — the trait an MCP guard implements.
+- [Configuration](/mcp/configuration/) — the env keys, and how a failing
+  operation talks to a model.

@@ -221,20 +221,11 @@ JSON body? See [errors](/http/errors/) for `ResponseError` and
 
 ## Going further
 
-- [Responses](/http/responses/) — `Json<T>`, status + body tuples,
-  `#[http_code]`, `#[response_header]`, `#[redirect]`, how multiple
-  shapers compose.
-- [Errors](/http/errors/) — `ResponseError`, RFC 9457 `ProblemDetails`,
-  mapping a feature error enum to a wire response.
-- [Extractors](/http/extractors/) — the full extractor surface:
-  `Json<T>`, `RawBody`, `ClientIp`, `Scoped<T>` (request-scoped
-  providers), `Ctx<T>` (context attached by a guard), `Reflector` +
-  `#[meta(...)]` (route-level metadata read by guards/interceptors).
-- [Versioning](/http/versioning/) — `#[controller(version = "1")]`,
-  multi-version controllers, the boot path.
-- [Configuration](/http/configuration/) — `HttpConfig`, TLS, CORS, the
-  framework header.
-- [Security](/security/) — bind an `AuthnGuard` and an `AbilityGuard` to
-  attach the principal and gate actions per row.
-- [OpenAPI](/openapi/) — every route documents itself; nothing to
-  hand-maintain.
+- [Responses](/http/responses/) — `Json<T>`, status + body tuples, and
+  how several shapers compose.
+- [Extractors](/http/extractors/) — the full extractor surface a handler
+  parameter can take.
+- [Errors](/http/errors/) — `ResponseError` on a feature error enum, and
+  RFC 9457 problem responses.
+- [Security](/security/) — binding a guard so the handler runs with a
+  principal and an ambient ability.

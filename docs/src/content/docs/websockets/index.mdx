@@ -6,8 +6,6 @@ sidebar:
   order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 A WebSocket upgrade is an HTTP `GET`, so a gateway **self-mounts** on the
 existing `HttpTransport` — same port, same CORS, same TLS, no second
 server. Every frame rides one JSON envelope, `{ "event": "...", "data":
@@ -164,22 +162,25 @@ controller paths in front of routing and never learns a self-mount's prefixes, s
 a versioned gateway stays at `/v1/ws` under every strategy — which is just as
 well, since a browser cannot set headers on a `WebSocket` handshake.
 
-## Going further
+## In this section
+
+### Basics
 
 - [Messages](/websockets/messages/) — the envelope shape, the
   `Result`/`Err` return contract, payload validation, error frames.
-- [Rooms](/websockets/rooms/) — `WsClient::join` / `leave` /
-  `broadcast` / `to`, the per-connection handle.
-- [Server-side push](/websockets/server-push/) — `WsServer<N>` from
-  outside a handler (queue processors, scheduled jobs, HTTP routes).
-- [Namespaces](/websockets/namespaces/) — multiple gateways with
-  isolated registries via `WsServer<N>` markers.
 - [Guards](/websockets/guards/) — authenticate at the upgrade, gate
-  per-message envelopes, the connection-vs-message scope split.
-- [Security](/security/) — wiring `AuthnGuard` and `AuthzGuard` for WS
-  the same way as HTTP and GraphQL.
+  per-message envelopes, and the two scopes that split.
+- [Rooms](/websockets/rooms/) — `WsClient::join` / `leave` / `broadcast` /
+  `to`, the per-connection handle.
 
-### Reference
+### All options
+
+- [Namespaces](/websockets/namespaces/) — several gateways with isolated
+  registries via `WsServer<N>` markers.
+- [Server-side push](/websockets/server-push/) — reaching connected clients
+  from a service, a scheduled job, or an HTTP route.
+
+## Reference
 
 - [`nest-rs-ws`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-ws) —
   the macro and runtime: `#[gateway]`, `#[messages]`,
@@ -187,5 +188,12 @@ well, since a browser cannot set headers on a `WebSocket` handshake.
   `WsClient`, `WsServer`, `WsModule`.
 - [`apps/live`](https://github.com/YV17labs/NestRS/tree/main/demo/apps/live) —
   end-to-end real-time example (`ChatGateway`, and the `notifications`
-  feature's `NotificationsGateway`) used
-  throughout these pages.
+  feature's `NotificationsGateway`) used throughout these pages.
+
+## Going further
+
+- [HTTP](/http/) — the transport a gateway self-mounts on.
+- [GraphQL subscriptions](/graphql/subscriptions/) — the schema-shaped
+  realtime surface, for comparison.
+- [Security](/security/) — wiring `AuthnGuard` and `AuthzGuard` for WS the
+  same way as HTTP and GraphQL.

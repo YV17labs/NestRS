@@ -169,31 +169,45 @@ request.
 - **Discoverable** — every decorated provider registers itself; transports
   consume the registry filtered by reachability.
 
-## What follows
+Each primitive below gets its own page — concept, signature, where to bind it,
+and a tested example. Handler types (controllers, resolvers, gateways,
+processors, MCP tools) are transport-specific and live in their own categories:
+[HTTP](/http/), [GraphQL](/graphql/), [WebSockets](/websockets/),
+[Queue](/queue/), [MCP](/mcp/).
 
-Each primitive gets its own page — concept, signature, where to bind it,
-and a tested example.
+## In this section
 
-```
-Fundamentals/
-  ├─ Modules
-  ├─ Providers
-  ├─ Lifecycle
-  ├─ Guards
-  ├─ Pipes
-  ├─ Interceptors
-  ├─ Error handling
-  └─ Middleware (equivalence note)
-```
+### Basics
 
-Handler types (controllers, resolvers, gateways, processors, MCP tools)
-are transport-specific — they live in their own categories
-([HTTP](/http/), [GraphQL](/graphql/), [WebSockets](/websockets/),
-[Queue](/queue/), [MCP](/mcp/)).
+- [Modules](/fundamentals/modules/) — the composition unit, `imports`, and
+  the port + adapters layout.
+- [Providers](/fundamentals/providers/) — injectables, scopes, and the
+  boot-time access graph.
+- [Guards](/fundamentals/guards/) — pre-handler gates, the three scopes,
+  and declaring on the provider.
+- [Pipes](/fundamentals/pipes/) — parse, normalize and validate at the
+  request boundary.
+- [Interceptors](/fundamentals/interceptors/) — wrap handler execution,
+  install ambient state, shape the response.
+- [Error handling](/fundamentals/exception-filters/) — typed catches,
+  unconditional mapping, and the defaults underneath.
+
+### All options
+
+- [Lifecycle](/fundamentals/lifecycle/) — `#[hooks]` on the init and
+  shutdown phases the framework drains in order.
+- [The request lifecycle](/fundamentals/request-lifecycle/) — one pool per
+  layer family, deduplicated by `TypeId`, run exactly once.
+- [Middleware](/fundamentals/middleware/) — why there is no middleware
+  primitive, and which of the two roles you actually want.
+- [Correlation](/fundamentals/correlation/) — the W3C trace every unit of
+  work runs under, readable anywhere.
+- [Extending NestRS](/fundamentals/extending/) — the extension contract and
+  its three selection modes.
 
 ## Going further
 
-- [Modules](/fundamentals/modules/) — the composition unit and port + adapters layout.
-- [Providers](/fundamentals/providers/) — injectables, scopes, and the access graph.
-- [Request lifecycle](/fundamentals/request-lifecycle/) — how guards, pipes, and interceptors nest.
-- [Tutorial](/tutorial/) — build the composed `posts/` root in the repo.
+- [Architecture and naming](/architecture/) — the role tables, the five
+  naming levels, and the reserved vocabulary.
+- [Tutorial](/tutorial/) — build the composed `posts/` root end to end.
+- [HTTP](/http/) — the first transport to mount on this vocabulary.

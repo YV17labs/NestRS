@@ -245,13 +245,9 @@ handler, something else is wrong.
 
 ## Going further
 
-- [Database](/database/) — the 60-line slice that imports `SeaOrmDatabaseModule`.
-- [Dataloaders](/database/dataloaders/) — `#[dataloader]` methods are
-  Repo-backed too; the `LoaderScope` re-installs the executor around each
-  batch.
-- [Transactions](/database/transactions/) — auto-commit details, conflict
-  retry primitives.
-- [Security](/security/) — `Ability`, `condition_for`, how the row-level
-  filter is built.
-- [Writing a driver](/database/writing-a-driver/) — implement `Executor`
-  for a non-SeaORM store on the same seam.
+- [Transactions](/database/transactions/) — auto-commit, conflict
+  observation, the retry primitive.
+- [Row-level filtering](/security/authorization/row-level-filtering/) —
+  the ability condition `Repo::scoped` joins in.
+- [Writing a driver](/database/writing-a-driver/) — implementing
+  `Executor` for a non-SeaORM store on the same seam.

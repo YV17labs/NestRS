@@ -220,8 +220,33 @@ controller with the transport's authz module, and write a
   — how GraphQL, WS, and MCP re-establish the ambient ability
   (explanation — useful once you add a second transport, not before).
 
+## In this section
+
+### Basics
+
+- [Policies](/security/authorization/policies/) — subjects, actions,
+  predicates and fields compiled into one `Ability`.
+- [Row-level filtering](/security/authorization/row-level-filtering/) —
+  what `Repo::scoped` joins into the SQL, with before/after.
+- [Route model binding](/security/authorization/by-id-binding/) —
+  `Bind<A, S>` turning a path id into a loaded, authorized model.
+- [Response masking](/security/authorization/response-masking/) — the
+  fail-closed field mask every successful response goes through.
+
+### All options
+
+- [Authorization on GraphQL, WS & MCP](/security/authorization/per-transport-bridges/)
+  — the bridges that re-establish the ambient ability per transport.
+- [Public reads](/security/authorization/public-reads/) — the anonymous
+  branch of the same policy, granting nothing until you write it.
+- [OAuth scopes](/security/authorization/scopes/) — gate a rule on the
+  scope a token carries, and refuse with an RFC 6750 challenge.
+
 ## Going further
 
-- [Authentication](/security/authentication/) — how the principal the ability reads gets attached.
-- [Database](/database/) — the `Repo` layer the query pre-filter joins into.
-- [Security](/security/) — the wider posture authn and authz compose into.
+- [Authentication](/security/authentication/) — how the principal an
+  ability reads gets attached.
+- [Database](/database/) — the `Repo` layer the query pre-filter joins
+  into.
+- [Multi-tenant SaaS](/security/multi-tenant-saas/) — the two layers under
+  a production tenancy model.

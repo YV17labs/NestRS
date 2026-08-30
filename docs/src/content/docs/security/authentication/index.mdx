@@ -181,7 +181,7 @@ rules would decide what they see.
 async fn health(&self) -> &'static str { "ok" }
 ```
 
-<Aside>
+<Aside type="note">
 A controller that binds no guard is reported at boot: with no global
 guard pool active, every route that is neither guarded nor marked
 `#[public]` is named in a `warn` on `nest_rs::layers`, and a guard whose
@@ -255,8 +255,29 @@ shape of that path.
 Once the principal is on the request, the authorization layer takes
 over — see [Authorization](/security/authorization/).
 
+## In this section
+
+### Basics
+
+- [Password](/security/authentication/password/) — Argon2id hashing, and a
+  miss path whose timing tells the caller nothing.
+- [JWT](/security/authentication/jwt/) — verify a signed bearer token, and
+  hold only the public key on a resource server.
+
+### All options
+
+- [OAuth2](/security/authentication/oauth2/) — the authorization-code flow
+  with PKCE, and stateless CSRF state.
+- [Split deployment](/security/authentication/split-deployment/) — one
+  signer, many verifiers, no RPC across the boundary.
+- [Social login](/security/authentication/social-login/) — one import
+  activates every configured provider, through an open contract.
+
 ## Going further
 
-- [JWT](/security/authentication/jwt/) — verify a signed bearer token on a resource server.
-- [OAuth2](/security/authentication/oauth2/) — the authorization-code flow with PKCE.
-- [Authorization](/security/authorization/) — what the caller may do once identified.
+- [Authorization](/security/authorization/) — what the caller may do once
+  identified.
+- [Add login + protect a route](/security/add-login/) — the same pieces as
+  a recipe, end to end.
+- [Threat model](/security/threat-model/) — what these layers cover, and
+  what they leave to you.

@@ -241,7 +241,7 @@ Same `Arc<AudioService>`, same `Arc<MediaService>`, three queues. Each
 method still delegates: the processor is a router, never a place where
 business logic accumulates.
 
-<Aside>
+<Aside type="caution">
 A single `#[processor]` impl block per struct (multiple would conflict
 at the discovery layer). Put every queue handler of a service in the
 same block — same convention as `#[routes]` and `#[scheduled]`.
@@ -316,25 +316,37 @@ $ nestrs run dev worker
 The last two lines share the job's `trace_id`, and it is the producer's — see [Observability](/queue/observability/) for the
 full field set.
 
-## Going further
+## In this section
 
-- [Producing jobs](/queue/producing-jobs/) — typing payloads, the
-  publisher handle, and the rule that keeps `push_to::<Q>` behind a
-  service.
+### Basics
+
+- [Producing jobs](/queue/producing-jobs/) — typing payloads, the publisher
+  handle, and the rule that keeps `push_to::<Q>` behind a service.
 - [Wiring](/queue/wiring/) — `RedisModule`, `RedisQueueModule` and
-  `RedisWorkerModule`, producer-only deploys, and module-gating across
-  shared features.
-- [Retries and failure](/queue/retries-and-failure/) — what an `Err`
-  means, the apalis retry shape, panics, dead-lettering.
-- [Observability](/queue/observability/) — span structure, fields, and
-  expected logs.
-- [Writing a queue driver](/queue/writing-a-driver/) — the scaffold for
-  a non-Redis backend.
+  `RedisWorkerModule`, and module-gating across a shared features crate.
 
-### Reference
+### All options
+
+- [Retries and failure](/queue/retries-and-failure/) — what an `Err` means,
+  the apalis retry shape, panics, dead-lettering.
+- [Observability](/queue/observability/) — the span, its fields, and the
+  lines a worker emits per job.
+- [Writing a queue driver](/queue/writing-a-driver/) — the scaffold for a
+  non-Redis backend.
+
+## Reference
 
 - `crates/nest-rs-queue/` — the abstractions: `#[processor]`,
   `#[process]`, `Job`, `Processor`, `ProcessMethod`, `JobProducer`.
 - `crates/nest-rs-redis/` — the Redis storage: `RedisModule` and its
   `RedisConnection`, `RedisQueueModule` and its `RedisQueueProducer`,
   `RedisWorkerModule` and its `RedisWorker`.
+
+## Going further
+
+- [Scheduling](/schedule/) — recurring work driven by a clock rather than a
+  producer.
+- [Events](/events/) — in-process fan-out, when the work need not outlive
+  the request.
+- [Correlation](/fundamentals/correlation/) — the trace an enqueue hands to
+  the attempt, across the process boundary.

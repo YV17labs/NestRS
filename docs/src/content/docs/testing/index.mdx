@@ -123,9 +123,28 @@ persistence. `nestrs run test e2e` covers the rest. The full suite is
   and [the Cargo Book on integration tests](https://doc.rust-lang.org/cargo/guide/tests.html)
   — the underlying conventions.
 
-## Going further
+## In this section
+
+### Basics
 
 - [Unit tests](/testing/unit/) — pure logic next to the code, no DI boot.
-- [Integration tests](/testing/integration/) — a crate's public API in process.
-- [End-to-end tests](/testing/e2e/) — the real AppModule against live Postgres.
-- [Publish demo](/publish/) — the exemplar apps these tests ship against.
+- [Integration tests](/testing/integration/) — a crate's public API in
+  process, no database and no network.
+- [End-to-end tests](/testing/e2e/) — the real `AppModule` against live
+  Postgres, Redis and S3.
+
+### All options
+
+- [Negative-path tests](/testing/negative-path/) — auth refused,
+  cross-tenant denied, validation failed, rollback verified.
+- [Policy tests](/testing/policy/) — asserting on `Ability::mask` and
+  `condition_for` directly, because a regression there is a leak.
+
+## Going further
+
+- [The Publish workspace](/publish/) — the exemplar apps these suites ship
+  against.
+- [CLI](/cli/) — `nestrs run test`, and the nextest gate that keeps e2e
+  out of the fast loop.
+- [Overriding in tests](/configuration/testing/) — hermetic configuration
+  in both suites.

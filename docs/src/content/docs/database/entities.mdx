@@ -8,12 +8,14 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-An entity is a SeaORM model decorated with `#[expose]`. You declare the
-columns, their types, the relations, and which fields cross the wire —
-**once** — and the macro emits everything downstream: the wire DTO, the
-create/update inputs, the `validator` wiring, the JSON schema the HTTP
-and OpenAPI layers read, the GraphQL object and its relation
-dataloaders, and the lifecycle behaviour (timestamps, soft delete).
+An entity is a SeaORM model decorated with `#[expose]`. You declare the columns, their types, the relations, and which fields cross
+the wire — **once**. The macro emits everything downstream:
+
+- the wire DTO, and the create/update inputs;
+- the `validator` wiring;
+- the JSON schema the HTTP and OpenAPI layers read;
+- the GraphQL object and its relation dataloaders;
+- the lifecycle behaviour — timestamps, soft delete.
 
 The entity *is* the wire contract. There is no separate DTO to keep in
 sync — a column reaches a transport only when it carries `#[expose]`,
@@ -350,16 +352,11 @@ See [Migrations](/database/migrations/) for writing and running them
 
 ## Going further
 
-- [Tutorial: declare the entity](/tutorial/entity/) — the step-by-step
-  build of a minimal `Post`.
-- [Database overview](/database/) — the entity + service + module
-  slice, CRUD-ready in under 60 lines.
+- [Entity checklist](/database/entity-checklist/) — every decision one
+  `#[expose]`d entity asks of you, one line each.
 - [CRUD](/database/crud/) — `#[crud]` generates the endpoints over the
   entity's service.
-- [GraphQL relations](/graphql/relations/) — how exposed relations
-  resolve.
 - [Response masking](/security/authorization/response-masking/) — what
   unexposed columns and `WireModelDefaults` are for.
-- [SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/) —
-  the official reference for entities, columns, relations, and
-  migrations underneath `#[expose]`.
+- [SeaORM 2 documentation](https://www.sea-ql.org/SeaORM/docs/index/) — the
+  reference for the columns, relations and migrations under `#[expose]`.

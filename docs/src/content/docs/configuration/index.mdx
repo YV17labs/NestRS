@@ -6,7 +6,7 @@ sidebar:
   order: 1
 ---
 
-import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 
 Configuration in nestrs is a typed struct, one file per concern, mapped
 explicitly to `NESTRS_<NAMESPACE>__<KEY>` environment variables. The crate
@@ -348,33 +348,34 @@ wrong and silent.
 
 Hand-writing `from_env` (for custom validation, or a field carrying a structured payload, or a rule spanning the whole struct) is covered on [Advanced configuration](/configuration/advanced/) with the real `IssuerConfig` as the worked example.
 
-## Going further
+## In this section
 
-<CardGrid>
-  <LinkCard
-    title="The .env cascade"
-    href="/configuration/env-cascade/"
-    description="Which files are loaded, in what order, and how Environment selects them."
-  />
-  <LinkCard
-    title="Alternative sources"
-    href="/configuration/sources/"
-    description="Plug Vault, a K8s ConfigMap, or AWS Parameter Store behind ConfigSource."
-  />
-  <LinkCard
-    title="Env-var reference"
-    href="/configuration/env-reference/"
-    description="Every NESTRS_* variable the framework reads, by namespace."
-  />
-  <LinkCard
-    title="Overriding in tests"
-    href="/configuration/testing/"
-    description="Seed pinned values, isolate the environment, keep tests hermetic."
-  />
-</CardGrid>
+### Basics
 
-### Reference
+- [The .env cascade](/configuration/env-cascade/) — which files load, in
+  what order, and how the active `Environment` selects them.
+
+### All options
+
+- [Alternative sources](/configuration/sources/) — Vault, a K8s ConfigMap
+  or AWS Parameter Store behind `ConfigSource`.
+- [Overriding in tests](/configuration/testing/) — seed pinned values,
+  isolate the environment, keep both suites hermetic.
+- [Advanced: hand-written `from_env`](/configuration/advanced/) — custom
+  validation and nested config, when the derive is not enough.
+- [Env-var reference](/configuration/env-reference/) — every `NESTRS_*`
+  variable the framework reads, by namespace.
+
+## Reference
 
 - `crates/features/src/oauth/config.rs` — the full real example.
 - `crates/nest-rs-config/` — `#[config]`, `Config`, `ConfigService`,
   `ConfigModule`, the `.env` cascade.
+
+## Going further
+
+- [Modules](/fundamentals/modules/) — where `for_root(...)` sits in a
+  composition root.
+- [HTTP configuration](/http/configuration/) — the largest config struct the
+  framework ships, dual-path like every other.
+- [CLI](/cli/) — `nestrs run` loads the cascade before it starts an app.

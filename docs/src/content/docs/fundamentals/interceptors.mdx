@@ -55,12 +55,12 @@ The `http` feature turns this on, and `http` is a default — name it explicitly
 ## A minimal interceptor
 
 `async_trait` comes from `nest-rs-interceptors` (and `nest-rs-filters` /
-`nest-rs-exception-filters` for their traits). That re-export is **load-bearing,
-not ergonomic**: `poem::async_trait` does not exist in poem 3, so there is no
-alternative spelling to fall back on — and the unresolved import cascades into
-a confusing `E0195: lifetime parameters or bounds on method 'intercept' do not
-match the trait declaration`, because the un-expanded `async fn` no longer
-matches the `#[async_trait]`-declared trait. A crate mid-upgrade can also depend
+`nest-rs-exception-filters` for their traits). That re-export is **load-bearing, not ergonomic**. `poem::async_trait` does
+not exist in poem 3, so there is no alternative spelling to fall back on.
+The unresolved import then cascades into a confusing `E0195: lifetime
+parameters or bounds on method 'intercept' do not match the trait
+declaration` — the un-expanded `async fn` no longer matches the
+`#[async_trait]`-declared trait. A crate mid-upgrade can also depend
 on `async-trait = "0.1"` directly and `use async_trait::async_trait;` — both
 spellings must resolve to the same 0.1 macro.
 
@@ -184,6 +184,11 @@ Interceptors are pooled by `TypeId` and run **once per request**: a global inter
 The pattern: capture what you need from `req`, `await next.run(req)` to
 get the response, decide what to do with it.
 
+## Reference
+
+- [`posts/http/interceptor.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/posts/http/interceptor.rs)
+  in the demo — a structured audit interceptor on the posts controller.
+
 ## Going further
 
 - [Guards](/fundamentals/guards/) — the sibling layer, runs after
@@ -192,5 +197,3 @@ get the response, decide what to do with it.
 - [Security / response masking](/security/) — the `Authorize` shaper
   composes with this seam.
 - [HTTP / controllers](/http/controllers/) — per-route bindings.
-- [`posts/http/interceptor.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/posts/http/interceptor.rs)
-  in the demo — a structured audit interceptor on the posts controller.

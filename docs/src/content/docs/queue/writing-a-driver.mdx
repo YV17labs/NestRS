@@ -6,8 +6,6 @@ sidebar:
   order: 6
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 The [`nest-rs-queue`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-queue)
 crate is a seam: a `JobProducer` trait on the push side, a link-time
 `ProcessMethod` inventory + a wire envelope on the consume side, and a
@@ -110,12 +108,12 @@ blanket impl on top of `push_json` — no extra code on your side.
 
 This is the meat, and it is smaller than it used to be. The worker is a
 `nest_rs::core::Transport`: the framework calls `configure` with the assembled
-container at boot, then `serve` with a cancellation token. **Two calls into the
-port do everything that is not your storage's**: `consume::discover` drains the
-`#[process]` inventory (module-gated, duplicate-checked, announced), and
-`consume::attempt` runs one attempt — it opens the envelope, continues or mints
-the trace, opens the `queue.job` span and the ambient scope, catches a panic,
-classifies the outcome and files the events and the `nest_rs::operation` line.
+container at boot, then `serve` with a cancellation token. **Two calls into the port do everything that is not your storage's.**
+`consume::discover` drains the `#[process]` inventory — module-gated,
+duplicate-checked, announced. `consume::attempt` runs one attempt: it opens
+the envelope, continues or mints the trace, opens the `queue.job` span and
+the ambient scope, catches a panic, classifies the outcome, and files the
+events and the `nest_rs::operation` line.
 You never restate any of that: an adapter that opens a `queue.job` span of its
 own has taken semantics it does not own, and the conformance suite says so.
 

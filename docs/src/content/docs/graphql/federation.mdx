@@ -68,10 +68,11 @@ Six things it refuses that a `#[query]` does not, each a named compile error:
 - the method must be **`async`**;
 - and it must take **at least one argument**, since the arguments are the key.
 
-Two more are decided at **boot**, because only the built schema holds the fact:
-an `#[entity]` whose resolved type carries no `@key` — a list, a scalar, a union,
-anything async-graphql does not key — fails the boot naming the method and the
-type, and so do two resolvers whose key shapes overlap (below).
+Two more are decided at **boot**, because only the built schema holds the
+fact. An `#[entity]` whose resolved type carries no `@key` — a list, a
+scalar, a union, anything async-graphql does not key — fails the boot naming
+the method and the type. So do two resolvers whose key shapes overlap
+(below).
 
 <Aside type="caution" title="Ship it ungated and every keyed type is public">
 Without the posture, every `@key`-ed type in the schema is readable **by

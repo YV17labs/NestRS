@@ -112,16 +112,15 @@ honour one.** The throttler's does, so `NESTRS_THROTTLER__LIMIT` and
 `NESTRS_THROTTLER__WINDOW_SECS` survive a backend swap unchanged — they are the
 policy every store honours, and your store reads them through the shared seam.
 
-A delegated port's contract requires nothing of you, so it owns no namespace, and
-your own settings take their namespace from where they are declared — **read off
-the path, exactly as a type name is**: your crate's word, then the binding
-folder's when the config sits in one, joined by `__`. The resource your crate
-opens is its own subject, so its config sits at the crate root and wears your
-crate's word (`nest-rs-redis/src/config.rs` → `RedisConfig` → `NESTRS_REDIS__*`,
-`nest-rs-seaorm/src/config.rs` → `SeaOrmConfig` → `NESTRS_SEAORM__*`); a setting
-one binding owns sits in that binding's folder and wears both words
-(`nest-rs-redis/src/worker/config.rs` → `RedisWorkerConfig` →
-`NESTRS_REDIS__WORKER__*`). From the variable an operator can name your crate and
+A delegated port's contract requires nothing of you, so it owns no
+namespace. Your own settings take their namespace from where they are
+declared — **read off the path, exactly as a type name is**: your crate's
+word, then the binding folder's when the config sits in one, joined by `__`. The resource your crate opens is its own subject, so its config sits at the
+crate root and wears your crate's word: `nest-rs-redis/src/config.rs` →
+`RedisConfig` → `NESTRS_REDIS__*`, and `nest-rs-seaorm/src/config.rs` →
+`SeaOrmConfig` → `NESTRS_SEAORM__*`. A setting one binding owns sits in that
+binding's folder and wears both words — `nest-rs-redis/src/worker/config.rs`
+→ `RedisWorkerConfig` → `NESTRS_REDIS__WORKER__*`. From the variable an operator can name your crate and
 your type; from your module a developer can name the variable.
 
 Selection by configuration is the case where the member is a folder of your

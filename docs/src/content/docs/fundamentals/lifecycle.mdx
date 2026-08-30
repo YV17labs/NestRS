@@ -73,11 +73,10 @@ impl ProviderResidency for MyHandWrittenProvider {
 }
 ```
 
-A fourth shape is your composition rather than a contradiction, so it
-warns at boot instead: a host the container holds under some *other* key
-— bound as `providers = [Foo as dyn Trait]`, imported through a
-`for_root`, or registered by hand under a name — has nothing under `Foo`
-itself. Move the methods to a provider listed under its own type.
+A fourth shape is your composition rather than a contradiction, so it warns
+at boot instead. A host the container holds under some *other* key has
+nothing under `Foo` itself — bound as `providers = [Foo as dyn Trait]`,
+imported through a `for_root`, or registered by hand under a name. Move the methods to a provider listed under its own type.
 Listing the same host twice is **not** the repair it looks like: each
 binding runs the constructor, so the hooks fire on one instance while
 everything injecting `Arc<dyn Trait>` holds another.

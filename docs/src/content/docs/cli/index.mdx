@@ -3,7 +3,7 @@ title: CLI
 description: Install the nestrs binary, scaffold projects, generate features, and verify your toolchain.
 ---
 
-import { Aside, Steps, FileTree } from '@astrojs/starlight/components';
+import { Aside, FileTree } from '@astrojs/starlight/components';
 
 The **`nestrs`** CLI scaffolds one layout: a workspace — `crates/features/` for
 your domain, `apps/*` for the binaries that serve it. **`nestrs new` reads the
@@ -306,10 +306,11 @@ side by side with what the generator emitted.
 
 ### Where `g entity` puts the file
 
-A module keeps its entities in one of two shapes, and the generator reads which
-one you are in rather than asking: a feature with no entity yet gets the lone
-`posts/entity.rs`, and a feature already keeping several in `posts/entities/`
-gets one more file there, named for the singular (`comment.rs` beside `post.rs`).
+A module keeps its entities in one of two shapes, and the generator reads
+which one you are in rather than asking. A feature with no entity yet gets
+the lone `posts/entity.rs`. A feature already keeping several in
+`posts/entities/` gets one more file there, named for the singular —
+`comment.rs` beside `post.rs`.
 
 Growing from the first shape into the second is the one thing it refuses. Moving
 `entity.rs` into `entities/` deepens every `super::` path the file carries — and
@@ -377,11 +378,12 @@ slot lands there too; it is a `shared/` folder at the scale of a file. And it
 is invisible from outside, because both names read perfectly well alone and
 only the pair is wrong.
 
-Everything short of that passes. The word may come from the folder rather than
-the file (`throttler/store.rs` holding `RedisThrottler`), an inflection is the
-same word (`scope.rs` holding `Scoped`), an abbreviation is too (`context.rs`
-holding `Ctx`), and a file whose principal export is a function is a namespace
-that owes no pairing at all (`queue/consume.rs` exporting `consume::attempt`).
+Everything short of that passes. The word may come from the folder rather than the file —
+`throttler/store.rs` holding `RedisThrottler`. An inflection is the same
+word (`scope.rs` holding `Scoped`), and so is an abbreviation (`context.rs`
+holding `Ctx`). And a file whose principal export is a function is a
+namespace that owes no pairing at all: `queue/consume.rs` exporting
+`consume::attempt`.
 Files a table already names — `service.rs`, `controller.rs`, `registry.rs` —
 are named by that table and are not this rule's business.
 

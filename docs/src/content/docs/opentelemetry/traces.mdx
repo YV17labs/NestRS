@@ -108,13 +108,15 @@ are things nothing else can supply:
 
 Everything else belongs to the transport and exists whether or not this crate is
 installed: the span itself, its W3C trace context, the `traceresponse` response
-header, and the access log. The span carries the OTel HTTP semantic-convention
-attributes — `http.request.method`, `url.path` (the addressed path),
-`http.route` (the **matched template**, so a backend groups on something
-low-cardinality), `http.response.status_code`, `http.response.body.size`,
-`client.address`, `user_agent.original` — and it is named `{method} {route}`
-through `otel.name`, because `tracing` fixes a span name to a literal and one
-literal for every route makes a trace list unreadable. A request that matched
+header, and the access log. The span carries the OTel HTTP semantic-convention attributes:
+`http.request.method`, `url.path` (the addressed path), `http.route` (the
+**matched template**, so a backend groups on something low-cardinality),
+`http.response.status_code`, `http.response.body.size`, `client.address` and
+`user_agent.original`.
+
+It is named `{method} {route}` through `otel.name`. `tracing` fixes a span
+name to a literal, and one literal for every route makes a trace list
+unreadable. A request that matched
 nothing is named by its method alone, never by the URL.
 
 Body size and duration are measured at **end-of-body**, not at handler return, so

@@ -5,8 +5,6 @@ sidebar:
   order: 5
 ---
 
-import { FileTree, Aside, Steps } from '@astrojs/starlight/components';
-
 You write the service that owns the entity, the controller that mounts
 the CRUD routes, and the HTTP module that ties them together. By the end
 of this page, the boot log shows five CRUD routes mounted from one empty
@@ -121,11 +119,10 @@ impl PostsController {}
 From this line on, no row crosses the data layer without someone to answer for
 it. `Repo` ANDs the caller's ambient [`Ability`](/security/authorization/) into
 every read and every by-id write; nothing but `AuthzGuard` installs one, so a
-request with no ability reads **nothing** rather than everything. That is the
-framework's central claim doing its work — row-level filtering you never write
-a `WHERE` for — and the price is that it starts now rather than later: there is
-no "skip auth for now" switch, because a public read of a table is not
-something the 1.0 data layer expresses.
+request with no ability reads **nothing** rather than everything. That is the framework's central claim doing its work: row-level filtering
+you never write a `WHERE` for. The price is that it starts now rather than
+later — there is no "skip auth for now" switch, because a public read of a
+table is not something the 1.0 data layer expresses.
 
 `AuthnGuard` and `AuthzGuard` are **your** types, not framework ones: the
 framework is generic over the principal and the policy, so each workspace writes

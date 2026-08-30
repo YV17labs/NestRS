@@ -63,11 +63,11 @@ guard resolved a principal.
 Your structured fields layer on top of those, and you never write either by
 hand.
 
-Both are also readable from code, anywhere the framework carries work —
-a handler, a service below it, a WS message, an MCP tool, a queue job in another
-process, and **inside a streaming response**, which is the one that surprises
-people: an `#[sse]` stream is written after its handler returned, and it still
-runs under the request that opened it.
+Both are also readable from code, anywhere the framework carries work: a
+handler, a service below it, a WS message, an MCP tool, a queue job in
+another process. And **inside a streaming response**, which is the one that
+surprises people — an `#[sse]` stream is written after its handler returned,
+and it still runs under the request that opened it.
 
 ```rust title="crates/features/src/users/service.rs"
 let trace_id = nest_rs::core::current_trace_id();
@@ -102,11 +102,10 @@ not change the shape of a line.
 
 ### The ids are read from the context, never from the span
 
-A line carries **no span attributes and no span names**. That is the part worth
-stating, because the alternative looks harmless and is not: a service runs under
-the HTTP request's span, so rendering span state put the request's method, path,
-client address and user agent on every line the service emitted — the line stopped
-being about what the service did. Nested work made it worse, printing one
+A line carries **no span attributes and no span names**. That is worth stating, because the alternative looks harmless and is not. A
+service runs under the HTTP request's span, so rendering span state put the
+request's method, path, client address and user agent on every line the
+service emitted. The line stopped being about what the service did. Nested work made it worse, printing one
 `trace_id` per level:
 
 ```text frame="terminal"
@@ -149,11 +148,11 @@ is a separate line, one per unit of work, on the shared target `nest_rs::operati
 | Event dispatch | `events.dispatch` | event, listener |
 
 **The name is `<edge>.<unit>`, and it is the same string the operation's span
-carries.** It is declared once — by the crate that owns the edge, as
-`<crate>::unit::<UNIT>` (`nest_rs_http::unit::REQUEST`,
-`nest_rs_ws::unit::MESSAGE`, `nest_rs_queue::unit::JOB`, …) — and read three
-times: by the span, by the log record's event name (what an OTLP exporter
-reports as `event.name`), and by the message a console prints. The *grammar* is
+carries.** It is declared once, by the crate that owns the edge, as
+`<crate>::unit::<UNIT>` — `nest_rs_http::unit::REQUEST`,
+`nest_rs_ws::unit::MESSAGE`, `nest_rs_queue::unit::JOB`, and so on. It is
+then read three times: by the span, by the log record's event name (what an
+OTLP exporter reports as `event.name`), and by the message a console prints. The *grammar* is
 `nest_rs_core::operation_log`'s; the names are not, for the same reason a span
 target is not — a unit name says which edge did the work, and the kernel does
 not know the edges exist. There used to be

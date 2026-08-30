@@ -140,12 +140,11 @@ Keyset buys stability under concurrent inserts and O(1) reads on the PK
 index by giving up two things: **no total count**, and **no jump-to-page**.
 
 There is no offset paginator in the framework, and no `paginate = page`
-mode — one pagination story, one wire shape per surface. A consumer that
-genuinely needs page numbers and a total (typically an admin table) writes
-that operation by hand: a `Repo::scoped(Action::Read)` query with
-`.offset()`/`.limit()` plus a `.count()`, returning a shape you own —
-accepting that `OFFSET n` makes the database walk and discard `n` rows, so
-past a few thousand it is a scan.
+mode — one pagination story, one wire shape per surface. A consumer that genuinely needs page numbers and a total — typically an
+admin table — writes that operation by hand: a `Repo::scoped(Action::Read)`
+query with `.offset()`/`.limit()` plus a `.count()`, returning a shape you
+own. The cost is `OFFSET n`, which makes the database walk and discard `n`
+rows, so past a few thousand it is a scan.
 
 ## Going further
 

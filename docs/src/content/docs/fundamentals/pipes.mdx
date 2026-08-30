@@ -8,12 +8,11 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-A pipe runs **between extraction and the handler**: the transport pulls
-a value out of the request (a path segment, a query param, a JSON body,
-a GraphQL argument, a WS payload, an MCP tool's arguments, a queued job),
-hands it to the pipe,
-and the pipe either returns the transformed value or rejects with a
-`PipeError` the transport renders as its native error.
+A pipe runs **between extraction and the handler**. The transport pulls a
+value out of the request — a path segment, a query param, a JSON body, a
+GraphQL argument, a WS payload, an MCP tool's arguments, a queued job — and
+hands it to the pipe. The pipe either returns the transformed value, or
+rejects with a `PipeError` the transport renders as its native error.
 
 The trait lives in `nest-rs-pipes`, transport-agnostic, and binds **per
 argument on every transport**. Two forms, one surface:
@@ -94,11 +93,11 @@ the handler body never runs:
 | MCP | `invalid_params` (`-32602`), the field errors in the error's `data` |
 | Queue | A job error — the queue's retry/failure policy applies |
 
-`ValidationPipe<T>` attaches the structured field-level errors to the rejection,
-and **every** transport carries them through under the name `errors`: an RFC 9457
-extension member on HTTP, `extensions.errors` on GraphQL, `data.errors` on a
-WebSocket frame, the error `data` on MCP, and an `errors` field on the queue's
-`job dead-lettered` event. A client (or an operator reading a dead-letter log)
+`ValidationPipe<T>` attaches the structured field-level errors to the
+rejection, and **every** transport carries them through under the name
+`errors`: an RFC 9457 extension member on HTTP, `extensions.errors` on
+GraphQL, `data.errors` on a WebSocket frame, the error `data` on MCP, an
+`errors` field on the queue's `job dead-lettered` event. A client (or an operator reading a dead-letter log)
 can always tell which field was wrong, not merely that something was.
 
 ## Validation at the HTTP edge
@@ -172,11 +171,11 @@ not a stringly-typed handler doing its own `parse::<Uuid>()`.
 
 ## The same pipe beyond HTTP
 
-On GraphQL, WebSockets, MCP, and queues the argument *is* the wire value, so
-the binding is `nest_rs::pipes::Piped<P, T>` / `Valid<T>` — `T` is what
-appears on the wire (the SDL argument type, the WS payload, the job
-payload); the handler body sees `P::Out` through `into_inner()` /
-`Deref`, exactly as on HTTP.
+On GraphQL, WebSockets, MCP and queues the argument *is* the wire value, so
+the binding is `nest_rs::pipes::Piped<P, T>` / `Valid<T>`. `T` is what
+appears on the wire — the SDL argument type, the WS payload, the job payload
+— and the handler body sees `P::Out` through `into_inner()` / `Deref`,
+exactly as on HTTP.
 
 ```rust title="crates/features/src/users/graphql/resolver.rs"
 // GraphQL — the SDL argument is `String`; the body sees it trimmed.
@@ -291,7 +290,7 @@ async fn create(&self, name: Piped<NonEmpty, Json<String>>) -> &'static str {
 }
 ```
 
-<Aside>
+<Aside type="note">
 **Reusable pipes live in the framework, never in an app.** A
 single-feature transform is a service. A pattern that recurs in two
 apps belongs in `crates/nest-rs-pipes/`.

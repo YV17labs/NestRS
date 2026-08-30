@@ -101,10 +101,10 @@ states the parts.
 ## Limits
 
 - The [`max_body_bytes` cap](/http/configuration/) gates **every** body,
-  `Multipart` included. A direct upload larger than the cap answers `413
-  Payload Too Large` before a byte reaches your handler, and the default cap is
-  **2 MiB** — so a 3 MiB upload fails out of the box, and raising the ceiling
-  is `NESTRS_HTTP__MAX_BODY_BYTES`, not a compensating control in your code.
+  `Multipart` included. A direct upload larger than the cap answers `413 Payload Too Large` before a
+byte reaches your handler, and the default cap is **2 MiB** — so a 3 MiB
+upload fails out of the box. Raising the ceiling is
+`NESTRS_HTTP__MAX_BODY_BYTES`, not a compensating control in your code.
   The admin gate and rate limit the demo binds are defence in depth, not the
   size bound.
 - Streaming bounds **memory**, not the request: the part is still read through

@@ -69,11 +69,11 @@ Deliberately separate surfaces are still separate: give one its own `path`.
 
 ## Name your endpoint
 
-An MCP endpoint is **one server** to every client that reaches it: the protocol
-carries one `serverInfo` and one `instructions`, on `initialize` and on
-`server/discover` alike — the same shape `new McpServer({ name, version })`
-builds in the TypeScript SDK, and the one a FastMCP parent keeps when it mounts
-children. Two declarations answer for it, each owned by whoever can know it.
+An MCP endpoint is **one server** to every client that reaches it. The
+protocol carries one `serverInfo` and one `instructions`, on `initialize`
+and on `server/discover` alike — the same shape `new McpServer({ name,
+version })` builds in the TypeScript SDK, and the one a FastMCP parent keeps
+when it mounts children. Two declarations answer for it, each owned by whoever can know it.
 
 **The app says who it is and how its server is used**, once, for every endpoint
 it exposes:

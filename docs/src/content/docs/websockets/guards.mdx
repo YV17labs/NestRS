@@ -9,12 +9,11 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 A WebSocket connection has two gates a `Guard` can sit on, and they
-answer different questions. The **upgrade** is an HTTP `GET` carrying
-headers, cookies, and a query string — the moment to ask "may this
-peer open a connection at all?" The **dispatch loop** then runs in a
-task on the upgraded socket — the moment to ask "may this connection
-fire *this* event?" One `Guard` trait covers both; the difference is
-where you bind it.
+answer different questions. The **upgrade** is an HTTP `GET` carrying headers, cookies and a query
+string: the moment to ask "may this peer open a connection at all?" The
+**dispatch loop** then runs in a task on the upgraded socket: the moment to
+ask "may this connection fire *this* event?" One `Guard` trait covers both,
+and the difference is where you bind it.
 
 ## Two scopes, one trait
 
@@ -157,9 +156,9 @@ time from **two** sources: app-global guards and the guards listed on the
 **message** itself. Guards bound on the gateway struct are **not** in this
 chain — they run once at the upgrade (`check_http`), never per message.
 Duplicates are removed by `TypeId`, so a guard registered globally and also
-listed on a specific message runs **once** per dispatch — there is no cost to
-redeclaring on a provider, and a feature crate moved to an app that doesn't
-share the same globals still carries its own.
+listed on a specific message runs **once** per dispatch. Redeclaring on a
+provider therefore costs nothing, and a feature crate moved to an app that
+does not share the same globals still carries its own.
 
 ```text frame="none"
 ConnUpgrade ── check_http ── on_connect
@@ -202,14 +201,7 @@ WS-specific bit — `WsDataContext` — lives in `nest_rs::seaorm` behind
 the `ws` feature (packaged by `AuthzWsModule`), alongside its HTTP and
 GraphQL sibling bridges.
 
-## Going further
-
-- [Security](/security/) — the authn + authz wiring story across HTTP,
-  GraphQL, and WS.
-- [Messages](/websockets/messages/) — the wire shape of a denial reply
-  and the return contract.
-
-### Reference
+## Reference
 
 - [`Guard`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-guards/src/guard.rs) —
   the `check_http` / `check_graphql` / `check_ws_message` triple.
@@ -217,3 +209,10 @@ GraphQL sibling bridges.
   the per-gateway, per-event guard table the dispatcher iterates.
 - [`crates/features/src/chat/ws/guard.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/ws/guard.rs) —
   a per-message guard worked end to end.
+
+## Going further
+
+- [Security](/security/) — the authn + authz wiring story across HTTP,
+  GraphQL, and WS.
+- [Messages](/websockets/messages/) — the wire shape of a denial reply
+  and the return contract.

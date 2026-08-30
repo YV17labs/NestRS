@@ -36,7 +36,7 @@ and that is the question preceding all four roles. Only the issuer needs
 machine-client registry: neither is a credential verdict, and a resource server
 that compiled them would carry a token endpoint it never serves.
 
-```sh
+```bash frame="terminal"
 # the issuer — signs tokens, so it serves a token endpoint
 cargo add nest-rs --features oauth-server
 
@@ -49,7 +49,7 @@ RFC 9728 document and the `401` challenge describe the *deployment*, are served
 to callers with no credential at all, and mount an HTTP controller a worker
 would never reach.
 
-```sh
+```bash frame="terminal"
 cargo add nest-rs --features oauth-resource
 ```
 
@@ -180,7 +180,7 @@ When a resource server needs to validate something the issuer knows
 issuer writes the revocation row, the resource server reads it via
 the same `Repo`. No HTTP between the two.
 
-<Aside>
+<Aside type="note">
 Sharing a database between deployables is itself a coupling. The
 right size of the split — one issuer + one API, or one issuer + many
 APIs — depends on whether the data layer is a bottleneck. The
@@ -249,13 +249,12 @@ description of itself. Each is omitted from the served JSON when unset, as
 | `NESTRS_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
 | `NESTRS_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
 
-§2 defines fourteen members and the framework serves eight. The other six are
-refused in writing on `ProtectedResourceMetadata` — each naming the fact that
-makes it impossible here (nothing signs a response, so no `jwks_uri`; no
-`cnf`-claim handling, so no DPoP binding; a `Strategy` never sees the TLS
-handshake, so no mTLS binding), with `signed_metadata` recorded as an owner
-question rather than a refusal, since publishing one is possible and only the
-validating half is missing.
+§2 defines fourteen members and the framework serves eight. The other six are refused in writing on `ProtectedResourceMetadata`, each
+naming the fact that makes it impossible here: nothing signs a response, so
+no `jwks_uri`; no `cnf`-claim handling, so no DPoP binding; a `Strategy`
+never sees the TLS handshake, so no mTLS binding. `signed_metadata` is
+recorded as an owner question rather than a refusal — publishing one is
+possible, and only the validating half is missing.
 
 The discovery walk, from a client that knows only one URL:
 

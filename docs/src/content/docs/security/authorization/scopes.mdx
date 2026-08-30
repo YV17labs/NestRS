@@ -38,12 +38,12 @@ impl AbilityFactory for AuthzAbility {
 }
 ```
 
-That is the whole declaration. When the caller's token does not carry
-the scope, the rule is **withheld** — not added at all — so every layer
-refuses together, exactly as they would for a rule you never wrote: the
-class gate says no, the [query pre-filter](/security/authorization/row-level-filtering/)
-matches nothing, the [response mask](/security/authorization/response-masking/)
-has nothing to expose.
+That is the whole declaration. When the caller's token does not carry the scope, the rule is **withheld** —
+not added at all. Every layer then refuses together, exactly as it would for
+a rule you never wrote: the class gate says no, the [query
+pre-filter](/security/authorization/row-level-filtering/) matches nothing,
+and the [response mask](/security/authorization/response-masking/) has
+nothing to expose.
 
 Call it more than once to require **all** the named scopes. Scopes are
 opaque tokens compared exactly (RFC 6749 §3.3) — `posts:*` is a value

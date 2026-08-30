@@ -1,0 +1,102 @@
+{{/*
+The apps that run to completion — `kind: job`.
+
+Migrations are one of them: the same image as every other app, another binary,
+and a `pre-install`/`pre-upgrade` hook so the schema is current before any
+deployment is updated. Ordering is the hook's, not this map's — Helm renders
+`apps` alphabetically.
+
+A job carries its own copy of the credentials rather than the release's Secret:
+a `pre-install` hook runs before the release's own resources exist, and on
+`pre-upgrade` that Secret still holds the *previous* revision's values. The copy
+is deleted as soon as the hook succeeds. A Secret you manage yourself
+(`existingSecret`) has neither problem and is used directly.
+*/}}
+{{- $jobs := dict }}
+{{- range $app, $_ := .Values.apps }}
+{{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}
+{{- if eq $cfg.kind "job" }}
+{{- $_ := set $jobs $app $cfg }}
+{{- end }}
+{{- end }}
+{{- if $jobs }}
+{{- if not .Values.existingSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ printf "%s-job" (include "demo.fullname" .) }}
+  labels:
+    {{- include "demo.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+type: Opaque
+stringData:
+  {{- range $key, $value := .Values.secrets }}
+  {{ printf "%s_%s" $.Values.envPrefix $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}
+{{- range $app, $cfg := $jobs }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-%s" (include "demo.fullname" $) $app }}
+  labels:
+    {{- include "demo.appLabels" (dict "ctx" $ "app" $app) | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": {{ $cfg.hookWeight | quote }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $cfg.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "demo.appSelectorLabels" (dict "ctx" $ "app" $app) | nindent 8 }}
+        {{- with $cfg.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $cfg.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      restartPolicy: Never
+      {{- with $.Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "demo.serviceAccountName" $ }}
+      securityContext:
+        {{- toYaml $cfg.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ $app }}
+          image: {{ include "demo.image" $ | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $cfg.securityContext | nindent 12 }}
+          command:
+            - {{ printf "/usr/local/bin/%s" $cfg.bin | quote }}
+          {{- with $cfg.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- include "demo.env" (dict "ctx" $ "app" $app) | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: {{ default (printf "%s-job" (include "demo.fullname" $)) $.Values.existingSecret }}
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+      {{- with $cfg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cfg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

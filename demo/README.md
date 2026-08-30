@@ -126,3 +126,28 @@ docker run --rm nestrs /usr/local/bin/migrate up                # apply migratio
 Runtime image is `gcr.io/distroless/cc-debian13:nonroot` — no shell, no package
 manager, runs as UID 65532. `cargo-chef` cooks dependencies in a cacheable
 layer. Adding a new app under `demo/apps/` requires no Dockerfile change.
+
+`migrate` ships beside the apps — the schema is an app of its own. `seed` does
+not: it writes demo fixtures, which a production image has no business being
+able to do, so it stays the local `nestrs run db seed`.
+
+## Kubernetes
+
+[`charts/demo/`](charts/demo/) is a Helm chart over that same image. Every
+app is one entry in `apps`, and `kind` says what it becomes — a Deployment
+behind a Service, or a job that runs to completion before them:
+
+```bash
+helm install demo charts/demo \
+  --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
+  --set secrets.REDIS__URL="redis://redis:6379"
+```
+
+Set `apps.<name>.host` rather than the cross-app URLs: the issuer, the audience,
+the RFC 9728 resource identifier and the MCP `Host` allowlist are each some
+app's public origin, and the chart derives them from the hostnames.
+
+The queue worker scales on queue depth through [KEDA](https://keda.sh), shipped
+disabled — its processors are I/O-bound and it runs one job at a time per
+`#[process]` method, so CPU stays flat however deep the backlog gets. The
+chart's [README](charts/demo/README.md) carries that trade-off and the rest.

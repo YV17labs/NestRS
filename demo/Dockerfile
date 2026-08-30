@@ -9,8 +9,12 @@
 #   cd ..  &&  docker build -f demo/Dockerfile -t nestrs .
 #
 # Every binary crate under `demo/apps/` is compiled in the builder and shipped
-# in the runtime image. Which one runs is chosen at `docker run` time by
-# overriding the entrypoint:
+# in the runtime image, plus `migrate` — the schema is an app of its own, run to
+# completion before the others. `seed` is deliberately left out: it writes demo
+# fixtures, which a production image has no business being able to do. It stays
+# a local command (`nestrs run db seed`).
+#
+# Which binary runs is chosen at `docker run` time by overriding the entrypoint:
 #
 #   docker run --rm -p 3002:3002 nestrs                # runs api (default)
 #   docker run --rm -p 3001:3001 nestrs /usr/local/bin/auth
@@ -18,7 +22,7 @@
 # Stages:
 #   1. chef    — rust toolchain + cargo-chef, shared by planner & builder
 #   2. planner — produces a recipe describing the workspace dependency graph
-#   3. builder — cooks deps (cacheable), then compiles every workspace binary
+#   3. builder — cooks deps (cacheable), then compiles the shipped binaries
 #   4. runtime — distroless, non-root, minimal attack surface
 #
 # Security choices:
@@ -53,8 +57,8 @@ COPY --from=planner /app/demo/recipe.json /app/demo/recipe.json
 WORKDIR /app/demo
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . /app
-RUN cargo build --release --workspace --bins
-# Collect every workspace binary into a single dir so the runtime stage can
+RUN cargo build --release --workspace --exclude seed --bins
+# Collect every binary that was built into a single dir so the runtime stage can
 # copy them without enumerating each one.
 RUN mkdir -p /out && \
     find target/release -maxdepth 1 -type f -executable -exec cp {} /out/ \;

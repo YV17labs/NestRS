@@ -1,0 +1,41 @@
+{{ .Chart.Name }} {{ .Chart.Version }} — release {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+Image: {{ include "demo.image" . }}
+{{ range $app, $_ := .Values.apps }}{{ $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}{{ if eq $cfg.kind "job" }}  {{ printf "%-10s" $app }} /usr/local/bin/{{ $cfg.bin }}{{ with $cfg.args }} {{ join " " . }}{{ end }}  [job, before every deployment]
+{{ end }}{{ end }}{{ range $app, $_ := .Values.apps }}{{ $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}{{ if eq $cfg.kind "deployment" }}  {{ printf "%-10s" $app }} /usr/local/bin/{{ $cfg.bin }} :{{ $cfg.port }}{{ if and $.Values.ingress.enabled $cfg.ingress $cfg.host }}  →  {{ $.Values.scheme }}://{{ $cfg.host }}{{ end }}{{ if $cfg.keda.enabled }}  [KEDA {{ $cfg.keda.minReplicaCount }}–{{ $cfg.keda.maxReplicaCount }}]{{ else if $cfg.autoscaling.enabled }}  [HPA {{ $cfg.autoscaling.minReplicas }}–{{ $cfg.autoscaling.maxReplicas }}]{{ else }}  [{{ $cfg.replicas }} replica(s)]{{ end }}
+{{ end }}{{ end }}
+Check the rollout:
+
+  kubectl --namespace {{ .Release.Namespace }} rollout status deploy/{{ include "demo.fullname" . }}-api
+  helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+
+{{- if not .Values.ingress.enabled }}
+
+No Ingress is enabled. Reach an app directly:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "demo.fullname" . }}-api {{ (fromYaml (include "demo.appConfig" (dict "ctx" . "app" "api"))).port }}
+{{- end }}
+{{- range $app, $_ := .Values.apps }}
+{{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}
+{{- if and $.Values.ingress.enabled $cfg.ingress (not $cfg.host) }}
+
+  ! apps.{{ $app }}.host is unset, so it has no Ingress — and the cross-app URLs
+    derived from it (issuer, audience, MCP allowed hosts, social redirects) are
+    unset too. Set the hostname rather than pinning those URLs in `config`.
+{{- end }}
+{{- end }}
+{{- $worker := fromYaml (include "demo.appConfig" (dict "ctx" . "app" "worker")) }}
+{{- if $worker.keda.enabled }}
+
+The queue worker scales on Redis list length. Two facts to keep in view:
+
+  - a worker start re-enqueues orphaned jobs across *all* registered consumers,
+    so scaling up re-runs peers' in-flight jobs; `#[process]` must be idempotent
+  - at zero replicas nothing promotes <queue>:scheduled or recovers
+    <queue>:inflight, which is why minReplicaCount defaults to 1
+{{- else if $worker.autoscaling.enabled }}
+
+The queue worker scales on CPU. It runs one job at a time per #[process] method,
+so a backlog of I/O-bound jobs leaves CPU flat and this HPA idle — queue depth,
+through KEDA, is the signal that moves with the work (`apps.worker.keda`).
+{{- end }}

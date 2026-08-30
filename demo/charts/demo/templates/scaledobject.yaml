@@ -1,0 +1,56 @@
+{{/*
+Queue depth, through KEDA. Optional: the chart installs and runs without KEDA in
+the cluster, and every app leaves this off by default.
+
+Why this exists at all when `autoscaling` above is simpler: the worker runs one
+job at a time per `#[process]` method and both demo processors are I/O-bound, so
+CPU utilisation stays flat however deep the backlog gets. List length is the
+only signal that moves with the work.
+*/}}
+{{- range $app, $_ := .Values.apps }}
+{{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}
+{{- if and (eq $cfg.kind "deployment") $cfg.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ printf "%s-%s" (include "demo.fullname" $) $app }}
+  labels:
+    {{- include "demo.appLabels" (dict "ctx" $ "app" $app) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ printf "%s-%s" (include "demo.fullname" $) $app }}
+  pollingInterval: {{ $cfg.keda.pollingInterval }}
+  cooldownPeriod: {{ $cfg.keda.cooldownPeriod }}
+  minReplicaCount: {{ $cfg.keda.minReplicaCount }}
+  maxReplicaCount: {{ $cfg.keda.maxReplicaCount }}
+  {{- with $cfg.keda.behavior }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
+  triggers:
+    {{- range $cfg.keda.triggers }}
+    - type: {{ .type }}
+      metadata:
+        {{- if eq .type "redis" }}
+        {{- if not (or (index .metadata "address") (index .metadata "addressFromEnv") (index .metadata "host")) }}
+        address: {{ $.Values.keda.redis.address | quote }}
+        {{- end }}
+        {{- if $.Values.keda.redis.passwordFromEnv }}
+        passwordFromEnv: {{ $.Values.keda.redis.passwordFromEnv | quote }}
+        {{- end }}
+        enableTLS: {{ $.Values.keda.redis.enableTLS | quote }}
+        databaseIndex: {{ $.Values.keda.redis.databaseIndex | quote }}
+        {{- end }}
+        {{- toYaml .metadata | nindent 8 }}
+      {{- with .authenticationRef }}
+      authenticationRef:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

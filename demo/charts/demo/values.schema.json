@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "demo",
+  "type": "object",
+  "required": ["image", "envPrefix", "apps"],
+  "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "image": {
+      "type": "object",
+      "required": ["repository", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] },
+        "pullSecrets": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "envPrefix": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+    "environment": { "type": "string", "minLength": 1 },
+    "scheme": { "enum": ["http", "https"] },
+    "config": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] } },
+    "secrets": { "type": "object", "additionalProperties": { "type": "string" } },
+    "existingSecret": { "type": "string" },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "annotations": { "type": "object" }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": { "type": "object" },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "secretName": { "type": "string" }
+          }
+        }
+      }
+    },
+    "defaults": { "$ref": "#/$defs/appSettings" },
+    "apps": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "allOf": [
+          { "$ref": "#/$defs/appSettings" },
+          {
+            "type": "object",
+            "required": ["bin"],
+            "properties": {
+              "kind": { "enum": ["deployment", "job"] },
+              "bin": { "type": "string", "minLength": 1 },
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+              "host": { "type": "string" },
+              "ingress": { "type": "boolean" },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "backoffLimit": { "type": "integer", "minimum": 0 },
+              "hookWeight": { "type": "integer" }
+            }
+          }
+        ]
+      }
+    },
+    "keda": {
+      "type": "object",
+      "properties": {
+        "redis": {
+          "type": "object",
+          "properties": {
+            "address": { "type": "string" },
+            "passwordFromEnv": { "type": "string" },
+            "enableTLS": { "type": "boolean" },
+            "databaseIndex": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "object" }
+      }
+    }
+  },
+  "$defs": {
+    "appSettings": {
+      "type": "object",
+      "properties": {
+        "kind": { "enum": ["deployment", "job"] },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "backoffLimit": { "type": "integer", "minimum": 0 },
+        "hookWeight": { "type": "integer" },
+        "replicas": { "type": "integer", "minimum": 0 },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+        "podSecurityContext": { "type": "object" },
+        "securityContext": { "type": "object" },
+        "resources": { "type": "object" },
+        "podAnnotations": { "type": "object" },
+        "podLabels": { "type": "object" },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object" },
+        "topologySpreadConstraints": { "type": "array" },
+        "extraEnv": { "type": "array" },
+        "pdb": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minAvailable": { "type": ["integer", "string"] },
+            "maxUnavailable": { "type": ["integer", "string"] }
+          }
+        },
+        "autoscaling": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicas": { "type": "integer", "minimum": 1 },
+            "maxReplicas": { "type": "integer", "minimum": 1 },
+            "targetCPUUtilizationPercentage": { "type": ["integer", "string"] },
+            "targetMemoryUtilizationPercentage": { "type": ["integer", "string"] },
+            "behavior": { "type": "object" }
+          }
+        },
+        "keda": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicaCount": { "type": "integer", "minimum": 0 },
+            "maxReplicaCount": { "type": "integer", "minimum": 1 },
+            "pollingInterval": { "type": "integer", "minimum": 1 },
+            "cooldownPeriod": { "type": "integer", "minimum": 0 },
+            "behavior": { "type": "object" },
+            "triggers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["type", "metadata"],
+                "properties": {
+                  "type": { "type": "string" },
+                  "metadata": { "type": "object" },
+                  "authenticationRef": { "type": "object" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

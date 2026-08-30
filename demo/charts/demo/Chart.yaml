@@ -1,0 +1,32 @@
+# Chart API v2, not v3: the v3 chart format announced with Helm 4 has not
+# shipped yet (early development, no released loader reads it). v2 is what
+# Helm 4 installs, and this chart is written for the Helm 4 runtime —
+# server-side apply, kstatus, OCI distribution.
+apiVersion: v2
+name: demo
+description: The NestRS demo workspace. One image, every app; which binary a Deployment runs is its command.
+type: application
+
+# Chart version, bumped on chart changes. `appVersion` tracks the demo
+# workspace's own version (demo/Cargo.toml) and supplies the default image tag.
+version: 0.1.0
+appVersion: "6.1.0"
+
+# The honest floor, read off the API versions this chart writes: autoscaling/v2
+# (1.23), policy/v1 (1.21), networking.k8s.io/v1 (1.19). `helm template` renders
+# offline against 1.20 unless told otherwise, so pass --kube-version there.
+kubeVersion: ">= 1.23.0-0"
+
+home: https://nestrs.dev
+sources:
+  - https://github.com/YV17labs/NestRS
+keywords:
+  - nestrs
+  - rust
+maintainers:
+  - name: YV17labs
+    url: https://github.com/YV17labs
+annotations:
+  # The queue worker scales on queue depth only when KEDA is installed and
+  # `apps.worker.keda.enabled` is set; the chart installs without it.
+  nestrs.dev/optional-dependencies: keda.sh

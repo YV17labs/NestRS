@@ -1,0 +1,22 @@
+{{- range $app, $_ := .Values.apps }}
+{{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}
+{{- if and (eq $cfg.kind "deployment") $cfg.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ printf "%s-%s" (include "demo.fullname" $) $app }}
+  labels:
+    {{- include "demo.appLabels" (dict "ctx" $ "app" $app) | nindent 4 }}
+spec:
+  {{- if $cfg.pdb.minAvailable }}
+  minAvailable: {{ $cfg.pdb.minAvailable }}
+  {{- end }}
+  {{- if $cfg.pdb.maxUnavailable }}
+  maxUnavailable: {{ $cfg.pdb.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "demo.appSelectorLabels" (dict "ctx" $ "app" $app) | nindent 6 }}
+{{- end }}
+{{- end }}

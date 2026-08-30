@@ -45,6 +45,53 @@ crate; the worker shares Redis with the API's queue producer. Tokens are
 self-contained JWTs — the API verifies with a public key, never calls the
 issuer over HTTP.
 
+## Deploy it
+
+The workspace ships a container and a Helm chart. One image holds every binary,
+so a Deployment's `command` is the whole difference between the five apps —
+[`demo/Dockerfile`](https://github.com/YV17labs/NestRS/tree/main/demo/Dockerfile)
+builds it, and the chart under
+[`demo/charts/demo/`](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo)
+deploys it.
+
+```bash
+helm install demo demo/charts/demo \
+  --set secrets.SEAORM__URL="postgres://user:pass@db:5432/nestrs" \
+  --set secrets.REDIS__URL="redis://redis:6379"
+```
+
+Every app is declared in one map, and `kind` says what it becomes in the
+cluster. Migrations are an app like the others — the same image, another binary
+— rendered as a job that runs to completion before any deployment is updated.
+
+```yaml title="charts/demo/values.yaml"
+apps:
+  migrate:   { kind: job, bin: migrate, args: [up] }
+  api:       { bin: api, port: 3002, host: api.example.com, ingress: true }
+  worker:    { bin: worker, port: 3005 }
+```
+
+Set the hostnames rather than the URLs. The apps address each other by URL —
+the issuer a token is signed by, the audience it is minted for, the resource
+identifier discovery serves, the MCP `Host` allowlist — and each of those is
+some app's public origin, so the chart derives them from `apps.<name>.host`.
+
+Scaling the queue worker is the one decision the chart does not make for you.
+The worker runs one job at a time per `#[process]` method, and Publish's
+processors are I/O — an S3 round-trip, one INSERT — so a pod draining thousands
+of jobs sits near 0% CPU and a CPU-driven autoscaler never fires. Queue depth is
+the signal that moves with the work, and [KEDA](https://keda.sh) is what reads
+it: the chart ships the triggers for both queues, disabled until you turn them
+on. The chart's
+[README](https://github.com/YV17labs/NestRS/tree/main/demo/charts/demo#scaling-the-queue-worker)
+carries the trade-offs, including why replicas stop at one rather than zero.
+
+<Aside type="caution">
+The demo's `.env` is committed on purpose and its keypair is public — anyone
+with the repository can mint tokens it accepts. Generate your own before
+deploying any of this, and pass it through `secrets`.
+</Aside>
+
 ## How the docs use Publish
 
 Three entry points — two learning paths (CLI) and one hosted reference (this repo):

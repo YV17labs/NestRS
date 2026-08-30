@@ -1,0 +1,271 @@
+# The NestRS demo, on Kubernetes.
+#
+# One image holds every binary of the demo workspace (see demo/Dockerfile), so
+# an app is a Deployment whose `command` names its binary. Everything below is
+# either that map (`apps`), what all of them share (`defaults`), or the
+# configuration the framework reads from the environment.
+
+# --- image --------------------------------------------------------------------
+image:
+  repository: ghcr.io/yv17labs/nestrs
+  # Empty ⇒ the chart's appVersion. Pin a digest or an immutable tag in prod.
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# --- configuration ------------------------------------------------------------
+# The framework reads its settings from the environment. `.env` is a local
+# development convenience the image does not carry: real environment variables
+# win over it anyway, so a cluster only ever sets variables.
+
+# The prefix every framework variable wears. Set on the process (here, as a pod
+# env var) because it chooses the cascade before any file is read — never in a
+# `.env`. Renaming it renames every key below at once.
+envPrefix: NESTRS
+
+# `NESTRS_ENV` — selects the environment-specific half of the cascade.
+environment: production
+
+# Scheme used to build the public origins the apps advertise to each other.
+scheme: https
+
+# Non-secret settings, written into a ConfigMap. Keys are spelled WITHOUT the
+# prefix; the chart prepends `envPrefix`. Anything set here wins over the values
+# the chart derives from the app hostnames (see `templates/_helpers.tpl`).
+config:
+  # Mirrors `features::authz::constants` — the scopes the demo's rules gate on.
+  # A scope a rule requires but this list omits is a dead end the framework
+  # reports at warn on boot.
+  OAUTH_RESOURCE__SCOPES_SUPPORTED: posts:read,posts:write,audio:transcode
+  OPENAPI__DESCRIPTION: Demo API built with nestrs
+  STORAGE__REGION: us-east-1
+  STORAGE__BUCKET: nestrs
+  STORAGE__FORCE_PATH_STYLE: "true"
+  # `<PREFIX>_LOG` — the framework's own EnvFilter directive (it falls back to
+  # the ecosystem's unprefixed RUST_LOG). `nest_rs::operation=off` silences
+  # every edge's one-line-per-unit-of-work at once.
+  LOG: info
+  # `text` or `json`. Release builds already default to json; stated because a
+  # log shipper reads it and nobody should have to know the build profile.
+  LOG_FORMAT: json
+
+# Secret settings, written into a Secret this chart owns. Same spelling rule as
+# `config`. Leave empty and set `existingSecret` to bring your own.
+#
+# Required (here or in `existingSecret`):
+#   SEAORM__URL              postgres://user:pass@host:5432/db
+#   REDIS__URL               redis://host:6379
+#   AUTHN__PRIVATE_KEY       PEM, Ed25519 — generate your own, never the repo's
+#   AUTHN__PUBLIC_KEY        PEM, its matching half
+# Optional: STORAGE__ACCESS_KEY, STORAGE__SECRET_KEY, ISSUER__CLIENTS,
+#   SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*
+secrets: {}
+
+# Name of a Secret you manage yourself. Set it and `secrets` must stay empty:
+# the two are alternatives, not layers.
+existingSecret: ""
+
+# --- shared pod settings ------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  tls:
+    enabled: true
+    # Empty ⇒ one secret per exposed app, named <release>-<app>-tls.
+    secretName: ""
+
+# Merged under every entry of `apps`; an app's own value wins.
+defaults:
+  # `deployment` — a long-running process behind a Service.
+  # `job`        — runs once before the deployments, as a pre-install/pre-upgrade
+  #                hook. Ordering comes from the hook, not from this map: Helm
+  #                renders the entries in alphabetical order.
+  kind: deployment
+  replicas: 1
+  # `kind: job` only. `hookWeight` orders the jobs among themselves; every one of
+  # them runs before the deployments either way.
+  args: []
+  backoffLimit: 1
+  hookWeight: -5
+  # The runtime image is distroless nonroot (UID 65532) with no shell.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  # The framework installs a SIGTERM handler and drains its transports; this is
+  # the window Kubernetes gives it before SIGKILL.
+  terminationGracePeriodSeconds: 30
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  extraEnv: []
+  pdb:
+    enabled: false
+    minAvailable: 1
+  # Plain HPA — CPU/memory. Never scales below 1.
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    # Empty ⇒ no memory metric.
+    targetMemoryUtilizationPercentage: ""
+    behavior: {}
+  # KEDA — queue depth. Mutually exclusive with `autoscaling` on the same app
+  # (KEDA owns an HPA of its own; two of them fight). The chart fails the render
+  # if both are enabled.
+  keda:
+    enabled: false
+    minReplicaCount: 1
+    maxReplicaCount: 10
+    pollingInterval: 20
+    cooldownPeriod: 300
+    behavior: {}
+    triggers: []
+
+# --- the apps -----------------------------------------------------------------
+# Every binary the image carries is declared here; `kind` says what shape it
+# takes in the cluster.
+#
+# `bin`  the binary in /usr/local/bin this app runs
+# `port` the HTTP port (deployments only); the chart sets NESTRS_HTTP__PORT from
+#        it, so this value is authoritative and the code default is only a
+#        local-run convenience
+# `host` public hostname. Also what the chart derives the cross-app URLs from
+#        (issuer, audience, MCP allowed hosts, social redirect URLs) — set them
+#        rather than copying those URLs into `config` by hand.
+apps:
+  # Schema migrations. An app like any other — the same image, another binary —
+  # that runs to completion before any deployment is updated.
+  migrate:
+    kind: job
+    bin: migrate
+    args:
+      - up
+
+  api:
+    bin: api
+    port: 3002
+    host: ""
+    ingress: true
+
+  auth:
+    bin: auth
+    port: 3001
+    host: ""
+    ingress: true
+
+  assistant:
+    bin: assistant
+    port: 3003
+    host: ""
+    ingress: true
+
+  live:
+    bin: live
+    port: 3004
+    host: ""
+    ingress: true
+    # WebSocket. Sockets live up to NESTRS_WS__MAX_CONNECTION_SECS (4h by
+    # default), so a rollout drops them and clients reconnect — CPU is a poor
+    # signal for a connection-bound edge, hence no autoscaling here by default.
+    terminationGracePeriodSeconds: 60
+
+  worker:
+    bin: worker
+    # Health only — the worker mounts an HTTP transport for the probes.
+    port: 3005
+    host: ""
+    ingress: false
+    # Must exceed NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS (30s by default),
+    # or SIGKILL lands mid-drain and every in-flight job is re-run.
+    terminationGracePeriodSeconds: 45
+    # Two facts about this worker, both from the framework's own source:
+    #
+    # 1. It runs `concurrency(1)` per `#[process]` method — throughput comes
+    #    from replicas, never from a bigger pod. Both demo jobs are pure I/O
+    #    (S3 round-trip, one INSERT), so a pod draining a huge backlog sits
+    #    near 0% CPU and a CPU-driven HPA never fires. Turn `autoscaling` on
+    #    only if your own processor is genuinely CPU-bound.
+    # 2. apalis re-enqueues orphaned jobs on every worker start, with a cutoff
+    #    that matches all registered consumers — a scale-up therefore re-runs
+    #    its peers' in-flight jobs. `#[process]` handlers must be idempotent,
+    #    and scaling stays deliberately unhurried.
+    autoscaling:
+      enabled: false
+    # Queue depth, the signal that actually reflects a backlog. Needs KEDA in
+    # the cluster. `minReplicaCount: 1` on purpose — see `keda.redis` below.
+    keda:
+      enabled: false
+      minReplicaCount: 1
+      maxReplicaCount: 10
+      pollingInterval: 20
+      cooldownPeriod: 300
+      triggers:
+        - type: redis
+          metadata:
+            listName: audio:active
+            listLength: "5"
+        - type: redis
+          metadata:
+            listName: notifications:active
+            listLength: "20"
+
+# --- KEDA ---------------------------------------------------------------------
+# KEDA connects to Redis itself, from the operator — not through the app's env.
+# Its scaler wants `host:port`, not the `redis://` URL the framework reads.
+#
+# Why minReplicaCount defaults to 1 rather than 0: with no worker running,
+# nothing promotes `<queue>:scheduled` into `<queue>:active` and nothing
+# recovers `<queue>:inflight` from a pod that died mid-job. Neither is reachable
+# from today's demo — the producer pushes straight to `:active` and retries are
+# in-process — but scale-to-zero makes both permanent the day a delayed push
+# appears. Set it to 0 knowingly.
+keda:
+  redis:
+    address: ""
+    # Name of an env var on the worker pod holding the Redis password, if any.
+    passwordFromEnv: ""
+    enableTLS: false
+    databaseIndex: 0
+
+# --- helm test ----------------------------------------------------------------
+# The runtime image is distroless: no shell, no curl. `helm test` therefore
+# brings its own client image to hit /health/ready.
+tests:
+  enabled: true
+  image:
+    repository: curlimages/curl
+    tag: "8.19.0"
+    pullPolicy: IfNotPresent

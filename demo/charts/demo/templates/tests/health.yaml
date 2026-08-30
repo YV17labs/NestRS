@@ -1,0 +1,33 @@
+{{/*
+`helm test` — every app answers its readiness probe. The runtime image is
+distroless (no shell, no client), so the test brings its own.
+*/}}
+{{- if .Values.tests.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ printf "%s-health" (include "demo.fullname" .) }}
+  labels:
+    {{- include "demo.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: health
+      image: {{ printf "%s:%s" .Values.tests.image.repository .Values.tests.image.tag | quote }}
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      args:
+        - --fail
+        - --silent
+        - --show-error
+        - --max-time
+        - "10"
+        {{- range $app, $_ := .Values.apps }}
+        {{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}
+        {{- if eq $cfg.kind "deployment" }}
+        - {{ printf "http://%s-%s:%v/health/ready" (include "demo.fullname" $) $app $cfg.port | quote }}
+        {{- end }}
+        {{- end }}
+{{- end }}

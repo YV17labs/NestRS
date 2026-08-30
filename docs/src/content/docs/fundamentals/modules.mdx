@@ -21,12 +21,6 @@ The snippets are illustrative. Step ① matches the
 [Fundamentals](/fundamentals/) tour — the same `BlogModule` grows on the
 rest of this page.
 
-```mermaid
-flowchart LR
-  A["① BlogModule<br/>inline handlers"] --> B["② posts/ feature<br/>PostsModule + adapters"]
-  B --> C["③ framework imports<br/>DB, HTTP, config"]
-  C --> D["④ root composes<br/>no inline providers"]
-```
 
 ## Start with one module
 
@@ -131,7 +125,7 @@ flowchart TB
   PC -. "injects" .-> PS
 ```
 
-<Aside>
+<Aside type="note">
 **One `#[module]` per folder.** A `module.rs` defines exactly one
 `#[module]` struct. Multiple modules per feature ⇒ multiple folders. No
 `*_module.rs` — the file is always `module.rs`.
@@ -177,7 +171,7 @@ SeaOrmModule::for_root(None)
 HttpModule::for_root(None)
 ```
 
-```sh title=".env"
+```bash title=".env"
 NESTRS_SEAORM__URL=postgres://localhost/blog
 NESTRS_HTTP__HOST=0.0.0.0
 NESTRS_HTTP__PORT=4000

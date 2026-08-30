@@ -6,7 +6,7 @@ sidebar:
   order: 6
 ---
 
-import { Aside, FileTree } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 
 This page continues **`blog`** from
 [Modules](/fundamentals/modules/) and
@@ -14,24 +14,6 @@ This page continues **`blog`** from
 open the [tutorial](/tutorial/) `posts/` feature. Once `PostsHttpModule` mounts
 `PostsController`, guards decide *who* reaches each handler — and often
 attach the principal the handler reads back via `Ctx<T>`.
-
-Four steps on this page:
-
-1. **What a guard is** — one trait, four transports, `Ok(())` or
-   [`Denial`](https://docs.rs/nest-rs-guards/latest/nest_rs_guards/enum.Denial.html).
-2. **Secure the post API** — `#[use_guards(AuthnGuard, AuthzGuard)]` on
-   `PostsController`, with the modules that provide those guards.
-3. **Three scopes** — global, controller, per-handler; additive, not
-   substitutive.
-4. **Declare on the provider** — dedup by `TypeId`; redeclare at the
-   controller so security travels with the feature.
-
-```mermaid
-flowchart LR
-  A["① Guard trait<br/>gate or pass"] --> B["② PostsController<br/>AuthnGuard + AuthzGuard"]
-  B --> C["③ three scopes<br/>global → controller → handler"]
-  C --> D["④ declare on provider<br/>dedup, access graph"]
-```
 
 ## Install
 
@@ -193,20 +175,6 @@ pub struct AuthzModule;
 `check_graphql`, `check_ws_message` and `check_mcp`. A resolver, a gateway and
 an MCP host bind the same type, so none of them imports an HTTP adapter to
 reach it.
-
-<FileTree>
-- crates/features/src/
-  - authn/
-    - module.rs (AuthnModule — provides AuthnGuard)
-    - strategy.rs (AuthnGuard — the alias, beside the strategy it wraps)
-  - authz/
-    - module.rs (AuthzModule — provides AuthzAbility + AuthzGuard)
-    - guard.rs (AuthzGuard — answers every transport)
-  - posts/
-    - http/
-      - module.rs (PostsHttpModule — imports AuthzModule)
-      - controller.rs (#[use_guards(AuthnGuard, AuthzGuard)])
-</FileTree>
 
 ```mermaid
 flowchart TB
@@ -382,98 +350,35 @@ flowchart TB
   PC -. "debug at boot, zero extra cost" .-> RUN
 ```
 
-## HTTP, GraphQL, WebSockets, and MCP
+## One trait, four transports
 
-For most apps the global HTTP declaration is enough: GraphQL
-`POST /graphql`, `POST /mcp` and the WS upgrade are all HTTP requests that pass
-through the global chain. `/graphql` and `/mcp` are `Exempt` at the HTTP edge
-and gate **in-band** instead: with no bridge registered, their endpoint runs the
-pool's `check_http` over the request, and either way the pool joins the
-per-operation chain, where its `check_graphql` / `check_mcp` runs. So
+A guard implements the `check_*` methods that apply to it, and the framework
+runs each at its own seam:
+
+| Method | Runs | Bound by |
+|---|---|---|
+| `check_http` | post-routing on `&mut HttpRequest`, before the handler | `#[controller]` / `#[routes]`, and the `#[gateway]` struct |
+| `check_graphql` | in the resolver's per-operation chain, and in front of the federation root fields | `#[resolver]` / `#[operations]` |
+| `check_ws_message` | once per inbound envelope, after the upgrade | beside a `#[subscribe_message]` |
+| `check_mcp` | once per `#[tool]` / `#[prompt]` operation, inside rmcp's dispatch | `#[mcp]` host / `#[tools]` operation |
+
 `use_guards_global([...])` reaches every transport at every method it
-implements — a global `ThrottlerGuard` rate-limits a tool call through
-`check_http`, and a global guard written against `check_mcp` refuses one.
+implements. `/graphql` and `/mcp` are `Exempt` at the HTTP edge and gate
+**in-band** instead, so a global `ThrottlerGuard` still rate-limits a tool call
+through `check_http`, and a global guard written against `check_mcp` still
+refuses one.
 
-Each transport method runs at a different seam:
+The three multiplexed transports need one thing on top: a **bridge** above the
+resolver, the gateway and the tool, because their per-operation context does
+not carry the poem request. The bridge re-runs the HTTP chain once and
+re-installs the ambient `Ability` for the operation; below it you bind ordinary
+guards as usual. That wiring — `AuthzGraphqlModule`, `AuthzWsModule`,
+`AuthzMcpModule`, `forward_principal!`, and what each one gates — lives on
+[Authorization on GraphQL, WS & MCP](/security/authorization/per-transport-bridges/),
+with the connection-vs-message split on
+[WebSocket guards](/websockets/guards/).
 
-- `check_http` — on `&mut HttpRequest`, post-routing at the route site
-  (before the handler, so it can read `#[public]` route data).
-- `check_graphql` — inside the resolver's per-operation chain (context
-  is read-only), **and** in front of the two federation root fields
-  `_service` / `_entities`, which async-graphql resolves above the merged root.
-  That second site is why the argument is a `GraphqlOperationContext` rather
-  than async-graphql's `Context`: a schema extension is the only seam there and
-  it is handed no `Context`. Read data with `op.data_opt::<T>()`; reach for
-  `op.context()` when you genuinely need the selection set — it answers `None`
-  on a federation field rather than inventing one.
-- `check_ws_message` — once per inbound message, after the connection
-  upgrade.
-- `check_mcp` — once per `#[tool]` / `#[prompt]` operation, inside rmcp's
-  dispatch. The context carries the app and which operation is running; the
-  caller's `Ability` is ambient, so a capability-only guard reads it with
-  `current_ability()`.
-
-GraphQL, WS and MCP need a bridge one level above the resolver / gateway / tool
-because the per-operation context does not carry the poem request:
-
-- **GraphQL** — a `GraphqlOperationGuard` (e.g. `GraphqlAbilityBridge`)
-  re-runs the HTTP guard chain on `POST /graphql` and installs `Ability`
-  for the operation. Per-resolver gating binds the ability guard.
-- **MCP** — an `McpOperationGuard` (e.g. `McpAbilityBridge`), the exact twin:
-  same chain, same `around` installing `Ability` — here *inside* rmcp's
-  spawned dispatch. With none registered the endpoint falls back to the global
-  pool, and with no pool either it is deny-all. Above it, `#[use_guards(...)]`
-  binds ordinary guards per host and per operation, and the global pool joins
-  them in one chain deduplicated by type. The endpoint guard does not shorten
-  that chain: it is handed a request and runs `check_http`, while the chain is
-  handed the operation and runs `check_mcp` — two questions, so neither answers
-  the other.
-- **WS** — a `SocketContext` (e.g. `WsDataContext`) captures pool +
-  `Ability` on upgrade and re-installs them around each message.
-  Per-message gating goes through `check_ws_message`.
-
-On a resolver, `#[use_guards(...)]` binds the **ability guard** — the one
-that has a `check_graphql`. Authentication is not bound here: the bridge
-already ran it in band before the operation, so listing an `AuthnGuard`
-on a resolver would bind a guard with nothing to do.
-
-```rust title="crates/features/src/posts/graphql/resolver.rs"
-#[resolver]
-#[use_guards(AuthzGuard)] // AbilityGuard<AuthzAbility> — has check_graphql
-pub struct PostResolver { /* ... */ }
-```
-
-The principal reaches `ctx` through `forward_principal!(Claims)`, declared
-once beside `AuthzGraphqlModule`. It is not a guard and binds nothing: it
-copies `Claims` off the request **only if something already attached them**,
-and the only thing that does is the authn guard the bridge ran in band. So the
-gate is that guard, which its own module already gates — an anonymous request
-passes through untouched, and there is no marker type to declare or forget.
-
-WebSockets need no marker type either — the upgrade is a real HTTP `GET`,
-so the gateway struct binds the **real** HTTP guards; they run once at
-the upgrade and are access-graph-validated the same way (omit
-`AuthzWsModule` and the guards are unreachable ⇒ boot fails). A
-per-message check binds a real `Guard` beside the
-`#[subscribe_message]`; it runs through `check_ws_message` — e.g.
-`AuthzGuard` (the app's `AbilityGuard<AuthzAbility>` alias) denies,
-fail-closed, when no ambient ability is present.
-
-```rust title="crates/features/src/posts/ws/gateway.rs"
-#[gateway(path = "/posts/live")]
-#[use_guards(AuthnGuard, AuthzGuard)] // real guards — run once, at the upgrade
-pub struct PostGateway { /* ... */ }
-
-#[messages]
-impl PostGateway {
-    #[subscribe_message("comment")]
-    #[public]
-    #[use_guards(AuthzGuard)] // re-checked per message via check_ws_message
-    async fn comment(&self, msg: CommentInput) -> Reply { /* ... */ }
-}
-```
-
-### A guard must declare the transports it checks
+## A guard must declare the transports it checks
 
 Every `check_*` above defaults to `Ok(())` — right as "this guard does not
 apply to that transport", and the reason a guard bound where it has no
@@ -507,11 +412,11 @@ passes every request; the marker is what turns that into an error at the
 `#[use_guards]` line rather than a chain entry that guards nothing.
 
 A guard bound **globally** takes no marker, and that is a deliberate hole
-rather than an oversight: a global guard serves whichever edges it
+rather than an oversight. A global guard serves whichever edges it
 implements — its `check_http` on the request, its `check_graphql` /
-`check_mcp` on the operation — so requiring `HttpGuard` there would refuse a
-GraphQL-only one, and the alternative is four global lists where the developer
-wrote one. So an empty guard registered globally still passes everything: the
+`check_mcp` on the operation. Requiring `HttpGuard` there would refuse a
+GraphQL-only guard, and the alternative is four global lists where the
+developer wrote one. So an empty guard registered globally still passes everything: the
 markers bind `#[use_guards]` sites, not the pool.
 
 A guard on the `#[gateway]` **struct** attests `HttpGuard`, not `WsGuard` —
@@ -535,11 +440,9 @@ for the full HTTP / GraphQL / WS wiring, and
 
 ## Going further
 
-- [Providers](/fundamentals/providers/) — the access graph also governs
-  `#[use_guards(...)]` bindings.
-- [Interceptors](/fundamentals/interceptors/) — the sibling layer; wraps
-  the handler instead of gating it. Same dedup rules apply.
-- [Pipes](/fundamentals/pipes/) — input transform / validation.
-- [Error handling](/fundamentals/exception-filters/) — typed catch for
-  handler errors.
-- [Security](/security/) — `AuthnGuard`, `AbilityGuard`, the full chain.
+- [Interceptors](/fundamentals/interceptors/) — the sibling layer: it
+  wraps the handler instead of gating it, and dedups the same way.
+- [The request lifecycle](/fundamentals/request-lifecycle/) — where a
+  guard sits among the other three layer families.
+- [Security](/security/) — `AuthnGuard`, `AbilityGuard`, and the chain
+  they compose into.

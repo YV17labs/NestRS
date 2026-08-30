@@ -69,11 +69,10 @@ cross-tenant leak. In NestRS the filter is applied by the data layer from the
 ambient ability, so forgetting it is a category error the framework prevents —
 not a review comment someone has to catch.
 
-<Aside type="note">
-  Once the security modules are imported, every read is filtered, every write
-  is gated, and every response is masked. A feature does not opt in to this;
-  it opts out by not importing them. Security is structural, not vigilant.
-</Aside>
+That inversion — a feature opting *out* of authz by not importing it, rather
+than into it per handler — is [property 2 of the
+thesis](/why/#2-secure-by-default), and [Security](/security/) is where the
+three layers it names are wired.
 
 ## The macro question
 
@@ -87,7 +86,7 @@ decorator emitted — plain Rust, compiled by rustc like anything you write by
 hand, with doc comments naming the attribute argument each item came from.
 Nothing is resolved by reflection and nothing is generated at runtime.
 
-```console
+```bash frame="terminal"
 $ cargo expand -p features orgs::http::controller
 pub struct OrgsController {
     svc: Arc<OrgsService>,
@@ -106,7 +105,7 @@ impl OrgsController {
 is not a cryptic trait error deep in the expansion — the first error names
 the option and the accepted set, at the line and column you typed it:
 
-```console
+```bash frame="terminal"
 $ cargo check -p features
 error: unknown #[crud] argument `servcie`; expected `service`, `entity`, `output`, `create`, `update`, `ops` or `paginate`
   --> crates/features/src/orgs/http/controller.rs:17:5
@@ -119,41 +118,27 @@ What a decorator cannot check at compile time — that every injected
 dependency is reachable through your module imports — fails at boot instead,
 as the next section shows.
 
-## Wiring you find out about at boot, not at 3am
+## Wiring you find out about at boot
 
 axum resolves its state and its routes as you build the `Router`. A dependency
 you forgot to thread through surfaces where you use it, at runtime, on the
 request that needs it.
 
-NestRS records every module's imports and every provider's dependencies at
-compile time, then walks the graph in `App::build()`. A provider that injects
-something its module cannot reach fails the boot with an error naming the
-consumer, the missing dependency, and the module that provides it — before the
-first request. The check lives in
-[`crates/nest-rs-core/src/access.rs`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-core/src/access.rs)
-and governs `#[inject]` and the guard, filter, and interceptor attributes
-alike.
-
-A misconfigured import is a startup error you read once, not a `Cannot
-resolve` your users find for you.
+NestRS records imports and dependencies at compile time and walks that graph in
+`App::build()`, so the same mistake is a startup error naming the consumer, the
+missing dependency and the module that provides it. The check and its error are
+on [Providers](/fundamentals/providers/#the-access-graph--wiring-checked-at-boot).
 
 ## Performance is the secondary benefit
 
-NestRS sits on top of hyper, tokio, and poem — the same native core the
-fastest Rust frameworks use. So performance is not the axis that separates the
-two; both are compiled and both are fast. It is a benefit, not the argument.
+NestRS sits on top of hyper, tokio and poem — the same native core the fastest
+Rust frameworks use. So throughput is not the axis that separates the two:
+both are compiled and both are fast, and against a managed runtime the margin
+is a consequence of that core rather than an argument for this framework.
+Protocol, figures and reproduction steps are on the
+[benchmarks page](/benchmarks/).
 
-For context, against the same service in NestJS 11 — idiomatic on both sides,
-byte-identical contract, conformance-gated — NestRS measures **×2.5** the
-throughput of the Fastify adapter (Node's best case) with p99 cut to a third,
-in **~25× less resident memory**, cold-starting **~23× faster**. Protocol,
-figures and reproduction steps on the [benchmarks page](/benchmarks/).
-
-<Aside type="caution">
-  Throughput is the floor here, not the argument. Both stacks compile to the
-  same native core; what NestRS adds on top is the isolation guarantee. Pick it
-  for the guarantee and take the performance as given.
-</Aside>
+Pick NestRS for the isolation guarantee, and take the performance as given.
 
 ## Where axum is still the right call
 

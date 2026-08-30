@@ -18,6 +18,14 @@
  *
  * A section's name is a link to its own first page.
  *
+ * **Scroll position survives navigation.** A column that lists every page is a
+ * tall column, so a reader eight sections down would land back at the top on
+ * every click. Starlight's own `SidebarPersister` is what stops that — it
+ * stores the scroller's offset in `sessionStorage` and restores it inline
+ * before paint — and the default `Sidebar` wraps its list in one. Replacing
+ * that component dropped the wrapper; this puts it back, at the top level
+ * only, since the element defines a custom element and must render once.
+ *
  * **Two levels, and the config is what keeps it that way.** The recursion below
  * renders whatever depth `astro.config.mjs` declares; that file declares a
  * group per section and pages under it, and STYLE.md §G says why the Basics /
@@ -25,6 +33,7 @@
  * level added there would render — silently, and nowhere else would say so.
  */
 import MobileMenuFooter from 'virtual:starlight/components/MobileMenuFooter';
+import SidebarPersister from '@astrojs/starlight/components/SidebarPersister.astro';
 
 interface Entry {
   type: 'link' | 'group';
@@ -60,44 +69,48 @@ const {
   sublist = Astro.locals.starlightRoute.sidebar as unknown as Entry[],
   nested = false,
 } = Astro.props;
+
+const Root = nested ? Fragment : SidebarPersister;
 ---
 
-<ul class:list={{ 'top-level': !nested }}>
-  {
-    sublist.map((entry) => {
-      const { class: className, ...attrs } = entry.attrs ?? {};
+<Root>
+  <ul class:list={{ 'top-level': !nested }}>
+    {
+      sublist.map((entry) => {
+        const { class: className, ...attrs } = entry.attrs ?? {};
 
-      if (entry.type === 'link') {
+        if (entry.type === 'link') {
+          return (
+            <li>
+              <a
+                href={entry.href}
+                aria-current={entry.isCurrent ? 'page' : undefined}
+                class:list={[{ large: !nested }, className]}
+                {...attrs}>
+                {entry.label}
+              </a>
+            </li>
+          );
+        }
+
+        // Always. `holdsCurrent` still decides the header's own state, so the
+        // section the reader is in reads as the current one without hiding the
+        // rest.
+        const here = holdsCurrent(entry);
+        const target = firstLink(entry);
+
         return (
           <li>
-            <a
-              href={entry.href}
-              aria-current={entry.isCurrent ? 'page' : undefined}
-              class:list={[{ large: !nested }, className]}
-              {...attrs}>
-              {entry.label}
+            <a class:list={['group-label', { 'is-open': here }]} href={target?.href}>
+              <span class="large">{entry.label}</span>
             </a>
+            <Astro.self sublist={entry.entries} nested />
           </li>
         );
-      }
-
-      // Always. `holdsCurrent` still decides the header's own state, so the
-      // section the reader is in reads as the current one without hiding the
-      // rest.
-      const here = holdsCurrent(entry);
-      const target = firstLink(entry);
-
-      return (
-        <li>
-          <a class:list={['group-label', { 'is-open': here }]} href={target?.href}>
-            <span class="large">{entry.label}</span>
-          </a>
-          <Astro.self sublist={entry.entries} nested />
-        </li>
-      );
-    })
-  }
-</ul>
+      })
+    }
+  </ul>
+</Root>
 
 {
   !nested && (

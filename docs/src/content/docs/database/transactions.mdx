@@ -146,7 +146,7 @@ overflows at `attempt >= 32` (UB in debug, wraps to `0` in release —
 which would hot-spin). Pass `usize::MAX` and the function still terminates
 in bounded time.
 
-<Aside>
+<Aside type="caution">
 **This is a service primitive.** It lives in `nest_rs::seaorm::retry` and
 takes an `Arc<DatabaseConnection>` because the closure re-opens the
 transaction from scratch. A handler can't use it against the ambient

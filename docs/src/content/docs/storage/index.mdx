@@ -22,7 +22,7 @@ implements. The AWS-S3 driver is wired by default and speaks to real
 AWS S3 as well as any S3-compatible server (MinIO, RustFS) in path- or
 virtual-host style.
 
-<Aside>
+<Aside type="note">
 `object_store` is reqwest/rustls-based — no `aws-runtime` / `aws-sdk-*`
 in the tree — so it builds on the pinned toolchain where the official
 AWS SDK currently does not.
@@ -221,16 +221,16 @@ inside the crate — not an API change for the features that inject it.
 The S3 driver is the default because it also covers every S3-compatible
 server.
 
-## Going further
-
-- [Queue](/queue/) — background workers that read and transform stored objects.
-- [Database](/database/) — persist the record a presigned upload finalizes.
-- [Configuration](/configuration/) — the dual-path rule behind `StorageConfig`.
-
-### Reference
+## Reference
 
 - `crates/nest-rs-storage/` — `Storage`, `ObjectMetadata`, `ObjectEntry`,
   `StorageConfig`, `StorageModule`.
 - [`audio` in the demo](https://github.com/YV17labs/NestRS/tree/main/demo/crates/features/src/audio)
   — presigns an upload URL, and the worker reads the stored object and writes
   a derived one.
+
+## Going further
+
+- [Queue](/queue/) — background workers that read and transform stored objects.
+- [Database](/database/) — persist the record a presigned upload finalizes.
+- [Configuration](/configuration/) — the dual-path rule behind `StorageConfig`.

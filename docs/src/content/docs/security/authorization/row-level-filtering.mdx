@@ -192,7 +192,7 @@ async fn search(
 with other filters. Routes that use `Scope` still need
 `AbilityGuard` bound — the access graph enforces it.
 
-<Aside>
+<Aside type="caution">
 Prefer extending the service. A custom query in a handler is a
 maintenance liability: the next reviewer must reconfirm that
 `scope.into_inner()` was joined. Adding the query to the

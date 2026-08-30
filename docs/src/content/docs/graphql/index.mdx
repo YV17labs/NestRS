@@ -6,8 +6,6 @@ sidebar:
   order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 Write a resolver as a struct and decorate it with `#[resolver]`; its
 operations register themselves into the schema at boot — there is no
 central `queries = [...]` list to keep in sync. Root resolvers
@@ -169,17 +167,7 @@ container handle to thread, no factory to call.
 - [Query limits](/graphql/query-limits/) — depth and complexity
   ceilings, and what a rejected query looks like.
 
-## Going further
-
-- [Security](/security/) — bind the ability guard so resolvers run with an
-  authenticated principal and an ambient `Ability`.
-- [Database](/database/) — the data layer the relation pages build on.
-- [Dataloaders](/database/dataloaders/) — `#[dataloader]` on a service
-  method, for batched fetches beyond what relations give you.
-- [WebSockets](/websockets/) — the other realtime surface, for protocols
-  that are message-shaped rather than schema-shaped.
-
-### Reference
+## Reference
 
 - `crates/features/src/users/graphql/resolver.rs` — a production-grade
   resolver with relations, dataloaders and authorization.
@@ -189,3 +177,13 @@ container handle to thread, no factory to call.
   `#[field_resolver]`, schema composition.
 - `crates/nest-rs-resource/` — `#[expose]` for an entity that becomes a
   GraphQL type *and* an OpenAPI schema from one declaration.
+
+## Going further
+
+- [Security](/security/) — bind the ability guard so resolvers run with an
+  authenticated principal and an ambient `Ability`.
+- [Database](/database/) — the data layer the relation pages build on.
+- [Dataloaders](/database/dataloaders/) — `#[dataloader]` on a service
+  method, for batched fetches beyond what relations give you.
+- [WebSockets](/websockets/) — the other realtime surface, for protocols
+  that are message-shaped rather than schema-shaped.

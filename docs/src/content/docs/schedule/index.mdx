@@ -126,7 +126,7 @@ same `AudioTasks` instance. Same `Arc<AudioService>`, three triggers, no
 ceremony. Each method calls into the service or logs; none of them
 build a queue payload or reach for a connection.
 
-<Aside>
+<Aside type="caution">
 A single `#[scheduled]` impl block per struct (multiple would conflict at
 the discovery layer). Put every scheduled method of a service in the same
 block — same convention as `#[routes]`.
@@ -275,6 +275,12 @@ impl CleanupTasks {
 
 Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbing.
 
+## Reference
+
+- `crates/features/src/audio/schedule/tasks.rs` — the canonical multi-method exemplar.
+- `crates/nest-rs-schedule/` — `#[scheduled]`, `ScheduleModule`,
+  `Scheduler`, `CronExpression`, `Trigger`.
+
 ## Going further
 
 - [Queue](/queue/) — pair a scheduled producer with a durable consumer
@@ -282,9 +288,3 @@ Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbin
 - [OpenTelemetry](/opentelemetry/) — every schedule event is targeted on
   `nest_rs::schedule`, carrying `provider` and `method` fields (plus
   `interval_ms` / `delay_ms` / `timezone` on the boot lines).
-
-### Reference
-
-- `crates/features/src/audio/schedule/tasks.rs` — the canonical multi-method exemplar.
-- `crates/nest-rs-schedule/` — `#[scheduled]`, `ScheduleModule`,
-  `Scheduler`, `CronExpression`, `Trigger`.

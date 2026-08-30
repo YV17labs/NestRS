@@ -5,10 +5,6 @@ sidebar:
   order: 5
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
-## Configuration
-
 `McpConfig` carries the streamable-HTTP options, dual-path like every
 `nest-rs-*` config: `NESTRS_MCP__*` env vars over an optional pinned base.
 Importing `McpModule` is what resolves it; without the import every mount runs
@@ -41,10 +37,12 @@ McpModule::for_root(McpOptions {
 | `NESTRS_MCP__MAX_REQUEST_BODY_BYTES` | `4194304` | POST body ceiling, enforced while streaming |
 | `NESTRS_MCP__STATELESS_PROTOCOL_METADATA_REQUIRED` | `false` | Require SEP-2243 per-request protocol metadata |
 
-The host allowlist is a **security control**, and its default is why a
-deployment reached under a real hostname answers `403` until it names itself: a
-page on an attacker's origin can point its own hostname at `127.0.0.1` and POST
-to a locally running MCP server, which would otherwise answer with the user's
+## The host allowlist
+
+The allowlist is a **security control**, which is why a deployment reached
+under a real hostname answers `403` until it names itself. A page on an
+attacker's origin can point its own hostname at `127.0.0.1` and POST to a
+locally running MCP server — which would otherwise answer with the user's
 tools and data. Name your hostnames; do not empty the list.
 
 The default looks strict for a public deployment, and that is the point:

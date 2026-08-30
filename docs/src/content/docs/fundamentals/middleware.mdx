@@ -146,7 +146,7 @@ same way, with DI and the access graph on top. The lower-level knobs
 poem middleware is often reached for — CORS, TLS, body-size limits,
 request timeout — are already `HttpConfig` fields.
 
-<Aside>
+<Aside type="tip">
 For cross-cutting work, write a Guard or an Interceptor; you get DI,
 the access graph, and per-route binding for free. Connection- and
 protocol-level concerns (CORS, TLS, limits) are configured on

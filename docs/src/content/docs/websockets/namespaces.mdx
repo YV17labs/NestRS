@@ -169,15 +169,15 @@ modules imports `WsModule` — the gateway's registry is a declared dependency
 like any `#[inject]` field, so a missing import is a boot error naming it rather
 than a surprise at the first `broadcast`.
 
+## Reference
+
+- [`WsServer<N>`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/server.rs) —
+  the generic, the `Global` default, the `Registry` trait that erases
+  `N` on the client side.
+
 ## Going further
 
 - [Server-side push](/websockets/server-push/) — once you have the
   typed registry, push it from anywhere DI reaches.
 - [Rooms](/websockets/rooms/) — most of the time, the right answer to
   "I need a separate channel" is a room, not a namespace.
-
-### Reference
-
-- [`WsServer<N>`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/server.rs) —
-  the generic, the `Global` default, the `Registry` trait that erases
-  `N` on the client side.

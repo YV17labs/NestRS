@@ -95,7 +95,7 @@ Two inventory entries — `NotificationsListener::email_the_author` and
 instance. Same `Arc<Mailer>`, two subscriptions to `PostPublishedEvent`;
 both run, in registration order.
 
-<Aside>
+<Aside type="caution">
 A single `#[listeners]` impl block per struct. Put every listener of a
 provider in the same block — same convention as `#[routes]`,
 `#[scheduled]`, and `#[processor]`.
@@ -188,6 +188,8 @@ use features::posts::PostsHttpModule;
 pub struct ApiModule;
 ```
 
+## Run it
+
 At bootstrap each wired listener logs one line at `debug`, target
 `nest_rs::events`:
 
@@ -200,7 +202,7 @@ a unit of work of its own: its logs file under the span of whatever emitted the
 event, with that request's `trace_id` and `actor_id`. See
 [Correlation](/fundamentals/correlation/).
 
-<Aside>
+<Aside type="caution">
 Without `EventsModule` anywhere in the tree, the `EventBus` is absent —
 every `#[listeners]` provider compiles in but stays inert (no
 subscription is wired). This is the same "linked but unreachable"
@@ -240,6 +242,15 @@ present in the binary but skipped at boot (a `warn` on `nest_rs::events`)
 because the provider is not reachable from the worker's module tree. Same
 property as queue processors and scheduled jobs.
 
+## Reference
+
+- `crates/nest-rs-events/` — `EventBus`, `EventsModule`, `#[listeners]`,
+  `#[on_event]`.
+- `crates/features/src/posts/event.rs` + `service.rs` — the producer:
+  payload at the port, emitted from the service.
+- `crates/features/src/notifications/events/listener.rs` — the listener
+  host in an `events/` adapter folder.
+
 ## Going further
 
 - [Queue](/queue/) — durable, distributed, retried; the right tool when
@@ -250,12 +261,3 @@ property as queue processors and scheduled jobs.
 - [Providers](/fundamentals/providers/) — the `#[injectable]` model
   `#[listeners]` builds on (same `#[inject]` fields, same boot-time
   access graph).
-
-### Reference
-
-- `crates/nest-rs-events/` — `EventBus`, `EventsModule`, `#[listeners]`,
-  `#[on_event]`.
-- `crates/features/src/posts/event.rs` + `service.rs` — the producer:
-  payload at the port, emitted from the service.
-- `crates/features/src/notifications/events/listener.rs` — the listener
-  host in an `events/` adapter folder.

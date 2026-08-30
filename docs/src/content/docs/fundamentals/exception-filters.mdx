@@ -102,7 +102,7 @@ async fn create(&self, Valid(input): Valid<Json<CreateUser>>)
 }
 ```
 
-<Aside>
+<Aside type="note">
 The data-layer HTTP mapping lives behind the `http` feature of
 `nest-rs-seaorm`, so a worker or MCP-only app importing the crate
 without that feature never links poem.

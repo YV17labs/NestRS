@@ -8,8 +8,6 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-## Resources and prompts
-
 MCP defines two primitives beyond tools: **prompts** (parameterized templates
 the user picks) and **resources** (documents the model can list and fetch).
 
@@ -29,7 +27,9 @@ impl WeatherTool {
 }
 ```
 
-Resources are the one surface with no decorator, because they are a mapping from
+## Resources have no decorator
+
+They are the one surface without one, because they are a mapping from
 URIs to rows rather than a set of methods. A host that serves them writes its own
 `impl ServerHandler` — `list_resources` / `read_resource` /
 `list_resource_templates` — and that is the documented way out of the sugar: it

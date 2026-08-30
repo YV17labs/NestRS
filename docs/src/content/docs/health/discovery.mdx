@@ -77,7 +77,7 @@ $ curl -s http://localhost:3000/health/ready | jq '.details | keys'
 Missing key, missing import. Present key with `status: "down"`,
 genuine failure — read the `error` bucket.
 
-<Aside>
+<Aside type="note">
 Stack traces and ambient context follow the indicator's owning
 provider. An indicator that injects an HTTP client logs under the
 provider's `tracing` target — usually `nest_rs::health` for

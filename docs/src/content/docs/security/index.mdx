@@ -87,7 +87,7 @@ The wiring sketch for an app that serves all three transports:
 pub struct ApiModule;
 ```
 
-<Aside>
+<Aside type="note">
 A handler opts **out** by not importing the transport's authz module —
 public endpoints do exactly that and lose every layer transitively.
 Visitor-rule policy then lives in your `AbilityFactory`, not in

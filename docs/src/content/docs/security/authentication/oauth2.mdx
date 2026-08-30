@@ -26,7 +26,7 @@ The OAuth 2.0 *client* role — this app obtaining a token from somebody else's
 authorization server — is its own capability. RFC 6749 §1.1 names four roles,
 and the crate that answers *who the caller is* is a different one.
 
-```sh
+```bash frame="terminal"
 cargo add nest-rs --features oauth-client
 ```
 
@@ -242,7 +242,7 @@ opaque RFC code on the wire; the inner `anyhow::Error` stays attached
 for `tracing`. A rename of these strings breaks every conforming
 client — they are wire contracts, not display strings.
 
-<Aside>
+<Aside type="caution">
 `OAuthClient` is a confidential client: it holds a `client_secret` and
 runs server-side. Native and SPA front-ends keep the secret out of the
 browser by routing their `code` exchange through your app — the

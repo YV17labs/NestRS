@@ -159,16 +159,16 @@ frames. The registry hands back the accepted-frame count, and
 `WsServer::connection_count` gives you the other half of the signal.
 </Aside>
 
+## Reference
+
+- [`WsServer`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/server.rs) —
+  `broadcast`, `emit_to`, `emit`, `connection_count`.
+- [`crates/features/src/chat/service.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/service.rs) —
+  service-side broadcast pattern.
+
 ## Going further
 
 - [Namespaces](/websockets/namespaces/) — when a gateway needs its own
   registry separate from the global one.
 - [Rooms](/websockets/rooms/) — the `WsClient` side of the same
   surface.
-
-### Reference
-
-- [`WsServer`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/server.rs) —
-  `broadcast`, `emit_to`, `emit`, `connection_count`.
-- [`crates/features/src/chat/service.rs`](https://github.com/YV17labs/NestRS/blob/main/demo/crates/features/src/chat/service.rs) —
-  service-side broadcast pattern.

@@ -30,7 +30,7 @@ One connection, one variable, named for the crate that parses it: a
 throttler-only app sets the same `NESTRS_REDIS__URL`. See [fundamentals/modules](/fundamentals/modules/) for the
 four boot phases that resolve the connection before any transport attaches.
 
-<Aside>
+<Aside type="note">
 The connection is built in the **collect** phase as an async factory, and
 every binding's factory declares that it runs after it — so `imports = [...]`
 order is a readability choice, and by the time `RedisWorker::configure` runs

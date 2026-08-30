@@ -181,7 +181,7 @@ without its `HealthModule` ships no probe surface for that feature —
 the access graph keeps the indicator out of the running binary. Apps
 opt into health the same way they opt into HTTP or GraphQL.
 
-<Aside>
+<Aside type="note">
 A `Discoverable` impl is **not** emitted by `#[indicators]` — the
 provider's `#[injectable]` owns it. Inventory is the same seam
 `#[hooks]`, `#[scheduled]`, and `#[processor]` use.

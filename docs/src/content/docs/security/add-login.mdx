@@ -3,7 +3,7 @@ title: Add login and protect a route
 description: The canonical first auth task, end to end — issue a JWT on POST /login, bind the two guards, curl the round-trip.
 ---
 
-import { Aside, Steps } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 
 The first auth task is always the same: **a `POST /login` that returns a
 token, and routes that require it**. This page walks that happy path end
@@ -29,11 +29,11 @@ a credential, where users live and what the token carries are domain decisions.
 Delete `crates/features/src/authn/http/` once the route below exists.
 
 **What keeps it out of production is `NESTRS_ENV`, and absence counts as
-production.** The route arms only when the variable positively reads
-`development` or `test` — not "unless it reads `production`", because the
-variable is unset in a fresh scaffold, in a container, and in most CI, and a
-default of "development" would leave a token minter serving wherever nobody
-thought to set it. `just dev` sets it; nothing else does. The check runs twice:
+production.** The route arms only when the variable positively reads `development` or
+`test` — not "unless it reads `production`". The variable is unset in a
+fresh scaffold, in a container, and in most CI, so a default of
+"development" would leave a token minter serving wherever nobody thought to
+set it. `just dev` sets it; nothing else does. The check runs twice:
 `DevTokenAudit` refuses the boot, so a deployment that kept the file finds out
 at start-up, and the handler asks again per request, so registering the
 controller from some other module buys nothing.
@@ -156,6 +156,25 @@ That last call gets more than a yes/no gate: with both guards bound, the
 ambient `Ability` row-filters every query the service runs and masks the
 response body — see
 [What you get once both are mounted](/security/#what-you-get-once-both-are-mounted).
+
+## What fails if you get it wrong
+
+Each of these is a boot refusal, not a silent hole — the point of the design is
+that a half-wired login never serves an unprotected route.
+
+- **No signing key.** With neither a secret nor a key pair set, the boot stops
+  on `no JWT key configured: set NESTRS_AUTHN__SECRET (HS256) or
+  NESTRS_AUTHN__PUBLIC_KEY (EdDSA)`.
+- **A secret under 32 bytes.** HS256 draws its security from the secret's
+  entropy, so a short one is refused at boot rather than used to mint forgeable
+  tokens: `NESTRS_AUTHN__SECRET must be at least 32 bytes for HS256`.
+- **The feature's HTTP module does not import `AuthzModule`.** The guard bound
+  on the controller is then unreachable through the access graph, and the boot
+  names it. The route is never served unprotected.
+- **`crates/features/src/authn/http/` shipped to production.** `DevTokenAudit`
+  refuses the boot wherever `NESTRS_ENV` does not positively read `development`
+  or `test`, so a deployment that kept the dev-token route finds out at
+  start-up rather than from a caller.
 
 ## Going further
 

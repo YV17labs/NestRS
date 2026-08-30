@@ -268,7 +268,7 @@ The SQL pre-filter for `Read` becomes
 `(OR of grant conditions) AND NOT (OR of deny conditions)`. The
 in-memory check refuses if any denial matches even when grants do.
 
-<Aside>
+<Aside type="note">
 The framework's authz engine is **ability-based**, but a rule's evaluation
 is independent of every other rule's. There is no inheritance, no
 precedence between non-denial rules — every matching grant

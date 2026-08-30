@@ -5,10 +5,6 @@ sidebar:
   order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
-## Authorization
-
 The quickstart opened `/mcp` deliberately with `AllowAllMcpGuard`. To
 authenticate instead — bearer JWT, ability, row-level filtering — import
 `AuthzMcpModule`, which binds
@@ -45,11 +41,13 @@ policy, same `AuthzAbility`, same audit log under `nest_rs::authz`. See the
 [per-transport bridges](/security/authorization/per-transport-bridges/) page for
 the four-transport story.
 
-The bridge answers *who is calling*, and it answers it in the logs too: every
-operation runs in its own [`mcp.operation` span](/fundamentals/correlation/),
-under the trace of the HTTP request it arrived on and carrying the `actor_id`
-the authn guard resolved — a model calling a tool is still a caller you can
-name afterwards.
+## Every operation is traced
+
+The bridge answers *who is calling*, and it answers it in the logs too.
+Every operation runs in its own [`mcp.operation`
+span](/fundamentals/correlation/), under the trace of the HTTP request it
+arrived on and carrying the `actor_id` the authn guard resolved. A model
+calling a tool is still a caller you can name afterwards.
 
 Every operation files its own line, and that matters more here than on a request
 edge: rmcp addresses many operations over one HTTP request, so the endpoint's
@@ -65,8 +63,9 @@ different `span_id`s, so "what did this call do" is answerable on its own.
 Everything the tool and the data layer below it log carries the operation's ids
 and its `actor_id`. See [Logs](/opentelemetry/logs/).
 
+## Declaring the posture
 
-Each operation then declares what it is, with the same two attributes a
+Each operation declares what it is, with the same two attributes a
 `#[query]` takes:
 
 ```rust title="crates/features/src/users/mcp/tool.rs"
@@ -109,6 +108,8 @@ column a field grant may mask should be `Option` on the entity. When a tool
 deliberately answers with a narrower projection, say
 `#[authorize(Action, Entity, unmasked)]`: the gate and the row filter stay, and
 the projection *is* the field restriction.
+
+## Telling a client how to authenticate
 
 Guarding the endpoint closes it; it does not tell a client how to open it. The
 MCP authorization spec requires the server to publish that, so add

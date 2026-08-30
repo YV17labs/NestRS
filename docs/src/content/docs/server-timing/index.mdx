@@ -3,8 +3,6 @@ title: Server-Timing
 description: Surface server-side latency in the browser's Network panel — one module import, optional sub-step records from any handler.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
 [`Server-Timing`](https://www.w3.org/TR/server-timing/) is a W3C header
 browsers render in their Network panel (DevTools → Network → Timing
 tab) — a per-request breakdown of where the time went. It rides on the
@@ -23,7 +21,7 @@ aggregations, reach for [OpenTelemetry](/opentelemetry/).
 cargo add nest-rs --features server-timing
 ```
 
-## Mount it
+## Wire it in
 
 ```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
@@ -32,6 +30,8 @@ use nest_rs::server_timing::ServerTimingModule;
 #[module(imports = [ServerTimingModule])]
 pub struct ApiModule;
 ```
+
+## Run it
 
 Every response now carries a `Server-Timing` header. The minimum,
 unstructured form is one entry:
@@ -101,6 +101,11 @@ server-timing: db;dur=7.82, covers;dur=0.41;desc="object-store lookup", total;du
   in DevTools; any string is allowed, the formatter quotes/escapes for
   you.
 
+## Reference
+
+- `crates/nest-rs-server-timing/` — `ServerTimingModule`, `Timings`,
+  `Entry`.
+
 ## Going further
 
 - [OpenTelemetry](/opentelemetry/) — for spans the frontend cannot
@@ -109,8 +114,3 @@ server-timing: db;dur=7.82, covers;dur=0.41;desc="object-store lookup", total;du
 - [Interceptors](/fundamentals/interceptors/) — the seam
   `ServerTimingModule` plugs into; the same shape any other
   cross-cutting concern uses.
-
-### Reference
-
-- `crates/nest-rs-server-timing/` — `ServerTimingModule`, `Timings`,
-  `Entry`.

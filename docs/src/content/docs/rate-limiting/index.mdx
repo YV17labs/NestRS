@@ -55,7 +55,7 @@ second feature on the same page:
 cargo add nest-rs --features redis-throttler
 ```
 
-## Mount the throttler
+## Wire it in
 
 ```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
@@ -163,13 +163,16 @@ attributed to — the [`ClientIp`](/http/extractors/) extractor's answer as much
 as the rate-limit bucket's. One list, so a `429` and the log line explaining it
 can never name different callers.
 
-<Aside>
+<Aside type="caution">
 Trust the proxy header **only** when the request arrived through a
 proxy you control. Production behind an ingress: list the ingress IPs.
 Direct exposure: leave `TRUSTED_PROXIES` empty.
 </Aside>
 
-## What an over-limit response looks like
+## Run it
+
+This is what an over-limit response looks like — the eleventh call
+in a minute, against the default window:
 
 ```bash frame="terminal"
 $ for i in {1..11}; do
@@ -267,14 +270,14 @@ token-bucket algorithms need per-key state the trait deliberately does not carry
 downstream crate with their own store type.
 </Aside>
 
+## Reference
+
+- `crates/nest-rs-throttler/` — `ThrottlerModule`, `ThrottlerGuard`,
+  `ThrottlerConfig`, `Throttle`, `InMemoryThrottler`.
+
 ## Going further
 
 - [Configuration](/configuration/) — `NESTRS_THROTTLER__*` follows the
   same env → struct dual path every module uses.
 - [Guards](/fundamentals/guards/) — what `#[use_guards(ThrottlerGuard)]`
   binds, and why a global guard is the wrong shape here.
-
-### Reference
-
-- `crates/nest-rs-throttler/` — `ThrottlerModule`, `ThrottlerGuard`,
-  `ThrottlerConfig`, `Throttle`, `InMemoryThrottler`.

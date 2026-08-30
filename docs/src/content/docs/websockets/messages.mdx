@@ -319,14 +319,14 @@ A missing `data` key decodes to `serde_json::Value::Null`, so older
 clients sending bare `{"event":"ping"}` still hit handlers that take no
 payload.
 
+## Reference
+
+- [`WsEnvelope` / `WsReply`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/envelope.rs) —
+  the wire shape and the dispatch outcome enum.
+
 ## Going further
 
 - [Rooms](/websockets/rooms/) — server→client pushes via `WsClient`.
 - [Server-side push](/websockets/server-push/) — emit without holding a
   client.
 - [Guards](/websockets/guards/) — reject envelopes before dispatch.
-
-### Reference
-
-- [`WsEnvelope` / `WsReply`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-ws/src/envelope.rs) —
-  the wire shape and the dispatch outcome enum.

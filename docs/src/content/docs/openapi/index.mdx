@@ -65,7 +65,7 @@ That's the whole opt-in. The module self-mounts both endpoints on the existing
   feeds the handler, the GraphQL schema, and this document, so the three stay in
   sync by construction. See [Database](/database/).
 
-<Aside>
+<Aside type="note">
   Because the document is composed from what the binary actually mounts, a worker
   that serves no HTTP routes produces no spec — and an app only documents the
   controllers it imports. Discovery is module-gated, like every other transport.
@@ -264,12 +264,14 @@ so the deployment can still override any one of them. See the
 ## Limits
 
 The document composes from the route table, so everything in it is derived:
-the `info` block, `servers` from the transport's `global_prefix`, every
-operation under `paths`, its path / query / header parameters, its request body
-and the media type that body arrives as, a shared `components.schemas`, a
-`bearerAuth` entry in `components.securitySchemes` with per-operation `security`
-on guarded routes, and the error statuses an operation can actually produce
-(`400` / `404` / `429` alongside its success code) as RFC 9457 `ProblemDetails`.
+
+- the `info` block, and `servers` from the transport's `global_prefix`;
+- every operation under `paths`, with its path, query and header parameters;
+- its request body, and the media type that body arrives as;
+- a shared `components.schemas`, plus a `bearerAuth` entry in
+  `components.securitySchemes` and per-operation `security` on guarded routes;
+- the error statuses an operation can actually produce — `400` / `404` / `429`
+  alongside its success code — as RFC 9457 `ProblemDetails`.
 
 `operationId` is derived too, as `<controller>_<handler>`, mapped onto what an
 identifier can carry — `PostsController::list` publishes `posts_list`, and a raw
@@ -299,6 +301,13 @@ an out-of-band edit is lost the next time the app starts and breaks the no-drift
 invariant that makes the spec worth trusting. (Composed once, not per request —
 serving it is a string write.)
 
+## Reference
+
+- `apps/api/` — mounts `OpenApiModule::for_root(None)` next to REST + GraphQL.
+- `crates/features/src/users/http/controller.rs` — real `#[api(...)]` usage.
+- `crates/nest-rs-openapi/` — `OpenApiModule`, `OpenApiConfig`, the document
+  composer, the bundled Swagger UI.
+
 ## Going further
 
 - [HTTP](/http/) — the controllers, routes and `Json<T>` types this document is
@@ -307,10 +316,3 @@ serving it is a string write.)
   GraphQL type **and** a JSON Schema at once.
 - [Security](/security/) — bind `AuthnGuard` / `AbilityGuard`; protected routes
   still appear in the spec.
-
-### Reference
-
-- `apps/api/` — mounts `OpenApiModule::for_root(None)` next to REST + GraphQL.
-- `crates/features/src/users/http/controller.rs` — real `#[api(...)]` usage.
-- `crates/nest-rs-openapi/` — `OpenApiModule`, `OpenApiConfig`, the document
-  composer, the bundled Swagger UI.

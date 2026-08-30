@@ -30,7 +30,7 @@ Every `#[readiness]` / `#[liveness]` / `#[startup]` method returns
 `anyhow::Result<()>`, so your own indicator names the crate. Reach it through
 `nest_rs::core::anyhow` instead and the second line goes too.
 
-## Mount it
+## Wire it in
 
 ```rust title="apps/api/src/module.rs (from the demo)"
 use nest_rs::core::module;
@@ -122,7 +122,7 @@ $ curl -s http://localhost:3000/health/ready | jq
 The overall `status` is `down` if any indicator is `down`. The HTTP
 status maps from that one bit: `200` for `up`, `503` for `down`.
 
-<Aside>
+<Aside type="note">
 The shape is Terminus-style on purpose — keys you can grep in JSON
 logs without walking a list, and a vocabulary (`status`, `info`,
 `error`, `details`) operators already know.

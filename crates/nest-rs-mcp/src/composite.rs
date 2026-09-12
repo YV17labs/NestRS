@@ -121,6 +121,23 @@ impl CompositeHandler {
     /// one of them can speak for it. False for the lone undeclared host, which *is*
     /// the endpoint: its own `initialize` / `discover` override is the answer,
     /// and rebuilding one from `get_info` would silently discard it.
+    /// What this endpoint declares of its own, laid over a host's answer.
+    ///
+    /// Both `initialize` and `negotiate_initialize` return the primary host's
+    /// result with the endpoint's declaration on top, and the two have to agree
+    /// — so the overlay is answered here rather than written twice. The
+    /// protocol version is deliberately left alone: it is the one field the
+    /// host *negotiated*, and `get_info`'s is a declaration, not a verdict.
+    fn overlay_own_declaration(&self, mut result: InitializeResult) -> InitializeResult {
+        if self.declares_itself() {
+            let merged = ServerHandler::get_info(self);
+            result.capabilities = merged.capabilities;
+            result.instructions = merged.instructions;
+            result.server_info = merged.server_info;
+        }
+        result
+    }
+
     fn declares_itself(&self) -> bool {
         self.identity.is_declared() || self.hosts.len() > 1
     }
@@ -340,6 +357,7 @@ macro_rules! broadcast_notification {
     };
 }
 
+#[deny(clippy::missing_trait_methods)]
 impl ServerHandler for CompositeHandler {
     // --- lifecycle & discovery ---------------------------------------------
 
@@ -365,14 +383,27 @@ impl ServerHandler for CompositeHandler {
         let Some(first) = self.primary() else {
             return Err(no_hosts());
         };
-        let mut result = first.host.initialize(request, context).await?;
-        if self.declares_itself() {
-            let merged = ServerHandler::get_info(self);
-            result.capabilities = merged.capabilities;
-            result.instructions = merged.instructions;
-            result.server_info = merged.server_info;
-        }
-        Ok(result)
+        let result = first.host.initialize(request, context).await?;
+        Ok(self.overlay_own_declaration(result))
+    }
+
+    /// **Not reached today**, and written anyway: rmcp calls this only from its
+    /// default `initialize`, which this type overrides. Inheriting rmcp's
+    /// default instead would answer from the *merged* declaration
+    /// unconditionally, ignoring the primary host even where the endpoint
+    /// declares nothing of its own — the wrong answer, waiting for the first
+    /// rmcp that routes through here.
+    ///
+    /// It cannot simply call `initialize`: that one also sets the peer info,
+    /// and a pure negotiation must have no such side effect.
+    fn negotiate_initialize(
+        &self,
+        request: &InitializeRequestParams,
+    ) -> Result<InitializeResult, McpError> {
+        let Some(first) = self.primary() else {
+            return Err(no_hosts());
+        };
+        Ok(self.overlay_own_declaration(first.host.negotiate_initialize(request)?))
     }
 
     async fn discover(

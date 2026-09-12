@@ -16,10 +16,14 @@
 //! empty, `prompts/get` method-not-found) — the inner handler's own
 //! implementation would be dropped, not merely unwrapped.
 //!
-//! So the delegation below is **exhaustive by construction, and must stay that
-//! way**: rmcp's `ServerHandler` is the list, `propagate.rs` in the
-//! integration suite is the proof. Adding a capability to rmcp means adding it
-//! here, otherwise the framework quietly answers for the tool host.
+//! So the delegation below has to stay **exhaustive**, and
+//! `#[deny(clippy::missing_trait_methods)]` on the impl is what keeps it that
+//! way: a method rmcp adds and this file does not override is a compile error
+//! naming it. That gate exists because the obligation is structural and every
+//! behavioural proof of it was blind — rmcp 3.3 added `negotiate_initialize`,
+//! the integration suite's probe host records only methods someone thought to
+//! add to it, and the wrapper silently inherited rmcp's default with every
+//! suite green.
 //!
 //! # What each kind of operation gets
 //!
@@ -335,6 +339,7 @@ macro_rules! notification_method {
     };
 }
 
+#[deny(clippy::missing_trait_methods)]
 impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
     // --- lifecycle & discovery ---------------------------------------------
     request_method!(ping() -> (), PingRequestMethod::VALUE, None);
@@ -505,5 +510,74 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
 
     fn get_info(&self) -> ServerInfo {
         self.inner.get_info()
+    }
+
+    /// Delegated for the reason rmcp's own `impl_server_handler_for_wrapper!`
+    /// delegates it: a host that narrows its supported versions, or overrides
+    /// this outright to refuse one, has that answer dropped if the wrapper
+    /// rebuilds it from the defaults instead of asking.
+    fn negotiate_initialize(
+        &self,
+        request: &InitializeRequestParams,
+    ) -> Result<InitializeResult, McpError> {
+        self.inner.negotiate_initialize(request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::guards::AllowAllMcpGuard;
+
+    /// Deliberately not `ProtocolVersion::LATEST`, which is what
+    /// `InitializeRequestParams::default()` carries: pinning this to `LATEST`
+    /// makes a wrapper that substitutes a request of its own invisible.
+    const THE_CALLER_ASKS_FOR: ProtocolVersion = ProtocolVersion::V_2025_06_18;
+
+    /// Not the version asked for, and not one any default arrives at, so a
+    /// wrapper that overwrites the host's verdict is visible too.
+    const THE_HOST_ANSWERS_WITH: ProtocolVersion = ProtocolVersion::V_2024_11_05;
+
+    /// A host that *overrides* negotiation, and asserts on its own input —
+    /// the two ways a delegation goes wrong are invisible from the result
+    /// alone.
+    #[derive(Clone)]
+    struct NegotiatingHost;
+
+    impl ServerHandler for NegotiatingHost {
+        fn negotiate_initialize(
+            &self,
+            request: &InitializeRequestParams,
+        ) -> Result<InitializeResult, McpError> {
+            assert_eq!(
+                request.protocol_version, THE_CALLER_ASKS_FOR,
+                "the wrapper substituted a request of its own",
+            );
+            let mut negotiated = ServerInfo::default();
+            negotiated.protocol_version = THE_HOST_ANSWERS_WITH;
+            Ok(negotiated)
+        }
+    }
+
+    /// The lint on the impl proves the method is *present*; this proves it
+    /// reaches the host with the caller's own request and returns the host's
+    /// own answer. It is a direct call because rmcp reaches
+    /// `negotiate_initialize` through the `initialize` this wrapper already
+    /// delegates, so no wire probe can tell a delegated call from an inherited
+    /// one.
+    #[test]
+    fn the_wrapper_asks_the_inner_host_to_negotiate() {
+        let wrapper = PropagatingHandler::new(NegotiatingHost, Arc::new(AllowAllMcpGuard), None);
+        let mut request = InitializeRequestParams::default();
+        request.protocol_version = THE_CALLER_ASKS_FOR;
+
+        let negotiated = wrapper
+            .negotiate_initialize(&request)
+            .expect("the caller's own request reaches the host");
+
+        assert_eq!(
+            negotiated.protocol_version, THE_HOST_ANSWERS_WITH,
+            "the host's negotiation was rebuilt rather than delegated",
+        );
     }
 }

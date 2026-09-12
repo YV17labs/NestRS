@@ -7,13 +7,13 @@
 //! `ServerHandler`. Same shim [`GraphqlResolverObject`-style composition uses
 //! next door, for the same reason.
 //!
-//! **The surface is exhaustive by construction, and must stay that way.** A
-//! method missing here is a method [`CompositeHandler`](crate::CompositeHandler)
-//! cannot delegate, which means rmcp's *default* answers for the host — an
-//! empty `tools/list`, a `-32601` on `prompts/get` — silently, and only on the
-//! wire. rmcp's `ServerHandler` is the list;
-//! `tests/integration/propagate.rs` is the proof for the wrapper and
-//! `tests/integration/registry.rs` for the merge.
+//! **The surface has to stay exhaustive.** A method missing here is a method
+//! [`CompositeHandler`](crate::CompositeHandler) cannot delegate, which means
+//! rmcp's *default* answers for the host — an empty `tools/list`, a `-32601` on
+//! `prompts/get` — silently, and only on the wire. Nothing needs to police this
+//! list directly: `CompositeHandler`'s impl carries
+//! `#[deny(clippy::missing_trait_methods)]` and delegates through `dyn McpHost`,
+//! so a method rmcp adds fails that impl's build until it is added here.
 //!
 //! [`GraphqlResolverObject`]: https://docs.rs/nest-rs-graphql
 
@@ -42,9 +42,9 @@ use crate::guard::BoxFuture;
 
 /// Restate `ServerHandler` with boxed futures, and blanket-implement it.
 ///
-/// Written as one macro over the method list because the alternative — 24
-/// hand-written pairs — is 24 chances for the trait and its blanket impl to
-/// drift apart. Every method rmcp's trait has goes in one of the three lists;
+/// Written as one macro over the method list because the alternative is one
+/// hand-written pair per method, and one chance per method for the trait and
+/// its blanket impl to drift apart. Every method rmcp's trait has goes in one of the three lists;
 /// only `listen` stays hand-written, because its context type is neither a
 /// `RequestContext` nor a `NotificationContext`.
 macro_rules! dyn_host {
@@ -172,5 +172,9 @@ dyn_host! {
         supported_protocol_versions() -> Cow<'static, [ProtocolVersion]>,
         "This host's declared capabilities and instructions."
         get_info() -> ServerInfo,
+        "The `initialize` result this host negotiates for `request`, derived \
+         from the two accessors above unless the host overrides it."
+        negotiate_initialize(request: &InitializeRequestParams)
+            -> Result<InitializeResult, McpError>,
     ],
 }

@@ -10,6 +10,13 @@
 //! So this suite drives a probe host that records the name of every method it
 //! is asked for, through the real streamable-HTTP endpoint, and asserts the
 //! recorded set. Adding a capability to the delegation means adding it here.
+//!
+//! **This proves delegation, not exhaustiveness** — the probe is hand-written,
+//! so `#[deny(clippy::missing_trait_methods)]` on the impl is what makes the
+//! list complete. Two methods are absent from [`EXPECTED`] on purpose:
+//! `initialize` for the reason below, and `negotiate_initialize` because it is
+//! reachable *through* that `initialize`, so the wire cannot tell a delegated
+//! call from an inherited one. `src/propagate.rs` proves that one directly.
 
 // The probe implements the *whole* trait, deprecated members included: rmcp
 // still routes legacy protocol versions to `subscribe`/`unsubscribe` and
@@ -47,8 +54,8 @@ fn tasks_client_capabilities() -> serde_json::Value {
     json!({ "extensions": { "io.modelcontextprotocol/tasks": {} } })
 }
 
-/// A host that implements the **whole** `ServerHandler` surface and records
-/// which method ran. `initialize` is deliberately not overridden: rmcp's
+/// A host that implements every `ServerHandler` method this suite asserts on,
+/// and records which one ran. `initialize` is deliberately not overridden: rmcp's
 /// default performs protocol negotiation through a `pub(crate)` helper a host
 /// cannot call, and a wrapper that dropped it would break the handshake this
 /// whole suite depends on — the loudest possible failure, so it needs no probe.

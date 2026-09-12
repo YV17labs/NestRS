@@ -7,6 +7,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Dependencies — the whole tree moved, and five moves are visible from your code
+
+Every third-party *requirement* now sits on its publisher's newest stable
+release, with two exceptions named at the bottom. Most of the movement is
+invisible: `cargo update` moved 73 crates in the framework's lockfile, 126 in
+the demo's and 89 in the benchmark's, and two floors followed the lock — `rmcp`
+to 3.3 and `uuid` to 1.26 — since the minor a manifest states is the version we
+actually build against. What a consumer can see is named here rather than left in a
+lockfile diff.
+
+#### `croner` 3.0 → 4.0
+
+- **Step syntax is stricter.** The shortcut `5/5 * * * *` — "every five minutes
+  from minute 5" — is rejected by default; the OCPS grammar wants the range,
+  `5-59/5 * * * *`. croner's message names the fix, and `#[cron]` reports it at
+  **compile time**, not at boot. No `CronExpression` preset used the shortcut
+  and neither did anything in this repository. croner can be built lenient again
+  (`CronParser::builder().sloppy_ranges(true)`) and `#[cron]` deliberately does
+  not expose that: strict is OCPS, `sloppy_ranges` is the deviation, and the
+  only place a per-site flag could sit is the attribute itself — a second
+  grammar for one declaration. The compile error carries the rewrite.
+- **Daylight-saving overlap iteration changed, and it changed for the better.**
+  croner 3 dropped an occurrence inside the repeated hour. On a fall-back day —
+  25 real hours — `EVERY_HOUR` now fires **25** times where it fired 24, and
+  `EVERY_MINUTE` (1440 → 1500), `EVERY_5_MINUTES` (288 → 300) and
+  `EVERY_30_MINUTES` (48 → 50) gain everywhere. `EVERY_2_HOURS` gains only where
+  the repeated local hour is even — Paris 12 → 13, New York 12 → 12 — because
+  `*/2` selects hours 0, 2, 4 and the repeat lands on 02:00 in one and 01:00 in
+  the other. Daily and longer presets are unchanged, and so is the
+  spring-forward gap.
+- **A live hot spin is gone.** Inside that repeated hour croner 3 could return
+  an occurrence *in the past* — the first pass over a time the clock is about to
+  repeat, up to 59 minutes stale — which `Scheduler`'s
+  `(next - now).to_std().unwrap_or(Duration::ZERO)` clamps to zero, so the job
+  re-fires as fast as the executor can reschedule it until the hour is over,
+  once a year, per zone. Sampled every second across the 2026 `America/New_York`
+  fall-back, `EVERY_MINUTE` alone: **3,540 negative delays under croner 3, none
+  under croner 4.** The delay is never exactly zero in either — the clamp is
+  what turns a stale answer into a spin, which is why `next_delay`'s own comment
+  says "clamp defensively rather than unwrap a negative span".
+- The `chrono` backend is now an optional feature, still on by default and
+  still what we resolve. Occurrence methods became generic over a new
+  `CronDateTime` trait; our call sites infer it without annotation.
+
+Both halves of `#[cron]` now carry a trybuild snapshot. The expression half
+never had one, so deleting the compile-time validation left the suite green
+while the documentation quoted its diagnostic verbatim. `CronExpression`'s
+presets are pinned to the instants they fire at, too: asserting only that each
+parses could not see a preset change meaning, which is precisely what a cron
+library's major release does.
+
+#### `argon2` 0.5 → 0.6
+
+- `password-hash` 0.6 drops the explicitly-constructed `SaltString` and has
+  `hash_password` draw the PHC specification's recommended 16 bytes straight
+  from the system CSPRNG. `hash_password` / `verify_password` keep their
+  signatures, the pinned OWASP work factor still reaches the stored string, and
+  the PHC output is unchanged.
+- **Credentials hashed by the previous release still verify**, pinned as a test
+  against two real 0.5.3-produced hashes rather than assumed — every other test
+  in that file hashes and verifies with the same build and would miss a PHC or
+  B64 change that locks a deployment out. Compatibility runs the other way too:
+  a hash written by 0.6 parses under 0.5.3, so a rolling deploy is safe in both
+  directions.
+- **One panic left a hot path.** 0.5's `SaltString::generate(&mut OsRng)`
+  panics if the system RNG fails; 0.6's `try_generate_salt()?` returns an error,
+  which the code maps to `PasswordError::HashFailed`.
+- **Salt bounds tightened.** `phc` 0.6 requires a decoded salt of 8–48 bytes and
+  at least 11 B64 characters, where `password-hash` 0.5 accepted 4. Nothing this
+  framework has ever written is affected — our salts are 16 bytes — but a
+  credential *imported* from another system with a shorter salt now reports
+  `PasswordError::InvalidHash` where it used to fail as a wrong password.
+
+#### `rmcp` 3.1 → 3.3
+
+- **`ServerHandler::negotiate_initialize` is new, and this framework was not
+  forwarding it.** `PropagatingHandler`, `CompositeHandler` and the object-safe
+  `McpHost` view now all delegate it, which is what rmcp's own
+  `impl_server_handler_for_wrapper!` does. Nothing misbehaved on the wire — the
+  method is reachable through the `initialize` the wrapper already delegated —
+  and that is exactly why every behavioural proof missed it: the integration
+  suite's probe host records only the methods someone thought to add to it.
+  **The real fix is `#[deny(clippy::missing_trait_methods)]`** on both
+  `ServerHandler` impls, which turns the next method rmcp adds into a compile
+  error naming it, and reaches `McpHost` too because `CompositeHandler`
+  delegates through it. The module headers no longer claim a hand-written list
+  is "exhaustive by construction"; the compiler says so instead.
+  **`McpHost` gained a required method**, which is a breaking change for
+  anything implementing that trait by hand. Almost nothing does — it is
+  blanket-implemented for every `ServerHandler`, so a `#[mcp]` host is one
+  without naming it — but a type implementing it directly now needs a
+  `negotiate_initialize`.
+- **An empty `#[tool_router]` is refused** — a host whose `impl` block serves no
+  tools is a compile error upstream, which is the position `#[tools]` already
+  took. If an empty router is what you want, rmcp takes
+  `#[tool_router(allow_empty)]`, which is what this repo's own mount-only test
+  fixtures use. Only hand-written rmcp hosts are affected; one written through
+  the `#[mcp]` / `#[tools]` pair never could be empty, and `#[tools]` refuses an
+  empty block with its own sentence before rmcp sees it.
+
+#### `handlebars` 6.4.3 → 6.4.4 — every `serde_json` map the demo emits reorders
+
+handlebars dropped `preserve_json_order` from its default features, which
+switches `serde_json::Map` from insertion order to alphabetical for everything
+downstream of it. It reaches the demo through the exact-pinned `async-graphql`,
+so `demo/apps/api/openapi.json` is rewritten — 1360 lines, **semantically
+identical**: 18 paths and 18 schemas, none added, none removed. Almost all of it
+is key order; four `parameters` arrays also swapped two elements, which OpenAPI
+gives no meaning to.
+The two workspaces had already drifted apart on this at 6.1.0: the framework's
+lockfile was on 6.4.4 and the demo's on 6.4.3, so framework crates serialized
+alphabetically and the demo's did not. They agree again. Nothing pins it, and a
+future handlebars that restores the default flips it back.
+
+#### Not taken
+
+- **`redis` 1.7.** `apalis-redis` 0.7.4 requires `redis = "0.32"`, and the two
+  must share one connection type. This waits on `apalis-redis` 1.0, whose stable
+  line has not moved since 2025-11-18.
+- **`cargo-chef` 0.1.78** in `demo/Dockerfile`, still pinned at 0.1.77. It is a
+  `cargo install` build tool rather than a requirement, and no test walks it.
+
 ## [6.1.0] - 2026-08-29
 
 ### `nestrs lint` — a file's stem, read against what it declares

@@ -75,43 +75,107 @@ impl CronExpression {
 #[cfg(test)]
 mod tests {
     use super::CronExpression;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
     use croner::Cron;
     use std::str::FromStr;
 
-    /// Guards the table against a typo that would only surface at a user's boot.
+    /// One row per preset: the constant's *name*, so a failure names what a
+    /// reader greps for, and the instants it must fire at.
+    macro_rules! pinned {
+        ($($name:ident => [$($at:literal),+ $(,)?]),+ $(,)?) => {
+            &[$((stringify!($name), CronExpression::$name, &[$($at),+] as &[&str])),+]
+        };
+    }
+
+    /// Every preset, pinned to the instants it actually fires at.
+    ///
+    /// Asserting that each one *parses* and has *a* next occurrence — all this
+    /// suite used to do — cannot see a preset change meaning, and that is what
+    /// a cron library's major release moves. Eight deliberately wrong tables
+    /// passed the old assertion: `EVERY_WEEKEND` pointing at Monday and
+    /// Tuesday, `EVERY_WEEK` at Wednesday, `EVERY_WEEKDAY` at the weekend,
+    /// `EVERY_QUARTER` every fourth month.
+    ///
+    /// The start is fixed and in UTC, so no daylight-saving rule is in play —
+    /// DST behaviour belongs to the scheduler, not to this table. Second 45 of
+    /// minute 23 of hour 14 aligns with no preset's period, so nothing passes
+    /// by landing on a boundary it started from.
+    const START: &str = "2026-03-11T14:23:45Z";
+    const PINNED: &[(&str, &str, &[&str])] = pinned![
+        EVERY_SECOND => ["2026-03-11T14:23:46Z", "2026-03-11T14:23:47Z", "2026-03-11T14:23:48Z"],
+        EVERY_5_SECONDS => ["2026-03-11T14:23:50Z", "2026-03-11T14:23:55Z", "2026-03-11T14:24:00Z"],
+        EVERY_10_SECONDS => ["2026-03-11T14:23:50Z", "2026-03-11T14:24:00Z", "2026-03-11T14:24:10Z"],
+        EVERY_30_SECONDS => ["2026-03-11T14:24:00Z", "2026-03-11T14:24:30Z", "2026-03-11T14:25:00Z"],
+        EVERY_MINUTE => ["2026-03-11T14:24:00Z", "2026-03-11T14:25:00Z", "2026-03-11T14:26:00Z"],
+        EVERY_5_MINUTES => ["2026-03-11T14:25:00Z", "2026-03-11T14:30:00Z", "2026-03-11T14:35:00Z"],
+        EVERY_10_MINUTES => ["2026-03-11T14:30:00Z", "2026-03-11T14:40:00Z", "2026-03-11T14:50:00Z"],
+        EVERY_30_MINUTES => ["2026-03-11T14:30:00Z", "2026-03-11T15:00:00Z", "2026-03-11T15:30:00Z"],
+        EVERY_HOUR => ["2026-03-11T15:00:00Z", "2026-03-11T16:00:00Z", "2026-03-11T17:00:00Z"],
+        EVERY_2_HOURS => ["2026-03-11T16:00:00Z", "2026-03-11T18:00:00Z", "2026-03-11T20:00:00Z"],
+        EVERY_3_HOURS => ["2026-03-11T15:00:00Z", "2026-03-11T18:00:00Z", "2026-03-11T21:00:00Z"],
+        EVERY_6_HOURS => ["2026-03-11T18:00:00Z", "2026-03-12T00:00:00Z", "2026-03-12T06:00:00Z"],
+        EVERY_12_HOURS => ["2026-03-12T00:00:00Z", "2026-03-12T12:00:00Z", "2026-03-13T00:00:00Z"],
+        EVERY_DAY_AT_1AM => ["2026-03-12T01:00:00Z", "2026-03-13T01:00:00Z", "2026-03-14T01:00:00Z"],
+        EVERY_DAY_AT_6AM => ["2026-03-12T06:00:00Z", "2026-03-13T06:00:00Z", "2026-03-14T06:00:00Z"],
+        EVERY_DAY_AT_NOON => ["2026-03-12T12:00:00Z", "2026-03-13T12:00:00Z", "2026-03-14T12:00:00Z"],
+        EVERY_DAY_AT_MIDNIGHT => ["2026-03-12T00:00:00Z", "2026-03-13T00:00:00Z", "2026-03-14T00:00:00Z"],
+        EVERY_WEEKDAY => ["2026-03-12T00:00:00Z", "2026-03-13T00:00:00Z", "2026-03-16T00:00:00Z"],
+        EVERY_WEEKEND => ["2026-03-14T00:00:00Z", "2026-03-15T00:00:00Z", "2026-03-21T00:00:00Z"],
+        EVERY_WEEK => ["2026-03-15T00:00:00Z", "2026-03-22T00:00:00Z", "2026-03-29T00:00:00Z"],
+        EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT => ["2026-04-01T00:00:00Z", "2026-05-01T00:00:00Z", "2026-06-01T00:00:00Z"],
+        EVERY_QUARTER => ["2026-04-01T00:00:00Z", "2026-07-01T00:00:00Z", "2026-10-01T00:00:00Z"],
+        EVERY_YEAR => ["2027-01-01T00:00:00Z", "2028-01-01T00:00:00Z", "2029-01-01T00:00:00Z"],
+    ];
+
+    /// The prose on each constant, checked against what croner actually does.
     #[test]
-    fn every_preset_parses_and_has_a_next_occurrence() {
-        let presets = [
-            CronExpression::EVERY_SECOND,
-            CronExpression::EVERY_5_SECONDS,
-            CronExpression::EVERY_10_SECONDS,
-            CronExpression::EVERY_30_SECONDS,
-            CronExpression::EVERY_MINUTE,
-            CronExpression::EVERY_5_MINUTES,
-            CronExpression::EVERY_10_MINUTES,
-            CronExpression::EVERY_30_MINUTES,
-            CronExpression::EVERY_HOUR,
-            CronExpression::EVERY_2_HOURS,
-            CronExpression::EVERY_3_HOURS,
-            CronExpression::EVERY_6_HOURS,
-            CronExpression::EVERY_12_HOURS,
-            CronExpression::EVERY_DAY_AT_1AM,
-            CronExpression::EVERY_DAY_AT_6AM,
-            CronExpression::EVERY_DAY_AT_NOON,
-            CronExpression::EVERY_DAY_AT_MIDNIGHT,
-            CronExpression::EVERY_WEEKDAY,
-            CronExpression::EVERY_WEEKEND,
-            CronExpression::EVERY_WEEK,
-            CronExpression::EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT,
-            CronExpression::EVERY_QUARTER,
-            CronExpression::EVERY_YEAR,
-        ];
-        let now = Utc::now();
-        for expr in presets {
-            let cron = Cron::from_str(expr).unwrap_or_else(|e| panic!("`{expr}` must parse: {e}"));
-            cron.find_next_occurrence(&now, false)
-                .unwrap_or_else(|e| panic!("`{expr}` must have a next occurrence: {e}"));
+    fn every_preset_fires_when_its_documentation_says_it_does() {
+        let start: DateTime<Utc> = START.parse().expect("the start instant parses");
+        let mut moved = Vec::new();
+        for (name, expr, expected) in PINNED {
+            let cron = Cron::from_str(expr).unwrap_or_else(|e| panic!("`{name}` must parse: {e}"));
+            let mut at = start;
+            let mut fired = Vec::with_capacity(expected.len());
+            for _ in 0..expected.len() {
+                at = cron
+                    .find_next_occurrence(&at, false)
+                    .unwrap_or_else(|e| panic!("`{name}` must have a next occurrence: {e}"));
+                fired.push(at.format("%Y-%m-%dT%H:%M:%SZ").to_string());
+            }
+            if fired != *expected {
+                moved.push(format!(
+                    "  {name} (`{expr}`)\n    pinned: {expected:?}\n    fired:  {fired:?}"
+                ));
+            }
         }
+        assert!(
+            moved.is_empty(),
+            "{} preset(s) no longer fire when their documentation says they do:\n{}\n\
+             One means that constant or its prose is wrong; several at once \
+             means croner's semantics moved, and the answer is upstream's \
+             changelog rather than this table.",
+            moved.len(),
+            moved.join("\n"),
+        );
+    }
+
+    /// [`PINNED`] says *every* preset, so no constant may be added without a
+    /// row — counted off this file, because Rust offers no reflection over
+    /// associated constants and a hand-kept count is the drift this suite
+    /// exists to catch.
+    #[test]
+    fn the_pinned_table_covers_every_preset() {
+        let declared = include_str!("trigger.rs")
+            .lines()
+            .filter(|line| line.starts_with("    pub const "))
+            .count();
+        assert_eq!(
+            PINNED.len(),
+            declared,
+            "`CronExpression` declares {declared} presets and the pinned table \
+             holds {}. Add the new preset's row — an unpinned preset is one \
+             whose documentation nothing checks.",
+            PINNED.len(),
+        );
     }
 }

@@ -1,0 +1,5 @@
+error: invalid cron expression: Invalid pattern: Pattern must have between 5 and 7 fields.
+  --> tests/integration/diagnostics/cron_expression_is_invalid.rs:19:12
+   |
+19 |     #[cron("every monday")]
+   |            ^^^^^^^^^^^^^^

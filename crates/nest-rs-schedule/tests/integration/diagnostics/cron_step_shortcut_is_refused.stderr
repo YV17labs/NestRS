@@ -1,0 +1,5 @@
+error: invalid cron expression: Component error: Invalid step syntax: single number steps like "5/5" are not allowed. Use "*/5" for wildcard steps or "X-Y/5" for range steps.
+  --> tests/integration/diagnostics/cron_step_shortcut_is_refused.rs:19:12
+   |
+19 |     #[cron("0 5/5 * * * *")]
+   |            ^^^^^^^^^^^^^^^

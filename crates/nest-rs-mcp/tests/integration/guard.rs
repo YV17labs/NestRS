@@ -36,7 +36,7 @@ impl McpOperationGuard for RejectGuard {
 #[derive(Clone)]
 struct DummyHandler;
 
-#[tool_router]
+#[tool_router(allow_empty)]
 impl DummyHandler {}
 
 #[tool_handler]
@@ -196,7 +196,7 @@ async fn an_operation_guards_around_installs_ambient_state_with_no_tool_context(
 #[derive(Clone)]
 struct PoolTool;
 
-#[tool_router]
+#[tool_router(allow_empty)]
 impl PoolTool {}
 
 #[tool_handler]

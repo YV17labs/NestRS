@@ -3,10 +3,7 @@
 
 use std::sync::OnceLock;
 
-use argon2::{
-    Algorithm, Argon2, Params, Version,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
-};
+use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 
 use crate::error::PasswordError;
 
@@ -37,10 +34,12 @@ fn argon2() -> Result<Argon2<'static>, PasswordError> {
 
 /// Hash `password` for storage (Argon2id, random salt, the pinned OWASP work
 /// factor).
+///
+/// The salt is the hasher's own: `password-hash` draws the PHC specification's
+/// recommended 16 bytes from the system CSPRNG, once per call.
 pub fn hash_password(password: &str) -> Result<String, PasswordError> {
-    let salt = SaltString::generate(&mut OsRng);
     argon2()?
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map(|hash| hash.to_string())
         .map_err(|_| PasswordError::HashFailed)
 }
@@ -108,17 +107,46 @@ mod tests {
         );
     }
 
+    // The two strings below were produced by argon2 0.5.3 — the release this
+    // crate shipped against before the 0.6 bump — with the salt fixed so the
+    // digest is reproducible. They are here because every other test in this
+    // file hashes and verifies with the *same* build, which is exactly the case
+    // that cannot fail: a PHC format or B64 change would sail through it and
+    // lock every account already in a deployment's database out.
+    const LEGACY_PINNED_PARAMS_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$\
+                                             bmVzdHJzbGVnYWN5c2FsdA$\
+                                             gehrg8ZBw1WMfqozNAlQokF0EvWAwCMyS4ieeePrVZY";
+    const LEGACY_WEAKER_PARAMS_HASH: &str = "$argon2id$v=19$m=8192,t=1,p=1$\
+                                             bmVzdHJzbGVnYWN5c2FsdA$\
+                                             s/Cau1U7+FQjQc81KuFxQI6PHY7x9nX9RYKGTOlegng";
+
+    #[test]
+    fn a_credential_stored_by_the_previous_argon2_release_still_verifies() {
+        assert!(
+            verify_password(LEGACY_PINNED_PARAMS_HASH, "correct horse battery staple")
+                .expect("a 0.5-era hash parses"),
+            "an account hashed before the argon2 0.6 bump must still log in",
+        );
+        assert!(
+            !verify_password(LEGACY_PINNED_PARAMS_HASH, "wrong").expect("verify"),
+            "and the wrong password must still be refused",
+        );
+        assert!(
+            verify_password(LEGACY_WEAKER_PARAMS_HASH, "legacy").expect("verify"),
+            "including one whose work factor is not the pinned one",
+        );
+    }
+
     #[test]
     fn a_hash_made_with_another_work_factor_still_verifies() {
         // Verification reads the stored parameters, so pinning ours never
         // invalidates credentials hashed before the pin.
-        let salt = SaltString::generate(&mut OsRng);
         let weaker = Argon2::new(
             Algorithm::Argon2id,
             Version::V0x13,
             Params::new(8 * 1024, 1, 1, None).expect("params"),
         )
-        .hash_password(b"legacy", &salt)
+        .hash_password(b"legacy")
         .expect("hash")
         .to_string();
         assert!(verify_password(&weaker, "legacy").expect("verify"));

@@ -71,7 +71,7 @@ impl ParityResolver {
 #[derive(Clone)]
 struct ParityTool;
 
-#[tool_router]
+#[tool_router(allow_empty)]
 impl ParityTool {}
 
 #[tool_handler]

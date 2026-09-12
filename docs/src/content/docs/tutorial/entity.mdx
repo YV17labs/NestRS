@@ -39,7 +39,7 @@ its guards need.
 nest-rs = { version = "6.1", features = ["http", "seaorm", "testing", "authz", "authn"] }
 sea-orm = { version = "2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid", "with-chrono"] }
 serde = { version = "1.0", features = ["derive"] }
-uuid = { version = "1.24", features = ["v7", "serde"] }
+uuid = { version = "1.26", features = ["v7", "serde"] }
 ```
 
 `sea-orm` is already there — the `migrations` crate the workspace ships uses
@@ -60,8 +60,9 @@ generates, `Uuid` as the primary-key type. The derives `#[expose]` emits —
 `schemars::JsonSchema`, `validator::Validate` — are routed back through the
 framework with a `crate = ` override, so neither appears here.
 
-`nestrs g resource posts` writes both manifests for you — byte for byte the two
-blocks above, dotted keys included.
+`nestrs g resource posts` writes both manifests for you — every line above
+verbatim, dotted keys included, alongside whatever else the workspace already
+needs.
 
 ## The first cut
 

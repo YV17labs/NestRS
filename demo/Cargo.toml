@@ -42,7 +42,7 @@ async-trait = "0.1"
 parking_lot = "0.12"
 async-graphql = { version = "=7.2.1", features = ["dataloader"] }
 validator = { version = "0.21", features = ["derive"] }
-uuid = { version = "1.24", features = ["v7", "serde"] }
+uuid = { version = "1.26", features = ["v7", "serde"] }
 sea-orm = { version = "=2.0", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros", "with-uuid"] }
 sea-orm-migration = { version = "=2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }

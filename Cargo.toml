@@ -132,10 +132,10 @@ async-graphql-poem = "=7.2.1"
 # the schema composes itself at boot with no central list.
 inventory = "0.3"
 
-argon2 = "0.5"
+argon2 = "0.6"
 validator = { version = "0.21", features = ["derive"] }
 # `serde` so UUID-keyed entity rows serialize for the authz response masker.
-uuid = { version = "1.24", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.26", features = ["v4", "v7", "serde"] }
 
 # EXACT pin (`=`), not a caret range: sea-orm types saturate the ORM public
 # surface (`Repo` bounds, `Executor`'s `ConnectionTrait`, `ServiceError::Db`),
@@ -160,20 +160,21 @@ flate2 = "1.1"
 
 # schemars must match rmcp's re-exported version, or the derive resolves to a
 # different trait than `rmcp::handler::server::wrapper::Parameters` expects.
-rmcp = { version = "3.1", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
+rmcp = { version = "3.3", features = ["server", "macros", "elicitation", "transport-streamable-http-server"] }
 schemars = { version = "1.2", features = ["uuid1", "chrono04"] }
 
 # `#[cron("...")]` parsing. croner accepts 5/6/7 fields (seconds optional);
 # chrono-tz resolves the IANA name of the optional per-job timezone.
-croner = "3.0"
+croner = "4.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 chrono-tz = "0.10"
 
 # Held at the 0.7 stable line: apalis 1.0 is still churning through release
 # candidates and does not clear the "no pre-release in a foundation dep" bar.
-# Checked 2026-08-03: newest stable `apalis-redis` is 0.7.4 (2025-11-18), newest
-# of any kind is 1.0.0-rc.8 (2026-05-07) — upstream is alive, its *stable* line
-# is not moving. That dates the freshness bar: ~2026-11 is when a still-RC 1.0
+# Re-checked 2026-09-12, unchanged since 2026-08-03: newest stable
+# `apalis-redis` 0.7.4 (2025-11-18), newest of any kind 1.0.0-rc.8 (2026-05-07)
+# — apalis itself reached rc.9, so upstream is alive and its *stable* line is
+# not. That dates the freshness bar: ~2026-11 is when a still-RC 1.0
 # turns this pin into a flag to raise, not a note to keep.
 # The 0.7 build carries a future-incompat warning (never-type fallback); the
 # crate now lives at github.com/apalis-dev/apalis-redis, split out of

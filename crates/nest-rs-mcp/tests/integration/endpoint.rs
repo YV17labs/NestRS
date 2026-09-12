@@ -13,7 +13,7 @@ use poem::http::StatusCode;
 #[derive(Clone)]
 struct EchoTool;
 
-#[tool_router]
+#[tool_router(allow_empty)]
 impl EchoTool {}
 
 #[tool_handler]

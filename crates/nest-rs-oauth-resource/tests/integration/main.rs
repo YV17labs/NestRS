@@ -58,7 +58,7 @@ pub fn challenge(resp: &poem::Response) -> String {
 #[derive(Clone)]
 pub struct EchoTool;
 
-#[tool_router]
+#[tool_router(allow_empty)]
 impl EchoTool {}
 
 #[tool_handler]

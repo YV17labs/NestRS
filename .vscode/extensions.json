@@ -1,0 +1,38 @@
+{
+	// Versions checked 2026-09-12. Anything listed here is actively published;
+	// what replaced a dead extension is in `unwantedRecommendations` below.
+	"recommendations": [
+		// --- Rust ---------------------------------------------------------
+		"rust-lang.rust-analyzer",
+		"vadimcn.vscode-lldb",
+		"fill-labs.dependi",
+		"tombi-toml.tombi",
+		"usernamehw.errorlens",
+
+		// --- This repo's tooling -----------------------------------------
+		"ryanluker.vscode-coverage-gutters",
+		"nefrob.vscode-just-syntax",
+		"ms-azuretools.vscode-containers",
+		"mtxr.sqltools",
+		"mtxr.sqltools-driver-pg",
+
+		// --- demo/apps/api + docs/ ---------------------------------------
+		"graphql.vscode-graphql-syntax",
+		"astro-build.astro-vscode",
+		"unifiedjs.vscode-mdx",
+		"bierner.markdown-mermaid",
+
+		"anthropic.claude-code"
+	],
+	"unwantedRecommendations": [
+		// Deprecated by its own author; `fill-labs.dependi` is the successor.
+		"serayuzgur.crates",
+		// VSIX frozen at 0.21.2 (2024-12); taplo takes build fixes only.
+		// `tombi-toml.tombi` is the maintained TOML language server.
+		"tamasfe.even-better-toml",
+		// Now an extension pack around `ms-azuretools.vscode-containers`.
+		"ms-azuretools.vscode-docker",
+		// Superseded by rust-analyzer years ago.
+		"rust-lang.rust"
+	]
+}

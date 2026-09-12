@@ -1,0 +1,113 @@
+{
+	// The single source of truth for both host and devcontainer: the container
+	// mounts this same folder, so `devcontainer.json` carries the extension
+	// list only and no settings of its own.
+
+	// --- rust-analyzer ---------------------------------------------------
+	// Two workspaces, and auto-discovery only ever finds the first. Listing
+	// them explicitly is what gives `demo/` IDE support at all; the third
+	// manifest, `bench/sut/nestrs`, is a benchmark subject and stays out.
+	"rust-analyzer.linkedProjects": [
+		"Cargo.toml",
+		"demo/Cargo.toml"
+	],
+	"rust-analyzer.files.exclude": [
+		"bench/sut",
+		"docs/node_modules",
+		"docs/dist",
+		"docs/.astro"
+	],
+
+	// The gate in `Definition of done` is `clippy --all-targets -- -D warnings`.
+	// `cargo.allTargets` already defaults to true, so only the deny is added —
+	// the editor then fails on exactly what CI fails on.
+	"rust-analyzer.check.command": "clippy",
+	"rust-analyzer.check.extraArgs": ["--", "-Dwarnings"],
+
+	// `all` matches how the umbrella is built and is what `nest-rs-macro-hygiene`
+	// proves against. It costs memory on a workspace this size — the lever if it
+	// hurts is `"rust-analyzer.cachePriming.enable": false`.
+	"rust-analyzer.cargo.features": "all",
+
+	// A target dir of its own, so rust-analyzer's `cargo check` never fights
+	// `bacon` (the `dev` recipe) over the `Cargo.lock`.
+	"rust-analyzer.cargo.targetDir": true,
+
+	// This framework is proc-macro-heavy; without this every decorator's
+	// expansion is invisible to the IDE.
+	"rust-analyzer.procMacro.enable": true,
+	"rust-analyzer.cargo.buildScripts.enable": true,
+
+	"rust-analyzer.inlayHints.closureReturnTypeHints.enable": "with_block",
+	"rust-analyzer.inlayHints.lifetimeElisionHints.enable": "skip_trivial",
+
+	// --- Formatting -------------------------------------------------------
+	"editor.formatOnSave": true,
+	"[rust]": {
+		"editor.defaultFormatter": "rust-lang.rust-analyzer"
+	},
+	// Manifests carry hand-laid comments and column alignment that a TOML
+	// formatter would rewrite, so Tombi lints and completes here but never
+	// reformats on save. Format one deliberately with `Format Document`.
+	"[toml]": {
+		"editor.defaultFormatter": "tombi-toml.tombi",
+		"editor.formatOnSave": false
+	},
+
+	// --- Coverage ---------------------------------------------------------
+	// `nestrs run test cov` writes `demo/lcov.info`; `Coverage Gutters: Watch`
+	// picks it up from there.
+	"coverage-gutters.coverageFileNames": ["lcov.info"],
+	"coverage-gutters.coverageBaseDir": "demo",
+	"coverage-gutters.showLineCoverage": true,
+	"coverage-gutters.showRulerCoverage": true,
+	"coverage-gutters.showGutterCoverage": true,
+
+	// --- Postgres ---------------------------------------------------------
+	// The demo's dev credentials, already committed in `demo/.env` and
+	// explained there. `postgres` is the compose hostname inside the
+	// devcontainer; `localhost` is the forwarded port from the host.
+	"sqltools.connections": [
+		{
+			"name": "nestrs (devcontainer)",
+			"driver": "PostgreSQL",
+			"server": "postgres",
+			"port": 5432,
+			"database": "nestrs",
+			"username": "nestrs",
+			"password": "nestrs",
+			"askForPassword": false,
+			"previewLimit": 50
+		},
+		{
+			"name": "nestrs (host)",
+			"driver": "PostgreSQL",
+			"server": "localhost",
+			"port": 5432,
+			"database": "nestrs",
+			"username": "nestrs",
+			"password": "nestrs",
+			"askForPassword": false,
+			"previewLimit": 50
+		}
+	],
+
+	// --- Noise ------------------------------------------------------------
+	"files.watcherExclude": {
+		"**/target/**": true,
+		"**/docs/node_modules/**": true,
+		"**/docs/.astro/**": true,
+		"**/bench/sut/**": true
+	},
+	"search.exclude": {
+		"**/target": true,
+		"**/docs/node_modules": true,
+		"**/docs/dist": true,
+		"bench/sut": true,
+		"**/Cargo.lock": true
+	},
+	"files.associations": {
+		"*.just": "just",
+		"Justfile": "just"
+	}
+}

@@ -4,22 +4,27 @@
 	"service": "dev",
 	"workspaceFolder": "/workspaces/nestrs",
 	"postCreateCommand": "cargo install --locked --path crates/nest-rs-cli",
+	// Extensions are installed in the container; every setting lives in the
+	// committed `.vscode/settings.json`, which the container mounts with the
+	// workspace. Keep this list in sync with `.vscode/extensions.json`.
 	"customizations": {
 		"vscode": {
 			"extensions": [
 				"rust-lang.rust-analyzer",
 				"vadimcn.vscode-lldb",
-				"tamasfe.even-better-toml",
 				"fill-labs.dependi",
+				"tombi-toml.tombi",
 				"usernamehw.errorlens",
-				"Anthropic.claude-code"
-			],
-			"settings": {
-				"rust-analyzer.check.command": "clippy",
-				"rust-analyzer.cargo.features": "all",
-				"rust-analyzer.cargo.targetDir": true,
-				"editor.formatOnSave": true
-			}
+				"ryanluker.vscode-coverage-gutters",
+				"nefrob.vscode-just-syntax",
+				"mtxr.sqltools",
+				"mtxr.sqltools-driver-pg",
+				"graphql.vscode-graphql-syntax",
+				"astro-build.astro-vscode",
+				"unifiedjs.vscode-mdx",
+				"bierner.markdown-mermaid",
+				"anthropic.claude-code"
+			]
 		}
 	},
 	"features": {

@@ -78,15 +78,15 @@ At boot:
    its `#[process]` methods into the reachable set.
 6. `RedisWorker::configure` drains `inventory::iter::<ProcessMethod>()`,
    keeps only the methods whose provider is reachable, and logs each
-   one. `serve` builds one apalis worker per method on a shared
-   `Monitor`.
+   one. `serve` runs one queue runtime draining every method's queue,
+   one job at a time per queue.
 
 ## The producer-only app
 
 A producer-only binary imports `RedisModule::for_root(...)` and
 `RedisQueueModule`, and skips `RedisWorkerModule` entirely. It gets
 `Arc<dyn JobProducer>` to push with — and no worker spawn, no drained
-inventory, no apalis monitor.
+inventory, no queue runtime.
 
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;

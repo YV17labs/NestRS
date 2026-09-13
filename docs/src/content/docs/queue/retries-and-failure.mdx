@@ -1,6 +1,6 @@
 ---
 title: Retries and failure
-description: "What an Err from a #[process] method means — the apalis retry shape, panic handling, and the dead-letter story."
+description: "What an Err from a #[process] method means — the retry shape, panic handling, and the dead-letter story."
 tier: all-options
 sidebar:
   order: 4
@@ -13,9 +13,9 @@ The contract is small: a `#[process]` method returns `anyhow::Result<()>`,
 attempt's transaction has settled, which is the one way a body that returned
 `Ok` can still fail (see
 [below](#panics-deserialization-errors-container-misses)). After that the
-backend decides — and Redis (via apalis) gives you a fixed retry budget
-per method, a panic safety net, and a failed-jobs list. Anything richer
-than that is bolted on top.
+backend decides — and Redis gives you a fixed retry budget per method, a
+panic safety net, and a dead-jobs list. Anything richer than that is bolted
+on top.
 
 ## The basic shape
 
@@ -27,26 +27,23 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 ```
 
 - `Ok(())` ⇒ the attempt's transaction commits and the job is removed
-  from the queue. apalis acknowledges it; that's the end of its life. If
-  the commit cannot be honoured, nothing it wrote landed and the attempt
-  fails instead — the one case where `Ok` is not the end.
-- `Err(e)` ⇒ the job goes back for another attempt. apalis tracks the
-  attempt count, and after `retries` failures it's moved to the
-  queue's failed-jobs list (see [Where failed jobs go](#where-failed-jobs-go)).
+  from Redis; that's the end of its life. If the commit cannot be
+  honoured, nothing it wrote landed and the attempt fails instead — the
+  one case where `Ok` is not the end.
+- `Err(e)` ⇒ the method runs again, at once, with the same `job_id` and
+  the next `attempt`. After `retries` re-runs have failed, the job moves to
+  the dead list (see [Where failed jobs go](#where-failed-jobs-go)).
 - A **panic** inside the method is caught, logged as
   `job dead-lettered: handler panicked` at `error` (inside the job's own
   span, so it carries `queue`, `processor`, `job_id` and `attempt`), and
-  converted to `Error::Abort`. The job dead-letters immediately, the
-  worker keeps running — one bad job doesn't kill the queue's consumer.
+  the job dead-letters immediately. The worker keeps running — one bad job
+  doesn't kill the queue's consumer.
 
-Hot-path layer order: `CatchPanicLayer` sits *inside* `RetryLayer`,
-which sits inside `ErrorHandlingLayer`. `RetryLayer` reacts to `Err`,
-not to panics, so without the panic layer a single `unwrap()` in user
-code would tear down the worker. The order is fixed in
-`nest-rs-redis`'s `build_worker`, which also catches the panic itself,
-one level in — that is what keeps the structured event inside the per-job span
-(with `queue`, `processor`, `job_id` and `attempt`) instead of losing it to an
-unwind.
+The panic is caught one level in, by the queue port itself
+(`nest_rs_queue::consume::attempt`) — that is what keeps the structured
+event inside the per-job span instead of losing it to an unwind. The job
+runtime catches an unwind as well, as the backstop for a panic outside the
+handler, so a single `unwrap()` in user code never tears the worker down.
 
 Rust's **default panic hook still prints its own `thread … panicked at …` line
 to stderr** first: catching an unwind does not replace the hook. That line
@@ -56,11 +53,10 @@ is the `job dead-lettered: handler panicked` event beneath it. Install
 
 ## The retry shape
 
-`retries = N` uses `RetryPolicy::retries(N)` from apalis. That's a
-**fixed retry count, no backoff** — the policy retries up to `N` times
-back-to-back. The number of total attempts a job sees is `N + 1` (the
-first try plus N retries). Default if you omit `retries`: `0` — the
-job is tried once.
+`retries = N` is a **fixed retry count, no backoff**: a failed attempt runs
+again at once, up to `N` times, while the queue's one job slot stays held.
+The number of total attempts a job sees is `N + 1` (the first try plus N
+retries). Default if you omit `retries`: `0` — the job is tried once.
 
 <Aside type="caution">
 There's no exponential backoff, no jitter, no per-attempt delay in the
@@ -102,31 +98,24 @@ failing under load, a panic in deserialization).
 
 ## Where failed jobs go
 
-apalis moves a job whose budget is exhausted (or that aborted) to a Redis
-sorted set named after the queue with **`:dead`** appended, and records
-the terminal error under `<queue>:data::result`. Both are apalis-internal
-keys you normally read through its CLI or admin tools:
+A job whose budget is exhausted, or that dead-lettered, moves to one Redis
+list shared by every queue, **`nestrs:queue:dead`**. Each entry is the job's
+JSON record — its `queue`, its payload, and the error under `meta.error` —
+and the newest 1,000 are kept:
 
 ```bash frame="terminal"
-$ redis-cli KEYS 'audio*'
-audio:data          audio:data::result          audio:consumers          audio:dead
-
-$ redis-cli ZRANGE audio:dead 0 -1
-01KYQ7RH444ZAHA2JP8JBJVRA1
-
-$ redis-cli HGET audio:data::result 01KYQ7RH444ZAHA2JP8JBJVRA1
-RetryPolicyError: Out of retries after 4 attempts: FailedError: transcode failed
+$ redis-cli LRANGE nestrs:queue:dead 0 9
 ```
 
 The framework does **not** ship a dead-letter routing layer of its own —
 the dead list is the storage's, and inspecting / replaying it is an
-operational task you run with apalis tooling or your own admin handler.
+operational task you run with `redis-cli` or your own admin handler.
 
 If you need richer dead-lettering — alerting, replay, archival to a
 separate queue — write a wrapper service that catches the `Err` from
 the work and republishes the payload to a dedicated queue (e.g.
-`audio.dead`) before returning the error to apalis. A `#[processor]`
-on `audio.dead` then runs your DLQ logic. That's the same pattern any
+`audio.dead`) before returning the error. A `#[processor]` on
+`audio.dead` then runs your DLQ logic. That's the same pattern any
 non-Redis backend would expose.
 
 ```rust title="crates/features/src/audio/queue/processor.rs"
@@ -147,10 +136,10 @@ async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
 Four failure modes the framework converts into the same `Err` path,
 so you don't have to think about them separately:
 
-- **Panics in the method body** — caught and surfaced as
-  `Error::Abort`, with a `job dead-lettered: handler panicked` event
-  carrying the panic message. The job dead-letters immediately
-  (regardless of remaining retries), the worker stays up.
+- **Panics in the method body** — caught, with a
+  `job dead-lettered: handler panicked` event carrying the panic message.
+  The job dead-letters immediately (regardless of remaining retries), the
+  worker stays up.
 - **Deserialization errors** — the macro-emitted `JobHandler` does the
   `serde_json::from_value`. A payload that doesn't match the method's
   job type returns `Err` before your method even runs. Retrying won't
@@ -206,17 +195,22 @@ always wrap.
   span, not the message, to tell the last try from the others.
 - **The dead list is not routed anywhere.** Nothing alerts, replays or
   archives on your behalf; wire the wrapper above if you need that.
-- **Scaling the worker up re-runs in-flight jobs.** Delivery is exclusive —
-  two replicas never get the same job from the queue — but a replica's
-  *startup* sweep requeues work its peers are currently running, so the same
-  `job_id` executes twice (both reported as `attempt=1`). It comes from
-  apalis-redis's startup call to `reenqueue_orphaned` using a cutoff of *now*,
-  which matches every registered consumer instead of only the worker's own
-  previous incarnation. Until it is fixed upstream, treat a `#[process]`
-  handler as **at-least-once** and make it idempotent — the practical rule for
-  any durable queue, and load-bearing here because replicas are how throughput
-  scales. Measured in
-  `crates/nest-rs-redis/tests/e2e/replicas.rs`, which pins both halves.
+- **A replica that dies mid-job has the job run again.** Delivery is
+  exclusive — two replicas never get the same job from the queue — and
+  starting a replica leaves in-flight work alone. But a replica killed
+  mid-job leaves the job in its own processing list, and once its heartbeat
+  has been silent for five seconds a live replica puts the job back on the
+  queue, where it runs again from `attempt=1`. Treat a `#[process]` handler
+  as **at-least-once** and make it idempotent — the practical rule for any
+  durable queue, and load-bearing here because replicas are how throughput
+  scales. The scale-up half is measured in
+  `crates/nest-rs-redis/tests/e2e/replicas.rs`.
+- **A container restarted in place does not re-run its job.** A replica is
+  recognised by its hostname and pid, and a container restarted where it
+  stood keeps both, so nothing sees its crashed predecessor as dead: the job
+  that was running stays in the processing list the restarted process now
+  owns, and does not run again. Replicas that differ by hostname are not
+  affected.
 
 ## Going further
 
@@ -224,8 +218,7 @@ always wrap.
   logs when a job retries or fails.
 - [OpenTelemetry](/opentelemetry/) — wiring the queue spans into a
   trace backend.
-- `crates/nest-rs-redis/src/worker/consumer.rs` — `build_worker`: the
-  apalis layer stack, the `CatchPanicLayer` placement, the
-  `RetryLayer` budget.
+- `crates/nest-rs-redis/src/worker/consumer.rs` — `settle`: how an
+  attempt's outcome spends, or does not spend, the retry budget.
 - `crates/nest-rs-queue/src/inventory.rs` — `WIRE_FORMAT_VERSION`,
   the envelope spec.

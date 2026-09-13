@@ -22,6 +22,7 @@ service-level logs your `#[process]` method emits keep their own target
 | `nest_rs::operation` | One `queue.job` line per attempt — identity, `outcome`, `duration_ms`. Shared with every other edge. | `info`. |
 | `nest_rs::app` | Boot: `attached module-contributed transport transport="RedisWorker"`. Emitted by the composition root, which attaches every transport — so the target is the app's, not the queue's. | `info`. |
 | `features::<feature>` | Your service-level logs inside the `#[process]` method. | Your call. |
+| `oxana::*` | The job runtime's own lines: `Job started` and `Job finished` per job on `oxana::executor`, which restate `queue.job`; a job requeued from a dead replica on `oxana::storage_internal`, which nothing else reports. Below `info`, oxana logs whole job records, payload included — on the producer's side at `trace` as well as the worker's. | `info`, `warn` on a transient Redis error. |
 
 Hot paths respect `RUST_LOG=info`: `job started` sits at `debug`, so a
 worker at `info` logs one `queue.job` line per attempt and, on failure, one
@@ -38,8 +39,8 @@ tagged with the span's fields:
 |---|---|
 | `queue` | The Redis queue name. |
 | `processor` | The processor host name, e.g. `AudioProcessor::transcode`. |
-| `job_id` | The apalis `TaskId` for this job. |
-| `attempt` | The apalis attempt counter (`1` on the first try, higher on retries). |
+| `job_id` | The job's id in Redis — a UUID, the same across its retries. |
+| `attempt` | Counted by the worker: `1` on the first try, higher on retries. |
 | `trace_id` / `span_id` | This job's [W3C trace context](/fundamentals/correlation/) — always present. |
 | `parent_span_id` | The span that enqueued the job: the HTTP request, the message, the tick. |
 | `continued_trace` | `true` when the envelope carried a `traceparent`, `false` when this job started a trace of its own. |
@@ -61,8 +62,8 @@ a unit of work, carrying the job's identity, its `outcome` and its
 `duration_ms`:
 
 ```text frame="terminal"
-DEBUG features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
- INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" job_id="01M0ATJ9C2YN8NJX3GVTA911X6" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+DEBUG features::audio: transcoded file="01a0978b-938c-718c-bd77-ac49831a8510-e2e-multipart-87068-1789248902027799293.mp3" derived_key="transcoded/01a0978b-938c-718c-bd77-ac49831a8510-e2e-multipart-87068-1789248902027799293.mp3" byte_size=41 trace_id=01a0978b93aa746c8754d7c900ef3597 span_id=8a42eb4688f9bb3d
+ INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" job_id="ccb2f3ed-924c-49f5-9370-10970d083b29" attempt=1 outcome="ok" duration_ms=29.803 trace_id=01a0978b93aa746c8754d7c900ef3597 span_id=8a42eb4688f9bb3d
 ```
 
 A failure adds one event on `nest_rs::queue` saying **why** — at `warn`
@@ -71,7 +72,7 @@ dead-letters — and the `queue.job` line reports `outcome="error"` (or
 `outcome="panic"`) beside it. The two never restate each other: the
 detail carries the cause, the line carries the timing and the identity.
 
-`attempt` is how you correlate a retry: apalis re-runs the same `job_id`
+`attempt` is how you correlate a retry: the worker re-runs the same `job_id`
 with `attempt=2`, opening a fresh `process job` span and filing a fresh
 line — same `trace_id`, new `span_id`. See
 [Retries and failure](/queue/retries-and-failure/) for the policy behind
@@ -111,11 +112,15 @@ tagged with an *unsupported* version fails the job instead of warning.
 ## Filtering recipes
 
 ```bash
-RUST_LOG=info,nest_rs::queue=debug nestrs run dev worker
+RUST_LOG=info,oxana::executor=warn,nest_rs::queue=debug nestrs run dev worker
 ```
 
 `info` everywhere, `debug` on the queue path: adds the `job started`
-line per poll on top of the `queue.job` line and any failure detail.
+line per poll on top of the `queue.job` line and any failure detail, while
+the runtime's own per-job lines stay quiet. Silence `oxana::executor` rather
+than `oxana`: the latter also hides the line saying a dead replica's job was
+put back on its queue, and never lower `oxana` below `info` in production,
+where it logs payloads.
 
 ```bash
 RUST_LOG=nest_rs::queue=warn nestrs run dev worker

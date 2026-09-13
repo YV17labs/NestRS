@@ -28,7 +28,7 @@ Read this section, then start from the working reference: the
 The abstractions — `Job`, `Processor`, `ProcessMethod`, the `#[processor]`
 macro — ship in **`nest-rs-queue`**. The first-class storage, **Redis**,
 ships in **`nest-rs-redis`** (built on
-[`apalis`](https://docs.rs/apalis)): the `RedisQueueProducer` producer binding,
+[`oxana`](https://docs.rs/oxana)): the `RedisQueueProducer` producer binding,
 the `RedisWorker` transport, and the `RedisQueueModule` / `RedisWorkerModule`
 activation seams. Both are compilation units, not lines you write: the
 `redis` feature below pulls them together, and an app's manifest names
@@ -157,10 +157,10 @@ Two consequences worth knowing:
 
 <Aside type="caution">
 **Write `#[process]` handlers to be idempotent.** Two replicas never receive
-the same job from the queue — the Redis fetch claims ids atomically — but
-*starting* a replica while another holds a job puts that job back on the queue,
-and it runs again. Scaling the worker up mid-flight therefore re-runs in-flight
-work, not only failed work. The measurement and the cause are in
+the same job from the queue — the Redis fetch claims a job atomically — but a
+replica that dies mid-job leaves that job to a peer, which runs it again once
+the dead replica's heartbeat has gone quiet. Delivery is at-least-once, as on
+any durable queue. The details are in
 [Retries and failure](/queue/retries-and-failure/#limits).
 </Aside>
 
@@ -251,14 +251,14 @@ same block — same convention as `#[routes]` and `#[scheduled]`.
 
 Three modules, three roles:
 
-- **`RedisModule::for_root(None)`** — opens the one Redis connection every
-  Redis binding shares (`NESTRS_REDIS__URL`). Every app that touches Redis
-  needs it.
-- **`RedisQueueModule`** — binds the producer over that connection, as
+- **`RedisModule::for_root(None)`** — opens the one Redis connection pool
+  every Redis binding shares (`NESTRS_REDIS__URL`). Every app that touches
+  Redis needs it.
+- **`RedisQueueModule`** — binds the producer over that pool, as
   `Arc<dyn JobProducer>`. Every app that enqueues imports it.
 - **`RedisWorkerModule`** — activates the consumer runtime. At boot the
-  framework drains the discovered `#[process]` methods, spawns one
-  apalis worker per method, and shuts them down with the app. A
+  framework drains the discovered `#[process]` methods, runs their queues
+  one job at a time each, and shuts them down with the app. A
   producer-only app does NOT import this.
 
 ```rust title="apps/worker/src/module.rs (from the demo)"
@@ -309,8 +309,8 @@ $ nestrs run dev worker
 ```text frame="terminal"
  INFO nest_rs::app: attached module-contributed transport transport="RedisWorker"
  INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
- INFO features::audio: transcoded file="track-1787069801760.mp3" byte_size=50 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
- INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" job_id="01M0ATJ9C2YN8NJX3GVTA911X6" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+DEBUG features::audio: transcoded file="01a0978b-938c-718c-bd77-ac49831a8510-e2e-multipart-87068-1789248902027799293.mp3" derived_key="transcoded/01a0978b-938c-718c-bd77-ac49831a8510-e2e-multipart-87068-1789248902027799293.mp3" byte_size=41 trace_id=01a0978b93aa746c8754d7c900ef3597 span_id=8a42eb4688f9bb3d
+ INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" job_id="ccb2f3ed-924c-49f5-9370-10970d083b29" attempt=1 outcome="ok" duration_ms=29.803 trace_id=01a0978b93aa746c8754d7c900ef3597 span_id=8a42eb4688f9bb3d
 ```
 
 The last two lines share the job's `trace_id`, and it is the producer's — see [Observability](/queue/observability/) for the
@@ -328,7 +328,7 @@ full field set.
 ### All options
 
 - [Retries and failure](/queue/retries-and-failure/) — what an `Err` means,
-  the apalis retry shape, panics, dead-lettering.
+  the retry shape, panics, dead-lettering.
 - [Observability](/queue/observability/) — the span, its fields, and the
   lines a worker emits per job.
 - [Writing a queue driver](/queue/writing-a-driver/) — the scaffold for a

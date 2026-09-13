@@ -36,13 +36,13 @@ types leak.
 | the crate that *binds* the port | delegates to | which already drives |
 |---|---|---|
 | `nest-rs-seaorm` | `sea-orm` | PostgreSQL, MySQL, SQLite |
-| `nest-rs-redis` | `apalis` | Redis, SQL backends |
+| `nest-rs-redis` | `oxana` | Redis |
 | `nest-rs-storage` | `object_store` | S3, GCS, Azure, local filesystem, in-memory |
 
 Note which column the crate names sit in. The question is answered by whoever
 **binds** the port, never by the crate that declares it — `nest-rs-database`'s
 entire manifest is one dependency on `tokio`, and `nest-rs-queue` names no
-`apalis`. A port crate depending on nothing is the normal case.
+`oxana`. A port crate depending on nothing is the normal case.
 
 When a concern is delegated, the port exists for exactly one move — swapping the
 **vendor** — so its contract is thin and it declares **no configuration of its

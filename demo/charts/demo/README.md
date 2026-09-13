@@ -73,9 +73,9 @@ apps:
       enabled: true
 ```
 
-The triggers ship pre-wired to the demo's two queues. The key names are apalis's
-own layout — `<queue>:active` is the pending list, and `<queue>` is the name the
-`#[queue]` declaration gives it.
+The triggers ship pre-wired to the demo's two queues. The key names are oxana's
+layout under the framework's namespace — `nestrs:queue:queue:<queue>` is the
+pending list, and `<queue>` is the name the `#[queue]` declaration gives it.
 
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
 its own, and two of them would scale the same Deployment against each other.
@@ -84,14 +84,13 @@ its own, and two of them would scale the same Deployment against each other.
 
 Scale-to-zero is one value away and deliberately not the default:
 
-- a worker start re-enqueues orphaned jobs across **all** registered consumers,
-  not just its own previous incarnation, so every scale-up re-runs its peers'
-  in-flight jobs. `#[process]` handlers must be idempotent — the framework says
-  so already — and scaling stays unhurried on purpose;
-- at zero replicas nothing promotes `<queue>:scheduled` into `<queue>:active`
-  and nothing recovers `<queue>:inflight` from a pod that died mid-job. Neither
-  is reachable from today's demo, where the producer pushes straight to
-  `:active` and retries are in-process, but both become permanent the day a
+- a pod that dies mid-job leaves the job in its own processing list, where only
+  a running worker finds it — once the dead pod's heartbeat has gone quiet. The
+  trigger counts the pending list alone, so at zero replicas that job starts no
+  worker and waits for the next push;
+- at zero replicas nothing promotes `nestrs:queue:schedule` onto a queue. That
+  is not reachable from today's demo, where the producer pushes straight to the
+  pending list and retries run in-process, but it becomes permanent the day a
   delayed push appears.
 
 Set it to 0 knowing that.

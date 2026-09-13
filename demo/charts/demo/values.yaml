@@ -213,15 +213,14 @@ apps:
     terminationGracePeriodSeconds: 45
     # Two facts about this worker, both from the framework's own source:
     #
-    # 1. It runs `concurrency(1)` per `#[process]` method — throughput comes
+    # 1. It runs one job at a time per `#[process]` method — throughput comes
     #    from replicas, never from a bigger pod. Both demo jobs are pure I/O
     #    (S3 round-trip, one INSERT), so a pod draining a huge backlog sits
     #    near 0% CPU and a CPU-driven HPA never fires. Turn `autoscaling` on
     #    only if your own processor is genuinely CPU-bound.
-    # 2. apalis re-enqueues orphaned jobs on every worker start, with a cutoff
-    #    that matches all registered consumers — a scale-up therefore re-runs
-    #    its peers' in-flight jobs. `#[process]` handlers must be idempotent,
-    #    and scaling stays deliberately unhurried.
+    # 2. A pod that dies mid-job has that job run again by a live worker once
+    #    its heartbeat has gone quiet — `#[process]` handlers must be
+    #    idempotent. Starting a pod disturbs nothing in flight.
     autoscaling:
       enabled: false
     # Queue depth, the signal that actually reflects a backlog. Needs KEDA in
@@ -235,11 +234,11 @@ apps:
       triggers:
         - type: redis
           metadata:
-            listName: audio:active
+            listName: nestrs:queue:queue:audio
             listLength: "5"
         - type: redis
           metadata:
-            listName: notifications:active
+            listName: nestrs:queue:queue:notifications
             listLength: "20"
 
 # --- KEDA ---------------------------------------------------------------------
@@ -247,11 +246,12 @@ apps:
 # Its scaler wants `host:port`, not the `redis://` URL the framework reads.
 #
 # Why minReplicaCount defaults to 1 rather than 0: with no worker running,
-# nothing promotes `<queue>:scheduled` into `<queue>:active` and nothing
-# recovers `<queue>:inflight` from a pod that died mid-job. Neither is reachable
-# from today's demo — the producer pushes straight to `:active` and retries are
-# in-process — but scale-to-zero makes both permanent the day a delayed push
-# appears. Set it to 0 knowingly.
+# nothing recovers a job from the processing list of a pod that died mid-job —
+# the trigger counts the pending list alone, so that job starts no worker — and
+# nothing promotes `nestrs:queue:schedule` onto a queue. The second is not
+# reachable from today's demo, where the producer pushes straight to the pending
+# list and retries run in-process, but scale-to-zero makes it permanent the day
+# a delayed push appears. Set it to 0 knowingly.
 keda:
   redis:
     address: ""

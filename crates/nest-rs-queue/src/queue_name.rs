@@ -34,7 +34,7 @@ use crate::processor::Job;
 /// process method's job argument is `Self::Job`, so a mismatch is a compile
 /// error naming both types.
 pub trait QueueName: 'static {
-    /// The wire name apalis (or any backend) namespaces storage under — the
+    /// The wire name a backend files the queue's storage under — the
     /// exact string that reaches the wire and the worker registry.
     const NAME: &'static str;
 

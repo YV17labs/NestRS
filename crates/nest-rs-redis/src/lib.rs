@@ -1,6 +1,6 @@
-//! Redis for nestrs — one crate, one connection, one binding per port.
+//! Redis for nestrs — one crate, one connection pool, one binding per port.
 //!
-//! [`RedisModule::for_root`] opens the one multiplexed [`RedisConnection`]
+//! [`RedisModule::for_root`] opens the one [`RedisConnection`] pool
 //! (`NESTRS_REDIS__*`); the bindings sit beside it in the composition root and
 //! share it:
 //!
@@ -9,14 +9,14 @@
 //!   `.push_to::<Q>(job).await?`.
 //! - **worker** — [`RedisWorkerModule`] attaches the [`RedisWorker`] transport,
 //!   which drains the `ProcessMethod` inventory the `#[processor]` macro feeds
-//!   and runs one apalis worker per method. Producer-only apps skip it.
+//!   and runs one job at a time per method. Producer-only apps skip it.
 //! - **throttler** (feature) — [`RedisThrottlerModule`] binds the
 //!   cross-process `dyn ThrottlerStore` the `nest-rs-throttler` guard injects.
 //!
 //! The queue contract lives in [`nest-rs-queue`](::nest_rs_queue) (the
 //! [`Job`] marker, the [`Processor`] trait, the [`ProcessMethod`] inventory);
-//! this crate is Redis's binding of it, built on apalis-redis. The user-facing
-//! storage is **Redis**; apalis is an implementation detail this crate hides,
+//! this crate is Redis's binding of it, built on oxana. The user-facing
+//! storage is **Redis**; oxana is an implementation detail this crate hides,
 //! which is why the crate, its namespace and its span target all carry the
 //! storage's word. Swapping storage means writing a different
 //! `nest-rs-<storage>` crate against the same abstractions; the macro and
@@ -38,6 +38,7 @@ pub const TARGET: &str = "nest_rs::redis";
 mod config;
 mod connection;
 mod error;
+mod job;
 mod module;
 mod queue;
 #[cfg(feature = "throttler")]

@@ -19,12 +19,14 @@
 //! module named for the concern it covers.
 
 mod concurrency;
+mod connection;
 mod correlation;
 mod portable_producer;
 mod replicas;
+mod shutdown;
 mod throttler;
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nest_rs_redis::{RedisConfig, RedisConnection};
 
@@ -57,4 +59,16 @@ async fn connect() -> RedisConnection {
     RedisConnection::connect(&redis_url())
         .await
         .expect("connect to the dev container Redis")
+}
+
+/// Poll `ready` every 50ms for up to five seconds — what a job pushed onto an
+/// idle queue takes to be picked up and run, with room to spare. The caller
+/// asserts on the state afterwards, so a timeout reads as that assertion.
+async fn wait_until(ready: impl Fn() -> bool) {
+    for _ in 0..100 {
+        if ready() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

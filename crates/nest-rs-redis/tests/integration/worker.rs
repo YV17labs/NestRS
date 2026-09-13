@@ -39,18 +39,22 @@ nest_rs_core::inventory::submit! {
 
 struct ProbeMarker;
 
+/// A container reaching exactly `providers` — the access graph's filter, which
+/// decides which of the `ProcessMethod`s linked into this binary a worker sees.
+fn reachable(providers: &[std::any::TypeId]) -> Container {
+    Container::builder()
+        .provide(nest_rs_core::ReachableProviders(
+            providers.iter().copied().collect(),
+        ))
+        .build()
+}
+
 #[tokio::test]
 async fn configure_fails_when_processors_exist_without_a_connection() {
     // Name the reachable provider rather than leaving the set unseeded: with no
     // gating, every `ProcessMethod` linked into this binary is visible, so a
     // later test adding one could route this boot into a different branch.
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(
-            [std::any::TypeId::of::<ProbeMarker>()]
-                .into_iter()
-                .collect(),
-        ))
-        .build();
+    let container = reachable(&[std::any::TypeId::of::<ProbeMarker>()]);
 
     let err = RedisWorker::new()
         .configure(&container)
@@ -63,7 +67,7 @@ async fn configure_fails_when_processors_exist_without_a_connection() {
 }
 
 // Two more link-time entries draining one queue — the shape a backend used to
-// accept, building one apalis worker per entry so both polled the same stream.
+// accept, building one consumer per entry so both drained the same queue.
 struct FirstClaimant;
 struct SecondClaimant;
 
@@ -93,16 +97,10 @@ nest_rs_core::inventory::submit! {
 async fn two_processors_claiming_one_queue_fail_configure() {
     // Only the two claimants are reachable: the probe entry above would
     // otherwise trip the missing-connection branch first and hide this one.
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(
-            [
-                std::any::TypeId::of::<FirstClaimant>(),
-                std::any::TypeId::of::<SecondClaimant>(),
-            ]
-            .into_iter()
-            .collect(),
-        ))
-        .build();
+    let container = reachable(&[
+        std::any::TypeId::of::<FirstClaimant>(),
+        std::any::TypeId::of::<SecondClaimant>(),
+    ]);
 
     let err = RedisWorker::new()
         .configure(&container)
@@ -116,18 +114,43 @@ async fn two_processors_claiming_one_queue_fail_configure() {
     );
 }
 
+// A queue named under the Redis bindings' own key prefix: oxana files such a
+// name verbatim, so a worker serving it would drain the bindings' own keys.
+struct ReservedClaimant;
+
+nest_rs_core::inventory::submit! {
+    ProcessMethod {
+        origin: module_path!(),
+        name: "ReservedClaimant::drain",
+        queue: "nestrs:queue:dead",
+        retries: 0,
+        provider_type_id: || std::any::TypeId::of::<ReservedClaimant>(),
+        handler: probe_handler,
+    }
+}
+
+#[tokio::test]
+async fn a_processor_on_a_queue_under_the_bindings_key_prefix_fails_configure() {
+    // Checked before the connection, so no Redis is needed to refuse it.
+    let container = reachable(&[std::any::TypeId::of::<ReservedClaimant>()]);
+
+    let err = RedisWorker::new()
+        .configure(&container)
+        .await
+        .expect_err("a reserved queue name aborts configure");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("nestrs:queue:dead") && msg.contains("ReservedClaimant::drain"),
+        "names the queue and the method serving it: {msg}",
+    );
+}
+
 #[tokio::test]
 async fn a_processor_another_app_owns_does_not_contest_this_queue() {
     // The check runs *after* module-gating, so a second claimant linked into
     // the binary but outside this app's module tree is not this app's problem —
     // the whole point of per-app subsets.
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(
-            [std::any::TypeId::of::<FirstClaimant>()]
-                .into_iter()
-                .collect(),
-        ))
-        .build();
+    let container = reachable(&[std::any::TypeId::of::<FirstClaimant>()]);
 
     let err = RedisWorker::new()
         .configure(&container)
@@ -144,9 +167,7 @@ async fn configure_succeeds_with_no_processors_and_serve_idles_until_cancel() {
     // Mark our link-time probe entry unreachable so configure() sees zero
     // methods in this test (the access graph is the same filter the real
     // worker uses at boot).
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
-        .build();
+    let container = reachable(&[]);
     let mut worker = RedisWorker::new();
     worker
         .configure(&container)
@@ -393,9 +414,8 @@ async fn older_wire_version_returns_err_pointing_at_the_drain_path() {
 #[tokio::test]
 async fn missing_provider_returns_err_without_panicking() {
     // Bug 3: the macro used to `.expect()` a missing provider and crash the
-    // apalis worker process. It must now surface an `Err` so apalis records
-    // the failure, retries per budget, and the worker keeps draining other
-    // queues.
+    // worker process. It must now surface an `Err` so the backend records the
+    // failure and the worker keeps draining other queues.
     let container = Container::builder().build();
     let payload = json!({
         "v": WIRE_FORMAT_VERSION,
@@ -414,7 +434,7 @@ async fn missing_provider_returns_err_without_panicking() {
 #[tokio::test]
 async fn payload_schema_drift_returns_err_without_panicking() {
     // Bug 3 sibling: a v=1 envelope whose payload doesn't match `EnvelopeCommand`
-    // must surface as Err so apalis applies the retry budget — not crash the
+    // must surface as Err so the job settles as a failure — not crash the
     // worker process via a panic.
     let payload = json!({
         "v": WIRE_FORMAT_VERSION,
@@ -604,58 +624,5 @@ async fn negative_v_falls_through_to_legacy_path() {
     assert!(
         msg.contains("failed to deserialize job"),
         "negative-v falls through to legacy decode: {msg}",
-    );
-}
-
-// ---- Panic survival (Bug X3) -----------------------------------------------
-//
-// A panic inside a `#[process]` method must surface as `Err` (caught by
-// `CatchPanicLayer`) — never as an aborted worker. This test asserts the
-// layer chain is wired by exercising the layered service directly: the
-// chain converts the panic to `Error::Abort` so apalis treats it as a
-// failed job and the worker keeps draining the queue.
-
-#[tokio::test]
-async fn catch_panic_layer_converts_a_panicking_handler_into_err() {
-    use apalis::layers::catch_panic::CatchPanicLayer;
-    use std::task::{Context, Poll};
-    use tower::{Layer, Service};
-
-    #[derive(Clone)]
-    struct PanickingService;
-
-    impl Service<apalis::prelude::Request<u8, ()>> for PanickingService {
-        type Response = ();
-        type Error = apalis::prelude::Error;
-        type Future = std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
-        >;
-
-        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn call(&mut self, _req: apalis::prelude::Request<u8, ()>) -> Self::Future {
-            Box::pin(async {
-                // Simulate a user handler panicking (e.g. an `unwrap` on a
-                // None value inside `#[process]`).
-                panic!("simulated user-handler panic");
-            })
-        }
-    }
-
-    let layer = CatchPanicLayer::new();
-    let mut service = layer.layer(PanickingService);
-    let request = apalis::prelude::Request::new(0u8);
-    let response = service.call(request).await;
-
-    assert!(
-        response.is_err(),
-        "CatchPanicLayer must convert the panic into an apalis Error",
-    );
-    let err_msg = response.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("PanicError") && err_msg.contains("simulated user-handler panic"),
-        "the error surfaces the panic message: {err_msg}",
     );
 }

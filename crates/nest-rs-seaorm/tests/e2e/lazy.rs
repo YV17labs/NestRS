@@ -264,8 +264,8 @@ async fn a_backend_terminated_mid_attempt_is_retryable() {
 // ---------------------------------------------------------------------------
 // An **abandoned** boundary: the future holding the executor is dropped before
 // anything settles it. That is the framework's own shutdown path — a queue
-// worker's `shutdown_timeout` elapsing makes apalis drop the job future where
-// it stands — and if that is mid-statement, the transaction stays open until
+// worker's `shutdown_timeout` elapsing abandons the job future where it
+// stands — and if that is mid-statement, the transaction stays open until
 // the abandoned statement drains server-side. Nothing can cancel it from here,
 // so what the framework owes is the event.
 

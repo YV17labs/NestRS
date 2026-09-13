@@ -456,7 +456,7 @@ Two questions determine the shape, and they are **independent** — answer both.
   abstraction, and the nestrs crate is a thin adapter over it that does not let
   the vendor's types leak. `object_store` (S3, GCS, Azure, local filesystem,
   in-memory) under `nest-rs-storage`; `sea-orm` (postgres/mysql/sqlite) under
-  `nest-rs-seaorm`; `apalis` (redis, sql) under `nest-rs-redis`. The port then
+  `nest-rs-seaorm`. The port then
   exists for exactly one move — swapping the **vendor** — so its contract is
   thin **and declares no config**, because nothing is asked of the integrator's
   settings. A thin port here is the correct outcome, not an unfinished one:
@@ -492,12 +492,12 @@ The two axes are orthogonal, and the measured tree carries this much:
 **Q1 is answered by the crate that *binds* the port, never by the crate that
 declares it.** A port crate depending on nothing is the normal case —
 `nest-rs-database`'s whole manifest is `tokio`, `nest-rs-queue` names no
-`apalis` — so it is the driver row that says delegated or owned:
+`oxana` — so it is the driver row that says delegated or owned:
 
 | port | declared by | bound by | Q1 (of the binding) | Q2 | contract written |
 |---|---|---|---|---|---|
 | `Executor` | `nest-rs-database` | `nest-rs-seaorm` | delegated (`sea-orm`) | by import | **yes** — `## Extension contract`, but no arbitration sentence |
-| `JobProducer` / `Processor` | `nest-rs-queue` | `nest-rs-redis` | delegated (`apalis`) | by import | **yes** — `docs/queue/writing-a-driver.mdx` |
+| `JobProducer` / `Processor` | `nest-rs-queue` | `nest-rs-redis` | delegated (`oxana`, which drives Redis alone) | by import | **yes** — `docs/queue/writing-a-driver.mdx` |
 | `SocialProvider` | `nest-rs-social` | itself + third parties | owned | by configuration | **yes** — open provider contract |
 | `ThrottlerStore` | `nest-rs-throttler` | itself + `nest-rs-redis` | owned | by import | no |
 | `Strategy` | `nest-rs-authn` | the app's alias | owned | by type parameter | no |
@@ -541,7 +541,7 @@ that is not swappable implying that it is. It is also the naming law's own case 
 a bare port name worn by one backend, exactly what `RedisThrottlerModule` exists
 not to be. Two ways out and both are the owner's: expose `object_store`'s other
 drivers, or rename the crate for the backend it pins. `nest-rs-redis` shows the
-second working — it pins `apalis_redis` just as hard, and its name says so.
+second working — it pins oxana's Redis layout just as hard, and its name says so.
 
 That derivation replaces three rejected attempts, each recorded so none is
 re-proposed: classifying a field as *policy* or *connection* (a judgement no
@@ -957,11 +957,11 @@ name order; init failure aborts boot, shutdown is best-effort.
   resolves at boot. `Scheduler` is a `Transport` via `TransportContribution`.
 - **`nest-rs-queue` + `nest-rs-redis`** — backend-agnostic queue contract
   (`Job`/`Processor`/`ProcessMethod` + `#[processor]` + inventory seam)
-  with Redis first-class (on `apalis`). The adapter crate is named for the
-  **storage** (Redis), because that is the surface a caller touches; apalis is
-  hidden — **no apalis types leak**. Queues identified by name (a `#[queue]`
+  with Redis first-class (on `oxana`). The adapter crate is named for the
+  **storage** (Redis), because that is the surface a caller touches; oxana is
+  hidden — **no oxana types leak**. Queues identified by name (a `#[queue]`
   marker type, or a string through the raw hatch). Producer/consumer decoupled.
-  One connection, opened by `RedisModule::for_root` (`NESTRS_REDIS__*`) and
+  One connection pool, opened by `RedisModule::for_root` (`NESTRS_REDIS__*`) and
   shared by every Redis binding; the producer binds through `RedisQueueModule`
   (bare), the consumer activates via `RedisWorkerModule::for_root`
   (`NESTRS_REDIS__WORKER__*`; producer-only apps skip it), and each binding
@@ -974,8 +974,8 @@ name order; init failure aborts boot, shutdown is best-effort.
   outcome into ok / retry / dead-letter, the three events and the
   `nest_rs::operation` line — is `nest_rs_queue::consume::attempt`, written once
   and tested once in the port. An adapter's consumer is a fetch loop that calls
-  it and translates the `Attempt` into its backend's vocabulary (apalis `Abort`
-  / `Failed`; a NATS consumer's `ack` / `nak` / `term`); discovery of the
+  it and translates the `Attempt` into its backend's vocabulary (a Redis job run
+  again or failed onto the dead list; a NATS consumer's `ack` / `nak` / `term`); discovery of the
   `#[process]` methods, module-gated, is `nest_rs_queue::consume::discover`. A
   second adapter therefore copies nothing — and an adapter that opens a
   `queue.job` span of its own has taken semantics it does not own.

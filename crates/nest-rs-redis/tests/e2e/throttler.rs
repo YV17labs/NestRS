@@ -199,12 +199,12 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
     // so a change to the prefix shows up as this test failing instead of
     // passing against a key nothing uses.
     let namespaced = format!("nestrs:throttle:{key}");
-    let mut manager = conn.manager();
+    let mut pooled = conn.connection().await.expect("a pooled connection");
     redis::cmd("HSET")
         .arg(&namespaced)
         .arg("field")
         .arg("value")
-        .query_async::<()>(&mut manager)
+        .query_async::<()>(&mut pooled)
         .await
         .expect("seed a key the window script cannot count");
     // With an expiry, because the window script never reaches its `PEXPIRE` on
@@ -214,7 +214,7 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
     redis::cmd("EXPIRE")
         .arg(&namespaced)
         .arg(300)
-        .query_async::<()>(&mut manager)
+        .query_async::<()>(&mut pooled)
         .await
         .expect("bound the probe key's lifetime");
 

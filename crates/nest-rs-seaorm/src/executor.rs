@@ -361,7 +361,7 @@ impl Drop for LazyTransaction {
     ///
     /// That is not hypothetical and not a bug to fix here — it is the
     /// framework's own shutdown path. A queue worker's `shutdown_timeout`
-    /// elapsing makes apalis drop the job future wherever it was, and if that
+    /// elapsing abandons the job future wherever it was, and if that
     /// was mid-statement the transaction stays open until the abandoned
     /// statement drains **server-side**: sea-orm's rollback cannot go out until
     /// the connection is free again, so every row lock the attempt took is held

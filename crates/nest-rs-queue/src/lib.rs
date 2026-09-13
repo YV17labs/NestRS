@@ -5,7 +5,7 @@
 //! entry the `#[processor]` macro submits, and the [`JobProducer`] seam a
 //! backend implements to enqueue.
 //!
-//! The first-class backend is **Redis** (via apalis-redis), shipped as
+//! The first-class backend is **Redis** (via oxana), shipped as
 //! `nest-rs-redis`. Application code keeps writing `nest_rs_queue::*` for the
 //! abstractions — the `#[processor]` macro, `Job`, `Processor`,
 //! `ProcessMethod`, `JobProducer` — and reaches for `nest_rs_redis::*` only

@@ -1,7 +1,7 @@
 //! Producer seam.
 //!
 //! Every queue backend exposes a [`JobProducer`] surface so any feature can
-//! enqueue without naming the backend. The first-class backend is `apalis-redis`
+//! enqueue without naming the backend. The first-class backend is Redis
 //! (shipped as `nest-rs-redis`); third-party backends provide their own
 //! `*Module` that registers a `JobProducer` in the container the same way, plus
 //! a `Transport` that drains [`ProcessMethod`](crate::ProcessMethod).

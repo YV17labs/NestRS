@@ -8,8 +8,8 @@
 //! ambient scope, catches a panic, classifies the outcome and files the three
 //! events and the `nest_rs::operation` line. What it returns is an [`Attempt`],
 //! and an adapter's consumer is a fetch loop that calls it and translates that
-//! into its backend's vocabulary — apalis `Abort`/`Failed`, a NATS consumer's
-//! `ack`/`nak`/`term`. Nothing in here names a backend; nothing in an adapter
+//! into its backend's vocabulary — a Redis job run again or failed onto the dead
+//! list, a NATS consumer's `ack`/`nak`/`term`. Nothing in here names a backend; nothing in an adapter
 //! restates what is here.
 
 use std::sync::Arc;

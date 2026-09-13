@@ -3,7 +3,7 @@
 //! Framework crates surface `thiserror` enums, not `anyhow`. An enqueue can
 //! fail two ways: serializing the job to its JSON wire form, or inside the
 //! backend's push. The backend failure is kept behind a boxed `source` so this
-//! contract names no concrete backend — a Redis backend wraps its apalis/Redis
+//! contract names no concrete backend — a Redis backend wraps its storage
 //! error, an SQS backend its SDK error, without this crate depending on either.
 
 use thiserror::Error;
@@ -25,7 +25,7 @@ pub enum QueueError {
 
 impl QueueError {
     /// Wrap a backend-specific enqueue failure as [`QueueError::Backend`]. A
-    /// backend calls this to surface its concrete error (an apalis/Redis error,
+    /// backend calls this to surface its concrete error (a Redis storage error,
     /// an SQS SDK error, …) without this crate naming the type — e.g.
     /// `storage.push(job).await.map_err(QueueError::backend)?`.
     pub fn backend<E>(source: E) -> Self

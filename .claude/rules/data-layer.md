@@ -216,7 +216,7 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
 
   **An abandoned attempt holds its locks until its statement drains, and that
   is new.** Dropping the job future mid-statement — the framework's own shutdown
-  path, `shutdown_timeout` elapsing while apalis is in a `select!` — leaves the
+  path, `shutdown_timeout` elapsing while the attempt still runs — leaves the
   attempt's transaction open: sea-orm's rollback is queued on `Drop` and cannot
   go out while the connection is busy, so every row lock the attempt took is held
   for the rest of that statement and the connection stays out of the pool. Before

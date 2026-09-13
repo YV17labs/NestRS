@@ -13,10 +13,9 @@
 //! and no shared process required for the logs to say so.
 //!
 //! The in-process envelope tests cover the shape; only a live worker shows the
-//! context survives Redis, apalis and the dispatch.
+//! context survives Redis, oxana and the dispatch.
 
 use std::sync::Mutex;
-use std::time::Duration;
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobProducerExt, processor, queue};
@@ -41,7 +40,7 @@ struct Observed {
 /// A map rather than one slot, and the queue is the reason: its name is a
 /// compile-time literal, so every run of this test shares one Redis queue with
 /// every run before it — including runs that were killed mid-job and left work
-/// in `:active`. A single slot recorded whichever job the consumer happened to
+/// behind. A single slot recorded whichever job the consumer happened to
 /// reach first, which on a dirty queue is a *previous* run's, carrying that
 /// run's trace and this run's actor (the literal is the same every time). The
 /// result was a failure that read exactly like a broken propagation and was
@@ -130,12 +129,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
             .find(|(s, _)| *s == seq)
             .map(|(_, o)| o.clone())
     };
-    for _ in 0..100 {
-        if observed(seq).is_some() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::wait_until(|| observed(seq).is_some()).await;
     worker.shutdown().await.expect("clean shutdown");
 
     let seen = observed(seq).expect("the job ran and reported what it was running under");

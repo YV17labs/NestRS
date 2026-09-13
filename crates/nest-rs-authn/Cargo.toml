@@ -26,7 +26,7 @@ nest-rs-guards.workspace = true
 poem.workspace = true
 async-trait.workspace = true
 # Token signing/verification — kept internal to this crate (apps never depend on
-# jsonwebtoken directly), mirroring how nest-rs-redis hides apalis.
+# jsonwebtoken directly), mirroring how nest-rs-redis hides oxana.
 jsonwebtoken.workspace = true
 # Decoding `Authorization: Basic` for the `basic_credentials` helper, symmetric
 # to `bearer_token` — the two credential forms a `Strategy` reads off a request.

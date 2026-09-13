@@ -1,12 +1,13 @@
 //! Typed errors for the Redis substrate.
 //!
 //! Framework crates surface `thiserror` enums, not `anyhow`. Opening the shared
-//! connection is a Redis-specific step, so it carries its own error here; the
-//! producer surface (the `JobProducer` impl on
+//! connection pool is a Redis-specific step, so it carries its own error here;
+//! the producer surface (the `JobProducer` impl on
 //! [`RedisQueueProducer`](crate::RedisQueueProducer)) instead speaks the
 //! backend-agnostic
 //! [`QueueError`](::nest_rs_queue::QueueError), wrapping a Redis push failure as
-//! its opaque `Backend` source.
+//! its opaque `Backend` source. The two crate-private errors below are what a
+//! queue binding hands its port or its runtime.
 
 use thiserror::Error;
 
@@ -19,9 +20,38 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RedisError {
-    /// The Redis connection could not be established.
-    #[error("failed to connect to Redis")]
-    Connect(#[from] redis::RedisError),
+    /// The URL could not configure a connection — malformed, or a scheme the
+    /// client does not speak. It fails the same way on every attempt, so it is
+    /// refused at once rather than retried for the whole budget.
+    #[error(
+        "invalid Redis URL {endpoint}: check {url_var}",
+        url_var = ::nest_rs_config::var_name("redis", "URL"),
+    )]
+    InvalidUrl {
+        /// The address the client dials, never the URL — which may embed a
+        /// password, and this string reaches logs and stderr.
+        endpoint: String,
+        /// Why the client rejected it.
+        #[source]
+        source: deadpool_redis::CreatePoolError,
+    },
+
+    /// Redis answered, and refused in a way every attempt would repeat —
+    /// credentials, an ACL denying the proof, a database index out of range.
+    /// That is not an outage, and retrying it would only tell the operator to
+    /// look at the network — so it fails at once, naming the variable that
+    /// holds the URL, with Redis's answer as the source.
+    #[error(
+        "Redis at {endpoint} refused the connection: check {url_var}",
+        url_var = ::nest_rs_config::var_name("redis", "URL"),
+    )]
+    Refused {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// What Redis answered.
+        #[source]
+        source: redis::RedisError,
+    },
 
     /// The connect budget elapsed with the backend still unreachable. Carries
     /// the redacted endpoint and the knob to widen, because this is the boot
@@ -35,8 +65,7 @@ pub enum RedisError {
         timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
     )]
     Unreachable {
-        /// The configured endpoint with any userinfo stripped — the URL may
-        /// embed a password and this string reaches logs and stderr.
+        /// The address the client dials, never the URL.
         endpoint: String,
         /// The budget that elapsed.
         budget: std::time::Duration,
@@ -45,6 +74,24 @@ pub enum RedisError {
         /// The last transport failure, when the budget ran out after an
         /// outright error rather than mid-attempt.
         #[source]
-        source: Option<redis::RedisError>,
+        source: Option<deadpool_redis::PoolError>,
     },
 }
+
+/// A queue name the Redis queue bindings cannot file. oxana keeps a queue under
+/// its namespace prefix unless the name already starts with that prefix, in
+/// which case it takes the name verbatim — so a queue named `nestrs:queue:dead`
+/// would write onto the dead list itself.
+#[derive(Debug, Error)]
+#[error(
+    "queue `{queue}` starts with `{namespace}`, the prefix of the Redis queue bindings' own keys — name the queue something else"
+)]
+pub(crate) struct ReservedQueueName {
+    pub(crate) queue: String,
+    pub(crate) namespace: &'static str,
+}
+
+/// Why a job failed, as the job runtime records it on the dead list.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub(crate) struct Undelivered(pub(crate) Box<dyn std::error::Error + Send + Sync>);

@@ -7,10 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The Redis queue runs on oxana, and apalis is gone
+
+`nest-rs-redis` drops `apalis` 0.7 and `apalis-redis` 0.7.4 for
+[oxana](https://github.com/pragmaplatform/oxana) 2.1, and `redis` moves from
+0.32 to 1.7 with it. apalis-redis's stable line had not moved since 2025-11-18
+and its 1.0 has been a release candidate since May; it pinned `redis` 0.32, and
+the Redis bindings share one connection type, so nothing else could move either.
+
+What your code and your deployment see:
+
+- **Jobs already in Redis are not carried over, and the two layouts do not
+  mix.** oxana keeps its own layout under `nestrs:queue:*`, so a job apalis
+  queued under `<queue>:active` is never fetched — and during a rolling deploy an
+  old producer keeps writing there while a new one writes where old workers never
+  read. Stop every producer and worker of the old release, drain its queues, then
+  start the new one.
+- **`RedisConnection` is a pool** of up to 50 connections. `manager()` is gone;
+  `connection().await` hands out one pooled connection — a `redis` 1.x
+  connection — and takes it back on drop. The producer, the worker and the
+  throttler share the pool, and `NESTRS_REDIS__CONNECT_TIMEOUT_SECS` now bounds
+  a caller's whole wait for a connection and every reply, where redis 1.x's own
+  500ms used to decide. A Redis that stops answering fails the caller within
+  that budget instead of holding it. Opening a connection stays bounded by the
+  client's own one-second connect timeout, which the budget does not widen: a
+  Redis slower than that to accept a connection fails the boot.
+- **The boot proves the pool with a `PING`**, and **`RedisError`** changed:
+  `Connect` is gone, `InvalidUrl` and `Refused` are new. A URL the client cannot
+  parse, or an answer Redis would repeat on every attempt — refused credentials,
+  an ACL denying the `PING`, a database index out of range — fails the boot at
+  once instead of retrying for the whole connect budget. The endpoint a boot
+  error or a `warn` names is the address the client dials — `host:port` or a
+  socket path — so no URL shape shows a password, and a URL the client cannot
+  parse is named by its scheme alone.
+- **A queue name starting with `nestrs:queue` is refused** — at boot for a
+  `#[process]` method, at the push for the raw `push_json` hatch — because oxana
+  files such a name verbatim, onto the bindings' own keys.
+- **`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` bounds the drain.** A job still
+  running past it is abandoned, and a `warn` on `nest_rs::queue` counts them — it
+  can no longer hold the process until SIGKILL.
+- **A Redis outage no longer stops the worker.** It logs a `warn` per failure and
+  resumes when Redis answers.
+- **A container restarted in place does not recover the job it was running.**
+  oxana names a process by hostname and pid, which a restart where it stood
+  keeps, so nothing sees the predecessor as dead. Replicas that differ by
+  hostname recover each other's jobs as described below.
+- **Starting a replica no longer re-runs in-flight jobs.** apalis-redis's startup
+  sweep requeued every consumer's in-flight work; oxana requeues a replica's
+  jobs only once its heartbeat has been silent for five seconds. Delivery stays
+  at-least-once — a replica that dies mid-job has its job run again — so a
+  `#[process]` handler still owes idempotency.
+- **The retry shape is unchanged.** `retries = N` is N immediate re-runs inside
+  the attempt, same `job_id`, `attempt` counting up, and a dead letter spends
+  none of them.
+- **Failed jobs land on `nestrs:queue:dead`**, a list of JSON records carrying
+  the error and its causes, newest 1,000 kept. A record the worker cannot decode
+  or route lands there too, with an `error` on `nest_rs::queue` saying which.
+- **`job_id` is a UUID** rather than a ULID.
+- **oxana logs `Job started` and `Job finished` at `info`** on `oxana::executor`,
+  which restates the `queue.job` line; `RUST_LOG=info,oxana::executor=warn` keeps
+  the framework's line alone. Silencing all of `oxana` also hides the line saying
+  a dead replica's job was requeued, and `oxana` below `info` logs payloads — at
+  `trace` on the producer's side too.
+- The demo chart's KEDA triggers read `nestrs:queue:queue:<queue>`.
+
 ### Dependencies — the whole tree moved, and five moves are visible from your code
 
 Every third-party *requirement* now sits on its publisher's newest stable
-release, with two exceptions named at the bottom. Most of the movement is
+release, with one exception named at the bottom. Most of the movement is
 invisible: `cargo update` moved 73 crates in the framework's lockfile, 126 in
 the demo's and 89 in the benchmark's, and two floors followed the lock — `rmcp`
 to 3.3 and `uuid` to 1.26 — since the minor a manifest states is the version we
@@ -123,9 +187,6 @@ future handlebars that restores the default flips it back.
 
 #### Not taken
 
-- **`redis` 1.7.** `apalis-redis` 0.7.4 requires `redis = "0.32"`, and the two
-  must share one connection type. This waits on `apalis-redis` 1.0, whose stable
-  line has not moved since 2025-11-18.
 - **`cargo-chef` 0.1.78** in `demo/Dockerfile`, still pinned at 0.1.77. It is a
   `cargo install` build tool rather than a requirement, and no test walks it.
 

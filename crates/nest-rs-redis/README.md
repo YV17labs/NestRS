@@ -1,6 +1,6 @@
 # nest-rs-redis
 
-Redis as one integration home: `RedisModule` opens the one shared connection (`NESTRS_REDIS__*`), and one binding per port sits beside it — `RedisQueueModule` (the portable `dyn JobProducer`, via apalis-redis), `RedisWorkerModule` (the `RedisWorker` consumer transport), and `RedisThrottlerModule` (the rate-limit store shared across replicas). The user-facing storage is Redis; apalis is an implementation detail.
+Redis as one integration home: `RedisModule` opens the one shared connection pool (`NESTRS_REDIS__*`), and one binding per port sits beside it — `RedisQueueModule` (the portable `dyn JobProducer`, via oxana), `RedisWorkerModule` (the `RedisWorker` consumer transport), and `RedisThrottlerModule` (the rate-limit store shared across replicas). The user-facing storage is Redis; oxana is an implementation detail.
 
 Part of [NestRS](https://nestrs.dev) — every framework crate ships at the same version in lockstep, under a semver contract: breaking changes wait for the next major.
 

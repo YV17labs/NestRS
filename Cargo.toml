@@ -169,24 +169,18 @@ croner = "4.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 chrono-tz = "0.10"
 
-# Held at the 0.7 stable line: apalis 1.0 is still churning through release
-# candidates and does not clear the "no pre-release in a foundation dep" bar.
-# Re-checked 2026-09-12, unchanged since 2026-08-03: newest stable
-# `apalis-redis` 0.7.4 (2025-11-18), newest of any kind 1.0.0-rc.8 (2026-05-07)
-# — apalis itself reached rc.9, so upstream is alive and its *stable* line is
-# not. That dates the freshness bar: ~2026-11 is when a still-RC 1.0
-# turns this pin into a flag to raise, not a note to keep.
-# The 0.7 build carries a future-incompat warning (never-type fallback); the
-# crate now lives at github.com/apalis-dev/apalis-redis, split out of
-# geofmureithi/apalis, and no issue there tracks it yet.
-apalis = "0.7"
-apalis-redis = "0.7"
-# Same 0.32 line apalis-redis pins, so the two share one connection type — a
-# semver divergence would break the `#[from]` conversion at compile time
-# (wanted). This is why redis 1.x waits on apalis-redis 1.0.
-redis = { version = "0.32", default-features = false, features = [
+# The job runtime under `nest-rs-redis`. Without its default features: `sentry`
+# is a reporter the framework does not ship, `tracing-instrument` opens a second
+# span per job beside the port's `queue.job`, and the derive macros serve a
+# typed registration the binding does by hand.
+oxana = { version = "2.1", default-features = false }
+# The pool oxana runs on. `RedisConnection` opens it once and every Redis binding
+# shares it, so it is the one pool type in the crate — and deadpool-redis builds
+# on the same `redis` 1.x line below, which is what lets the throttler run its
+# `redis::Script` on a pooled connection with no conversion.
+deadpool-redis = "0.23"
+redis = { version = "1.7", default-features = false, features = [
     "aio",
-    "connection-manager",
     "script",
     "tokio-comp",
 ] }

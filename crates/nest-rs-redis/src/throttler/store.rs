@@ -18,6 +18,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use deadpool_redis::PoolError;
 use nest_rs_throttler::{Decision, Throttle, ThrottlerStore};
 use redis::Script;
 
@@ -51,8 +52,8 @@ pub struct RedisThrottler {
 }
 
 impl RedisThrottler {
-    /// `conn` is the app's shared Redis connection (reused, not reopened —
-    /// [`RedisConnection::manager`] hands out the multiplexed handle).
+    /// `conn` is the app's shared Redis pool (reused, not reopened —
+    /// [`RedisConnection::connection`] hands out one pooled connection per hit).
     pub fn new(conn: RedisConnection) -> Self {
         Self {
             conn,
@@ -64,16 +65,17 @@ impl RedisThrottler {
     /// is the current limit's window. Awaited on the guard's own request task —
     /// the [`ThrottlerStore`] seam is async, so no runtime worker is blocked
     /// and a current-thread runtime works too.
-    async fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), redis::RedisError> {
+    async fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), PoolError> {
         // A namespace prefix keeps throttle counters from colliding with queue
         // keys on a shared Redis, and makes them greppable in `redis-cli`.
         let namespaced = format!("nestrs:throttle:{key}");
-        let mut conn = self.conn.manager();
+        let mut conn = self.conn.connection().await?;
         self.script
             .key(namespaced)
             .arg(window_ms)
             .invoke_async::<(i64, i64)>(&mut conn)
             .await
+            .map_err(PoolError::Backend)
     }
 }
 

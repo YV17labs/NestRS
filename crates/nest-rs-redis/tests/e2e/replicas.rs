@@ -3,39 +3,31 @@
 //! rather than from an in-process ceiling (see `concurrency.rs`), so how two of
 //! them share a queue is part of that contract, not an edge case.
 //!
-//! Two separate questions, and they have different answers.
+//! Two separate questions.
 //!
 //! # 1. Does the fetch hand one job to two replicas? No.
 //!
-//! `get_jobs.lua` is a single Redis EVAL that `lrange`s the ids, `sadd`s them to
-//! the consumer's inflight set and `ltrim`s them off the active list. Redis runs
-//! a script atomically, so a second poller cannot observe an id the first has
-//! claimed. That is the exclusive-delivery guarantee, and
-//! [`the_fetch_never_hands_one_job_to_two_replicas`] measures it.
+//! A replica claims a job with one `LMOVE` from the queue's list into its own
+//! processing list. Redis runs a command atomically, so a second poller cannot
+//! observe an id the first has claimed. That is the exclusive-delivery
+//! guarantee, and [`the_fetch_never_hands_one_job_to_two_replicas`] measures it.
 //!
-//! # 2. Does starting a replica disturb jobs already in flight? Yes — a defect.
+//! # 2. Does starting a replica disturb jobs already in flight? No.
 //!
-//! On startup, `RedisStorage::poll` calls
-//! `reenqueue_orphaned(limit, Utc::now())`. Its comment says "reenqueue any jobs
-//! that **belonged to this worker** in case of a death", but the cutoff is *now*,
-//! and `reenqueue_orphaned_jobs.lua` selects `zrangebyscore(consumers, 0, now)`
-//! — every registered consumer, including peers that are alive and mid-job. It
-//! `spop`s their inflight sets back onto the active list, so a scale-up re-runs
-//! whatever was in flight.
+//! A job goes back on its queue only once the process holding it has stopped
+//! heartbeating; nothing sweeps at startup.
+//! [`a_replica_starting_mid_flight_leaves_the_in_flight_job_alone`] measures it.
 //!
-//! Our own choice sharpens it: `WorkerBuilder::new(method.queue)` makes the
-//! `WorkerId` the queue name verbatim, so every replica registers the *same*
-//! consumer identity and shares one inflight set
-//! (`{queue}:inflight:{queue}`) — the starting replica pops exactly the peer's
-//! in-flight jobs. A unique id per process would not fix the steal (the sweep
-//! matches peers either way) but would fix a second, unmeasured consequence:
-//! with a shared identity, a crashed replica's in-flight jobs are never
-//! reclaimed while any peer keeps the shared heartbeat fresh.
-//!
-//! [`a_replica_starting_mid_flight_re_runs_the_in_flight_job`] pins the measured
-//! behaviour rather than the behaviour we want, so it is green today and turns
-//! red the moment either side is fixed — which is the point: the change should be
-//! deliberate, and the fix is an upstream decision (apalis-redis 0.7.4).
+//! Both run in one test process, and that bounds what the two tests can prove.
+//! oxana identifies a process by hostname and pid, so the two replicas share an
+//! identity and one processing list. The first question is unaffected — the
+//! claim is atomic whichever list it lands in. The second is proved only
+//! against a sweep at startup that would take *every* in-flight job: a sweep
+//! that spared its own identity and took its peers' would find no peer here and
+//! pass this test. Nor can a replica be dead while the other heartbeats for
+//! both, so the other half of at-least-once — a replica that dies mid-job has
+//! that job run again — needs two processes, and `consumer.rs` states it rather
+//! than this suite asserting it.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -55,8 +47,7 @@ const HOLD: Duration = Duration::from_secs(3);
 /// One fixture per test, spelled out twice rather than through a macro: nextest
 /// runs tests in parallel, and both a shared `#[queue]` and a shared static would
 /// let one test's jobs land in the other's assertion. Separate queue names also
-/// give each test its own Redis key space (`{queue}:*`), so the startup sweep one
-/// test triggers cannot reach the other's consumers.
+/// keep each test's jobs on a list of their own.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SlowCommand {
     seq: usize,
@@ -89,7 +80,7 @@ impl FetchProcessor {
 )]
 struct FetchModule;
 
-// --- fixture 2: the scale-up defect ----------------------------------------
+// --- fixture 2: a replica starting mid-flight --------------------------------
 
 static SCALE_UP_RUNS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
@@ -116,11 +107,9 @@ impl ScaleUpProcessor {
 )]
 struct ScaleUpModule;
 
-/// Boot one "replica": its own app, its own `RedisWorker` transport, against the
-/// same Redis and the same queue. Two of these in one process are
-/// indistinguishable from two containers as far as the backend is concerned —
-/// the consumer identity apalis registers comes from the worker name, which is
-/// the queue name, so it is byte-identical either way.
+/// Boot one "replica": its own app, its own pool, its own `RedisWorker`
+/// transport, against the same Redis and the same queue — and, unlike two
+/// containers, the same process identity (see the module docs).
 async fn spawn_replica<M: nest_rs_core::Module + 'static>() -> nest_rs_testing::TransportHandle {
     let app = TestApp::builder()
         .module::<M>()
@@ -140,13 +129,12 @@ async fn spawn_replica<M: nest_rs_core::Module + 'static>() -> nest_rs_testing::
 
 /// The guarantee that makes replica-based throughput sound: with both replicas
 /// already up, a batch is split between them and **no job runs twice**. This is
-/// the atomic claim in `get_jobs.lua`, measured rather than read.
+/// the atomic claim, measured rather than read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_fetch_never_hands_one_job_to_two_replicas() {
     const JOBS: usize = 4;
 
-    // Both up before any job exists, so no startup sweep can find work in
-    // flight — this isolates the fetch from the scale-up defect below.
+    // Both up before any job exists, so the split is the fetch's alone.
     let first = spawn_replica::<FetchModule>().await;
     let second = spawn_replica::<FetchModule>().await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -176,26 +164,11 @@ async fn the_fetch_never_hands_one_job_to_two_replicas() {
     );
 }
 
-/// **Pins a defect, not a desired behaviour.** Starting a replica while a peer
-/// holds a job puts that job back on the queue, and it runs a second time —
-/// same `job_id`, both attempts reported as `attempt=1`. Measured against live
-/// Redis:
-///
-/// ```text
-/// INFO process job{queue="nestrs-e2e-replicas" job_id=01KYT4X0FN… attempt=1}: job ok elapsed_ms=3002
-/// INFO process job{queue="nestrs-e2e-replicas" job_id=01KYT4X0FN… attempt=1}: job ok elapsed_ms=3001
-/// ```
-///
-/// The cause is upstream (see the module docs: a `Utc::now()` cutoff in
-/// `RedisStorage::poll`'s startup sweep), so the fix is a dependency decision.
-/// Until then this is the honest contract — **a `#[process]` handler must be
-/// idempotent**, and a deployment that scales the worker up mid-flight will
-/// re-run in-flight jobs, not merely retry failed ones.
-///
-/// Asserted as-is so that fixing it fails this test loudly instead of silently
-/// changing what the queue promises.
+/// Starting a replica while a peer holds a job leaves the job with that peer,
+/// so it runs once. A scale-up is the moment a deployment adds replicas under
+/// load, which is exactly when re-running in-flight work would hurt most.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replica_starting_mid_flight_re_runs_the_in_flight_job() {
+async fn a_replica_starting_mid_flight_leaves_the_in_flight_job_alone() {
     let first = spawn_replica::<ScaleUpModule>().await;
 
     let conn = RedisQueueProducer::new(
@@ -224,10 +197,7 @@ async fn a_replica_starting_mid_flight_re_runs_the_in_flight_job() {
 
     assert_eq!(
         SCALE_UP_RUNS.lock().expect("lock").clone(),
-        vec![0, 0],
-        "measured: the in-flight job is requeued by the starting replica and runs \
-         twice. If this now fails with `[0]`, the defect is fixed — update the \
-         module docs, `/queue/`'s idempotency note, and delete this test in favour \
-         of `the_fetch_never_hands_one_job_to_two_replicas`",
+        vec![0],
+        "the in-flight job runs once: a starting replica leaves a live peer's work alone",
     );
 }

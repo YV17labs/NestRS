@@ -44,7 +44,7 @@ outranks a name that is short in an import**, and a module name appears in a
 composition root, not in fifty call sites.
 
 **An adapter crate is named for the vendor whose types are the developer's
-surface** — the storage when the library is hidden (`nest-rs-redis`: apalis is
+surface** — the storage when the library is hidden (`nest-rs-redis`: oxana is
 an implementation detail, `redis::` is what a caller touches), the library when
 the library *is* the surface (`nest-rs-seaorm`: entities, `Repo`, `DbErr` are
 sea-orm's, and postgres/mysql/sqlite are interchangeable behind its URL). Never

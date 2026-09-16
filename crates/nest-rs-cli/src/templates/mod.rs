@@ -3,16 +3,16 @@
 //! Every module here is `const` source strings; `crud.rs` holds the one
 //! computed set of placeholders, because it varies by transport.
 
-pub mod adapter;
-pub mod auth;
-pub mod crud;
-pub mod entity;
-pub mod feature;
-pub mod hello;
-pub mod migration;
-pub mod resource;
-pub mod shared;
-pub mod workspace;
+pub(crate) mod adapter;
+pub(crate) mod auth;
+pub(crate) mod crud;
+pub(crate) mod entity;
+pub(crate) mod feature;
+pub(crate) mod hello;
+pub(crate) mod migration;
+pub(crate) mod resource;
+pub(crate) mod shared;
+pub(crate) mod workspace;
 
 /// Every template module, as `(file name, source)` — **read from the
 /// directory**, never listed. A list is edited by a different hand than the one

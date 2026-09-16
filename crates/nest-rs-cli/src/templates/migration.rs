@@ -11,7 +11,7 @@
 //! in the same breath — names them in every recipe: `nestrs run db up` on a
 //! fresh workspace has to apply zero migrations, not fail on a missing package.
 
-pub const CRATE_CARGO: &str = r#"[package]
+pub(crate) const CRATE_CARGO: &str = r#"[package]
 name = "migrations"
 version.workspace = true
 edition.workspace = true
@@ -35,7 +35,7 @@ tracing-subscriber.workspace = true
 /// single connector for tools outside the DI container: it resolves
 /// `<PREFIX>_SEAORM__*` through the same `.env` cascade the apps use, so a tool
 /// and its app can never disagree about which database they mean.
-pub const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
+pub(crate) const CRATE_BIN: &str = r#"use anyhow::{Context, Result, bail};
 use migrations::Migrator;
 use sea_orm_migration::MigratorTrait;
 use tracing_subscriber::EnvFilter;
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
 }
 "#;
 
-pub const SEED_CARGO: &str = r#"[package]
+pub(crate) const SEED_CARGO: &str = r#"[package]
 name = "seed"
 version.workspace = true
 edition.workspace = true
@@ -87,7 +87,7 @@ tokio.workspace = true
 
 /// `nestrs run db seed`. Empty, but connected: the wiring a fixture needs is
 /// already here, so adding one is a body edit rather than a new crate.
-pub const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
+pub(crate) const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs run db seed`.
 //!
 //! `nestrs run db reset` runs `fresh` and then this, and you will run it again
 //! on a database that already has rows — so every insert here must be
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
 /// reaches the DDL verbatim.
 ///
 /// [`Names`]: crate::naming::Names
-pub const MIGRATION: &str = r#"use sea_orm_migration::prelude::*;
+pub(crate) const MIGRATION: &str = r#"use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;

@@ -11,14 +11,14 @@ use crate::error::{CliError, CliResult};
 
 use super::toolchain;
 
-pub struct RunOptions {
+pub(crate) struct RunOptions {
     /// Recipe name plus trailing args forwarded to `just` (empty → list recipes).
     pub args: Vec<String>,
     /// Skip the first-run toolchain bootstrap (CI / offline).
     pub no_bootstrap: bool,
 }
 
-pub fn run(opts: RunOptions) -> CliResult<()> {
+pub(crate) fn run(opts: RunOptions) -> CliResult<()> {
     toolchain::ensure_toolchain(opts.no_bootstrap)?;
 
     let mut cmd = Command::new("just");

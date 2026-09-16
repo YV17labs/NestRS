@@ -7,10 +7,10 @@
 //! full Rust parse.
 
 /// A pure, idempotent rewrite of a file's contents.
-pub type Transform = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+pub(crate) type Transform = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 /// Ensure a single `mod`/`pub mod`/`use` declaration line is present.
-pub fn ensure_decl(line: &str) -> Transform {
+pub(crate) fn ensure_decl(line: &str) -> Transform {
     ensure_lines(vec![line.to_string()])
 }
 
@@ -19,7 +19,7 @@ pub fn ensure_decl(line: &str) -> Transform {
 /// disk, so two would clobber each other). Each line is inserted after the
 /// last existing line sharing its leading keyword (`mod` with `mod`, `pub use`
 /// with `pub use`).
-pub fn ensure_lines(new_lines: Vec<String>) -> Transform {
+pub(crate) fn ensure_lines(new_lines: Vec<String>) -> Transform {
     let new_lines: Vec<String> = new_lines
         .into_iter()
         .map(|l| l.trim_end().to_string())
@@ -52,7 +52,7 @@ pub fn ensure_lines(new_lines: Vec<String>) -> Transform {
 /// land them in **one** transform: `Scaffold::apply` resolves every edit against
 /// the file on disk, so two edits of the same path would each start from the
 /// original and the second write would drop the first.
-pub fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
+pub(crate) fn ensure_module_imports(imports: &[(&str, &str)]) -> Transform {
     let imports: Vec<(String, String)> = imports
         .iter()
         .map(|(use_path, ident)| (format!("use {use_path};"), (*ident).to_owned()))
@@ -111,7 +111,7 @@ fn insert_module_import(lines: &mut Vec<String>, use_line: &str, ident: &str) ->
 ///
 /// Anchored on the **struct-level** attribute: the entity's own `#[expose(`
 /// starts a line at column 0, while every field-level one is indented.
-pub fn ensure_expose_graphql() -> Transform {
+pub(crate) fn ensure_expose_graphql() -> Transform {
     Box::new(move |content: &str| {
         let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
         let at = lines.iter().position(|l| l.starts_with("#[expose("))?;

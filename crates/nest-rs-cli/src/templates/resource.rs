@@ -9,7 +9,7 @@
 //! every route (no ability) with no row ever reaching Postgres. So there is no
 //! unguarded variant to generate — `g resource` bootstraps `g auth` instead.
 
-pub const MOD: &str = r#"mod entity;
+pub(crate) const MOD: &str = r#"mod entity;
 mod module;
 mod service;
 
@@ -22,7 +22,7 @@ pub use service::{{service}};
 pub use http::{{http_module}};
 "#;
 
-pub const ENTITY: &str = r#"use nest_rs::resource::expose;
+pub(crate) const ENTITY: &str = r#"use nest_rs::resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -58,7 +58,7 @@ pub struct Model {
 }
 "#;
 
-pub const SERVICE: &str = r#"use nest_rs::core::injectable;
+pub(crate) const SERVICE: &str = r#"use nest_rs::core::injectable;
 use nest_rs::seaorm::{Creatable, CrudService, Deletable, Updatable};
 
 use super::entity::{{{create_op}}, Entity as {{pascal}}, {{update_op}}};
@@ -93,7 +93,7 @@ impl Updatable for {{service}} {
 impl Deletable for {{service}} {}
 "#;
 
-pub const MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const MODULE: &str = r#"use nest_rs::core::module;
 
 use super::service::{{service}};
 
@@ -101,7 +101,7 @@ use super::service::{{service}};
 pub struct {{module}};
 "#;
 
-pub const HTTP_MOD: &str = r#"mod controller;
+pub(crate) const HTTP_MOD: &str = r#"mod controller;
 mod module;
 
 pub use module::{{http_module}};
@@ -109,7 +109,7 @@ pub use module::{{http_module}};
 
 /// Imports `AuthzModule` alongside the port so the ability guard is
 /// reachable — the access graph fails boot otherwise.
-pub const HTTP_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const HTTP_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::controller::{{controller}};
 use crate::authz::AuthzModule;
@@ -125,7 +125,7 @@ pub struct {{http_module}};
 /// The `#[crud]` + guards controller, mirroring
 /// `demo/crates/features/src/orgs/http/controller.rs`. `AuthnGuard` /
 /// `AuthzGuard` come from the workspace's own auth adapter (`nestrs g auth`).
-pub const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
+pub(crate) const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, crud};
 

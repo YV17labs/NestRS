@@ -13,7 +13,7 @@ use super::{queue_agent_files, queue_env_files};
 
 const HELLO_APP_PORT: u16 = 3000;
 
-pub fn scaffold_root(
+pub(super) fn scaffold_root(
     output: &Path,
     names: &Names,
     env_prefix: &str,
@@ -77,7 +77,7 @@ pub fn scaffold_root(
     Ok(())
 }
 
-pub fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliResult<()> {
+pub(super) fn scaffold_app(ws: &NestrsWorkspace, names: &Names, dry_run: bool) -> CliResult<()> {
     let root = ws.apps_root().join(&names.kebab);
     if root.exists() {
         return Err(CliError::AppExists {

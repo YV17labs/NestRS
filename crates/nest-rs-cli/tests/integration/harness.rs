@@ -111,7 +111,7 @@ pub(crate) fn write_fake_migrations_crate(root: &Path) {
 /// that proves a rename reaches everything. Third copy of one join, and it is
 /// reported as such — `context::ENV_PREFIX_VAR` is spelled here because it is
 /// the one name no prefix renames, which `CLAUDE.md` sanctions per crate.
-pub fn scaffolded_var(namespace: &str, key: &str) -> String {
+pub(crate) fn scaffolded_var(namespace: &str, key: &str) -> String {
     let prefix = std::env::var("NESTRS_ENV_PREFIX")
         .ok()
         .filter(|value| !value.is_empty())

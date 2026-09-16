@@ -1,5 +1,5 @@
 //! **Adapter** skeletons — one transport bolted onto an existing port
-//! (`g http|graphql|ws|queue|schedule|mcp <feature>`).
+//! (`g http|graphql|ws|queue|schedule|mcp|events <feature>`).
 //!
 //! Each skeleton delegates to the port service's `count()` (the method
 //! `g feature` emits) so a freshly-generated port + any adapter compiles
@@ -17,7 +17,7 @@
 
 /// `mod.rs` for an adapter folder: `mod <handler>; mod module;` + re-exports.
 /// `{{handler_mod}}`/`{{handler}}`/`{{tmodule}}` are layered per transport.
-pub const MOD: &str = r#"mod {{handler_mod}};
+pub(crate) const MOD: &str = r#"mod {{handler_mod}};
 mod module;
 
 pub use module::{{tmodule}};
@@ -30,7 +30,7 @@ pub use module::{{tmodule}};
 /// the job to the port service — the access graph fails the boot unless the port
 /// module is already there. Scaffolding the import costs nothing (registration
 /// is idempotent) and removes a boot error from the developer's first edit.
-pub const MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const MODULE: &str = r#"use nest_rs::core::module;
 
 use super::{{handler_mod}}::{{handler}};
 use crate::{{snake}}::{{module}};
@@ -42,7 +42,7 @@ use crate::{{snake}}::{{module}};
 pub struct {{tmodule}};
 "#;
 
-pub const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
+pub(crate) const HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, routes};
 
@@ -71,7 +71,7 @@ impl {{controller}} {
 }
 "#;
 
-pub const GRAPHQL_RESOLVER: &str = r#"use std::sync::Arc;
+pub(crate) const GRAPHQL_RESOLVER: &str = r#"use std::sync::Arc;
 
 use async_graphql::Result;
 use nest_rs::graphql::{operations, resolver};
@@ -103,7 +103,7 @@ impl {{resolver}} {
 /// The GraphQL adapter for a **resource** port: the `#[crud]` resolver behind
 /// the app's guards, the exact twin of `resource::HTTP_CONTROLLER` — same
 /// service, same ability, same rows, one transport over.
-pub const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
+pub(crate) const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 
 use nest_rs::graphql::{crud, resolver};
 
@@ -136,7 +136,7 @@ impl {{resolver}} {}
 /// connection registry every `WsClient` reads, for the default namespace and for
 /// every `#[gateway(namespace = …)]` marker alike — so the generator writes it
 /// rather than leaving the app to discover it at boot.
-pub const WS_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const WS_MODULE: &str = r#"use nest_rs::core::module;
 use nest_rs::ws::WsModule;
 
 use super::{{handler_mod}}::{{handler}};
@@ -149,8 +149,9 @@ use crate::{{snake}}::{{module}};
 pub struct {{tmodule}};
 "#;
 
-pub const WS_GATEWAY: &str = r#"use std::sync::Arc;
+pub(crate) const WS_GATEWAY: &str = r#"use std::sync::Arc;
 
+use nest_rs::core::error_message;
 use nest_rs::ws::{WsClient, gateway, messages};
 
 use crate::{{snake}}::{{service}};
@@ -180,17 +181,17 @@ impl {{gateway}} {
         // a delivery failure is logged rather than propagated (this handler
         // returns `()` — there is no client left to surface an error to).
         if let Err(e) = client.broadcast("{{kebab}}.{{op}}", {{op_value}}) {
-            tracing::warn!(target: "features::{{snake}}", error = %e, "broadcast failed");
+            tracing::warn!(target: "features::{{snake}}", error = %error_message(&e), "broadcast failed");
         }
     }
 }
 "#;
 
-pub const QUEUE_PROCESSOR: &str = r#"use anyhow::Result;
+pub(crate) const QUEUE_PROCESSOR: &str = r#"use anyhow::Result;
 use nest_rs::core::injectable;
 use nest_rs::queue::processor;
 
-use crate::{{snake}}::{{{command}}, {{queue_name}}};
+use crate::{{snake}}::{{{command}}, {{queue}}};
 
 #[injectable]
 #[derive(Default)]
@@ -198,7 +199,7 @@ pub struct {{processor}};
 
 #[processor]
 impl {{processor}} {
-    #[process(queue = {{queue_name}}, retries = 3)]
+    #[process(queue = {{queue}}, retries = 3)]
     async fn handle(&self, job: {{command}}) -> Result<()> {
         let _ = job;
         Ok(())
@@ -206,17 +207,18 @@ impl {{processor}} {
 }
 "#;
 
-/// The queue payload **and its `QueueName`** — both at the feature *port*, not
-/// in the `queue/` adapter: they are the producer↔worker contract, and the
+/// The queue payload **and its `#[queue]` marker** — both at the feature *port*,
+/// not in the `queue/` adapter: they are the producer↔worker contract, and the
 /// producer is usually the port's own service, one directory up. Keeping the
-/// marker beside the payload is what makes `push_to::<Q>` reachable; declaring
-/// it inside the private `queue::processor` module would leave the untyped
-/// `push(name, job)` escape hatch as the only way to enqueue.
+/// marker beside the payload is what makes the typed `push(Q, job, options)`
+/// reachable; declaring it inside the private `queue::processor` module would
+/// leave the untyped `push_json(name, value, options)` escape hatch as the only
+/// way to push.
 ///
 /// The default payload is a Command (the common case); rename it verb-led to
 /// the real action, or switch to an `…Event` (past tense) when a fact is
 /// published to several consumers.
-pub const QUEUE_COMMAND: &str = r#"use nest_rs::queue::queue;
+pub(crate) const QUEUE_COMMAND: &str = r#"use nest_rs::queue::queue;
 use serde::{Deserialize, Serialize};
 
 /// Imperative payload for the `{{kebab}}` queue — "do this work", handled by one
@@ -225,7 +227,7 @@ use serde::{Deserialize, Serialize};
 /// Plain `serde` derives rather than `#[input]`, and the difference is not
 /// stylistic: `#[input]` carries `deny_unknown_fields`, which is right at an
 /// edge a client controls and wrong on a producer↔worker contract. A producer
-/// one deploy ahead that adds a field would have every job it enqueues refused
+/// one deploy ahead that adds a field would have every job it pushes refused
 /// by the older worker — and a decode failure is a `JobError::abort`, so the
 /// job dead-letters on its first attempt instead of retrying.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,13 +237,13 @@ pub struct {{command}} {
 
 /// The queue's identity — wire name + payload type in one artifact the producer
 /// and the processor both import, so a typo or a mismatched payload is a compile
-/// error rather than a job that silently never drains. Enqueue with
-/// `queue.push_to::<{{queue_name}}>(…)`.
+/// error rather than a job that silently never drains. Push with
+/// `queue.push({{queue}}, …, None)`.
 #[queue(name = "{{kebab}}", job = {{command}})]
-pub struct {{queue_name}};
+pub struct {{queue}};
 "#;
 
-pub const SCHEDULE_TASKS: &str = r#"use std::sync::Arc;
+pub(crate) const SCHEDULE_TASKS: &str = r#"use std::sync::Arc;
 
 use anyhow::Result;
 use nest_rs::core::injectable;
@@ -265,7 +267,36 @@ impl {{tasks}} {
 }
 "#;
 
-pub const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
+pub(crate) const EVENTS_LISTENER: &str = r#"use nest_rs::core::injectable;
+use nest_rs::events::listeners;
+
+use crate::{{snake}}::{{event}};
+
+#[injectable]
+#[derive(Default)]
+pub struct {{listener}};
+
+#[listeners]
+impl {{listener}} {
+    #[on_event]
+    async fn on_changed(&self, event: {{event}}) {
+        let _ = event;
+    }
+}
+"#;
+
+/// The published fact the `events/` listener receives — at the feature *port*,
+/// because the service that emits it and every listener import it. Past tense,
+/// named for what happened.
+pub(crate) const EVENTS_EVENT: &str = r#"/// A `{{kebab}}` fact, emitted on the event bus. Rename it to what happened
+/// (e.g. `PostPublishedEvent`).
+#[derive(Debug, Clone)]
+pub struct {{event}} {
+    pub id: String,
+}
+"#;
+
+pub(crate) const MCP_TOOL: &str = r#"//! MCP tool for `{{snake}}`.
 //!
 //! Security: the MCP endpoint gates through the app's `dyn McpOperationGuard`,
 //! else the global guard pool (`use_guards_global`), else deny-all. Wire your

@@ -2,17 +2,17 @@
 //!
 //! The bare port: a `mod.rs` index, a `module.rs` DI module, and a
 //! `service.rs` with a `count()` stand-in. Add a transport with
-//! `g http|graphql|ws|queue|schedule|mcp <feature>`; each adapter delegates
+//! `g http|graphql|ws|queue|schedule|mcp|events <feature>`; each adapter delegates
 //! to this service.
 
-pub const MOD: &str = r#"mod module;
+pub(crate) const MOD: &str = r#"mod module;
 mod service;
 
 pub use module::{{module}};
 pub use service::{{service}};
 "#;
 
-pub const MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const MODULE: &str = r#"use nest_rs::core::module;
 
 use super::service::{{service}};
 
@@ -20,7 +20,7 @@ use super::service::{{service}};
 pub struct {{module}};
 "#;
 
-pub const SERVICE: &str = r#"use nest_rs::core::injectable;
+pub(crate) const SERVICE: &str = r#"use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]

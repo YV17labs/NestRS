@@ -9,14 +9,14 @@ use std::collections::HashMap;
 use crate::naming::{Names, Transport};
 
 #[derive(Clone)]
-pub struct Renderer {
+pub(crate) struct Renderer {
     vars: HashMap<String, String>,
 }
 
 impl Renderer {
     /// Seed the standard identifiers for `names`. Every key below is
     /// available as `{{key}}` in any template string.
-    pub fn new(names: &Names) -> Self {
+    pub(crate) fn new(names: &Names) -> Self {
         let mut vars = HashMap::new();
         let mut put = |k: &str, v: String| {
             vars.insert(k.to_string(), v);
@@ -31,9 +31,11 @@ impl Renderer {
         put("resolver", names.resolver());
         put("gateway", names.gateway());
         put("processor", names.processor());
-        put("queue_name", names.queue_name());
+        put("queue", names.queue());
         put("tasks", names.tasks());
         put("tool", names.tool());
+        put("listener", names.listener());
+        put("event", names.event());
         put("entity", names.entity());
         put("table", names.table());
         put("create_op", names.create_op());
@@ -67,7 +69,7 @@ impl Renderer {
         Self { vars }
     }
 
-    pub fn with(mut self, key: &str, value: impl Into<String>) -> Self {
+    pub(crate) fn with(mut self, key: &str, value: impl Into<String>) -> Self {
         self.vars.insert(key.to_string(), value.into());
         self
     }
@@ -90,7 +92,7 @@ impl Renderer {
     /// The loop is bounded by the key count: each pass that changes anything has
     /// resolved at least one key's worth of nesting, and a template cannot nest
     /// deeper than the number of keys without a cycle.
-    pub fn render(&self, template: &str) -> String {
+    pub(crate) fn render(&self, template: &str) -> String {
         let mut out = template.to_string();
         for _ in 0..=self.vars.len() {
             let mut next = out.clone();

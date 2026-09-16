@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::context::{ENV_PREFIX_VAR, EnvPrefixSource};
@@ -31,12 +32,12 @@ const fn parse_floor(raw: &str) -> (u32, u32) {
     (component[0], component[1])
 }
 
-pub struct DoctorOptions {
+pub(crate) struct DoctorOptions {
     pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
-pub struct DoctorReport {
+pub(crate) struct DoctorReport {
     /// What asking for the toolchain produced, kept structural: a consumer
     /// reads the outcome rather than matching on an English sentence, and the
     /// three fields this replaced could disagree with one another.
@@ -60,19 +61,19 @@ pub struct DoctorReport {
 impl DoctorReport {
     /// The prefix every name below is built from — derived, never stored, so
     /// the two cannot disagree.
-    pub fn env_prefix(&self) -> &str {
+    pub(crate) fn env_prefix(&self) -> &str {
         self.env_prefix_source.prefix()
     }
 
     /// Whether the toolchain meets the floor. Derived, so it cannot disagree
     /// with the outcome it summarises.
-    pub fn rustc_ok(&self) -> bool {
+    pub(crate) fn rustc_ok(&self) -> bool {
         matches!(self.rustc, Rustc::Version { release: Some(release), .. } if release >= MIN_RUST_VERSION)
     }
 }
 
 #[derive(Debug)]
-pub struct EnvVar {
+pub(crate) struct EnvVar {
     pub name: String,
     pub present: bool,
     /// Listed even when unset — the two backends an app is most likely to be
@@ -93,7 +94,7 @@ const CHECKED: &[(&str, &str, bool)] = &[
     ("HTTP", "PORT", false),
 ];
 
-pub fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
+pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
     let start = super::resolve_start(opts.path);
 
     let mut report = DoctorReport {
@@ -230,13 +231,29 @@ fn status_line(label: &str, ok: bool, detail: &str) {
 /// nest-rs-cli` stays independent of the version a project pins. Only presence
 /// is answered, so this stays a scan for the key, not a second value parser.
 fn env_present(cascade: &str, name: &str) -> bool {
-    matches!(std::env::var(name), Ok(v) if !v.trim().is_empty()) || file_defines(cascade, name)
+    present(|var| std::env::var_os(var), cascade, name)
+}
+
+/// [`env_present`] over a supplied process environment, answered as the loader
+/// answers it. `name` is set under either of its spellings — inline, or as the
+/// `<NAME>_FILE` path the loader reads it from — and **the deployment chooses
+/// the spelling**: when the process environment holds either, empty included,
+/// both are read from the process alone and the cascade is shadowed. An empty
+/// value is unset in either tier, and nothing is trimmed that the loader keeps.
+fn present(real: impl Fn(&str) -> Option<OsString>, cascade: &str, name: &str) -> bool {
+    let spellings = [name.to_owned(), format!("{name}_FILE")];
+    if spellings.iter().any(|var| real(var).is_some()) {
+        return spellings
+            .iter()
+            .any(|var| real(var).is_some_and(|value| !value.is_empty()));
+    }
+    spellings.iter().any(|var| file_defines(cascade, var))
 }
 
 /// Every cascade file rooted at `dir`, concatenated. Mirrors
 /// `nest_rs_config::dotenv`'s file set — including skipping `.env.local` under
 /// `<PREFIX>_ENV=test`, so doctor answers what an app would actually resolve.
-/// Precedence does not matter here: the question is presence, not value.
+/// Most specific first, as the loader merges them: the first assignment of a key wins.
 fn cascade_text(dir: &Path, env_prefix: &str) -> String {
     let env =
         std::env::var(format!("{env_prefix}_ENV")).unwrap_or_else(|_| "development".to_owned());
@@ -254,18 +271,26 @@ fn cascade_text(dir: &Path, env_prefix: &str) -> String {
         .join("\n")
 }
 
-/// One file's answer, split out so the line grammar (`export` prefix,
-/// comments, `KEY=` counting as unset) is unit-testable.
+/// The cascade's answer, split out so the line grammar (`export` prefix,
+/// comments, `KEY=` counting as unset) is unit-testable. The first assignment
+/// wins, as the loader's set-if-absent merge does — `cascade_text` concatenates
+/// the files most specific first — so an empty assignment in a more specific
+/// file unsets the key for every file after it.
 fn file_defines(contents: &str, name: &str) -> bool {
-    contents.lines().any(|line| {
-        let line = line.trim();
-        if line.starts_with('#') {
-            return false;
-        }
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        line.split_once('=')
-            .is_some_and(|(key, value)| key.trim() == name && !value.trim().is_empty())
-    })
+    contents
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.starts_with('#') {
+                return None;
+            }
+            let line = line.strip_prefix("export ").unwrap_or(line);
+            line.split_once('=')
+                .filter(|(key, _)| key.trim() == name)
+                .map(|(_, value)| value.trim())
+        })
+        .next()
+        .is_some_and(|value| !matches!(value, "" | "\"\"" | "''"))
 }
 
 /// What asking `rustc` for its version produced.
@@ -275,7 +300,7 @@ fn file_defines(contents: &str, name: &str) -> bool {
 /// on `PATH` and printed a diagnosis was reported as absent and its diagnosis
 /// discarded — the operator was sent to fix the wrong thing.
 #[derive(Debug, Default)]
-pub enum Rustc {
+pub(crate) enum Rustc {
     Version {
         line: String,
         /// `None` when the line carries no version to read — which is not the
@@ -444,6 +469,77 @@ mod tests {
         assert!(env_present(&cascade, "NESTRS_SEAORM__URL"));
         assert!(!env_present(&cascade, "NESTRS_REDIS__URL"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A variable given as a file is set: the loader reads `<NAME>_FILE` as the
+    /// same variable, so doctor must not report it missing.
+    #[test]
+    fn a_variable_given_as_a_file_is_reported_set() {
+        let cascade = "NESTRS_REDIS__URL_FILE=/run/secrets/redis-url\n";
+        assert!(env_present(cascade, "NESTRS_REDIS__URL"));
+    }
+
+    /// A process environment holding `vars`, for [`present`].
+    fn real(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        move |name| {
+            vars.iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| OsString::from(value))
+        }
+    }
+
+    /// The deployment chooses the spelling: an empty variable in the shell
+    /// shadows both spellings in the cascade, as the loader reads it.
+    #[test]
+    fn an_empty_shell_variable_shadows_the_cascade_file_spelling() {
+        let cascade = "NESTRS_SEAORM__URL_FILE=/nonexistent\n";
+        assert!(!present(
+            real(&[("NESTRS_SEAORM__URL", "")]),
+            cascade,
+            "NESTRS_SEAORM__URL"
+        ));
+        assert!(present(real(&[]), cascade, "NESTRS_SEAORM__URL"));
+    }
+
+    /// Emptiness is the loader's: a blank shell value is set, since the loader
+    /// trims nothing, and an empty one is not.
+    #[test]
+    fn a_shell_value_is_judged_empty_exactly_as_the_loader_judges_it() {
+        assert!(present(
+            real(&[("NESTRS_REDIS__URL", " ")]),
+            "",
+            "NESTRS_REDIS__URL"
+        ));
+        assert!(!present(
+            real(&[("NESTRS_REDIS__URL", "")]),
+            "",
+            "NESTRS_REDIS__URL"
+        ));
+        assert!(present(
+            real(&[("NESTRS_REDIS__URL_FILE", "/run/secrets/url")]),
+            "",
+            "NESTRS_REDIS__URL"
+        ));
+    }
+
+    /// The cascade merges set-if-absent, most specific file first: an empty
+    /// assignment there unsets the key for the files after it, and a quoted
+    /// empty value is empty.
+    #[test]
+    fn the_first_cascade_assignment_wins_even_when_empty() {
+        assert!(!file_defines(
+            "NESTRS_SEAORM__URL=\nNESTRS_SEAORM__URL=postgres://x\n",
+            "NESTRS_SEAORM__URL"
+        ));
+        assert!(!file_defines(
+            "NESTRS_SEAORM__URL=\"\"",
+            "NESTRS_SEAORM__URL"
+        ));
+        assert!(!file_defines("NESTRS_SEAORM__URL=''", "NESTRS_SEAORM__URL"));
     }
 
     /// A project that renamed its variables must be answered in its own names.

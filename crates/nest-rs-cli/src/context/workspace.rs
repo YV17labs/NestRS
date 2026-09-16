@@ -13,21 +13,21 @@ use crate::error::{CliError, CliResult};
 const NESTRS_WORKSPACE_MARKERS: &[&str] = &["crates/*", "apps/*"];
 
 /// Default HTTP port handed to the first app in a fresh workspace.
-pub const DEFAULT_PORT_BASE: u16 = 3000;
+pub(super) const DEFAULT_PORT_BASE: u16 = 3000;
 
 /// The framework's own env-var prefix, and what a project gets unless the
 /// environment names another. Kept as a literal rather than borrowed from
 /// `nest-rs-core`: the CLI depends on no framework crate, so that
 /// `cargo install nest-rs-cli` stays independent of the version a project pins.
-pub const DEFAULT_ENV_PREFIX: &str = "NESTRS";
+pub(crate) const DEFAULT_ENV_PREFIX: &str = "NESTRS";
 
 /// The variable the prefix is read from — the one name no prefix can rename,
 /// which is why it is spelled here (`nest_rs_core::EnvPrefix::VAR` is the same
 /// literal, for the same reason).
-pub const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
+pub(crate) const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
 
 #[derive(Debug, Clone)]
-pub struct NestrsWorkspace {
+pub(crate) struct NestrsWorkspace {
     pub root: PathBuf,
     pub metadata: Metadata,
 }
@@ -35,7 +35,7 @@ pub struct NestrsWorkspace {
 /// Opt-in `[workspace.metadata.nestrs]` overrides. Every field has a default,
 /// so the table is never required.
 #[derive(Debug, Clone)]
-pub struct Metadata {
+pub(crate) struct Metadata {
     /// Base port for app port allocation.
     pub port_base: u16,
 }
@@ -49,7 +49,7 @@ impl Default for Metadata {
 }
 
 impl NestrsWorkspace {
-    pub fn discover(start: &Path) -> CliResult<Option<Self>> {
+    pub(crate) fn discover(start: &Path) -> CliResult<Option<Self>> {
         let mut dir = start.canonicalize().map_err(CliError::Io)?;
         loop {
             if let Some(ws) = read_workspace(&dir)? {
@@ -61,47 +61,47 @@ impl NestrsWorkspace {
         }
     }
 
-    pub fn require(start: &Path) -> CliResult<Self> {
+    pub(crate) fn require(start: &Path) -> CliResult<Self> {
         Self::discover(start)?.ok_or(CliError::NotNestrsWorkspace)
     }
 
-    pub fn features_root(&self) -> PathBuf {
+    pub(crate) fn features_root(&self) -> PathBuf {
         self.root.join("crates/features/src")
     }
 
-    pub fn features_lib(&self) -> PathBuf {
+    pub(crate) fn features_lib(&self) -> PathBuf {
         self.root.join("crates/features/src/lib.rs")
     }
 
-    pub fn features_cargo(&self) -> PathBuf {
+    pub(crate) fn features_cargo(&self) -> PathBuf {
         self.root.join("crates/features/Cargo.toml")
     }
 
-    pub fn apps_root(&self) -> PathBuf {
+    pub(crate) fn apps_root(&self) -> PathBuf {
         self.root.join("apps")
     }
 
     /// `crates/migrations/src` — the SeaORM migration crate's source dir.
-    pub fn migrations_root(&self) -> PathBuf {
+    pub(crate) fn migrations_root(&self) -> PathBuf {
         self.root.join("crates/migrations/src")
     }
 
     /// The migration crate's `lib.rs` (the `mod m…;` registry).
-    pub fn migrations_lib(&self) -> PathBuf {
+    pub(crate) fn migrations_lib(&self) -> PathBuf {
         self.migrations_root().join("lib.rs")
     }
 
     /// The migration crate's `migrator.rs` (the `MigratorTrait` vec — regenerated
     /// from the `lib.rs` module list so both registrations always agree).
-    pub fn migrations_migrator(&self) -> PathBuf {
+    pub(crate) fn migrations_migrator(&self) -> PathBuf {
         self.migrations_root().join("migrator.rs")
     }
 
-    pub fn feature_root(&self, snake: &str) -> PathBuf {
+    pub(crate) fn feature_root(&self, snake: &str) -> PathBuf {
         self.features_root().join(snake)
     }
 
-    pub fn feature_exists(&self, snake: &str) -> bool {
+    pub(crate) fn feature_exists(&self, snake: &str) -> bool {
         self.feature_root(snake).is_dir()
     }
 }
@@ -113,7 +113,7 @@ impl NestrsWorkspace {
 /// `None` covers both "no `nest-rs` entry" and an entry carrying no version (a
 /// `path` dependency in a contributor's tree): neither is a requirement to
 /// report, and inventing one would be worse than saying nothing.
-pub fn framework_pin(manifest_dir: &Path) -> CliResult<Option<String>> {
+pub(crate) fn framework_pin(manifest_dir: &Path) -> CliResult<Option<String>> {
     let Some(doc) = read_manifest(manifest_dir)? else {
         return Ok(None);
     };
@@ -210,7 +210,7 @@ fn read_metadata(workspace: &toml_edit::Table) -> Metadata {
 /// the deployed process resolves `NESTRS` is precisely the failure the single
 /// variable exists to remove.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum EnvPrefixSource {
+pub(crate) enum EnvPrefixSource {
     /// Nothing names one; every variable is built from `NESTRS`.
     #[default]
     Unset,
@@ -224,7 +224,7 @@ pub enum EnvPrefixSource {
 
 impl EnvPrefixSource {
     /// Read the environment this process was given.
-    pub fn detect() -> Self {
+    pub(crate) fn detect() -> Self {
         let Ok(value) = std::env::var(ENV_PREFIX_VAR) else {
             return Self::Unset;
         };
@@ -240,7 +240,7 @@ impl EnvPrefixSource {
 
     /// The prefix to build names from — the default whenever there is no usable
     /// one, which is also what the app resolves in that case.
-    pub fn prefix(&self) -> &str {
+    pub(crate) fn prefix(&self) -> &str {
         match self {
             Self::Environment(prefix) => prefix,
             Self::Unset | Self::Invalid(_) => DEFAULT_ENV_PREFIX,
@@ -249,7 +249,7 @@ impl EnvPrefixSource {
 }
 
 /// The prefix every name this CLI writes or checks must carry.
-pub fn env_prefix() -> String {
+pub(crate) fn env_prefix() -> String {
     EnvPrefixSource::detect().prefix().to_owned()
 }
 
@@ -258,14 +258,14 @@ pub fn env_prefix() -> String {
 ///
 /// One function so the name a command *checks* and the name it *prints* cannot
 /// be two independent `format!`s that drift.
-pub fn var_name(env_prefix: &str, namespace: &str, key: &str) -> String {
+pub(crate) fn var_name(env_prefix: &str, namespace: &str, key: &str) -> String {
     format!("{env_prefix}_{namespace}__{key}")
 }
 
 /// The shape the runtime accepts, restated for the CLI (which links no
 /// framework crate). Uppercase ASCII, digits and underscores, starting with a
 /// letter and not ending in `_` — the framework supplies the separator.
-pub fn validate_env_prefix(prefix: &str) -> Result<(), String> {
+pub(crate) fn validate_env_prefix(prefix: &str) -> Result<(), String> {
     let valid = !prefix.is_empty()
         && prefix.starts_with(|c: char| c.is_ascii_uppercase())
         && !prefix.ends_with('_')

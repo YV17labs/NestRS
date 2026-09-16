@@ -255,6 +255,44 @@ fn generate_schedule_adapter_does_not_restate_the_tick_line() {
     );
 }
 
+/// `events/` is the edge folder, so the fact the listener receives sits at the
+/// port as `event.rs` — never in a plural `events/` beside the edge.
+#[test]
+fn generate_events_adapter_puts_the_event_at_the_port() {
+    let dir = tempfile::tempdir().unwrap();
+    write_fake_workspace(dir.path());
+    let path = dir.path().to_str().unwrap();
+
+    run_ok(dir.path(), &["g", "feature", "posts", "-p", path]);
+    run_ok(dir.path(), &["g", "events", "posts", "-p", path]);
+
+    let feature = dir.path().join("crates/features/src/posts");
+    let event_rs = fs::read_to_string(feature.join("event.rs")).unwrap();
+    assert!(
+        event_rs.contains("pub struct PostChangedEvent"),
+        "{event_rs}"
+    );
+
+    let listener_rs = fs::read_to_string(feature.join("events/listener.rs")).unwrap();
+    assert!(listener_rs.contains("#[listeners]"), "{listener_rs}");
+    assert!(
+        listener_rs.contains("event: PostChangedEvent"),
+        "{listener_rs}"
+    );
+    assert!(!listener_rs.contains("pub struct PostChangedEvent"));
+
+    let module_rs = fs::read_to_string(feature.join("events/module.rs")).unwrap();
+    assert!(
+        module_rs.contains("pub struct PostsEventsModule"),
+        "{module_rs}"
+    );
+
+    let mod_rs = fs::read_to_string(feature.join("mod.rs")).unwrap();
+    assert!(mod_rs.contains("mod event;"));
+    assert!(mod_rs.contains("pub use event::PostChangedEvent;"));
+    assert!(mod_rs.contains("pub mod events;"));
+}
+
 #[test]
 fn generate_queue_adapter_puts_command_at_the_port() {
     let dir = tempfile::tempdir().unwrap();
@@ -300,11 +338,11 @@ fn generate_queue_adapter_puts_command_at_the_port() {
     assert!(mod_rs.contains("PostsQueueModule"));
 }
 
-/// The `#[queue]` marker is the artifact `push_to::<Q>` is generic over, so it
-/// has to be *reachable*. Declared in the adapter's private `processor` module
-/// it was invisible to the feature's own service one directory up, leaving the
-/// untyped `push(name, job)` escape hatch as the only way to enqueue — the exact
-/// check `QueueName` exists to provide, lost.
+/// The `#[queue]` marker is the destination a typed `push` takes, so it has to
+/// be *reachable*. Declared in the adapter's private `processor` module it was
+/// invisible to the feature's own service one directory up, leaving the untyped
+/// `push_json(name, value, ..)` escape hatch as the only way to enqueue — the
+/// exact check the `Queue` trait exists to provide, lost.
 #[test]
 fn generate_queue_adapter_declares_the_queue_marker_at_the_port() {
     let dir = tempfile::tempdir().unwrap();

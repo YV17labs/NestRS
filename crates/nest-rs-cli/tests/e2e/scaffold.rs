@@ -382,6 +382,14 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
 }
 
 #[test]
+fn the_generated_events_adapter_compiles() {
+    scaffold_and_check(
+        &[&["g", "feature", "post"], &["g", "events", "post"]],
+        "the generated events listener and its port event",
+    );
+}
+
+#[test]
 fn the_generated_ws_and_mcp_authz_bridges_compile() {
     // F4: `g ws` and `g mcp` named `AuthzWsModule` / `features::authz::mcp` in
     // their own output while writing neither. They write both now — and a

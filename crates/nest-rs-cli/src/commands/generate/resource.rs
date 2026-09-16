@@ -20,13 +20,13 @@ use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, ensure_lines};
 use crate::templates::resource;
 
-pub struct ResourceOptions {
+pub(crate) struct ResourceOptions {
     pub name: String,
     pub path: Option<PathBuf>,
     pub dry_run: bool,
 }
 
-pub fn run(opts: ResourceOptions) -> CliResult<()> {
+pub(crate) fn run(opts: ResourceOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
 

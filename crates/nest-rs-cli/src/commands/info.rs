@@ -19,11 +19,11 @@ use crate::context::{
 };
 use crate::error::CliResult;
 
-pub struct InfoOptions {
+pub(crate) struct InfoOptions {
     pub path: Option<PathBuf>,
 }
 
-pub fn run(opts: InfoOptions) -> CliResult<()> {
+pub(crate) fn run(opts: InfoOptions) -> CliResult<()> {
     let start = super::resolve_start(opts.path);
     let here = start.canonicalize().unwrap_or_else(|_| start.clone());
     let ctx = Context::detect(&start)?;

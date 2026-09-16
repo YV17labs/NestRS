@@ -13,7 +13,7 @@
 //! shape.
 
 /// The greeting — a provider with one method.
-pub const SERVICE: &str = r#"use nest_rs::core::injectable;
+pub(crate) const SERVICE: &str = r#"use nest_rs::core::injectable;
 
 #[injectable]
 #[derive(Default)]
@@ -28,7 +28,7 @@ impl {{service}} {
 
 /// `GET /`. The service sits at `crate::<feature>::<Service>`, both halves
 /// already seeded from the project name.
-pub const CONTROLLER: &str = r#"use std::sync::Arc;
+pub(crate) const CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::http::{controller, routes};
 
@@ -59,7 +59,7 @@ impl {{controller}} {
 // `hello` feature; `nestrs new blog` inside that workspace writes the `blog`
 // one — the same shape either way, so no path ends up with a mute app.
 
-pub const FEATURE_MOD: &str = r#"mod module;
+pub(crate) const FEATURE_MOD: &str = r#"mod module;
 mod service;
 
 pub mod http;
@@ -69,7 +69,7 @@ pub use module::{{module}};
 pub use service::{{service}};
 "#;
 
-pub const FEATURE_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const FEATURE_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::service::{{service}};
 
@@ -77,13 +77,13 @@ use super::service::{{service}};
 pub struct {{module}};
 "#;
 
-pub const FEATURE_HTTP_MOD: &str = r#"mod controller;
+pub(crate) const FEATURE_HTTP_MOD: &str = r#"mod controller;
 mod module;
 
 pub use module::{{http_module}};
 "#;
 
-pub const FEATURE_HTTP_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const FEATURE_HTTP_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::controller::{{controller}};
 use crate::{{snake}}::{{module}};

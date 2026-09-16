@@ -35,7 +35,7 @@ use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, ensure_decl, ensure_lines};
 use crate::templates::entity;
 
-pub struct EntityOptions {
+pub(crate) struct EntityOptions {
     /// `<feature>` or `<feature>/<entity>`.
     pub target: String,
     pub path: Option<PathBuf>,
@@ -86,7 +86,7 @@ impl Target {
     }
 }
 
-pub fn run(opts: EntityOptions) -> CliResult<()> {
+pub(crate) fn run(opts: EntityOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.ok_or(CliError::NotNestrsWorkspace)?;
 

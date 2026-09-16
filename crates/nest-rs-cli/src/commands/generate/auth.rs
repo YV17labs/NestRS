@@ -19,12 +19,12 @@ use crate::naming::Transport;
 use crate::scaffold::{Scaffold, ensure_lines};
 use crate::templates::auth;
 
-pub struct AuthOptions {
+pub(crate) struct AuthOptions {
     pub path: Option<PathBuf>,
     pub dry_run: bool,
 }
 
-pub fn run(opts: AuthOptions) -> CliResult<()> {
+pub(crate) fn run(opts: AuthOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
 
@@ -202,15 +202,15 @@ impl AuthzBridge {
 }
 
 /// The bridge that enforces `transport`, whoever writes it — `None` for the
-/// transports that need none: **queue** and **schedule** have no caller to
-/// authenticate, since a job runs on the app's own behalf.
+/// transports that need none: **queue**, **schedule** and **events** have no
+/// caller to authenticate, since their work runs on the app's own behalf.
 pub(super) fn bridge_for(transport: Transport) -> Option<&'static AuthzBridge> {
     match transport {
         Transport::Http => Some(&HTTP_BRIDGE),
         Transport::Graphql => Some(&GRAPHQL_BRIDGE),
         Transport::Ws => Some(&WS_BRIDGE),
         Transport::Mcp => Some(&MCP_BRIDGE),
-        Transport::Queue | Transport::Schedule => None,
+        Transport::Queue | Transport::Schedule | Transport::Events => None,
     }
 }
 

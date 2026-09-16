@@ -7,7 +7,7 @@ use crate::error::{CliError, CliResult};
 
 const CRATE_NAME: &str = env!("CARGO_PKG_NAME");
 
-pub struct UpdateOptions {
+pub(crate) struct UpdateOptions {
     /// Reinstall from `crates/nest-rs-cli` in the nestrs monorepo instead of crates.io.
     pub from_path: bool,
     /// Workspace root when using `--workspace` (default: auto-discover).
@@ -16,7 +16,7 @@ pub struct UpdateOptions {
     pub force: bool,
 }
 
-pub fn run(opts: UpdateOptions) -> CliResult<()> {
+pub(crate) fn run(opts: UpdateOptions) -> CliResult<()> {
     if !cargo_available() {
         return Err(CliError::Anyhow(anyhow::anyhow!(
             "cargo is not on PATH — install Rust from https://rustup.rs"

@@ -82,7 +82,7 @@ const NO_BOOTSTRAP_ENV: &str = "NESTRS_NO_BOOTSTRAP";
 /// A no-op once everything is present. When bootstrap is disabled (the
 /// `--no-bootstrap` flag or `NESTRS_NO_BOOTSTRAP`), a missing tool is a hard
 /// error naming the manual install — never a silent install.
-pub fn ensure_toolchain(no_bootstrap: bool) -> CliResult<()> {
+pub(super) fn ensure_toolchain(no_bootstrap: bool) -> CliResult<()> {
     let missing: Vec<&Tool> = TOOLCHAIN
         .iter()
         .filter(|tool| !tool_available(tool.bin, tool.probe))
@@ -125,7 +125,7 @@ fn is_truthy(value: &str) -> bool {
 }
 
 /// Probes a binary on PATH with the arguments that make it print its version.
-pub fn tool_available(bin: &str, args: &[&str]) -> bool {
+pub(super) fn tool_available(bin: &str, args: &[&str]) -> bool {
     Command::new(bin)
         .args(args)
         .stdout(Stdio::null())

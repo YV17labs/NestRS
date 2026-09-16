@@ -21,7 +21,7 @@ const KEEP_SVC_LIVE: &str = "        let _ = &self.svc;";
 /// between the two, so only the handler is a variable: the imports, the
 /// `#[gateway]`/`#[tool_router]` scaffolding and the `/ws/<feature>` path
 /// rationale keep one home each.
-pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, String)> {
+pub(crate) fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, String)> {
     if !crud_port {
         return vec![
             ("op", "count".to_owned()),
@@ -64,7 +64,7 @@ pub fn crud_vars(crud_port: bool, transport: Transport) -> Vec<(&'static str, St
         // `GRAPHQL_RESOLVER_CRUD`), and the queue processor is driven by its
         // payload type rather than by a read. Spelled out rather than left to
         // `_` so a transport added later has to choose a body on purpose.
-        Transport::Http | Transport::Graphql | Transport::Queue => "",
+        Transport::Http | Transport::Graphql | Transport::Queue | Transport::Events => "",
     };
     let value = match transport {
         Transport::Ws => "&Vec::<String>::new()",

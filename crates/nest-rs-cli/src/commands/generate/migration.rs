@@ -15,7 +15,7 @@ use crate::naming::Names;
 use crate::scaffold::{Renderer, Scaffold, ensure_decl};
 use crate::templates::migration;
 
-pub struct MigrationOptions {
+pub(crate) struct MigrationOptions {
     pub name: String,
     pub path: Option<PathBuf>,
     pub dry_run: bool,
@@ -51,7 +51,7 @@ pub(crate) fn queue_db_crates(s: &mut Scaffold, root: &Path, mods: &[String]) {
     );
 }
 
-pub fn run(opts: MigrationOptions) -> CliResult<()> {
+pub(crate) fn run(opts: MigrationOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.ok_or(CliError::NotNestrsWorkspace)?;
 

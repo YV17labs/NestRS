@@ -12,7 +12,7 @@
 
 /// The principal. `JwtStrategy<Claims>` deserializes a verified token into it,
 /// and `AuthzAbility` reads it to build the caller's rules.
-pub const AUTHN_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
+pub(crate) const AUTHN_CLAIMS: &str = r#"use nest_rs::authn::PrincipalIdentity;
 use nest_rs::resource::wire_enum;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -51,7 +51,7 @@ impl PrincipalIdentity for Claims {
 }
 "#;
 
-pub const AUTHN_MOD: &str = r#"mod claims;
+pub(crate) const AUTHN_MOD: &str = r#"mod claims;
 mod module;
 mod strategy;
 
@@ -63,7 +63,7 @@ pub use module::AuthnModule;
 pub use strategy::AuthnGuard;
 "#;
 
-pub const AUTHN_STRATEGY: &str = r#"use nest_rs::authn::JwtStrategy;
+pub(crate) const AUTHN_STRATEGY: &str = r#"use nest_rs::authn::JwtStrategy;
 
 use crate::authn::Claims;
 
@@ -74,7 +74,7 @@ pub type AuthnStrategy = JwtStrategy<Claims>;
 pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 "#;
 
-pub const AUTHN_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const AUTHN_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::strategy::{AuthnGuard, AuthnStrategy};
 
@@ -98,7 +98,7 @@ pub struct AuthnModule;
 // single request is served. Delete `authn/http/` the day the real login lands —
 // nothing else references it.
 
-pub const AUTHN_HTTP_MOD: &str = r#"mod audit;
+pub(crate) const AUTHN_HTTP_MOD: &str = r#"mod audit;
 mod controller;
 mod guard;
 mod module;
@@ -109,7 +109,7 @@ pub use module::AuthnHttpModule;
 /// The route the tutorial `curl`s. `#[public]` because a caller with no token
 /// is exactly who asks for one, and the environment check is what stands in for
 /// the credential this route deliberately does not have.
-pub const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
+pub(crate) const AUTHN_HTTP_CONTROLLER: &str = r#"use std::sync::Arc;
 
 use nest_rs::authn::JwtService;
 use nest_rs::http::poem::error::InternalServerError;
@@ -173,7 +173,7 @@ impl DevTokenController {
 /// skipped at boot — which is why the framework refuses that composition at
 /// compile time (`nest_rs::core::ProviderResidency`). Same shape as the framework's
 /// own `SoftDeleteAudit`: an `#[injectable]` whose only job is to refuse.
-pub const AUTHN_HTTP_GUARD: &str = r#"use nest_rs::core::{Layer, injectable};
+pub(crate) const AUTHN_HTTP_GUARD: &str = r#"use nest_rs::core::{Layer, injectable};
 use nest_rs::guards::{Denial, Guard, HttpGuard};
 use nest_rs::http::async_trait;
 use nest_rs::http::poem::Request;
@@ -202,7 +202,7 @@ impl Guard for DevOnlyGuard {
 impl HttpGuard for DevOnlyGuard {}
 "#;
 
-pub const AUTHN_HTTP_AUDIT: &str = r#"use nest_rs::config::Environment;
+pub(crate) const AUTHN_HTTP_AUDIT: &str = r#"use nest_rs::config::Environment;
 use nest_rs::core::anyhow::{anyhow, Result};
 use nest_rs::core::{hooks, injectable};
 
@@ -239,7 +239,7 @@ impl DevTokenAudit {
 }
 "#;
 
-pub const AUTHN_HTTP_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const AUTHN_HTTP_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::audit::DevTokenAudit;
 use super::controller::DevTokenController;
@@ -253,7 +253,7 @@ use crate::authn::AuthnModule;
 pub struct AuthnHttpModule;
 "#;
 
-pub const AUTHZ_MOD: &str = r#"mod ability;
+pub(crate) const AUTHZ_MOD: &str = r#"mod ability;
 mod guard;
 mod module;
 
@@ -265,7 +265,7 @@ pub use module::AuthzModule;
 /// The whole policy, in one function. Empty on purpose: the data layer denies
 /// every row the ability does not grant, so an app that grants nothing serves
 /// nothing — a legible 403, never a silent empty list.
-pub const AUTHZ_ABILITY: &str = r#"use nest_rs::authz::{AbilityBuilder, AbilityFactory};
+pub(crate) const AUTHZ_ABILITY: &str = r#"use nest_rs::authz::{AbilityBuilder, AbilityFactory};
 use nest_rs::core::injectable;
 
 use crate::authn::Claims;
@@ -312,7 +312,7 @@ impl AbilityFactory for AuthzAbility {
 }
 "#;
 
-pub const AUTHZ_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const AUTHZ_MODULE: &str = r#"use nest_rs::core::module;
 
 use super::ability::AuthzAbility;
 use super::guard::AuthzGuard;
@@ -329,7 +329,7 @@ pub struct AuthzModule;
 /// `AbilityGuard` answers every transport: it implements `check_http`,
 /// `check_graphql`, `check_ws_message` and `check_mcp`. Filing it under one edge
 /// made the other three import that edge's module to reach their own guard.
-pub const AUTHZ_GUARD: &str = r#"use nest_rs::authz::AbilityGuard;
+pub(crate) const AUTHZ_GUARD: &str = r#"use nest_rs::authz::AbilityGuard;
 
 use crate::authz::AuthzAbility;
 
@@ -344,7 +344,7 @@ pub type AuthzGuard = AbilityGuard<AuthzAbility>;
 // posture is enforced against, so a GraphQL adapter without them boots into a
 // deny-all fallback that installs no ability at all.
 
-pub const AUTHZ_GRAPHQL_MOD: &str = r#"mod bridge;
+pub(crate) const AUTHZ_GRAPHQL_MOD: &str = r#"mod bridge;
 mod module;
 
 pub use module::AuthzGraphqlModule;
@@ -353,7 +353,7 @@ pub use module::AuthzGraphqlModule;
 /// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
 /// `AuthzGuard`) on the GraphQL request, then scopes the operation to the
 /// ability it produced — so one policy answers on both transports.
-pub const AUTHZ_GRAPHQL_BRIDGE: &str = r#"use nest_rs::authz::graphql::GraphqlAbilityBridge;
+pub(crate) const AUTHZ_GRAPHQL_BRIDGE: &str = r#"use nest_rs::authz::graphql::GraphqlAbilityBridge;
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -361,7 +361,7 @@ use crate::authz::AuthzGuard;
 pub type AuthzGraphqlBridge = GraphqlAbilityBridge<AuthnGuard, AuthzGuard>;
 "#;
 
-pub const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const AUTHZ_GRAPHQL_MODULE: &str = r#"use nest_rs::core::module;
 use nest_rs::graphql::{GraphqlBatchContext, GraphqlOperationGuard, forward_principal};
 use nest_rs::seaorm::graphql::LoaderScope;
 
@@ -393,12 +393,12 @@ forward_principal!(Claims);
 // generated gateway's own SECURITY comment tells the reader to import a module
 // nothing was writing.
 
-pub const AUTHZ_WS_MOD: &str = r#"mod module;
+pub(crate) const AUTHZ_WS_MOD: &str = r#"mod module;
 
 pub use module::AuthzWsModule;
 "#;
 
-pub const AUTHZ_WS_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const AUTHZ_WS_MODULE: &str = r#"use nest_rs::core::module;
 use nest_rs::seaorm::ws::WsDataContext;
 use nest_rs::ws::{SocketContext, WsModule};
 
@@ -420,7 +420,7 @@ pub struct AuthzWsModule;
 // tool call answers 401, which is the boot warning `nestrs g mcp` prints. These
 // three providers are what turn that into a real posture.
 
-pub const AUTHZ_MCP_MOD: &str = r#"mod bridge;
+pub(crate) const AUTHZ_MCP_MOD: &str = r#"mod bridge;
 mod module;
 
 pub use module::AuthzMcpModule;
@@ -429,7 +429,7 @@ pub use module::AuthzMcpModule;
 /// The operation guard: runs the controllers' own chain (`AuthnGuard`, then
 /// `AuthzGuard`) on the MCP request, then installs the ambient `Ability` a tool
 /// returns masked rows through — so one policy answers on every transport.
-pub const AUTHZ_MCP_BRIDGE: &str = r#"use nest_rs::authz::mcp::McpAbilityBridge;
+pub(crate) const AUTHZ_MCP_BRIDGE: &str = r#"use nest_rs::authz::mcp::McpAbilityBridge;
 
 use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
@@ -437,7 +437,7 @@ use crate::authz::AuthzGuard;
 pub type AuthzMcpBridge = McpAbilityBridge<AuthnGuard, AuthzGuard>;
 "#;
 
-pub const AUTHZ_MCP_MODULE: &str = r#"use nest_rs::core::module;
+pub(crate) const AUTHZ_MCP_MODULE: &str = r#"use nest_rs::core::module;
 use nest_rs::mcp::{McpOperationGuard, McpToolContext};
 use nest_rs::seaorm::mcp::McpDataContext;
 
@@ -456,11 +456,15 @@ pub struct AuthzMcpModule;
 
 /// Appended to the committed `.env`. HS256 needs ≥ 32 bytes or the app refuses
 /// to boot; this placeholder is deliberately obvious so nobody ships it.
-pub const ENV_AUTHN: &str = r#"
+pub(crate) const ENV_AUTHN: &str = r#"
 # JWT verification (`nestrs g auth`). HS256 shared secret — a holder can also
 # MINT tokens, so this value is a local-development placeholder only: set a
 # real `{{env_prefix}}_AUTHN__SECRET` through the real environment in every deployed
-# environment, or switch to EdDSA (`{{env_prefix}}_AUTHN__PRIVATE_KEY` on the issuing
-# app, `{{env_prefix}}_AUTHN__PUBLIC_KEY` on the resource servers).
+# environment, or switch to EdDSA: `{{env_prefix}}_AUTHN__PRIVATE_KEY` and
+# `{{env_prefix}}_AUTHN__PUBLIC_KEY` on the issuing app, `{{env_prefix}}_AUTHN__PUBLIC_KEY`
+# alone on the resource servers — each inline, or as a path in its `_FILE` form. A
+# secret beside either key fails the boot — this line beside keys the real
+# environment sets included — so switching to EdDSA means deleting this line.
+# (A config pinned in code stops this file being read for the namespace.)
 {{env_prefix}}_AUTHN__SECRET=dev-only-insecure-secret-change-me-32b
 "#;

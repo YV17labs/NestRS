@@ -7,14 +7,14 @@ use super::workspace::NestrsWorkspace;
 use crate::error::CliResult;
 
 #[derive(Debug, Clone)]
-pub struct Context {
+pub(crate) struct Context {
     pub workspace: Option<NestrsWorkspace>,
     /// Crate root of the app the cursor is in (`apps/<x>/`), when applicable.
     pub current_app: Option<PathBuf>,
 }
 
 impl Context {
-    pub fn detect(start: &Path) -> CliResult<Self> {
+    pub(crate) fn detect(start: &Path) -> CliResult<Self> {
         let abs = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
         let workspace = NestrsWorkspace::discover(start)?;
         let current_app = workspace.as_ref().and_then(|ws| detect_app(ws, &abs));
@@ -25,7 +25,7 @@ impl Context {
     }
 
     /// The `module.rs` of the app the cursor is in, if any.
-    pub fn current_app_module(&self) -> Option<PathBuf> {
+    pub(crate) fn current_app_module(&self) -> Option<PathBuf> {
         self.current_app
             .as_ref()
             .map(|app| app.join("src/module.rs"))

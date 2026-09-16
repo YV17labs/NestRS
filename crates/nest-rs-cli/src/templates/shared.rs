@@ -1,6 +1,6 @@
 //! Files every scaffold writes (env cascade, gitignore, agent rules, …).
 
-pub const RUST_TOOLCHAIN: &str = r#"[toolchain]
+pub(crate) const RUST_TOOLCHAIN: &str = r#"[toolchain]
 channel = "1.97"
 # `llvm-tools-preview` carries the `llvm-cov` / `llvm-profdata` that
 # `nestrs run test cov` shells out to. It is pinned per toolchain rather than
@@ -14,7 +14,7 @@ components = ["clippy", "rustfmt", "llvm-tools-preview"]
 /// day one, whether or not the project has a database yet. Recipes follow the
 /// nestrs convention: a `migrations` crate (the `migrate` bin) and a `seed` crate.
 /// They start working once you add those — see the database docs.
-pub const DB_JUSTFILE: &str = r#"# Database lifecycle, exposed as `nestrs run db <verb>` (see `mod db` in the
+pub(crate) const DB_JUSTFILE: &str = r#"# Database lifecycle, exposed as `nestrs run db <verb>` (see `mod db` in the
 # Justfile). Recipes assume the nestrs `migrations` + `seed` crates.
 
 # Bare `nestrs run db` lists these instead of running the first recipe.
@@ -49,7 +49,7 @@ reset: fresh seed
 /// DB-backed feature works the moment you add one: `docker compose up -d`,
 /// then `nestrs run db up`. The committed `.env` points at these services on
 /// `localhost`. Delete it if your project never touches a database or a queue.
-pub const COMPOSE: &str = r#"# Local development services. Start them with:
+pub(crate) const COMPOSE: &str = r#"# Local development services. Start them with:
 #
 #   docker compose up -d
 #
@@ -90,7 +90,7 @@ volumes:
 /// A template rather than a `format!` in the command module: everything the CLI
 /// writes into a generated project lives here, which is also what keeps it under
 /// the mechanical guards in `super::tests`.
-pub const ENV_PREFIX_JUSTFILE: &str = r#"# Every framework variable carries this prefix ({{env_prefix}}_ENV, {{env_prefix}}_HTTP__PORT, …).
+pub(crate) const ENV_PREFIX_JUSTFILE: &str = r#"# Every framework variable carries this prefix ({{env_prefix}}_ENV, {{env_prefix}}_HTTP__PORT, …).
 # It must be set on the process, so it lives here and in your deployment —
 # never in `.env`, which is read too late to have chosen itself.
 export {{env_prefix_var}} := "{{env_prefix}}"
@@ -100,12 +100,12 @@ export {{env_prefix_var}} := "{{env_prefix}}"
 /// Why the `dev` recipe sets `<PREFIX>_ENV` on the command line. Told once and
 /// rendered into the recipe, because a story drifts the moment it is told
 /// twice.
-pub const DEV_RECIPE_NOTE: &str = r#"# `{{env_prefix}}_ENV` is set here rather than in `.env`: it selects the `.env`
+pub(crate) const DEV_RECIPE_NOTE: &str = r#"# `{{env_prefix}}_ENV` is set here rather than in `.env`: it selects the `.env`
 # cascade, so it has to exist before any file is read. It also arms every
 # development-only affordance (the `POST /auth/dev-token` route `nestrs g auth`
 # writes), which is why absence has to mean "not development" everywhere else."#;
 
-pub const GITIGNORE: &str = r#"/target
+pub(crate) const GITIGNORE: &str = r#"/target
 **/*.rs.bk
 
 # Coverage (cargo-llvm-cov)
@@ -123,7 +123,7 @@ pub const GITIGNORE: &str = r#"/target
 .DS_Store
 "#;
 
-pub const ENV: &str = r#"# nestrs workspace — committed base config (`.env` cascade).
+pub(crate) const ENV: &str = r#"# nestrs workspace — committed base config (`.env` cascade).
 #
 # Each app's root `module.rs` sets its own HTTP defaults
 # (`HttpConfig { port: …, ..Default::default() }`). Those are defaults, not a
@@ -142,7 +142,7 @@ pub const ENV: &str = r#"# nestrs workspace — committed base config (`.env` ca
 #   >  .env.<{{env_prefix}}_ENV>  >  .env
 "#;
 
-pub const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides. An unset {{env_prefix}}_ENV still loads
+pub(crate) const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only overrides. An unset {{env_prefix}}_ENV still loads
 # this cascade, but arms no development-only affordance: those need it set, on the
 # process, to development, dev or test — `nestrs run dev` does it. Setting it here
 # would be too late and is refused at boot.
@@ -159,7 +159,7 @@ pub const ENV_DEVELOPMENT: &str = r#"# nestrs workspace — development-only ove
 /// (hermetic by design). Without that line, a developer whose Postgres is not on
 /// the default port edits `.env.local`, watches `nestrs run test e2e` fail to
 /// connect, and has nothing pointing at the file being ignored.
-pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or secret-shaped settings:
+pub(crate) const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or secret-shaped settings:
 #
 #   cp .env.example .env.local
 #
@@ -186,7 +186,7 @@ pub const ENV_EXAMPLE: &str = r#"# Copy to `.env.local` for machine-specific or 
 /// no matter what the app grows into — and the emitted file says so, because
 /// the developer who later adds a database is the one who has to know why this
 /// suite boots a feature rather than the root.
-pub const SMOKE: &str = r#"//! In-process smoke test — boots the feature's own module through `TestApp`,
+pub(crate) const SMOKE: &str = r#"//! In-process smoke test — boots the feature's own module through `TestApp`,
 //! no live infra, so it belongs to the `integration` suite and runs on every
 //! `nestrs run test unit`. Tests needing a database, queue or object store go
 //! next door in `tests/e2e/main.rs`.
@@ -225,7 +225,7 @@ async fn hello_endpoint_greets() {
 /// The title and the one paragraph both layouts open with. Split out because
 /// a fix applied to one head would otherwise ship silently one-sided — nothing
 /// compares the two.
-pub const AGENTS_INTRO: &str = r#"# AGENTS.md — {{pascal}}
+pub(crate) const AGENTS_INTRO: &str = r#"# AGENTS.md — {{pascal}}
 
 How this project is laid out and named. `nestrs new` wrote this file; it is
 yours to edit. Read it before adding a file: the conventions below cannot be
@@ -234,7 +234,7 @@ folder nobody can navigate.
 
 "#;
 
-pub const AGENTS_LAYOUT: &str = r#"## Layout — two homes, and the rule that divides them
+pub(crate) const AGENTS_LAYOUT: &str = r#"## Layout — two homes, and the rule that divides them
 
 ```
 apps/<app>/src/     main.rs + module.rs only — pure composition
@@ -258,7 +258,7 @@ crates/features/src/<feature>/
   mcp/      module.rs tool.rs
 ```
 
-`nestrs g feature|resource|http|graphql|ws|queue|schedule|mcp` writes that
+`nestrs g feature|resource|http|graphql|ws|queue|schedule|mcp|events` writes that
 shape and performs the two wiring edits a copy cannot carry — the `pub mod`
 line in `crates/features/src/lib.rs` and the module entry in the serving app's
 `module.rs`. Prefer it over hand-copying.
@@ -315,7 +315,7 @@ idempotent (find-or-create, or `ON CONFLICT DO NOTHING`).
 /// require. The note is an HTML comment — stripped before the file enters an
 /// agent's context, so it costs no tokens and reads as intended by whoever
 /// opens the file.
-pub const CLAUDE_POINTER: &str = r#"@AGENTS.md
+pub(crate) const CLAUDE_POINTER: &str = r#"@AGENTS.md
 
 <!--
 This project's conventions live in AGENTS.md, the format every coding agent
@@ -348,7 +348,7 @@ for Claude Code alone belong below the import.
 /// this one embeds ~9 KB from two modules that land in different codegen units.
 /// A `static` has one address, so the blob ships once however many scaffolds
 /// reference it.
-pub static AGENTS_BODY: &str = concat!(
+pub(crate) static AGENTS_BODY: &str = concat!(
     "\n",
     include_str!("architecture.md"),
     r#"
@@ -473,4 +473,4 @@ the `{{env_prefix}}_` prefix.
 /// object storage, booted against a throwaway database through
 /// `nest_rs::testing`'s `EphemeralDatabase` — is stated in the generated
 /// `AGENTS.md`.
-pub const E2E: &str = "";
+pub(crate) const E2E: &str = "";

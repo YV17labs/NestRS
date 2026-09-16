@@ -22,7 +22,7 @@
 //! in lockstep, so a resource is never left with a tombstone column nothing
 //! honours.
 
-pub const ENTITY: &str = r#"use nest_rs::resource::expose;
+pub(crate) const ENTITY: &str = r#"use nest_rs::resource::expose;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -50,5 +50,5 @@ pub struct Model {
 /// The index of a module that owns several entities. Written only when the
 /// folder exists without one — the usual case is an `ensure_lines` edit onto the
 /// index already there.
-pub const ENTITIES_MOD: &str = r#"pub mod {{stem}};
+pub(crate) const ENTITIES_MOD: &str = r#"pub mod {{stem}};
 "#;

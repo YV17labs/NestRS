@@ -5,7 +5,7 @@ use crate::lint::scan;
 
 use super::resolve_start;
 
-pub struct LintOptions {
+pub(crate) struct LintOptions {
     pub path: Option<PathBuf>,
 }
 
@@ -15,7 +15,7 @@ pub struct LintOptions {
 /// The command's job is the report and the exit code: a lint nobody's CI can
 /// fail is a lint nobody runs. A caller that wants the findings as data calls
 /// [`crate::lint::scan`], which is what `nest-rs-conformance` does.
-pub fn run(opts: LintOptions) -> CliResult<()> {
+pub(crate) fn run(opts: LintOptions) -> CliResult<()> {
     let scan = scan(&resolve_start(opts.path));
 
     println!("nestrs lint");

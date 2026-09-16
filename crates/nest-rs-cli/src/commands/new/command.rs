@@ -19,7 +19,7 @@ use crate::scaffold::{Renderer, Scaffold};
 use crate::templates::shared;
 
 #[derive(Debug, Clone)]
-pub struct NewOptions {
+pub(crate) struct NewOptions {
     pub name: String,
     pub output: PathBuf,
     /// `None` ⇒ the framework default (`NESTRS`).
@@ -27,7 +27,7 @@ pub struct NewOptions {
     pub dry_run: bool,
 }
 
-pub fn run(opts: NewOptions) -> CliResult<()> {
+pub(crate) fn run(opts: NewOptions) -> CliResult<()> {
     // Reject a name that would derive an invalid crate identifier (e.g.
     // `"Bad Name!"` → `bad-name!`) before scaffolding a project that won't
     // compile (CLI-I6).
@@ -143,7 +143,7 @@ pub(crate) fn queue_agent_files(s: &mut Scaffold, base: &Path, r: &Renderer) {
     s.create(base.join("CLAUDE.md"), r.render(shared::CLAUDE_POINTER));
 }
 
-pub fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
+pub(crate) fn run_cargo_check(project_dir: &Path) -> CliResult<()> {
     let status = Command::new("cargo")
         .arg("check")
         .current_dir(project_dir)

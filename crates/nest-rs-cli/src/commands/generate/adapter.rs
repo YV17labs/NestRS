@@ -1,4 +1,4 @@
-//! `nestrs g http|graphql|ws|queue|schedule|mcp <feature>` — bolt one
+//! `nestrs g http|graphql|ws|queue|schedule|mcp|events <feature>` — bolt one
 //! transport adapter onto an existing port. One uniform generator parameterised
 //! by [`Transport`]: it picks the right templates, ensures the transport's
 //! crates, wires the feature `mod.rs`, and (inside an app) the app's imports.
@@ -29,13 +29,13 @@ use crate::scaffold::{
 };
 use crate::templates::adapter;
 
-pub struct AdapterOptions {
+pub(crate) struct AdapterOptions {
     pub name: String,
     pub path: Option<PathBuf>,
     pub dry_run: bool,
 }
 
-pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
+pub(crate) fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
     let ctx = Context::detect(&resolve_start(opts.path))?;
     let ws = ctx.workspace.clone().ok_or(CliError::NotNestrsWorkspace)?;
 
@@ -121,13 +121,13 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         s.edit(ws.features_root().join("authz/mod.rs"), ensure_lines(decls));
     }
 
-    // The queue payload and its `QueueName` marker are a producer↔worker
+    // The queue payload and its `#[queue]` marker are a producer↔worker
     // contract, so they live at the *port* (`command.rs`), not in the
     // consumer-side `queue/` adapter — the generated `processor.rs` imports
-    // both. Re-exporting the marker is what keeps the typed `push_to::<Q>`
+    // both. Re-exporting the marker is what keeps the typed `push(Q, job, ..)`
     // reachable: left inside the private `queue::processor` module it is
     // invisible even to the feature's own service, and the untyped
-    // `push(name, job)` escape hatch becomes the only way to enqueue. Lines
+    // `push_json(name, value, ..)` escape hatch becomes the only way to enqueue. Lines
     // wiring it into the feature `mod.rs` are folded into the single edit
     // below (one edit per file).
     let mut port_lines = Vec::new();
@@ -143,8 +143,19 @@ pub fn run(transport: Transport, opts: AdapterOptions) -> CliResult<()> {
         port_lines.push(format!(
             "pub use command::{{{}, {}}};",
             names.command(),
-            names.queue_name()
+            names.queue()
         ));
+    }
+    // An event is a published fact, so it too is port vocabulary: the service
+    // that emits it and every listener import it from the feature root, and it
+    // takes no plural folder because `events/` is the edge.
+    if transport == Transport::Events {
+        s.create(
+            feature_root.join("event.rs"),
+            r.render(adapter::EVENTS_EVENT),
+        );
+        port_lines.push("mod event;".to_string());
+        port_lines.push(format!("pub use event::{};", names.event()));
     }
 
     // Ensure the transport's crates — plus the bridge's, and the auth
@@ -261,17 +272,21 @@ pub(crate) fn templates_for(transport: Transport, crud_port: bool) -> (&'static 
         (Transport::Ws, _) => (adapter::WS_GATEWAY, adapter::WS_MODULE),
         (Transport::Schedule, _) => (adapter::SCHEDULE_TASKS, adapter::MODULE),
         (Transport::Mcp, _) => (adapter::MCP_TOOL, adapter::MODULE),
+        (Transport::Events, _) => (adapter::EVENTS_LISTENER, adapter::MODULE),
     }
 }
 
 /// The app-level root module each transport needs to actually serve the adapter.
 fn host_module(transport: Transport) -> &'static str {
     match transport {
-        Transport::Http | Transport::Ws => "HttpModule",
-        Transport::Graphql => "GraphqlModule",
-        Transport::Queue => "RedisModule::for_root(None) + RedisWorkerModule::for_root(None)",
-        Transport::Schedule => "ScheduleModule",
-        Transport::Mcp => "HttpModule",
+        Transport::Http | Transport::Ws => "nest_rs::http::HttpModule",
+        Transport::Graphql => "nest_rs::graphql::GraphqlModule",
+        Transport::Queue => {
+            "nest_rs::redis::RedisModule::for_root(None) + nest_rs::redis::RedisWorkerModule::for_root(None)"
+        }
+        Transport::Schedule => "nest_rs::schedule::ScheduleModule",
+        Transport::Mcp => "nest_rs::http::HttpModule",
+        Transport::Events => "nest_rs::events::EventsModule",
     }
 }
 

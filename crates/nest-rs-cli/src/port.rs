@@ -10,7 +10,7 @@ const DEFAULT_HTTP_PORT: u16 = 3000;
 /// for explicit `HttpConfig { port: … }` (and treats `for_root(None)` as the
 /// base). The base is the workspace's `[workspace.metadata.nestrs] port-base`
 /// when set, else 3000.
-pub fn next_http_port(ws: &NestrsWorkspace) -> CliResult<u16> {
+pub(crate) fn next_http_port(ws: &NestrsWorkspace) -> CliResult<u16> {
     let base = ws.metadata.port_base;
     let used = collect_used_ports(&ws.apps_root())?;
     if used.is_empty() {

@@ -57,6 +57,7 @@ pub(super) const RESOURCE: Dep = nest_rs(&["seaorm"]);
 pub(super) const GRAPHQL: Dep = nest_rs(&["graphql"]);
 pub(super) const WS: Dep = nest_rs(&["ws"]);
 pub(super) const SCHEDULE: Dep = nest_rs(&["schedule"]);
+pub(super) const EVENTS: Dep = nest_rs(&["events"]);
 // `redis` implies `queue`: the abstractions and the Redis bindings
 // (`RedisModule`, `RedisQueueModule`, `RedisWorkerModule`) arrive together.
 pub(super) const REDIS: Dep = nest_rs(&["redis"]);
@@ -125,7 +126,7 @@ const TOKIO: Dep = Dep {
 /// framework, so `schemars` / `validator` / `uuid` / `chrono` are no longer
 /// call-site deps. `authz` stays because `#[crud]` emits `Authorize<…>`
 /// parameters — the developer's `#[authorize]` is what turns it on.
-pub fn resource_deps() -> Vec<&'static Dep> {
+pub(super) fn resource_deps() -> Vec<&'static Dep> {
     vec![&SEAORM, &RESOURCE, &AUTHZ, &SEA_ORM, &SERDE]
 }
 
@@ -133,12 +134,12 @@ pub fn resource_deps() -> Vec<&'static Dep> {
 /// without `authz`, which belongs to the `#[crud]` controller rather than to the
 /// entity. `seaorm` is the entity's own: `soft_delete` expands to the
 /// `SoftDeletable` impl that crate declares.
-pub fn entity_deps() -> Vec<&'static Dep> {
+pub(super) fn entity_deps() -> Vec<&'static Dep> {
     vec![&SEAORM, &RESOURCE, &SEA_ORM, &SERDE]
 }
 
 /// The crates the authn/authz adapter (`g auth`) needs.
-pub fn auth_deps() -> Vec<&'static Dep> {
+pub(super) fn auth_deps() -> Vec<&'static Dep> {
     // `RESOURCE` is what `#[wire_enum]` on `Role` needs: the principal's role
     // enum is named by `Claims` *and* by the development token DTO, so it
     // carries the wire derives rather than serde alone.
@@ -152,7 +153,7 @@ pub fn auth_deps() -> Vec<&'static Dep> {
 /// (`async-trait` is deliberately absent: the migration template writes
 /// `#[async_trait::async_trait]`, which `sea_orm_migration::prelude` re-exports
 /// — the demo's migrations crate does not depend on it either.)
-pub fn migrations_deps() -> Vec<&'static Dep> {
+pub(super) fn migrations_deps() -> Vec<&'static Dep> {
     vec![
         &SEAORM,
         &SEA_ORM,
@@ -164,7 +165,7 @@ pub fn migrations_deps() -> Vec<&'static Dep> {
 }
 
 /// The crates an adapter for `transport` needs on top of the port.
-pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
+pub(super) fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http => vec![],
         Transport::Graphql => vec![&GRAPHQL, &ASYNC_GRAPHQL],
@@ -176,6 +177,7 @@ pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
         Transport::Queue => vec![&REDIS, &ANYHOW, &SERDE],
         Transport::Schedule => vec![&SCHEDULE, &ANYHOW],
         Transport::Mcp => vec![&MCP],
+        Transport::Events => vec![&EVENTS],
     }
 }
 
@@ -184,12 +186,13 @@ pub fn adapter_deps(transport: Transport) -> Vec<&'static Dep> {
 /// import. Empty where the scaffold already carries it: every app crate
 /// `nestrs new` writes depends on `nest-rs-http`, so HTTP, WS and MCP add
 /// nothing.
-pub fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
+pub(super) fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
     match transport {
         Transport::Http | Transport::Ws | Transport::Mcp => vec![],
         Transport::Graphql => vec![&GRAPHQL],
         Transport::Queue => vec![&REDIS],
         Transport::Schedule => vec![&SCHEDULE],
+        Transport::Events => vec![&EVENTS],
     }
 }
 
@@ -200,18 +203,18 @@ pub fn app_host_deps(transport: Transport) -> Vec<&'static Dep> {
 /// What exposing an entity over GraphQL needs: `#[expose(graphql)]` derives the
 /// async-graphql object through `nest_rs_resource::graphql`, which that crate
 /// only compiles under its own `graphql` feature.
-pub fn graphql_port_deps() -> Vec<&'static Dep> {
+pub(super) fn graphql_port_deps() -> Vec<&'static Dep> {
     vec![&RESOURCE, &GRAPHQL]
 }
 
 /// Edit the root manifest: add any missing `[workspace.dependencies]` entries.
-pub fn ensure_workspace_deps(deps: Vec<&'static Dep>) -> Transform {
+pub(super) fn ensure_workspace_deps(deps: Vec<&'static Dep>) -> Transform {
     ensure_deps(deps, &["workspace", "dependencies"], Dep::workspace_item)
 }
 
 /// Edit the `features` manifest: add any missing `[dependencies]` entries as
 /// `{ workspace = true, features = [...] }`.
-pub fn ensure_features_deps(deps: Vec<&'static Dep>) -> Transform {
+pub(super) fn ensure_features_deps(deps: Vec<&'static Dep>) -> Transform {
     ensure_deps(deps, &["dependencies"], |_| Item::Value(workspace_value()))
 }
 

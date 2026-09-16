@@ -12,7 +12,7 @@
 /// The semver requirement (`"<major>.<minor>"`) generated manifests pin for
 /// every `nest-rs-*` crate. Tracks the CLI's own `CARGO_PKG_VERSION`, so a
 /// lockstep release moves it with zero manual edits.
-pub fn framework_req() -> String {
+pub(crate) fn framework_req() -> String {
     let mut parts = env!("CARGO_PKG_VERSION").split('.');
     let major = parts.next().unwrap_or("0");
     let minor = parts.next().unwrap_or("0");

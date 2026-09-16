@@ -10,13 +10,14 @@ use std::sync::LazyLock;
 /// The transports a feature can expose. Drives adapter folder names,
 /// module struct names, and the access-graph imports a generator wires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Transport {
+pub(crate) enum Transport {
     Http,
     Graphql,
     Ws,
     Queue,
     Schedule,
     Mcp,
+    Events,
 }
 
 impl Transport {
@@ -25,17 +26,18 @@ impl Transport {
     /// rather than the day someone remembers to extend the list. Test-only:
     /// the generators are each reached through one `Transport`, never the set.
     #[cfg(test)]
-    pub const ALL: [Transport; 6] = [
+    pub(crate) const ALL: [Transport; 7] = [
         Self::Http,
         Self::Graphql,
         Self::Ws,
         Self::Queue,
         Self::Schedule,
         Self::Mcp,
+        Self::Events,
     ];
 
     /// Adapter sub-folder under the feature root (`users/http/`).
-    pub fn folder(self) -> &'static str {
+    pub(crate) fn folder(self) -> &'static str {
         match self {
             Self::Http => "http",
             Self::Graphql => "graphql",
@@ -43,6 +45,7 @@ impl Transport {
             Self::Queue => "queue",
             Self::Schedule => "schedule",
             Self::Mcp => "mcp",
+            Self::Events => "events",
         }
     }
 
@@ -55,11 +58,12 @@ impl Transport {
             Self::Queue => "Queue",
             Self::Schedule => "Schedule",
             Self::Mcp => "Mcp",
+            Self::Events => "Events",
         }
     }
 
     /// File holding the handler for this transport (`controller.rs`, …).
-    pub fn handler_file(self) -> &'static str {
+    pub(crate) fn handler_file(self) -> &'static str {
         match self {
             Self::Http => "controller.rs",
             Self::Graphql => "resolver.rs",
@@ -67,17 +71,18 @@ impl Transport {
             Self::Queue => "processor.rs",
             Self::Schedule => "tasks.rs",
             Self::Mcp => "tool.rs",
+            Self::Events => "listener.rs",
         }
     }
 
     /// Module name of the handler file (`controller`, `resolver`, …).
-    pub fn handler_mod(self) -> &'static str {
+    pub(crate) fn handler_mod(self) -> &'static str {
         self.handler_file().trim_end_matches(".rs")
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Names {
+pub(crate) struct Names {
     /// `blog-posts`
     pub kebab: String,
     /// `blog_posts`
@@ -100,8 +105,6 @@ static ARCHITECTURE_RULES: &str = include_str!("templates/architecture.md");
 /// The rules file states it as one fenced block under *Reserved vocabulary*,
 /// one row per category, continuation rows indented — so a row's first token is
 /// its category when the line starts flush, and every other token is a word.
-/// `events` is claimed twice (a pluralized role folder and an edge); the first
-/// row to name it wins, which is the order the file reads in.
 static RESERVED: LazyLock<BTreeMap<&'static str, &'static str>> = LazyLock::new(|| {
     let mut out = BTreeMap::new();
     let block = ARCHITECTURE_RULES
@@ -155,7 +158,7 @@ fn reserved_role(category: &str, word: &str) -> String {
 /// Reject path segments that would escape the features workspace, names whose
 /// derived kebab form would not be a valid crate/package identifier, and names
 /// the layout has already spent.
-pub fn validate_feature_name(raw: &str) -> Result<(), String> {
+pub(crate) fn validate_feature_name(raw: &str) -> Result<(), String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("feature name must not be empty".into());
@@ -197,7 +200,7 @@ fn validate_not_reserved(kebab: &str) -> Result<(), String> {
 /// lowercase ASCII letter, then only lowercase letters, digits, or hyphens.
 /// Catches `nestrs new "Bad Name!"` (→ `bad-name!`) or a digit-led name before
 /// it scaffolds a project that fails to compile (CLI-I6).
-pub fn validate_derived_kebab(kebab: &str) -> Result<(), String> {
+pub(crate) fn validate_derived_kebab(kebab: &str) -> Result<(), String> {
     if kebab.is_empty() {
         return Err("the name has no letters or digits to form a package name".into());
     }
@@ -215,7 +218,7 @@ pub fn validate_derived_kebab(kebab: &str) -> Result<(), String> {
 }
 
 impl Names {
-    pub fn parse(raw: &str) -> Self {
+    pub(crate) fn parse(raw: &str) -> Self {
         let kebab = to_kebab(raw);
         let snake = kebab.replace('-', "_");
         let pascal = to_pascal(&kebab);
@@ -228,51 +231,60 @@ impl Names {
         }
     }
 
-    pub fn module(&self) -> String {
+    pub(crate) fn module(&self) -> String {
         format!("{}Module", self.pascal)
     }
 
-    pub fn service(&self) -> String {
+    pub(crate) fn service(&self) -> String {
         format!("{}Service", self.pascal)
     }
 
-    pub fn controller(&self) -> String {
+    pub(crate) fn controller(&self) -> String {
         format!("{}Controller", self.pascal)
     }
 
-    pub fn resolver(&self) -> String {
+    pub(crate) fn resolver(&self) -> String {
         format!("{}Resolver", self.pascal)
     }
 
-    pub fn gateway(&self) -> String {
+    pub(crate) fn gateway(&self) -> String {
         format!("{}Gateway", self.pascal)
     }
 
-    pub fn processor(&self) -> String {
+    pub(crate) fn processor(&self) -> String {
         format!("{}Processor", self.pascal)
     }
 
-    /// The `QueueName` type both sides of the queue import — the wire name and
+    /// The `#[queue]` marker both sides of the queue import — the wire name and
     /// the payload type in one artifact.
-    pub fn queue_name(&self) -> String {
+    pub(crate) fn queue(&self) -> String {
         format!("{}Queue", self.pascal)
     }
 
-    pub fn tasks(&self) -> String {
+    pub(crate) fn tasks(&self) -> String {
         format!("{}Tasks", self.pascal)
     }
 
-    pub fn tool(&self) -> String {
+    pub(crate) fn tool(&self) -> String {
         format!("{}Tool", self.pascal)
     }
 
+    pub(crate) fn listener(&self) -> String {
+        format!("{}Listener", self.pascal)
+    }
+
+    /// The fact the `g events` skeleton listens for — past tense, at the port.
+    pub(crate) fn event(&self) -> String {
+        format!("{}ChangedEvent", self.singular)
+    }
+
     /// Entity/wire-model name — singular Pascal (`users` → `User`).
-    pub fn entity(&self) -> String {
+    pub(crate) fn entity(&self) -> String {
         self.singular.clone()
     }
 
     /// SQL table name — singular snake (`users` → `user`, `blog_posts` → `blog_post`).
-    pub fn table(&self) -> String {
+    pub(crate) fn table(&self) -> String {
         to_kebab(&self.singular).replace('-', "_")
     }
 
@@ -281,13 +293,13 @@ impl Names {
     /// service's `Create` type, the GraphQL `input`, and the REST body at once —
     /// so it joins the entity exception and stays bare. Hand-written transfer
     /// objects keep their boundary suffix (`…Dto`/`…Input`/`…Command`).
-    pub fn create_op(&self) -> String {
+    pub(crate) fn create_op(&self) -> String {
         format!("Create{}", self.singular)
     }
 
     /// Update form derived from the entity (`UpdatePost`). Bare, same rationale
     /// as [`create_op`](Self::create_op).
-    pub fn update_op(&self) -> String {
+    pub(crate) fn update_op(&self) -> String {
         format!("Update{}", self.singular)
     }
 
@@ -296,17 +308,17 @@ impl Names {
     /// per the convention; the developer renames it to the real action
     /// (`GenerateMediaVariantCommand`), or switches to an `…Event` (past tense)
     /// when publishing a fact to several consumers.
-    pub fn command(&self) -> String {
+    pub(crate) fn command(&self) -> String {
         format!("Process{}Command", self.singular)
     }
 
     /// `Users<Transport>Module`, e.g. `UsersHttpModule`.
-    pub fn module_for(&self, transport: Transport) -> String {
+    pub(crate) fn module_for(&self, transport: Transport) -> String {
         format!("{}{}Module", self.pascal, transport.module_infix())
     }
 
     /// The handler struct name a given transport adapter declares.
-    pub fn handler_for(&self, transport: Transport) -> String {
+    pub(crate) fn handler_for(&self, transport: Transport) -> String {
         match transport {
             Transport::Http => self.controller(),
             Transport::Graphql => self.resolver(),
@@ -314,11 +326,12 @@ impl Names {
             Transport::Queue => self.processor(),
             Transport::Schedule => self.tasks(),
             Transport::Mcp => self.tool(),
+            Transport::Events => self.listener(),
         }
     }
 
     /// Shorthand for the HTTP adapter module name.
-    pub fn http_module(&self) -> String {
+    pub(crate) fn http_module(&self) -> String {
         self.module_for(Transport::Http)
     }
 }
@@ -344,7 +357,7 @@ const MIGRATION_TARGET_WORDS: &[&str] = &["to", "from", "on", "in", "into", "for
 /// A name with nothing left to strip (`init`, a bare `widgets`) stands as its
 /// own subject: a placeholder the developer renames beats an empty enum that
 /// doesn't compile.
-pub fn migration_subject(raw: &str) -> Names {
+pub(crate) fn migration_subject(raw: &str) -> Names {
     let whole = Names::parse(raw);
     let all: Vec<&str> = whole.snake.split('_').filter(|t| !t.is_empty()).collect();
     let mut tokens: &[&str] = &all;
@@ -397,7 +410,7 @@ fn port_role_file(role: &str, stem: &str, total: usize) -> String {
 /// is what `g queue` emits today (via [`generate::adapter`](crate::commands));
 /// the `commands/` directory form is the placement authority for the
 /// multi-payload case.
-pub fn command_file(stem: &str, total: usize) -> String {
+pub(crate) fn command_file(stem: &str, total: usize) -> String {
     port_role_file("command", stem, total)
 }
 
@@ -501,8 +514,8 @@ mod tests {
                 "`{word}` must be scraped from architecture.md as {category}",
             );
         }
-        // `events` is claimed twice; the first row to name it wins.
-        assert_eq!(reserved_category("events"), Some("plurals"));
+        // `events` is an edge and never a plural folder: one folder name, one meaning.
+        assert_eq!(reserved_category("events"), Some("edges"));
         assert_eq!(reserved_category("programs"), None);
         assert!(validate_not_reserved("apps").is_err());
         assert!(validate_not_reserved("programs").is_ok());

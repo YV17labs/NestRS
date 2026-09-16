@@ -12,12 +12,48 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::JwtConfig;
 use crate::error::AuthError;
 
+/// Prove an EdDSA private key and public key are one pair: a signature the
+/// private key makes has to verify under the public key. A private key from one
+/// pair beside a public key from another signs tokens its own service refuses —
+/// and that service accepts the tokens the other pair's private key signs.
+fn prove_one_pair(
+    encoding: &EncodingKey,
+    decoding: &DecodingKey,
+    algorithm: Algorithm,
+) -> Result<(), AuthError> {
+    const PROBE: &[u8] = b"nest-rs-authn: are these two keys one pair";
+    let signature = jsonwebtoken::crypto::sign(PROBE, encoding, algorithm)
+        .map_err(|e| AuthError::Failed(format!("invalid JWT private key: {e}")))?;
+    let paired = jsonwebtoken::crypto::verify(&signature, PROBE, decoding, algorithm)
+        .map_err(|e| AuthError::Failed(format!("invalid JWT public key: {e}")))?;
+    if paired {
+        return Ok(());
+    }
+    Err(AuthError::Failed(format!(
+        "{}, and {}, are not one pair: tokens this service signed would be refused, and tokens \
+         the other pair's private key signed accepted",
+        crate::config::spellings("PRIVATE_KEY", "private_key"),
+        crate::config::spellings("PUBLIC_KEY", "public_key"),
+    )))
+}
+
 /// Minimum HS256 shared-secret length: 256 bits (32 bytes). HMAC-SHA256 derives
 /// all its security from the secret's entropy, so a shorter secret is
 /// brute-forceable and mints forgeable tokens. Enforced in [`JwtService::new`]
 /// — the derivation point every constructor funnels through (`JwtOptions::new`,
 /// the honest-API path, included), not only on the config-env path.
 pub(crate) const HS256_MIN_SECRET_BYTES: usize = 32;
+
+/// The shortest shared secret `algorithm` accepts: the size of its hash output,
+/// RFC 7518 §3.2's floor — a longer hash signed with a shorter key is no stronger
+/// than the key.
+fn min_hmac_secret_bytes(algorithm: Algorithm) -> usize {
+    match algorithm {
+        Algorithm::HS384 => 48,
+        Algorithm::HS512 => 64,
+        _ => HS256_MIN_SECRET_BYTES,
+    }
+}
 
 /// Prefix of every media type this framework mints for a non-access purpose.
 ///
@@ -190,15 +226,47 @@ impl JwtService {
     /// under 256 bits, and on the
     /// [`allow_any_audience`](JwtOptions::allow_any_audience) contradiction.
     pub fn new(options: JwtOptions) -> Result<Self, AuthError> {
+        // A key and an algorithm that cannot work together fail here, at
+        // construction, instead of at the first sign or verify — which on a
+        // verifier is the first request.
+        let fits = match &options.key {
+            JwtKey::Hmac(_) => matches!(
+                options.algorithm,
+                Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512
+            ),
+            JwtKey::Pem { .. } => options.algorithm == Algorithm::EdDSA,
+        };
+        if !fits {
+            let (key, fitting) = match &options.key {
+                JwtKey::Hmac(_) => ("an HMAC secret", "HS256, HS384 or HS512"),
+                JwtKey::Pem { .. } => ("an EdDSA key", "EdDSA"),
+            };
+            return Err(AuthError::Failed(format!(
+                "the {:?} algorithm cannot be used with {key}: use {fitting}",
+                options.algorithm
+            )));
+        }
         let (encoding, decoding) = match &options.key {
             JwtKey::Hmac(secret) => {
                 // Fail closed at the derivation point: an HS256 secret under 256
                 // bits is brute-forceable. This guards every constructor path —
                 // `JwtOptions::new` (the documented honest-API) as much as the
                 // config-env path (SEC-F3).
-                if secret.len() < HS256_MIN_SECRET_BYTES {
+                if secret.trim().is_empty() {
                     return Err(AuthError::Failed(format!(
-                        "HS256 secret must be at least {HS256_MIN_SECRET_BYTES} bytes (256 bits); got {}",
+                        "{}, must not be empty",
+                        crate::config::secret_setting()
+                    )));
+                }
+                // RFC 7518 §3.2: a key of the same size as the hash output, or
+                // larger — 256 bits for HS256, 384 for HS384, 512 for HS512.
+                let minimum = min_hmac_secret_bytes(options.algorithm);
+                if secret.len() < minimum {
+                    return Err(AuthError::Failed(format!(
+                        "{}, must be at least {minimum} bytes ({} bits) for {:?}; got {}",
+                        crate::config::secret_setting(),
+                        minimum * 8,
+                        options.algorithm,
                         secret.len()
                     )));
                 }
@@ -212,13 +280,22 @@ impl JwtService {
                 private_pem,
                 public_pem,
             } => {
-                let decoding = DecodingKey::from_ed_pem(public_pem.as_bytes())
-                    .map_err(|e| AuthError::Failed(format!("invalid JWT public key: {e}")))?;
+                let decoding = DecodingKey::from_ed_pem(public_pem.as_bytes()).map_err(|e| {
+                    AuthError::Failed(format!(
+                        "{}, is not an EdDSA public key in PEM form ({e})",
+                        crate::config::spellings("PUBLIC_KEY", "public_key"),
+                    ))
+                })?;
                 let encoding = match private_pem {
                     Some(pem) => {
-                        Some(EncodingKey::from_ed_pem(pem.as_bytes()).map_err(|e| {
-                            AuthError::Failed(format!("invalid JWT private key: {e}"))
-                        })?)
+                        let encoding = EncodingKey::from_ed_pem(pem.as_bytes()).map_err(|e| {
+                            AuthError::Failed(format!(
+                                "{}, is not an EdDSA private key in PEM form ({e})",
+                                crate::config::spellings("PRIVATE_KEY", "private_key"),
+                            ))
+                        })?;
+                        prove_one_pair(&encoding, &decoding, options.algorithm)?;
+                        Some(encoding)
                     }
                     None => None,
                 };
@@ -470,7 +547,7 @@ fn map_decode_error(err: jsonwebtoken::errors::Error) -> AuthError {
     // authentication failure with strategy + route context; this stays `debug`
     // so the typed decode reason is available without double-counting denials.
     if !matches!(mapped, AuthError::Expired) {
-        tracing::debug!(target: crate::TARGET, error = %err, "JWT verification failed");
+        tracing::debug!(target: crate::TARGET, error = %nest_rs_core::error_message(&err), "JWT verification failed");
     }
     mapped
 }

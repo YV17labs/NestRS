@@ -91,7 +91,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                     target: crate::TARGET,
                     strategy,
                     reason = error.reason(),
-                    error = %error,
+                    error = %nest_rs_core::error_message(&error),
                     "authentication unavailable — identity store unreachable",
                 );
                 Err(Denial::internal(error.client_message()))
@@ -109,7 +109,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                     target: crate::TARGET,
                     strategy,
                     reason = error.reason(),
-                    error = %error,
+                    error = %nest_rs_core::error_message(&error),
                     "rejected credential on a public route — continuing as anonymous",
                 );
                 // Anonymous is only an answer while nothing downstream needs a
@@ -128,7 +128,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
                     target: crate::TARGET,
                     strategy,
                     reason = error.reason(),
-                    error = %error,
+                    error = %nest_rs_core::error_message(&error),
                     "authentication failed",
                 );
                 Err(match error.error_code() {

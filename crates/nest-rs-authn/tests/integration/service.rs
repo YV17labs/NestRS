@@ -63,6 +63,52 @@ fn short_hmac_secret_is_rejected_by_the_service_constructor() {
     JwtService::new(JwtOptions::new(ok)).expect("a 32-byte secret is accepted");
 }
 
+/// A key and an algorithm that cannot work together are refused when the
+/// service is built, not on the first sign or verify — which on a verifier is
+/// the first request.
+#[test]
+fn an_algorithm_that_does_not_fit_the_key_is_refused_at_construction() {
+    let secret = "0123456789abcdef0123456789abcdef";
+    let cases = [
+        (
+            "an HMAC secret with RS256",
+            JwtOptions {
+                algorithm: Algorithm::RS256,
+                ..JwtOptions::new(secret)
+            },
+        ),
+        (
+            "an EdDSA pair with HS256",
+            JwtOptions {
+                algorithm: Algorithm::HS256,
+                ..JwtOptions::eddsa(crate::DEV_PRIVATE_KEY, crate::DEV_PUBLIC_KEY)
+            },
+        ),
+        (
+            "a verify-only EdDSA key with ES256",
+            JwtOptions {
+                algorithm: Algorithm::ES256,
+                ..JwtOptions::eddsa_verify(crate::DEV_PUBLIC_KEY)
+            },
+        ),
+    ];
+    for (label, options) in cases {
+        let Err(AuthError::Failed(message)) = JwtService::new(options) else {
+            panic!("{label} must be refused at construction")
+        };
+        assert!(
+            message.contains("algorithm cannot be used"),
+            "{label}: {message}"
+        );
+    }
+    // RFC 7518 §3.2: HS512 takes a key of at least its 64-byte hash.
+    JwtService::new(JwtOptions {
+        algorithm: Algorithm::HS512,
+        ..JwtOptions::new(secret.repeat(2))
+    })
+    .expect("another HMAC algorithm fits an HMAC secret of its hash's size");
+}
+
 #[test]
 fn sign_and_verify_round_trip() {
     let jwt = service("round-trip-secret");
@@ -266,6 +312,30 @@ fn eddsa_sign_and_verify_round_trip() {
     let token = jwt.sign(&claims(jwt.expiry(), None)).expect("sign");
     let decoded: TestClaims = jwt.verify(&token).expect("verify");
     assert_eq!(decoded.sub, "alice");
+}
+
+/// A private key beside the public key of another pair signs tokens its own
+/// service refuses, and verifies the tokens that other pair's private key signs
+/// — so the service is refused before anything is served.
+#[test]
+fn a_private_key_beside_another_pairs_public_key_is_refused() {
+    const ANOTHER_PAIRS_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\n\
+         MCowBQYDK2VwAyEAK0Be2/q0Wt0AT7wXt1zGeT9ViWrp+Z2uMwAofcgKlnk=\n\
+         -----END PUBLIC KEY-----\n";
+    let refused = JwtService::new(JwtOptions::eddsa(
+        crate::DEV_PRIVATE_KEY,
+        ANOTHER_PAIRS_PUBLIC_KEY,
+    ));
+    let Err(nest_rs_authn::AuthError::Failed(message)) = refused else {
+        panic!("keys from two pairs must not build a service")
+    };
+    assert!(message.contains("not one pair"), "{message}");
+    for setting in ["PRIVATE_KEY_FILE", "PUBLIC_KEY_FILE"] {
+        assert!(
+            message.contains(&nest_rs_config::var_name("authn", setting)),
+            "names the pair as either spelling may have set it: {message}"
+        );
+    }
 }
 
 #[test]

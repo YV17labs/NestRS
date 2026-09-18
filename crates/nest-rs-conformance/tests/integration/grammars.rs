@@ -153,19 +153,33 @@ fn refuses_a_repeat(root: &Path, attr: &str, crates: &BTreeSet<String>) -> bool 
         })
 }
 
-/// Whether a trybuild snapshot anywhere in the tree pins one of this
-/// decorator's grammar refusals.
+/// Every trybuild snapshot in the tree, read once for every cell that asks.
 ///
 /// The `.stderr`, because that is the compiler actually saying it: a helper
 /// called in a `src/` file proves the code exists, and only a snapshot proves it
-/// is reachable and worded as recorded. Matched on the two shared sentence
-/// shapes rather than on a file name — `testing.md` clause 3, and this join's
-/// siblings record a rename closing a cell that asked for a name.
-fn snapshotted(root: &Path, needles: &[String]) -> bool {
+/// is reachable and worded as recorded. Matched on sentence fragments rather
+/// than on a file name — `testing.md` clause 3, and this join's siblings record a
+/// rename closing a cell that asked for a name.
+fn snapshots(root: &Path) -> Vec<String> {
     files_with_extension(&root.join("crates"), "stderr")
         .into_iter()
         .filter_map(|path| read(&path).ok())
-        .any(|text| needles.iter().any(|needle| text.contains(needle)))
+        .collect()
+}
+
+/// Whether one snapshot carries **every** fragment.
+///
+/// **All, not any, and the bare-key column is why.** Its needle was `#[{attr}] ``
+/// alone, which any refusal opening with the decorator and a backtick
+/// satisfies: `#[process] `throttle(window)` takes a duration…` filled the cell
+/// for `#[process]`, and the same held at `#[queue]`, `#[controller]`,
+/// `#[gateway]`, `#[mcp]` and `#[crud]`. Measured: deleting both real bare-key
+/// snapshots **and** the refusal left the cell green, which is the hollow cell
+/// `testing.md` ranks below an empty one.
+fn snapshotted(snapshots: &[String], needles: &[&str]) -> bool {
+    snapshots
+        .iter()
+        .any(|text| needles.iter().all(|needle| text.contains(needle)))
 }
 
 #[test]
@@ -178,6 +192,7 @@ fn every_key_value_grammar_refuses_the_four_ways_of_getting_it_wrong() {
         "decorator(s) with a key = value grammar",
     );
 
+    let snapshots = snapshots(&root);
     let mut holes = BTreeSet::new();
     let mut cells = 0usize;
     for (attr, crates) in &grammars {
@@ -191,15 +206,15 @@ fn every_key_value_grammar_refuses_the_four_ways_of_getting_it_wrong() {
             ),
             (
                 "a snapshot pinning the duplicate-key refusal",
-                snapshotted(&root, &[duplicate]),
+                snapshotted(&snapshots, &[&duplicate]),
             ),
             (
                 "a snapshot pinning the unknown-key refusal",
-                snapshotted(&root, &[unknown]),
+                snapshotted(&snapshots, &[&unknown]),
             ),
             (
                 "a snapshot pinning the bare-key refusal",
-                snapshotted(&root, &[bare]),
+                snapshotted(&snapshots, &[&bare, "needs a value"]),
             ),
         ] {
             cells += 1;

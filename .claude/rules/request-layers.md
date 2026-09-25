@@ -115,7 +115,7 @@ mandatory posture, worded to name the reason. It is a role and not a modifier:
 `_entities` is a `Query`-root field, so combining `#[entity]` with `#[mutation]`
 or `#[subscription]` is a compile error naming both.
 
-**Being unnamed is also why it is stricter than a `#[query]` in six places**,
+**Being unnamed is also why it is stricter than a `#[query]` in five places**,
 each a compile error, and they are named rather than counted because a count
 drifts the day one is added: a `Result` return (the chain is emitted only where a
 denial has somewhere to go — a bare-return entity would silently have none, and
@@ -125,8 +125,10 @@ key), no `#[entity(key = …)]` (the key is inferred from the arguments), no
 `#[graphql(…)]` of the method's own (async-graphql reads the *first* one on a
 method and the decorator has to emit `#[graphql(entity)]` there, so the
 developer's would silently take its place and the method would stop being an
-entity), `async`, and at least one argument. Five live in `entity_refusals`; the
-`bind` one is refused where the posture is parsed.
+entity), and at least one argument. Four live in `entity_refusals`; the `bind`
+one is refused where the posture is parsed. `fn` is accepted beside `async fn`, as
+at every operation: the resolver async-graphql awaits is the one the expansion
+emits, which calls the method with or without an `.await`.
 
 **Four boot refusals carry the rest**, because none is expressible at one site:
 an `#[entity]` without `GraphqlConfig::federation` (async-graphql serves

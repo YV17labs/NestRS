@@ -3,7 +3,7 @@
 | Level | Named for | Appears as |
 |---|---|---|
 | **Project** | the product | the repository and the workspace — **nowhere else** |
-| **Family** | the **standard** that names its members | a shared crate-name prefix — and nothing else |
+| **Family** | the **standard** that names its members | a shared crate-name prefix, and the first level of every path, span target and config namespace its members own — `nest_rs::oauth::client`, `NESTRS_OAUTH__CLIENT__*` |
 | **Crate** | what it holds | its directory, and the root of every span target it emits |
 | **App** | what it **serves** (`api`, `worker`, `auth`) | the binary, and `<App>Module` |
 | **Module** | its **domain** (`users`, `billing`) | `<module>/`, `<Module>Module` |
@@ -95,8 +95,11 @@ binding wearing the crate's name) — and **one folder per port it binds**:
 `health/` under `nest-rs-seaorm`, whose `worker/` holds the job-context bridge
 the database binding installs rather than a binding of its own. A binding
 folder holds the adapter types (`queue/producer.rs`, `throttler/store.rs`) and
-its `module.rs`; what several bindings share sits at the root, and `naming.rs`'s
-bindings gate fires on a binding that names a sibling's type. A port crate holds
+its `module.rs`; what several bindings share sits at the root — **and only
+that**: a root file one binding alone reaches belongs in that binding's folder,
+because a root file reads as shared. `naming.rs`'s bindings gate fires on a
+binding that names a sibling's type, and on a root file exactly one binding
+folder uses. A port crate holds
 the contract and its semantics and **no module** when it has nothing to register
 (`nest-rs-queue`, `nest-rs-database`): a second queue adapter calls
 `nest_rs_queue::consume` for the attempt and writes its fetch loop, nothing
@@ -342,7 +345,9 @@ never chosen.** The segments are the crate's subject, then every folder below
 code say one thing: `http/src/config.rs` → `HttpConfig` → `NESTRS_HTTP__*`;
 `seaorm/src/config.rs` → `SeaOrmConfig` → `NESTRS_SEAORM__URL`;
 `redis/src/worker/config.rs` → `RedisWorkerConfig` →
-`NESTRS_REDIS__WORKER__*`; `social/src/providers/github/config.rs` →
+`NESTRS_REDIS__WORKER__*`; a family member adds the family as a level, so
+`oauth-client/src/config.rs` → `NESTRS_OAUTH__CLIENT__*`, the same string as its
+path `nest_rs::oauth::client`; `social/src/providers/github/config.rs` →
 `NESTRS_SOCIAL__GITHUB__*` (`providers/` is a role folder, so it is not a
 segment — and the type there, `GithubSocialConfig`, takes the member-first name
 the role tables give a provider's files). From a variable a reader knows the
@@ -351,6 +356,12 @@ vendor is in the variable when the vendor is in the path — never one without
 the other — and `NESTRS_DATABASE__URL`, the universal convention, is exactly
 what this forbids: a word that names neither the crate nor the type that parses
 it. Enforced by `namespace_is_the_stem` in `naming.rs`.
+
+**`Config` names a `#[config]`, and nothing else.** A settings struct a config
+nests — its TLS, its CORS policy — is vocabulary, so the file names the kind and
+the type prepends the crate's subject: `http/src/tls.rs` holds `HttpTls`, and
+`http/src/cors.rs` holds `HttpCors`. A `*Config` that no `#[config]` declares
+reads as a namespace of variables that does not exist.
 
 **Pinning by seeding (`App::builder().provide(cfg)`) is not a seam** — a seed
 short-circuits the resolving factory and freezes that whole namespace against
@@ -406,7 +417,7 @@ is named for the role, never for the type.
 | Guard / Strategy / Pipe | `guard.rs` / `strategy.rs` / `pipe.rs` |
 | Interceptor / Filter / Exception filter | `interceptor.rs` / `filter.rs` / `exception_filter.rs` |
 | Module config (`#[config]`) | `config.rs` |
-| Domain error / Static constants | `error.rs` / `constants.rs` |
+| Error types (every one — public, crate-private, domain or driver defect; a wire error document a client parses, such as `ProblemDetails`, is named for its document) / Static constants | `error.rs` / `constants.rs` |
 
 An adapter role carries its folder: `schedule/tasks.rs`, never `tasks.rs` at
 the module root. A transport-specific guard belongs to its adapter too
@@ -537,11 +548,17 @@ collection that is not there.
 |---|---|---|
 | Providers — `services/`, `strategies/`, `pipes/` | bare: `input.rs` | `InputService` |
 | Entities — `entities/` | bare: `user.rs` | `User` |
-| Transfer objects — `dtos/`, `commands/`, `events/` | suffixed: `login_dto.rs` | `LoginDto` |
+| Transfer objects — `dtos/`, `commands/` | suffixed: `login_dto.rs` | `LoginDto` |
 
 A provider's role is spelled by its folder *and* its type, so the file does not
 spell it a third time. A transfer object is read far from its folder — in a
 handler signature — so it keeps the suffix at both sites.
+
+**Events take no plural folder, because `events/` is an edge.** A folder name
+means one thing, and the edge vocabulary is closed, so the edge keeps the word:
+one event payload is `event.rs`, several sit flat at the port as
+`<fact>_event.rs` (`post_published_event.rs`), and `events/` holds the listener
+host alone.
 
 **Two services in one module is a last resort.** Extracting a factory, a client
 or an enum leaves the count at one, and that is the common case. Reach for
@@ -549,6 +566,10 @@ or an enum leaves the count at one, and that is the common case. Reach for
 
 ## Folders
 
+- **One file, one subject.** A file's `//!` names its subject in one sentence;
+  a sentence that needs *and* names two files. A procedure and the record it
+  writes, a transport and the registry it announces into — each pair is two
+  files, however short, because a reader looking for either one opens the name.
 - A module that is not a feature still gets a folder — cross-cutting wiring
   imported once by the root is `<name>/module.rs`, never a top-level
   `<name>.rs`. A hand-written `impl Module` is still a DI module.
@@ -608,7 +629,7 @@ roles       mod  module  service  controller  resolver  gateway  tool
             interceptor  filter
             entity  error  constants  testing
 singulars   dto  command  event
-plurals     services  entities  dtos  commands  events  strategies  pipes
+plurals     services  entities  dtos  commands  strategies  pipes
 edges       http  graphql  ws  queue  schedule  mcp  events
 ```
 
@@ -618,7 +639,7 @@ edges       http  graphql  ws  queue  schedule  mcp  events
 |---|---|
 | REST body, in or out | `Dto` — `LoginDto` |
 | Queue payload, imperative ("do X", verb-led) | `Command` — `TranscodeCommand` |
-| Queue payload, published fact (past tense) | `Event` — `OrderPlacedEvent` |
+| Published fact, on the event bus or a queue (past tense) | `Event` — `OrderPlacedEvent` |
 | WS message payload | `Dto` — `SendMessageDto` |
 | GraphQL input, hand-written | `Input` |
 

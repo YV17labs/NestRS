@@ -19,6 +19,11 @@ transactions, edge validation, discovery, lifecycle** — must be
 *transparent*. Forcing the developer to hand-manage any of them is a
 framework defect.
 
+The framework carries what a developer writes and what makes it correct in
+production. Operating a running system — pausing, reviving, retuning,
+dashboards — is the backend's own tooling: raised, never built, until an
+application needs it.
+
 The leverage is **procedural macros** — decorators, as declarative in
 Rust as in TS. Reach for one first.
 
@@ -44,7 +49,7 @@ looking at when it appears in a stack trace at three in the morning. So a name
 is **never judged alone** — always as the qualified path a caller types, and
 always against its siblings at the same level.
 
-Three consequences, and they are not negotiable:
+Four consequences, and they are not negotiable:
 
 1. **The framework's crate name is a subject, and a driver carries it.** The
    bare name of a capability belongs to the crate that defines the port. A crate
@@ -79,6 +84,17 @@ The full model, the tables and the one documented precedence live in
 what is mechanical, with an empty baseline that only shrinks. **When a naming
 question and any other question compete for the answer, naming wins** — settle
 it first, then build.
+
+**A name is a set before it is a word** — that is the posture, not a ritual.
+Every name written here is one member of a series that mostly does not exist
+yet: a type, a file, a variable, an env var, a span target, an error variant, a
+column, a branch. Chosen against that series it places every member after it;
+chosen alone it reads fine today and is paid for by whoever adds the second one.
+The test is one a reader can run — **name two siblings that do not exist yet,
+sort the list, and say where the next one goes.** Two answers to that last
+question, or none, means the scheme is already wrong. `/name` is that procedure
+written out, and it runs *before* the name exists; `/architecture` judges names
+that already do, which is the expensive end.
 
 ## Rule priority — Rust first, conventions second
 
@@ -461,8 +477,9 @@ Three consequences are load-bearing enough to repeat here:
   provider below the composition root carries it.
 - **`module.rs` is the DI module; `mod.rs` is the folder index *and* the
   export contract.** Never merged. **No `*_module.rs` ever.**
-- **A file exists only if it has real content**, and errors live in
-  `error.rs` — never scattered inside `service.rs`.
+- **A file exists only if it has real content**, and **every error type lives
+  in `error.rs`** — public or crate-private, domain or driver defect; a
+  `thiserror` derive in any other file is the defect, and `naming.rs` refuses it.
 
 ## Engineering posture
 
@@ -518,6 +535,16 @@ Three consequences are load-bearing enough to repeat here:
   not a style nit: those are the events queried under incident.
 - **One event, said once.** Don't restate what a field or the enclosing
   span carries; don't emit the same event at two layers.
+- **An `error` field is the whole chain.** Every event carrying an error
+  renders it through `nest_rs_core::error_message`, in the framework, in
+  `demo/` and in every CLI template: `%err` prints one sentence, and the cause an
+  operator acts on is the one beneath it. A surface bounded `E: Display` cannot
+  walk a chain, so no framework surface that logs an error is bounded that way.
+- **A value is escaped by the formatter, never by the call site.** Any field can
+  carry a string a client chose — a WS event name, a serde error echoing input —
+  so `TextFormat` escapes every field value it writes, and a line break or a
+  control character can never forge a second line (CWE-117, OWASP Logging Cheat
+  Sheet). JSON output is escaped by construction.
 
 ### Correlation — W3C Trace Context, in the kernel, never optional
 
@@ -803,7 +830,8 @@ surface the question** rather than pick:
 - A second way to do something a decorator already does.
 - A migration that drops or rewrites existing data.
 - A documented rule that has drifted from the code — report it; don't
-  edit either side to match.
+  edit either side to match, until the owner asks for the findings to be
+  fixed (*Workflow*: the rule is settled first, then the code).
 
 **Progress rule:** if two consecutive iterations make no measurable
 progress against *Definition of done*, stop and report the blocker
@@ -825,6 +853,9 @@ mandate is to *prove and not fix*, ranks silence above noise, and
 separates "clean" from "not looked at". The classes it hunts are the ones
 that have actually shipped here; the skill carries them.
 
+**`/name` comes before all three**: it runs before a name exists, and each
+review below is the more expensive way of finding the same mistake afterwards.
+
 **Three review skills, and the order is what a mistake costs.**
 `/architecture` asks where a thing lives and under what name; it takes a
 **scope** — a crate, a subsystem — never a diff, so it runs when a territory
@@ -839,6 +870,13 @@ decided, `/simplify` applies its own findings — so both are followed by the
 *Definition of done* and, for anything non-trivial, by `/audit`, since applied
 code is new code nobody has read. `/audit` itself never writes: it proves, and
 hands the fix back.
+
+**A finding is closed at two levels, and the rule comes first.** When the owner
+asks for review findings to be fixed, the rules are settled before the code: two
+rules that contradict each other are decided with their argument, a class a
+review found that no rule forbade gets its sentence — and, where it is
+mechanical, its join or lint — and only then is the instance fixed. A blind spot
+is a missing or wrong rule somewhere.
 
 ## Reading order
 

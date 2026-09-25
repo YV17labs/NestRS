@@ -199,6 +199,36 @@ no `#[tools]` block at all — `#[tools]` on a trait impl is a compile error
 saying so. `demo`'s `posts` is that host, deliberately kept as the witness of
 the raw shape.
 
+### The impl half — one method grammar at every member
+
+**Every impl-half decorator reads a method the same way**, because a developer
+moves between them inside one feature: `#[routes]`, `#[messages]`,
+`#[operations]`, `#[tools]`, `#[processor]`, `#[scheduled]`, `#[listeners]`,
+`#[indicators]`, `#[hooks]`. Five facts hold at all nine, each worded once in
+`nest_rs_codegen`, with a trybuild snapshot per decorator:
+
+- **One role per method** (`one_role_per_method`). A second role attribute — a
+  second verb, a second trigger — is a compile error with the caret on the
+  repeated attribute, the span chosen by the helper and not by the caller; never
+  the first taken and the rest left on the method.
+- **The receiver is a shared borrow** (`shared_receiver`). A host is one instance
+  shared by every call, so `&mut self` and `self` cannot be served, and a method
+  with no receiver is refused — never has its first argument skipped as if it were
+  one. The provider-hosted five also take `self: &Arc<Self>`, because they hold
+  the host's `Arc` and may lend it; the four edges take `&self` alone, because WS,
+  MCP and GraphQL call a method on `&Self` and have no `Arc` to lend — a recorded
+  asymmetry, and the sentence names which borrow each member takes.
+- **`fn` and `async fn` are both accepted**, and only an `async fn` is awaited.
+  Whether a body blocks is the developer's call, as it is in any Rust function;
+  refusing a synchronous method would assert an impossibility no standard holds,
+  and `#[operations]` and `#[tools]` already served both.
+- **A dispatched method is concrete** (`concrete_signature`). It takes no type
+  or const parameter, because the expansion calls it with only what its caller
+  carries and nothing supplies one; lifetimes are allowed.
+- **`#[cfg]` travels with the method** (`cfg_attrs`), including a `cfg` inside a
+  `cfg_attr`, and nothing else does: a method compiled out is compiled out of its
+  wrapper, its registration and its inventory entry.
+
 ### When (not) to write a decorator
 
 **Write one when all three hold:** the pattern appears in ≥ 3 places;
@@ -352,6 +382,41 @@ to move the counters off-process, and no line has to be removed.
 This is where we deliberately exceed NestJS, which lets the last registration
 win in silence — a dropped declaration is on the wrong side of *no silent
 failure*.
+
+**`nest-rs-config` loads; the consuming module judges.** The config crate
+resolves each variable through the tiers one variable at a time — deployment,
+then the `.env` cascade, then defaults — except that a config pinned in code
+switches its whole namespace to deployment over pin: beside a pin the `.env`
+cascade is not read at all. It hands the values over, assigns them no meaning
+and never arbitrates between variables or tiers.
+
+**`<KEY>_FILE` is a spelling of `<KEY>`, never a second variable, and every
+namespaced variable (`<PREFIX>_<NS>__<KEY>`) has it.** The kernel's own family
+read before any container exists — `<PREFIX>_LOG*`, `<PREFIX>_ENV` — is not read
+through the loader and does not. A value may be given inline or as the path of a regular file
+holding it — the container-secrets convention (Docker secrets, Kubernetes secret
+volumes) — so no secret ever has to sit in the process environment, where
+`/proc/<pid>/environ`, a crash dump or a child process reads it. The file is read
+through the loader's one bounded reader (a regular file, never a FIFO, at most a
+mebibyte), and a consumer that re-reads on renewal reuses that reader and the
+path the value came from. **The deployment chooses the spelling**: when
+either spelling is present in the deployment tier — empty included — both are
+read from the deployment alone, so a `.env` value under the other spelling is
+shadowed exactly as one under the same name is. Both spellings set within the
+tier that answers is refused naming both, because it is one variable given
+twice, and the loader is the only site that sees two spellings — a consumer is
+handed one value. A file holding nothing but line breaks is unset, and a refusal
+names the spelling that was set and never repeats a value read from a file. That is the loader's one refusal, and
+it judges spelling, never meaning; `ContestedDeclarationError` and
+`ContestedVariable` refuse two declarations and two readers, never two values.
+
+**A combination of different variables is the consumer's, validated once.** Half
+a key pair, a secret beside asymmetric keys, a partial credential set: refused at
+boot by the module that uses them, naming what is set, never settled by choosing
+one — and checked **in the one constructor every path reaches**, a config-driven
+boot and a value built in code alike, so the check has one site and its sentence
+names the settings the caller actually wrote. Ranking the tiers of related
+variables inside the loader was tried and removed.
 
 **One recorded exception: `OpenTelemetry::init_with(config)`.** The global
 tracer and meter must exist *before* any module registers (the module panics
@@ -997,6 +1062,15 @@ name order; init failure aborts boot, shutdown is best-effort.
   A gateway **owns** its mount — the audited exception to *a transport
   aggregates*, recorded above; sharing state across gateways is what
   `WsServer<N>` is for, not sharing a path.
+
+  **A handler returns at most a `Result` around a `Result`-free value.** The
+  reply is decided by type (`ReplyValue`), so an alias is a `Result` like the
+  literal, and the value is split twice: an `Err` at either level is an error
+  frame and a `warn`. A `Result` inside an `Option`, a `Vec` or a struct is data
+  and is serialized as such — the frame carries `{"Err": …}` because the handler
+  said so. An `Err` becomes a frame through `ErrorReport`'s three tiers — a
+  `Send + Sync` error, any other error, `Display` — so a cause chain is logged
+  whenever the type has one.
 - **`nest-rs-mcp`** — also not a `Transport`, also an HTTP self-mount, but
   it **aggregates**: several `#[mcp]` hosts merge into one `CompositeHandler`
   behind one endpoint, because MCP namespaces tools per endpoint and clients

@@ -7,7 +7,9 @@ paths:
 
 Command surface: `new` (monorepo / workspace app),
 `generate`/`g` (`feature`, `resource`, `entity`, `auth`, `migration`, and the
-adapters `http` / `graphql` / `ws` / `queue` / `schedule` / `mcp`),
+adapters `http` / `graphql` / `ws` / `queue` / `schedule` / `mcp` / `events` —
+one per edge of the closed vocabulary, and a new edge is not shipped until its
+generator is),
 `run` (forwards to `just` in the product workspace), `doctor`, `update`,
 `version`, `about`, `info`.
 

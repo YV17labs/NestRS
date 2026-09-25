@@ -238,7 +238,7 @@ Hunt these before anything generic.
   type called it *protected resource*, and the crate's `//!` argued at length for
   the first word while every single item it exported was spelled in the second.
   It has since been settled the other way: the crate is `nest-rs-oauth-resource`,
-  the target `nest_rs::oauth::resource`, the namespace `oauth_resource`, and the
+  the target `nest_rs::oauth::resource`, the namespace `oauth__resource`, and the
   exports `OAuthResource*` — one word at every site. The worked count below is
   kept because the *method* is what transfers, not because the defect is live.
   The finding is never "the type is badly named": it is **the two levels

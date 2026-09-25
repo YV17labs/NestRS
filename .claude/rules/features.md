@@ -114,7 +114,7 @@ are all wrong.
 |---|---|---|
 | REST body (request/response) | **`Dto`** — `LoginDto`, `AccessTokenDto` | port: `dto.rs` / `dtos/` |
 | Queue payload, imperative ("do X" → one handler, idempotent, replayable; verb-led) | **`Command`** — `TranscodeCommand` | port: `command.rs` / `commands/` |
-| Queue payload, published fact ("X happened" → many consumers; past-tense) | **`Event`** — `OrderPlacedEvent` | port: `event.rs` / `events/` |
+| Published fact, on the event bus or a queue ("X happened" → many consumers; past-tense) | **`Event`** — `OrderPlacedEvent` | port: `event.rs`; several flat as `<fact>_event.rs` — `events/` is the edge folder |
 | WS message payload (the `data` of an envelope, either direction) | **`Dto`** — `SendMessageDto`, `ChatMessageDto` | with the gateway's feature |
 | GraphQL input, hand-written | **`Input`** | `graphql/input.rs` / `graphql/inputs/` |
 | GraphQL output | the object type itself (bare, or `Payload` for a wrapper) | with the resolver |

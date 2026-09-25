@@ -557,7 +557,7 @@
       "| Level | Named for | Appears as |",
       "|---|---|---|",
       "| **Project** | the product | the repository and the workspace — **nowhere else** |",
-      "| **Family** | the **standard** that names its members | a shared crate-name prefix — and nothing else |",
+      "| **Family** | the **standard** that names its members | a shared crate-name prefix, and the first level of every path, span target and config namespace its members own — `nest_rs::oauth::client`, `NESTRS_OAUTH__CLIENT__*` |",
       "| **Crate** | what it holds | its directory, and the root of every span target it emits |",
       "| **App** | what it **serves** (`api`, `worker`, `auth`) | the binary, and `<App>Module` |",
       "| **Module** | its **domain** (`users`, `billing`) | `<module>/`, `<Module>Module` |",
@@ -600,20 +600,20 @@
       "| Guard / Strategy / Pipe | `guard.rs` / `strategy.rs` / `pipe.rs` |",
       "| Interceptor / Filter / Exception filter | `interceptor.rs` / `filter.rs` / `exception_filter.rs` |",
       "| Module config (`#[config]`) | `config.rs` |",
-      "| Domain error / Static constants | `error.rs` / `constants.rs` |",
+      "| Error types (every one — public, crate-private, domain or driver defect; a wire error document a client parses, such as `ProblemDetails`, is named for its document) / Static constants | `error.rs` / `constants.rs` |",
       "| Folder | File | Type |",
       "|---|---|---|",
       "| Providers — `services/`, `strategies/`, `pipes/` | bare: `input.rs` | `InputService` |",
       "| Entities — `entities/` | bare: `user.rs` | `User` |",
-      "| Transfer objects — `dtos/`, `commands/`, `events/` | suffixed: `login_dto.rs` | `LoginDto` |",
+      "| Transfer objects — `dtos/`, `commands/` | suffixed: `login_dto.rs` | `LoginDto` |",
       "| Kind | Suffix |",
       "|---|---|",
       "| REST body, in or out | `Dto` — `LoginDto` |",
       "| Queue payload, imperative (\"do X\", verb-led) | `Command` — `TranscodeCommand` |",
-      "| Queue payload, published fact (past tense) | `Event` — `OrderPlacedEvent` |",
+      "| Published fact, on the event bus or a queue (past tense) | `Event` — `OrderPlacedEvent` |",
       "| WS message payload | `Dto` — `SendMessageDto` |",
       "| GraphQL input, hand-written | `Input` |"
     ],
-    "reserved_block": "structure   apps  crates  features  src  tests\nroles       mod  module  service  controller  resolver  gateway  tool\n            processor  tasks  listener  guard  strategy  pipe  config\n            interceptor  filter\n            entity  error  constants  testing\nsingulars   dto  command  event\nplurals     services  entities  dtos  commands  events  strategies  pipes\nedges       http  graphql  ws  queue  schedule  mcp  events\n"
+    "reserved_block": "structure   apps  crates  features  src  tests\nroles       mod  module  service  controller  resolver  gateway  tool\n            processor  tasks  listener  guard  strategy  pipe  config\n            interceptor  filter\n            entity  error  constants  testing\nsingulars   dto  command  event\nplurals     services  entities  dtos  commands  strategies  pipes\nedges       http  graphql  ws  queue  schedule  mcp  events\n"
   }
 }

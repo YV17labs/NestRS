@@ -68,7 +68,9 @@ Four clauses, load-bearing in this order.
    four other crates.
 
    **A join lands on existing code through a baseline, never through a sprint.**
-   Today's empty cells are recorded once; the join fails on the *next* one, and
+   A baseline line is existing code, or a name a dependency dictates and this
+   repo cannot change — recorded with its upstream issue; code the same change
+   writes is never baselined, it is fixed. Today's empty cells are recorded once; the join fails on the *next* one, and
    the baseline **only shrinks** — the docs linter's contract, for the same
    reason. Filling a pre-existing cell is ranked work, not a debt to clear:
    `warn`+ events deciding access come first because they are what an incident

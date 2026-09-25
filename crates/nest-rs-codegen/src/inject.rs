@@ -8,6 +8,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, quote};
 use syn::{Fields, FnArg, Ident, ItemStruct, Pat, Signature};
 
+use crate::attrs::Conditional;
 use crate::ty::{arc_inner, nth_generic_type, type_label};
 
 /// The constructor expression plus, per `#[inject]` dependency, its `TypeId`
@@ -438,17 +439,35 @@ pub struct LayerDeps {
 
 /// Walk `items` once, yielding [`LayerDeps`]. Feeding its `keys` into
 /// `Discoverable::injected` is what puts a layer under the access contract.
-pub fn layer_deps<'a, T: ToTokens + 'a>(items: impl IntoIterator<Item = &'a T>) -> LayerDeps {
+///
+/// An item declared on a method compiled out by `#[cfg]` carries the method's
+/// conditions ([`Conditional`]), and its key and label are emitted under them —
+/// a guard named only on a compiled-out route is neither required of the app
+/// nor named in the expansion, where it may not exist. A layer also declared
+/// unconditionally is emitted once, unconditionally.
+pub fn layer_deps<'a, T: ToTokens + 'a>(
+    items: impl IntoIterator<Item = impl Into<Conditional<'a, T>>>,
+) -> LayerDeps {
+    let items: Vec<Conditional<'a, T>> = items.into_iter().map(Into::into).collect();
+    let unconditional: HashSet<String> = items
+        .iter()
+        .filter(|entry| entry.cfgs.is_empty())
+        .map(|entry| entry.item.to_token_stream().to_string())
+        .collect();
     let mut seen = HashSet::new();
     let mut keys = Vec::new();
     let mut labels = Vec::new();
-    for item in items {
-        if !seen.insert(quote!(#item).to_string()) {
+    for Conditional { cfgs, item } in items {
+        let rendered = item.to_token_stream().to_string();
+        if !cfgs.is_empty() && unconditional.contains(&rendered) {
             continue;
         }
-        keys.push(quote! { ::core::any::TypeId::of::<#item>() });
+        if !seen.insert(format!("{} {rendered}", quote!(#(#cfgs)*))) {
+            continue;
+        }
+        keys.push(quote! { #(#cfgs)* ::core::any::TypeId::of::<#item>() });
         let label = layer_label(item);
-        labels.push(quote! { #label });
+        labels.push(quote! { #(#cfgs)* #label });
     }
     LayerDeps { keys, labels }
 }
@@ -496,27 +515,27 @@ pub fn injected_names_with_layers(dep_names: &[TokenStream2], layers: &LayerDeps
 ///
 /// One function emitting both, over one [`LayerDeps`] — so an impl-block
 /// decorator cannot append a key without its label, and adding a seventh layer
-/// family to a call site's selector cannot misalign the two. The fixed-size,
-/// explicitly-typed arrays keep `extend` unambiguous when no per-method layers
-/// are present.
+/// family to a call site's selector cannot misalign the two. The explicitly
+/// typed `Vec`s keep `extend` unambiguous when no per-method layers are present,
+/// and — unlike a fixed-size array — hold whatever count a layer's `#[cfg]`
+/// leaves.
 pub fn injected_methods_with_layers(
     self_ty: &impl quote::ToTokens,
     layers: &LayerDeps,
 ) -> TokenStream2 {
-    let count = proc_macro2::Literal::usize_unsuffixed(layers.keys.len());
     let keys = &layers.keys;
     let labels = &layers.labels;
     quote! {
         fn injected() -> ::std::vec::Vec<::core::any::TypeId> {
             let mut __keys = <#self_ty>::__nestrs_injected();
-            let __layers: [::core::any::TypeId; #count] = [ #(#keys),* ];
+            let __layers: ::std::vec::Vec<::core::any::TypeId> = ::std::vec![ #(#keys),* ];
             __keys.extend(__layers);
             __keys
         }
 
         fn injected_names() -> ::std::vec::Vec<&'static str> {
             let mut __names = <#self_ty>::__nestrs_injected_names();
-            let __layers: [&'static str; #count] = [ #(#labels),* ];
+            let __layers: ::std::vec::Vec<&'static str> = ::std::vec![ #(#labels),* ];
             __names.extend(__layers);
             __names
         }

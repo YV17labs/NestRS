@@ -23,7 +23,7 @@ mod stamped {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "lifecycle_probe_stamped")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
         pub name: String,
@@ -32,7 +32,7 @@ mod stamped {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     /// The shape `#[expose(..., timestamps)]` emits: `created_at` on insert,
     /// `updated_at` on **every** save.

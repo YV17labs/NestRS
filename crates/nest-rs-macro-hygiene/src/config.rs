@@ -11,14 +11,14 @@ use nest_rs::config::config;
 /// pinned base, per the dual-path rule.
 #[config(namespace = "macro_hygiene")]
 #[derive(Clone, Debug)]
-pub struct HygieneConfig {
+pub struct MacroHygieneConfig {
     /// A field with a validation rule, so the emitted `Validate` derive is
     /// actually exercised rather than merely present.
     #[validate(range(min = 1))]
     pub retries: u32,
 }
 
-impl Default for HygieneConfig {
+impl Default for MacroHygieneConfig {
     fn default() -> Self {
         Self { retries: 1 }
     }

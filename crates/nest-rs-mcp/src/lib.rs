@@ -131,6 +131,12 @@ pub use scope::Scoped;
 // --- The ergonomic surface: what a tool, prompt or resource host writes -----
 
 pub use rmcp::model::ProtocolVersion;
+/// What a host reports about itself, and what it advertises — named here rather
+/// than reached through the transparent `model` re-export below, on `McpError`'s
+/// precedent: `#[tools]` writes these two into every expansion it emits, so an
+/// upstream rename costs one line here instead of one per emission site. rmcp 3.4
+/// renaming `ServerInfo` to `ServerConfig` is what made that concrete.
+pub use rmcp::model::{ServerCapabilities, ServerConfig};
 pub use rmcp::{ErrorData as McpError, ServerHandler};
 /// Host decorators. rmcp owns them; `nest-rs-mcp` re-exports them so a host
 /// file imports one path. `#[tool_router]`/`#[prompt_router]` scan an inherent

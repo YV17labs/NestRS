@@ -286,12 +286,11 @@ async fn run_with_timeout(
     match tokio::time::timeout(timeout, fut).await {
         Ok(Ok(())) => (IndicatorStatus::Up, None),
         Ok(Err(err)) => {
-            let detail = format!("{err:#}");
             tracing::warn!(
                 target: crate::TARGET,
                 indicator = name,
                 ?kind,
-                error = %detail,
+                error = %nest_rs_core::error_message(&*err),
                 "health indicator failed",
             );
             (IndicatorStatus::Down, Some(REASON_FAILED.to_owned()))

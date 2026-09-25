@@ -874,7 +874,7 @@ mod tests {
         let scope = std::sync::Arc::new(nest_rs_core::RequestScope::new(builder.build()));
         nest_rs_core::with_request_scope(
             Some(scope),
-            nest_rs_core::Correlation::mint(),
+            nest_rs_core::Correlation::minted(None),
             extract(req),
         )
         .await

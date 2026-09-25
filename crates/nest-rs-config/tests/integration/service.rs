@@ -23,7 +23,7 @@ struct First {
 impl Config for First {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            token: env.get("TOKEN").or(base.token),
+            token: env.get("TOKEN")?.or(base.token),
         })
     }
 }
@@ -39,7 +39,7 @@ struct Sibling {
 impl Config for Sibling {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            audience: env.get("AUDIENCE").or(base.audience),
+            audience: env.get("AUDIENCE")?.or(base.audience),
         })
     }
 }
@@ -55,7 +55,7 @@ struct Contender {
 impl Config for Contender {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            token: env.get("TOKEN").or(base.token),
+            token: env.get("TOKEN")?.or(base.token),
         })
     }
 }
@@ -128,7 +128,7 @@ fn a_key_read_through_a_const_is_claimed_like_any_other() {
     impl Config for ViaConst {
         fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
             Ok(Self {
-                token: env.get(KEY).or(base.token),
+                token: env.get(KEY)?.or(base.token),
             })
         }
     }
@@ -142,7 +142,7 @@ fn a_key_read_through_a_const_is_claimed_like_any_other() {
     impl Config for AlsoViaConst {
         fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
             Ok(Self {
-                token: env.get(KEY).or(base.token),
+                token: env.get(KEY)?.or(base.token),
             })
         }
     }
@@ -182,7 +182,7 @@ fn citing_a_variable_is_not_claiming_it() {
     impl Config for Reader {
         fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
             Ok(Self {
-                token: env.get("TOKEN").or(base.token),
+                token: env.get("TOKEN")?.or(base.token),
             })
         }
     }
@@ -211,7 +211,7 @@ fn the_free_reader_is_outside_the_registry() {
     impl Config for Owner {
         fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
             Ok(Self {
-                token: env.get("TOKEN").or(base.token),
+                token: env.get("TOKEN")?.or(base.token),
             })
         }
     }

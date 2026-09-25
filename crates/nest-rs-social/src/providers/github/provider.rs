@@ -49,7 +49,7 @@ impl GithubSocialProvider {
                 tracing::debug!(
                     target: crate::TARGET,
                     provider = Self::KEY,
-                    error = %err,
+                    error = %nest_rs_core::error_message(&err),
                     "github emails endpoint unavailable; falling back to unverified profile email",
                 );
             }

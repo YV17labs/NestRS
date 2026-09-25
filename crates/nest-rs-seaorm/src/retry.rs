@@ -181,7 +181,7 @@ where
                         target: crate::TARGET,
                         attempt,
                         attempts,
-                        error = %err,
+                        error = %nest_rs_core::error_message(&err),
                         "transaction conflict — retry budget exhausted",
                     );
                     return Err(err);
@@ -190,7 +190,7 @@ where
                     target: crate::TARGET,
                     attempt,
                     attempts,
-                    error = %err,
+                    error = %nest_rs_core::error_message(&err),
                     "transaction conflict — retrying",
                 );
                 tokio::time::sleep(backoff_for(initial_backoff, attempt - 1)).await;

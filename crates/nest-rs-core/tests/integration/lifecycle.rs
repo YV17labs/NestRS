@@ -151,3 +151,109 @@ async fn a_failing_shutdown_hook_is_named_at_error_and_does_not_abort_the_rest()
         event.fields,
     );
 }
+
+static SHAPED_INITS: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct ShapedHost;
+
+#[hooks]
+impl ShapedHost {
+    #[allow(clippy::needless_arbitrary_self_type, clippy::unused_unit)]
+    #[on_module_init]
+    async fn init(self: &Self) -> () {
+        SHAPED_INITS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[cfg(any())]
+    #[on_module_init]
+    async fn compiled_out(&self) {}
+
+    #[on_module_init]
+    async fn r#type(&self) {
+        SHAPED_INITS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[on_module_init]
+    async fn through_its_arc(self: &std::sync::Arc<Self>) {
+        SHAPED_INITS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+#[allow(non_camel_case_types)]
+struct r#async;
+
+#[hooks]
+impl r#async {
+    #[on_module_init]
+    async fn init(&self) {}
+}
+
+#[module(providers = [ShapedHost])]
+struct ShapedModule;
+
+/// Compiling is the first half: a hook compiled out takes its entry with it.
+/// `-> ()` written out is the infallible shape — it was read as a `Result`, and
+/// its `()` handed to `map_err` — `self: &Self` is `&self` spelled out,
+/// `self: &Arc<Self>` borrows what the container holds, and a raw identifier is
+/// labelled by its name: a method's, which the run order sorts on, and a host's.
+#[tokio::test]
+async fn a_compiled_out_hook_is_skipped_and_the_spelled_out_shapes_run() {
+    let mut methods: Vec<&str> = nest_rs_core::inventory::iter::<nest_rs_core::LifecycleHook>()
+        .filter(|hook| hook.provider == "ShapedHost")
+        .map(|hook| hook.method)
+        .collect();
+    methods.sort_unstable();
+    assert_eq!(methods, ["init", "through_its_arc", "type"]);
+    let raw_hosts = nest_rs_core::inventory::iter::<nest_rs_core::LifecycleHook>()
+        .filter(|hook| hook.provider == "async")
+        .count();
+    assert_eq!(raw_hosts, 1, "a raw host is labelled by its name");
+
+    let app = App::new::<ShapedModule>().expect("the module boots");
+    app.init().await.expect("the init phases drain");
+    assert_eq!(SHAPED_INITS.load(Ordering::SeqCst), 3);
+}
+
+/// A trait with a method of a hook's name, implemented for every `Arc<T>` — the
+/// shape an extension trait takes.
+#[allow(dead_code)]
+trait Warm {
+    fn warm(&self) -> std::future::Ready<()>;
+}
+
+impl<T> Warm for std::sync::Arc<T> {
+    fn warm(&self) -> std::future::Ready<()> {
+        std::future::ready(())
+    }
+}
+
+static WARMED: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct WarmHost;
+
+#[hooks]
+impl WarmHost {
+    #[on_module_init]
+    async fn warm(&self) {
+        WARMED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[module(providers = [WarmHost])]
+struct WarmModule;
+
+/// The provider a hook runs on is an `Arc<Host>`, and method-call syntax looks a
+/// name up on the `Arc` first: a trait in scope with a method of the hook's name
+/// implemented for `Arc<T>` ran in the hook's place, and the hook never ran.
+#[tokio::test]
+async fn a_hook_runs_where_a_trait_on_arc_shares_its_name() {
+    let app = App::new::<WarmModule>().expect("the module boots");
+    app.init().await.expect("the init phases drain");
+    assert_eq!(WARMED.load(Ordering::SeqCst), 1);
+}

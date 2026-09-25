@@ -23,8 +23,16 @@ impl HygieneIndicator {
         Ok(())
     }
 
+    /// A synchronous probe is called without an `.await`.
     #[startup]
-    async fn started(&self) -> Result<(), std::io::Error> {
+    fn started(&self) -> Result<(), std::io::Error> {
         Ok(())
+    }
+
+    /// A probe compiled out takes its registry entry with it.
+    #[cfg(any())]
+    #[readiness]
+    async fn compiled_out(&self) -> crate::does_not_exist::Answer {
+        crate::does_not_exist::probe()
     }
 }

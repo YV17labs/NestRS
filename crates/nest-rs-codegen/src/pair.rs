@@ -280,6 +280,102 @@ impl DecoratorPair {
     }
 }
 
+/// The attributes every impl half consumes off a method or its block, whatever
+/// else the half takes — the layers, the posture, and the two HTTP-only keys a
+/// half refuses by name elsewhere.
+const CONSUMED_BY_EVERY_HALF: [&str; 11] = [
+    "use_guards",
+    "force_guards",
+    "use_interceptors",
+    "use_filters",
+    "use_pipes",
+    "use_exception_filters",
+    "public",
+    "authorize",
+    "version",
+    "api",
+    "meta",
+];
+
+impl DecoratorPair {
+    /// What an impl half emits: `expansion` when it expanded, and when it refused
+    /// — nothing but `compile_error!`s — those errors **beside the item as the
+    /// developer wrote it**, with the attributes the half would have consumed
+    /// taken off (`helpers`, plus the layers and the posture every half consumes)
+    /// and the trait impls a host is required to carry filled in by `fallback`.
+    ///
+    /// A refusal used to drop the whole `impl`, so the one real error arrived
+    /// under a cascade it caused: every method became `no method found`, every
+    /// import `unused`, and the host failed `Discoverable` or `McpHost` at the
+    /// module listing it — `E0277` blamed on a line that is right. The item stays,
+    /// so what rustc reports beside the refusal is only what is wrong in the
+    /// developer's own code. `fallback` runs for an inherent impl alone: a trait
+    /// impl is itself the refusal, and a second impl of the host's traits would
+    /// only add a conflict.
+    pub fn keep_item_on_refusal(
+        &self,
+        input: TokenStream,
+        expansion: TokenStream,
+        helpers: &[&str],
+        fallback: impl FnOnce(&ItemImpl) -> TokenStream,
+    ) -> TokenStream {
+        if !only_compile_errors(&expansion) {
+            return expansion;
+        }
+        let Ok(item) = syn::parse2::<Item>(input.clone()) else {
+            return expansion;
+        };
+        let Item::Impl(mut item) = item else {
+            return quote!(#expansion #input);
+        };
+        let consumed = |attr: &syn::Attribute| {
+            helpers
+                .iter()
+                .chain(CONSUMED_BY_EVERY_HALF.iter())
+                .any(|name| attr.path().is_ident(name))
+        };
+        item.attrs.retain(|attr| !consumed(attr));
+        for entry in &mut item.items {
+            let syn::ImplItem::Fn(method) = entry else {
+                continue;
+            };
+            method.attrs.retain(|attr| !consumed(attr));
+            for input in &mut method.sig.inputs {
+                if let syn::FnArg::Typed(typed) = input {
+                    typed.attrs.retain(|attr| !consumed(attr));
+                }
+            }
+        }
+        let fallback = item.trait_.is_none().then(|| fallback(&item));
+        quote!(#expansion #item #fallback)
+    }
+}
+
+/// Whether `tokens` hold `compile_error!` invocations and nothing else — the
+/// shape `syn::Error::to_compile_error` writes, one error or several combined.
+///
+/// Read structurally rather than flagged by the caller: a half has dozens of
+/// refusal sites, and an expansion that expanded always holds the item it was
+/// given, so a stream of nothing but errors is a refusal by construction.
+fn only_compile_errors(tokens: &TokenStream) -> bool {
+    use proc_macro2::TokenTree;
+    let mut named_the_macro = false;
+    let mut any = false;
+    for token in tokens.clone() {
+        match token {
+            TokenTree::Ident(ident) if ident == "core" || ident == "std" => {}
+            TokenTree::Ident(ident) if ident == "compile_error" => named_the_macro = true,
+            TokenTree::Punct(punct) if matches!(punct.as_char(), ':' | '!' | ';') => {}
+            TokenTree::Group(_) if named_the_macro => {
+                named_the_macro = false;
+                any = true;
+            }
+            _ => return false,
+        }
+    }
+    any && !named_the_macro
+}
+
 /// Parse `#[injectable]`'s input, naming the impl halves when the developer
 /// decorated the impl block instead.
 ///
@@ -398,6 +494,45 @@ mod tests {
         );
         assert!(msg.contains("#[injectable]"), "{msg}");
         assert!(msg.contains("#[process]"), "{msg}");
+    }
+
+    /// A refusal keeps the item, minus what the half consumes; an expansion is
+    /// left alone.
+    #[test]
+    fn a_refusal_keeps_the_item_without_the_consumed_attributes() {
+        let input = quote! {
+            impl Gateway {
+                #[on_x]
+                #[public]
+                #[doc = "kept"]
+                async fn run(&self) {}
+            }
+        };
+        let refusal = syn::Error::new(proc_macro2::Span::call_site(), "no").to_compile_error();
+        let kept = PAIR
+            .keep_item_on_refusal(
+                input.clone(),
+                refusal.clone(),
+                &["on_x"],
+                |_| quote!(impl Fallback for Gateway {}),
+            )
+            .to_string();
+        let expected = quote! {
+            #refusal
+            impl Gateway {
+                #[doc = "kept"]
+                async fn run(&self) {}
+            }
+            impl Fallback for Gateway {}
+        };
+        assert_eq!(kept, expected.to_string());
+
+        let expansion = quote!(impl Gateway {} const _: () = (););
+        assert_eq!(
+            PAIR.keep_item_on_refusal(input, expansion.clone(), &[], |_| quote!())
+                .to_string(),
+            expansion.to_string(),
+        );
     }
 
     #[test]

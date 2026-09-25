@@ -14,7 +14,7 @@ categories = ["web-programming::http-server", "asynchronous"]
 [dependencies]
 nest-rs-core.workspace = true
 nest-rs-http-macros.workspace = true
-# `TlsConfig::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
+# `HttpTls::from_env` reads the `NESTRS_HTTP__TLS_*` keys through the
 # framework-wide env scheme (`env_var`, empty-as-unset), like every other
 # per-crate `from_env` shortcut.
 nest-rs-config.workspace = true

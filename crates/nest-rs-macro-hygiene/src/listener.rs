@@ -21,4 +21,17 @@ impl HygieneListener {
     async fn on_hygiene(&self, event: HygieneEvent) {
         let _ = event.label;
     }
+
+    /// A synchronous listener is called without an `.await`.
+    #[on_event]
+    fn on_hygiene_sync(&self, event: HygieneEvent) {
+        let _ = event.label;
+    }
+
+    /// A listener compiled out takes its wiring with it.
+    #[cfg(any())]
+    #[on_event]
+    async fn compiled_out(&self, event: crate::does_not_exist::Event) {
+        crate::does_not_exist::handle(event)
+    }
 }

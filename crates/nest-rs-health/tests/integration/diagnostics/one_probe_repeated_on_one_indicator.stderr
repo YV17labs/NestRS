@@ -1,0 +1,5 @@
+error: a method declares exactly one probe — this one writes `#[readiness]` twice. Accepted: `#[liveness]`, `#[readiness]` or `#[startup]`. A method that must be two is two methods.
+  --> tests/integration/diagnostics/one_probe_repeated_on_one_indicator.rs:14:5
+   |
+14 |     #[readiness]
+   |     ^^^^^^^^^^^^

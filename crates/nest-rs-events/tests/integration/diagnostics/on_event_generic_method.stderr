@@ -1,0 +1,5 @@
+error: a `#[on_event]` method takes no type or const parameters, and `on_ping` declares type parameter `T`: the expansion calls it with only what its transport carries, so nothing supplies a type for it — name a concrete one, or call a generic function from the body
+  --> tests/integration/diagnostics/on_event_generic_method.rs:18:22
+   |
+18 |     async fn on_ping<T: Default>(&self, _event: Ping) {}
+   |                      ^^^^^^^^^^

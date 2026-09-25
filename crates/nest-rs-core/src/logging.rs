@@ -30,7 +30,7 @@
 //! regardless, so there is nothing that hatch could save it.
 
 use std::borrow::Cow;
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use anyhow::Result;
 use tracing::field::{Field, Visit};
@@ -229,15 +229,84 @@ impl Visit for FixedWidthDurations<'_> {
     }
 
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.0.record_str(field, value);
+        // `DefaultVisitor` quotes a `&str` field through `Debug` — except the
+        // message, which it writes bare. That one goes through the escape too.
+        if field.name() == "message" {
+            self.0
+                .record_debug(field, &format_args!("{}", LineSafe(&value)));
+        } else {
+            self.0.record_str(field, value);
+        }
     }
 
     fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-        self.0.record_error(field, value);
+        let message = crate::error_message(value);
+        self.0
+            .record_debug(field, &format_args!("{}", LineSafe(&message)));
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        self.0.record_debug(field, value);
+        self.0.record_debug(field, &LineSafe(&value));
+    }
+}
+
+/// A value written with every character that could forge a line or hide one
+/// escaped — controls (a line break starts a second record; `ESC` drives the
+/// terminal), bidirectional overrides and invisible formatting characters — as
+/// Rust's debug escapes, and every other character untouched.
+///
+/// **Applied to every field value, the message included, by the formatter**
+/// (CWE-117; OWASP Logging Cheat Sheet, *Event data sources*): a `%` field renders
+/// its `Display` unescaped, and any field can carry a string a client chose — a
+/// WebSocket event name, a deserializer's error echoing the input — so an escape
+/// left to the call site is an escape some call site forgets. It escapes as it
+/// writes, so a value needing none costs no allocation.
+///
+/// **What it guarantees is one line per event, not unambiguous fields.** A `%`
+/// value holding `x trace_id=…` still reads as a pair on a text line, and a value
+/// holding the two characters `\n` renders as an escaped line break does: the text
+/// console is for a human, and the JSON output — every value a quoted, escaped
+/// string — is the one a machine parses.
+struct LineSafe<'a, T: ?Sized>(&'a T);
+
+impl<T: fmt::Debug + ?Sized> fmt::Debug for LineSafe<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(LineSafeWriter(f), "{:?}", self.0)
+    }
+}
+
+impl<T: fmt::Display + ?Sized> fmt::Display for LineSafe<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(LineSafeWriter(f), "{}", self.0)
+    }
+}
+
+/// Whether `ch` could forge a log line or hide part of one.
+fn forges(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        )
+}
+
+/// The writer [`LineSafe`] escapes through: one `write_str` per run between
+/// escapes, none per character.
+struct LineSafeWriter<'a, 'f>(&'a mut fmt::Formatter<'f>);
+
+impl fmt::Write for LineSafeWriter<'_, '_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        let mut run = 0;
+        for (at, ch) in text.char_indices() {
+            if forges(ch) {
+                self.0.write_str(&text[run..at])?;
+                for escaped in ch.escape_debug() {
+                    self.0.write_char(escaped)?;
+                }
+                run = at + ch.len_utf8();
+            }
+        }
+        self.0.write_str(&text[run..])
     }
 }
 
@@ -349,11 +418,31 @@ where
                 writer.write_str(" ")?;
                 writer.write_str(field::ACTOR_ID)?;
                 writer.write_char('=')?;
-                writer.write_str(actor_id)?;
+                write_text_value(&mut writer, actor_id)?;
             }
             Ok(())
         })?;
         writer.write_char('\n')
+    }
+}
+
+/// `value` written bare when every character is one a `key=value` reader cannot
+/// mistake — ASCII letters and digits, and `-_.@:/+` — and quoted otherwise, Rust's
+/// debug escapes turning a quote, a backslash, a control, a bidi or an invisible
+/// character into its escape. It is for the correlation values [`TextFormat`] writes
+/// beside the fields — the fields themselves go through [`LineSafe`]: an `actor_id`
+/// comes from a principal or off the wire, and written bare it forged a line beneath
+/// the real one, ids beside the real ones, or the terminal (OWASP's Logging Cheat Sheet, on delimiter characters; CWE-117). An
+/// identifier of the usual shapes — a UUID, a subject, an email — stays bare.
+fn write_text_value(writer: &mut Writer<'_>, value: &str) -> fmt::Result {
+    let bare = !value.is_empty()
+        && value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '@' | ':' | '/' | '+')
+        });
+    if bare {
+        writer.write_str(value)
+    } else {
+        write!(writer, "{value:?}")
     }
 }
 
@@ -388,17 +477,17 @@ impl JsonFormat {
     }
 }
 
-/// Bound to [`JsonFields`] rather than generic over the field formatter: the
-/// envelope splices the formatted fields in as a JSON **object**, so pairing this
-/// with the plain-text field formatter would emit malformed JSON. A bound makes
-/// that a compile error instead.
+/// Bound to [`JsonFields`], the field formatter a JSON layer is built with, so a
+/// layer pairing this format with the plain-text one is a compile error. The
+/// event's own fields are written by the format itself ([`write_json_fields`]),
+/// so the chain of a `&dyn Error` field reaches the record.
 impl<S> FormatEvent<S, JsonFields> for JsonFormat
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn format_event(
         &self,
-        ctx: &FmtContext<'_, S, JsonFields>,
+        _ctx: &FmtContext<'_, S, JsonFields>,
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
@@ -410,8 +499,7 @@ where
         // `as_str` rather than `Display`, which pads through a `Formatter`.
         writer.write_str(event.metadata().level().as_str())?;
         writer.write_str("\",\"fields\":")?;
-        // `JsonFields` writes a complete object, braces included.
-        ctx.format_fields(writer.by_ref(), event)?;
+        write_json_fields(&mut writer, event)?;
 
         writer.write_str(",\"target\":\"")?;
         write_json_escaped(&mut writer, &source.target)?;
@@ -458,8 +546,126 @@ where
     }
 }
 
-/// The JSON string-body escapes, and no others: the two mandatory ones plus every
-/// control character as `\u00XX`. A log line carries developer-authored targets
+/// Render an event's own fields as one JSON object, written by this format
+/// rather than by [`JsonFields`]: its visitor has no `record_error`, so a field
+/// recorded as `&dyn Error` lost its causes in the output production reads, while
+/// the text console rendered them. It writes what `JsonFields` wrote, value for
+/// value: a number or a boolean recorded as one stays one (a float keeps its
+/// `.0`, and a non-finite one is `null`), everything else is an escaped string,
+/// the `log.*` fields a bridged record carries are kept, and a name recorded
+/// twice keeps its last value.
+fn write_json_fields(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt::Result {
+    let mut visitor = JsonFieldWriter {
+        writer: writer.by_ref(),
+        fields: event.metadata().fields(),
+        first: true,
+        result: Ok(()),
+    };
+    visitor.writer.write_char('{')?;
+    event.record(&mut visitor);
+    visitor.result?;
+    writer.write_char('}')
+}
+
+struct JsonFieldWriter<'w> {
+    writer: Writer<'w>,
+    fields: &'static tracing::field::FieldSet,
+    first: bool,
+    result: fmt::Result,
+}
+
+impl JsonFieldWriter<'_> {
+    /// Whether this value is written: not after an error, and not when a later
+    /// field of the event carries the same name — read off the callsite's field
+    /// set, so no value is buffered to keep the last one.
+    fn writes(&self, field: &Field) -> bool {
+        self.result.is_ok()
+            && !self
+                .fields
+                .iter()
+                .any(|other| other.name() == field.name() && other.index() > field.index())
+    }
+
+    fn key(&mut self, field: &Field) -> fmt::Result {
+        if !std::mem::take(&mut self.first) {
+            self.writer.write_char(',')?;
+        }
+        self.writer.write_char('"')?;
+        write_json_escaped(&mut self.writer, field.name())?;
+        self.writer.write_str("\":")
+    }
+
+    fn raw(&mut self, field: &Field, value: impl fmt::Display) {
+        if !self.writes(field) {
+            return;
+        }
+        self.result = self
+            .key(field)
+            .and_then(|()| write!(self.writer, "{value}"));
+    }
+
+    fn string(&mut self, field: &Field, value: impl fmt::Display) {
+        if !self.writes(field) {
+            return;
+        }
+        self.result = self.key(field).and_then(|()| {
+            self.writer.write_char('"')?;
+            write!(JsonEscaping(&mut self.writer), "{value}")?;
+            self.writer.write_char('"')
+        });
+    }
+}
+
+impl Visit for JsonFieldWriter<'_> {
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.raw(field, value);
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.raw(field, value);
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.raw(field, value);
+    }
+
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        if value.is_finite() {
+            // `Debug` keeps the `.0` of a whole float, so a backend typing a field
+            // from its first value types `duration_ms` as a float.
+            self.raw(field, format_args!("{value:?}"));
+        } else {
+            self.raw(field, "null");
+        }
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.string(field, value);
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.string(field, crate::error_message(value));
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.string(field, format_args!("{value:?}"));
+    }
+}
+
+/// A `fmt::Write` over [`write_json_escaped`], so a value is escaped as it is
+/// formatted rather than formatted into a `String` first.
+struct JsonEscaping<'a, 'w>(&'a mut Writer<'w>);
+
+impl fmt::Write for JsonEscaping<'_, '_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        write_json_escaped(self.0, text)
+    }
+}
+
+/// The JSON string-body escapes: the two mandatory ones, plus every character
+/// [`LineSafe`] escapes on a text line — controls, bidirectional overrides and
+/// invisible formatting characters — as `\uXXXX`, so the two outputs hide
+/// nothing from each other. A log line carries developer-authored targets
 /// and an `actor_id` that came off the wire, so this cannot be skipped on the
 /// grounds that "it is always a Rust path".
 ///
@@ -489,7 +695,7 @@ fn write_json_escaped(writer: &mut Writer<'_>, value: &str) -> fmt::Result {
             writer.write_str(&value[run..at])?;
             writer.write_str(escaped)?;
             run = at + ch.len_utf8();
-        } else if ch.is_control() {
+        } else if forges(ch) {
             writer.write_str(&value[run..at])?;
             write!(writer, "\\u{:04x}", ch as u32)?;
             run = at + ch.len_utf8();
@@ -699,7 +905,7 @@ mod tests {
         captured: Captured,
         actor: &str,
     ) -> (String, String, String) {
-        let correlation = Correlation::mint();
+        let correlation = Correlation::minted(None);
         let trace_id = correlation.trace_id().to_string();
         let span_id = correlation.span_id().to_string();
         with_request_scope(None, correlation, async {
@@ -878,6 +1084,27 @@ mod tests {
         assert_eq!(line.matches("actor_id=").count(), 1, "{line}");
     }
 
+    /// A value a client chose cannot forge a record: a `%` field renders its
+    /// `Display` unescaped, so the formatter escapes what the call site did not.
+    #[test]
+    fn a_field_value_cannot_forge_a_second_line_or_hide_one() {
+        let captured = Captured::default();
+        let layer = tracing_subscriber::fmt::layer()
+            .event_format(TextFormat::new(false))
+            .with_ansi(false)
+            .with_writer(captured.clone());
+        let forged = "chat\n2026-01-01T00:00:00Z  WARN nest_rs::authn: forged \u{202E}\u{1b}[2J";
+        tracing::subscriber::with_default(Registry::default().with(layer), || {
+            tracing::warn!(target: "fixture::lane", event = %forged, "unknown event");
+        });
+        let line = captured.take();
+
+        assert_eq!(line.trim_end().lines().count(), 1, "{line}");
+        assert!(line.contains("\\n"), "{line}");
+        assert!(!line.contains('\u{202E}'), "{line}");
+        assert!(!line.contains('\u{1b}'), "{line}");
+    }
+
     /// Absence is the answer, not a sentinel — an event outside any unit of work
     /// carries no id rather than an empty or invented one.
     #[tokio::test]
@@ -925,6 +1152,54 @@ mod tests {
         assert!(
             line.contains(r#""actor_id":"a\"quote\"\nand a newline""#),
             "{line}"
+        );
+    }
+
+    /// The text format quotes an actor it cannot write bare: one carrying a line
+    /// break wrote a second, forged line beneath the real one, a space and an `=`
+    /// forged ids beside the real ones, and a control, bidi or invisible character
+    /// drove what the terminal showed. An actor of the usual shape stays bare.
+    #[tokio::test]
+    async fn the_text_format_quotes_what_came_off_the_wire() {
+        async fn text_line(actor: &str) -> String {
+            let captured = Captured::default();
+            let layer = tracing_subscriber::fmt::layer()
+                .event_format(TextFormat::new(false))
+                .with_ansi(false)
+                .with_writer(captured.clone());
+            render(layer, captured, actor).await.0
+        }
+
+        let forged_line =
+            text_line("user-7\n2026-09-15T00:00:00Z  WARN nest_rs::authz: forged\u{1b}[2K\\").await;
+        assert_eq!(
+            forged_line.matches('\n').count(),
+            1,
+            "one line: {forged_line}"
+        );
+        assert!(
+            forged_line.contains(
+                r#"actor_id="user-7\n2026-09-15T00:00:00Z  WARN nest_rs::authz: forged\u{1b}[2K\\""#
+            ),
+            "{forged_line}"
+        );
+
+        let forged_ids = text_line("alice trace_id=00000000000000000000000000000000").await;
+        assert!(
+            forged_ids.ends_with("actor_id=\"alice trace_id=00000000000000000000000000000000\"\n"),
+            "{forged_ids}"
+        );
+
+        let unseen = text_line("a\u{2028}b\u{85}c\u{9b}d\u{202e}e\u{200b}f").await;
+        assert!(
+            unseen.contains(r#"actor_id="a\u{2028}b\u{85}c\u{9b}d\u{202e}e\u{200b}f""#),
+            "{unseen}"
+        );
+
+        let usual = text_line("alice-42@example.com").await;
+        assert!(
+            usual.ends_with("actor_id=alice-42@example.com\n"),
+            "{usual}"
         );
     }
 
@@ -983,6 +1258,106 @@ mod tests {
             assert_eq!(parsed["target"].as_str(), Some(FIXTURE_TARGET));
             assert!(parsed["fields"].is_object(), "{line}");
         }
+    }
+
+    /// The message itself is a value like any other: recorded as a `&str`, it
+    /// reached the text line unescaped while every other field did not.
+    #[test]
+    fn a_message_recorded_as_a_str_cannot_forge_a_second_line() {
+        let captured = Captured::default();
+        let layer = tracing_subscriber::fmt::layer()
+            .event_format(TextFormat::new(false))
+            .with_ansi(false)
+            .with_writer(captured.clone());
+        let forged = "a\nFORGED WARN x \u{202E}";
+        tracing::subscriber::with_default(Registry::default().with(layer), || {
+            tracing::info!(target: "fixture::lane", message = forged);
+        });
+        let line = captured.take();
+
+        assert_eq!(line.trim_end().lines().count(), 1, "{line}");
+        assert!(!line.contains('\u{202E}'), "{line}");
+    }
+
+    #[derive(Debug)]
+    struct Outer(std::io::Error);
+
+    impl fmt::Display for Outer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("outer failed")
+        }
+    }
+
+    impl std::error::Error for Outer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    /// Production reads JSON, so a field recorded as `&dyn Error` carries its
+    /// causes there as it does on the console — and a hidden character is escaped
+    /// in both.
+    #[test]
+    fn a_json_error_field_carries_its_causes_and_hides_nothing() {
+        let captured = Captured::default();
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .event_format(JsonFormat::new(false))
+            .with_writer(captured.clone());
+        tracing::subscriber::with_default(Registry::default().with(layer), || {
+            let error = Outer(std::io::Error::other("disk \u{202E}full"));
+            tracing::error!(
+                target: "fixture::lane",
+                error = &error as &(dyn std::error::Error + 'static),
+                count = 3u64,
+                "write failed"
+            );
+        });
+        let line = captured.take();
+
+        assert!(!line.contains('\u{202E}'), "{line}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(line.trim()).unwrap_or_else(|err| panic!("{err}\n{line}"));
+        assert_eq!(
+            parsed["fields"]["error"].as_str(),
+            Some("outer failed: disk \u{202E}full"),
+            "{line}"
+        );
+        assert_eq!(parsed["fields"]["count"].as_u64(), Some(3), "{line}");
+        assert_eq!(
+            parsed["fields"]["message"].as_str(),
+            Some("write failed"),
+            "{line}"
+        );
+    }
+
+    /// `JsonFormat` writes what `JsonFields` wrote: a whole float keeps its `.0`,
+    /// a non-finite one is `null`, and a name recorded twice keeps its last value.
+    #[test]
+    fn json_fields_keep_the_shape_json_fields_wrote() {
+        let captured = Captured::default();
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .event_format(JsonFormat::new(false))
+            .with_writer(captured.clone());
+        tracing::subscriber::with_default(Registry::default().with(layer), || {
+            tracing::info!(
+                target: "fixture::lane",
+                whole = 12.0_f64,
+                nan = f64::NAN,
+                a = 1u64,
+                a = 2u64,
+                "shape"
+            );
+        });
+        let line = captured.take();
+
+        assert!(line.contains("\"whole\":12.0"), "{line}");
+        let parsed: serde_json::Value =
+            serde_json::from_str(line.trim()).unwrap_or_else(|err| panic!("{err}\n{line}"));
+        assert!(parsed["fields"]["nan"].is_null(), "{line}");
+        assert_eq!(parsed["fields"]["a"].as_u64(), Some(2), "{line}");
+        assert_eq!(line.matches("\"a\":").count(), 1, "{line}");
     }
 
     /// The correlation block writes nothing outside a unit of work, so the

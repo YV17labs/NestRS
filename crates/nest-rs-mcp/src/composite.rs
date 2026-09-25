@@ -57,7 +57,7 @@ use rmcp::model::{
     GetTaskResult, InitializeRequestParams, InitializeResult, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
     ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-    ServerCapabilities, ServerInfo, SetLevelRequestParams, SubscribeRequestParams,
+    ServerCapabilities, ServerConfig, SetLevelRequestParams, SubscribeRequestParams,
     SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer, SubscriptionContext};
@@ -624,10 +624,10 @@ impl ServerHandler for CompositeHandler {
     /// and a path taking it is reported at boot (`registry::check_identity`) —
     /// at N=1 with a host that overrode `get_info` it is not a fallback at all:
     /// one host alone *is* the server, which is the shape every MCP SDK builds.
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let mut infos = self.hosts.iter().map(|host| host.host.get_info());
         let Some(mut merged) = infos.next() else {
-            return ServerInfo::new(ServerCapabilities::default());
+            return ServerConfig::new(ServerCapabilities::default());
         };
         let mut instructions: Vec<String> = merged.instructions.take().into_iter().collect();
         for info in infos {

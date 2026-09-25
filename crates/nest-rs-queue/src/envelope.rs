@@ -88,7 +88,8 @@ pub fn seal(payload: Value) -> Value {
     // One read for every key: they are one value on the ambient context for the
     // reason `Correlation`'s own doc gives — an edge that carried the trace while
     // dropping the actor reopens exactly the gap this crossing closes.
-    let correlation = nest_rs_core::current_correlation().unwrap_or_else(Correlation::mint);
+    let correlation =
+        nest_rs_core::current_correlation().unwrap_or_else(|| Correlation::minted(None));
     let mut sealed = json!({
         VERSION: WIRE_FORMAT_VERSION,
         PAYLOAD: payload,
@@ -186,7 +187,7 @@ mod tests {
     /// parent link is what a flat id could never carry across a process.
     #[tokio::test]
     async fn the_job_is_a_child_of_the_enqueue_in_the_same_trace() {
-        let producer = Correlation::mint();
+        let producer = Correlation::minted(None);
         let sealed = under(producer.clone(), async { seal(json!({ "clip": 1 })) }).await;
 
         let (_, adopted) = open(sealed);
@@ -231,7 +232,7 @@ mod tests {
     /// knew. Without it crossing here, every job would be attributed to nobody.
     #[tokio::test]
     async fn the_actor_crosses_with_the_id() {
-        let producer = Correlation::mint();
+        let producer = Correlation::minted(None);
         let sealed = under(producer.clone(), async {
             nest_rs_core::set_actor_id("alice-42");
             seal(json!({ "clip": 1 }))
@@ -250,7 +251,10 @@ mod tests {
     /// `None` says exactly that.
     #[tokio::test]
     async fn an_anonymous_enqueue_carries_an_id_and_no_actor() {
-        let sealed = under(Correlation::mint(), async { seal(json!({ "clip": 1 })) }).await;
+        let sealed = under(Correlation::minted(None), async {
+            seal(json!({ "clip": 1 }))
+        })
+        .await;
 
         let (_, adopted) = open(sealed);
         assert!(adopted.is_some(), "the job is still correlated");

@@ -161,7 +161,7 @@ where
     // which off a request task is the honest answer rather than a missing id.
     let correlation = match nest_rs_core::current_correlation() {
         Some(request) => request.child(),
-        None => nest_rs_core::Correlation::mint(),
+        None => nest_rs_core::Correlation::minted(None),
     };
     let span = nest_rs_core::operation_span!(
         target: crate::TARGET,

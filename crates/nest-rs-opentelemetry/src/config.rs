@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use nest_rs_config::{ConfigService, env_var};
+use nest_rs_config::{ConfigError, ConfigService, env_var};
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_core::parse_bool;
@@ -30,8 +30,8 @@ pub struct OpenTelemetryConfig {
     /// `service.version` resource attribute (e.g. the crate version or git
     /// SHA). `None` omits the attribute entirely rather than emitting a blank.
     pub service_version: Option<String>,
-    /// `deployment.environment` resource attribute (`prod`, `staging`, …) so a
-    /// backend can partition otherwise-identical services. `None` omits it.
+    /// `deployment.environment.name` resource attribute (`prod`, `staging`, …)
+    /// so a backend can partition otherwise-identical services. `None` omits it.
     pub deployment_environment: Option<String>,
     /// Defaults to a fresh UUID v7 per process so restarts get distinct
     /// identities in the backend.
@@ -65,13 +65,14 @@ pub struct OpenTelemetryConfig {
     pub metric_interval: Duration,
 }
 
-/// Report a set-but-unparseable OTel variable on stderr.
+/// Report a set-but-unparseable **logging-family** variable on stderr.
 ///
-/// `from_env` cannot return `Err` (it builds the config that installs the
-/// subscriber, so it runs before one exists and before `main` can propagate),
-/// but silence is what broke the framework-wide contract: the value was
-/// dropped and the default kept with nothing to read anywhere. Same channel and
-/// shape as `Environment::from_env`'s unrecognised-`NESTRS_ENV` report.
+/// `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG_SOURCE_LOCATION` are the kernel's
+/// family, read before any subscriber exists by whichever console is mounted,
+/// and the kernel's own reader keeps its default with a warning — so this one
+/// answers the same way rather than failing a boot the fallback logger would
+/// let through. This crate's own namespaced variables are refused through
+/// `from_env`'s `Result` instead.
 fn warn_unparseable(name: &str, raw: &str) {
     eprintln!(
         "nestrs: WARNING — unparseable {name}={raw:?}; keeping the default. \
@@ -111,7 +112,11 @@ impl OpenTelemetryConfig {
     }
 
     /// `service_name` is the default; `NESTRS_OPENTELEMETRY__SERVICE_NAME` overrides.
-    pub fn from_env(service_name: impl Into<String>) -> Self {
+    ///
+    /// `Err` when a variable cannot be read at all — both of its spellings set,
+    /// or a `<KEY>_FILE` naming an unreadable file; a readable value that does not
+    /// parse keeps its default with a warning, as before.
+    pub fn from_env(service_name: impl Into<String>) -> Result<Self, ConfigError> {
         let mut cfg = Self::new(service_name);
         // The ordinary namespaced reader — constructing one has no side effect
         // and needs no container, which matters here: `from_env` runs before
@@ -121,12 +126,12 @@ impl OpenTelemetryConfig {
         // report.
         let env = ConfigService::for_namespace("opentelemetry");
 
-        if let Some(v) = env.get("SERVICE_NAME") {
+        if let Some(v) = env.get("SERVICE_NAME")? {
             cfg.service_name = v;
         }
-        cfg.service_version = env.get("SERVICE_VERSION");
-        cfg.deployment_environment = env.get("SERVICE_ENVIRONMENT");
-        cfg.service_instance_id = env.get("SERVICE_INSTANCE_ID");
+        cfg.service_version = env.get("SERVICE_VERSION")?;
+        cfg.deployment_environment = env.get("SERVICE_ENVIRONMENT")?;
+        cfg.service_instance_id = env.get("SERVICE_INSTANCE_ID")?;
 
         // The console layer answers to the framework-wide logging family
         // (`<PREFIX>_LOG*`, owned by nest-rs-core's fallback logger) — an app's
@@ -154,28 +159,21 @@ impl OpenTelemetryConfig {
             }
         }
 
-        cfg.otlp_endpoint = env.get("OTLP_ENDPOINT");
-        if let Some(raw) = env.get("SAMPLE_RATIO") {
-            match raw.trim().parse::<f64>() {
-                Ok(r) => cfg.trace_sample_ratio = r.clamp(0.0, 1.0),
-                Err(_) => warn_unparseable(&env.var_name("SAMPLE_RATIO"), &raw),
-            }
+        cfg.otlp_endpoint = env.get("OTLP_ENDPOINT")?;
+        // Set-but-unparseable is boot-fatal, naming the spelling that was set and
+        // never a value read from a file — the framework-wide contract, which a
+        // `from_env` returning `Result` can now keep.
+        if let Some(ratio) = env.parse::<f64>("SAMPLE_RATIO")? {
+            cfg.trace_sample_ratio = ratio.clamp(0.0, 1.0);
         }
-        // `0` is the documented sentinel for "keep the default"; anything
-        // non-numeric is a typo, and swallowing it silently broke the
-        // framework-wide "set-but-unparseable is never a silent fallback"
-        // contract. This runs before any subscriber exists (it is what
-        // configures one), so the report goes to stderr — the same channel
-        // `Environment::from_env` uses for an unrecognised `<PREFIX>_ENV`.
-        if let Some(raw) = env.get("METRIC_INTERVAL_SECS") {
-            match raw.trim().parse::<u64>() {
-                Ok(0) => {}
-                Ok(secs) => cfg.metric_interval = Duration::from_secs(secs),
-                Err(_) => warn_unparseable(&env.var_name("METRIC_INTERVAL_SECS"), &raw),
-            }
+        // `0` is the documented sentinel for "keep the default".
+        if let Some(secs) = env.parse::<u64>("METRIC_INTERVAL_SECS")?
+            && secs > 0
+        {
+            cfg.metric_interval = Duration::from_secs(secs);
         }
 
-        cfg
+        Ok(cfg)
     }
 
     /// Pin the metric export interval, overriding the SDK's 60 s default.
@@ -219,7 +217,7 @@ impl OpenTelemetryConfig {
         self
     }
 
-    /// Set the `deployment.environment` resource attribute.
+    /// Set the `deployment.environment.name` resource attribute.
     pub fn with_deployment_environment(mut self, env: impl Into<String>) -> Self {
         self.deployment_environment = Some(env.into());
         self
@@ -340,7 +338,7 @@ mod tests {
     #[test]
     fn from_env_falls_back_to_defaults_for_every_optional_field() {
         figment::Jail::expect_with(|_| {
-            let cfg = OpenTelemetryConfig::from_env("default-svc");
+            let cfg = OpenTelemetryConfig::from_env("default-svc").expect("readable config");
             assert_eq!(cfg.service_name, "default-svc");
             assert!(cfg.service_version.is_none());
             assert!(cfg.deployment_environment.is_none());
@@ -370,7 +368,7 @@ mod tests {
             );
             jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "0.25");
 
-            let cfg = OpenTelemetryConfig::from_env("default-svc");
+            let cfg = OpenTelemetryConfig::from_env("default-svc").expect("readable config");
             assert_eq!(cfg.service_name, "override-svc");
             assert_eq!(cfg.service_version.as_deref(), Some("9.9.9"));
             assert_eq!(cfg.deployment_environment.as_deref(), Some("prod"));
@@ -389,7 +387,9 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env("RUST_LOG", "warn,tower=off");
             assert_eq!(
-                OpenTelemetryConfig::from_env("svc").log_filter,
+                OpenTelemetryConfig::from_env("svc")
+                    .expect("readable config")
+                    .log_filter,
                 "warn,tower=off"
             );
             Ok(())
@@ -398,7 +398,9 @@ mod tests {
             jail.set_env(EnvPrefix::var(var::FILTER), "debug");
             jail.set_env("RUST_LOG", "warn");
             assert_eq!(
-                OpenTelemetryConfig::from_env("svc").log_filter,
+                OpenTelemetryConfig::from_env("svc")
+                    .expect("readable config")
+                    .log_filter,
                 "debug",
                 "{} wins over RUST_LOG",
                 EnvPrefix::var(var::FILTER),
@@ -430,22 +432,26 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.set_env(var_name("opentelemetry", "METRIC_INTERVAL_SECS"), "5");
             assert_eq!(
-                OpenTelemetryConfig::from_env("svc").metric_interval,
+                OpenTelemetryConfig::from_env("svc")
+                    .expect("readable config")
+                    .metric_interval,
                 Duration::from_secs(5),
             );
             Ok(())
         });
     }
 
-    /// A zero or unparseable interval keeps the default — a `PeriodicReader`
-    /// on a zero period is a tight export loop, which is worse than a slow one.
+    /// A zero or empty interval keeps the default — a `PeriodicReader` on a zero
+    /// period is a tight export loop, which is worse than a slow one.
     #[test]
-    fn a_zero_or_unparseable_metric_interval_keeps_the_default() {
-        for raw in ["0", "", "soon"] {
+    fn a_zero_or_empty_metric_interval_keeps_the_default() {
+        for raw in ["0", ""] {
             figment::Jail::expect_with(|jail| {
                 jail.set_env(var_name("opentelemetry", "METRIC_INTERVAL_SECS"), raw);
                 assert_eq!(
-                    OpenTelemetryConfig::from_env("svc").metric_interval,
+                    OpenTelemetryConfig::from_env("svc")
+                        .expect("readable config")
+                        .metric_interval,
                     DEFAULT_METRIC_INTERVAL,
                     "`{raw}` must not shorten the interval",
                 );
@@ -464,26 +470,49 @@ mod tests {
     fn from_env_clamps_ratio_outside_zero_to_one() {
         figment::Jail::expect_with(|jail| {
             jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "2.5");
-            assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 1.0);
+            assert_eq!(
+                OpenTelemetryConfig::from_env("svc")
+                    .expect("readable config")
+                    .trace_sample_ratio,
+                1.0
+            );
             Ok(())
         });
         figment::Jail::expect_with(|jail| {
             jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "-0.5");
-            assert_eq!(OpenTelemetryConfig::from_env("svc").trace_sample_ratio, 0.0);
+            assert_eq!(
+                OpenTelemetryConfig::from_env("svc")
+                    .expect("readable config")
+                    .trace_sample_ratio,
+                0.0
+            );
             Ok(())
         });
     }
 
     #[test]
-    fn from_env_ignores_unparseable_ratio_and_log_format() {
+    fn from_env_keeps_the_default_for_an_unparseable_log_format() {
         figment::Jail::expect_with(|jail| {
-            jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "not-a-number");
             jail.set_env(EnvPrefix::var(var::FORMAT), "console");
-            // Both stick to defaults — never panic on bad input.
-            let cfg = OpenTelemetryConfig::from_env("svc");
-            assert_eq!(cfg.trace_sample_ratio, 1.0);
+            let cfg = OpenTelemetryConfig::from_env("svc").expect("readable config");
             assert_eq!(cfg.log_format, LogFormat::Text);
             Ok(())
         });
+    }
+
+    /// This crate's own variables keep the framework contract: set but
+    /// unparseable fails the boot, naming the variable.
+    #[test]
+    fn from_env_refuses_an_unparseable_ratio_or_interval_naming_it() {
+        for key in ["SAMPLE_RATIO", "METRIC_INTERVAL_SECS"] {
+            figment::Jail::expect_with(|jail| {
+                jail.set_env(var_name("opentelemetry", key), "soon");
+                let err = OpenTelemetryConfig::from_env("svc")
+                    .unwrap_err()
+                    .to_string();
+                assert!(err.contains(&var_name("opentelemetry", key)), "{err}");
+                Ok(())
+            });
+        }
     }
 }

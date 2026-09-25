@@ -77,6 +77,7 @@ pub mod discovery;
 pub mod env_flag;
 pub mod env_prefix;
 pub mod error;
+pub mod error_message;
 mod identifier;
 pub mod layer;
 pub mod layer_chain;
@@ -111,6 +112,7 @@ pub use error::{
     AccessGraphError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
     KeyedDependencyError, MissingDependencyError, ScopeViolationError, UnresolvedFactoryError,
 };
+pub use error_message::error_message;
 pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;

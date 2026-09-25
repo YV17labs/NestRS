@@ -11,7 +11,7 @@ use crate::attr::{
     is_uuid,
 };
 
-pub fn emit(model: &ResourceModel) -> TokenStream2 {
+pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     let output = &model.output_ident;
     let source = &model.source_ident;
     let mut decls = Vec::new();

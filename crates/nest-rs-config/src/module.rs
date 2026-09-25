@@ -193,7 +193,7 @@ mod tests {
         impl Config for SeamConfig {
             fn from_env(env: &ConfigService, base: Self) -> crate::Result<Self> {
                 Ok(Self {
-                    bucket: env.get("BUCKET").unwrap_or(base.bucket),
+                    bucket: env.get("BUCKET")?.unwrap_or(base.bucket),
                 })
             }
         }
@@ -345,7 +345,9 @@ mod tests {
             // own process, so the `OnceLock` is always this test's. The guard
             // made the read half of the cell unfailable, which is worse than
             // empty (`testing.md` clause 3).
-            let value = crate::ConfigService::for_namespace("readpath_guard").get("URL");
+            let value = crate::ConfigService::for_namespace("readpath_guard")
+                .get("URL")
+                .unwrap();
             assert_eq!(
                 value.as_deref(),
                 Some("from_dotenv"),

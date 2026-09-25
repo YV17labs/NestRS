@@ -32,6 +32,21 @@ impl std::error::Error for DbFailure {}
 /// The alias the return-type detection cannot see through.
 type ServiceResult<T> = Result<T, DbFailure>;
 
+/// The same shape with an error that is `Display` and **not** `Error` — the one
+/// a bound on the alias path let fall to the blanket impl and ship whole.
+#[derive(Debug, Serialize)]
+struct DisplayOnly {
+    dsn: String,
+}
+
+impl std::fmt::Display for DisplayOnly {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("display-only failure")
+    }
+}
+
+type DisplayOnlyResult<T> = Result<T, DisplayOnly>;
+
 /// A pipe that always rejects — exercises the WS pipe error path.
 struct Reject;
 
@@ -50,7 +65,7 @@ struct NameInput {
 }
 
 #[gateway(path = "/test")]
-pub struct TestGateway;
+pub(crate) struct TestGateway;
 
 #[messages]
 impl TestGateway {
@@ -124,10 +139,78 @@ impl TestGateway {
         Err(failure())
     }
 
+    #[subscribe_message("renamed_display_only")]
+    #[public]
+    async fn renamed_display_only_handler(&self) -> DisplayOnlyResult<String> {
+        Err(DisplayOnly {
+            dsn: "postgres://u:hunter2@db".to_string(),
+        })
+    }
+
     #[subscribe_message("renamed_ok")]
     #[public]
     async fn renamed_ok_handler(&self) -> ServiceResult<String> {
         Ok("fine".to_string())
+    }
+
+    // A `Result` around a `Result`: the inner `Err` is the handler's failure,
+    // spelled literally or through the alias.
+    #[subscribe_message("nested_literal")]
+    #[public]
+    async fn nested_literal_handler(&self) -> Result<Result<String, DbFailure>, std::io::Error> {
+        Ok(Err(failure()))
+    }
+
+    #[subscribe_message("nested_renamed")]
+    #[public]
+    async fn nested_renamed_handler(&self) -> ServiceResult<Result<String, DbFailure>> {
+        Ok(Err(failure()))
+    }
+
+    #[subscribe_message("nested_ok")]
+    #[public]
+    async fn nested_ok_handler(&self) -> Result<ServiceResult<String>, std::io::Error> {
+        Ok(Ok("fine".to_string()))
+    }
+
+    // Errors that are not `Send + Sync`, each with a cause beneath its sentence.
+    #[subscribe_message("unsendable_boxed")]
+    #[public]
+    async fn unsendable_boxed_handler(&self) -> Result<String, Box<dyn std::error::Error>> {
+        Err(Box::new(LocalFailure::new()))
+    }
+
+    #[subscribe_message("unsendable_rc")]
+    #[public]
+    async fn unsendable_rc_handler(&self) -> Result<String, LocalFailure> {
+        Err(LocalFailure::new())
+    }
+}
+
+/// An error holding an `Rc` — neither `Send` nor `Sync` — whose sentence names
+/// no cause, so only a walk of its chain reaches the one beneath it.
+#[derive(Debug)]
+struct LocalFailure {
+    cause: std::rc::Rc<std::io::Error>,
+}
+
+impl LocalFailure {
+    fn new() -> Self {
+        Self {
+            cause: std::rc::Rc::new(std::io::Error::other("replica lagging")),
+        }
+    }
+}
+
+impl std::fmt::Display for LocalFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("read failed")
+    }
+}
+
+impl std::error::Error for LocalFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.cause)
     }
 }
 
@@ -371,6 +454,27 @@ async fn an_aliased_result_produces_an_error_frame_not_a_serialized_err() {
     assert_eq!(event.field("event").as_deref(), Some("renamed"));
 }
 
+/// An alias whose error is `Display` alone is still a `Result`: it replies with
+/// an error frame and a `warn`, never with the error struct serialized as data.
+#[tokio::test]
+async fn an_aliased_result_with_a_display_only_error_is_an_error_frame() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "renamed_display_only",
+            serde_json::Value::Null,
+        )
+        .await;
+
+    match reply {
+        WsReply::Error(msg) => assert_eq!(msg.error, "display-only failure"),
+        WsReply::Reply(value) => panic!("the Err variant was shipped as a success frame — {value}"),
+        WsReply::None => panic!("expected an error frame"),
+    }
+    logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
+}
+
 /// Both spellings produce the same frame — the point of the fix is that the
 /// contract no longer depends on how the type was written.
 #[tokio::test]
@@ -406,6 +510,63 @@ async fn an_aliased_result_still_replies_on_ok() {
     match reply {
         WsReply::Reply(v) => assert_eq!(v.as_str(), Some("fine")),
         _ => panic!("expected the Ok value"),
+    }
+}
+
+/// A handler returns at most a `Result` around a `Result`, and the inner `Err` is
+/// a failure like the outer one. It used to be the `Ok` value, serialized whole:
+/// `{"Err": {"dsn": …}}` in a frame shaped like a success, with no `warn`.
+#[tokio::test]
+async fn a_result_inside_a_result_is_an_error_frame_however_it_is_spelled() {
+    for event in ["nested_literal", "nested_renamed"] {
+        let logs = nest_rs_testing::LogCapture::install();
+        match TestGateway
+            .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
+            .await
+        {
+            WsReply::Error(msg) => assert_eq!(msg.error, "database unavailable", "{event}"),
+            WsReply::Reply(value) => {
+                panic!("`{event}`: the inner Err was shipped as a success frame — {value}")
+            }
+            WsReply::None => panic!("`{event}`: expected an error frame"),
+        }
+        let line = logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
+        assert_eq!(line.field("event").as_deref(), Some(event));
+    }
+}
+
+#[tokio::test]
+async fn a_result_inside_a_result_replies_with_the_inner_value() {
+    match TestGateway
+        .dispatch(&WsClient::for_test(), "nested_ok", serde_json::Value::Null)
+        .await
+    {
+        WsReply::Reply(v) => assert_eq!(v.as_str(), Some("fine")),
+        _ => panic!("expected the inner Ok value"),
+    }
+}
+
+/// An error that is not `Send + Sync` cannot become a boxed `Send + Sync` one,
+/// and it used to fall to the `Display` fallback — the operator's line carried
+/// its sentence and lost every cause beneath it. It is still an `Error`, so its
+/// chain is walked.
+#[tokio::test]
+async fn an_error_that_is_not_send_logs_its_cause_chain() {
+    for event in ["unsendable_boxed", "unsendable_rc"] {
+        let logs = nest_rs_testing::LogCapture::install();
+        match TestGateway
+            .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
+            .await
+        {
+            WsReply::Error(msg) => assert_eq!(msg.error, "read failed", "{event}"),
+            _ => panic!("`{event}`: expected an error frame"),
+        }
+        let line = logs.expect_one("nest_rs::ws", "subscribe_message handler returned Err");
+        assert_eq!(
+            line.field("error").as_deref(),
+            Some("read failed: replica lagging"),
+            "`{event}` logs the whole chain",
+        );
     }
 }
 
@@ -489,7 +650,7 @@ async fn a_malformed_payload_warns_on_the_ws_target() {
 // boot does with two gateways that share a path.
 
 #[gateway(path = "/ws", version = "1")]
-pub struct VersionedGateway;
+pub(crate) struct VersionedGateway;
 
 #[messages]
 impl VersionedGateway {
@@ -766,7 +927,7 @@ use std::time::Duration;
 const QUIET: Duration = Duration::from_millis(150);
 
 #[gateway(path = "/socket")]
-pub struct SocketGateway;
+pub(crate) struct SocketGateway;
 
 #[messages]
 impl SocketGateway {
@@ -1021,4 +1182,38 @@ async fn an_unknown_event_answers_once_and_leaves_the_socket_open() {
     );
 
     app.shutdown().await.expect("the transport stops cleanly");
+}
+
+// ── Connection hooks under `#[cfg]` ─────────────────────────────────────────
+//
+// An attribute macro reads a method before its `#[cfg]` is evaluated, so every
+// hook reaches the expansion — including one compiled out. Keeping only the
+// last one seen dropped a hook that *is* compiled in whenever a compiled-out
+// one followed it.
+
+static CFG_HOOK_RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[gateway(path = "/cfg-hooks")]
+pub(crate) struct CfgHookGateway;
+
+#[messages]
+impl CfgHookGateway {
+    #[cfg(test)]
+    #[on_connect]
+    fn connected(&self) {
+        CFG_HOOK_RAN.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(any())]
+    #[on_connect]
+    fn never_compiled(&self) {}
+}
+
+#[tokio::test]
+async fn a_hook_compiled_in_survives_a_compiled_out_one_declared_after_it() {
+    CfgHookGateway.on_connect(&WsClient::for_test()).await;
+    assert!(
+        CFG_HOOK_RAN.load(std::sync::atomic::Ordering::SeqCst),
+        "the `#[on_connect]` whose `#[cfg]` holds is the one the gateway runs",
+    );
 }

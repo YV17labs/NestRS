@@ -16,6 +16,15 @@
 //! [`SocialModule`](crate::SocialModule), which never learns the provider
 //! exists.
 
+/// A required credential holding only whitespace configures nothing, exactly
+/// like an empty one, and is refused the same way.
+pub(crate) fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
+    if value.trim().is_empty() {
+        return Err(validator::ValidationError::new("blank"));
+    }
+    Ok(())
+}
+
 /// First-party GitHub OAuth provider.
 pub mod github;
 /// First-party Google OIDC provider.

@@ -168,10 +168,10 @@ impl Config for GraphqlConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let d = base;
         Ok(Self {
-            path: env.get("PATH").unwrap_or(d.path),
+            path: env.get("PATH")?.unwrap_or(d.path),
             playground: env.flag("PLAYGROUND", d.playground)?,
             schema_path: env
-                .get("SCHEMA_PATH")
+                .get("SCHEMA_PATH")?
                 .map(PathBuf::from)
                 .unwrap_or(d.schema_path),
             emit_sdl: env.flag("EMIT_SDL", d.emit_sdl)?,

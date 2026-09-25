@@ -131,7 +131,7 @@ fn merge_file(path: &Path, values: &mut HashMap<String, String>) {
             tracing::warn!(
                 target: crate::TARGET,
                 path = %path.display(),
-                error = %e,
+                error = %nest_rs_core::error_message(&e),
                 "skipping unreadable .env file",
             );
             return;

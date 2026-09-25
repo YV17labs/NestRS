@@ -146,7 +146,7 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
 #[tokio::test]
 async fn a_successful_check_publishes_the_actor_into_the_ambient_context() {
     let guard = AuthnGuard::new(Arc::new(AuthenticateAs("ada")));
-    let correlation = nest_rs_core::Correlation::mint();
+    let correlation = nest_rs_core::Correlation::minted(None);
 
     let seen = nest_rs_core::with_request_scope(None, correlation, async {
         let mut req = Request::default();
@@ -170,7 +170,7 @@ async fn a_successful_check_publishes_the_actor_into_the_ambient_context() {
 /// `""` or `"anonymous"`.
 #[tokio::test]
 async fn an_unauthenticated_caller_has_no_ambient_actor() {
-    let correlation = nest_rs_core::Correlation::mint();
+    let correlation = nest_rs_core::Correlation::minted(None);
 
     let seen = nest_rs_core::with_request_scope(None, correlation, async {
         // No guard ran at all — the shape of every request before authentication

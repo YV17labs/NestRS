@@ -104,7 +104,7 @@ pub async fn attempt(
     // system — starts a trace instead; see `envelope`.
     let (job, inherited) = envelope::open(payload);
     let continued_trace = inherited.is_some();
-    let correlation = inherited.unwrap_or_else(nest_rs_core::Correlation::mint);
+    let correlation = inherited.unwrap_or_else(|| nest_rs_core::Correlation::minted(None));
     // One span per job attempt; `attempt` distinguishes retries of the same
     // job_id. `.instrument` (not an entered guard held across `.await`) keeps
     // the span current for the whole poll. Through `operation_span!` so a job

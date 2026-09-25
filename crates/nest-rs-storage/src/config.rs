@@ -1,4 +1,4 @@
-use nest_rs_config::{Config, ConfigError, ConfigService, Environment, config};
+use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Setting, config};
 
 /// S3-compatible object storage configuration, read from the
 /// framework-namespaced `NESTRS_STORAGE__*` keys.
@@ -87,23 +87,15 @@ impl Config for StorageConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         let d = base;
         let allow_http = env.flag("ALLOW_HTTP", d.allow_http)?;
+        let access_key = env.setting("ACCESS_KEY")?;
+        let secret_key = env.setting("SECRET_KEY")?;
+        refuse_half_a_credential(env, &d, access_key.as_ref(), secret_key.as_ref())?;
         Ok(Self {
-            endpoint: resolve_endpoint(
-                env.get("ENDPOINT").unwrap_or(d.endpoint),
-                allow_http,
-                &env.var_name("ENDPOINT"),
-                &env.var_name("ALLOW_HTTP"),
-            )?,
-            region: env.get("REGION").unwrap_or(d.region),
-            access_key: resolve_credential(
-                env.get("ACCESS_KEY").unwrap_or(d.access_key),
-                &env.var_name("ACCESS_KEY"),
-            )?,
-            secret_key: resolve_credential(
-                env.get("SECRET_KEY").unwrap_or(d.secret_key),
-                &env.var_name("SECRET_KEY"),
-            )?,
-            bucket: env.get("BUCKET").unwrap_or(d.bucket),
+            endpoint: resolve_endpoint(env, env.setting("ENDPOINT")?, d.endpoint, allow_http)?,
+            region: env.get("REGION")?.unwrap_or(d.region),
+            access_key: resolve_credential(env, "ACCESS_KEY", access_key, d.access_key)?,
+            secret_key: resolve_credential(env, "SECRET_KEY", secret_key, d.secret_key)?,
+            bucket: env.get("BUCKET")?.unwrap_or(d.bucket),
             force_path_style: env.flag("FORCE_PATH_STYLE", d.force_path_style)?,
             allow_http,
         })
@@ -121,25 +113,72 @@ impl Config for StorageConfig {
 /// Rejecting the pairing where the config is resolved fixes both halves at
 /// once: no unencrypted transfer can be attempted, no plaintext URL can be
 /// signed, and a mis-deployed app fails boot naming the variable instead of
-/// starting healthy and 500-ing on first use. Pure, so the branch is testable
-/// without env mutation.
+/// starting healthy and 500-ing on first use. The refusal names the spelling
+/// the deployment set and quotes the endpoint only when no file held it.
 fn resolve_endpoint(
-    endpoint: String,
+    env: &ConfigService,
+    setting: Option<Setting>,
+    base: String,
     allow_http: bool,
-    endpoint_var: &str,
-    allow_http_var: &str,
 ) -> nest_rs_config::Result<String> {
-    if is_plaintext(&endpoint) && !allow_http {
-        return Err(ConfigError::parse(
-            endpoint_var,
-            format!(
-                "plain-http endpoint `{endpoint}` is refused because {allow_http_var} is false \
-                 (the staging/production default) — credentials and presigned URLs would travel \
-                 unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in"
-            ),
-        ));
+    let allow_http_var = env.var_name("ALLOW_HTTP");
+    let reason = |endpoint: &dyn std::fmt::Display| {
+        format!(
+            "plain-http endpoint `{endpoint}` is refused because {allow_http_var} is false \
+             (the staging/production default) — credentials and presigned URLs would travel \
+             unencrypted; use an https:// endpoint, or set {allow_http_var}=true to opt in"
+        )
+    };
+    match setting {
+        Some(setting) if is_plaintext(&setting.value) && !allow_http => {
+            Err(setting.refuse(reason(&setting.shown())))
+        }
+        Some(setting) => Ok(setting.value),
+        None if is_plaintext(&base) && !allow_http => {
+            Err(ConfigError::parse(env.var_name("ENDPOINT"), reason(&base)))
+        }
+        None => Ok(base),
     }
-    Ok(endpoint)
+}
+
+/// Refuse a credential pair the environment set only half of, whatever supplies
+/// the other half.
+///
+/// An access key and its secret are one credential. The environment's half
+/// beside a half pinned in code, or beside the public `nestrs` development
+/// sentinel, is a pair nobody issued: the store refuses it at first use, or —
+/// against a dev server that still accepts the sentinel — the app talks to it
+/// with a key nobody chose. So the environment replaces the pair whole or not
+/// at all, and the refusal says where the other half would have come from — the
+/// shape the HTTP transport's half-pair refusal has over a pinned certificate.
+fn refuse_half_a_credential(
+    env: &ConfigService,
+    base: &StorageConfig,
+    access_key: Option<&Setting>,
+    secret_key: Option<&Setting>,
+) -> nest_rs_config::Result<()> {
+    let built_in = StorageConfig::default();
+    let (set, other, other_value, built_in_value) = match (access_key, secret_key) {
+        (Some(set), None) => (set, "SECRET_KEY", &base.secret_key, &built_in.secret_key),
+        (None, Some(set)) => (set, "ACCESS_KEY", &base.access_key, &built_in.access_key),
+        _ => return Ok(()),
+    };
+    let (set_var, other_file_var) = (set.var(), env.var_name(&format!("{other}_FILE")));
+    let message = if other_value.trim().is_empty() {
+        format!("is not set, nor is {other_file_var}, beside {set_var} — set both")
+    } else {
+        let source = if other_value == built_in_value {
+            "the built-in development default"
+        } else {
+            "the value pinned in code"
+        };
+        format!(
+            "is not set, nor is {other_file_var}, beside {set_var}, so the other half of the pair \
+             would be {source} — set {} too, so the pair is replaced whole rather than mixed",
+            env.spellings(other),
+        )
+    };
+    Err(ConfigError::parse(env.var_name(other), message))
 }
 
 /// Whether `endpoint` addresses the store over unencrypted HTTP.
@@ -162,18 +201,31 @@ fn dev_profile() -> bool {
     )
 }
 
-/// The resolved credential, refusing a blank one by naming its variable. Blank
-/// is only reachable outside dev/test, where [`Config::defaults`] drops the dev
-/// sentinel — so this is where STORAGE-ST1 lands as a boot error. Pure, so the
-/// branch is testable without env mutation.
-fn resolve_credential(resolved: String, var: &str) -> nest_rs_config::Result<String> {
-    if resolved.trim().is_empty() {
-        return Err(ConfigError::parse(
-            var,
-            "must be set in staging/production (no dev-credential fallback outside dev/test)",
-        ));
+/// The resolved credential, refusing a blank one by naming its variable. An
+/// unset one is blank only outside dev/test, where [`Config::defaults`] drops
+/// the dev sentinel — so this is where STORAGE-ST1 lands as a boot error. A
+/// value the deployment set blank is refused under the spelling that set it.
+fn resolve_credential(
+    env: &ConfigService,
+    key: &str,
+    setting: Option<Setting>,
+    base: String,
+) -> nest_rs_config::Result<String> {
+    const NO_FALLBACK: &str = "in staging/production (no dev-credential fallback outside dev/test)";
+    match setting {
+        Some(setting) if setting.value.trim().is_empty() => {
+            Err(setting.refuse(format_args!("is blank — it must be set {NO_FALLBACK}")))
+        }
+        Some(setting) => Ok(setting.value),
+        None if base.trim().is_empty() => Err(ConfigError::parse(
+            env.var_name(key),
+            format!(
+                "must be set, inline or through {}, {NO_FALLBACK}",
+                env.var_name(&format!("{key}_FILE"))
+            ),
+        )),
+        None => Ok(base),
     }
-    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -197,29 +249,37 @@ mod tests {
         assert_eq!(d.secret_key, "nestrs");
     }
 
+    fn unset() -> ConfigService {
+        ConfigService::with_vars("storage", [])
+    }
+
     #[test]
-    fn credential_blank_aborts_naming_its_variable() {
+    fn credential_blank_aborts_naming_both_its_spellings() {
         // STORAGE-ST1: outside dev/test `Config::defaults` drops the sentinel, so
         // an unset variable arrives here blank and must abort by name.
-        let err = resolve_credential(
-            String::new(),
-            &nest_rs_config::var_name("storage", "SECRET_KEY"),
-        )
-        .expect_err("must abort");
+        let err = resolve_credential(&unset(), "SECRET_KEY", None, String::new())
+            .expect_err("must abort")
+            .to_string();
         assert!(
-            err.to_string().contains("SECRET_KEY"),
+            err.contains(&nest_rs_config::var_name("storage", "SECRET_KEY")),
             "the error names the variable: {err}",
         );
         assert!(
-            resolve_credential("   ".into(), "K").is_err(),
+            err.contains(&nest_rs_config::var_name("storage", "SECRET_KEY_FILE")),
+            "and its file spelling: {err}",
+        );
+        assert!(
+            resolve_credential(&unset(), "SECRET_KEY", None, "   ".into()).is_err(),
             "whitespace-only is blank too",
         );
     }
 
     #[test]
     fn credential_set_is_taken_verbatim() {
+        let env = ConfigService::with_vars("storage", [("ACCESS_KEY", "AKIAREAL")]);
+        let setting = env.setting("ACCESS_KEY").expect("reads");
         assert_eq!(
-            resolve_credential("AKIAREAL".into(), "K").expect("set ⇒ ok"),
+            resolve_credential(&env, "ACCESS_KEY", setting, String::new()).expect("set ⇒ ok"),
             "AKIAREAL",
         );
     }
@@ -229,13 +289,8 @@ mod tests {
     // working plaintext URLs in production. The pairing has to die at load.
     #[test]
     fn a_plain_http_endpoint_is_refused_when_allow_http_is_false() {
-        let err = resolve_endpoint(
-            "http://minio.internal:9000".into(),
-            false,
-            &nest_rs_config::var_name("storage", "ENDPOINT"),
-            &nest_rs_config::var_name("storage", "ALLOW_HTTP"),
-        )
-        .expect_err("plaintext + allow_http=false must abort boot");
+        let err = resolve_endpoint(&unset(), None, "http://minio.internal:9000".into(), false)
+            .expect_err("plaintext + allow_http=false must abort boot");
         let rendered = err.to_string();
         assert!(
             rendered.contains("ENDPOINT"),
@@ -247,7 +302,7 @@ mod tests {
         );
         // Case-insensitive and whitespace-tolerant — a scheme is not a shibboleth.
         assert!(
-            resolve_endpoint("  HTTP://x:9000".into(), false, "E", "A").is_err(),
+            resolve_endpoint(&unset(), None, "  HTTP://x:9000".into(), false).is_err(),
             "the scheme check must not be defeated by case or leading space",
         );
     }
@@ -256,7 +311,7 @@ mod tests {
     fn https_and_the_empty_aws_endpoint_are_always_accepted() {
         for endpoint in ["https://s3.example", "", "https://minio:9000"] {
             assert_eq!(
-                resolve_endpoint(endpoint.into(), false, "E", "A").expect("encrypted ⇒ ok"),
+                resolve_endpoint(&unset(), None, endpoint.into(), false).expect("encrypted ⇒ ok"),
                 endpoint,
             );
         }
@@ -266,7 +321,8 @@ mod tests {
     fn a_plain_http_endpoint_is_accepted_when_allow_http_is_opted_in() {
         // The dev/test default, and the documented production opt-in.
         assert_eq!(
-            resolve_endpoint("http://rustfs:9000".into(), true, "E", "A").expect("opted in ⇒ ok"),
+            resolve_endpoint(&unset(), None, "http://rustfs:9000".into(), true)
+                .expect("opted in ⇒ ok"),
             "http://rustfs:9000",
         );
     }
@@ -290,6 +346,8 @@ mod tests {
     fn env_overrides_each_field_of_a_pinned_config_independently() {
         let pinned = StorageConfig {
             bucket: "pinned-bucket".into(),
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
             ..Default::default()
         };
         let cfg = StorageConfig::from_env(
@@ -298,17 +356,134 @@ mod tests {
                 [
                     ("ENDPOINT", "https://s3.example"),
                     ("ACCESS_KEY", "AKIAREAL"),
+                    ("SECRET_KEY", "real-secret"),
                 ],
             ),
             pinned,
         )
-        .expect("overlay resolves");
+        .expect("a whole pair over a whole pin resolves");
         assert_eq!(cfg.endpoint, "https://s3.example");
         assert_eq!(cfg.access_key, "AKIAREAL");
+        assert_eq!(cfg.secret_key, "real-secret", "the pair is replaced whole");
         assert_eq!(
             cfg.bucket, "pinned-bucket",
             "the pin survives where the env is silent"
         );
-        assert_eq!(cfg.secret_key, "nestrs", "and so does the rest of the pin");
+    }
+
+    /// Half a pair from the environment over a pair pinned in code is refused
+    /// too, in both directions — a key the deployment issued beside a secret
+    /// someone pinned is not a credential — and the refusal says the other half
+    /// is the pinned one.
+    #[test]
+    fn half_a_credential_over_a_pinned_pair_is_refused_saying_the_other_is_pinned() {
+        let pinned = StorageConfig {
+            access_key: "AKIAPINNED".into(),
+            secret_key: "pinned-secret".into(),
+            ..Default::default()
+        };
+        for (set, missing) in [("ACCESS_KEY", "SECRET_KEY"), ("SECRET_KEY", "ACCESS_KEY")] {
+            let err = StorageConfig::from_env(
+                &ConfigService::with_vars("storage", [(set, "FROM-DEPLOY")]),
+                pinned.clone(),
+            )
+            .expect_err("a deployment half beside a pinned half is refused");
+            let rendered = err.to_string();
+            assert!(
+                rendered.starts_with(&format!(
+                    "invalid value for {}",
+                    nest_rs_config::var_name("storage", missing)
+                )),
+                "names {missing}: {rendered}"
+            );
+            assert!(rendered.contains("pinned in code"), "{rendered}");
+        }
+    }
+
+    /// One half of the credential pair from the environment beside the other
+    /// half's built-in development default is refused, naming the missing
+    /// variable — in both directions.
+    #[test]
+    fn half_a_credential_beside_the_built_in_default_is_refused() {
+        for (set, missing) in [("ACCESS_KEY", "SECRET_KEY"), ("SECRET_KEY", "ACCESS_KEY")] {
+            let err = StorageConfig::from_env(
+                &ConfigService::with_vars("storage", [(set, "from-the-deployment")]),
+                StorageConfig::default(),
+            )
+            .expect_err("half a credential beside the dev default is refused");
+            assert!(
+                err.to_string().starts_with(&format!(
+                    "invalid value for {}",
+                    nest_rs_config::var_name("storage", missing)
+                )),
+                "names {missing}: {err}"
+            );
+        }
+    }
+
+    /// A file holding `contents`, removed on drop — the value a `_FILE`
+    /// variable names.
+    struct SecretFile(std::path::PathBuf);
+
+    impl SecretFile {
+        fn new(name: &str, contents: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("nest-rs-storage-{name}-{}", std::process::id()));
+            std::fs::write(&path, contents).expect("write the fixture");
+            Self(path)
+        }
+
+        fn path(&self) -> &str {
+            self.0.to_str().expect("a UTF-8 path")
+        }
+    }
+
+    impl Drop for SecretFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// Half a pair given as a file is refused naming the `_FILE` spelling that
+    /// was set, and both spellings of the half that was not.
+    #[test]
+    fn half_a_credential_given_as_a_file_names_both_spellings() {
+        let access = SecretFile::new("access", "AKIA-FROM-FILE\n");
+        let err = StorageConfig::from_env(
+            &ConfigService::with_vars("storage", [("ACCESS_KEY_FILE", access.path())]),
+            StorageConfig::default(),
+        )
+        .expect_err("half a credential is refused")
+        .to_string();
+        assert!(
+            err.contains(&nest_rs_config::var_name("storage", "ACCESS_KEY_FILE")),
+            "names the spelling that was set: {err}"
+        );
+        assert!(
+            err.contains(&nest_rs_config::var_name("storage", "SECRET_KEY_FILE")),
+            "and the other half's file spelling: {err}"
+        );
+        assert!(!err.contains("AKIA-FROM-FILE"), "{err}");
+    }
+
+    /// A plaintext endpoint read from a file is refused under its `_FILE`
+    /// variable, and the endpoint is not quoted.
+    #[test]
+    fn a_plain_http_endpoint_from_a_file_is_refused_without_quoting_it() {
+        let endpoint = SecretFile::new("endpoint", "http://user:hunter2@minio:9000\n");
+        let err = StorageConfig::from_env(
+            &ConfigService::with_vars(
+                "storage",
+                [("ENDPOINT_FILE", endpoint.path()), ("ALLOW_HTTP", "false")],
+            ),
+            StorageConfig::default(),
+        )
+        .expect_err("plaintext is refused")
+        .to_string();
+        assert!(
+            err.contains(&nest_rs_config::var_name("storage", "ENDPOINT_FILE")),
+            "{err}"
+        );
+        assert!(!err.contains("hunter2"), "{err}");
     }
 }

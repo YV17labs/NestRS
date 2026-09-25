@@ -2,18 +2,21 @@
 //! methods, finds those tagged with `#[liveness]` / `#[readiness]` /
 //! `#[startup]`, strips the attribute, and submits one `HealthIndicator` per
 //! method to the link-time inventory. The methods stay on the impl block
-//! unchanged so they remain regular `async fn` callable from anywhere.
+//! unchanged so they remain regular methods callable from anywhere.
 //!
 //! Discoverable is NOT emitted here — the provider's own `#[injectable]` owns
 //! it. Inventory is exactly the seam `#[hooks]`, `#[scheduled]`, and
 //! `#[processor]` use, for the same reason.
 
-use nest_rs_codegen::{DecoratorPair, impl_self_ident};
+use nest_rs_codegen::{
+    DecoratorPair, HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit,
+    shared_receiver,
+};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::spanned::Spanned;
-use syn::{ImplItem, ReturnType};
+use syn::ImplItem;
+use syn::ext::IdentExt;
 
 /// The indicator host keeps its own `#[injectable]`; this names the shape
 /// `#[indicators]` wants rather than reporting syn's `expected impl`.
@@ -27,6 +30,19 @@ const PROBE_ATTRS: [(&str, &str); 3] = [
 ];
 
 pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
+    let written = TokenStream2::from(input.clone());
+    let expansion = expand(args, input).into();
+    INDICATORS_PAIR
+        .keep_item_on_refusal(
+            written,
+            expansion,
+            &PROBE_ATTRS.map(|(name, _)| name),
+            |_| TokenStream2::new(),
+        )
+        .into()
+}
+
+fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     if let Err(err) = INDICATORS_PAIR.reject_args(&args, "the provider's scope is declared by") {
         return err.to_compile_error().into();
@@ -38,10 +54,11 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
     };
     let self_ty = item.self_ty.clone();
     let host_check = INDICATORS_PAIR.provider_host_check(&self_ty);
-    let provider_name = match impl_self_ident(&self_ty, "#[indicators]") {
-        Ok(ident) => ident.to_string(),
+    let provider = match impl_self_ident(&self_ty, "#[indicators]") {
+        Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
     };
+    let provider_name = provider.unraw().to_string();
 
     let mut submissions: Vec<TokenStream2> = Vec::new();
 
@@ -50,67 +67,56 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let probe = method.attrs.iter().enumerate().find_map(|(idx, attr)| {
-            PROBE_ATTRS
-                .iter()
-                .find(|(name, _)| attr.path().is_ident(name))
-                .map(|(_, variant)| (idx, *variant))
-        });
-        let Some((idx, kind_variant)) = probe else {
+        // One probe per method, through the family's helper, and that one taken
+        // through `take_flag_attr`, so an argument on it —
+        // `#[readiness(timeout = "5s")]` compiled and meant nothing — is a named
+        // compile error rather than something dropped.
+        let accepted: Vec<&str> = PROBE_ATTRS.iter().map(|(name, _)| *name).collect();
+        let index =
+            match nest_rs_codegen::one_role_per_method("probe", &method.attrs, &accepted, "") {
+                Ok(Some(index)) => index,
+                Ok(None) => continue,
+                Err(err) => return err.to_compile_error().into(),
+            };
+        let Some((name, kind_variant)) = PROBE_ATTRS
+            .into_iter()
+            .find(|(name, _)| method.attrs[index].path().is_ident(name))
+        else {
             continue;
         };
-        let attr = method.attrs.remove(idx);
-
-        // A second probe attribute on the same method is a per-method
-        // mutual-exclusion violation — surface it at compile.
-        if let Some(extra) = method.attrs.iter().find(|attr| {
-            PROBE_ATTRS
-                .iter()
-                .any(|(name, _)| attr.path().is_ident(name))
-        }) {
-            let declared = [
-                nest_rs_codegen::key_as_written(attr.path()),
-                nest_rs_codegen::key_as_written(extra.path()),
-            ];
-            let accepted: Vec<&str> = PROBE_ATTRS.iter().map(|(name, _)| *name).collect();
-            return syn::Error::new(
-                extra.span(),
-                nest_rs_codegen::one_role_per_method("probe", &declared, &accepted),
-            )
-            .to_compile_error()
-            .into();
+        if let Err(err) = nest_rs_codegen::take_flag_attr(&mut method.attrs, name) {
+            return err.to_compile_error().into();
         }
 
-        if method.sig.asyncness.is_none() {
-            return syn::Error::new_spanned(
-                &method.sig,
-                nest_rs_codegen::must_be_async("#[indicators]"),
-            )
-            .to_compile_error()
-            .into();
+        if let Err(err) = shared_receiver(method, "#[indicators]", &provider, HostBorrow::Arc) {
+            return err.to_compile_error().into();
+        }
+        if let Err(err) = nest_rs_codegen::concrete_signature(method, "#[indicators]") {
+            return err.to_compile_error().into();
         }
 
         let method_ident = method.sig.ident.clone();
-        let method_name = method_ident.to_string();
-        let kind_ident = syn::Ident::new(kind_variant, attr.span());
+        let method_name = method_ident.unraw().to_string();
+        let kind_ident = syn::Ident::new(kind_variant, method_ident.span());
+        let cfgs = cfg_attrs(&method.attrs);
 
-        // Adapt the method's return to `anyhow::Result<()>`. A bare method is
-        // infallible (always `up`); a returning one must yield
-        // `Result<(), E: Into<anyhow::Error>>`.
-        let invoke = match &method.sig.output {
-            ReturnType::Default => quote! {
-                <#self_ty>::#method_ident(&__provider).await;
+        // Adapt the method's return to `anyhow::Result<()>`. A method answering
+        // `()` — written or not — is infallible (always `up`); any other must
+        // yield `Result<(), E: Into<anyhow::Error>>`.
+        let call = await_if_async(&method.sig, quote!(<#self_ty>::#method_ident(&__provider)));
+        let invoke = if returns_unit(&method.sig.output) {
+            quote! {
+                #call;
                 ::std::result::Result::Ok(())
-            },
-            ReturnType::Type(..) => quote! {
-                ::std::result::Result::map_err(
-                    <#self_ty>::#method_ident(&__provider).await,
-                    ::std::convert::Into::into,
-                )
-            },
+            }
+        } else {
+            quote! {
+                ::std::result::Result::map_err(#call, ::std::convert::Into::into)
+            }
         };
 
         submissions.push(quote! {
+            #(#cfgs)*
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_health::HealthIndicator {
                     origin: ::core::module_path!(),

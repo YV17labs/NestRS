@@ -106,7 +106,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
             .await
             .expect("connect"),
     );
-    let correlation = nest_rs_core::Correlation::mint();
+    let correlation = nest_rs_core::Correlation::minted(None);
     // This run's own marker, so a job left behind by an earlier run cannot be
     // mistaken for it — see `SEEN`.
     let seq = std::time::SystemTime::now()

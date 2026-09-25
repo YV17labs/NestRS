@@ -32,14 +32,14 @@ mod ghost {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
     #[sea_orm(table_name = "bind_probe_table_that_does_not_exist")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
         pub title: String,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }

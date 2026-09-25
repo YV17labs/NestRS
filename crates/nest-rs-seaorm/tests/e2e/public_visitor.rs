@@ -24,7 +24,7 @@ mod post {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
     #[sea_orm(table_name = "visitor_probe_posts")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: i32,
         pub title: String,
@@ -33,7 +33,7 @@ mod post {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -110,7 +110,7 @@ macro_rules! visitor_app {
 
             #[nest_rs_core::injectable]
             #[derive(Default)]
-            pub struct $factory;
+            pub(super) struct $factory;
 
             impl AbilityFactory for $factory {
                 type Actor = ();
@@ -120,11 +120,11 @@ macro_rules! visitor_app {
                 $define_visitor
             }
 
-            pub type VisitorGuard = AbilityGuard<$factory>;
+            pub(super) type VisitorGuard = AbilityGuard<$factory>;
 
             #[controller(path = "/posts")]
             #[use_guards(VisitorGuard)]
-            pub struct PostsController;
+            pub(super) struct PostsController;
 
             #[routes]
             impl PostsController {
@@ -159,9 +159,9 @@ macro_rules! visitor_app {
                     ],
                 providers = [$factory, VisitorGuard, PostsController],
             )]
-            pub struct AppModule;
+            pub(super) struct AppModule;
 
-            pub async fn boot() -> TestApp {
+            pub(super) async fn boot() -> TestApp {
                 TestApp::builder()
                     .module::<AppModule>()
                     .use_guards_global([guard::<VisitorGuard>()])

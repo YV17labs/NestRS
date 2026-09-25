@@ -516,19 +516,24 @@ struct Shared {
 }
 
 impl Correlation {
-    /// Start a trace: new trace id, new span, no parent, no actor.
+    /// Start a trace: new trace id, new span, no parent — for `actor` when an
+    /// audit identity arrived without a trace context worth continuing.
     ///
     /// What every edge that accepts work with no upstream writes — a scheduled
     /// tick, a job carrying no envelope trace, an endpoint mounted outside any
     /// transport — and what a transport writes when it *restarts* a trace it was
-    /// not willing to continue.
-    pub fn mint() -> Self {
+    /// not willing to continue. `actor` is `Some` only where the identity cannot
+    /// be re-derived: a queue job whose envelope names who pushed it but carries
+    /// no usable `traceparent`, where losing the actor with the trace would leave
+    /// the job anonymous exactly where its envelope said who it was for. Every
+    /// other caller passes `None` and lets its guard fill the slot.
+    pub fn minted(actor: Option<&str>) -> Self {
         Self::open(
             TraceId::mint(),
             None,
             TraceFlags::started(),
             TraceState::default(),
-            None,
+            actor,
         )
     }
 
@@ -564,10 +569,10 @@ impl Correlation {
     /// What every edge that *accepts* work writes: a socket taking its upgrade's
     /// trace, a producer sealing an envelope, an endpoint mounted outside any
     /// transport. Spelled once here because five sites wrote it as
-    /// `current_correlation().unwrap_or_else(Correlation::mint)` — five copies of
+    /// `current_correlation().unwrap_or_else(|| Correlation::minted(None))` — five copies of
     /// one decision, in a kernel that owns both halves.
     pub fn inherited() -> Self {
-        current_correlation().unwrap_or_else(Self::mint)
+        current_correlation().unwrap_or_else(|| Self::minted(None))
     }
 
     /// A new unit of work inside the trace this one is already serving — a WS
@@ -726,8 +731,9 @@ pub fn current_actor_id() -> Option<String> {
 /// mid-request, and [`Correlation::open`], which fills the slot up front from a
 /// value that arrived with the work. The second is the one that matters here —
 /// `nest_rs_queue::envelope::open` reads an actor out of a job envelope and hands
-/// it to [`Correlation::continued`], so an empty one reaches this slot on a path
-/// where *nothing downstream can re-derive the actor*: a worker holds no
+/// it to [`Correlation::continued`] — or to [`Correlation::minted`], when the
+/// trace context beside it is missing or unusable — so an empty one reaches this
+/// slot on a path where *nothing downstream can re-derive the actor*: a worker holds no
 /// credential to re-authenticate with. Guarding only the guard's side would have
 /// left that path open, which is a bandaid rather than a second layer.
 fn set_actor(shared: &Shared, actor_id: &str) {
@@ -924,7 +930,7 @@ const fn unhex(byte: u8) -> Option<u8> {
 ///     pub const REQUEST: &str = "http.request";
 /// }
 ///
-/// let correlation = Correlation::mint();
+/// let correlation = Correlation::minted(None);
 /// let span = operation_span!(
 ///     target: TARGET,
 ///     kind: kind::SERVER,
@@ -1019,7 +1025,7 @@ mod tests {
 
     #[test]
     fn a_traceparent_round_trips() {
-        let correlation = Correlation::mint();
+        let correlation = Correlation::minted(None);
         let header = correlation.traceparent().to_string();
         assert_eq!(header.len(), VERSION_00_LEN, "{header}");
 
@@ -1113,7 +1119,7 @@ mod tests {
 
     #[test]
     fn continuing_keeps_the_trace_and_starts_a_new_span() {
-        let caller = Correlation::mint();
+        let caller = Correlation::minted(None);
         let continued = Correlation::continued(caller.traceparent(), TraceState::default(), None);
 
         assert_eq!(continued.trace_id(), caller.trace_id(), "one trace");
@@ -1129,7 +1135,7 @@ mod tests {
     /// job is one trace and two spans, and the job knows which request caused it.
     #[test]
     fn a_child_names_its_parent_and_shares_the_actor() {
-        let request = Correlation::mint();
+        let request = Correlation::minted(None);
         set_actor_on(&request, "alice-42");
         let job = request.child();
 
@@ -1237,7 +1243,7 @@ mod tests {
         // value — it would make the real principal unrecordable for the rest of
         // the unit of work, with nothing anywhere saying so. An empty `sub` from
         // a lenient issuer reaches this function through the authn guard.
-        let correlation = Correlation::mint();
+        let correlation = Correlation::minted(None);
         crate::request_scope::with_request_scope(None, correlation, async {
             set_actor_id("");
             assert_eq!(

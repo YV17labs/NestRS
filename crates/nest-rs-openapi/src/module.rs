@@ -119,7 +119,7 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
                         Err(err) => tracing::warn!(
                             target: crate::TARGET,
                             path = %dest.display(),
-                            error = %err,
+                            error = %nest_rs_core::error_message(&err),
                             "failed to write OpenAPI document",
                         ),
                     });

@@ -20,8 +20,6 @@
 //! be *read* by the model so it can retry with corrected input — return it
 //! directly and never route it through here.
 
-use std::fmt::Display;
-
 use nest_rs_pipes::PipeError;
 use rmcp::ErrorData as McpError;
 
@@ -32,7 +30,8 @@ use nest_rs_core::OPAQUE_CLIENT_MESSAGE as OPAQUE;
 
 /// Turn a failure the model must not read into one it may.
 ///
-/// Implemented for every `Result` whose error is printable, so it covers a
+/// Implemented for every `Result` whose error converts into a boxed error, so
+/// the whole cause chain reaches the operator's line. It covers a
 /// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
 /// any of them having to know MCP exists.
 ///
@@ -44,12 +43,16 @@ pub trait Opaque<T> {
     fn opaque(self) -> Result<T, McpError>;
 }
 
-impl<T, E: Display> Opaque<T> for Result<T, E> {
+impl<T, E> Opaque<T> for Result<T, E>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     fn opaque(self) -> Result<T, McpError> {
         self.map_err(|err| {
+            let err: Box<dyn std::error::Error + Send + Sync> = err.into();
             tracing::error!(
                 target: crate::TARGET,
-                error = %err,
+                error = %nest_rs_core::error_message(&*err),
                 "mcp operation failed",
             );
             McpError::internal_error(OPAQUE, None)

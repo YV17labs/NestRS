@@ -4,10 +4,10 @@ use std::time::Duration;
 use nest_rs_config::{Config, ConfigService, Result, config};
 use poem::http::HeaderName;
 
-use crate::cors::CorsConfig;
+use crate::cors::HttpCors;
 use crate::raw_body::RawBody;
-use crate::security_headers::SecurityHeadersConfig;
-use crate::tls::TlsConfig;
+use crate::security_headers::HttpSecurityHeaders;
+use crate::tls::HttpTls;
 use crate::versioning::{ApiVersioning, DEFAULT_VERSION_HEADER, VersionSelector};
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -38,10 +38,10 @@ pub struct HttpConfig {
     pub port: u16,
     /// PEM cert + key for HTTPS. `None` ⇒ plain HTTP. Picked up from
     /// `NESTRS_HTTP__TLS_CERT[_FILE]` + `NESTRS_HTTP__TLS_KEY[_FILE]`.
-    pub tls: Option<TlsConfig>,
+    pub tls: Option<HttpTls>,
     /// CORS policy. `None` ⇒ no CORS layer. Populated when
-    /// `NESTRS_HTTP__CORS_ORIGINS` is set (see [`CorsConfig`]).
-    pub cors: Option<CorsConfig>,
+    /// `NESTRS_HTTP__CORS_ORIGINS` is set (see [`HttpCors`]).
+    pub cors: Option<HttpCors>,
     /// How a caller selects an API version. `uri` (the default) reads it from
     /// the path a `#[controller(version = …)]` mounts at; `header` and
     /// `media_type` resolve it per request instead. Read from
@@ -106,9 +106,9 @@ pub struct HttpConfig {
     /// Default security response headers (`nosniff`, `X-Frame-Options`,
     /// `Referrer-Policy`, the `Cross-Origin-*` pair, HSTS under TLS). On by
     /// default; tune via `NESTRS_HTTP__SECURITY_HEADERS` (the master switch)
-    /// and one key per header — see [`SecurityHeadersConfig`], which also
+    /// and one key per header — see [`HttpSecurityHeaders`], which also
     /// carries the argument for the three members that ship off.
-    pub security_headers: SecurityHeadersConfig,
+    pub security_headers: HttpSecurityHeaders,
     /// Negotiate response compression (gzip / deflate / brotli / zstd) from the
     /// request's `Accept-Encoding`. Off by default — leave it to the reverse
     /// proxy in most deployments; flip on with `NESTRS_HTTP__COMPRESSION=true`
@@ -178,7 +178,7 @@ impl Default for HttpConfig {
             max_body_bytes: Some(RawBody::DEFAULT_LIMIT),
             request_timeout: Some(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS)),
             fail_secure_strict: true,
-            security_headers: SecurityHeadersConfig::default(),
+            security_headers: HttpSecurityHeaders::default(),
             compression: false,
             // On by default. A deployment that serves requests and records none
             // of them is the surprising configuration, not the reverse.
@@ -223,7 +223,7 @@ impl HttpConfig {
 impl Config for HttpConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let global_prefix = env
-            .get("GLOBAL_PREFIX")
+            .get("GLOBAL_PREFIX")?
             .map(|raw| {
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
@@ -234,30 +234,31 @@ impl Config for HttpConfig {
             })
             .unwrap_or(base.global_prefix);
         Ok(Self {
-            host: env.get("HOST").unwrap_or(base.host),
+            host: env.get("HOST")?.unwrap_or(base.host),
             port: env.parse("PORT")?.unwrap_or(base.port),
             // The reader owns the name: a literal here would cite a variable
             // the operator does not have once the app declares its own prefix.
-            tls: TlsConfig::from_env(env, base.tls).map_err(|e| {
-                nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), e.to_string())
+            tls: HttpTls::from_env(env, base.tls).map_err(|e| {
+                // A refusal the reader worded, or a file it could not read, is
+                // already a `ConfigError` naming its variable — and the second
+                // carries the I/O reason as its source, which a string drops.
+                match e.downcast::<nest_rs_config::ConfigError>() {
+                    Ok(worded) => worded,
+                    Err(e) => {
+                        nest_rs_config::ConfigError::parse(env.var_name("TLS_*"), format!("{e:#}"))
+                    }
+                }
             })?,
-            cors: CorsConfig::from_env(env, base.cors).map_err(|e| {
-                nest_rs_config::ConfigError::parse(env.var_name("CORS_*"), e.to_string())
-            })?,
-            versioning: match env.get("VERSIONING") {
-                Some(raw) => raw.parse().map_err(|msg: String| {
-                    nest_rs_config::ConfigError::parse(env.var_name("VERSIONING"), msg)
-                })?,
-                None => base.versioning,
-            },
+            cors: HttpCors::from_env(env, base.cors)?,
+            versioning: env.parse("VERSIONING")?.unwrap_or(base.versioning),
             version_header: version_header(env, base.version_header)?,
-            default_version: env.get("DEFAULT_VERSION").or(base.default_version),
+            default_version: env.get("DEFAULT_VERSION")?.or(base.default_version),
             server_header: env.flag("SERVER_HEADER", base.server_header)?,
             global_prefix,
             max_body_bytes: env.parse("MAX_BODY_BYTES")?.or(base.max_body_bytes),
             request_timeout: env.seconds("REQUEST_TIMEOUT_SECS", base.request_timeout)?,
             fail_secure_strict: env.flag("FAIL_SECURE_STRICT", base.fail_secure_strict)?,
-            security_headers: SecurityHeadersConfig::from_env(env, base.security_headers)?,
+            security_headers: HttpSecurityHeaders::from_env(env, base.security_headers)?,
             compression: env.flag("COMPRESSION", base.compression)?,
             access_log: env.flag("ACCESS_LOG", base.access_log)?,
             trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
@@ -271,13 +272,15 @@ impl Config for HttpConfig {
 /// an unusable name aborts the boot naming the variable rather than silently
 /// disabling version selection at the first request.
 fn version_header(env: &ConfigService, base: String) -> Result<String> {
-    let raw = env.get("VERSION_HEADER").unwrap_or(base);
-    match HeaderName::from_bytes(raw.as_bytes()) {
-        Ok(_) => Ok(raw),
-        Err(_) => Err(nest_rs_config::ConfigError::parse(
-            env.var_name("VERSION_HEADER"),
-            format!("{raw:?} is not a valid HTTP header name"),
-        )),
+    let Some(raw) = env.setting("VERSION_HEADER")? else {
+        return Ok(base);
+    };
+    match HeaderName::from_bytes(raw.value.as_bytes()) {
+        Ok(_) => Ok(raw.value),
+        Err(_) => Err(raw.refuse(format_args!(
+            "`{}` is not a valid HTTP header name",
+            raw.shown()
+        ))),
     }
 }
 
@@ -290,18 +293,24 @@ fn parse_trusted_proxies(env: &ConfigService, base: Vec<IpAddr>) -> Result<Vec<I
     const KEY: &str = "TRUSTED_PROXIES";
     // `ConfigService` has no typed-list reader, so the raw list is parsed here.
     // The pinned base short-circuits rather than round-tripping through strings.
-    let Some(raw) = env.get(KEY) else {
+    let Some(raw) = env.setting(KEY)? else {
         return Ok(base);
     };
-    raw.split(',')
+    raw.value
+        .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| {
+        .enumerate()
+        .map(|(index, s)| {
             s.parse::<IpAddr>().map_err(|e| {
-                nest_rs_config::ConfigError::parse(
-                    env.var_name(KEY),
-                    format!("invalid IP `{s}`: {e}"),
-                )
+                if raw.from_file() {
+                    raw.refuse(format_args!(
+                        "entry {} of the list in the file it names is not an IP address: {e}",
+                        index + 1
+                    ))
+                } else {
+                    raw.refuse(format_args!("invalid IP `{s}`: {e}"))
+                }
             })
         })
         .collect()
@@ -312,6 +321,64 @@ fn parse_trusted_proxies(env: &ConfigService, base: Vec<IpAddr>) -> Result<Vec<I
 #[allow(clippy::result_large_err)]
 mod tests {
     use super::*;
+
+    /// A TLS file the transport cannot read fails the boot as the reader worded
+    /// it — the variable, the path, and the I/O reason as the source — instead
+    /// of a string that cannot tell a missing file from a permission error.
+    #[test]
+    fn an_unreadable_tls_file_fails_the_boot_with_its_reason() {
+        let env = ConfigService::with_vars(
+            "http",
+            [
+                ("TLS_CERT_FILE", "/nonexistent/nest-rs-http/cert.pem"),
+                ("TLS_KEY_FILE", "/nonexistent/nest-rs-http/key.pem"),
+            ],
+        );
+        let error = HttpConfig::from_env(&env, HttpConfig::default())
+            .expect_err("an unreadable file fails the boot");
+        assert!(
+            matches!(error, nest_rs_config::ConfigError::File { .. }),
+            "{error}"
+        );
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "the I/O reason travels as the source: {error}",
+        );
+    }
+
+    /// A value read from a `_FILE` spelling is refused under that spelling and
+    /// never quoted — at every key `HttpConfig` judges itself.
+    #[test]
+    fn a_refused_value_from_a_file_names_its_file_variable_and_is_never_shown() {
+        const SECRET: &str = "hunter2_secret";
+        for (key, content) in [
+            ("VERSIONING", SECRET.to_owned()),
+            ("TRUSTED_PROXIES", format!("10.0.0.1,{SECRET}")),
+            ("VERSION_HEADER", format!("{SECRET} bad")),
+            ("TLS_RELOAD_SECS", SECRET.to_owned()),
+            ("CORS_MAX_AGE", SECRET.to_owned()),
+            ("HSTS", format!("{SECRET}\u{7}")),
+        ] {
+            figment::Jail::expect_with(|jail| {
+                jail.create_file("value", &content)?;
+                let file_key = format!("{key}_FILE");
+                let mut vars = vec![(file_key.as_str(), "value")];
+                if key == "CORS_MAX_AGE" {
+                    vars.push(("CORS_ORIGINS", "https://a.example"));
+                }
+                let env = ConfigService::with_vars("http", vars);
+                let err = HttpConfig::from_env(&env, HttpConfig::default())
+                    .expect_err("the value is refused")
+                    .to_string();
+                assert!(
+                    err.contains(&nest_rs_config::var_name("http", &file_key)),
+                    "{key}: names the file spelling: {err}"
+                );
+                assert!(!err.contains(SECRET), "{key}: never shows the value: {err}");
+                Ok(())
+            });
+        }
+    }
 
     #[test]
     fn defaults_bind_all_interfaces_on_3000_with_no_tls_no_cors() {

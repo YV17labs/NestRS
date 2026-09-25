@@ -257,7 +257,7 @@ fn mask_failure<S>(
     action: Action,
     reason: &'static str,
     detail: &'static str,
-    err: Option<&dyn std::fmt::Display>,
+    err: Option<&(dyn std::error::Error + 'static)>,
     body: &'static str,
 ) -> Response {
     warn_mask_failure(

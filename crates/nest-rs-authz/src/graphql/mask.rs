@@ -270,7 +270,7 @@ fn mask_failure<E>(
         detail,
         Some(transport::GRAPHQL),
         None,
-        Some(&err),
+        Some(err),
     );
     Error::new("response masking failed: value did not match the authorized subject type")
 }

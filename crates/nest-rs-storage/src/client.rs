@@ -455,7 +455,7 @@ async fn abort_upload(upload: &mut Box<dyn MultipartUpload>, key: &str) {
         Err(error) => tracing::warn!(
             target: crate::TARGET,
             key,
-            error = %error,
+            error = %nest_rs_core::error_message(&error),
             "multipart upload left dangling parts",
         ),
     }

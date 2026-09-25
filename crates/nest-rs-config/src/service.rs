@@ -38,6 +38,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -45,6 +46,8 @@ use std::time::Duration;
 use nest_rs_core::EnvPrefix;
 
 use crate::error::ConfigError;
+use crate::material::{Material, read_material};
+use crate::setting::Setting;
 use crate::source::{ConfigSource, EnvSource, MapSource};
 
 thread_local! {
@@ -54,8 +57,8 @@ thread_local! {
     /// construction — it is one call, on the resolving thread, with a
     /// `&ConfigService` it may hand to as many inherent sub-readers as it likes.
     /// That is exactly why the recording sits on the *reader* rather than on the
-    /// config type: `HttpConfig` delegates ten of its keys to `TlsConfig`,
-    /// `CorsConfig` and `SecurityHeadersConfig`, none of which is a `Config`, and
+    /// config type: `HttpConfig` delegates ten of its keys to `HttpTls`,
+    /// `HttpCors` and `HttpSecurityHeaders`, none of which is a `Config`, and
     /// nothing that inspects types can see those reads.
     static READING: RefCell<Option<BTreeSet<String>>> = const { RefCell::new(None) };
 }
@@ -206,6 +209,35 @@ pub fn var_name(namespace: &str, key: &str) -> String {
     )
 }
 
+/// Both spellings of a namespaced variable, as a sentence names a setting the
+/// deployment may give either way: `<PREFIX>_<DOMAIN>__<KEY> (or
+/// <PREFIX>_<DOMAIN>__<KEY>_FILE)`.
+///
+/// The one wording for a message citing a variable that is **not** the one
+/// being refused — the other half of a pair, a setting that is missing — where
+/// no [`Setting`] says which spelling applies. A value that *was* read is
+/// refused through [`Setting::refuse`] instead, which names the spelling set.
+///
+/// ```
+/// use nest_rs_config::{spellings, var_name};
+///
+/// assert_eq!(
+///     spellings("storage", "SECRET_KEY"),
+///     format!(
+///         "{} (or {})",
+///         var_name("storage", "SECRET_KEY"),
+///         var_name("storage", "SECRET_KEY_FILE"),
+///     ),
+/// );
+/// ```
+pub fn spellings(namespace: &str, key: &str) -> String {
+    format!(
+        "{} (or {})",
+        var_name(namespace, key),
+        var_name(namespace, &file_key(key))
+    )
+}
+
 /// Which tiers of the environment outrank the value a field falls back to.
 ///
 /// A `Config` is always resolved as *environment over a base*. What the base
@@ -285,8 +317,9 @@ impl ConfigService {
     /// ```
     /// # use nest_rs_config::ConfigService;
     /// let cfg = ConfigService::with_vars("app", [("PORT", "8080")]);
-    /// assert_eq!(cfg.get("PORT").as_deref(), Some("8080"));
-    /// assert_eq!(cfg.get("MISSING"), None);
+    /// assert_eq!(cfg.get("PORT")?.as_deref(), Some("8080"));
+    /// assert_eq!(cfg.get("MISSING")?, None);
+    /// # Ok::<(), nest_rs_config::ConfigError>(())
     /// ```
     pub fn with_vars<'a>(
         namespace: &str,
@@ -305,39 +338,162 @@ impl ConfigService {
         var_name(&self.namespace, key)
     }
 
-    /// The raw string value for `key` in this namespace, or `None` if unset in
-    /// every tier this reader's precedence lets through.
-    pub fn get(&self, key: &str) -> Option<String> {
-        let var = self.var_name(key);
-        // The one funnel: `parse`, `flag`, `seconds`, `count` and `list` all
-        // reach the environment through here, so recording once records every
-        // read. `var_name` deliberately does not record — it *cites* a variable
-        // in a message (sometimes a glob, `TLS_*`), which is not a claim on one.
-        READING.with(|cell| {
-            if let Some(read) = cell.borrow_mut().as_mut() {
-                read.insert(var.clone());
+    /// Both spellings of `key` in this namespace — see the free [`spellings`].
+    pub fn spellings(&self, key: &str) -> String {
+        spellings(&self.namespace, key)
+    }
+
+    /// The value of `key` in this namespace, from whichever of its two spellings
+    /// the deployment set: inline in `<KEY>`, or in the file `<KEY>_FILE` names —
+    /// the container-secrets convention, so a secret never has to sit in the
+    /// process environment. `Ok(None)` when neither is set in any tier this
+    /// reader's precedence lets through.
+    ///
+    /// A value read from a file must be UTF-8 and has its trailing line breaks
+    /// removed: an editor or `echo` ends a secret file with one, and a variable's
+    /// value never does. An empty file is unset, as an empty variable is. Both
+    /// spellings set in one tier, or a file that cannot be read, is boot-fatal —
+    /// see [`material`](Self::material).
+    pub fn get(&self, key: &str) -> Result<Option<String>, ConfigError> {
+        Ok(self.setting(key)?.map(|setting| setting.value))
+    }
+
+    /// [`get`](Self::get), keeping which spelling supplied the value — for a
+    /// consumer that judges the value itself. Its refusal is
+    /// [`Setting::refuse`], which names the variable the deployment actually
+    /// set, and it quotes the value only through [`Setting::shown`], which never
+    /// repeats what a file held.
+    pub fn setting(&self, key: &str) -> Result<Option<Setting>, ConfigError> {
+        match self.spelled(key)? {
+            None => Ok(None),
+            Some(Spelled::Inline(value)) => {
+                Ok(Some(Setting::new(value, self.var_name(key), false)))
             }
-        });
-        match self.precedence {
-            Precedence::OverDefaults => self.source.get(&var),
-            Precedence::OverPinned => self.source.get_from_deployment(&var),
+            Some(Spelled::File(path)) => {
+                let var = self.var_name(&file_key(key));
+                let bytes = self.read_file(key, &path)?;
+                let text = String::from_utf8(bytes).map_err(|_| {
+                    ConfigError::parse(var.clone(), "names a file that is not UTF-8 text")
+                })?;
+                let value = text.trim_end_matches(['\n', '\r']);
+                Ok((!value.is_empty()).then(|| Setting::new(value.to_owned(), var, true)))
+            }
         }
     }
 
+    /// The bytes of `key` as the deployment gave them, and the file they came
+    /// from — for a consumer that parses bytes rather than text (a certificate, a
+    /// key) or re-reads the file when it is renewed. Resolved exactly as
+    /// [`get`](Self::get) resolves it, with the bytes kept as read; a file holding
+    /// nothing but line breaks is unset.
+    ///
+    /// **The deployment chooses the spelling.** When either spelling is present
+    /// in the deployment tier — empty included, which is how a deployment unsets
+    /// a committed value — both are read from the deployment alone, so a `.env`
+    /// value under the other spelling is shadowed exactly as one under the same
+    /// name is. Both spellings set within the tier that answers is one variable
+    /// given twice, refused naming both. Whether the value makes sense beside the
+    /// consumer's other settings is the consumer's to decide. The path has its
+    /// surrounding ASCII whitespace trimmed — a YAML block scalar adds a trailing
+    /// newline — and must name a regular file of at most a mebibyte; anything
+    /// else is boot-fatal, naming the variable and never its value. The
+    /// [`Setting`] around the material says which spelling supplied it, so a
+    /// consumer's refusal of the bytes names that variable.
+    pub fn material(&self, key: &str) -> Result<Option<Setting<Material>>, ConfigError> {
+        Ok(match self.spelled(key)? {
+            None => None,
+            Some(Spelled::Inline(value)) => Some(Setting::new(
+                Material {
+                    bytes: value.into_bytes(),
+                    path: None,
+                },
+                self.var_name(key),
+                false,
+            )),
+            Some(Spelled::File(path)) => {
+                let bytes = self.read_file(key, &path)?;
+                let blank = bytes.iter().all(|byte| matches!(byte, b'\n' | b'\r'));
+                (!blank).then(|| {
+                    Setting::new(
+                        Material {
+                            bytes,
+                            path: Some(path),
+                        },
+                        self.var_name(&file_key(key)),
+                        true,
+                    )
+                })
+            }
+        })
+    }
+
+    /// Which spelling of `key` the tier that answers set, refusing both.
+    fn spelled(&self, key: &str) -> Result<Option<Spelled>, ConfigError> {
+        let file_key = file_key(key);
+        let (var, file_var) = (self.var_name(key), self.var_name(&file_key));
+        self.record(&var);
+        self.record(&file_var);
+        let deployment_only = self.precedence == Precedence::OverPinned
+            || self.source.in_deployment(&var)
+            || self.source.in_deployment(&file_var);
+        let read = |name: &str| {
+            let value = if deployment_only {
+                self.source.get_from_deployment(name)
+            } else {
+                self.source.get(name)
+            };
+            // Empty is unset whatever the source: the trait asks for it, and a
+            // custom source that forgets would otherwise blank a default — or
+            // make a key see two spellings where one was set.
+            value.filter(|value| !value.is_empty())
+        };
+        match (read(&var), read(&file_var)) {
+            (None, None) => Ok(None),
+            (Some(value), None) => Ok(Some(Spelled::Inline(value))),
+            (None, Some(path)) => Ok(Some(Spelled::File(PathBuf::from(
+                path.trim_matches(|c: char| c.is_ascii_whitespace()),
+            )))),
+            (Some(_), Some(_)) => Err(ConfigError::parse(
+                var,
+                format!(
+                    "is set together with {file_var} — give the value once, inline or as a path"
+                ),
+            )),
+        }
+    }
+
+    fn read_file(&self, key: &str, path: &std::path::Path) -> Result<Vec<u8>, ConfigError> {
+        read_material(path).map_err(|source| ConfigError::File {
+            var: self.var_name(&file_key(key)),
+            source,
+        })
+    }
+
+    /// Record `var` as read by the config whose `from_env` is in flight.
+    ///
+    /// The one funnel: every public reader reaches the environment through
+    /// [`spelled`](Self::spelled), which records both spellings of a key.
+    /// `var_name` deliberately does not record — it *cites* a variable in a
+    /// message (sometimes a glob, `TLS_*`), which is not a claim on one.
+    fn record(&self, var: &str) {
+        READING.with(|cell| {
+            if let Some(read) = cell.borrow_mut().as_mut() {
+                read.insert(var.to_owned());
+            }
+        });
+    }
+
     /// `Err` (naming the variable) when set-but-unparseable — boot-fatal, no
-    /// silent fallback.
+    /// silent fallback. [`Setting::parse`] words the refusal, so a value read
+    /// from a file is never passed through the parser's reason.
     pub fn parse<T>(&self, key: &str) -> Result<Option<T>, ConfigError>
     where
         T: FromStr,
         T::Err: std::fmt::Display,
     {
-        match self.get(key) {
-            None => Ok(None),
-            Some(raw) => raw
-                .parse::<T>()
-                .map(Some)
-                .map_err(|e| ConfigError::parse(self.var_name(key), e.to_string())),
-        }
+        self.setting(key)?
+            .map(|setting| setting.parse())
+            .transpose()
     }
 
     /// `1`/`true`/`yes`/`on` and their negatives, case-insensitive.
@@ -350,13 +506,17 @@ impl ConfigService {
     /// error naming the variable, where a subscriber has no error path and takes
     /// its default.
     pub fn flag(&self, key: &str, default: bool) -> Result<bool, ConfigError> {
-        match self.get(key) {
+        match self.setting(key)? {
             None => Ok(default),
-            Some(raw) => nest_rs_core::parse_bool(&raw).ok_or_else(|| {
-                ConfigError::parse(
-                    self.var_name(key),
-                    format!("expected a boolean, got `{raw}`"),
-                )
+            Some(setting) => nest_rs_core::parse_bool(&setting.value).ok_or_else(|| {
+                if setting.from_file() {
+                    setting.refuse("expected a boolean in the file it names")
+                } else {
+                    setting.refuse(format_args!(
+                        "expected a boolean, got `{}`",
+                        setting.shown()
+                    ))
+                }
             }),
         }
     }
@@ -404,8 +564,9 @@ impl ConfigService {
     /// field keeps when the variable is unset — the same shape as
     /// [`flag`](Self::flag), so a `from_env` body passes `base.<field>` and the
     /// overlay reads the same way for every field type.
-    pub fn list(&self, key: &str, default: Vec<String>) -> Vec<String> {
-        self.get(key)
+    pub fn list(&self, key: &str, default: Vec<String>) -> Result<Vec<String>, ConfigError> {
+        Ok(self
+            .get(key)?
             .map(|raw| {
                 raw.split(',')
                     .map(str::trim)
@@ -413,8 +574,18 @@ impl ConfigService {
                     .map(ToOwned::to_owned)
                     .collect()
             })
-            .unwrap_or(default)
+            .unwrap_or(default))
     }
+}
+
+/// The two spellings a key is given in.
+enum Spelled {
+    Inline(String),
+    File(PathBuf),
+}
+
+fn file_key(key: &str) -> String {
+    format!("{key}_FILE")
 }
 
 #[cfg(test)]
@@ -422,6 +593,425 @@ impl ConfigService {
 #[allow(clippy::result_large_err)]
 mod tests {
     use super::*;
+
+    /// A source with a deployment tier over a cascade, the shape `EnvSource`
+    /// serves, where a deployment entry may be present and empty.
+    struct Tiers {
+        deployment: std::collections::HashMap<String, String>,
+        cascade: std::collections::HashMap<String, String>,
+    }
+
+    impl Tiers {
+        fn new(deployment: &[(&str, &str)], cascade: &[(&str, &str)]) -> Arc<Self> {
+            let named = |pairs: &[(&str, &str)]| {
+                pairs
+                    .iter()
+                    .map(|(key, value)| (var_name("tiers", key), (*value).to_owned()))
+                    .collect()
+            };
+            Arc::new(Self {
+                deployment: named(deployment),
+                cascade: named(cascade),
+            })
+        }
+    }
+
+    impl ConfigSource for Tiers {
+        fn get(&self, var: &str) -> Option<String> {
+            match self.deployment.get(var) {
+                Some(value) => Some(value.clone()).filter(|v| !v.is_empty()),
+                None => self.cascade.get(var).cloned(),
+            }
+        }
+        fn get_from_deployment(&self, var: &str) -> Option<String> {
+            self.deployment.get(var).cloned().filter(|v| !v.is_empty())
+        }
+        fn in_deployment(&self, var: &str) -> bool {
+            self.deployment.contains_key(var)
+        }
+    }
+
+    /// A deployment that blanks a variable unsets it under both spellings: a
+    /// committed `_FILE` does not come back through the other name.
+    #[test]
+    fn a_blank_deployment_value_shadows_the_cascade_file_spelling() {
+        let env = ConfigService::with_source(
+            "tiers",
+            Tiers::new(&[("SECRET", "")], &[("SECRET_FILE", "/nonexistent/secret")]),
+        );
+        assert_eq!(env.get("SECRET").unwrap(), None);
+    }
+
+    /// The deployment chooses the spelling, pinned or not: a deployment `_FILE`
+    /// beside a committed inline value is the deployment's answer, not a refusal.
+    #[test]
+    fn a_deployment_spelling_shadows_the_other_spelling_in_the_cascade() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("secret", "from-the-deployment\n")?;
+            let deployed_file =
+                || Tiers::new(&[("SECRET_FILE", "secret")], &[("SECRET", "committed")]);
+            let unpinned = ConfigService::with_source("tiers", deployed_file());
+            assert_eq!(
+                unpinned.get("SECRET").unwrap().as_deref(),
+                Some("from-the-deployment")
+            );
+            let pinned = ConfigService::with_source("tiers", deployed_file()).over_pinned();
+            assert_eq!(
+                pinned.get("SECRET").unwrap().as_deref(),
+                Some("from-the-deployment")
+            );
+            Ok(())
+        });
+    }
+
+    /// An empty file is unset, as an empty variable is — so a default survives it.
+    #[test]
+    fn an_empty_file_is_unset() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("empty", "\n")?;
+            let env =
+                ConfigService::with_vars("fixture", [("LIST_FILE", "empty"), ("ON_FILE", "empty")]);
+            assert_eq!(env.get("LIST").unwrap(), None);
+            assert_eq!(
+                env.list("LIST", vec!["default".into()]).unwrap(),
+                ["default"]
+            );
+            assert!(env.flag("ON", true).unwrap());
+            assert!(env.material("LIST").unwrap().is_none());
+            Ok(())
+        });
+    }
+
+    /// A refusal names the spelling the deployment set, and never repeats a value
+    /// read from a file — `_FILE` is the secrets channel.
+    #[test]
+    fn a_value_from_a_file_is_refused_under_its_file_variable_and_never_shown() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("secret", "hunter2-SECRET")?;
+            let env = ConfigService::with_vars(
+                "fixture",
+                [("ON_FILE", "secret"), ("PORT_FILE", "secret")],
+            );
+            let flag = env.flag("ON", false).unwrap_err().to_string();
+            assert!(flag.contains(&var_name("fixture", "ON_FILE")), "{flag}");
+            assert!(!flag.contains("hunter2"), "{flag}");
+            let port = env.parse::<u16>("PORT").unwrap_err().to_string();
+            assert!(port.contains(&var_name("fixture", "PORT_FILE")), "{port}");
+            Ok(())
+        });
+    }
+
+    /// A parser whose error quotes its input, as `T::Err` is free to.
+    #[derive(Debug)]
+    struct Echoing;
+    impl FromStr for Echoing {
+        type Err = String;
+        fn from_str(s: &str) -> Result<Self, String> {
+            Err(format!("unknown value {s:?}"))
+        }
+    }
+
+    /// `parse` keeps the parser's reason for an inline value and drops it for
+    /// one read from a file, whose content it may quote.
+    #[test]
+    fn parse_never_passes_a_file_value_through_the_parsers_reason() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("secret", "hunter2-SECRET")?;
+            let from_file = ConfigService::with_vars("fixture", [("MODE_FILE", "secret")])
+                .parse::<Echoing>("MODE")
+                .unwrap_err()
+                .to_string();
+            assert!(!from_file.contains("hunter2"), "{from_file}");
+            assert!(
+                from_file.contains(&var_name("fixture", "MODE_FILE")),
+                "{from_file}"
+            );
+            assert!(from_file.contains("does not parse as"), "{from_file}");
+
+            let inline = ConfigService::with_vars("fixture", [("MODE", "sideways")])
+                .parse::<Echoing>("MODE")
+                .unwrap_err()
+                .to_string();
+            assert!(inline.contains("unknown value \"sideways\""), "{inline}");
+            Ok(())
+        });
+    }
+
+    /// A consumer's refusal names the spelling that supplied the value, and
+    /// quotes a file's content only as a placeholder.
+    #[test]
+    fn a_setting_refuses_under_its_spelling_and_shows_a_file_value_as_a_placeholder() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("secret", "hunter2-SECRET\n")?;
+            let env = ConfigService::with_vars("fixture", [("KEY_FILE", "secret"), ("OTHER", "x")]);
+
+            let file = env.setting("KEY").unwrap().expect("present");
+            assert_eq!(file.value, "hunter2-SECRET");
+            assert!(file.from_file());
+            assert_eq!(file.var(), var_name("fixture", "KEY_FILE"));
+            let refused = file
+                .refuse(format_args!("`{}` is no good", file.shown()))
+                .to_string();
+            assert!(!refused.contains("hunter2"), "{refused}");
+            assert!(
+                refused.contains(&var_name("fixture", "KEY_FILE")),
+                "{refused}"
+            );
+            assert!(!format!("{file:?}").contains("hunter2"));
+
+            let inline = env.setting("OTHER").unwrap().expect("present");
+            assert!(!inline.from_file());
+            assert_eq!(inline.var(), var_name("fixture", "OTHER"));
+            assert_eq!(inline.shown().to_string(), "x");
+
+            let material = env.material("KEY").unwrap().expect("present");
+            assert_eq!(material.var(), var_name("fixture", "KEY_FILE"));
+            assert!(material.from_file());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn spellings_name_both_spellings_of_a_key() {
+        let env = ConfigService::with_vars("fixture", []);
+        assert_eq!(
+            env.spellings("KEY"),
+            format!(
+                "{} (or {})",
+                var_name("fixture", "KEY"),
+                var_name("fixture", "KEY_FILE")
+            )
+        );
+    }
+
+    #[test]
+    fn get_reads_any_variable_from_the_file_its_file_variable_names() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("secret", "s3cr3t\n")?;
+            let env = ConfigService::with_vars("fixture", [("SECRET_FILE", "secret")]);
+            assert_eq!(
+                env.get("SECRET").unwrap().as_deref(),
+                Some("s3cr3t"),
+                "the file's trailing line break is not part of the value",
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn get_refuses_a_file_that_is_not_utf8_naming_its_variable() {
+        figment::Jail::expect_with(|jail| {
+            std::fs::write(jail.directory().join("secret"), [0xff, 0xfe]).expect("write fixture");
+            let err = ConfigService::with_vars("fixture", [("SECRET_FILE", "secret")])
+                .get("SECRET")
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(&var_name("fixture", "SECRET_FILE")),
+                "names the variable: {err}"
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn get_given_both_spellings_is_refused_naming_both() {
+        let err =
+            ConfigService::with_vars("fixture", [("SECRET", "inline"), ("SECRET_FILE", "secret")])
+                .get("SECRET")
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains(&var_name("fixture", "SECRET")), "{err}");
+        assert!(err.contains(&var_name("fixture", "SECRET_FILE")), "{err}");
+        assert!(!err.contains("s3cr3t"), "never prints the value: {err}");
+    }
+
+    #[test]
+    fn material_reads_the_material_inline_or_from_the_file_its_file_variable_names() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("ca.pem", "-----FROM-FILE-----")?;
+
+            let inline = ConfigService::with_vars("fixture", [("CA", "-----INLINE-----")])
+                .material("CA")
+                .expect("inline material reads")
+                .expect("and is present");
+            assert_eq!(inline.value.bytes, b"-----INLINE-----");
+            assert_eq!(
+                inline.value.path, None,
+                "inline material has no file to watch"
+            );
+
+            let file = ConfigService::with_vars("fixture", [("CA_FILE", "ca.pem")])
+                .material("CA")
+                .expect("a readable file reads")
+                .expect("and is present");
+            assert_eq!(file.value.bytes, b"-----FROM-FILE-----");
+            assert_eq!(file.value.path, Some(PathBuf::from("ca.pem")));
+
+            let block = ConfigService::with_vars("fixture", [("CA_FILE", " ca.pem\n")])
+                .material("CA")
+                .expect("a YAML block scalar's trailing newline is not part of the path")
+                .expect("and is present");
+            assert_eq!(block.value.path, Some(PathBuf::from("ca.pem")));
+
+            assert!(
+                ConfigService::with_vars("fixture", [])
+                    .material("CA")
+                    .expect("unset is not an error")
+                    .is_none()
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn material_given_both_inline_and_as_a_path_is_refused_naming_both() {
+        let err = ConfigService::with_vars(
+            "fixture",
+            [("CA", "-----INLINE-----"), ("CA_FILE", "ca.pem")],
+        )
+        .material("CA")
+        .expect_err("two spellings of one material cannot both be meant");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(&var_name("fixture", "CA")),
+            "names the inline variable: {rendered}"
+        );
+        assert!(
+            rendered.contains(&var_name("fixture", "CA_FILE")),
+            "and the path variable: {rendered}"
+        );
+    }
+
+    /// A `_FILE` value is never printed: an operator who pastes the material
+    /// itself — with its PEM header, or as bare base64 no shape test can tell
+    /// from a path — would otherwise find the key in the boot error.
+    #[test]
+    fn material_names_the_variable_of_a_file_it_cannot_read_and_never_its_value() {
+        for value in [
+            "/nonexistent/nest-rs-config/ca.pem",
+            "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIs3cr3tb4se64\n-----END PRIVATE KEY-----\n",
+            "MC4CAQAwBQYDK2VwBCIEIs3cr3tb4se64",
+        ] {
+            let err = ConfigService::with_vars("fixture", [("CA_FILE", value)])
+                .material("CA")
+                .expect_err("an unreadable file is boot-fatal");
+            let mut shown = vec![err.to_string(), format!("{err:?}")];
+            let mut source = std::error::Error::source(&err);
+            assert!(source.is_some(), "the io error travels as the source");
+            while let Some(cause) = source {
+                shown.push(cause.to_string());
+                shown.push(format!("{cause:?}"));
+                source = cause.source();
+            }
+            assert!(
+                shown[0].contains(&var_name("fixture", "CA_FILE")),
+                "names the variable: {}",
+                shown[0]
+            );
+            let secret = value.trim().lines().nth(1).unwrap_or(value.trim());
+            for text in &shown {
+                assert!(!text.contains(secret), "never prints the value: {text}");
+            }
+        }
+    }
+
+    /// A FIFO blocks whoever opens it until something writes, so a `_FILE`
+    /// naming one would hang the boot forever.
+    #[cfg(unix)]
+    #[test]
+    fn material_refuses_a_path_that_is_not_a_regular_file_without_blocking() {
+        let fifo = std::env::temp_dir().join(format!("nest-rs-config-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_file(&fifo);
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "a FIFO to point at");
+        let path = fifo.to_str().expect("a UTF-8 path").to_owned();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let read = ConfigService::with_vars("fixture", [("CA_FILE", path.as_str())])
+                .material("CA")
+                .map(|pem| pem.is_some());
+            let _ = tx.send(read.map_err(|e| e.to_string()));
+        });
+        let outcome = rx.recv_timeout(Duration::from_secs(5));
+        let _ = std::fs::remove_file(&fifo);
+        let refused = outcome.expect("returns instead of blocking on the pipe");
+        assert!(refused.is_err(), "a FIFO is not material: {refused:?}");
+    }
+
+    #[test]
+    fn material_reads_at_most_a_mebibyte() {
+        let dir = std::env::temp_dir().join(format!("nest-rs-config-size-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let limit = usize::try_from(crate::material::MAX_MATERIAL_BYTES).expect("fits");
+        let at = dir.join("at.pem");
+        let over = dir.join("over.pem");
+        std::fs::write(&at, vec![b'a'; limit]).expect("write");
+        std::fs::write(&over, vec![b'a'; limit + 1]).expect("write");
+        let read = |path: &std::path::Path| {
+            ConfigService::with_vars("fixture", [("CA_FILE", path.to_str().expect("UTF-8"))])
+                .material("CA")
+        };
+        let at_limit = read(&at);
+        let over_limit = read(&over);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            at_limit
+                .expect("the limit itself reads")
+                .expect("present")
+                .value
+                .bytes
+                .len(),
+            limit
+        );
+        let err = over_limit.expect_err("one byte over is refused");
+        let source = std::error::Error::source(&err)
+            .and_then(|cause| cause.downcast_ref::<std::io::Error>())
+            .expect("an io error says why");
+        assert_eq!(source.kind(), std::io::ErrorKind::FileTooLarge, "{err}");
+    }
+
+    /// A custom source answering `Some("")` means unset, as the trait says —
+    /// for `get` and so for `pem`, which must not see two spellings.
+    #[test]
+    fn an_empty_value_from_any_source_is_unset() {
+        struct Blank;
+        impl ConfigSource for Blank {
+            fn get(&self, var: &str) -> Option<String> {
+                if var == var_name("fixture", "CA_FILE") {
+                    Some("ca.pem".into())
+                } else {
+                    Some(String::new())
+                }
+            }
+        }
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("ca.pem", "-----FROM-FILE-----")?;
+            let env = ConfigService::with_source("fixture", Arc::new(Blank));
+            assert_eq!(env.get("OTHER").unwrap(), None, "empty is unset");
+            let pem = env
+                .material("CA")
+                .expect("an empty inline value is not a second spelling")
+                .expect("present");
+            assert_eq!(pem.value.bytes, b"-----FROM-FILE-----");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn material_debug_never_shows_the_material() {
+        let pem =
+            ConfigService::with_vars("fixture", [("KEY", "-----BEGIN PRIVATE KEY-----s3cr3t")])
+                .material("KEY")
+                .expect("reads")
+                .expect("present");
+        let shown = format!("{pem:?}");
+        assert!(!shown.contains("s3cr3t"), "{shown}");
+    }
 
     #[test]
     fn var_name_builds_the_namespaced_name() {
@@ -490,7 +1080,7 @@ mod tests {
             jail.set_env(var_name("testl", "SCOPES"), "read:user, write , ,admin");
             let env = ConfigService::for_namespace("testl");
             assert_eq!(
-                env.list("SCOPES", Vec::new()),
+                env.list("SCOPES", Vec::new()).unwrap(),
                 vec!["read:user", "write", "admin"],
             );
             Ok(())
@@ -501,7 +1091,7 @@ mod tests {
     fn list_keeps_the_default_when_unset() {
         let env = ConfigService::with_vars("testl", []);
         assert_eq!(
-            env.list("SCOPES", vec!["pinned".to_owned()]),
+            env.list("SCOPES", vec!["pinned".to_owned()]).unwrap(),
             vec!["pinned".to_owned()],
             "an unset list keeps the base, the same way `flag` keeps its default",
         );
@@ -514,9 +1104,9 @@ mod tests {
     #[test]
     fn over_pinned_narrows_to_the_deployment_tier() {
         let env = ConfigService::with_vars("prec", [("PORT", "9000")]);
-        assert_eq!(env.get("PORT").as_deref(), Some("9000"));
+        assert_eq!(env.get("PORT").unwrap().as_deref(), Some("9000"));
         assert_eq!(
-            env.over_pinned().get("PORT").as_deref(),
+            env.over_pinned().get("PORT").unwrap().as_deref(),
             Some("9000"),
             "a custom source is deployment-supplied unless it says otherwise",
         );
@@ -532,12 +1122,12 @@ mod tests {
             jail.set_env(var_name("precpin", "FROM_REAL"), "from_real");
             let pinned = ConfigService::for_namespace("precpin").over_pinned();
             assert_eq!(
-                pinned.get("FROM_REAL").as_deref(),
+                pinned.get("FROM_REAL").unwrap().as_deref(),
                 Some("from_real"),
                 "a deployment variable outranks a value pinned in code",
             );
             assert_eq!(
-                pinned.get("FROM_FILE"),
+                pinned.get("FROM_FILE").unwrap(),
                 None,
                 "a committed .env file does not silently undo a deliberate pin",
             );
@@ -545,6 +1135,7 @@ mod tests {
             assert_eq!(
                 ConfigService::for_namespace("precpin")
                     .get("FROM_FILE")
+                    .unwrap()
                     .as_deref(),
                 Some("from_dotenv"),
             );
@@ -569,8 +1160,8 @@ mod tests {
             "value-from-map",
         )])));
         let env = ConfigService::with_source("custom", source);
-        assert_eq!(env.get("URL").as_deref(), Some("value-from-map"));
-        assert!(env.get("MISSING").is_none());
+        assert_eq!(env.get("URL").unwrap().as_deref(), Some("value-from-map"));
+        assert!(env.get("MISSING").unwrap().is_none());
     }
 
     // The dotenv cascade used to fire from `for_namespace`, which meant any
@@ -598,7 +1189,7 @@ mod tests {
             // Build + use the custom-source reader. If dotenv leaked here it
             // would set the marker in the jailed process env.
             let env = ConfigService::with_source("leakguard", Arc::new(Empty));
-            assert!(env.get("ANYTHING").is_none());
+            assert!(env.get("ANYTHING").unwrap().is_none());
             assert!(
                 std::env::var(var_name("leak_guard", "SHOULD_STAY_UNSET")).is_err(),
                 "custom-source path must not merge .env into the process env",

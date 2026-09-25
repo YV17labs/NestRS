@@ -60,7 +60,7 @@ mod tests {
     /// lines name the same request by two different identifiers.
     #[test]
     fn the_frameworks_ids_are_what_the_sdk_receives() {
-        let correlation = Correlation::mint();
+        let correlation = Correlation::minted(None);
         let generator = AdoptFrameworkIds::default();
 
         let (trace_id, span_id) =

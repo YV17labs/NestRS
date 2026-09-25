@@ -1,0 +1,17 @@
+error[E0592]: duplicate definitions with name `__nestrs_tools_dispatches_tool_lookup_to_one_method`
+  --> tests/integration/diagnostics/tools_one_name_under_two_true_cfgs.rs:21:7
+   |
+15 |     #[tool(description = "Look one up.")]
+   |       ---- other definition for `__nestrs_tools_dispatches_tool_lookup_to_one_method`
+...
+21 |     #[tool(name = "lookup", description = "Look one up, again.")]
+   |       ^^^^ duplicate definitions for `__nestrs_tools_dispatches_tool_lookup_to_one_method`
+
+error[E0592]: duplicate definitions with name `__nestrs_tools_dispatches_prompt_brief_to_one_method`
+  --> tests/integration/diagnostics/tools_one_name_under_two_true_cfgs.rs:35:7
+   |
+28 |     #[prompt(name = "brief", description = "A brief.")]
+   |       ------ other definition for `__nestrs_tools_dispatches_prompt_brief_to_one_method`
+...
+35 |     #[prompt(name = "brief", description = "Another brief.")]
+   |       ^^^^^^ duplicate definitions for `__nestrs_tools_dispatches_prompt_brief_to_one_method`

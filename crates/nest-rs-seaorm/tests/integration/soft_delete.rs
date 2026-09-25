@@ -28,7 +28,7 @@ mod bound {
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
     #[sea_orm(table_name = "audit_bound_row")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -42,7 +42,7 @@ mod bound {
     }
 
     #[derive(Default)]
-    pub struct RowsService;
+    pub(super) struct RowsService;
 
     impl CrudService for RowsService {
         type Entity = Entity;
@@ -65,7 +65,7 @@ mod unbound {
     #[sea_orm::model]
     #[derive(Clone, Debug, DeriveEntityModel)]
     #[sea_orm(table_name = "audit_unbound_row")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -79,7 +79,7 @@ mod unbound {
     }
 
     #[derive(Default)]
-    pub struct OrphansService;
+    pub(super) struct OrphansService;
 
     impl CrudService for OrphansService {
         type Entity = Entity;

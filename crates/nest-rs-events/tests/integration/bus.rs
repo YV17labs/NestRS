@@ -154,3 +154,86 @@ async fn listeners_with_no_event_bus_are_reported_at_boot() {
         "each line names the listener a developer can find, got {named:?}",
     );
 }
+
+#[derive(Clone)]
+struct Shaped;
+
+#[cfg(any())]
+#[derive(Clone)]
+struct CompiledOut;
+
+static SHAPED: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct ShapedListeners;
+
+#[listeners]
+impl ShapedListeners {
+    #[allow(clippy::needless_arbitrary_self_type, clippy::unused_unit)]
+    #[on_event]
+    async fn on_shaped(self: &Self, _event: Shaped) -> () {
+        SHAPED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[cfg(any())]
+    #[on_event]
+    async fn on_compiled_out(&self, _event: CompiledOut) {}
+
+    #[on_event]
+    async fn r#match(&self, _event: Shaped) {
+        SHAPED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[on_event]
+    async fn through_its_arc(self: &std::sync::Arc<Self>, _event: Shaped) {
+        SHAPED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+#[allow(non_camel_case_types)]
+struct r#loop;
+
+#[listeners]
+impl r#loop {
+    #[on_event]
+    async fn on_shaped(&self, _event: Shaped) {}
+}
+
+#[module(imports = [EventsModule], providers = [ShapedListeners])]
+struct ShapedModule;
+
+/// Compiling is the first half: a listener compiled out takes its wiring and its
+/// entry with it — without them the expansion names a method and an event that
+/// do not exist. `-> ()` written out and a typed `self: &Self` are the plain
+/// shapes spelled out, `self: &Arc<Self>` borrows what the container holds, and a
+/// raw identifier is a name — the expansion panicked on `r#` — so every listener
+/// is subscribed, and a raw host is named by its name.
+#[tokio::test]
+async fn a_compiled_out_listener_is_skipped_and_the_spelled_out_shapes_are_served() {
+    let app = App::new::<ShapedModule>().expect("boots");
+    app.init().await.expect("bootstrap wiring succeeds");
+    let bus = app
+        .container()
+        .get::<EventBus>()
+        .expect("EventBus is provided");
+    bus.emit(Shaped).await;
+    assert_eq!(SHAPED.load(Ordering::SeqCst), 3);
+
+    let mut names: Vec<&str> = nest_rs_core::inventory::iter::<nest_rs_events::ListenerMethod>()
+        .map(|listener| listener.name)
+        .filter(|name| name.starts_with("ShapedListeners::") || name.starts_with("loop::"))
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "ShapedListeners::match",
+            "ShapedListeners::on_shaped",
+            "ShapedListeners::through_its_arc",
+            "loop::on_shaped",
+        ]
+    );
+}

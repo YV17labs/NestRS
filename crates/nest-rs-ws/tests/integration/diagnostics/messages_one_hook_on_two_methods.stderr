@@ -1,0 +1,5 @@
+error: `#[messages]` declares `#[on_connect]` on `greet` and again on `count`: a gateway dispatches each event, and each connection hook, to one method, so the second would never run — fold the two bodies into one
+  --> tests/integration/diagnostics/messages_one_hook_on_two_methods.rs:14:5
+   |
+14 |     #[on_connect]
+   |     ^^^^^^^^^^^^^

@@ -13,7 +13,7 @@ use nest_rs_resource::wire_enum;
 
 #[wire_enum]
 #[serde(rename_all = "lowercase")]
-pub enum Tier {
+pub(crate) enum Tier {
     Free,
     Pro,
 }
@@ -71,7 +71,7 @@ mod graphql {
     #[expose(name = "Release", service = ReleasesService, graphql)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "releases")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -82,11 +82,11 @@ mod graphql {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    pub struct ReleasesService;
+    pub(super) struct ReleasesService;
 
     impl CrudService for ReleasesService {
         type Entity = Entity;

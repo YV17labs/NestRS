@@ -80,11 +80,31 @@ impl WidgetsResolver {
     }
 }
 
+/// A second federated type, resolved by a synchronous entity method.
+#[derive(SimpleObject)]
+struct Sprocket {
+    id: i32,
+}
+
+#[resolver]
+struct SprocketsResolver;
+
+#[operations]
+impl SprocketsResolver {
+    /// `fn`, not `async fn`: the entity resolver async-graphql awaits is the one
+    /// the expansion emits, and it calls this one without an `.await`.
+    #[entity]
+    #[public]
+    fn find_sprocket_by_id(&self, id: i32) -> Result<Sprocket> {
+        Ok(Sprocket { id })
+    }
+}
+
 #[module(imports = [GraphqlModule::for_root(GraphqlConfig {
     federation: true,
     disable_introspection: false,
     ..GraphqlConfig::default()
-})], providers = [WidgetsResolver])]
+})], providers = [WidgetsResolver, SprocketsResolver])]
 struct FederatedModule;
 
 #[resolver]
@@ -174,6 +194,24 @@ async fn an_entity_resolver_answers_a_reference_the_client_never_named() {
         "the router's reference reached the entity resolver: {body}",
     );
     assert_eq!(entity["id"], 7, "carrying the key it was resolved by");
+}
+
+#[tokio::test]
+async fn a_synchronous_entity_resolver_answers_a_reference() {
+    let app = TestApp::for_module::<FederatedModule>()
+        .await
+        .expect("a federated schema boots");
+
+    let body = post_graphql(
+        &app,
+        serde_json::json!({
+            "query": "query($reps: [_Any!]!) { _entities(representations: $reps) { ... on Sprocket { id } } }",
+            "variables": { "reps": [{ "__typename": "Sprocket", "id": 4 }] },
+        }),
+    )
+    .await;
+    assert!(body["errors"].is_null(), "{body}");
+    assert_eq!(body["data"]["_entities"][0]["id"], 4, "{body}");
 }
 
 #[tokio::test]

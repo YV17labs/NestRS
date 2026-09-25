@@ -79,7 +79,7 @@ fn default_value_tokens(field: &ResourceField) -> Option<proc_macro2::TokenStrea
     })
 }
 
-pub fn emit(model: &ResourceModel) -> proc_macro2::TokenStream {
+pub(crate) fn emit(model: &ResourceModel) -> proc_macro2::TokenStream {
     let entries = model
         .fields
         .iter()

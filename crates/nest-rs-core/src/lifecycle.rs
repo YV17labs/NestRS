@@ -136,7 +136,7 @@ pub(crate) async fn run_phase_lenient(container: &Container, phase: LifecyclePha
                 ?phase,
                 provider = hook.provider,
                 method = hook.method,
-                error = %err,
+                error = %crate::error_message(&*err),
                 "lifecycle hook failed",
             );
         }

@@ -40,8 +40,6 @@
 //! [`HttpRouteMeta::header_params`](crate::HttpRouteMeta::header_params), so
 //! the OpenAPI document carries one `in: header` parameter per property of `T`.
 
-use std::borrow::Cow;
-use std::fmt;
 use std::ops::Deref;
 
 use poem::http::HeaderMap;
@@ -51,6 +49,8 @@ use serde::de::{DeserializeOwned, Deserializer, IntoDeserializer, Visitor};
 use serde::forward_to_deserialize_any;
 
 use crate::ProblemDetails;
+
+use crate::error::HeaderError;
 
 /// Request headers deserialized into `T`.
 ///
@@ -97,128 +97,11 @@ fn reject(err: HeaderError) -> Error {
     Error::from(ProblemDetails::bad_request().with_detail(err.to_string()))
 }
 
-/// What a header binding can fail on. Each variant names the header; none
-/// carries its value.
-#[derive(Debug)]
-enum HeaderError {
-    /// A field without a default (i.e. not `Option<_>`) whose header is absent.
-    Missing(String),
-    /// The header is present but its value is not what the field's type needs.
-    Malformed {
-        name: String,
-        expected: Cow<'static, str>,
-    },
-    /// serde recognised the shape and refused the content — an enum field whose
-    /// text names no variant, a `Deserialize` impl calling `invalid_value`. It
-    /// carries what was *expected*, never what was read; the header's name is
-    /// put back by [`against`](Self::against), which is the one place that
-    /// knows it.
-    Unexpected(Cow<'static, str>),
-    /// Anything serde itself reports — a `deserialize_with` function, a custom
-    /// `Deserialize` impl.
-    Custom(String),
-    /// A field naming something that cannot be a header name. The developer's
-    /// mistake, not the caller's — but it surfaces on a request, so it is
-    /// reported the same way and says whose it is.
-    NotAHeaderName(String),
-}
-
-impl HeaderError {
-    fn not_a_header_name(field: &str) -> Self {
-        Self::NotAHeaderName(field.to_owned())
-    }
-
-    fn malformed(name: &str, expected: impl Into<Cow<'static, str>>) -> Self {
-        Self::Malformed {
-            name: name.to_owned(),
-            expected: expected.into(),
-        }
-    }
-
-    /// Attribute a content refusal to the header it was read from.
-    ///
-    /// serde builds `unknown_variant` and friends from **static**
-    /// constructors — there is no deserializer in scope to ask which header is
-    /// being read — so the name is attached here, by the arm that has one.
-    /// Every other variant already names a header, which makes this idempotent
-    /// and safe to apply at each arm that hands a value to a visitor.
-    fn against(self, name: &str) -> Self {
-        match self {
-            Self::Unexpected(expected) => Self::malformed(name, expected),
-            named => named,
-        }
-    }
-}
-
-impl fmt::Display for HeaderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Missing(name) => write!(f, "missing required header `{name}`"),
-            Self::Malformed { name, expected } => {
-                write!(f, "header `{name}` is not {expected}")
-            }
-            Self::Unexpected(expected) => write!(f, "header value is not {expected}"),
-            Self::Custom(msg) => f.write_str(msg),
-            Self::NotAHeaderName(field) => write!(
-                f,
-                "`{field}` is not a valid header name, so no request can carry it — fix the \
-                 field's `#[serde(rename = \"…\")]`",
-            ),
-        }
-    }
-}
-
-impl std::error::Error for HeaderError {}
-
 /// serde's `expected one of \`a\`, \`b\`` list, without the value its own
 /// message opens with.
-fn one_of(expected: &'static [&'static str]) -> String {
+pub(crate) fn one_of(expected: &'static [&'static str]) -> String {
     let list: Vec<String> = expected.iter().map(|item| format!("`{item}`")).collect();
     format!("one of {}", list.join(", "))
-}
-
-impl serde::de::Error for HeaderError {
-    fn custom<T: fmt::Display>(msg: T) -> Self {
-        Self::Custom(msg.to_string())
-    }
-
-    /// serde's derive routes an absent field here, which is what turns
-    /// "missing field `X-Request-Id`" into a sentence about headers.
-    fn missing_field(field: &'static str) -> Self {
-        Self::Missing(field.to_owned())
-    }
-
-    /// The one serde constructor a plain header field actually reaches: an
-    /// enum-typed field whose text names no variant. The default
-    /// (`unknown variant \`{variant}\`, expected …`) opens with the value read
-    /// off the wire, which on a header is exactly what must not be echoed.
-    fn unknown_variant(_variant: &str, expected: &'static [&'static str]) -> Self {
-        Self::Unexpected(one_of(expected).into())
-    }
-
-    /// Same default shape (`unknown field \`{field}\``); a header *name* is not
-    /// a secret, but one rule over every value-interpolating constructor is
-    /// what stops the next one being missed.
-    fn unknown_field(_field: &str, expected: &'static [&'static str]) -> Self {
-        Self::Unexpected(one_of(expected).into())
-    }
-
-    /// `invalid value: string "…", expected …` — one custom `Deserialize` impl
-    /// away, and it quotes the value in full.
-    fn invalid_value(
-        _unexpected: serde::de::Unexpected<'_>,
-        expected: &dyn serde::de::Expected,
-    ) -> Self {
-        Self::Unexpected(expected.to_string().into())
-    }
-
-    /// `invalid type: string "…", expected …`, same reasoning.
-    fn invalid_type(
-        _unexpected: serde::de::Unexpected<'_>,
-        expected: &dyn serde::de::Expected,
-    ) -> Self {
-        Self::Unexpected(expected.to_string().into())
-    }
 }
 
 /// Deserializer over a request's [`HeaderMap`].

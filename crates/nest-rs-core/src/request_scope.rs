@@ -342,7 +342,7 @@ mod tests {
         let scope = Arc::new(RequestScope::new(
             Container::builder().provide(Greeter("hi")).build(),
         ));
-        let correlation = crate::Correlation::mint();
+        let correlation = crate::Correlation::minted(None);
         let trace_id = correlation.trace_id();
 
         let continuation =
@@ -373,7 +373,7 @@ mod tests {
     #[tokio::test]
     async fn a_continuation_sees_an_actor_resolved_after_it_was_built() {
         let scope = Arc::new(RequestScope::new(Container::builder().build()));
-        let correlation = crate::Correlation::mint();
+        let correlation = crate::Correlation::minted(None);
         let continuation = RequestContinuation::new(Some(scope.clone()), correlation.clone());
 
         with_request_scope(Some(scope), correlation, async {

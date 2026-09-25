@@ -2,4 +2,4 @@ error: a method declares exactly one probe — this one declares `#[liveness]` a
   --> tests/integration/diagnostics/two_probes_on_one_indicator.rs:16:5
    |
 16 |     #[readiness]
-   |     ^
+   |     ^^^^^^^^^^^^

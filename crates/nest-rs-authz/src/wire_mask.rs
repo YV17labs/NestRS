@@ -20,25 +20,13 @@ use serde_json::Value;
 
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 use crate::FieldSet;
+use crate::error::MaskReplyError;
 use crate::{Ability, Action};
 
 // `warn_mask_failure` lives in `crate::ability` (always compiled) so the
 // ambient `Ability::mask` can reach it in a feature-less build; re-exported
 // here since the transport masking paths import it alongside `mask_wire_json`.
 pub(crate) use crate::ability::warn_mask_failure;
-
-/// Why [`masked_reply`] could not produce a masked value. Callers must treat
-/// either case as fail-closed: send an error frame, never the unmasked body.
-#[derive(Debug, thiserror::Error)]
-pub enum MaskReplyError {
-    /// No ambient [`Ability`] is installed — the auth bridge for this
-    /// transport is missing, so masking cannot run.
-    #[error("no ambient ability — is the transport's authz bridge installed?")]
-    NoAmbientAbility,
-    /// The wire value could not be reconciled with the entity model.
-    #[error("wire value could not be reconciled with the entity model")]
-    Irreconcilable(#[source] serde_json::Error),
-}
 
 /// Mask a handler's wire JSON with the **ambient** ability — the manual
 /// analog of the HTTP response shaper and the GraphQL resolver wrapper, for

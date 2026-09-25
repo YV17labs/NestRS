@@ -24,8 +24,9 @@ mod indicators;
 /// controller's; a prefixed app logs one `warn` at boot naming the paths its
 /// probes actually answer on.
 ///
-/// Each tagged method takes `&self` and returns `anyhow::Result<()>` (or any
-/// `Result<(), E: Into<anyhow::Error>>`). `Ok(())` reports the indicator as
+/// Each tagged method takes `&self` and returns `()` — reported `up` once it
+/// completes — or a `Result<(), E: Into<anyhow::Error>>` such as
+/// `anyhow::Result<()>`. `Ok(())` reports the indicator as
 /// `up`; an error reports it as `down` with a **fixed, opaque** reason
 /// (`"check failed"` / `"timed out"` / `"probe deadline exceeded"`) — never
 /// your error's text. `/health/*` is routinely unauthenticated and an `anyhow`

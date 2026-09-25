@@ -46,6 +46,26 @@ impl Sensors {
     /// (`ReturnType::Default`): reaching the end of the body is the `Ok`.
     #[liveness]
     async fn process_responsive(&self) {}
+
+    /// The same shapes spelled out: `-> ()` written is the infallible return, and
+    /// `self: &Self` is `&self`.
+    #[allow(clippy::needless_arbitrary_self_type, clippy::unused_unit)]
+    #[liveness]
+    async fn heartbeat(self: &Self) -> () {}
+
+    /// A raw identifier reports under its name — the key a caller reads.
+    #[liveness]
+    async fn r#loop(&self) {}
+
+    /// `self: &Arc<Self>` borrows what the container holds.
+    #[liveness]
+    async fn through_its_arc(self: &std::sync::Arc<Self>) {}
+
+    /// Compiled out, it takes its entry with it — the expansion would otherwise
+    /// name a method that does not exist.
+    #[cfg(any())]
+    #[readiness]
+    async fn compiled_out(&self) {}
 }
 
 #[module(imports = [HealthModule], providers = [Sensors])]
@@ -115,4 +135,17 @@ async fn the_hosts_own_error_never_reaches_the_body() {
              {leaked:?}: {body}",
         );
     }
+}
+
+/// A written `-> ()` and a typed receiver answer as their plain spellings do, and
+/// a raw identifier is keyed by its name rather than by `r#` and its name.
+#[tokio::test]
+async fn a_spelled_out_unit_return_and_receiver_report_up() {
+    let (status, body) = probe("/health/live").await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body.contains("heartbeat") && body.contains("through_its_arc"),
+        "{body}"
+    );
+    assert!(body.contains("\"loop\"") && !body.contains("r#"), "{body}");
 }

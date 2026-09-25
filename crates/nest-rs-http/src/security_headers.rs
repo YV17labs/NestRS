@@ -81,9 +81,9 @@ const KEY_PERMISSIONS_POLICY: &str = "PERMISSIONS_POLICY";
 const KEY_CSP: &str = "CONTENT_SECURITY_POLICY";
 
 /// Default-on security headers. Disable the whole set with `enabled = false`;
-/// drop an individual header by setting its value to an empty string.
+/// drop an individual header with `None` in code, or `off` in the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SecurityHeadersConfig {
+pub struct HttpSecurityHeaders {
     /// Master switch. `false` ⇒ emit no security headers at all.
     pub enabled: bool,
     /// Emit `X-Content-Type-Options: nosniff` (default `true`).
@@ -115,7 +115,7 @@ pub struct SecurityHeadersConfig {
     pub content_security_policy: Option<String>,
 }
 
-impl Default for SecurityHeadersConfig {
+impl Default for HttpSecurityHeaders {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -141,38 +141,39 @@ struct ValueHeader<'a> {
     value: &'a Option<String>,
 }
 
-impl SecurityHeadersConfig {
+impl HttpSecurityHeaders {
     /// Read `NESTRS_HTTP__SECURITY_HEADERS` (master) plus one key per header,
     /// overlaid onto `base`. Absent vars keep `base`'s value (the safe defaults
-    /// unless the call site pinned something else); an explicit empty string
-    /// drops that one header.
+    /// unless the call site pinned something else); `off` drops that one
+    /// header, and a blank value is refused.
     pub fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         let resolved = Self {
             enabled: env.flag("SECURITY_HEADERS", base.enabled)?,
             content_type_options: env.flag("CONTENT_TYPE_OPTIONS", base.content_type_options)?,
-            frame_options: override_header(env.get(KEY_FRAME_OPTIONS), base.frame_options),
-            hsts: override_header(env.get(KEY_HSTS), base.hsts),
-            referrer_policy: override_header(env.get(KEY_REFERRER_POLICY), base.referrer_policy),
+            frame_options: override_header(env, KEY_FRAME_OPTIONS, base.frame_options)?,
+            hsts: override_header(env, KEY_HSTS, base.hsts)?,
+            referrer_policy: override_header(env, KEY_REFERRER_POLICY, base.referrer_policy)?,
             cross_origin_opener_policy: override_header(
-                env.get(KEY_COOP),
+                env,
+                KEY_COOP,
                 base.cross_origin_opener_policy,
-            ),
+            )?,
             cross_origin_resource_policy: override_header(
-                env.get(KEY_CORP),
+                env,
+                KEY_CORP,
                 base.cross_origin_resource_policy,
-            ),
+            )?,
             cross_origin_embedder_policy: override_header(
-                env.get(KEY_COEP),
+                env,
+                KEY_COEP,
                 base.cross_origin_embedder_policy,
-            ),
+            )?,
             permissions_policy: override_header(
-                env.get(KEY_PERMISSIONS_POLICY),
+                env,
+                KEY_PERMISSIONS_POLICY,
                 base.permissions_policy,
-            ),
-            content_security_policy: override_header(
-                env.get(KEY_CSP),
-                base.content_security_policy,
-            ),
+            )?,
+            content_security_policy: override_header(env, KEY_CSP, base.content_security_policy)?,
         };
         // Reject a set-but-invalid header value at boot, naming the env var
         // (HTTP-S4) — otherwise the response layer silently drops it and a
@@ -270,6 +271,10 @@ impl SecurityHeadersConfig {
 
 /// Boot-fatal check that a non-empty header value parses as an HTTP header
 /// value, naming the offending env var so the misconfig is obvious (HTTP-S4).
+///
+/// A value the environment set was already judged by [`override_header`],
+/// which knows the spelling that supplied it; what reaches this refusal is a
+/// value pinned in code, which is quoted because no file held it.
 fn validate_header_value(env: &ConfigService, key: &str, value: &Option<String>) -> Result<()> {
     if let Some(v) = non_empty(value) {
         HeaderValue::from_str(&v).map_err(|_| {
@@ -282,13 +287,37 @@ fn validate_header_value(env: &ConfigService, key: &str, value: &Option<String>)
     Ok(())
 }
 
-/// An env value present (even empty) overrides the default; absent keeps it.
-fn override_header(env_value: Option<String>, default: Option<String>) -> Option<String> {
-    match env_value {
-        Some(v) if v.trim().is_empty() => None,
-        Some(v) => Some(v),
-        None => default,
+/// The value a header's variable takes to drop that header.
+const OFF: &str = "off";
+
+/// A header's value from the environment over `default`: absent keeps the
+/// default, `off` (whatever its case) drops the header, and a blank value is
+/// refused — it is no header value, and an empty one is unset like any other
+/// variable, so blank was never how a header was dropped.
+fn override_header(
+    env: &ConfigService,
+    key: &str,
+    default: Option<String>,
+) -> Result<Option<String>> {
+    let Some(setting) = env.setting(key)? else {
+        return Ok(default);
+    };
+    let value = setting.value.trim();
+    if value.eq_ignore_ascii_case(OFF) {
+        return Ok(None);
     }
+    if value.is_empty() {
+        return Err(setting.refuse(format_args!(
+            "is blank — set it to `{OFF}` to drop the header"
+        )));
+    }
+    if HeaderValue::from_str(value).is_err() {
+        return Err(setting.refuse(format_args!(
+            "`{}` is not a valid HTTP header value",
+            setting.shown()
+        )));
+    }
+    Ok(Some(setting.value))
 }
 
 fn non_empty(value: &Option<String>) -> Option<String> {
@@ -312,7 +341,7 @@ mod tests {
 
     #[test]
     fn defaults_are_on_with_safe_values() {
-        let plain = SecurityHeadersConfig::default().headers(false);
+        let plain = HttpSecurityHeaders::default().headers(false);
         assert_eq!(
             value_of(&plain, &header::X_CONTENT_TYPE_OPTIONS).as_deref(),
             Some("nosniff"),
@@ -331,7 +360,7 @@ mod tests {
     // would notice missing until an incident.
     #[test]
     fn the_cross_origin_and_referrer_defaults_are_emitted() {
-        let plain = SecurityHeadersConfig::default().headers(false);
+        let plain = HttpSecurityHeaders::default().headers(false);
         assert_eq!(
             value_of(&plain, &header::REFERRER_POLICY).as_deref(),
             Some("strict-origin-when-cross-origin"),
@@ -359,7 +388,7 @@ mod tests {
     // document it does not serve.
     #[test]
     fn the_argued_off_members_are_absent_by_default_and_settable() {
-        let plain = SecurityHeadersConfig::default().headers(false);
+        let plain = HttpSecurityHeaders::default().headers(false);
         for name in [
             HeaderName::from_static("cross-origin-embedder-policy"),
             HeaderName::from_static("permissions-policy"),
@@ -371,7 +400,7 @@ mod tests {
             );
         }
 
-        let pinned = SecurityHeadersConfig {
+        let pinned = HttpSecurityHeaders {
             cross_origin_embedder_policy: Some("require-corp".into()),
             permissions_policy: Some("geolocation=()".into()),
             content_security_policy: Some("default-src 'none'".into()),
@@ -412,7 +441,7 @@ mod tests {
         ] {
             let env = ConfigService::with_vars("http", [(key, "no-referrer")]);
             let loaded =
-                SecurityHeadersConfig::from_env(&env, Default::default()).expect("value loads");
+                HttpSecurityHeaders::from_env(&env, Default::default()).expect("value loads");
             let emitted = loaded.headers(true);
             let entry = loaded
                 .value_headers()
@@ -430,7 +459,7 @@ mod tests {
 
     #[test]
     fn hsts_only_under_tls() {
-        let d = SecurityHeadersConfig::default();
+        let d = HttpSecurityHeaders::default();
         assert!(
             value_of(&d.headers(true), &header::STRICT_TRANSPORT_SECURITY).is_some(),
             "HSTS must be emitted under TLS",
@@ -439,7 +468,7 @@ mod tests {
 
     #[test]
     fn disabled_emits_nothing() {
-        let cfg = SecurityHeadersConfig {
+        let cfg = HttpSecurityHeaders {
             enabled: false,
             ..Default::default()
         };
@@ -449,7 +478,7 @@ mod tests {
     #[test]
     fn an_invalid_header_value_fails_boot_naming_the_var() {
         let cfg = ConfigService::with_vars("http", [(KEY_FRAME_OPTIONS, "bad\nvalue")]);
-        let err = SecurityHeadersConfig::from_env(&cfg, Default::default()).unwrap_err();
+        let err = HttpSecurityHeaders::from_env(&cfg, Default::default()).unwrap_err();
         assert!(
             matches!(err, ConfigError::Parse { ref var, .. }
                 if *var == nest_rs_config::var_name("http", KEY_FRAME_OPTIONS)),
@@ -463,7 +492,7 @@ mod tests {
     fn an_invalid_value_on_a_newer_header_fails_boot_too() {
         let cfg =
             ConfigService::with_vars("http", [(KEY_CSP, "default-src 'none'\nX-Injected: y")]);
-        let err = SecurityHeadersConfig::from_env(&cfg, Default::default()).unwrap_err();
+        let err = HttpSecurityHeaders::from_env(&cfg, Default::default()).unwrap_err();
         assert!(
             matches!(err, ConfigError::Parse { ref var, .. }
                 if *var == nest_rs_config::var_name("http", KEY_CSP)),
@@ -475,21 +504,55 @@ mod tests {
     fn a_valid_override_still_loads() {
         let cfg = ConfigService::with_vars("http", [(KEY_FRAME_OPTIONS, "SAMEORIGIN")]);
         let loaded =
-            SecurityHeadersConfig::from_env(&cfg, Default::default()).expect("valid value loads");
+            HttpSecurityHeaders::from_env(&cfg, Default::default()).expect("valid value loads");
         assert_eq!(loaded.frame_options.as_deref(), Some("SAMEORIGIN"));
     }
 
     #[test]
-    fn an_empty_override_drops_one_header() {
-        let cfg = SecurityHeadersConfig {
-            frame_options: override_header(Some(String::new()), Some("DENY".into())),
-            ..Default::default()
-        };
-        let emitted = cfg.headers(false);
-        assert!(value_of(&emitted, &header::X_FRAME_OPTIONS).is_none());
+    fn off_in_the_environment_drops_one_header_and_leaves_the_others() {
+        let env = ConfigService::with_vars(
+            "http",
+            [
+                ("FRAME_OPTIONS", "off"),
+                ("HSTS", " OFF "),
+                ("REFERRER_POLICY", "no-referrer"),
+            ],
+        );
+        let cfg = HttpSecurityHeaders::from_env(&env, HttpSecurityHeaders::default())
+            .expect("`off` is a value the environment may set");
+        let emitted = cfg.headers(true);
+        assert!(
+            value_of(&emitted, &header::X_FRAME_OPTIONS).is_none(),
+            "`off` drops the header",
+        );
+        assert!(
+            value_of(&emitted, &header::STRICT_TRANSPORT_SECURITY).is_none(),
+            "whatever its case and surrounding space",
+        );
+        assert_eq!(
+            value_of(&emitted, &header::REFERRER_POLICY).as_deref(),
+            Some("no-referrer"),
+            "any other value still overrides",
+        );
         assert!(
             value_of(&emitted, &header::X_CONTENT_TYPE_OPTIONS).is_some(),
             "dropping one header leaves the others",
         );
+    }
+
+    /// A blank value is no header value and was never how a header is
+    /// dropped, so it is refused, naming the variable and the spelling that
+    /// drops it.
+    #[test]
+    fn a_blank_header_value_is_refused_naming_off() {
+        let env = ConfigService::with_vars("http", [("HSTS", "   ")]);
+        let err = HttpSecurityHeaders::from_env(&env, HttpSecurityHeaders::default())
+            .expect_err("a blank header value is refused")
+            .to_string();
+        assert!(
+            err.contains(&nest_rs_config::var_name("http", "HSTS")),
+            "names the variable: {err}"
+        );
+        assert!(err.contains("`off`"), "and how to drop the header: {err}");
     }
 }

@@ -7,7 +7,7 @@ use quote::quote;
 
 use crate::attr::{ResourceField, ResourceModel, graphql_crate_attr, graphql_object_derive};
 
-pub fn emit(model: &ResourceModel) -> TokenStream2 {
+pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     let create = input_struct(&model.create_ident, model, |f| f.in_create);
     let update = input_struct(&model.update_ident, model, |f| f.in_update);
     quote! {

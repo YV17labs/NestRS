@@ -1,0 +1,5 @@
+error: a `#[routes]` method borrows its host — `&self` — and this one takes no receiver: a host is one instance shared by every call, and each method is lent a shared borrow of it
+  --> tests/integration/diagnostics/routes_takes_self_by_reference.rs:14:19
+   |
+14 |     async fn show(id: nest_rs_http::poem::web::Path<String>) -> String {
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

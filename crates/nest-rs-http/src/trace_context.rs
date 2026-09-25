@@ -89,7 +89,7 @@ const UPSTREAM_REQUEST_ID_ATTR: &str = "http.request.header.x-request-id";
 /// so the trust decision is made once per request and this module cannot come to
 /// disagree with [`ClientOrigin`] about which peers are infrastructure.
 pub(crate) fn resolve(req: &Request, origin: ClientOrigin) -> Correlation {
-    continued(req, origin).unwrap_or_else(Correlation::mint)
+    continued(req, origin).unwrap_or_else(|| Correlation::minted(None))
 }
 
 /// The inbound context, if there is one and it may be believed.
@@ -469,7 +469,7 @@ mod tests {
     /// front gate, is deliberately not the one they asked for.
     #[test]
     fn the_response_reports_the_trace_this_service_used() {
-        let correlation = Correlation::mint();
+        let correlation = Correlation::minted(None);
         let mut resp = Response::default();
         stamp(&correlation, &mut resp);
 

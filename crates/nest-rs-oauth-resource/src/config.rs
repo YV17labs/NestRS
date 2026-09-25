@@ -1,7 +1,7 @@
 //! [`OAuthResourceConfig`] — who this resource server is, and which
 //! authorization servers issue tokens for it (RFC 9728 §2).
 
-use nest_rs_config::{Config, ConfigService, Namespaced, config, var_name};
+use nest_rs_config::{Config, ConfigService, Namespaced, config};
 
 use crate::metadata::ProtectedResourceMetadata;
 use nest_rs_authn::AuthError;
@@ -15,38 +15,38 @@ const BEARER_METHOD_HEADER: &str = "header";
 const BEARER_METHODS_DEFINED: [&str; 3] = [BEARER_METHOD_HEADER, "body", "query"];
 
 /// Identity of this deployment as an OAuth 2.1 protected resource (namespace
-/// `oauth_resource`). Dual-path like every `nest-rs-*` config: `NESTRS_OAUTH_RESOURCE__*` env
+/// `oauth__resource`). Dual-path like every `nest-rs-*` config: `NESTRS_OAUTH__RESOURCE__*` env
 /// vars over the base pinned in
 /// [`OAuthResourceModule::for_root`](crate::OAuthResourceModule::for_root),
 /// composing per field.
-#[config(namespace = "oauth_resource")]
+#[config(namespace = "oauth__resource")]
 #[derive(Clone, Debug, Default)]
 pub struct OAuthResourceConfig {
     /// The canonical URI clients name in their RFC 8707 `resource` parameter,
     /// and the value tokens must carry as `aud`. Absolute, no fragment, no
     /// trailing slash — `https://api.example.com` or
-    /// `https://api.example.com/mcp`. Read from `NESTRS_OAUTH_RESOURCE__RESOURCE`;
+    /// `https://api.example.com/mcp`. Read from `NESTRS_OAUTH__RESOURCE__RESOURCE`;
     /// **required** — the module fails boot without it.
     pub resource: Option<String>,
     /// Issuer identifiers of the authorization servers that mint tokens for
-    /// this resource. Read from `NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS`;
+    /// this resource. Read from `NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS`;
     /// **at least one is required** (RFC 9728 §2, restated as a MUST by the
     /// MCP authorization spec).
     pub authorization_servers: Vec<String>,
     /// The minimal scope set for basic functionality, advertised in the
     /// metadata document and echoed in the `WWW-Authenticate` challenge so a
     /// client knows what to ask for. Read from
-    /// `NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED`; empty omits both.
+    /// `NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED`; empty omits both.
     pub scopes_supported: Vec<String>,
     /// How a token may be presented (RFC 9728 §2). Read from
-    /// `NESTRS_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED`; defaults to `header` alone,
+    /// `NESTRS_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED`; defaults to `header` alone,
     /// which is the only form this framework accepts.
     pub bearer_methods_supported: Vec<String>,
     /// Human-readable name for a consent screen. Read from
-    /// `NESTRS_OAUTH_RESOURCE__RESOURCE_NAME`.
+    /// `NESTRS_OAUTH__RESOURCE__RESOURCE_NAME`.
     pub resource_name: Option<String>,
     /// URL of developer documentation for this resource. Read from
-    /// `NESTRS_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION`.
+    /// `NESTRS_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION`.
     pub resource_documentation: Option<String>,
     /// RFC 9728 §2 `resource_policy_uri` — where a developer reads how the
     /// protected resource's data may be used. Omitted from the document when
@@ -62,16 +62,16 @@ pub struct OAuthResourceConfig {
 impl Config for OAuthResourceConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            resource: env.get("RESOURCE").or(base.resource),
-            authorization_servers: env.list("AUTHORIZATION_SERVERS", base.authorization_servers),
-            scopes_supported: env.list("SCOPES_SUPPORTED", base.scopes_supported),
+            resource: env.get("RESOURCE")?.or(base.resource),
+            authorization_servers: env.list("AUTHORIZATION_SERVERS", base.authorization_servers)?,
+            scopes_supported: env.list("SCOPES_SUPPORTED", base.scopes_supported)?,
             bearer_methods_supported: env
-                .list("BEARER_METHODS_SUPPORTED", base.bearer_methods_supported),
-            resource_name: env.get("RESOURCE_NAME").or(base.resource_name),
-            resource_policy_uri: env.get("RESOURCE_POLICY_URI").or(base.resource_policy_uri),
-            resource_tos_uri: env.get("RESOURCE_TOS_URI").or(base.resource_tos_uri),
+                .list("BEARER_METHODS_SUPPORTED", base.bearer_methods_supported)?,
+            resource_name: env.get("RESOURCE_NAME")?.or(base.resource_name),
+            resource_policy_uri: env.get("RESOURCE_POLICY_URI")?.or(base.resource_policy_uri),
+            resource_tos_uri: env.get("RESOURCE_TOS_URI")?.or(base.resource_tos_uri),
             resource_documentation: env
-                .get("RESOURCE_DOCUMENTATION")
+                .get("RESOURCE_DOCUMENTATION")?
                 .or(base.resource_documentation),
         })
     }
@@ -116,7 +116,7 @@ impl OAuthResourceConfig {
             return Err(AuthError::Failed(format!(
                 "{} must name this deployment's canonical URI \
                  (for example https://api.example.com)",
-                var_name(Self::NAMESPACE, "RESOURCE"),
+                nest_rs_config::spellings(Self::NAMESPACE, "RESOURCE"),
             )));
         }
         validate_canonical_uri(resource)?;
@@ -131,7 +131,7 @@ impl OAuthResourceConfig {
             return Err(AuthError::Failed(format!(
                 "{} must list at least one issuer — RFC 9728 metadata without \
                  `authorization_servers` tells a client nothing",
-                var_name(Self::NAMESPACE, "AUTHORIZATION_SERVERS"),
+                nest_rs_config::spellings(Self::NAMESPACE, "AUTHORIZATION_SERVERS"),
             )));
         }
         for issuer in &authorization_servers {

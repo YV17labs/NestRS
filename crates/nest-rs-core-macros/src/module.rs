@@ -5,7 +5,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Expr, Ident, ItemStruct, Path, Token, Type, bracketed, parse_macro_input};
 
-pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as ModuleArgs);
     let item = parse_macro_input!(input as ItemStruct);
     let name = item.ident.clone();

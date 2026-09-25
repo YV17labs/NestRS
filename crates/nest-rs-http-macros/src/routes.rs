@@ -11,9 +11,10 @@ use syn::{
 };
 
 use nest_rs_codegen::{
+    Collision, Conditional, DispatchKeys, HostBorrow, RoutePath, await_if_async, cfg_attrs,
     force_guard_typeids, guard_capability_bounds, impl_self_ident, injected_methods_with_layers,
     layer_deps, mixed_site_ident, normalize_forwarded_args, nth_generic_type, require_str_lit,
-    scoped_specs, take_flag_attr, take_path_list,
+    scoped_specs, shared_receiver, take_flag_attr, take_path_list,
 };
 
 use crate::attr::opt_str;
@@ -62,16 +63,69 @@ struct RouteHandler {
     /// `#[version("2")]` on the method — the subset of the controller's
     /// versions this route serves. Empty means all of them.
     versions: Vec<LitStr>,
+    /// The method's `#[cfg]` conditions, carried onto every item emitted for the
+    /// route outside the method.
+    cfgs: Vec<TokenStream2>,
 }
 
-/// Handlers grouped by path in first-seen order. Several verbs may share a
-/// path (`GET` + `POST /users`), and poem rejects two `.at(path, ..)` for the
-/// same path, so they must collapse into one method table
+/// Handlers grouped by address in first-seen order. Several verbs may share one
+/// (`GET` + `POST /users`), and poem rejects two `.at(path, ..)` for the same
+/// path, so they must collapse into one method table
 /// (`MethodTable::new().get(h1).post(h2)`), which is also what carries the verb
 /// set to the `Allow` header a `405` owes.
-type RoutesByPath = Vec<(LitStr, Vec<RouteHandler>)>;
+///
+/// Grouped by [`RoutePath::identity`], never by the path as written: `/p/:id`
+/// for `GET` and `/p/:other/` for `DELETE` are one address, and two groups were
+/// two poem nodes, the first of which answered `DELETE` with `405`.
+type RoutesByPath = Vec<RouteGroup>;
+
+/// One address and every handler serving it.
+struct RouteGroup {
+    /// [`RoutePath::identity`] — what makes two paths one address.
+    identity: String,
+    /// The path poem mounts, the same for every handler of the group.
+    mount: LitStr,
+    /// The method that first declared the address, for the refusal that names it.
+    first: syn::Ident,
+    handlers: Vec<RouteHandler>,
+}
 
 pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
+    let written = TokenStream2::from(input.clone());
+    let expansion = expand(args, input).into();
+    crate::controller::HTTP_PAIR
+        .keep_item_on_refusal(written, expansion, &HELPERS, |item| {
+            let self_ty = &item.self_ty;
+            quote! {
+                impl ::nest_rs_core::Discoverable for #self_ty {
+                    fn register(
+                        builder: ::nest_rs_core::ContainerBuilder,
+                    ) -> ::nest_rs_core::ContainerBuilder {
+                        builder
+                    }
+                }
+            }
+        })
+        .into()
+}
+
+/// What `#[routes]` consumes off a method beside the layers and the posture.
+const HELPERS: [&str; 12] = [
+    "get",
+    "post",
+    "put",
+    "delete",
+    "patch",
+    "sse",
+    "no_pipes",
+    "http_code",
+    "response_header",
+    "redirect",
+    "crud_write",
+    "crud_location",
+];
+
+fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // The impl half collects; it declares nothing. Taking an argument list and
     // dropping it is the defect `#[processor]` and `#[scheduled]` were fixed
     // for, and this is the likeliest place of all to reach for `version` —
@@ -108,6 +162,11 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut wrappers: Vec<TokenStream2> = Vec::new();
     let mut routes_by_path: RoutesByPath = Vec::new();
+    let mut routes_declared = DispatchKeys::new(
+        "#[routes]",
+        "a controller serves each verb and path with one handler in each version, so the second \
+         would never run — give one a distinct path, verb or `#[version]`",
+    );
     let mut route_metas: Vec<TokenStream2> = Vec::new();
 
     for impl_item in item.items.iter_mut() {
@@ -115,19 +174,31 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let verb_idx = method.attrs.iter().position(|attr| {
-            ["get", "post", "put", "delete", "patch", "sse"]
-                .iter()
-                .any(|v| attr.path().is_ident(v))
-        });
-        let Some(idx) = verb_idx else { continue };
-
-        let attr = method.attrs.remove(idx);
-        let declared_verb = attr
-            .path()
-            .get_ident()
-            .expect("verb attribute has an ident")
-            .clone();
+        let index = match nest_rs_codegen::one_role_per_method(
+            "verb",
+            &method.attrs,
+            &["get", "post", "put", "delete", "patch", "sse"],
+            "",
+        ) {
+            Ok(Some(index)) => index,
+            Ok(None) => continue,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        let attr = method.attrs.remove(index);
+        let Some(declared_verb) = attr.path().get_ident().cloned() else {
+            continue;
+        };
+        // Before the arguments are read: a method without `&self` has no
+        // controller to be called on, and its first argument is never taken for
+        // a receiver.
+        if let Err(err) = shared_receiver(method, "#[routes]", &ctrl_name, HostBorrow::Host)
+            .and_then(|()| nest_rs_codegen::concrete_signature(method, "#[routes]"))
+        {
+            return err.to_compile_error().into();
+        }
+        // The route travels with the method: its wrapper, its mount and its
+        // document entry are compiled out with it.
+        let cfgs = cfg_attrs(&method.attrs);
         // `#[sse]` is a `GET` that answers `text/event-stream` — a response
         // shape, not a sixth method. Collapsing it here is what makes
         // `#[sse("/x")]` beside `#[get("/x")]` the same duplicate-route error
@@ -139,10 +210,28 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
             declared_verb.clone()
         };
 
-        let route_path: LitStr = match attr.parse_args() {
+        let written_path: LitStr = match attr.parse_args() {
             Ok(p) => p,
             Err(err) => return err.to_compile_error().into(),
         };
+        // Read with poem's grammar here, where the literal is: the address is
+        // what the route's identity, its group, its mount, its log line and its
+        // document entry all name.
+        let parsed_path = match RoutePath::parse(&written_path.value()) {
+            Ok(parsed) => parsed,
+            Err(why) => {
+                return syn::Error::new_spanned(
+                    &written_path,
+                    format!(
+                        "`{}` is not a path poem can mount: {why}",
+                        written_path.value()
+                    ),
+                )
+                .to_compile_error()
+                .into();
+            }
+        };
+        let route_path = LitStr::new(parsed_path.mount(), written_path.span());
 
         let method_name = method.sig.ident.clone();
         let method_name_lit = method_name.to_string();
@@ -357,7 +446,13 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
         let ctrl_var = mixed_site_ident("__ctrl");
         let res_var = mixed_site_ident("res");
 
-        let call_expr = quote! { #ctrl_var.#method_name(#(#arg_idents),*).await };
+        let call_expr = await_if_async(
+            &method.sig,
+            // By path, never `__ctrl.method(..)`: the controller is held in an
+            // `Arc`, and method lookup tries the `Arc` before it derefs, so a trait
+            // method of the handler's name implemented for `Arc<T>` ran instead.
+            quote! { <#self_ty>::#method_name(&**#ctrl_var, #(#arg_idents),*) },
+        );
         let returns_result = match &method.sig.output {
             ReturnType::Type(_, ty) => result_inner(ty).is_some(),
             ReturnType::Default => false,
@@ -440,12 +535,14 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
             (quote! {}, quote! {})
         };
         wrappers.push(quote! {
+            #(#cfgs)*
             #[allow(non_camel_case_types)]
             struct #wrapper_name {
                 __ctrl: ::std::sync::Arc<#self_ty>,
                 #sse_field
             }
 
+            #(#cfgs)*
             impl ::nest_rs_http::poem::Endpoint for #wrapper_name {
                 type Output = ::nest_rs_http::poem::Response;
 
@@ -500,32 +597,82 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
             pipes: method_pipes,
             exception_filters: method_exception_filters,
             versions: method_versions.clone(),
+            cfgs: cfgs.clone(),
         };
+        // Two handlers for the same (verb, path) would collapse silently into
+        // `poem::get(h1).get(h2)` — the second wins and the first becomes dead,
+        // unroutable code (HTTP-R2). Refused by the macro when neither carries a
+        // `#[cfg]`, and by rustc through the marker when both are compiled: the
+        // conditions as written say nothing about whether both hold.
+        //
+        // The identity is the address poem routes, not the path as written, and
+        // it is claimed in the versions the route serves: `#[version("1")]` and
+        // `#[version("2")]` on one verb and path are two addresses, `/v1/…` and
+        // `/v2/…`, while an unnarrowed route serves every version beside them.
+        let served: Vec<String> = method_versions.iter().map(LitStr::value).collect();
+        let route = match served.as_slice() {
+            [] => format!(
+                "{} {}",
+                verb_ident.to_string().to_uppercase(),
+                route_path.value()
+            ),
+            versions => format!(
+                "{} {} #[version({})]",
+                verb_ident.to_string().to_uppercase(),
+                route_path.value(),
+                versions
+                    .iter()
+                    .map(|version| format!("{version:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        };
+        if let Err(err) = routes_declared.declare_in(
+            Collision::Marker,
+            "route",
+            // The verb folds; the path does not — `/Users` and `/users` are two
+            // routes, and the marker's name keeps them apart by its hash.
+            &format!("{} {}", verb_ident, parsed_path.identity()),
+            &served,
+            &route,
+            &method_name,
+            &cfgs,
+            &attr,
+        ) {
+            return err.to_compile_error().into();
+        }
         match routes_by_path
             .iter_mut()
-            .find(|(path, _)| path.value() == route_path.value())
+            .find(|group| group.identity == parsed_path.identity())
         {
-            Some((_, handlers)) => {
-                // Two handlers for the same (verb, path) would collapse silently
-                // into `poem::get(h1).get(h2)` — the second wins and the first
-                // becomes dead, unroutable code. Reject it at the macro (HTTP-R2).
-                if handlers.iter().any(|h| h.verb == verb_ident) {
-                    return syn::Error::new_spanned(
-                        &verb_ident,
-                        format!(
-                            "duplicate route `{} {}` on this controller — two handlers for \
-                             the same verb+path collapse silently (the later one would win); \
-                             give one a distinct path or verb",
-                            verb_ident.to_string().to_uppercase(),
-                            route_path.value(),
-                        ),
-                    )
-                    .to_compile_error()
-                    .into();
-                }
-                handlers.push(handler);
+            // poem mounts an address once and binds each parameter by the name
+            // it was mounted under. A handler reading `:other` from a node
+            // mounted as `:id` finds nothing — so one address spells its
+            // parameters one way, whatever conditions its routes carry.
+            Some(group) if group.mount.value() != route_path.value() => {
+                return syn::Error::new_spanned(
+                    &written_path,
+                    format!(
+                        "`#[routes]` mounts one address as `{}` on `{}` and as `{}` on `{}`: poem \
+                         mounts an address once and binds each parameter by the name it was \
+                         mounted under, so one handler would read a parameter that is not there \
+                         — name the parameters alike on both",
+                        group.mount.value(),
+                        group.first,
+                        route_path.value(),
+                        method_name,
+                    ),
+                )
+                .to_compile_error()
+                .into();
             }
-            None => routes_by_path.push((route_path.clone(), vec![handler])),
+            Some(group) => group.handlers.push(handler),
+            None => routes_by_path.push(RouteGroup {
+                identity: parsed_path.identity().to_owned(),
+                mount: route_path.clone(),
+                first: method_name.clone(),
+                handlers: vec![handler],
+            }),
         }
 
         let verb_variant = match verb_ident.to_string().as_str() {
@@ -711,6 +858,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
                 span,
             );
             wrappers.push(quote_spanned! {span=>
+                #(#cfgs)*
                 const _: () = ::core::assert!(
                     ::nest_rs_http::versions_declare(<#self_ty>::VERSIONS, #route_versions),
                     #message,
@@ -719,6 +867,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         route_metas.push(quote! {
+            #(#cfgs)*
             ::nest_rs_http::HttpRouteMeta {
                 verb: #verb_variant,
                 path: #route_path,
@@ -754,7 +903,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     let route_layers = layer_deps(
         routes_by_path
             .iter()
-            .flat_map(|(_, handlers)| handlers.iter())
+            .flat_map(|group| group.handlers.iter())
             .flat_map(|handler| {
                 handler
                     .guards
@@ -764,6 +913,10 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
                     .chain(&handler.force_guards)
                     .chain(&handler.pipes)
                     .chain(&handler.exception_filters)
+                    .map(|item| Conditional {
+                        cfgs: &handler.cfgs,
+                        item,
+                    })
             }),
     );
     let injected_methods = injected_methods_with_layers(&self_ty, &route_layers);
@@ -777,8 +930,17 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     let capability_bounds = guard_capability_bounds(
         routes_by_path
             .iter()
-            .flat_map(|(_, handlers)| handlers.iter())
-            .flat_map(|handler| handler.guards.iter().chain(&handler.force_guards)),
+            .flat_map(|group| group.handlers.iter())
+            .flat_map(|handler| {
+                handler
+                    .guards
+                    .iter()
+                    .chain(&handler.force_guards)
+                    .map(|item| Conditional {
+                        cfgs: &handler.cfgs,
+                        item,
+                    })
+            }),
         quote!(::nest_rs_guards::HttpGuard),
     );
 
@@ -787,7 +949,7 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     // lookup no non-streaming controller has any use for.
     let has_sse = routes_by_path
         .iter()
-        .flat_map(|(_, handlers)| handlers.iter())
+        .flat_map(|group| group.handlers.iter())
         .any(|handler| handler.is_sse);
     let sse_resolve = if has_sse {
         quote! { let __sse = ::nest_rs_http::SseSettings::resolve(container); }
@@ -810,14 +972,17 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     // survive is decided at mount time.
     let route_entries: Vec<TokenStream2> = routes_by_path
         .iter()
-        .map(|(path, handlers)| {
-            let arms: Vec<TokenStream2> = handlers
+        .map(|group| {
+            let path = &group.mount;
+            let arms: Vec<TokenStream2> = group
+                .handlers
                 .iter()
                 .map(|handler| {
                     let label = format!("{} {}", handler.verb, path.value());
                     let ep = guarded_handler(handler, &label, &self_ty);
                     let verb = &handler.verb;
                     let versions = &handler.versions;
+                    let cfgs = &handler.cfgs;
                     let serves = if versions.is_empty() {
                         quote! { true }
                     } else {
@@ -830,15 +995,19 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
                             }
                         }
                     };
+                    // A `let`, because a `#[cfg]` may sit on a statement and not
+                    // on an `if` expression.
                     quote! {
-                        if #serves {
+                        #(#cfgs)*
+                        let () = if #serves {
                             __method = __method.#verb(#ep);
-                        }
+                        };
                     }
                 })
                 .collect();
             quote! {
                 {
+                    #[allow(unused_mut)]
                     let mut __method = ::nest_rs_http::MethodTable::new();
                     #(#arms)*
                     if !__method.is_empty() {
@@ -852,8 +1021,12 @@ pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
         })
         .collect();
 
+    let markers = routes_declared.markers(&self_ty, &item.generics);
+
     quote! {
         #item
+
+        #markers
 
         #capability_bounds
 
@@ -1162,6 +1335,7 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     let RouteHandler {
         verb: _,
         versions: _,
+        cfgs: _,
         is_sse,
         wrapper,
         guards,

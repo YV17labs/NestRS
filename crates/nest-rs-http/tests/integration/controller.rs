@@ -137,3 +137,186 @@ async fn the_collision_stays_closed_under_a_response_shaper() {
     resp.assert_header("x-hygiene", "ok");
     resp.assert_text("shaped tagged 0.0.0.0").await;
 }
+
+/// A trait whose method shares a handler's name, implemented for the `Arc` the
+/// route holds its controller in. Method syntax on that `Arc` finds this
+/// implementation before it derefs to the controller, so a route calling
+/// `__ctrl.named_like_a_trait()` ran this body instead of the handler.
+#[expect(
+    dead_code,
+    reason = "never called: the expansion calls the method by its path"
+)]
+trait NamedLikeATrait {
+    fn named_like_a_trait(&self) -> String;
+}
+
+impl<T> NamedLikeATrait for std::sync::Arc<T> {
+    fn named_like_a_trait(&self) -> String {
+        "the trait on Arc".into()
+    }
+}
+
+#[controller(path = "/shadowed")]
+#[derive(Default)]
+struct ShadowedController;
+
+#[routes]
+impl ShadowedController {
+    #[get("/")]
+    fn named_like_a_trait(&self) -> String {
+        "the handler".into()
+    }
+}
+
+#[module(providers = [ShadowedController])]
+struct ShadowedModule;
+
+#[tokio::test]
+async fn a_route_calls_its_handler_and_not_a_trait_method_of_the_same_name_on_arc() {
+    let client = crate::boot::<ShadowedModule>().await;
+    let resp = client.get("/shadowed").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_text("the handler").await;
+}
+
+// ---------------------------------------------------------------------------
+// A route's identity is the address poem mounts, read with poem's grammar
+// (`nest_rs_codegen::RoutePath`), and it is claimed in the versions the route
+// serves. The refusals are trybuild snapshots; what is pinned here is what the
+// same reading *serves*.
+
+#[controller(path = "/addresses", version = ["1", "2"])]
+struct AddressController;
+
+#[routes]
+impl AddressController {
+    /// One verb and path in two versions is two addresses, `/v1/…` and `/v2/…`.
+    #[get("/versioned")]
+    #[version("1")]
+    async fn versioned_one(&self) -> String {
+        "one".into()
+    }
+
+    #[get("/versioned")]
+    #[version("2")]
+    async fn versioned_two(&self) -> String {
+        "two".into()
+    }
+
+    /// Two spellings of one address, two verbs: one poem node answering both.
+    #[get("/parcels/:id")]
+    async fn read_parcel(&self, Path(id): Path<String>) -> String {
+        format!("read {id}")
+    }
+
+    #[delete("parcels/:id/")]
+    async fn drop_parcel(&self, Path(id): Path<String>) -> String {
+        format!("dropped {id}")
+    }
+
+    /// Declared with the trailing slash the edge trims off every request.
+    #[get("/slashed/")]
+    async fn slashed(&self) -> String {
+        "slashed".into()
+    }
+}
+
+#[module(providers = [AddressController])]
+struct AddressModule;
+
+#[tokio::test]
+async fn one_route_in_two_versions_serves_each_version_with_its_own_handler() {
+    let client = crate::boot::<AddressModule>().await;
+    for (path, body) in [
+        ("/v1/addresses/versioned", "one"),
+        ("/v2/addresses/versioned", "two"),
+    ] {
+        let resp = client.get(path).send().await;
+        resp.assert_status_is_ok();
+        resp.assert_text(body).await;
+    }
+}
+
+#[tokio::test]
+async fn two_spellings_of_one_address_mount_one_node_serving_both_verbs() {
+    let client = crate::boot::<AddressModule>().await;
+    let read = client.get("/v1/addresses/parcels/7").send().await;
+    read.assert_status_is_ok();
+    read.assert_text("read 7").await;
+    let dropped = client.delete("/v1/addresses/parcels/7").send().await;
+    dropped.assert_status_is_ok();
+    dropped.assert_text("dropped 7").await;
+}
+
+#[tokio::test]
+async fn a_route_declared_with_a_trailing_slash_is_served_at_the_address_without_it() {
+    let client = crate::boot::<AddressModule>().await;
+    let resp = client.get("/v2/addresses/slashed").send().await;
+    resp.assert_status_is_ok();
+    resp.assert_text("slashed").await;
+}
+
+/// The reading is pinned against poem itself, pair by pair: two paths share a
+/// [`RoutePath::identity`] exactly when poem, behind the edge's trailing-slash
+/// trim, serves them as one address — refusing the second mount, or answering
+/// both probes with one endpoint. A poem upgrade that reads a path differently
+/// fails here.
+#[tokio::test]
+async fn a_route_identity_is_the_address_poem_serves() {
+    use nest_rs_codegen::RoutePath;
+    use poem::{Route, endpoint::make_sync};
+
+    /// A path and a request it serves.
+    type Probe = (&'static str, &'static str);
+    // Two probes, and whether the macro calls them one address.
+    let pairs: &[(Probe, Probe, bool)] = &[
+        (("/t", "/t"), ("t", "/t"), true),
+        (("/u", "/u"), ("/u/", "/u"), true),
+        (("/a//b", "/a/b"), ("/a/b", "/a/b"), true),
+        (("/q/:id", "/q/7"), ("/q/:other", "/q/8"), true),
+        (("/n/:id<\\d+>", "/n/7"), ("/n/<\\d+>", "/n/8"), true),
+        (("/f/*", "/f/x/y"), ("/f/*rest", "/f/z"), true),
+        (("/Users", "/Users"), ("/users", "/users"), false),
+        (("/q/:id", "/q/7"), ("/q/:id/x", "/q/7/x"), false),
+        (("/n/:id", "/n/abc"), ("/n/:id<\\d+>", "/n/7"), false),
+        (("/r/<\\d+>", "/r/7"), ("/r/<[a-z]+>", "/r/abc"), false),
+        (("/c/*", "/c/x/y"), ("/c/:id", "/c/x"), false),
+    ];
+
+    for ((a, probe_a), (b, probe_b), same) in pairs {
+        let identity = |path: &str| {
+            RoutePath::parse(path)
+                .unwrap_or_else(|why| panic!("`{path}`: {why}"))
+                .identity()
+                .to_owned()
+        };
+        assert_eq!(
+            identity(a) == identity(b),
+            *same,
+            "the macro's reading of `{a}` and `{b}`",
+        );
+
+        let mounted = Route::new()
+            .try_at(*a, make_sync(|_| "a"))
+            .and_then(|route| route.try_at(*b, make_sync(|_| "b")));
+        let poem_says_one = match mounted {
+            Err(_) => true,
+            Ok(route) => {
+                let client = TestClient::new(route);
+                let mut answers = Vec::new();
+                for probe in [probe_a, probe_b] {
+                    // The edge trims a trailing slash before poem routes.
+                    let trimmed = match probe.trim_end_matches('/') {
+                        "" => "/",
+                        trimmed => trimmed,
+                    };
+                    let resp = client.get(trimmed).send().await;
+                    resp.assert_status_is_ok();
+                    answers.push(resp.0.into_body().into_string().await.unwrap_or_default());
+                }
+                answers[0] == answers[1]
+            }
+        };
+        assert_eq!(poem_says_one, *same, "poem's reading of `{a}` and `{b}`");
+    }
+}

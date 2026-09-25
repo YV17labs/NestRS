@@ -42,7 +42,7 @@ fn internal(service: &'static str, err: &sea_orm::DbErr) -> Error {
     tracing::error!(
         target: crate::TARGET,
         service,
-        error = %err,
+        error = %nest_rs_core::error_message(err),
         "by-id access load failed",
     );
     Error::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE)

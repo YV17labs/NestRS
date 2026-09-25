@@ -20,4 +20,16 @@ impl HygieneLifecycle {
     async fn shutdown(&self) -> Result<(), std::io::Error> {
         Ok(())
     }
+
+    /// A synchronous hook is called without an `.await`.
+    #[on_module_init]
+    fn init(&self) {}
+
+    /// A hook compiled out takes its registration with it — the missing item it
+    /// names is never looked up.
+    #[cfg(any())]
+    #[on_application_shutdown]
+    async fn compiled_out(&self) -> crate::does_not_exist::Error {
+        crate::does_not_exist::run()
+    }
 }

@@ -12,7 +12,7 @@ mod thing {
     #[expose(name = "Thing", service = ThingsService)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "things")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -21,11 +21,11 @@ mod thing {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    pub struct ThingsService;
+    pub(super) struct ThingsService;
 
     impl CrudService for ThingsService {
         type Entity = Entity;
@@ -53,7 +53,7 @@ mod reading {
     #[expose(name = "Reading", service = ReadingsService)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "readings")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -62,11 +62,11 @@ mod reading {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    pub struct ReadingsService;
+    pub(super) struct ReadingsService;
 
     // No `Creatable`/`Updatable`/`Deletable` — and no placeholder write type.
     impl CrudService for ReadingsService {
@@ -108,7 +108,7 @@ mod account {
     #[expose(name = "Account", service = AccountsService)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "accounts")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -121,11 +121,11 @@ mod account {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    pub struct AccountsService;
+    pub(super) struct AccountsService;
 
     impl CrudService for AccountsService {
         type Entity = Entity;

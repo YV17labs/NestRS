@@ -1,0 +1,5 @@
+error: `#[messages]` declares `#[subscribe_message("ping")]` on `ping` and again on `pong`: a gateway dispatches each event, and each connection hook, to one method, so the second would never run — fold the two bodies into one
+  --> tests/integration/diagnostics/messages_one_event_on_two_methods.rs:15:5
+   |
+15 |     #[subscribe_message("ping")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

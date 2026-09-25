@@ -92,7 +92,7 @@ pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
 /// {
 ///     Box::pin(async move {
 ///         match ::nest_rs_core::Container::get::<Foo>(c) {
-///             Some(p) => { p.ready().await; Ok(()) }   // Result methods map_err(Into::into)
+///             Some(p) => { <Foo>::ready(&p).await; Ok(()) }   // Result methods map_err(Into::into)
 ///             None => Ok(()),
 ///         }
 ///     })

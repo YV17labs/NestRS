@@ -65,6 +65,18 @@ pub struct CapturedEvent {
     /// Every other field, formatted with `Debug` (so a `%`/`?` value reads the
     /// way it does in the JSON output, minus the quoting).
     pub fields: BTreeMap<String, String>,
+    /// The `trace_id` the line renders: read off the ambient context when the
+    /// event fired, exactly as the formatters read it, and `None` where no edge
+    /// had opened a unit of work.
+    ///
+    /// Beside `fields`, never inside them — an event writing its trace ids as
+    /// fields is the duplicate the formatters exist to prevent, and a test
+    /// reading them there would pass on exactly that defect.
+    pub trace_id: Option<String>,
+    /// The `span_id` the line renders, read as [`trace_id`](Self::trace_id) is.
+    pub span_id: Option<String>,
+    /// The `actor_id` the line renders, read as [`trace_id`](Self::trace_id) is.
+    pub actor_id: Option<String>,
 }
 
 impl CapturedEvent {
@@ -315,6 +327,7 @@ where
         let mut visitor = FieldVisitor::default();
         event.record(&mut visitor);
         let meta = event.metadata();
+        let correlation = nest_rs_core::current_correlation();
         self.events
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -324,6 +337,11 @@ where
                 level: meta.level().as_str().to_lowercase(),
                 message: visitor.message.unwrap_or_default(),
                 fields: visitor.fields,
+                trace_id: correlation.as_ref().map(|c| c.trace_id().to_string()),
+                span_id: correlation.as_ref().map(|c| c.span_id().to_string()),
+                actor_id: correlation
+                    .as_ref()
+                    .and_then(|c| c.actor_id().map(str::to_owned)),
             });
     }
 }
@@ -380,5 +398,37 @@ mod tests {
         assert!(!event.message.contains("post"));
         assert_eq!(logs.find("nest_rs::orm", "listing rows").len(), 1);
         assert!(logs.find("nest_rs::http", "denying all rows").is_empty());
+    }
+
+    /// What a line renders is read off the ambient context, so an event filed
+    /// outside any unit of work carries no ids — the case a line emitted before
+    /// its edge installed the context falls into.
+    #[tokio::test]
+    async fn an_event_carries_the_trace_context_it_was_filed_under() {
+        let logs = LogCapture::install();
+        tracing::info!(target: "nest_rs::orm", entity = "post", "listing rows");
+        let correlation = nest_rs_core::Correlation::minted(Some("user-7"));
+        let (trace_id, span_id) = (
+            correlation.trace_id().to_string(),
+            correlation.span_id().to_string(),
+        );
+        nest_rs_core::with_request_scope(None, correlation, async {
+            tracing::warn!(target: "nest_rs::orm", entity = "post", "denying all rows");
+        })
+        .await;
+
+        let outside = logs.expect_one("nest_rs::orm", "listing rows");
+        assert_eq!(
+            (outside.trace_id, outside.span_id, outside.actor_id),
+            (None, None, None)
+        );
+        let inside = logs.expect_one("nest_rs::orm", "denying all rows");
+        assert_eq!(inside.trace_id, Some(trace_id));
+        assert_eq!(inside.span_id, Some(span_id));
+        assert_eq!(inside.actor_id.as_deref(), Some("user-7"));
+        assert!(
+            !inside.fields.contains_key("trace_id"),
+            "the ids ride beside the fields, never inside them: {inside:#?}",
+        );
     }
 }

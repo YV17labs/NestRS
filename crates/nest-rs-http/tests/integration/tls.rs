@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{HttpTransport, TlsConfig, controller, routes};
+use nest_rs_http::{HttpTls, HttpTransport, controller, routes};
 use poem::Result;
 use tokio_util::sync::CancellationToken;
 
@@ -134,7 +134,7 @@ async fn ping_until_ok(host: &str, port: u16, within: Duration) -> Option<String
 
 /// A configured transport over the material on disk, not yet served.
 async fn transport_for(port: u16, material: &Material, reload_secs: u64) -> HttpTransport {
-    let tls = TlsConfig::from_files(material.cert(), material.key())
+    let tls = HttpTls::from_files(material.cert(), material.key())
         .expect("fixture material reads")
         .with_reload_secs(reload_secs);
     let app = App::builder()
@@ -374,7 +374,7 @@ async fn a_renewal_that_cannot_serve_is_refused_and_the_certificate_in_use_keeps
 
 #[test]
 fn from_files_reports_the_path_it_could_not_read() {
-    let err = TlsConfig::from_files(Path::new("/nonexistent/cert.pem"), Path::new("/dev/null"))
+    let err = HttpTls::from_files(Path::new("/nonexistent/cert.pem"), Path::new("/dev/null"))
         .expect_err("a missing certificate is not silently skipped");
     let msg = format!("{err:#}");
     assert!(

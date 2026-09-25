@@ -88,4 +88,39 @@ impl HygieneTool {
             "hello",
         )]))
     }
+
+    /// A synchronous tool is called without an `.await`; its wrapper still
+    /// awaits the guard chain.
+    #[tool(description = "Answer at once.")]
+    #[public]
+    fn ping(&self) -> Result<String, McpError> {
+        Ok("pong".into())
+    }
+
+    /// An operation compiled out takes its wrapper, its route and its guard with
+    /// it — rmcp's router would otherwise route a function that is not there.
+    #[cfg(any())]
+    #[tool(description = "Not in this build.")]
+    #[public]
+    #[use_guards(crate::does_not_exist::Guard)]
+    async fn compiled_out(&self, input: crate::does_not_exist::Input) -> Result<String, McpError> {
+        crate::does_not_exist::answer(input)
+    }
+
+    /// The same, through a `#[cfg_attr]`.
+    #[cfg_attr(all(), cfg(any()))]
+    #[tool(description = "Not in this build either.")]
+    #[public]
+    fn compiled_out_by_cfg_attr(&self) -> Result<crate::does_not_exist::Output, McpError> {
+        crate::does_not_exist::answer()
+    }
+
+    /// One tool name under conditions that exclude each other: at most one is
+    /// compiled, so the router still routes `ping` to one method.
+    #[cfg(any())]
+    #[tool(name = "ping", description = "Answer at once, elsewhere.")]
+    #[public]
+    fn ping_elsewhere(&self) -> Result<String, McpError> {
+        Ok("pong".into())
+    }
 }

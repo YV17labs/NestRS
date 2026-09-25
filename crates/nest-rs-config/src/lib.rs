@@ -26,16 +26,20 @@ mod config;
 mod dotenv;
 mod environment;
 mod error;
+mod material;
 mod module;
 mod service;
+mod setting;
 mod source;
 
 pub use config::{Config, Namespaced, read};
 pub use dotenv::load_cascade;
 pub use environment::Environment;
 pub use error::{ConfigError, Result};
+pub use material::{Material, read_material};
 pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
-pub use service::{ConfigService, var_name};
+pub use service::{ConfigService, spellings, var_name};
+pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
 
 /// The `#[config(namespace = "…")]` decorator — marks a struct as a namespaced,

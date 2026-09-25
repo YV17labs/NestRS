@@ -104,7 +104,7 @@ pub(crate) async fn with_data_context<T>(
             tracing::error!(
                 target: crate::TARGET,
                 transport = transport,
-                error = %err,
+                error = %nest_rs_core::error_message(&err),
                 "dispatch transaction commit failed"
             );
             internal_error()

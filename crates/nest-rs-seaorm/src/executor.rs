@@ -20,6 +20,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use async_trait::async_trait;
+
+use crate::error::CommitError;
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, ExecResult,
     QueryResult, Statement, TransactionTrait,
@@ -319,7 +321,7 @@ impl LazyTransaction {
                 tracing::error!(
                     target: crate::TARGET,
                     transport,
-                    error = %err,
+                    error = %nest_rs_core::error_message(&err),
                     "poisoned transaction rollback failed"
                 );
             }
@@ -346,7 +348,7 @@ impl LazyTransaction {
                 tracing::error!(
                     target: crate::TARGET,
                     transport,
-                    error = %err,
+                    error = %nest_rs_core::error_message(&err),
                     "transaction rollback failed"
                 );
             }
@@ -461,39 +463,6 @@ pub enum FinalizeOutcome {
         /// reason.
         retryable: bool,
     },
-}
-
-/// A commit-time database failure. Opaque over the ORM's `DbErr` so a sea-orm
-/// version bump is not a semver break through [`FinalizeOutcome`] (B-DATA): the
-/// public surface exposes only what a caller needs — a [`Display`] for logging
-/// and [`is_retryable_conflict`](CommitError::is_retryable_conflict) for
-/// classification — never the wrapped `DbErr` itself.
-///
-/// [`Display`]: std::fmt::Display
-#[derive(Debug)]
-pub struct CommitError(DbErr);
-
-impl CommitError {
-    /// Whether the commit failed on a retryable serialization/deadlock conflict
-    /// (a typed SQLSTATE `40001`/`40P01`/…), matched against the *typed* error
-    /// rather than message text. The interceptor tags these for observability;
-    /// the replay itself belongs at a programmatic transaction boundary
-    /// (`retry::retry_on_conflict`).
-    pub fn is_retryable_conflict(&self) -> bool {
-        crate::retry::is_retryable_conflict(&self.0)
-    }
-}
-
-impl std::fmt::Display for CommitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for CommitError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
 }
 
 #[async_trait]

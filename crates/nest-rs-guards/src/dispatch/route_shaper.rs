@@ -235,7 +235,7 @@ async fn apply_body_pipes(
             // would run the handler against an empty body with every global
             // pipe skipped. Fail the request instead, exactly as the sibling
             // body readers do (`nest_rs_http` `RawBody` / `Piped`).
-            tracing::warn!(target: nest_rs_core::target::LAYERS, error = %err, "global pipe: failed to read body");
+            tracing::warn!(target: nest_rs_core::target::LAYERS, error = %nest_rs_core::error_message(&err), "global pipe: failed to read body");
             return Err(err.into());
         }
     };
@@ -245,7 +245,7 @@ async fn apply_body_pipes(
     let mut value: Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
         Err(err) => {
-            tracing::debug!(target: nest_rs_core::target::LAYERS, error = %err, "global pipe: body is not valid JSON");
+            tracing::debug!(target: nest_rs_core::target::LAYERS, error = %nest_rs_core::error_message(&err), "global pipe: body is not valid JSON");
             req.set_body(Body::from_bytes(bytes));
             return Ok(());
         }
@@ -268,7 +268,7 @@ async fn apply_body_pipes(
     let rewritten = serde_json::to_vec(&value).map_err(|err| {
         tracing::error!(
             target: nest_rs_core::target::LAYERS,
-            error = %err,
+            error = %nest_rs_core::error_message(&err),
             "global pipe: failed to re-serialize the transformed body",
         );
         nest_rs_http::poem::Error::from_status(

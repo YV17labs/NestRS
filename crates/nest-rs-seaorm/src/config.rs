@@ -45,7 +45,7 @@ pub struct SeaOrmConfig {
 impl Config for SeaOrmConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            url: env.get("URL").unwrap_or(base.url), //                NESTRS_SEAORM__URL
+            url: env.get("URL")?.unwrap_or(base.url), //                NESTRS_SEAORM__URL
             max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections), // NESTRS_SEAORM__MAX_CONNECTIONS
             min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections), // NESTRS_SEAORM__MIN_CONNECTIONS
             connect_timeout_secs: env

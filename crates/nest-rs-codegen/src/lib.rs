@@ -17,30 +17,43 @@ mod attrs;
 mod capability;
 mod casing;
 mod crud;
+mod dispatch;
+mod duration;
 mod inject;
 mod job;
 mod mount;
 mod pair;
 mod posture;
+mod queue_name;
+mod replicas;
 mod root;
+mod route_path;
 mod specs;
 mod ty;
-/// Public because the grammar it words has a *runtime* counterpart:
-/// `nest-rs-http` cannot depend on this crate (it pulls `syn`), so it carries a
-/// copy of `is_valid_version` and pins it against this one in a dev-dependency
-/// test. Naming the module is what lets that test exist.
+mod ungrouped;
+/// Public because its runtime counterpart needs a *name* from it: `nest-rs-http`
+/// cannot depend on this crate (it pulls `syn`), so it carries its own copy of the
+/// grammar and pins it against this one in a dev-dependency test that reads the
+/// module's items by path. A rule whose runtime copy needs only a function to
+/// call — `queue_name` — stays private and re-exports that function flat
+/// (`framework.md`, *written twice and pinned once*).
 pub mod versioning;
 
 pub use args::{
     duplicate_argument, key_as_written, missing_argument, needs_a_value, one_role_per_method,
     reject_duplicate_argument, require_str_lit, unknown_argument, unknown_value, unmatched_meta,
 };
-pub use attrs::{reject_http_only_layers, take_flag_attr, take_path_list};
+pub use attrs::{
+    Conditional, cfg_attrs, delegated_attrs, reject_http_only_layers, take_flag_attr,
+    take_path_list,
+};
 pub use capability::guard_capability_bounds;
 pub use casing::{pascal_case, snake_case};
 pub use crud::{
-    CrudConfig, CrudOp, GeneratedOps, OpsSelection, Paginate, parse_crud_args, singular_of,
+    CrudDeclaration, CrudOp, GeneratedOps, OpsSelection, Paginate, parse_crud_args, singular_of,
 };
+pub use dispatch::{Collision, DispatchKeys};
+pub use duration::duration_millis;
 pub use inject::{
     InjectableBody, LayerDeps, build_injectable_body, dependencies_method, dependency_names_method,
     forwarded_arg_idents, forwarded_idents, from_container_method, from_scope_method,
@@ -48,17 +61,25 @@ pub use inject::{
     injected_methods_with_layers, injected_names_method, injected_names_with_layers, layer_deps,
     mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
 };
-pub use job::{TRANSACTIONAL, job_argument_needs_a_value, job_transaction, transactional_value};
+pub use job::{
+    TRANSACTIONAL, job_argument_needs_a_value, job_argument_refused, job_returns_a_result,
+    job_transaction, transactional_value,
+};
 pub use mount::reject_path;
 pub use pair::{DecoratorPair, parse_provider_host, provider_residency};
 pub use posture::{
     ID_ARG_UNSUPPORTED_BECAUSE, Posture, PostureRules, at_most_one_authorize,
     posture_contradiction, posture_key_unsupported, posture_required,
 };
+pub use queue_name::{invalid_queue_name, is_valid_queue_name};
+pub use replicas::{REPLICAS, replicas_default, replicas_value};
 pub use root::reroot;
+pub use route_path::RoutePath;
 pub use specs::{force_guard_typeids, scoped_specs};
 pub use ty::{
-    PipeWrapper, generic_args, impl_self_ident, last_segment_ident, must_be_async,
-    nth_generic_type, payload_arg_type, pipe_wrapper, type_label,
+    HostBorrow, PipeWrapper, await_if_async, concrete_signature, generic_args, impl_self_ident,
+    last_segment_ident, nth_generic_type, payload_arg_type, pipe_wrapper, returns_unit,
+    shared_receiver, type_label,
 };
+pub use ungrouped::ungrouped_expr;
 pub use versioning::{Edge, VersionAnswer};

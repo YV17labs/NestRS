@@ -412,7 +412,7 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "widgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub org_id: i32,
@@ -422,7 +422,7 @@ mod tests {
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -453,14 +453,14 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "parents")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub org_id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -470,14 +470,14 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "children")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub parent_id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {
+        pub(super) enum Relation {
             #[sea_orm(
                 belongs_to = "super::parent::Entity",
                 from = "Column::ParentId",

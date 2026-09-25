@@ -33,7 +33,7 @@ use nest_rs_mcp::model::{
     GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
     ProgressNotificationParam, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-    ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo, SetLevelRequestParams,
+    ReadResourceResult, ResourceContents, ServerCapabilities, ServerConfig, SetLevelRequestParams,
     SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams, UpdateTaskParams,
 };
 use nest_rs_mcp::rmcp::serde_json::{self, json};
@@ -71,9 +71,9 @@ impl ProbeHandler {
 }
 
 impl ServerHandler for ProbeHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         self.mark("get_info");
-        ServerInfo::new(
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()

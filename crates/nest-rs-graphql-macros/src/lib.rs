@@ -77,9 +77,10 @@ pub fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 /// the gate once, at subscribe, and the mask on **every item** the stream
 /// yields — evaluated against the ability captured at subscribe, so an item the
 /// subscriber may not read is dropped rather than nulled
-/// (`nest_rs_authz::graphql::masked_item_for`). The method must be `async` and
-/// return `impl Stream<Item = T>`, optionally behind a literally-spelled
-/// `Result<…>`; both rules are compile errors that name themselves.
+/// (`nest_rs_authz::graphql::masked_item_for`). The method is a `fn` or an
+/// `async fn` returning `impl Stream<Item = T>`, optionally behind a
+/// literally-spelled `Result<…>`; an aliased `Result` is a compile error that
+/// names itself.
 ///
 /// **One `#[ComplexObject]` per wire type.** async-graphql allows at most one
 /// `#[ComplexObject]` impl per output type. A `#[field_resolver]` here and an

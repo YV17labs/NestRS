@@ -81,7 +81,7 @@ impl ResourceField {
     /// True iff the field belongs in the output struct as a plain column. A
     /// relation never does — it is materialised by a `#[ComplexObject]` field
     /// resolver (or skipped entirely).
-    pub fn in_output_struct(&self) -> bool {
+    pub(crate) fn in_output_struct(&self) -> bool {
         self.read && self.relation.is_none()
     }
 }
@@ -120,7 +120,7 @@ pub(crate) struct ResourceModel {
 
 impl ResourceModel {
     /// True iff at least one exposed (`#[expose]`) relation needs a `#[ComplexObject]`.
-    pub fn has_auto_relations(&self) -> bool {
+    pub(crate) fn has_auto_relations(&self) -> bool {
         self.fields.iter().any(|f| f.read && f.relation.is_some())
     }
 }

@@ -86,7 +86,7 @@ mod tests {
         let (req, mut body) = Request::default().split();
         let scoped: Scoped<Marker> = crate::with_request_scope(
             Some(scope),
-            nest_rs_core::Correlation::mint(),
+            nest_rs_core::Correlation::minted(None),
             Scoped::from_request(&req, &mut body),
         )
         .await
@@ -122,7 +122,7 @@ mod tests {
         let (req, mut body) = Request::default().split();
         let err = match crate::with_request_scope(
             Some(scope),
-            nest_rs_core::Correlation::mint(),
+            nest_rs_core::Correlation::minted(None),
             Scoped::<Marker>::from_request(&req, &mut body),
         )
         .await

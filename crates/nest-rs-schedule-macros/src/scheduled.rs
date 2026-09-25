@@ -51,31 +51,17 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let trigger_idx = method
-            .attrs
-            .iter()
-            .position(|attr| is_trigger_attr(attr.path()));
-        let Some(idx) = trigger_idx else { continue };
-        let trigger_attr = method.attrs.remove(idx);
-
-        // A second trigger attribute on the same method is a per-method
-        // mutual-exclusion violation — surface it crisply at compile.
-        if let Some(extra) = method
-            .attrs
-            .iter()
-            .find(|attr| is_trigger_attr(attr.path()))
-        {
-            let declared = [
-                nest_rs_codegen::key_as_written(trigger_attr.path()),
-                nest_rs_codegen::key_as_written(extra.path()),
-            ];
-            return syn::Error::new(
-                extra.span(),
-                nest_rs_codegen::one_role_per_method("trigger", &declared, &TRIGGER_ATTRS),
-            )
-            .to_compile_error()
-            .into();
-        }
+        let index = match nest_rs_codegen::one_role_per_method(
+            "trigger",
+            &method.attrs,
+            &TRIGGER_ATTRS,
+            "",
+        ) {
+            Ok(Some(index)) => index,
+            Ok(None) => continue,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        let trigger_attr = method.attrs.remove(index);
 
         let (trigger_tokens, transactional) = match parse_trigger(&trigger_attr) {
             Ok(parsed) => parsed,
@@ -129,14 +115,8 @@ fn reject_args(args: TokenStream) -> syn::Result<()> {
     SCHEDULED_PAIR.reject_args(&args, "the provider's scope is declared by")
 }
 
-/// The closed trigger vocabulary, read by [`is_trigger_attr`] **and** by the
-/// one-role refusal — so the set a method is checked against and the set it is
-/// told about cannot disagree.
+/// The closed trigger vocabulary, read by the one-role refusal.
 const TRIGGER_ATTRS: [&str; 3] = ["cron", "every", "after"];
-
-fn is_trigger_attr(path: &syn::Path) -> bool {
-    TRIGGER_ATTRS.iter().any(|name| path.is_ident(name))
-}
 
 /// The trigger tokens, plus whatever the shared `transactional` key said.
 ///

@@ -42,6 +42,42 @@ impl HygieneGateway {
     #[subscribe_message("hygiene.ping")]
     #[public]
     async fn ping(&self) {}
+
+    /// A synchronous handler is called without an `.await`.
+    #[subscribe_message("hygiene.sync")]
+    #[public]
+    fn sync(&self) -> String {
+        "sync".into()
+    }
+
+    /// A synchronous connection hook, likewise.
+    #[on_connect]
+    fn connected(&self) {}
+
+    /// A message compiled out takes its dispatch arm, its chain and its guard
+    /// with it.
+    #[cfg(any())]
+    #[subscribe_message("hygiene.gone")]
+    #[public]
+    #[use_guards(crate::does_not_exist::Guard)]
+    async fn compiled_out(
+        &self,
+        data: crate::does_not_exist::Data,
+    ) -> crate::does_not_exist::Reply {
+        crate::does_not_exist::answer(data)
+    }
+
+    /// One event, and one hook, declared again under a condition that excludes
+    /// the first: at most one of each is compiled, so each is still dispatched
+    /// to one method.
+    #[cfg(any())]
+    #[subscribe_message("hygiene.ping")]
+    #[public]
+    async fn ping_elsewhere(&self) {}
+
+    #[cfg(any())]
+    #[on_connect]
+    fn connected_elsewhere(&self) {}
 }
 
 /// The versioned mount. `version_path` lives in `nest-rs-http`, which this crate

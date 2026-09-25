@@ -8,7 +8,7 @@ use quote::quote;
 
 use crate::attr::{ResourceModel, is_uuid};
 
-pub fn emit(model: &ResourceModel) -> TokenStream2 {
+pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     let create = emit_create(model);
     let update = emit_update(model);
     quote! {

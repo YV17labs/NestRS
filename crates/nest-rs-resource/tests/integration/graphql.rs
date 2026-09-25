@@ -22,7 +22,7 @@ mod booking {
     #[expose(name = "Booking", service = BookingsService, graphql)]
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "bookings")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -37,11 +37,11 @@ mod booking {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    pub struct BookingsService;
+    pub(super) struct BookingsService;
 
     impl CrudService for BookingsService {
         type Entity = Entity;

@@ -3,9 +3,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::stream::{self, BoxStream, StreamExt};
-use nest_rs_config::ConfigService;
+use nest_rs_config::{ConfigService, Setting};
 use poem::listener::{RustlsCertificate, RustlsConfig};
-use rustls::crypto::CryptoProvider;
 use rustls::crypto::aws_lc_rs::sign::any_supported_type;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -29,10 +28,10 @@ enum TlsSource {
 ///
 /// ```no_run
 /// # use nest_rs_config::ConfigService;
-/// # use nest_rs_http::{HttpTransport, TlsConfig};
+/// # use nest_rs_http::{HttpTransport, HttpTls};
 /// let env = ConfigService::for_namespace("http");
 /// let mut http = HttpTransport::new().bind("0.0.0.0:3000");
-/// if let Some(tls) = TlsConfig::from_env(&env, None)? {
+/// if let Some(tls) = HttpTls::from_env(&env, None)? {
 ///     http = http.tls(tls);
 /// }
 /// # Ok::<(), anyhow::Error>(())
@@ -56,7 +55,7 @@ enum TlsSource {
 ///
 /// Inline PEM has no source to watch, so it is loaded once as before.
 #[derive(Clone)]
-pub struct TlsConfig {
+pub struct HttpTls {
     cert: Vec<u8>,
     key: Vec<u8>,
     source: TlsSource,
@@ -65,9 +64,9 @@ pub struct TlsConfig {
 
 /// Manual `Debug` so `HttpConfig`'s derived `Debug` cannot leak the private
 /// key to a log line — only sizes are printed.
-impl std::fmt::Debug for TlsConfig {
+impl std::fmt::Debug for HttpTls {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TlsConfig")
+        f.debug_struct("HttpTls")
             .field("cert", &format_args!("<{} bytes>", self.cert.len()))
             .field("key", &format_args!("<{} bytes redacted>", self.key.len()))
             .field("source", &self.source)
@@ -76,7 +75,7 @@ impl std::fmt::Debug for TlsConfig {
     }
 }
 
-impl TlsConfig {
+impl HttpTls {
     /// Build a TLS config from PEM certificate and private-key bytes. Inline
     /// material has no source to watch — see [`from_files`](Self::from_files)
     /// for the reloadable form.
@@ -115,9 +114,10 @@ impl TlsConfig {
     }
 
     /// Read TLS material from `NESTRS_HTTP__TLS_CERT` / `NESTRS_HTTP__TLS_KEY`
-    /// (PEM inline) or their `_FILE` variants (path the transport loads); the
-    /// inline form wins if both are set. `base` is what the field keeps when the
-    /// environment configures neither half.
+    /// (PEM inline) or their `_FILE` variants (path the transport loads), read
+    /// through [`ConfigService::pem`] — which refuses a half set both ways.
+    /// `base` is what the field keeps when the environment configures neither
+    /// half.
     ///
     /// `Ok(None)` when neither is present and `base` is `None` (serve plain
     /// HTTP). Fails if exactly one of the pair is configured — a
@@ -128,19 +128,19 @@ impl TlsConfig {
     /// so a pinned `HttpConfig` and a deployment variable resolve on the same
     /// precedence ladder as every other field.
     pub fn from_env(env: &ConfigService, base: Option<Self>) -> Result<Option<Self>> {
-        let cert = read_env_pem(env, "TLS_CERT", "TLS_CERT_FILE")?;
-        let key = read_env_pem(env, "TLS_KEY", "TLS_KEY_FILE")?;
-        let reload = match env.get("TLS_RELOAD_SECS") {
-            Some(raw) => Some(raw.trim().parse::<u64>().with_context(|| {
-                format!(
-                    "{} must be a whole number of seconds",
-                    env.var_name("TLS_RELOAD_SECS")
-                )
-            })?),
+        let cert = env.material("TLS_CERT")?;
+        let key = env.material("TLS_KEY")?;
+        let reload = match env.setting("TLS_RELOAD_SECS")? {
+            Some(raw) => Some(
+                raw.value
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| raw.refuse("must be a whole number of seconds"))?,
+            ),
             None => None,
         };
         match (cert, key) {
-            (Some(cert), Some(key)) => {
+            (Some(Setting { value: cert, .. }), Some(Setting { value: key, .. })) => {
                 // Both halves read from files ⇒ a watchable source. A mixed
                 // pair (one inline, one from a file) is not: reloading half a
                 // pair would swap in a certificate its key no longer matches.
@@ -162,16 +162,8 @@ impl TlsConfig {
                 Some(secs) => base.with_reload_secs(secs),
                 None => base,
             })),
-            (Some(_), None) => anyhow::bail!(
-                "{} is set but no key ({} / _FILE)",
-                env.var_name("TLS_CERT"),
-                env.var_name("TLS_KEY"),
-            ),
-            (None, Some(_)) => anyhow::bail!(
-                "{} is set but no certificate ({} / _FILE)",
-                env.var_name("TLS_KEY"),
-                env.var_name("TLS_CERT"),
-            ),
+            (Some(cert), None) => Err(half_pair(env, &cert, "TLS_KEY", base.is_some())),
+            (None, Some(key)) => Err(half_pair(env, &key, "TLS_CERT", base.is_some())),
         }
     }
 
@@ -190,7 +182,7 @@ impl TlsConfig {
     /// this type became a stream, restored at the seam that removed it.
     pub(crate) fn into_rustls_stream(self) -> Result<BoxStream<'static, RustlsConfig>> {
         validate_pair(&self.cert, &self.key)?;
-        let TlsConfig {
+        let HttpTls {
             cert,
             key,
             source,
@@ -246,31 +238,50 @@ fn rustls_config(cert: Vec<u8>, key: Vec<u8>) -> RustlsConfig {
 /// is refused there, while a pair it wrongly *rejects* is a loud boot failure or
 /// a `warn` that keeps the working certificate serving. Neither outcome is
 /// silence, which is what the alternative — trusting the bytes — was.
+///
+/// A parse failure is described and never quoted: the parser's error carries
+/// the line it choked on, byte for byte, and a PEM whose line breaks were
+/// collapsed is one line holding all of it — the private key included — on its
+/// way to the boot error or the renewal watcher's `warn`.
 fn validate_pair(cert: &[u8], key: &[u8]) -> Result<()> {
     let chain = CertificateDer::pem_slice_iter(cert)
         .collect::<std::result::Result<Vec<_>, _>>()
-        .context("the certificate is not valid PEM")?;
+        .map_err(|_| anyhow::anyhow!("the certificate is not valid PEM: {PEM_SHAPE}"))?;
     anyhow::ensure!(
         !chain.is_empty(),
         "the certificate holds no CERTIFICATE block — an empty or truncated file reads as a \
          chain with nothing in it, which every handshake then fails to present",
     );
-    let key = PrivateKeyDer::from_pem_slice(key).context("the private key is not valid PEM")?;
-    // The provider poem will build with, when it has already installed one; its
-    // own default otherwise. Asking rather than assuming keeps this from
-    // refusing a key the listener would have accepted.
-    let signing = match CryptoProvider::get_default() {
-        Some(provider) => provider.key_provider.load_private_key(key),
-        None => any_supported_type(&key),
-    }
-    .context("the private key is not a type this build of rustls can sign with")?;
-    CertifiedKey::new(chain, signing).keys_match().context(
-        "the certificate and the private key do not correspond — a renewal that writes the two \
-         as separate operations is observable half-done, and installing that pair fails every \
-         handshake",
-    )?;
+    let key = PrivateKeyDer::from_pem_slice(key).map_err(|error| match error {
+        rustls::pki_types::pem::Error::NoItemsFound => anyhow::anyhow!(
+            "the private key holds no PRIVATE KEY block — an empty file, a certificate or a \
+             public key in its place, or an encrypted key, which has to be decrypted first"
+        ),
+        _ => anyhow::anyhow!("the private key is not valid PEM: {PEM_SHAPE}"),
+    })?;
+    // poem loads the listener's key with aws-lc-rs whatever provider the app
+    // installed — that one reaches only its `ServerConfig` — so the key is loaded
+    // with the same loader and the pair judged strictly: an aws-lc-rs key always
+    // exposes its public half, so a mismatch can never pass as unknown.
+    let signing = any_supported_type(&key)
+        .context("the private key is not a type this build of rustls can sign with")?;
+    CertifiedKey::new(chain, signing)
+        .keys_match()
+        .map_err(|error| match error {
+            rustls::Error::InconsistentKeys(_) => anyhow::anyhow!(
+                "the certificate and the private key do not correspond — the chain has to start \
+                 with this key's own certificate, and a renewal that writes the two as separate \
+                 operations is observable half-done; installing that pair fails every handshake"
+            ),
+            other => anyhow::anyhow!("the certificate cannot be read as X.509: {other}"),
+        })?;
     Ok(())
 }
+
+/// What a PEM value has to look like, said instead of quoting one that does not.
+const PEM_SHAPE: &str = "each -----BEGIN and -----END line stands on a line of its own, with \
+     intact base64 between them, and a value whose line breaks were collapsed or escaped does \
+     not parse";
 
 /// Polls the PEM pair and reports a renewal. Polling rather than an OS watch
 /// deliberately: a renewal is a minute-scale event, two `read`s a minute cost
@@ -370,13 +381,15 @@ impl Watcher {
     /// already serving a valid certificate, and a renewal tool that unlinks
     /// before it writes would otherwise take the listener down with it.
     fn read(&self, path: &Path) -> Option<Vec<u8>> {
-        match std::fs::read(path) {
+        // The loader's reader: a regular file of bounded size, opened so a FIFO
+        // swapped in by a renewal tool cannot stall the watcher.
+        match nest_rs_config::read_material(path) {
             Ok(bytes) => Some(bytes),
             Err(error) => {
                 tracing::warn!(
                     target: crate::target::HTTP,
                     path = %path.display(),
-                    error = %error,
+                    error = %nest_rs_core::error_message(&error),
                     "tls material could not be re-read; keeping the certificate in use",
                 );
                 None
@@ -385,42 +398,92 @@ impl Watcher {
     }
 }
 
-/// PEM bytes plus, when they came from a file, the path they came from — which
-/// is what makes them reloadable.
-struct EnvPem {
-    bytes: Vec<u8>,
-    path: Option<PathBuf>,
+/// The refusal for half a pair: names the half as the deployment spelled it —
+/// the [`Setting`] says whether that was the `_FILE` form — and both spellings
+/// of the half it lacks.
+/// Over a pair pinned in code the missing half is not missing, only not
+/// replaced, and the sentence says that rather than claim there is none.
+fn half_pair(
+    env: &ConfigService,
+    set: &Setting<nest_rs_config::Material>,
+    other_key: &str,
+    pinned: bool,
+) -> anyhow::Error {
+    let set_var = set.var();
+    let other = env.spellings(other_key);
+    if pinned {
+        anyhow::anyhow!(
+            "{set_var} is set, but the other half of the pair is the one pinned in code — set \
+             {other} beside it, so the pair is replaced whole rather than mixed"
+        )
+    } else {
+        anyhow::anyhow!(
+            "{set_var} is set without the other half of the pair — set {other} beside it, or \
+             neither to serve plain HTTP"
+        )
+    }
 }
 
 fn read_pem(path: &Path) -> Result<Vec<u8>> {
-    std::fs::read(path).with_context(|| format!("reading TLS material at {}", path.display()))
-}
-
-fn read_env_pem(env: &ConfigService, inline_key: &str, file_key: &str) -> Result<Option<EnvPem>> {
-    if let Some(pem) = env.get(inline_key) {
-        return Ok(Some(EnvPem {
-            bytes: pem.into_bytes(),
-            path: None,
-        }));
-    }
-    match env.get(file_key) {
-        Some(path) => {
-            let path = PathBuf::from(path);
-            let bytes = std::fs::read(&path).with_context(|| {
-                format!("reading {} at {}", env.var_name(file_key), path.display())
-            })?;
-            Ok(Some(EnvPem {
-                bytes,
-                path: Some(path),
-            }))
-        }
-        None => Ok(None),
-    }
+    nest_rs_config::read_material(path)
+        .with_context(|| format!("reading TLS material at {}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A FIFO in a scratch directory, for the two readers that must not block
+    /// on one.
+    #[cfg(unix)]
+    fn fifo(label: &str) -> (ScratchDir, std::path::PathBuf) {
+        let dir = ScratchDir(
+            std::env::temp_dir().join(format!("nest-rs-http-{label}-{}", std::process::id())),
+        );
+        let _ = std::fs::remove_dir_all(&*dir);
+        std::fs::create_dir_all(&*dir).expect("a scratch directory");
+        let fifo = dir.join("pipe.pem");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "a FIFO to point at");
+        (dir, fifo)
+    }
+
+    /// `from_files` naming a FIFO fails the boot instead of blocking on the
+    /// pipe forever.
+    #[cfg(unix)]
+    #[test]
+    fn from_files_refuses_a_fifo_without_blocking() {
+        let (_dir, fifo) = fifo("from-files");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(HttpTls::from_files(path.clone(), path).is_err());
+        });
+        let refused = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("returns instead of blocking on the pipe");
+        assert!(refused, "a FIFO is not TLS material");
+    }
+
+    /// The renewal watcher re-reading a path that became a FIFO skips it and
+    /// keeps the certificate in use, instead of stalling renewal for good.
+    #[cfg(unix)]
+    #[test]
+    fn the_watcher_skips_a_fifo_without_blocking() {
+        let (dir, fifo) = fifo("watcher");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let watch = watcher(&dir);
+        std::thread::spawn(move || {
+            let _ = tx.send(watch.read(&fifo).is_none());
+        });
+        let skipped = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("returns instead of blocking on the pipe");
+        assert!(skipped, "a FIFO is not re-read as material");
+    }
 
     /// A watcher holding `cert`/`key` in hand and pointed at two paths, ticking
     /// fast enough for a test to outlast several intervals.
@@ -549,7 +612,7 @@ mod tests {
 
     #[test]
     fn new_round_trips_bytes() {
-        let cfg = TlsConfig::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
+        let cfg = HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
         assert_eq!(cfg.cert, b"--CERT--");
         assert_eq!(cfg.key, b"--KEY--");
     }
@@ -558,7 +621,7 @@ mod tests {
     // test pins the manual impl that redacts both the cert and key bytes.
     #[test]
     fn debug_redacts_key_bytes() {
-        let cfg = TlsConfig::new(vec![0; 128], b"super secret key material".to_vec());
+        let cfg = HttpTls::new(vec![0; 128], b"super secret key material".to_vec());
         let debug = format!("{cfg:?}");
         assert!(!debug.contains("super secret"), "key leaked: {debug}");
         assert!(
@@ -568,7 +631,7 @@ mod tests {
         assert!(debug.contains("128 bytes"), "cert length missing: {debug}");
     }
 
-    // `TlsConfig::from_env` resolves through a `ConfigService`, so a map-backed
+    // `HttpTls::from_env` resolves through a `ConfigService`, so a map-backed
     // source feeds it hermetically — no process-env mutation, no `unsafe`, safe
     // under parallel test execution. Only the `_FILE` variant still needs a real
     // working directory, and `figment::Jail` supplies one.
@@ -580,7 +643,7 @@ mod tests {
     #[test]
     fn from_env_is_none_when_no_tls_vars_are_set() {
         assert!(
-            TlsConfig::from_env(&tls_env([]), None)
+            HttpTls::from_env(&tls_env([]), None)
                 .expect("no error")
                 .is_none()
         );
@@ -590,8 +653,8 @@ mod tests {
     fn from_env_keeps_the_base_when_no_tls_vars_are_set() {
         // The pinned-config path: an `HttpConfig` carrying TLS in code must not
         // lose it just because the environment says nothing about TLS.
-        let base = TlsConfig::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
-        let kept = TlsConfig::from_env(&tls_env([]), Some(base))
+        let base = HttpTls::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
+        let kept = HttpTls::from_env(&tls_env([]), Some(base))
             .expect("no error")
             .expect("the base survives an env that configures no TLS");
         assert_eq!(kept.cert, b"--PINNED-CERT--");
@@ -599,8 +662,8 @@ mod tests {
 
     #[test]
     fn from_env_overrides_the_base_when_both_halves_are_set() {
-        let base = TlsConfig::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
-        let cfg = TlsConfig::from_env(
+        let base = HttpTls::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
+        let cfg = HttpTls::from_env(
             &tls_env([("TLS_CERT", "--ENV-CERT--"), ("TLS_KEY", "--ENV-KEY--")]),
             Some(base),
         )
@@ -610,9 +673,39 @@ mod tests {
         assert_eq!(cfg.key, b"--ENV-KEY--");
     }
 
+    /// Half a pair is named as the deployment spelled it: a certificate given
+    /// by path is `TLS_CERT_FILE` in the refusal, not the inline name nobody set.
+    #[test]
+    fn a_half_pair_names_the_spelling_the_deployment_used() {
+        let cert = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/integration/fixtures/tls_a.pem"
+        );
+        let err = HttpTls::from_env(&tls_env([("TLS_CERT_FILE", cert)]), None)
+            .expect_err("half a pair is refused");
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with(&nest_rs_config::var_name("http", "TLS_CERT_FILE")),
+            "{msg}"
+        );
+    }
+
+    /// Over a pair pinned in code, a deployment half is still refused — the
+    /// pair would be mixed — but the pin holds the other half, so the sentence
+    /// must not say there is none.
+    #[test]
+    fn a_half_pair_over_a_pinned_pair_does_not_say_the_other_half_is_missing() {
+        let base = HttpTls::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
+        let err = HttpTls::from_env(&tls_env([("TLS_KEY", "--ENV-KEY--")]), Some(base))
+            .expect_err("a mixed pair is refused");
+        let msg = err.to_string();
+        assert!(msg.contains("pinned in code"), "{msg}");
+        assert!(!msg.contains("without"), "{msg}");
+    }
+
     #[test]
     fn from_env_reads_inline_pem_pair() {
-        let cfg = TlsConfig::from_env(
+        let cfg = HttpTls::from_env(
             &tls_env([("TLS_CERT", "--CERT--"), ("TLS_KEY", "--KEY--")]),
             None,
         )
@@ -624,7 +717,7 @@ mod tests {
 
     #[test]
     fn from_env_fails_when_only_cert_is_set() {
-        let err = TlsConfig::from_env(&tls_env([("TLS_CERT", "--CERT--")]), None)
+        let err = HttpTls::from_env(&tls_env([("TLS_CERT", "--CERT--")]), None)
             .expect_err("half-config is rejected");
         let msg = err.to_string();
         assert!(msg.contains("KEY"), "must name the missing var: {msg}");
@@ -632,7 +725,7 @@ mod tests {
 
     #[test]
     fn from_env_fails_when_only_key_is_set() {
-        let err = TlsConfig::from_env(&tls_env([("TLS_KEY", "--KEY--")]), None)
+        let err = HttpTls::from_env(&tls_env([("TLS_KEY", "--KEY--")]), None)
             .expect_err("half-config is rejected");
         let msg = err.to_string();
         assert!(msg.contains("CERT"), "must name the missing var: {msg}");
@@ -643,23 +736,21 @@ mod tests {
     // silently serving the pinned cert instead would hide the mistake.
     #[test]
     fn from_env_fails_on_a_half_config_even_over_a_complete_base() {
-        let base = TlsConfig::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
-        assert!(
-            TlsConfig::from_env(&tls_env([("TLS_CERT", "--ENV-CERT--")]), Some(base),).is_err()
-        );
+        let base = HttpTls::new(b"--PINNED-CERT--".to_vec(), b"--PINNED-KEY--".to_vec());
+        assert!(HttpTls::from_env(&tls_env([("TLS_CERT", "--ENV-CERT--")]), Some(base),).is_err());
     }
 
     #[test]
     fn inline_material_is_not_watchable() {
         // There is no source to re-read, so `reload_secs` has nothing to mean.
-        let cfg = TlsConfig::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
+        let cfg = HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
         assert_eq!(cfg.source, TlsSource::Inline);
         assert_eq!(cfg.reload_secs, 0);
     }
 
     #[test]
     fn from_env_rejects_an_unparseable_reload_interval() {
-        let err = TlsConfig::from_env(
+        let err = HttpTls::from_env(
             &tls_env([
                 ("TLS_CERT", "--CERT--"),
                 ("TLS_KEY", "--KEY--"),
@@ -678,8 +769,8 @@ mod tests {
     fn from_env_applies_the_reload_interval_to_a_pinned_base() {
         // The dual path: a base pinned in code still takes the deployment's
         // watch interval, per field, like every other `HttpConfig` key.
-        let base = TlsConfig::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
-        let cfg = TlsConfig::from_env(&tls_env([("TLS_RELOAD_SECS", "5")]), Some(base))
+        let base = HttpTls::new(b"--CERT--".to_vec(), b"--KEY--".to_vec());
+        let cfg = HttpTls::from_env(&tls_env([("TLS_RELOAD_SECS", "5")]), Some(base))
             .expect("no error")
             .expect("Some");
         assert_eq!(cfg.reload_secs, 5);
@@ -691,7 +782,7 @@ mod tests {
         figment::Jail::expect_with(|jail| {
             jail.create_file("cert.pem", "file-cert-bytes")?;
             jail.create_file("key.pem", "file-key-bytes")?;
-            let cfg = TlsConfig::from_env(
+            let cfg = HttpTls::from_env(
                 &tls_env([("TLS_CERT_FILE", "cert.pem"), ("TLS_KEY_FILE", "key.pem")]),
                 None,
             )
@@ -702,7 +793,7 @@ mod tests {
 
             // A pair with one half inline is not a watchable source: re-reading
             // the file half alone would pair a certificate with a stale key.
-            let mixed = TlsConfig::from_env(
+            let mixed = HttpTls::from_env(
                 &tls_env([("TLS_CERT", "--INLINE-CERT--"), ("TLS_KEY_FILE", "key.pem")]),
                 None,
             )
@@ -792,6 +883,135 @@ mod tests {
         assert_eq!(watcher.key, b"key-v2");
     }
 
+    /// A key whose line breaks were collapsed does not parse, and the parser's
+    /// error carries that one line — the whole key — byte for byte. The refusal
+    /// reaches the boot error and the watcher's `warn`, so it describes the
+    /// problem and quotes nothing, not even as a list of bytes.
+    #[test]
+    fn a_pair_that_does_not_parse_is_described_and_never_quoted() {
+        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
+        let key_a = std::str::from_utf8(include_bytes!(
+            "../tests/integration/fixtures/tls_a.key.pem"
+        ))
+        .expect("PEM is text");
+        let secret = key_a.lines().nth(1).expect("a base64 line of the key");
+        let as_bytes = secret.as_bytes()[..4]
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        for collapsed in [key_a.replace('\n', " "), key_a.replace('\n', "\\n")] {
+            let refused = validate_pair(cert_a, collapsed.as_bytes())
+                .expect_err("a key on one line does not parse");
+            for shown in [format!("{refused:#}"), format!("{refused:?}")] {
+                assert!(
+                    shown.contains("not valid PEM"),
+                    "names what is wrong: {shown}"
+                );
+                assert!(
+                    !shown.contains(&secret[..12]),
+                    "never quotes the key: {shown}"
+                );
+                assert!(!shown.contains(&as_bytes), "not even as bytes: {shown}");
+            }
+        }
+    }
+
+    /// A provider the app installs for its own reasons never loads the
+    /// listener's key — poem loads that with aws-lc-rs — so one whose keys hide
+    /// their public half cannot let a mismatched pair through the check, which
+    /// would install cleanly and fail every handshake.
+    #[test]
+    fn a_mismatched_pair_is_refused_whatever_provider_the_app_installed() {
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        struct Opaque(Arc<dyn rustls::sign::SigningKey>);
+        impl rustls::sign::SigningKey for Opaque {
+            fn choose_scheme(
+                &self,
+                offered: &[rustls::SignatureScheme],
+            ) -> Option<Box<dyn rustls::sign::Signer>> {
+                self.0.choose_scheme(offered)
+            }
+            fn algorithm(&self) -> rustls::SignatureAlgorithm {
+                self.0.algorithm()
+            }
+        }
+        #[derive(Debug)]
+        struct OpaqueKeys;
+        impl rustls::crypto::KeyProvider for OpaqueKeys {
+            fn load_private_key(
+                &self,
+                key: PrivateKeyDer<'static>,
+            ) -> std::result::Result<Arc<dyn rustls::sign::SigningKey>, rustls::Error> {
+                let loaded = rustls::crypto::aws_lc_rs::default_provider()
+                    .key_provider
+                    .load_private_key(key)?;
+                Ok(Arc::new(Opaque(loaded)))
+            }
+        }
+        rustls::crypto::CryptoProvider {
+            key_provider: &OpaqueKeys,
+            ..rustls::crypto::aws_lc_rs::default_provider()
+        }
+        .install_default()
+        .expect("each test runs in a process of its own, with no provider installed yet");
+
+        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
+        let key_b = include_bytes!("../tests/integration/fixtures/tls_b.key.pem");
+        let refused = validate_pair(cert_a, key_b).expect_err("a mismatched pair is refused");
+        assert!(
+            format!("{refused:#}").contains("do not correspond"),
+            "{refused:#}"
+        );
+    }
+
+    /// And a key the installed provider cannot load at all is still one poem
+    /// serves, so the check does not refuse it either.
+    #[test]
+    fn a_pair_poem_serves_is_accepted_whatever_provider_the_app_installed() {
+        use std::sync::Arc;
+
+        #[derive(Debug)]
+        struct NoKeys;
+        impl rustls::crypto::KeyProvider for NoKeys {
+            fn load_private_key(
+                &self,
+                _key: PrivateKeyDer<'static>,
+            ) -> std::result::Result<Arc<dyn rustls::sign::SigningKey>, rustls::Error> {
+                Err(rustls::Error::General(
+                    "this provider loads no key".to_owned(),
+                ))
+            }
+        }
+        rustls::crypto::CryptoProvider {
+            key_provider: &NoKeys,
+            ..rustls::crypto::aws_lc_rs::default_provider()
+        }
+        .install_default()
+        .expect("each test runs in a process of its own, with no provider installed yet");
+
+        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
+        let key_a = include_bytes!("../tests/integration/fixtures/tls_a.key.pem");
+        validate_pair(cert_a, key_a).expect("a pair poem serves is not refused");
+    }
+
+    /// A key file holding no private key — empty, or a certificate in its
+    /// place — says so, rather than blaming line breaks it does not have.
+    #[test]
+    fn a_key_file_holding_no_private_key_says_so() {
+        let cert_a = include_bytes!("../tests/integration/fixtures/tls_a.pem");
+        for (label, key) in [("empty", &b""[..]), ("a certificate", &cert_a[..])] {
+            let refused =
+                validate_pair(cert_a, key).expect_err("a file with no key in it is refused");
+            assert!(
+                format!("{refused:#}").contains("no PRIVATE KEY block"),
+                "{label}: {refused:#}"
+            );
+        }
+    }
+
     #[test]
     fn a_pair_that_cannot_serve_is_refused_before_it_is_published() {
         // Each of these installed cleanly and took TLS down for every name:
@@ -830,7 +1050,7 @@ mod tests {
             // the `_FILE` vars at them by relative path.
             jail.create_file("cert.pem", "file-cert-bytes")?;
             jail.create_file("key.pem", "file-key-bytes")?;
-            let cfg = TlsConfig::from_env(
+            let cfg = HttpTls::from_env(
                 &tls_env([("TLS_CERT_FILE", "cert.pem"), ("TLS_KEY_FILE", "key.pem")]),
                 None,
             )

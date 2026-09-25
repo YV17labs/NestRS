@@ -31,7 +31,7 @@ use rmcp::model::{
     DiscoverResult, GetPromptRequestParams, GetPromptResponse, GetTaskParams, GetTaskResult,
     InitializeRequestParams, InitializeResult, ListPromptsResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
-    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ServerInfo,
+    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ServerConfig,
     SetLevelRequestParams, SubscribeRequestParams, SubscriptionFilter, Tool,
     UnsubscribeRequestParams, UpdateTaskParams,
 };
@@ -171,7 +171,7 @@ dyn_host! {
         "The protocol versions this host implements."
         supported_protocol_versions() -> Cow<'static, [ProtocolVersion]>,
         "This host's declared capabilities and instructions."
-        get_info() -> ServerInfo,
+        get_info() -> ServerConfig,
         "The `initialize` result this host negotiates for `request`, derived \
          from the two accessors above unless the host overrides it."
         negotiate_initialize(request: &InitializeRequestParams)

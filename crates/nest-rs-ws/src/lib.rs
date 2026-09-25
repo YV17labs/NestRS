@@ -154,6 +154,7 @@ pub mod target {
 mod config;
 mod context;
 mod envelope;
+mod error;
 mod gateway;
 mod guard;
 mod module;
@@ -165,7 +166,13 @@ pub mod unit;
 
 pub use config::WsConfig;
 pub use context::{BoxFuture, Captured, SocketContext};
-pub use envelope::{ReplyValue, ReplyValueFallback, WsEnvelope, WsError, WsReply};
+pub use envelope::{
+    ErrorReport, ErrorReportChain, ErrorReportFallback, ReplyOutcome, ReplyValue,
+    ReplyValueFallback, WsEnvelope, WsError, WsReply,
+};
+/// Per-message accessor for `#[injectable(scope = request)]` providers inside a
+/// WS message handler — the WS mirror of `nest_rs_http::Scoped<T>`.
+pub use error::WsScopeError;
 pub use gateway::{
     Gateway, GatewayEndpoint, WsDataFold, WsDataPipe, gateway_endpoint, resolve_ws_data_pipe,
 };
@@ -173,9 +180,7 @@ pub use guard::{EventLayerTable, WsMessageCheck};
 pub use module::{WsModule, WsSetup};
 pub use namespace::{WsNamespaceEntry, WsNamespaces};
 pub use opaque::Opaque;
-/// Per-message accessor for `#[injectable(scope = request)]` providers inside a
-/// WS message handler — the WS mirror of `nest_rs_http::Scoped<T>`.
-pub use scope::{Scoped, WsScopeError};
+pub use scope::Scoped;
 pub use server::{ConnId, Global, Registry, WsClient, WsServer};
 
 // Re-exported so macro-generated code resolves these through the framework.

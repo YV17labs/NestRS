@@ -20,7 +20,7 @@ use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, GetPromptResult, Implementation, ListResourcesResult,
     ListToolsResult, PaginatedRequestParams, PromptMessage, ProtocolVersion,
     ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, Role, ServerCapabilities, ServerInfo, Tool,
+    ResourceContents, Role, ServerCapabilities, ServerConfig, Tool,
 };
 use nest_rs_mcp::rmcp;
 use nest_rs_mcp::rmcp::serde_json::json;
@@ -59,8 +59,8 @@ impl AlphaTool {
 
 #[tool_handler]
 impl ServerHandler for AlphaTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Alpha instructions.")
     }
 }
@@ -95,8 +95,8 @@ impl BetaTool {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for BetaTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -367,8 +367,8 @@ impl OwnedTool {
 
 #[tool_handler]
 impl ServerHandler for OwnedTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Host blurb nobody should read.")
     }
 }
@@ -611,8 +611,8 @@ impl SelfNamedTool {
 
 #[tool_handler]
 impl ServerHandler for SelfNamedTool {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info = Implementation::new("standalone-host", "1.2.3");
         info
     }
@@ -644,7 +644,7 @@ const SDK_DEFAULT_IDENTITY: &str = "an MCP endpoint introduces itself with the S
 const UNDECLARED_IDENTITY: &str = "several MCP hosts share an endpoint whose identity nobody \
      declared — it reports the first host's";
 
-/// rmcp's `ServerInfo::new` leaves `serverInfo` at the **SDK's** build identity,
+/// rmcp's `ServerConfig::new` leaves `serverInfo` at the **SDK's** build identity,
 /// so an endpoint nobody named introduces itself to every client as `rmcp`, at
 /// rmcp's version. Nothing fails, which is exactly why it has to be said out
 /// loud at boot.
@@ -661,7 +661,7 @@ async fn an_endpoint_nobody_named_reports_the_sdk_and_is_told_so() {
     assert_eq!(
         event.field("reports_as"),
         Some(
-            ServerInfo::new(ServerCapabilities::default())
+            ServerConfig::new(ServerCapabilities::default())
                 .server_info
                 .name
         ),
@@ -705,8 +705,8 @@ impl FirstNamedTool {
 
 #[tool_handler]
 impl ServerHandler for FirstNamedTool {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info = Implementation::new("first-peer", "1.0.0");
         info
     }
@@ -726,8 +726,8 @@ impl SecondNamedTool {
 
 #[tool_handler]
 impl ServerHandler for SecondNamedTool {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info = Implementation::new("second-peer", "1.0.0");
         info
     }
@@ -773,8 +773,8 @@ const MANUAL: &str = "/manual";
 struct ManualTool;
 
 impl ServerHandler for ManualTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 
     async fn list_tools(
@@ -1271,8 +1271,8 @@ impl PagedResourcesTool {
 
 #[tool_handler]
 impl ServerHandler for PagedResourcesTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
@@ -1309,8 +1309,8 @@ impl UnpagedResourcesTool {
 
 #[tool_handler]
 impl ServerHandler for UnpagedResourcesTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()

@@ -10,14 +10,16 @@
 //! the process — no per-message container lookup.
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use proc_macro2::{Span, TokenStream as TokenStream2};
+use quote::{quote, quote_spanned};
+use syn::spanned::Spanned;
 use syn::{FnArg, ImplItem, ImplItemFn, LitStr, Path, ReturnType, Type};
 
 use nest_rs_codegen::{
-    PipeWrapper, Posture, PostureRules, guard_capability_bounds, impl_self_ident,
-    injected_methods_with_layers, layer_deps, pipe_wrapper, reject_http_only_layers,
-    take_flag_attr, take_path_list,
+    Collision, Conditional, DispatchKeys, HostBorrow, PipeWrapper, Posture, PostureRules,
+    await_if_async, cfg_attrs, guard_capability_bounds, impl_self_ident,
+    injected_methods_with_layers, layer_deps, pipe_wrapper, reject_http_only_layers, returns_unit,
+    shared_receiver, take_flag_attr, take_path_list,
 };
 
 /// WS's half of the shared posture grammar. Mandatory per message for the same
@@ -48,6 +50,28 @@ fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
 }
 
 pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
+    let written = TokenStream2::from(input.clone());
+    let expansion = expand(args, input).into();
+    crate::gateway::WS_PAIR
+        .keep_item_on_refusal(written, expansion, &HELPERS, |item| {
+            let self_ty = &item.self_ty;
+            quote! {
+                impl ::nest_rs_core::Discoverable for #self_ty {
+                    fn register(
+                        builder: ::nest_rs_core::ContainerBuilder,
+                    ) -> ::nest_rs_core::ContainerBuilder {
+                        builder
+                    }
+                }
+            }
+        })
+        .into()
+}
+
+/// What `#[messages]` consumes off a method beside the layers and the posture.
+const HELPERS: [&str; 3] = ["subscribe_message", "on_connect", "on_disconnect"];
+
+fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // The impl half collects; it declares nothing. `#[gateway]` one line up
     // declares the `path` and the `version`, which makes this the likeliest
     // place to reach for either — so an argument list is refused rather than
@@ -69,63 +93,119 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
 
     // Gateway struct name — logged as a structured field beside each mounted
     // event at boot, mirroring how `#[routes]` logs its controller.
-    let gateway_name = match impl_self_ident(&self_ty, "#[messages]") {
+    let host = match impl_self_ident(&self_ty, "#[messages]") {
         Ok(name) => name,
         Err(err) => return err.to_compile_error().into(),
     };
-    let gateway_name = LitStr::new(&gateway_name.to_string(), gateway_name.span());
+    let gateway_name = LitStr::new(&host.to_string(), host.span());
 
     let mut arms: Vec<TokenStream2> = Vec::new();
-    let mut event_names: Vec<LitStr> = Vec::new();
+    let mut mounted_logs: Vec<TokenStream2> = Vec::new();
     let mut chain_inserts: Vec<TokenStream2> = Vec::new();
     // Folded into `Discoverable::injected` for the access-graph check, same
     // as HTTP per-route layer keys.
-    let mut all_message_layers: Vec<Path> = Vec::new();
-    let mut on_connect: Option<TokenStream2> = None;
-    let mut on_disconnect: Option<TokenStream2> = None;
+    let mut all_message_layers: Vec<(Vec<TokenStream2>, Path)> = Vec::new();
+    // Every hook override, each under its method's conditions. All of them are
+    // emitted: keeping the last one seen dropped a hook compiled in whenever a
+    // compiled-out one followed it, and two compiled in are two definitions of
+    // one trait method, which rustc refuses.
+    let mut hooks: Vec<TokenStream2> = Vec::new();
+    // What each event and hook is already served by. A second declaration is
+    // refused at its own attribute — by the macro when neither carries a
+    // condition, by rustc through the marker when both are compiled in — instead
+    // of compiling to a match arm that never runs while the guard table keeps
+    // the *second* method's chain for the first method's arm.
+    let mut declared = DispatchKeys::new(
+        "#[messages]",
+        "a gateway dispatches each event, and each connection hook, to one method, so the \
+         second would never run — fold the two bodies into one",
+    );
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
 
-        let is_on_connect = match take_flag_attr(&mut method.attrs, "on_connect") {
-            Ok(flag) => flag,
+        // One role per method — a message, or one of the two connection hooks —
+        // through the family's helper, which places the caret on the repeated
+        // attribute rather than serving the first and leaving the rest.
+        let index = match nest_rs_codegen::one_role_per_method(
+            "role",
+            &method.attrs,
+            &["subscribe_message", "on_connect", "on_disconnect"],
+            "",
+        ) {
+            Ok(Some(index)) => index,
+            Ok(None) => continue,
             Err(err) => return err.to_compile_error().into(),
         };
-        if is_on_connect {
-            on_connect = Some(match hook_override("on_connect", method) {
-                Ok(tokens) => tokens,
-                Err(err) => return err.to_compile_error().into(),
-            });
-            continue;
+        if let Err(err) = shared_receiver(method, "#[messages]", &host, HostBorrow::Host)
+            .and_then(|()| nest_rs_codegen::concrete_signature(method, "#[messages]"))
+        {
+            return err.to_compile_error().into();
         }
-        let is_on_disconnect = match take_flag_attr(&mut method.attrs, "on_disconnect") {
-            Ok(flag) => flag,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        if is_on_disconnect {
-            on_disconnect = Some(match hook_override("on_disconnect", method) {
-                Ok(tokens) => tokens,
+        let cfgs = cfg_attrs(&method.attrs);
+        let hook = ["on_connect", "on_disconnect"]
+            .into_iter()
+            .find(|name| method.attrs[index].path().is_ident(name));
+        let role_attr = method.attrs[index].clone();
+        let role_span = role_attr.path().span();
+        let (kind, identity, key) = match hook {
+            Some(hook) => ("hook", hook.to_owned(), format!("#[{hook}]")),
+            None => match method.attrs[index].parse_args::<LitStr>() {
+                Ok(event) => (
+                    "event",
+                    event.value(),
+                    format!("#[subscribe_message({:?})]", event.value()),
+                ),
                 Err(err) => return err.to_compile_error().into(),
-            });
+            },
+        };
+        // The hook's own trait method is the marker: two compiled in are two
+        // definitions of `on_connect`, spanned at the attributes that declared
+        // them. An event has no item of its own to collide, so it gets one.
+        let collision = match hook {
+            Some(_) => Collision::Item,
+            None => Collision::Marker,
+        };
+        let refused = declared.declare(
+            collision,
+            kind,
+            &identity,
+            &key,
+            &method.sig.ident,
+            &cfgs,
+            &role_attr,
+        );
+        if let Err(err) = refused {
+            return err.to_compile_error().into();
+        }
+        if let Some(hook) = hook {
+            if let Err(err) = take_flag_attr(&mut method.attrs, hook) {
+                return err.to_compile_error().into();
+            }
+            match hook_override(hook, method, role_span) {
+                Ok(tokens) => hooks.push(quote! { #(#cfgs)* #tokens }),
+                Err(err) => return err.to_compile_error().into(),
+            }
             continue;
         }
 
-        let Some(idx) = method
-            .attrs
-            .iter()
-            .position(|a| a.path().is_ident("subscribe_message"))
-        else {
-            continue;
-        };
-
-        let attr = method.attrs.remove(idx);
+        let attr = method.attrs.remove(index);
         let event: LitStr = match attr.parse_args() {
             Ok(e) => e,
             Err(err) => return err.to_compile_error().into(),
         };
-        event_names.push(event.clone());
+        mounted_logs.push(quote! {
+            #(#cfgs)*
+            ::nest_rs_ws::tracing::info!(
+                target: ::nest_rs_ws::target::ROUTES,
+                gateway = #gateway_name,
+                path = __path.as_str(),
+                event = #event,
+                "mounted message",
+            );
+        });
 
         if let Err(err) = reject_http_only_layers(&method.attrs, "WebSockets", "message") {
             return err.to_compile_error().into();
@@ -146,10 +226,15 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
             Ok(posture) => posture,
             Err(err) => return err.to_compile_error().into(),
         };
-        all_message_layers.extend(guards.iter().cloned());
-        all_message_layers.extend(force_guards.iter().cloned());
+        all_message_layers.extend(
+            guards
+                .iter()
+                .chain(&force_guards)
+                .map(|guard| (cfgs.clone(), guard.clone())),
+        );
 
-        chain_inserts.push(chain_insert(&event, &guards, &force_guards));
+        let insert = chain_insert(&event, &guards, &force_guards);
+        chain_inserts.push(quote! { #(#cfgs)* let () = #insert; });
 
         let method_name = method.sig.ident.clone();
 
@@ -253,10 +338,14 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
             Posture::Public => quote! {},
         };
 
+        let invoke = await_if_async(
+            &method.sig,
+            quote!(<#self_ty>::#method_name(self, #(#call_args),*)),
+        );
         let call = quote! {
             #gate
             #deser
-            self.#method_name(#(#call_args),*).await
+            #invoke
         };
 
         // Step 2 — reply masking, armed by the same posture. The masked *JSON* is
@@ -264,9 +353,9 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
         // a WS envelope promises no schema, so a stripped key is simply absent
         // from the frame, exactly as HTTP omits it from a body. See
         // `nest_rs_authz::ws::mask` for why WS is HTTP's case here and not MCP's.
-        // `__ret` is the handler's `Ok` value, bound by the `Result` arm below —
-        // the only shape that reaches a mask, so this is a value rather than a
-        // function of one.
+        // `__ret` is the value left once the handler's `Result` and any `Result`
+        // inside it are split, bound by the arms below — so this is a value
+        // rather than a function of one, and a mask never sees an `Err`.
         let reply = match &posture {
             Posture::Authorize {
                 action,
@@ -307,6 +396,31 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
             .into();
         }
 
+        // Every `Err` a handler can return is turned into a frame by type, through
+        // `ErrorReport`'s three tiers — the imports bring the two trait tiers into
+        // scope, and the inherent one needs none.
+        let report = quote! {
+            {
+                #[allow(unused_imports)]
+                use ::nest_rs_ws::{ErrorReportChain as _, ErrorReportFallback as _};
+                ::nest_rs_ws::ErrorReport(__err).into_frame(#event)
+            }
+        };
+        // A handler's value is split once more before it replies: a `Result` inside
+        // the `Result` is a failure too, however either is spelled. Through
+        // `ReplyValue` rather than by reading the type, because an alias hides
+        // the `Result` from the macro and not from method resolution.
+        let split_then_reply = quote! {
+            {
+                #[allow(unused_imports)]
+                use ::nest_rs_ws::ReplyValueFallback as _;
+                match ::nest_rs_ws::ReplyValue(__ret).into_outcome() {
+                    ::nest_rs_ws::ReplyOutcome::Value(__ret) => { #reply }
+                    ::nest_rs_ws::ReplyOutcome::Failed(__err) => #report,
+                }
+            }
+        };
+
         let arm_body = match return_kind {
             ReturnKind::Unit => quote! {
                 { #call };
@@ -317,56 +431,63 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
             // alias (`ServiceResult<T>`) reads as an ordinary value here, and
             // used to serialize its `Err` variant — the whole error struct —
             // into a frame shaped like a success. Method resolution picks the
-            // inherent `Result` impl whatever the alias is called.
+            // inherent `Result` impl whatever the alias is called; its `Ok` is
+            // then split again, as the literal arm's is.
             //
             // The syntactic `Result` arm below is therefore not redundant: on a
-            // literal `Result` it calls `from_handler_error` directly, which
-            // **requires `E: Display`** at compile time. This arm cannot — an
-            // `E` that is `Serialize` but not `Display` falls back to the
-            // blanket impl, the original leak shape. Keeping both means the
-            // common spelling is checked and the alias is at least contained.
+            // literal `Result` it goes straight to `ErrorReport`. `ReplyValue`'s
+            // `Result` impl carries no bound on `E`, so no error type can fall
+            // to the blanket impl and be serialized whole; an `E` that is
+            // neither an error nor `Display` fails to compile at `ErrorReport`.
             ReturnKind::Value => quote! {
                 let __ret = { #call };
                 {
                     #[allow(unused_imports)]
                     use ::nest_rs_ws::ReplyValueFallback as _;
-                    ::nest_rs_ws::ReplyValue(&__ret).into_reply(#event)
+                    match ::nest_rs_ws::ReplyValue(__ret).into_outcome() {
+                        ::nest_rs_ws::ReplyOutcome::Value(__ret) => #split_then_reply,
+                        ::nest_rs_ws::ReplyOutcome::Failed(__err) => #report,
+                    }
                 }
             },
             ReturnKind::ResultUnit => quote! {
                 match { #call } {
                     ::core::result::Result::Ok(()) => ::nest_rs_ws::WsReply::None,
-                    ::core::result::Result::Err(__err) =>
-                        ::nest_rs_ws::WsReply::from_handler_error(#event, &__err),
+                    ::core::result::Result::Err(__err) => #report,
                 }
             },
-            ReturnKind::Result => {
-                quote! {
-                    match { #call } {
-                        ::core::result::Result::Ok(__ret) => { #reply }
-                        ::core::result::Result::Err(__err) =>
-                            ::nest_rs_ws::WsReply::from_handler_error(#event, &__err),
-                    }
+            ReturnKind::Result => quote! {
+                match { #call } {
+                    ::core::result::Result::Ok(__ret) => #split_then_reply,
+                    ::core::result::Result::Err(__err) => #report,
                 }
-            }
+            },
         };
 
-        arms.push(quote! { #event => { #arm_body } });
+        arms.push(quote! { #(#cfgs)* #event => { #arm_body } });
     }
 
     // Per-message guards run `Guard::check_ws_message`, whose default is `Ok(())`.
     // One bound each, at the `#[use_guards]` line. Guards on the `#[gateway]`
     // struct are deliberately absent from this list: they run on the upgrade,
     // which is an HTTP `GET`.
+    let conditional = || {
+        all_message_layers
+            .iter()
+            .map(|(cfgs, item)| Conditional { cfgs, item })
+    };
     let capability_bounds =
-        guard_capability_bounds(all_message_layers.iter(), quote!(::nest_rs_guards::WsGuard));
-    let message_layers = layer_deps(all_message_layers.iter());
+        guard_capability_bounds(conditional(), quote!(::nest_rs_guards::WsGuard));
+    let message_layers = layer_deps(conditional());
     let injected_methods = injected_methods_with_layers(&self_ty, &message_layers);
+    let markers = declared.markers(&self_ty, &item.generics);
 
     quote! {
         #item
 
         #capability_bounds
+
+        #markers
 
         #[::nest_rs_ws::async_trait]
         impl ::nest_rs_ws::Gateway for #self_ty {
@@ -378,14 +499,16 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
             ) -> ::nest_rs_ws::WsReply {
                 let _ = &__data;
                 let _ = __client;
+                // Two arms for one event are refused — by the macro, or by rustc
+                // at the marker — so the lint would only repeat that refusal.
+                #[allow(unreachable_patterns)]
                 match __event {
                     #(#arms)*
                     __other => ::nest_rs_ws::WsReply::unknown(__other),
                 }
             }
 
-            #on_connect
-            #on_disconnect
+            #(#hooks)*
         }
 
         impl ::nest_rs_core::Discoverable for #self_ty {
@@ -411,15 +534,7 @@ pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
                             // One string for the log and the mount, so what boot
                             // prints is the address a client connects to.
                             let __path = <#self_ty>::__nestrs_mount_path();
-                            #(
-                                ::nest_rs_ws::tracing::info!(
-                                    target: ::nest_rs_ws::target::ROUTES,
-                                    gateway = #gateway_name,
-                                    path = __path.as_str(),
-                                    event = #event_names,
-                                    "mounted message",
-                                );
-                            )*
+                            #(#mounted_logs)*
                             let __gw = ::std::sync::Arc::new(
                                 <#self_ty>::from_container(__container),
                             );
@@ -530,10 +645,28 @@ fn classify_return(output: &ReturnType) -> ReturnKind {
 }
 
 /// Emit the `Gateway` override for `on_connect` / `on_disconnect` delegating
-/// to the user method. The hook may declare an optional `&WsClient` parameter.
-fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
-    let hook_ident = syn::Ident::new(hook, proc_macro2::Span::call_site());
+/// to the user method. The hook may declare an optional `&WsClient` parameter,
+/// and answers `()`.
+///
+/// The override is named at `at`, the attribute that declared it, so two hooks
+/// compiled in are refused by rustc there.
+fn hook_override(hook: &str, method: &ImplItemFn, at: Span) -> syn::Result<TokenStream2> {
+    let hook_ident = syn::Ident::new(hook, at);
     let method_name = method.sig.ident.clone();
+    // The override awaits what the method is and discards what it answers, so a
+    // returned future would be dropped without ever being polled, and a returned
+    // error with nothing to report it.
+    if !returns_unit(&method.sig.output) {
+        return Err(syn::Error::new_spanned(
+            &method.sig.output,
+            format!(
+                "a #[{hook}] hook returns `()`, written out or left out: the gateway calls it \
+                 and moves on, so a future it returned would be dropped without ever being \
+                 polled and an error would be discarded — write `async fn`, and handle a \
+                 failure inside the method"
+            ),
+        ));
+    }
 
     let mut takes_client = false;
     for arg in method.sig.inputs.iter().skip(1) {
@@ -554,14 +687,16 @@ fn hook_override(hook: &str, method: &ImplItemFn) -> syn::Result<TokenStream2> {
     }
 
     let body = if takes_client {
-        quote! { self.#method_name(__client).await; }
+        let call = await_if_async(&method.sig, quote!(Self::#method_name(self, __client)));
+        quote! { #call; }
     } else {
+        let call = await_if_async(&method.sig, quote!(Self::#method_name(self)));
         quote! {
             let _ = __client;
-            self.#method_name().await;
+            #call;
         }
     };
-    Ok(quote! {
+    Ok(quote_spanned! {at=>
         async fn #hook_ident(&self, __client: &::nest_rs_ws::WsClient) {
             #body
         }

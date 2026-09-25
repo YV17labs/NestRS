@@ -144,7 +144,7 @@ impl Default for McpAmbient {
             captured: None,
             guard_captured: None,
             span: tracing::Span::none(),
-            correlation: nest_rs_core::Correlation::mint(),
+            correlation: nest_rs_core::Correlation::minted(None),
         }
     }
 }

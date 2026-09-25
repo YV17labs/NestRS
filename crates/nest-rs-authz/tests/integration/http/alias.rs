@@ -28,7 +28,7 @@ mod gadget {
         Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize, schemars::JsonSchema,
     )]
     #[sea_orm(table_name = "gadgets")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub name: String,
@@ -36,7 +36,7 @@ mod gadget {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }

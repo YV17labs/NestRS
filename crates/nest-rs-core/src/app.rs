@@ -201,14 +201,14 @@ impl App {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     if first_err.is_none() {
-                        tracing::error!(target: crate::target::APP, error = %e, "transport failed; shutting down");
+                        tracing::error!(target: crate::target::APP, error = %crate::error_message(&*e), "transport failed; shutting down");
                         first_err = Some(e);
                         cancel.cancel();
                     }
                 }
                 Err(join_err) => {
                     if first_err.is_none() {
-                        tracing::error!(target: crate::target::APP, error = %join_err, "transport task panicked; shutting down");
+                        tracing::error!(target: crate::target::APP, error = %crate::error_message(&join_err), "transport task panicked; shutting down");
                         first_err = Some(anyhow!(join_err));
                         cancel.cancel();
                     }
@@ -477,7 +477,7 @@ fn spawn_shutdown_signal(cancel: CancellationToken) {
             let mut sigterm = match signal(SignalKind::terminate()) {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::warn!(target: crate::target::APP, error = %e, "failed to install SIGTERM handler");
+                    tracing::warn!(target: crate::target::APP, error = %crate::error_message(&e), "failed to install SIGTERM handler");
                     return;
                 }
             };
@@ -493,7 +493,7 @@ fn spawn_shutdown_signal(cancel: CancellationToken) {
                     tracing::info!(target: crate::target::APP, signal = "ctrl-c", "shutdown signal received")
                 }
                 Err(e) => {
-                    tracing::warn!(target: crate::target::APP, error = %e, "failed to install ctrl-c handler");
+                    tracing::warn!(target: crate::target::APP, error = %crate::error_message(&e), "failed to install ctrl-c handler");
                     return;
                 }
             }

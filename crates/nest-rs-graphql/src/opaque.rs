@@ -20,14 +20,13 @@
 //! message a client can act on — those exist to be *read*. Return them directly;
 //! `denial_to_graphql_error` is the shape a refusal already travels through.
 
-use std::fmt::Display;
-
 use async_graphql::Error as GraphqlError;
 use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
 
 /// Turn a failure the client must not read into one it may.
 ///
-/// Implemented for every `Result` whose error is printable, so it covers a
+/// Implemented for every `Result` whose error converts into a boxed error, so
+/// the whole cause chain reaches the operator's line. It covers a
 /// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
 /// any of them having to know GraphQL exists.
 ///
@@ -39,12 +38,16 @@ pub trait Opaque<T> {
     fn opaque(self) -> Result<T, GraphqlError>;
 }
 
-impl<T, E: Display> Opaque<T> for Result<T, E> {
+impl<T, E> Opaque<T> for Result<T, E>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     fn opaque(self) -> Result<T, GraphqlError> {
         self.map_err(|err| {
+            let err: Box<dyn std::error::Error + Send + Sync> = err.into();
             tracing::error!(
                 target: crate::TARGET,
-                error = %err,
+                error = %nest_rs_core::error_message(&*err),
                 "graphql operation failed",
             );
             // Extended with the same `INTERNAL` code an internal denial carries, so
@@ -58,10 +61,15 @@ impl<T, E: Display> Opaque<T> for Result<T, E> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Display;
+
     use super::*;
 
     /// An error whose `Display` carries exactly what must not ship.
+    #[derive(Debug)]
     struct Leaky;
+
+    impl std::error::Error for Leaky {}
 
     impl Display for Leaky {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

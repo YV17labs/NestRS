@@ -321,8 +321,8 @@ mod tests {
     impl Config for StubConfig {
         fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
             Ok(Self {
-                client_id: env.get("CLIENT_ID").unwrap_or(base.client_id),
-                client_secret: env.get("CLIENT_SECRET").unwrap_or(base.client_secret),
+                client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
+                client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
             })
         }
     }

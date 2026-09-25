@@ -35,10 +35,23 @@ pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[prompt]` methods too, since a prompt is an operation this same host
 /// serves and rmcp routes both through one `ServerHandler`.
 pub(crate) fn tools(args: TokenStream, input: TokenStream) -> TokenStream {
-    match MCP_PAIR.parse_operations(input.into()) {
+    let written = TokenStream2::from(input.clone());
+    let expansion = match MCP_PAIR.parse_operations(input.into()) {
         Ok(item) => crate::mcp_impl::mcp_impl(args, item),
         Err(err) => err.to_compile_error().into(),
-    }
+    };
+    // The struct half holds the host to `McpHost`, which `ServerHandler` answers,
+    // so a refused block still names one — every method at its default — rather
+    // than add an unsatisfied bound to the refusal.
+    MCP_PAIR
+        .keep_item_on_refusal(written, expansion.into(), &["tool", "prompt"], |item| {
+            let self_ty = &item.self_ty;
+            let (impl_generics, _, where_clause) = item.generics.split_for_impl();
+            quote! {
+                impl #impl_generics ::nest_rs_mcp::ServerHandler for #self_ty #where_clause {}
+            }
+        })
+        .into()
 }
 
 fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {

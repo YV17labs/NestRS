@@ -134,7 +134,7 @@ pub fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     }
 ///     #[rmcp::tool_handler]
 ///     impl rmcp::ServerHandler for super::MyHandler {
-///         fn get_info(&self) -> ServerInfo { /* capabilities derived from the roles present */ }
+///         fn get_info(&self) -> ServerConfig { /* capabilities derived from the roles present */ }
 ///     }
 /// }
 /// ```

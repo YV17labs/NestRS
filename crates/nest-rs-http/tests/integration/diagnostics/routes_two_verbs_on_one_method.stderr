@@ -1,0 +1,5 @@
+error: a method declares exactly one verb — this one declares `#[get]` and `#[post]`. Accepted: `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]` or `#[sse]`. Keeping the first and dropping the second would run the method under a verb you did not write, so neither is assumed: a method that must be two is two methods.
+  --> tests/integration/diagnostics/routes_two_verbs_on_one_method.rs:13:5
+   |
+13 |     #[post("/")]
+   |     ^^^^^^^^^^^^

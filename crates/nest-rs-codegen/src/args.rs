@@ -147,51 +147,99 @@ pub fn missing_argument(attr: &str, key: &str, example: &str) -> String {
     format!("#[{attr}] requires `{key}` — write `{key} = {example}`")
 }
 
-/// The sentence an orchestrator prints for a method that declares two of the
-/// roles it collects.
+/// The one role attribute a decorated method carries — its index in `attrs`,
+/// `None` when it carries none — or the refusal of a method carrying more.
 ///
-/// Five orchestrators impose this identical rule — `#[hooks]`, `#[indicators]`,
-/// `#[scheduled]`, `#[operations]`, `#[tools]` — and it was worded four ways
-/// plus one silence. The four disagreed on *what* they name: two listed the
-/// alternatives and never said which two the method wrote, one said what was
-/// written and never listed the alternatives. A reader wants both, so the
-/// shared sentence carries both.
+/// All nine impl-half decorators impose this rule — `#[routes]`, `#[messages]`,
+/// `#[operations]`, `#[tools]`, `#[processor]`, `#[scheduled]`, `#[listeners]`,
+/// `#[indicators]` and `#[hooks]` — and it was worded four ways plus two
+/// silences: `#[routes]` and `#[messages]` took the first verb and left the rest
+/// on the method, and `#[tools]` took the first role and let rmcp route the
+/// second as an operation nobody declared. **The span is chosen here, never by
+/// the caller**: the error sits on the *second* role attribute, the one that
+/// made the method two, because six callers spanning it themselves had put the
+/// caret on the signature, on the `#`, and on the attribute, in no pattern.
 ///
-/// The silence was MCP's, and it was the one with a consequence rather than a
-/// wording: `#[tools]` took the **first** role attribute with a `find_map` and
-/// removed only that one, leaving the second on the re-emitted method for rmcp
-/// to route as an operation nobody declared.
+/// A role is an attribute whose path is one of `accepted`, written bare
+/// (`"get"`, `"on_module_init"`) and bracketed here, so `#[..]` is written once
+/// rather than at each call site. `noun` is what the family is called at this
+/// site — a phase, a probe, a trigger, a role — because that is the word the
+/// developer just wrote and the one they will search for. `why` is what a site
+/// has to add about its own roles (GraphQL's `_entities` root), empty for the
+/// rest.
 ///
-/// `noun` is what the family is called at this site — a phase, a probe, a
-/// trigger, a role — because that is the word the developer just wrote and the
-/// one they will search for.
-///
-/// Both lists are named **bare** and bracketed here, so `#[..]` is written in
-/// one place rather than at each of the five call sites — where the hand-rolled
-/// spelling had already drifted three ways.
-pub fn one_role_per_method(noun: &str, declared: &[String], accepted: &[&str]) -> String {
+/// The sentence carries both what the method wrote and what is accepted. **One
+/// attribute written again is its own sentence**: both copies name the same
+/// role, so no role nobody wrote could run, and saying so would be false. A role
+/// repeated beside another is named once.
+pub fn one_role_per_method(
+    noun: &str,
+    attrs: &[syn::Attribute],
+    accepted: &[&str],
+    why: &str,
+) -> syn::Result<Option<usize>> {
+    let roles: Vec<usize> = attrs
+        .iter()
+        .enumerate()
+        .filter(|(_, attr)| accepted.iter().any(|name| attr.path().is_ident(name)))
+        .map(|(index, _)| index)
+        .collect();
+    let second = match roles.as_slice() {
+        [] => return Ok(None),
+        [only] => return Ok(Some(*only)),
+        [_, second, ..] => *second,
+    };
+    let declared: Vec<String> = roles
+        .iter()
+        .map(|index| key_as_written(attrs[*index].path()))
+        .collect();
+    Err(syn::Error::new_spanned(
+        &attrs[second],
+        format!("{}{why}", role_sentence(noun, &declared, accepted)),
+    ))
+}
+
+/// The sentence [`one_role_per_method`] refuses with, over the role names the
+/// method wrote — a repeated one included, so a repetition is counted as written.
+fn role_sentence(noun: &str, declared: &[String], accepted: &[&str]) -> String {
+    let bracketed: Vec<String> = accepted.iter().map(|name| format!("#[{name}]")).collect();
+    let accepted = expected_list(
+        bracketed
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        "none",
+    );
+    let mut distinct: Vec<&str> = Vec::new();
+    for name in declared {
+        if !distinct.contains(&name.as_str()) {
+            distinct.push(name);
+        }
+    }
+    if let [name] = distinct.as_slice() {
+        let times = match declared.len() {
+            2 => "twice".to_owned(),
+            count => format!("{count} times"),
+        };
+        return format!(
+            "a method declares exactly one {noun} — this one writes `#[{name}]` {times}. \
+             Accepted: {accepted}. A method that must be two is two methods."
+        );
+    }
     // `and`, not the `or` [`expected_list`] joins with: the method declared
     // both of these, and reading it back as a choice describes the opposite of
     // what happened.
-    let written = declared
+    let written = distinct
         .iter()
         .map(|name| format!("`#[{name}]`"))
         .collect::<Vec<_>>()
         .join(" and ");
-    let bracketed: Vec<String> = accepted.iter().map(|name| format!("#[{name}]")).collect();
     format!(
-        "a method declares exactly one {noun} — this one declares {written}. Accepted: {}. \
-         Keeping the first and dropping the second would run the method under a {noun} \
-         you did not write, so neither is assumed: a method that must be two is two \
-         methods.",
-        expected_list(
-            bracketed
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .as_slice(),
-            "none",
-        ),
+        "a method declares exactly one {noun} — this one declares {written}. Accepted: \
+         {accepted}. Keeping the first and dropping the second would run the method under \
+         a {noun} you did not write, so neither is assumed: a method that must be two is \
+         two methods."
     )
 }
 
@@ -233,8 +281,8 @@ pub fn unmatched_meta(attr: &str, meta: &Meta, expected: &[&str]) -> syn::Error 
 /// Public because the other attribute shape — `syn::meta::parser` /
 /// `parse_nested_meta`, which hands a `ParseNestedMeta` rather than a `Meta` —
 /// needs the same reader and cannot use [`unmatched_meta`]. Three shapes, one
-/// answer to "what did they actually write": the third is an orchestrator
-/// naming the *role* attribute a method declared, for [`one_role_per_method`].
+/// answer to "what did they actually write": the third is
+/// [`one_role_per_method`] naming the *role* attributes a method declared.
 ///
 /// That third caller had its own copy, returning `?` for a non-ident path —
 /// the "nicer placeholder" the paragraph above condemns, ninety lines from the
@@ -262,5 +310,82 @@ fn expected_list(expected: &[&str], empty: &str) -> String {
         None => empty.to_owned(),
         Some((last, [])) => last.clone(),
         Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refusal(method: syn::ImplItemFn, accepted: &[&str]) -> String {
+        one_role_per_method("probe", &method.attrs, accepted, "")
+            .expect_err("more than one role")
+            .to_string()
+    }
+
+    #[test]
+    fn one_role_is_found_and_none_is_no_role() {
+        let method: syn::ImplItemFn = syn::parse_quote! {
+            #[doc = "x"] #[readiness] async fn ready(&self) {}
+        };
+        assert_eq!(
+            one_role_per_method("probe", &method.attrs, &["liveness", "readiness"], "").ok(),
+            Some(Some(1))
+        );
+        assert_eq!(
+            one_role_per_method("probe", &method.attrs, &["startup"], "").ok(),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn two_roles_are_named_with_why_neither_is_kept() {
+        let sentence = refusal(
+            syn::parse_quote! { #[liveness] #[readiness] async fn probe(&self) {} },
+            &["liveness", "readiness", "startup"],
+        );
+        assert!(
+            sentence.contains("declares `#[liveness]` and `#[readiness]`."),
+            "{sentence}"
+        );
+        assert!(sentence.contains("a probe you did not write"), "{sentence}");
+    }
+
+    #[test]
+    fn one_role_written_again_is_said_to_be_repeated_and_nothing_more() {
+        let twice = refusal(
+            syn::parse_quote! { #[startup] #[startup] async fn probe(&self) {} },
+            &["startup"],
+        );
+        assert!(twice.contains("writes `#[startup]` twice."), "{twice}");
+        assert!(!twice.contains("did not write"), "{twice}");
+        let thrice = refusal(
+            syn::parse_quote! { #[startup] #[startup] #[startup] async fn probe(&self) {} },
+            &["startup"],
+        );
+        assert!(thrice.contains("writes `#[startup]` 3 times."), "{thrice}");
+    }
+
+    #[test]
+    fn a_role_repeated_beside_another_is_named_once() {
+        let sentence = refusal(
+            syn::parse_quote! {
+                #[on_module_init] #[on_module_init] #[on_module_destroy] async fn hook(&self) {}
+            },
+            &["on_module_init", "on_module_destroy"],
+        );
+        assert!(
+            sentence.contains("declares `#[on_module_init]` and `#[on_module_destroy]`."),
+            "{sentence}"
+        );
+    }
+
+    #[test]
+    fn a_site_with_more_to_say_appends_it() {
+        let method: syn::ImplItemFn =
+            syn::parse_quote! { #[query] #[entity] async fn find(&self) {} };
+        let error = one_role_per_method("role", &method.attrs, &["query", "entity"], " Why.")
+            .expect_err("two roles");
+        assert!(error.to_string().ends_with("two methods. Why."), "{error}");
     }
 }

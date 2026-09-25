@@ -33,20 +33,7 @@ use std::any::type_name;
 use std::ops::Deref;
 use std::sync::Arc;
 
-/// Why a request-scoped provider could not be resolved inside a WS message
-/// handler. `Display` is what the `#[messages]` reply mapping puts on the error
-/// frame, so a handler can `?` it directly.
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum WsScopeError {
-    /// The per-message request scope was not installed — the handler ran off the
-    /// dispatch task, or the gateway is not nested under the HTTP request scope.
-    #[error("request scope not installed — the WS gateway installs it per message")]
-    NoScope,
-    /// No provider of the requested type is registered in any reachable module.
-    #[error("no provider registered for `{0}` — add it to a module's providers")]
-    NoProvider(&'static str),
-}
+use crate::error::WsScopeError;
 
 /// Resolves a provider of type `T` from the current WS message's
 /// [`RequestScope`](nest_rs_core::RequestScope) — the per-message mirror of [`nest_rs_http::Scoped<T>`].
@@ -102,7 +89,7 @@ mod tests {
     #[tokio::test]
     async fn from_context_shares_one_instance_within_a_message() {
         let scope = Arc::new(RequestScope::new(scoped_container()));
-        nest_rs_core::with_request_scope(Some(scope), Correlation::mint(), async {
+        nest_rs_core::with_request_scope(Some(scope), Correlation::minted(None), async {
             let a = Scoped::<Probe>::from_context().expect("scope installed");
             let b = Scoped::<Probe>::from_context().expect("scope installed");
             assert!(Arc::ptr_eq(&a.0, &b.0));
@@ -116,13 +103,13 @@ mod tests {
         let container = scoped_container();
         let first = nest_rs_core::with_request_scope(
             Some(Arc::new(RequestScope::new(container.clone()))),
-            Correlation::mint(),
+            Correlation::minted(None),
             async { Scoped::<Probe>::from_context().expect("scope").0.0 },
         )
         .await;
         let second = nest_rs_core::with_request_scope(
             Some(Arc::new(RequestScope::new(container))),
-            Correlation::mint(),
+            Correlation::minted(None),
             async { Scoped::<Probe>::from_context().expect("scope").0.0 },
         )
         .await;

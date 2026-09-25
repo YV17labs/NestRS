@@ -1,0 +1,5 @@
+error: a #[on_connect] hook returns `()`, written out or left out: the gateway calls it and moves on, so a future it returned would be dropped without ever being polled and an error would be discarded — write `async fn`, and handle a failure inside the method
+  --> tests/integration/diagnostics/on_connect_returns_a_value.rs:15:21
+   |
+15 |     fn greet(&self) -> impl Future<Output = ()> {
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^

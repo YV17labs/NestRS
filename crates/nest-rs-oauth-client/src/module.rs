@@ -18,7 +18,7 @@ use crate::config::OAuthClientConfig;
 pub struct OAuthClientModule;
 
 impl OAuthClientModule {
-    /// `None` ⇒ load [`OAuthClientConfig`] from `NESTRS_OAUTH_CLIENT__*`; `Some(cfg)` pins
+    /// `None` ⇒ load [`OAuthClientConfig`] from `NESTRS_OAUTH__CLIENT__*`; `Some(cfg)` pins
     /// it in code. Either way the [`OAuthClient`] factory is registered.
     pub fn for_root(config: impl Into<Option<OAuthClientConfig>>) -> OAuthClientSetup {
         OAuthClientSetup {

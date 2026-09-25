@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use sea_orm::{EntityTrait, IdenStatic};
 
-use crate::ability::{Ability, FieldSet, MalformedRuleError, Rule};
+use crate::ability::{Ability, FieldSet, Rule};
 use crate::action::Action;
+use crate::error::MalformedRuleError;
 use crate::predicate::{Predicate, PredicateBuilder};
 
 /// Accumulates rules into an [`Ability`]. Handed to
@@ -265,14 +266,14 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "widgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub org_id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }

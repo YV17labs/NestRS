@@ -1,7 +1,10 @@
 //! Type/path inspection helpers shared by the decorator macros.
 
+use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{GenericArgument, Ident, PathArguments, Type, TypeParamBound};
+
+use crate::ungrouped::ungrouped_type;
 
 /// The base ident of an impl block's self type — last path segment of
 /// `impl Foo` / `impl path::to::Foo`. Errors on a non-path self type;
@@ -164,21 +167,250 @@ pub fn nth_generic_type<'a>(ty: &'a Type, name: &str, idx: usize) -> Option<&'a 
         .nth(idx)
 }
 
-/// The sentence an orchestrator prints for a method that is not `async`.
+/// `call`, awaited when `sig` is an `async fn` and left as it is otherwise.
 ///
-/// The clause left behind when [`payload_arg_type`] merged this family's
-/// *argument* refusal: `#[hooks]`, `#[on_event]` and `#[indicators]` impose the
-/// identical rule and worded it three times, one noun apart. `decorator` is the
-/// attribute the reader actually wrote — the block for `#[hooks]` and
-/// `#[indicators]`, the method's own for `#[on_event]` — because that is what
-/// tells them where to look, and the sentence is what may not drift.
+/// Every impl-half decorator takes both, because whether a body blocks is the
+/// developer's call as it is in any Rust function, and refusing a synchronous
+/// method would assert an impossibility no standard holds. The expansion around
+/// the call is `async` either way; only what it calls decides the `.await`, and
+/// that decision is written here once for the nine decorators that make it.
+pub fn await_if_async(sig: &syn::Signature, call: TokenStream) -> TokenStream {
+    if sig.asyncness.is_some() {
+        quote!(#call.await)
+    } else {
+        call
+    }
+}
+
+/// Whether a method answers `()` — the return written `-> ()`, or not written at
+/// all.
 ///
-/// GraphQL's `#[entity]` and `#[subscription]` deliberately word their own: each
-/// carries the *reason* asyncness is required there (a router resolving a
-/// reference, a stream awaited once), which is a different sentence rather than
-/// this one spelled differently.
-pub fn must_be_async(decorator: &str) -> String {
-    format!("{decorator} methods must be `async fn`")
+/// The two spellings are one signature, so an orchestrator reading the return
+/// treats them alike: `#[on_event]` accepts both, `#[process]` and the three
+/// schedule triggers refuse both (`job::job_returns_a_result`), and `#[hooks]` /
+/// `#[indicators]` run both as infallible. A `()` a `macro_rules!` expansion
+/// wrapped in an invisible group is the same `()`.
+pub fn returns_unit(output: &syn::ReturnType) -> bool {
+    match output {
+        syn::ReturnType::Default => true,
+        syn::ReturnType::Type(_, ty) => {
+            matches!(ungrouped_type(ty), Type::Tuple(tuple) if tuple.elems.is_empty())
+        }
+    }
+}
+
+/// What an impl half's expansion calls a decorated method through — the one
+/// thing about the receiver that differs between the nine decorators.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HostBorrow {
+    /// A borrow of the host alone. An edge dispatches from code holding `&Self`
+    /// — a trait method the host implements, or a host built for the call — so
+    /// `&self` is all it can lend.
+    Host,
+    /// A borrow of the `Arc` the container holds a provider in, so
+    /// `self: &Arc<Self>` is lent as well as `&self`.
+    Arc,
+}
+
+/// Refuse any receiver the expansion's call cannot lend — anything but `&self`,
+/// a typed shared borrow of the host, or (where `borrow` is [`HostBorrow::Arc`])
+/// of the `Arc` holding it — with a sentence quoting the one written.
+///
+/// A host is one instance shared by every call its decorator dispatches: a
+/// provider is a singleton resolved out of the container, an edge host is built
+/// once at mount. So `&mut self` has no exclusive access to take, `self` or
+/// `self: Arc<Self>` nothing to consume, `self: &Box<Self>` a box nothing holds,
+/// and a method with no receiver has no host to be called on — its first
+/// argument is never taken for one. Refused with that fact, not with what rustc
+/// says of the call the expansion writes. `decorator` is the attribute the reader
+/// wrote; `host` is the impl's type name, which a pointer's argument is read
+/// against.
+pub fn shared_receiver(
+    method: &syn::ImplItemFn,
+    decorator: &str,
+    host: &Ident,
+    borrow: HostBorrow,
+) -> syn::Result<()> {
+    let refusal = |at: &dyn quote::ToTokens, written: &str| {
+        let accepted = match borrow {
+            HostBorrow::Host => "`&self`",
+            HostBorrow::Arc => "`&self`, or `self: &Arc<Self>`",
+        };
+        syn::Error::new_spanned(
+            at,
+            format!(
+                "a `{decorator}` method borrows its host — {accepted} — and this one takes \
+                 {written}: a host is one instance shared by every call, and each method is \
+                 lent a shared borrow of it"
+            ),
+        )
+    };
+    match method.sig.inputs.first() {
+        Some(syn::FnArg::Receiver(receiver)) if borrows_shared(receiver, host, borrow) => Ok(()),
+        Some(syn::FnArg::Receiver(receiver)) => Err(refusal(
+            receiver,
+            &format!("`{}`", receiver_as_written(receiver)),
+        )),
+        Some(first) => Err(refusal(first, "no receiver")),
+        None => Err(refusal(&method.sig, "no receiver")),
+    }
+}
+
+/// Refuse a type or const parameter on a dispatched method, naming the first.
+///
+/// The expansion calls the method with what its transport carries — a request's
+/// extractors, a message's payload, a tool's arguments — and nothing names a type
+/// for the parameter, so rustc answers `E0283` at the decorator with no cause a
+/// reader can act on. A lifetime is not refused: it is inferred at the call like
+/// any borrow's. `decorator` is the attribute the reader wrote.
+pub fn concrete_signature(method: &syn::ImplItemFn, decorator: &str) -> syn::Result<()> {
+    let written = method
+        .sig
+        .generics
+        .params
+        .iter()
+        .find_map(|param| match param {
+            syn::GenericParam::Lifetime(_) => None,
+            syn::GenericParam::Type(ty) => Some((param, "type", "a type", &ty.ident)),
+            syn::GenericParam::Const(konst) => Some((param, "const", "a value", &konst.ident)),
+        });
+    match written {
+        None => Ok(()),
+        Some((param, kind, supplied, name)) => Err(syn::Error::new_spanned(
+            param,
+            format!(
+                "a `{decorator}` method takes no type or const parameters, and `{method}` \
+                 declares {kind} parameter `{name}`: the expansion calls it with only what its \
+                 transport carries, so nothing supplies {supplied} for it — name a concrete \
+                 one, or call a generic function from the body",
+                method = method.sig.ident,
+            ),
+        )),
+    }
+}
+
+/// `&self` or `&'a self`, or a typed shared borrow the expansion's call can lend:
+/// of the host — `&Self`, or whatever type the borrow names, which rustc judges
+/// since an alias names the host too — or, where `borrow` lends one, of the `Arc`
+/// the container holds it in, `&Arc<Self>`. A borrow of another pointer around the host, however deep
+/// (`&Box<Self>`, `&Pin<Box<Self>>`, `&Arc<Box<Self>>`), borrows what the
+/// container does not hold, and a `'static` borrow outlives what it lends. The
+/// reading is textual: a pointer spelled through an alias is read as the name it
+/// is given.
+fn borrows_shared(receiver: &syn::Receiver, host: &Ident, borrow: HostBorrow) -> bool {
+    match &receiver.kind {
+        syn::ReceiverKind::Reference(_, lifetime, mutability) => {
+            mutability.is_none() && !is_static(lifetime.as_ref())
+        }
+        syn::ReceiverKind::Typed(_, ty) => match ungrouped_type(ty) {
+            Type::Reference(reference)
+                if reference.mutability.is_none() && !is_static(reference.lifetime.as_ref()) =>
+            {
+                match ungrouped_type(&reference.elem) {
+                    Type::Path(path) if path.qself.is_none() => {
+                        path.path.segments.last().is_some_and(|segment| {
+                            (borrow == HostBorrow::Arc && is_arc_of_host(segment, host))
+                                || !wraps_host(segment, host)
+                        })
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn is_static(lifetime: Option<&syn::Lifetime>) -> bool {
+    lifetime.is_some_and(|lifetime| lifetime.ident == "static")
+}
+
+/// Whether `segment` is `Arc<Self>` or `Arc<Host..>`: the `Arc` the container
+/// holds the host in, its one type argument the host itself.
+fn is_arc_of_host(segment: &syn::PathSegment, host: &Ident) -> bool {
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    let mut types = arguments.args.iter().filter_map(|argument| match argument {
+        syn::GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    });
+    segment.ident == "Arc"
+        && matches!((types.next(), types.next()), (Some(ty), None) if is_host(ty, host))
+}
+
+/// Whether `segment` is a pointer around the host: a type argument of it names the
+/// host, behind any references or pointers.
+fn wraps_host(segment: &syn::PathSegment, host: &Ident) -> bool {
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    arguments.args.iter().any(|argument| match argument {
+        syn::GenericArgument::Type(ty) => names_host(ty, host),
+        _ => false,
+    })
+}
+
+/// Whether `ty` names the host anywhere: itself, behind references, or as a type
+/// argument of a path.
+fn names_host(ty: &Type, host: &Ident) -> bool {
+    match ungrouped_type(ty) {
+        Type::Reference(reference) => names_host(&reference.elem, host),
+        Type::Path(path) if path.qself.is_none() => {
+            is_host(ty, host)
+                || path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| wraps_host(segment, host))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `ty` is the host: `Self`, or a path ending in its name, raw or not.
+fn is_host(ty: &Type, host: &Ident) -> bool {
+    use syn::ext::IdentExt;
+
+    matches!(
+        ungrouped_type(ty),
+        Type::Path(path)
+            if path.qself.is_none()
+                && path.path.segments.last().is_some_and(|segment| {
+                    segment.ident == "Self" || segment.ident.unraw() == host.unraw()
+                })
+    )
+}
+
+/// The receiver as its author wrote it, for the refusal to quote.
+fn receiver_as_written(receiver: &syn::Receiver) -> String {
+    let binding = if receiver.mutability.is_some() {
+        "mut "
+    } else {
+        ""
+    };
+    match &receiver.kind {
+        syn::ReceiverKind::Reference(_, lifetime, mutability) => format!(
+            "&{}{}self",
+            lifetime
+                .as_ref()
+                .map(|lifetime| format!("{lifetime} "))
+                .unwrap_or_default(),
+            if mutability.is_some() { "mut " } else { "" },
+        ),
+        syn::ReceiverKind::Typed(_, ty) => format!(
+            "{binding}self: {}",
+            quote!(#ty)
+                .to_string()
+                .replace(" < ", "<")
+                .replace("< ", "<")
+                .replace(" >", ">")
+                .replace(" :: ", "::")
+                .replace("& ", "&")
+        ),
+        _ => format!("{binding}self"),
+    }
 }
 
 /// The single payload argument of an orchestrator method: `&self` receiver,
@@ -188,37 +420,25 @@ pub fn must_be_async(decorator: &str) -> String {
 /// identical diagnostics up to one noun; `decorator` (`"#[process]"`) and
 /// `payload` (`"job"`) are what actually differed. Extra dependencies belong on
 /// the host struct as `#[inject]` fields, which is why more than one argument
-/// is refused rather than resolved.
+/// is refused rather than resolved. `host` is the impl's type name, which a typed
+/// receiver may borrow — through its `Arc`, since both callers resolve a provider.
 pub fn payload_arg_type(
     method: &syn::ImplItemFn,
     decorator: &str,
     payload: &str,
+    host: &Ident,
 ) -> syn::Result<Type> {
     use syn::spanned::Spanned;
     use syn::{FnArg, PatType};
 
-    let mut iter = method.sig.inputs.iter();
-    match iter.next() {
-        Some(FnArg::Receiver(_)) => {}
-        Some(other) => {
-            return Err(syn::Error::new(
-                other.span(),
-                format!("a `{decorator}` method must take `&self` as its first argument"),
-            ));
-        }
-        None => {
-            return Err(syn::Error::new(
-                method.sig.span(),
-                format!("a `{decorator}` method must take `&self` and one {payload} argument"),
-            ));
-        }
-    }
+    shared_receiver(method, decorator, host, HostBorrow::Arc)?;
+    let mut iter = method.sig.inputs.iter().skip(1);
     let Some(arg) = iter.next() else {
         return Err(syn::Error::new(
             method.sig.span(),
             format!(
                 "a `{decorator}` method needs a {payload} argument: \
-                 `async fn(&self, {payload}: T)`"
+                 `fn(&self, {payload}: T)`"
             ),
         ));
     };
@@ -237,5 +457,122 @@ pub fn payload_arg_type(
             r.span(),
             format!("a `{decorator}` method takes exactly one `&self` receiver"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    fn receiver_answer(method: &syn::ImplItemFn, host: Ident) -> Result<(), String> {
+        shared_receiver(method, "#[hooks]", &host, HostBorrow::Arc)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Every receiver the expansion's call can lend is taken — a shared borrow of
+    /// the host however it is spelled, or of the `Arc` holding it — and the type a
+    /// borrow names is left to rustc, since an alias names the host too.
+    #[test]
+    fn a_borrow_the_call_can_lend_is_accepted_however_it_is_spelled() {
+        let methods: [syn::ImplItemFn; 9] = [
+            parse_quote! { async fn plain(&self) {} },
+            parse_quote! { async fn lifetime<'a>(&'a self) {} },
+            parse_quote! { async fn typed(self: &Self) {} },
+            parse_quote! { async fn named(self: &Host) {} },
+            parse_quote! { async fn generic(self: &Host<u8>) {} },
+            parse_quote! { async fn pathed(self: &crate::Host) {} },
+            parse_quote! { async fn aliased(self: &HostAlias) {} },
+            parse_quote! { async fn arc(self: &Arc<Self>) {} },
+            parse_quote! { async fn std_arc(self: &std::sync::Arc<Host<u8>>) {} },
+        ];
+        for method in &methods {
+            assert_eq!(
+                receiver_answer(method, parse_quote!(Host)),
+                Ok(()),
+                "{}",
+                method.sig.ident
+            );
+        }
+        let raw: syn::ImplItemFn = parse_quote! { async fn raw(self: &Arc<Raw>) {} };
+        assert_eq!(receiver_answer(&raw, parse_quote!(r#Raw)), Ok(()));
+    }
+
+    /// Anything else is refused quoting what was written, with the one fact true
+    /// of all of them.
+    #[test]
+    fn any_other_receiver_is_refused_quoting_it() {
+        let cases: Vec<(syn::ImplItemFn, &str)> = vec![
+            (
+                parse_quote! { async fn exclusive(&mut self) {} },
+                "`&mut self`",
+            ),
+            (parse_quote! { async fn owned(self) {} }, "`self`"),
+            (
+                parse_quote! { async fn arc(self: std::sync::Arc<Self>) {} },
+                "`self: std::sync::Arc<Self>`",
+            ),
+            (
+                parse_quote! { async fn boxed(self: &Box<Self>) {} },
+                "`self: &Box<Self>`",
+            ),
+            (
+                parse_quote! { async fn counted(self: &std::rc::Rc<Host>) {} },
+                "`self: &std::rc::Rc<Host>`",
+            ),
+            (
+                parse_quote! { async fn pinned(self: &Pin<&Self>) {} },
+                "`self: &Pin<&Self>`",
+            ),
+            (
+                parse_quote! { async fn pinned_box(self: &Pin<Box<Self>>) {} },
+                "`self: &Pin<Box<Self>>`",
+            ),
+            (
+                parse_quote! { async fn arc_of_box(self: &Arc<Box<Self>>) {} },
+                "`self: &Arc<Box<Self>>`",
+            ),
+            (
+                parse_quote! { async fn forever(&'static self) {} },
+                "`&'static self`",
+            ),
+            (
+                parse_quote! { async fn typed_forever(self: &'static Self) {} },
+                "`self: &'static Self`",
+            ),
+            (parse_quote! { async fn none() {} }, "no receiver"),
+        ];
+        for (method, written) in &cases {
+            let refusal = receiver_answer(method, parse_quote!(Host)).expect_err(written);
+            assert!(refusal.contains(written), "{refusal}");
+            assert!(
+                refusal.contains("one instance shared by every call"),
+                "{refusal}"
+            );
+        }
+        let raw: syn::ImplItemFn = parse_quote! { async fn raw(self: &Box<Raw>) {} };
+        assert!(
+            receiver_answer(&raw, parse_quote!(r#Raw)).is_err(),
+            "a raw host is its name"
+        );
+    }
+
+    /// An edge lends the host alone, so the `Arc` borrow a provider accepts is
+    /// refused there — naming what the edge does lend.
+    #[test]
+    fn an_edge_refuses_the_arc_borrow_a_provider_takes() {
+        let arc: syn::ImplItemFn = parse_quote! { async fn arc(self: &Arc<Self>) {} };
+        let refusal = shared_receiver(&arc, "#[routes]", &parse_quote!(Host), HostBorrow::Host)
+            .expect_err("an edge holds no Arc to lend")
+            .to_string();
+        assert!(
+            refusal.contains("borrows its host — `&self` — and"),
+            "{refusal}"
+        );
+        let plain: syn::ImplItemFn = parse_quote! { fn plain(&self) {} };
+        assert!(
+            shared_receiver(&plain, "#[routes]", &parse_quote!(Host), HostBorrow::Host).is_ok()
+        );
     }
 }

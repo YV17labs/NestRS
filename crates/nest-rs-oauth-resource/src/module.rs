@@ -74,7 +74,7 @@ impl AudienceBinding {
 pub struct OAuthResourceModule;
 
 impl OAuthResourceModule {
-    /// `None` ⇒ load [`OAuthResourceConfig`] from `NESTRS_OAUTH_RESOURCE__*`;
+    /// `None` ⇒ load [`OAuthResourceConfig`] from `NESTRS_OAUTH__RESOURCE__*`;
     /// `Some(cfg)` makes `cfg` the base those variables overlay per field.
     pub fn for_root(config: impl Into<Option<OAuthResourceConfig>>) -> OAuthResourceSetup {
         OAuthResourceSetup {

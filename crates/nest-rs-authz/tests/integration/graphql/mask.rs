@@ -34,7 +34,7 @@ mod widget {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
     #[sea_orm(table_name = "widgets")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub name: String,
@@ -42,7 +42,7 @@ mod widget {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }

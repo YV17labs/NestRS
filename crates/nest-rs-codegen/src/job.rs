@@ -8,12 +8,17 @@
 //! grammar is worded here rather than four times.
 //!
 //! There is no site that *cannot* take it: every worker job runs through the one
-//! `JobContext` seam. So this module carries no refusal — those four are the
+//! `JobContext` seam. The family's *other* keys are another matter — a key one
+//! member takes is answered at every member, and where a member cannot take it
+//! the refusal names the fact ([`job_argument_refused`]). Those four are the
 //! whole family, and a fifth job decorator joins them by calling in here.
 
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, ExprLit, Lit};
+
+use crate::replicas::REPLICAS;
+use crate::ungrouped::ungrouped_expr;
 
 /// The key, spelled once.
 pub const TRANSACTIONAL: &str = "transactional";
@@ -32,7 +37,7 @@ const WHAT_THE_VALUES_DO: &str = "`true` (the default) settles the job's data-la
 /// fixing a typo, and the choice is the thing worth stating at the point of
 /// refusal.
 pub fn transactional_value(expr: &Expr) -> syn::Result<bool> {
-    match unwrap_groups(expr) {
+    match ungrouped_expr(expr) {
         Expr::Lit(ExprLit {
             lit: Lit::Bool(b), ..
         }) => Ok(b.value()),
@@ -72,25 +77,85 @@ pub fn job_argument_needs_a_value(attr: &str, name: &str) -> String {
     }
 }
 
-/// Strip the invisible-delimiter groups a `macro_rules!` substitution leaves.
+/// Every cell of the worker-job key table a member refuses, with the fact that
+/// makes the key meaningless there — `framework.md`, *The impl half*.
 ///
-/// A `$settle:expr` reaches a proc macro as `Expr::Group` — `syn` unwraps it in
-/// some parse paths and not others, and *which* depended here on how each
-/// decorator read its argument list and on where in that list the key sat.
-/// `#[process]` parses the value with `input.parse::<Expr>()` and keeps the
-/// group; the triggers go through `Punctuated<MetaNameValue, …>`, which unwraps
-/// only when the fork is empty — so the same `false` compiled as the *last*
-/// argument of `#[every]` and was refused one position earlier in `#[cron]`,
-/// with a sentence telling the developer to write the value they had written.
-/// Unwrapping here is what makes "one key, four sites, one answer" true rather
-/// than nearly true. Looping, not a single unwrap: nesting is legal, and a key
-/// forwarded through two macro layers arrives wrapped twice.
-fn unwrap_groups(expr: &Expr) -> &Expr {
-    let mut current = expr;
-    while let Expr::Group(group) = current {
-        current = &group.expr;
-    }
-    current
+/// The table is closed: each of the family's keys beside `transactional`, which
+/// every member builds, is built at a member or listed here for it, and the test
+/// below holds the two to that. A key no member takes
+/// is not a cell, and keeps the unknown-key sentence.
+const REFUSED: [(&str, &str, &str); 17] = [
+    (
+        "process",
+        REPLICAS,
+        "a job is delivered to one worker, so there is no replica to choose",
+    ),
+    (
+        "process",
+        "tz",
+        "a job runs when delivered, and has no clock to be read in",
+    ),
+    ("every", "queue", RUNS_IN_PROCESS),
+    ("every", "retries", "a tick's retry is the next occurrence"),
+    ("every", "concurrency", NEVER_OVERLAPS),
+    ("every", "throttle", "the trigger is the rate"),
+    ("every", "tz", "an interval has no wall clock"),
+    ("cron", "queue", RUNS_IN_PROCESS),
+    ("cron", "retries", "a tick's retry is the next occurrence"),
+    ("cron", "concurrency", NEVER_OVERLAPS),
+    ("cron", "throttle", "the trigger is the rate"),
+    ("after", "queue", RUNS_IN_PROCESS),
+    (
+        "after",
+        "retries",
+        "a one-shot has no next occurrence, so work that must succeed is a queue job it pushes",
+    ),
+    ("after", "concurrency", "a one-shot runs once"),
+    ("after", "throttle", "the trigger is the rate"),
+    (
+        "after",
+        REPLICAS,
+        "a one-shot fires on the replica that booted",
+    ),
+    ("after", "tz", "a delay has no wall clock"),
+];
+
+/// The one delivery fact all three triggers state: `queue` names where a
+/// `#[process]` job is delivered *from*, and a tick is delivered from nowhere.
+const RUNS_IN_PROCESS: &str = "a scheduled tick runs in process and is not delivered from a \
+     queue — push a job from the tick to reach one";
+
+/// The one overlap fact both recurring triggers state.
+const NEVER_OVERLAPS: &str = "a scheduled job never overlaps itself — an occurrence falling \
+     inside a run is skipped and counted";
+
+/// The refusal of `key` at `#[attr]` when another member of the worker-job family
+/// takes it and this one cannot, naming why — `None` for a key this member takes,
+/// and for a key no member takes, which [`crate::unknown_argument`] answers.
+///
+/// Checked before the unknown-key sentence and whatever the value, so a
+/// developer carrying `retries` from a `#[process]` to an `#[every]` learns what
+/// a tick does instead, not that they misspelled a word.
+pub fn job_argument_refused(attr: &str, key: &str) -> Option<String> {
+    REFUSED
+        .iter()
+        .find(|(member, refused, _)| *member == attr && *refused == key)
+        .map(|(_, _, fact)| format!("#[{attr}] takes no `{key}`: {fact}"))
+}
+
+/// The refusal of a job method answering `()` — written or not — naming what its
+/// `Result` decides. `#[process]` and the three triggers state it one way; only
+/// what an `Err` does differs, because a job has a retry budget and an occurrence
+/// has the next one.
+pub fn job_returns_a_result(attr: &str) -> String {
+    let outcome = if attr == "process" {
+        "`Ok(())` completes the job and an `Err` fails the attempt, which the retry budget \
+         decides on"
+    } else {
+        "`Ok(())` completes the occurrence and an `Err` fails it, which the scheduler logs \
+         before the next one"
+    };
+    format!("a `#[{attr}]` method returns a `Result`: {outcome} — write `-> anyhow::Result<()>`")
 }
 
 /// The `JobTransaction` variant a parsed value selects, rooted at the surface
@@ -102,5 +167,39 @@ pub fn job_transaction(value: Option<bool>, surface: &TokenStream) -> TokenStrea
     match value {
         Some(false) => quote! { #surface::nest_rs_worker::JobTransaction::Pool },
         Some(true) | None => quote! { #surface::nest_rs_worker::JobTransaction::PerAttempt },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every member answers every family key: built, or refused with a fact.
+    #[test]
+    fn the_key_table_is_closed() {
+        const FAMILY_KEYS: [&str; 6] = [
+            "queue",
+            "retries",
+            "concurrency",
+            "throttle",
+            REPLICAS,
+            "tz",
+        ];
+        let built: [(&str, &[&str]); 4] = [
+            ("process", &["queue", "retries", "concurrency", "throttle"]),
+            ("every", &[REPLICAS]),
+            ("cron", &[REPLICAS, "tz"]),
+            ("after", &[]),
+        ];
+        for (member, takes) in built {
+            for key in FAMILY_KEYS {
+                assert_ne!(
+                    takes.contains(&key),
+                    job_argument_refused(member, key).is_some(),
+                    "#[{member}] `{key}` is neither built nor refused, or both",
+                );
+            }
+        }
+        assert_eq!(job_argument_refused("every", "priority"), None);
     }
 }

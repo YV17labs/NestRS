@@ -353,6 +353,7 @@ mod tests {
     /// `reason` and `requiredScopes` already do. It was computed and dropped on
     /// three of four, which left a throttled caller hot-retrying into the limit
     /// the limiter exists to shed.
+    #[cfg(any(feature = "mcp", feature = "ws"))]
     #[test]
     fn every_edge_reports_the_wait_a_rate_limit_denial_carries() {
         let data = structured_reason(&Denial::rate_limited(42, "too many requests"));

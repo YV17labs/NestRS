@@ -1,0 +1,5 @@
+error: a `#[indicators]` method borrows its host — `&self`, or `self: &Arc<Self>` — and this one takes `self`: a host is one instance shared by every call, and each method is lent a shared borrow of it
+  --> tests/integration/diagnostics/indicators_takes_self_by_reference.rs:15:33
+   |
+15 |     async fn upstream_reachable(self) -> Result<(), std::io::Error> {
+   |                                 ^^^^

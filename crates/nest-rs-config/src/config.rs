@@ -154,7 +154,7 @@ mod tests {
     impl Config for DbCfg {
         fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
             Ok(Self {
-                url: env.get("URL").unwrap_or(base.url),
+                url: env.get("URL")?.unwrap_or(base.url),
                 max_connections: env
                     .parse("MAX_CONNECTIONS")?
                     .unwrap_or(base.max_connections),

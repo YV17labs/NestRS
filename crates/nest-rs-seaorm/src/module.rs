@@ -74,7 +74,7 @@ async fn connect(config: &SeaOrmConfig) -> anyhow::Result<DatabaseConnection> {
     if config.url.is_empty() {
         anyhow::bail!(
             "{} must be set",
-            nest_rs_config::var_name(
+            nest_rs_config::spellings(
                 <SeaOrmConfig as nest_rs_config::Namespaced>::NAMESPACE,
                 "URL"
             )

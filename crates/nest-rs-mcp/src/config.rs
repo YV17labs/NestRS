@@ -136,7 +136,7 @@ impl McpConfig {
 impl Config for McpConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            allowed_hosts: env.list("ALLOWED_HOSTS", base.allowed_hosts),
+            allowed_hosts: env.list("ALLOWED_HOSTS", base.allowed_hosts)?,
             legacy_session_mode: env.flag("LEGACY_SESSION_MODE", base.legacy_session_mode)?,
             json_response: env.flag("JSON_RESPONSE", base.json_response)?,
             sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,

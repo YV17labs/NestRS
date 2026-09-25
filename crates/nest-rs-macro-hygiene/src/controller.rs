@@ -93,6 +93,25 @@ impl HygieneController {
     async fn events(&self) -> SseStream {
         SseStream::new(stream::iter([SseEvent::message("tick")]))
     }
+
+    /// A synchronous handler is called without an `.await`.
+    #[get("/sync")]
+    #[public]
+    fn sync(&self) -> String {
+        "sync".into()
+    }
+
+    /// A route compiled out takes its endpoint, its mount, its document entry
+    /// and its guard with it — none of which exists in this build.
+    #[cfg(any())]
+    #[get("/sync")]
+    #[use_guards(crate::does_not_exist::Guard)]
+    async fn compiled_out(
+        &self,
+        body: crate::does_not_exist::Body,
+    ) -> crate::does_not_exist::Reply {
+        crate::does_not_exist::answer(body)
+    }
 }
 
 /// The versioned mount, whose expansion is a different shape again: the routes

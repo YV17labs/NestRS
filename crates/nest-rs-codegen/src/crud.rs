@@ -2,7 +2,7 @@
 //! generators.
 //!
 //! The grammar is the same on both surfaces, and it is the *whole* grammar on
-//! both: every key [`CrudConfig`] carries is read by each generator. The
+//! both: every key [`CrudDeclaration`] carries is read by each generator. The
 //! sentence here used to promise otherwise — "REST consumes `guards`; GraphQL
 //! ignores them", about a `guards` key that has never existed — and the second
 //! half is the shape `CLAUDE.md` bans, written as though it were the design. A
@@ -55,7 +55,7 @@ pub enum OpsSelection {
 /// Resolved per-op generation decision — the answer the generators consume.
 /// The write ops that carry an input type expose it directly (`Some(path)` ⇒
 /// generate, borrowing it for the emit) so a generator never re-reaches into
-/// `CrudConfig` nor re-asserts the "type is present" invariant.
+/// `CrudDeclaration` nor re-asserts the "type is present" invariant.
 pub struct GeneratedOps<'a> {
     /// Generate the collection read.
     pub list: bool,
@@ -69,8 +69,8 @@ pub struct GeneratedOps<'a> {
     pub delete: bool,
 }
 
-/// The parsed `#[crud(...)]` configuration both surface generators consume.
-pub struct CrudConfig {
+/// The parsed `#[crud(...)]` declaration both surface generators consume.
+pub struct CrudDeclaration {
     /// Field holding the entity's `CrudService` — every generated op
     /// delegates to it so controllers/resolvers never touch `Repo` directly.
     pub service: Ident,
@@ -90,7 +90,7 @@ pub struct CrudConfig {
     pub paginate: Paginate,
 }
 
-impl CrudConfig {
+impl CrudDeclaration {
     /// Resolve which ops to generate, validating that any explicitly requested
     /// `create`/`update` op has its input type. A `create`/`update` op without
     /// `create = ` / `update = ` is a hard error — never a silently dropped op.
@@ -171,7 +171,7 @@ fn value_for(input: ParseStream, key: &Ident) -> syn::Result<()> {
     Ok(())
 }
 
-impl Parse for CrudConfig {
+impl Parse for CrudDeclaration {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut service = None;
         let mut entity = None;
@@ -351,7 +351,7 @@ impl Parse for CrudConfig {
             )
         })?;
 
-        Ok(CrudConfig {
+        Ok(CrudDeclaration {
             service,
             entity,
             output,
@@ -363,8 +363,8 @@ impl Parse for CrudConfig {
     }
 }
 
-/// Parse a `#[crud(...)]` attribute's tokens into a [`CrudConfig`].
-pub fn parse_crud_args(args: TokenStream2) -> syn::Result<CrudConfig> {
+/// Parse a `#[crud(...)]` attribute's tokens into a [`CrudDeclaration`].
+pub fn parse_crud_args(args: TokenStream2) -> syn::Result<CrudDeclaration> {
     syn::parse2(args)
 }
 
@@ -394,7 +394,7 @@ mod tests {
 
     use super::*;
 
-    fn parse(args: proc_macro2::TokenStream) -> syn::Result<CrudConfig> {
+    fn parse(args: proc_macro2::TokenStream) -> syn::Result<CrudDeclaration> {
         parse_crud_args(args)
     }
 

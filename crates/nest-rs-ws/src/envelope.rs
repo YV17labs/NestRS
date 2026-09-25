@@ -79,6 +79,12 @@ impl std::fmt::Display for WsError {
     }
 }
 
+/// A handler may return it as its `Err`: it is the frame a client reads, so
+/// [`WsReply::from_handler_error`] sends it whole, details included — when it is
+/// the handler's error type itself; wrapped in `anyhow`, only its sentence
+/// survives the conversion.
+impl std::error::Error for WsError {}
+
 impl<T: Into<String>> From<T> for WsError {
     fn from(message: T) -> Self {
         Self::new(message)
@@ -147,11 +153,11 @@ impl WsReply {
     /// Its own constructor rather than a bare [`error`](Self::error) so the
     /// `warn` cannot be forgotten at the one call site that produces it —
     /// malformed input from a client is a denied dispatch like any other.
-    pub fn payload_error(event: &str, error: &impl std::fmt::Display) -> WsReply {
+    pub fn payload_error(event: &str, error: &(dyn std::error::Error + 'static)) -> WsReply {
         tracing::warn!(
             target: crate::TARGET,
             event,
-            error = %error,
+            error = %nest_rs_core::error_message(error),
             "subscribe_message payload failed to deserialize",
         );
         WsReply::Error(WsError::new(format!(
@@ -175,14 +181,26 @@ impl WsReply {
     /// `#[subscribe_message]` expansion's syntactic `Result` arm and the
     /// type-directed [`ReplyValue`] fallback — so the two can never disagree
     /// on what a failed handler puts on the wire.
-    pub fn from_handler_error(event: &str, error: &impl std::fmt::Display) -> WsReply {
+    ///
+    /// The operator's line carries the whole cause chain; the client's frame
+    /// carries the error's own sentence, as it always has. Any error converting
+    /// into a boxed one qualifies — `anyhow::Error` keeps its context chain
+    /// through that conversion.
+    pub fn from_handler_error<E>(event: &str, error: E) -> WsReply
+    where
+        E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let error: Box<dyn std::error::Error + Send + Sync> = error.into();
         tracing::warn!(
             target: crate::TARGET,
             event,
-            error = %error,
+            error = %nest_rs_core::error_message(&*error),
             "subscribe_message handler returned Err",
         );
-        WsReply::Error(WsError::new(error.to_string()))
+        match error.downcast::<WsError>() {
+            Ok(frame) => WsReply::Error(*frame),
+            Err(error) => WsReply::Error(WsError::new(error.to_string())),
+        }
     }
 }
 
@@ -200,31 +218,120 @@ impl WsReply {
 /// `Serialize` errors — the ones whose errors carry the most detail.
 ///
 /// Resolution here is on the type, so an alias is transparent: the inherent
-/// method below applies to any `Result<T, E>` however it is spelled, and wins
-/// over the blanket trait method (inherent methods are probed first).
-pub struct ReplyValue<'a, T>(pub &'a T);
+/// method below applies to **any** `Result<T, E>` however it is spelled — no
+/// bound on `E`, because a bound it failed would drop an `Err` onto the blanket
+/// method and serialize it whole — and wins over the blanket trait method
+/// (inherent methods are probed first). What becomes of the `Err` is
+/// [`ErrorReport`]'s to decide, where the expansion knows its concrete type.
+///
+/// **A handler returns at most a `Result` around a `Result`-free value.** The
+/// expansion splits the value twice — the outer `Result`, then its `Ok` — so
+/// `Result<Result<T, E1>, E2>` is a failure on either `Err`, literal or aliased.
+/// It used to split once, and the inner `Err` shipped as `{"Err": …}` in a frame
+/// shaped like a success. A `Result` any deeper, or inside an `Option`, a `Vec`
+/// or a struct, is data and is serialized as such.
+pub struct ReplyValue<T>(pub T);
 
-impl<T: Serialize, E: std::fmt::Display> ReplyValue<'_, Result<T, E>> {
-    /// A `Result` however it was spelled: `Ok` replies, `Err` becomes the same
-    /// error frame the literal form produces.
-    pub fn into_reply(self, event: &str) -> WsReply {
+/// A handler's return value, split into what replies and what failed.
+pub enum ReplyOutcome<T, E> {
+    /// The value a success replies with — split again, or serialized.
+    Value(T),
+    /// The error an `Err` carried, for [`ErrorReport`] to turn into a frame.
+    Failed(E),
+}
+
+impl<T, E> ReplyValue<Result<T, E>> {
+    /// A `Result` however it was spelled: `Ok` is the value, `Err` is handed back.
+    pub fn into_outcome(self) -> ReplyOutcome<T, E> {
         match self.0 {
-            Ok(value) => WsReply::reply(value),
-            Err(err) => WsReply::from_handler_error(event, err),
+            Ok(value) => ReplyOutcome::Value(value),
+            Err(err) => ReplyOutcome::Failed(err),
         }
     }
 }
 
-/// The ordinary case: any serializable value replies as-is. Kept a trait so the
+/// The ordinary case: any other value is the value. Kept a trait so the
 /// `Result` impl above can be inherent, and therefore more specific.
 pub trait ReplyValueFallback {
-    /// Serialize the value into a reply on the request's event name.
-    fn into_reply(self, event: &str) -> WsReply;
+    /// The value itself.
+    type Value;
+
+    /// The value, with nothing that can have failed.
+    fn into_outcome(self) -> ReplyOutcome<Self::Value, std::convert::Infallible>;
 }
 
-impl<T: Serialize> ReplyValueFallback for ReplyValue<'_, T> {
-    fn into_reply(self, _event: &str) -> WsReply {
-        WsReply::reply(self.0)
+impl<T> ReplyValueFallback for ReplyValue<T> {
+    type Value = T;
+
+    fn into_outcome(self) -> ReplyOutcome<T, std::convert::Infallible> {
+        ReplyOutcome::Value(self.0)
+    }
+}
+
+/// A handler's error, turned into the frame a client reads and the line an
+/// operator reads — **by type**, resolved where the expansion names it, in three
+/// tiers, each taken only when the one above does not apply:
+///
+/// 1. An error converting into a boxed `Send + Sync` one takes the inherent
+///    method: its whole cause chain is logged, and a [`WsError`] is sent whole
+///    ([`WsReply::from_handler_error`]).
+/// 2. Any other error — one holding an `Rc`, a `Box<dyn Error>` — takes
+///    [`ErrorReportChain`]: it cannot cross threads, but it has causes, and they
+///    are logged. It used to fall to the third tier and lose them.
+/// 3. Any other `Display` type takes [`ErrorReportFallback`]: it has no causes to
+///    walk, so its sentence is its whole chain.
+///
+/// A type that is none of them does not compile.
+pub struct ErrorReport<E>(pub E);
+
+impl<E> ErrorReport<E>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    /// The error frame, with the whole cause chain on the operator's line.
+    pub fn into_frame(self, event: &str) -> WsReply {
+        WsReply::from_handler_error(event, self.0)
+    }
+}
+
+/// The error that is not `Send + Sync` case of [`ErrorReport`] — the second tier.
+pub trait ErrorReportChain {
+    /// The error frame, with the whole cause chain on the operator's line.
+    fn into_frame(self, event: &str) -> WsReply;
+}
+
+impl<E> ErrorReportChain for ErrorReport<E>
+where
+    E: Into<Box<dyn std::error::Error>>,
+{
+    fn into_frame(self, event: &str) -> WsReply {
+        let error: Box<dyn std::error::Error> = self.0.into();
+        tracing::warn!(
+            target: crate::TARGET,
+            event,
+            error = %nest_rs_core::error_message(&*error),
+            "subscribe_message handler returned Err",
+        );
+        WsReply::Error(WsError::new(error.to_string()))
+    }
+}
+
+/// The `Display`-only case of [`ErrorReport`] — the third tier, implemented on a
+/// borrow so that method resolution reaches it only after the two above.
+pub trait ErrorReportFallback {
+    /// The error frame, with the error's sentence on the operator's line.
+    fn into_frame(self, event: &str) -> WsReply;
+}
+
+impl<E: std::fmt::Display> ErrorReportFallback for &ErrorReport<E> {
+    fn into_frame(self, event: &str) -> WsReply {
+        tracing::warn!(
+            target: crate::TARGET,
+            event,
+            error = %self.0,
+            "subscribe_message handler returned Err",
+        );
+        WsReply::Error(WsError::new(self.0.to_string()))
     }
 }
 

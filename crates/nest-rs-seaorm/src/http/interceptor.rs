@@ -51,9 +51,8 @@ use poem::{Error, Request, Response, Result};
 use sea_orm::DatabaseConnection;
 
 use crate::SeaOrmConfig;
-use crate::executor::{
-    CommitError, Executor, FinalizeOutcome, LazyTransaction, with_request_executor,
-};
+use crate::error::CommitError;
+use crate::executor::{Executor, FinalizeOutcome, LazyTransaction, with_request_executor};
 
 /// The request interceptor that installs the ambient [`Executor`] — the pool for
 /// a safe method, a **lazily opened** per-request transaction (committed on
@@ -132,13 +131,13 @@ fn commit_failure(err: CommitError, observe_conflicts: bool) -> Error {
     if observe_conflicts && err.is_retryable_conflict() {
         tracing::warn!(
             target: crate::TARGET,
-            error = %err,
+            error = %nest_rs_core::error_message(&err),
             hint = "not retried here (handler is not replayable from the interceptor); \
                     use `retry::retry_on_conflict` at a programmatic transaction boundary",
             "serialization conflict at commit",
         );
     } else {
-        tracing::error!(target: crate::TARGET, error = %err, "transaction commit failed");
+        tracing::error!(target: crate::TARGET, error = %nest_rs_core::error_message(&err), "transaction commit failed");
     }
     Error::from_status(StatusCode::INTERNAL_SERVER_ERROR)
 }

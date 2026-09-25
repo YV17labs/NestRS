@@ -84,12 +84,12 @@ impl Config for OpenApiConfig {
         }
         Ok(Self {
             enabled,
-            title: env.get("TITLE").unwrap_or(d.title),
-            version: env.get("VERSION").unwrap_or(d.version),
-            description: env.get("DESCRIPTION").or(d.description),
+            title: env.get("TITLE")?.unwrap_or(d.title),
+            version: env.get("VERSION")?.unwrap_or(d.version),
+            description: env.get("DESCRIPTION")?.or(d.description),
             emit_document: env.flag("EMIT_DOCUMENT", d.emit_document)?,
             document_path: env
-                .get("DOCUMENT_PATH")
+                .get("DOCUMENT_PATH")?
                 .map(PathBuf::from)
                 .unwrap_or(d.document_path),
         })

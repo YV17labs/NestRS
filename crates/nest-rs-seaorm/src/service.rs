@@ -306,7 +306,7 @@ pub trait Creatable: CrudService {
                     tracing::error!(
                         target: crate::TARGET,
                         entity,
-                        error = %rollback_err,
+                        error = %nest_rs_core::error_message(&rollback_err),
                         "rollback of the create SAVEPOINT/transaction failed",
                     );
                 }

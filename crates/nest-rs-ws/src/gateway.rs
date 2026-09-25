@@ -373,7 +373,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                         tracing::debug!(
                             target: crate::TARGET,
                             conn_id,
-                            error = %err,
+                            error = %nest_rs_core::error_message(&err),
                             close_code = u16::from(CloseCode::Error),
                             "websocket read error",
                         );
@@ -415,7 +415,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
                 tracing::warn!(
                     target: crate::TARGET,
                     conn_id,
-                    error = %err,
+                    error = %nest_rs_core::error_message(&err),
                     "writer task failed",
                 );
             }
@@ -518,7 +518,7 @@ async fn close_socket(
         tracing::debug!(
             target: crate::TARGET,
             conn_id,
-            error = %err,
+            error = %nest_rs_core::error_message(&err),
             "websocket close frame undelivered",
         );
         return;
@@ -527,7 +527,7 @@ async fn close_socket(
         tracing::debug!(
             target: crate::TARGET,
             conn_id,
-            error = %err,
+            error = %nest_rs_core::error_message(&err),
             "websocket close handshake unfinished",
         );
     }
@@ -752,7 +752,7 @@ async fn handle_text<G: Gateway>(
                     tracing::warn!(
                         target: crate::TARGET,
                         event = %envelope.event,
-                        error = %err,
+                        error = %nest_rs_core::error_message(&err),
                         "failed to serialize reply",
                     );
                     Some(error_frame(
@@ -791,7 +791,7 @@ mod tests {
     #[tokio::test]
     async fn a_connection_hook_runs_under_the_connections_identity() {
         let logs = nest_rs_testing::LogCapture::install();
-        let connection = nest_rs_core::Correlation::mint();
+        let connection = nest_rs_core::Correlation::minted(None);
         let trace_id = connection.trace_id().to_hex();
 
         under_connection(
@@ -855,7 +855,7 @@ mod tests {
     #[tokio::test]
     async fn a_message_over_the_cap_is_refused_to_the_client_and_recorded_for_the_operator() {
         let logs = nest_rs_testing::LogCapture::install();
-        let connection = nest_rs_core::Correlation::mint();
+        let connection = nest_rs_core::Correlation::minted(None);
         let trace_id = connection.trace_id();
 
         let frame = nest_rs_core::with_request_scope(None, connection, async {
@@ -924,7 +924,7 @@ mod tests {
             ambient: None,
             data_pipe: None,
             root_container: None,
-            connection: nest_rs_core::Correlation::mint(),
+            connection: nest_rs_core::Correlation::minted(None),
         }
     }
 

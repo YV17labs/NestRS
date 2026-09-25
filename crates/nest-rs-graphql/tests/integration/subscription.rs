@@ -72,6 +72,15 @@ impl TickResolver {
         })
     }
 
+    /// A synchronous subscription. The method the root publishes is the one
+    /// the expansion emits, and that one is `async`; what the developer writes
+    /// only decides whether it is awaited.
+    #[subscription]
+    #[public]
+    fn counted(&self) -> impl futures_stream::Stream<Item = i32> {
+        futures_stream::iter([1, 2])
+    }
+
     /// A per-argument pipe on a subscription: the wire exposes `label`, the pipe
     /// runs once at subscribe, and the stream carries the transformed value.
     #[subscription]
@@ -154,6 +163,21 @@ async fn a_subscriber_receives_the_items_the_resolver_emits() {
     assert_eq!(second["data"]["ticks"]["seq"], 2, "{second}");
 
     emitted.await.expect("the emitter completes");
+}
+
+/// `fn` and `async fn` are both accepted at every impl half, a subscription
+/// included — the async-ness async-graphql requires is the emitted method's.
+#[tokio::test]
+async fn a_synchronous_subscription_streams_like_an_async_one() {
+    let app = boot().await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("counted", "subscription { counted }");
+
+    let first = socket.next_item("counted").await.expect("the first item");
+    assert_eq!(first["data"]["counted"], 1, "{first}");
+    let second = socket.next_item("counted").await.expect("the second item");
+    assert_eq!(second["data"]["counted"], 2, "{second}");
 }
 
 /// A request-scoped provider is **not** the connection's. The upgrade's

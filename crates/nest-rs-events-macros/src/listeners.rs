@@ -15,15 +15,27 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{ImplItem, ReturnType};
+use syn::ImplItem;
+use syn::ext::IdentExt;
 
-use nest_rs_codegen::{DecoratorPair, Edge, impl_self_ident, payload_arg_type, snake_case};
+use nest_rs_codegen::{
+    DecoratorPair, Edge, await_if_async, cfg_attrs, impl_self_ident, payload_arg_type,
+    returns_unit, snake_case,
+};
 
 /// The listener host keeps its own `#[injectable]`; this names the shape
 /// `#[listeners]` wants rather than reporting syn's `expected impl`.
 const LISTENERS_PAIR: DecoratorPair = DecoratorPair::on_provider("#[listeners]", "#[on_event]");
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
+    let written = TokenStream2::from(input.clone());
+    let expansion = expand(args, input).into();
+    LISTENERS_PAIR
+        .keep_item_on_refusal(written, expansion, &["on_event"], |_| TokenStream2::new())
+        .into()
+}
+
+fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
     // `version` before the blanket refusal: the developer arriving from
     // `#[controller(version = "1")]` asked a real question, and "takes no
@@ -46,7 +58,7 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
     };
-    let provider_name = provider_ident.to_string();
+    let provider_name = provider_ident.unraw().to_string();
     let provider_snake = snake_case(&provider_name);
 
     let mut emissions: Vec<TokenStream2> = Vec::new();
@@ -63,49 +75,50 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
             continue;
         };
 
-        let attr_idx = method
-            .attrs
-            .iter()
-            .position(|attr| attr.path().is_ident("on_event"));
-        let Some(idx) = attr_idx else { continue };
-        let attr = method.attrs.remove(idx);
+        let index = match nest_rs_codegen::one_role_per_method(
+            "listener",
+            &method.attrs,
+            &["on_event"],
+            "",
+        ) {
+            Ok(Some(index)) => index,
+            Ok(None) => continue,
+            Err(err) => return err.to_compile_error().into(),
+        };
+        let attr = method.attrs.remove(index);
+        if let Err(err) = nest_rs_codegen::concrete_signature(method, "#[on_event]") {
+            return err.to_compile_error().into();
+        }
 
         if attr.meta.require_path_only().is_err() {
             return syn::Error::new_spanned(
                 attr,
                 "#[on_event] takes no arguments; the event is read from the method's \
-                 second parameter (e.g. `async fn on_x(&self, event: PointsAwarded)`)",
+                 second parameter (e.g. `fn on_x(&self, event: PointsAwarded)`)",
             )
             .to_compile_error()
             .into();
         }
 
-        if method.sig.asyncness.is_none() {
-            return syn::Error::new_spanned(
-                &method.sig,
-                nest_rs_codegen::must_be_async("#[on_event]"),
-            )
-            .to_compile_error()
-            .into();
-        }
-
-        if !matches!(method.sig.output, ReturnType::Default) {
+        if !returns_unit(&method.sig.output) {
             return syn::Error::new_spanned(
                 &method.sig.output,
-                "#[on_event] methods are fire-and-forget — return `()` and handle errors \
-                 inside the method (push a failed job to the queue, log, etc.)",
+                "#[on_event] methods are fire-and-forget — return `()`, written out or left \
+                 out (an alias of `()` is not read as one), and handle errors inside the \
+                 method (push a failed job to the queue, log, etc.)",
             )
             .to_compile_error()
             .into();
         }
 
-        let event_ty = match payload_arg_type(method, "#[on_event]", "event") {
+        let event_ty = match payload_arg_type(method, "#[on_event]", "event", &provider_ident) {
             Ok(ty) => ty,
             Err(err) => return err.to_compile_error().into(),
         };
 
         let method_ident = method.sig.ident.clone();
-        let method_name = method_ident.to_string();
+        // Un-raw: a label is read, and a generated identifier cannot hold `r#`.
+        let method_name = method_ident.unraw().to_string();
         let qualified_name = format!("{provider_name}::{method_name}");
         let method_snake = snake_case(&method_name);
         let wire_ident =
@@ -113,8 +126,14 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
 
         let declaration = proc_macro2::Literal::usize_unsuffixed(declaration_index);
         declaration_index += 1;
+        let cfgs = cfg_attrs(&method.attrs);
+        let call = await_if_async(
+            &method.sig,
+            quote!(<#self_ty>::#method_ident(&__provider, __event)),
+        );
 
         emissions.push(quote! {
+            #(#cfgs)*
             #[doc(hidden)]
             #[allow(non_snake_case)]
             fn #wire_ident(
@@ -131,11 +150,12 @@ pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
                 __bus.subscribe_named::<#event_ty, _, _>(#qualified_name, move |__event| {
                     let __provider = ::std::sync::Arc::clone(&__provider);
                     async move {
-                        <#self_ty>::#method_ident(&__provider, __event).await
+                        #call
                     }
                 });
             }
 
+            #(#cfgs)*
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_events::ListenerMethod {
                     origin: ::core::module_path!(),

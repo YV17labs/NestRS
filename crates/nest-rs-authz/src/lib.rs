@@ -24,6 +24,7 @@ mod builder;
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 mod chain;
 mod context;
+mod error;
 mod factory;
 // The class-level decision every `#[authorize]`-emitting transport shares.
 //
@@ -55,12 +56,13 @@ mod wire_mask;
 /// feature gate on every denial.
 pub const TARGET: &str = "nest_rs::authz";
 
-pub use ability::{Ability, FieldSet, MalformedRuleError};
+pub use ability::{Ability, FieldSet};
 pub use action::{Action, ActionMarker, Create, Delete, Manage, Read, Update};
 pub use builder::{AbilityBuilder, RuleSpec};
 #[cfg(any(feature = "graphql", feature = "mcp"))]
 pub use chain::run_ability_chain;
 pub use context::{current_ability, with_ability};
+pub use error::{MalformedRuleError, MaskReplyError};
 pub use factory::AbilityFactory;
 #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
 pub use gate::{GateVerdict, gate};
@@ -70,7 +72,7 @@ pub use mask::masked_output_ambient;
 pub use predicate::{Predicate, PredicateBuilder};
 pub use subject::Subject;
 #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-pub use wire_mask::{MaskReplyError, masked_reply};
+pub use wire_mask::masked_reply;
 
 #[cfg(feature = "graphql")]
 pub mod graphql;

@@ -30,11 +30,11 @@ fn catches() -> usize {
 
 #[derive(Debug, thiserror::Error)]
 #[error("domain failure: {0}")]
-pub struct DomainError(pub String);
+pub(crate) struct DomainError(pub String);
 
 #[derive(Debug, thiserror::Error)]
 #[error("infrastructure failure: {0}")]
-pub struct InfraError(pub String);
+pub(crate) struct InfraError(pub String);
 
 /// R12 L-2. Every handler above raises its error by hand
 /// (`poem::Error::new(DomainError(…), status)`), which is the one shape that

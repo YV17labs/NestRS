@@ -31,11 +31,14 @@ impl EphemeralDatabase {
     pub async fn create<M: MigratorTrait>() -> Result<Self> {
         // The admin URL is read before any `App` boots, so load `.env` first.
         load_project_env();
-        let var = nest_rs_config::var_name("seaorm", "URL");
-        let admin_url = std::env::var(&var).map_err(|_| {
+        // Through the reader, so `<PREFIX>_SEAORM__URL_FILE` answers as the app's
+        // own config would.
+        let env = nest_rs_config::ConfigService::for_namespace("seaorm");
+        let admin_url = env.get("URL")?.ok_or_else(|| {
             anyhow!(
-                "{var} is unset and no `.env` was found above the test's working \
-                 directory — point it at a reachable Postgres for e2e"
+                "{} is unset in the environment and the `.env` cascade — point it at a \
+                 reachable Postgres for e2e",
+                env.spellings("URL"),
             )
         })?;
         Self::create_with::<M>(&admin_url).await

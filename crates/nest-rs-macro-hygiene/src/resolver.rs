@@ -75,4 +75,77 @@ impl GreetingResolver {
             text: "Hello, World!".to_owned(),
         })
     }
+
+    /// A synchronous operation is called without an `.await`.
+    #[query]
+    #[public]
+    fn farewell(&self) -> String {
+        "Goodbye!".to_owned()
+    }
+
+    /// An operation compiled out takes its root field and its guard with it.
+    #[cfg(any())]
+    #[query]
+    #[public]
+    #[use_guards(crate::does_not_exist::Guard)]
+    async fn compiled_out(
+        &self,
+        input: crate::does_not_exist::Input,
+    ) -> crate::does_not_exist::Output {
+        crate::does_not_exist::answer(input)
+    }
+
+    /// The same, with the `#[cfg]` inside a `#[cfg_attr]`. async-graphql's
+    /// `#[Object]` reads a plain `#[cfg]` and nothing else, so the condition is
+    /// handed to it already unfolded — otherwise its dispatch names a method
+    /// that is not there.
+    #[cfg_attr(all(), cfg(any()))]
+    #[query]
+    #[public]
+    fn compiled_out_by_cfg_attr(&self) -> crate::does_not_exist::Output {
+        crate::does_not_exist::answer()
+    }
+
+    /// A synchronous subscription: the emitted root method is the async one.
+    #[subscription]
+    #[public]
+    async fn farewells(&self) -> impl Stream<Item = String> {
+        stream::iter(["Goodbye!".to_string()])
+    }
+
+    /// One operation name under conditions that exclude each other: at most one
+    /// is compiled, so the root still has one field of that name.
+    #[cfg(any())]
+    #[query]
+    #[public]
+    fn farewell_elsewhere(&self) -> String {
+        "Goodbye!".to_owned()
+    }
+}
+
+/// The parent a field resolver below hangs off.
+#[derive(SimpleObject)]
+#[graphql(complex, crate = "::nest_rs::graphql::async_graphql")]
+pub struct Parcel {
+    pub id: i32,
+}
+
+#[resolver]
+pub struct ParcelResolver;
+
+#[operations]
+impl ParcelResolver {
+    #[query]
+    #[public]
+    fn parcel(&self) -> Parcel {
+        Parcel { id: 1 }
+    }
+
+    /// A field resolver compiled out through a `#[cfg_attr]` leaves the parent's
+    /// `#[ComplexObject]` without it, for the reason above.
+    #[cfg_attr(all(), cfg(any()))]
+    #[field_resolver]
+    fn gone(&self, parent: &Parcel) -> crate::does_not_exist::Output {
+        crate::does_not_exist::answer(parent)
+    }
 }

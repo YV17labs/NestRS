@@ -38,7 +38,7 @@ impl OpenTelemetry {
     /// endpoint is set, but the tracer is always installed so `trace_id` and
     /// `traceparent` propagation work out of the box.
     pub fn init(service_name: impl Into<String>) -> Result<Self, OpenTelemetryError> {
-        Self::init_with(OpenTelemetryConfig::from_env(service_name))
+        Self::init_with(OpenTelemetryConfig::from_env(service_name)?)
     }
 
     /// Console-only init for tests. Idempotent; first call wins. No flush

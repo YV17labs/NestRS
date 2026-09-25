@@ -6,8 +6,191 @@
 //! `#[public]` and their HTTP-only siblings), so every transport reads them
 //! from one place instead of keeping drifting copies.
 
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
+
+use crate::ungrouped::ungrouped_tokens;
+use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Path, Token};
+
+/// The `#[cfg]` conditions of a decorated method — written plainly, or inside a
+/// `#[cfg_attr]` — for every item its expansion emits beside the method.
+///
+/// An attribute macro on an `impl` block receives its methods before any
+/// `#[cfg]` or `#[cfg_attr]` is evaluated, so a method compiled out still
+/// reaches the expansion — and a handler or an inventory entry emitted for it
+/// without the same condition names a method that no longer exists: a compile
+/// error blamed on the decorator, over code that is correct. Only the conditions
+/// travel. A `#[cfg_attr]` is forwarded holding its `cfg(..)`s and nothing else,
+/// since its other attributes are the method's own; an `#[allow]` governs the
+/// method's body and signature, which an emitted handler neither contains nor
+/// restates.
+pub fn cfg_attrs(attrs: &[Attribute]) -> Vec<TokenStream> {
+    attrs
+        .iter()
+        .filter_map(|attr| {
+            if attr.path().is_ident("cfg") {
+                return Some(quote!(#attr));
+            }
+            if !attr.path().is_ident("cfg_attr") {
+                return None;
+            }
+            let conditions = cfg_attr_conditions(attr.meta.require_list().ok()?.tokens.clone())?;
+            Some(quote!(#[#conditions]))
+        })
+        .collect()
+}
+
+/// A decorated method's attributes as another attribute macro can read them —
+/// every `#[cfg]` inside a `#[cfg_attr]` unfolded into a plain `#[cfg]`, and
+/// everything else as written.
+///
+/// A macro the expansion delegates to — async-graphql's `#[Object]` and
+/// `#[ComplexObject]` — receives the method before rustc evaluates either
+/// attribute, and it reads a plain `#[cfg]` alone: a `#[cfg_attr(p, cfg(x))]`
+/// compiled the method out while the delegate's dispatch still named it.
+///
+/// The unfolding keeps the meaning, which is not `cfg(all(p, x))`: the attribute
+/// applies `cfg(x)` only when `p` holds, so the method is kept when `p` does not
+/// hold *or* `x` does — `cfg(any(not(p), x))`. A nested `cfg_attr` conjoins its
+/// predicate with the enclosing one, and a non-`cfg` attribute inside stays in a
+/// `cfg_attr` of the whole conjunction.
+pub fn delegated_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
+    let mut delegated = Vec::with_capacity(attrs.len());
+    for attr in attrs {
+        let unfolded = attr
+            .path()
+            .is_ident("cfg_attr")
+            .then(|| attr.meta.require_list().ok())
+            .flatten()
+            .and_then(|list| {
+                let mut tokens = Vec::new();
+                unfold_cfg_attr(&[], list.tokens.clone(), &mut tokens).then_some(tokens)
+            })
+            .and_then(|tokens| {
+                tokens
+                    .into_iter()
+                    .map(|tokens| {
+                        syn::parse::Parser::parse2(Attribute::parse_outer, tokens)
+                            .ok()
+                            .and_then(|mut parsed| parsed.pop())
+                    })
+                    .collect::<Option<Vec<_>>>()
+            });
+        match unfolded {
+            Some(unfolded) => delegated.extend(unfolded),
+            None => delegated.push(attr.clone()),
+        }
+    }
+    delegated
+}
+
+/// The attributes one `cfg_attr(predicate, ..)` holds, under every enclosing
+/// predicate in `outer`, pushed onto `into` — `false` when the arguments are not
+/// the attribute's grammar, so the caller keeps it as written.
+fn unfold_cfg_attr(
+    outer: &[TokenStream],
+    arguments: TokenStream,
+    into: &mut Vec<TokenStream>,
+) -> bool {
+    let mut entries = split_at_commas(arguments).into_iter();
+    let Some(predicate) = entries.next().filter(|predicate| !predicate.is_empty()) else {
+        return false;
+    };
+    let mut predicates = outer.to_vec();
+    predicates.push(predicate);
+    let conjunction = quote!(all(#(#predicates),*));
+    for entry in entries {
+        let entry = ungrouped_tokens(entry);
+        if entry.is_empty() {
+            continue;
+        }
+        let mut tokens = entry.clone().into_iter();
+        match (tokens.next(), tokens.next(), tokens.next()) {
+            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), None)
+                if name == "cfg" && group.delimiter() == Delimiter::Parenthesis =>
+            {
+                let condition = group.stream();
+                into.push(quote!(#[cfg(any(not(#conjunction), #condition))]));
+            }
+            (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), None)
+                if name == "cfg_attr" && group.delimiter() == Delimiter::Parenthesis =>
+            {
+                if !unfold_cfg_attr(&predicates, group.stream(), into) {
+                    return false;
+                }
+            }
+            _ => into.push(quote!(#[cfg_attr(#conjunction, #entry)])),
+        }
+    }
+    true
+}
+
+/// An item a decorated method declares — a guard it binds, a dependency it
+/// resolves — under the `#[cfg]` conditions of that method ([`cfg_attrs`]), for a
+/// helper that emits something per item *outside* the method.
+///
+/// A plain `&T` converts with no conditions, so a struct half, whose declarations
+/// cannot be compiled out one by one, passes its list unchanged.
+pub struct Conditional<'a, T> {
+    /// The method's conditions, empty when it has none.
+    pub cfgs: &'a [TokenStream],
+    /// The item it declares.
+    pub item: &'a T,
+}
+
+impl<'a, T> From<&'a T> for Conditional<'a, T> {
+    fn from(item: &'a T) -> Self {
+        Self { cfgs: &[], item }
+    }
+}
+
+/// `cfg_attr(predicate, ..)` holding only the `cfg(..)`s among the attributes in
+/// `arguments` — a nested `cfg_attr` kept for the `cfg(..)`s inside it — or `None`
+/// when it holds none.
+///
+/// Read as tokens split at their top-level commas, never as `Meta`: a predicate is
+/// cfg grammar rather than attribute grammar, and `true` in `cfg_attr(true, ..)`
+/// is no path, so a `Meta` parse dropped the whole attribute.
+fn cfg_attr_conditions(arguments: TokenStream) -> Option<TokenStream> {
+    let mut entries = split_at_commas(arguments).into_iter();
+    let predicate = entries.next().filter(|predicate| !predicate.is_empty())?;
+    let conditions: Vec<TokenStream> = entries
+        .filter_map(|entry| {
+            let entry = ungrouped_tokens(entry);
+            let mut tokens = entry.clone().into_iter();
+            let (Some(TokenTree::Ident(name)), Some(TokenTree::Group(group)), None) =
+                (tokens.next(), tokens.next(), tokens.next())
+            else {
+                return None;
+            };
+            if group.delimiter() != Delimiter::Parenthesis {
+                return None;
+            }
+            if name == "cfg" {
+                Some(entry)
+            } else if name == "cfg_attr" {
+                cfg_attr_conditions(group.stream())
+            } else {
+                None
+            }
+        })
+        .collect();
+    (!conditions.is_empty()).then(|| quote!(cfg_attr(#predicate, #(#conditions),*)))
+}
+
+/// `tokens` split at each comma outside a group.
+fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
+    let mut entries = vec![TokenStream::new()];
+    for token in tokens {
+        if matches!(&token, TokenTree::Punct(punct) if punct.as_char() == ',') {
+            entries.push(TokenStream::new());
+        } else if let Some(entry) = entries.last_mut() {
+            entry.extend([token]);
+        }
+    }
+    entries
+}
 
 /// Extract and remove a flag attribute (no args, no parens) like `#[public]`.
 /// `Ok(true)` when present (and removed), `Ok(false)` when absent.
@@ -150,4 +333,82 @@ pub fn reject_http_only_layers(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    /// A plain `#[cfg]` travels whole, a `#[cfg_attr]` with its `cfg(..)`s alone —
+    /// nested ones included, whatever its predicate — and everything else stays
+    /// with the method.
+    #[test]
+    fn only_the_conditions_travel() {
+        let method: syn::ImplItemFn = parse_quote! {
+            #[doc = "a method"]
+            #[cfg(feature = "x")]
+            #[allow(dead_code)]
+            #[cfg_attr(all(), cfg(any()), must_use)]
+            #[cfg_attr(test, cfg_attr(unix, cfg(not(miri))))]
+            #[cfg_attr(test, allow(unused))]
+            #[cfg_attr(true, cfg(false))]
+            #[cfg_attr(unix, cfg(a), )]
+            async fn run(&self) {}
+        };
+        let forwarded: Vec<String> = cfg_attrs(&method.attrs)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            forwarded,
+            [
+                quote!(#[cfg(feature = "x")]).to_string(),
+                quote!(#[cfg_attr(all(), cfg(any()))]).to_string(),
+                quote!(#[cfg_attr(test, cfg_attr(unix, cfg(not(miri))))]).to_string(),
+                quote!(#[cfg_attr(true, cfg(false))]).to_string(),
+                quote!(#[cfg_attr(unix, cfg(a))]).to_string(),
+            ]
+        );
+    }
+
+    /// A `cfg` inside a `cfg_attr` becomes the plain `cfg` a delegate reads, with
+    /// the attribute's meaning — kept unless the predicate holds and the
+    /// condition does not — and whatever else it held stays conditional.
+    #[test]
+    fn a_cfg_inside_a_cfg_attr_is_unfolded_for_a_delegate() {
+        let method: syn::ImplItemFn = parse_quote! {
+            #[doc = "a method"]
+            #[cfg(feature = "x")]
+            #[cfg_attr(test, cfg(unix), must_use)]
+            #[cfg_attr(a, cfg_attr(b, cfg(c)))]
+            fn run(&self) {}
+        };
+        let delegated: Vec<String> = delegated_attrs(&method.attrs)
+            .iter()
+            .map(|attr| quote!(#attr).to_string())
+            .collect();
+        assert_eq!(
+            delegated,
+            [
+                quote!(#[doc = "a method"]).to_string(),
+                quote!(#[cfg(feature = "x")]).to_string(),
+                quote!(#[cfg(any(not(all(test)), unix))]).to_string(),
+                quote!(#[cfg_attr(all(test), must_use)]).to_string(),
+                quote!(#[cfg(any(not(all(a, b)), c))]).to_string(),
+            ]
+        );
+    }
+
+    /// A `macro_rules!` fragment arrives wrapped in an invisible group, and the
+    /// condition inside travels as a written one does.
+    #[test]
+    fn a_condition_passed_through_a_macro_fragment_travels() {
+        let fragment = proc_macro2::Group::new(Delimiter::None, quote!(cfg(any())));
+        assert_eq!(
+            cfg_attr_conditions(quote!(all(), #fragment)).map(|tokens| tokens.to_string()),
+            Some(quote!(cfg_attr(all(), cfg(any()))).to_string()),
+        );
+    }
 }

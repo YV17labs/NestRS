@@ -20,14 +20,14 @@ mod container {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "rel_container")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
         pub org_id: Uuid,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }
@@ -37,7 +37,7 @@ mod item {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
     #[sea_orm(table_name = "rel_item")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
         pub container_id: Uuid,
@@ -45,7 +45,7 @@ mod item {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {
+    pub(super) enum Relation {
         #[sea_orm(
             belongs_to = "super::container::Entity",
             from = "Column::ContainerId",

@@ -99,7 +99,7 @@ mod tests {
     /// refused to join.
     #[test]
     fn a_restarted_trace_has_no_parent_to_link() {
-        assert_eq!(Correlation::mint().parent_id(), None);
+        assert_eq!(Correlation::minted(None).parent_id(), None);
     }
 
     /// And a continued one does — the caller's span, which is what makes the

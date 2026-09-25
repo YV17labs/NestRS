@@ -211,7 +211,7 @@ mod tests {
             Some(32),
             nest_rs_core::with_request_scope(
                 Some(scope),
-                nest_rs_core::Correlation::mint(),
+                nest_rs_core::Correlation::minted(None),
                 RawBody::from_request(&req, &mut body),
             ),
         )

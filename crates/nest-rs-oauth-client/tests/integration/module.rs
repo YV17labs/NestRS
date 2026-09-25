@@ -4,7 +4,7 @@
 //! `OAuthClientConfig`, and until now nothing in either workspace called it. What a
 //! compile could never show is what actually matters here: the seam queues a
 //! *resolving* factory rather than the struct verbatim, so the pinned base and
-//! the `NESTRS_OAUTH_CLIENT__*` cascade are reconciled during the builder's factory
+//! the `NESTRS_OAUTH__CLIENT__*` cascade are reconciled during the builder's factory
 //! phase — a phase only a boot runs.
 
 use std::sync::Arc;

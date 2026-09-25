@@ -80,10 +80,11 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    PipeWrapper, Posture, PostureRules, force_guard_typeids, forwarded_arg_idents, generic_args,
+    Collision, Conditional, DispatchKeys, HostBorrow, PipeWrapper, Posture, PostureRules,
+    await_if_async, cfg_attrs, force_guard_typeids, forwarded_arg_idents, generic_args,
     guard_capability_bounds, impl_self_ident, layer_deps, normalize_forwarded_args,
     nth_generic_type, pipe_wrapper, reject_http_only_layers, require_str_lit, scoped_specs,
-    snake_case, take_path_list, type_label,
+    shared_receiver, snake_case, take_path_list, type_label,
 };
 
 /// The decorated methods of one authored `impl`, already partitioned by the
@@ -186,10 +187,9 @@ struct Operation {
     force_guards: Vec<Path>,
     posture: Posture,
     pipes: Vec<PipedArg>,
-    /// Attributes the wrapper keeps beside its role attribute (`#[cfg]`,
-    /// `#[allow]`, …) — the doc comment stays on the authored method, where a
-    /// reader of the source looks for it.
-    passthrough: Vec<Attribute>,
+    /// The authored method's `#[cfg]` conditions, which its router group, and so
+    /// its wrapper and its route, are compiled under.
+    cfgs: Vec<TokenStream2>,
 }
 
 impl Operation {
@@ -240,7 +240,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // sentences here named the decorator on the *struct* and gave that back by
     // hand.
     let base = impl_self_ident(&self_ty, "#[tools]")?;
-    let operations = take_operations(&mut item, &base)?;
+    let (operations, declared) = take_operations(&mut item, &base)?;
+    let markers = declared.markers(&self_ty, &item.generics);
     if operations.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.self_ty,
@@ -252,21 +253,30 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let module = format_ident!("__nest_rs_mcp_{}", snake_case(&base.to_string()),);
     let generics = item.generics.split_for_impl();
 
-    let wrappers = |ops: &[Operation]| -> syn::Result<Vec<TokenStream2>> {
-        ops.iter().map(|op| wrapper(&self_ty, op)).collect()
-    };
-    let tools = wrappers(&operations.tools)?;
-    let prompts = wrappers(&operations.prompts)?;
-
-    // `vis = "pub(crate)"` is what carries rmcp's generated router out of this
-    // module, so the boot checks can still read the host's tool names.
+    // `pub(crate)` is what carries the router out of this module, so the boot
+    // checks can still read the host's tool names.
     let tool_impl = router_impl(
         &self_ty,
         &generics,
-        &tools,
-        quote!(tool_router(vis = "pub(crate)")),
-    );
-    let prompt_impl = router_impl(&self_ty, &generics, &prompts, quote!(prompt_router));
+        &operations.tools,
+        &Router {
+            attr: quote!(tool_router),
+            name: format_ident!("tool_router"),
+            ty: quote!(rmcp::handler::server::router::tool::ToolRouter),
+            vis: quote!(pub(crate)),
+        },
+    )?;
+    let prompt_impl = router_impl(
+        &self_ty,
+        &generics,
+        &operations.prompts,
+        &Router {
+            attr: quote!(prompt_router),
+            name: format_ident!("prompt_router"),
+            ty: quote!(rmcp::handler::server::router::prompt::PromptRouter),
+            vis: quote!(),
+        },
+    )?;
 
     let handler_attrs = {
         let tools = (!operations.tools.is_empty()).then(|| quote!(#[tool_handler]));
@@ -274,31 +284,59 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         quote!(#tools #prompts)
     };
 
-    // Capabilities are *derived*, never restated: a router with methods in it is
-    // the proof the surface exists, so a host cannot route tools it forgot to
-    // advertise. A hand-written surface (resources, completion) is declared by
-    // hand in its own `impl ServerHandler`, which is the one shape this does not
-    // generate.
+    // Capabilities are *derived*, never restated: a method in a router is the
+    // proof the surface exists, so a host cannot route tools it forgot to
+    // advertise. Derived from what survives `#[cfg]`, not from what was written:
+    // each operation switches its surface on under its own conditions, so a host
+    // whose every tool is compiled out claims no tools surface. A hand-written
+    // surface (resources, completion) is declared by hand in its own
+    // `impl ServerHandler`, which is the one shape this does not generate.
     let capabilities = {
-        let tools = (!operations.tools.is_empty()).then(|| quote!(.enable_tools()));
-        let prompts = (!operations.prompts.is_empty()).then(|| quote!(.enable_prompts()));
-        quote!(ServerCapabilities::builder() #tools #prompts .build())
+        let surface = |ops: &[Operation], field: TokenStream2| {
+            ops.iter()
+                .map(|op| {
+                    let cfgs = &op.cfgs;
+                    // A `let`, because a condition may sit on a statement of that
+                    // kind and not on an assignment.
+                    quote! {
+                        #(#cfgs)*
+                        let () = __capabilities.#field = ::core::option::Option::Some(
+                            ::core::default::Default::default(),
+                        );
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let tools = surface(&operations.tools, quote!(tools));
+        let prompts = surface(&operations.prompts, quote!(prompts));
+        quote! {{
+            #[allow(unused_mut)]
+            let mut __capabilities = ServerCapabilities::builder().build();
+            #(#tools)*
+            #(#prompts)*
+            __capabilities
+        }}
     };
 
     // Every guard any operation declared, deduped, for `Discoverable::injected`
     // — the struct half reads this back through `DefaultOperationLayers`, so a
     // guard no reachable module provides fails the boot naming it rather than
     // resolving to nothing at the first call.
-    let operation_guards: Vec<&Path> = operations
-        .all()
-        .flat_map(|op| op.guards.iter().chain(op.force_guards.iter()))
-        .collect();
+    let operation_guards = || {
+        operations.all().flat_map(|op| {
+            op.guards
+                .iter()
+                .chain(op.force_guards.iter())
+                .map(|item| Conditional {
+                    cfgs: &op.cfgs,
+                    item,
+                })
+        })
+    };
     // Operation-scope guards run `Guard::check_mcp`, whose default is `Ok(())`.
-    let capability_bounds = guard_capability_bounds(
-        operation_guards.iter().copied(),
-        quote!(::nest_rs_guards::McpGuard),
-    );
-    let layers = layer_deps(operation_guards.iter().copied());
+    let capability_bounds =
+        guard_capability_bounds(operation_guards(), quote!(::nest_rs_guards::McpGuard));
+    let layers = layer_deps(operation_guards());
     let layer_keys = &layers.keys;
     let layer_labels = &layers.labels;
 
@@ -307,6 +345,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #item
 
         #capability_bounds
+
+        #markers
 
         impl #impl_generics #self_ty #ty_generics #where_clause {
             #[doc(hidden)]
@@ -324,7 +364,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // The names rmcp's own expansions resolve against — the import that
             // used to sit in the developer's file, now scoped to generated code.
             use ::nest_rs_mcp::rmcp;
-            use ::nest_rs_mcp::model::{ServerCapabilities, ServerInfo};
+            use ::nest_rs_mcp::{ServerCapabilities, ServerConfig};
             use ::nest_rs_mcp::{
                 ServerHandler, prompt, prompt_handler, prompt_router, tool, tool_handler,
                 tool_router,
@@ -335,31 +375,93 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
             #handler_attrs
             impl #impl_generics ServerHandler for #self_ty #ty_generics #where_clause {
-                fn get_info(&self) -> ServerInfo {
-                    ServerInfo::new(#capabilities)
+                fn get_info(&self) -> ServerConfig {
+                    ServerConfig::new(#capabilities)
                 }
             }
         }
     })
 }
 
-/// One rmcp router impl carrying `methods`, or nothing when the host serves none
+/// One of rmcp's two routers, as `router_impl` emits it.
+struct Router {
+    /// rmcp's attribute that builds a router out of an impl's methods.
+    attr: TokenStream2,
+    /// The router function rmcp's handler attribute reads.
+    name: syn::Ident,
+    /// The router type, as the generated module's `rmcp` import names it.
+    ty: TokenStream2,
+    vis: TokenStream2,
+}
+
+/// The rmcp router carrying `ops`' wrappers, or nothing when the host serves none
 /// of that role.
+///
+/// **One rmcp router impl per set of `#[cfg]` conditions**, merged into the one
+/// router function the handler reads. rmcp's router attribute routes every
+/// method it finds whatever the method's `#[cfg]`, so a compiled-out operation
+/// left the route naming a function that no longer exists. A condition on the
+/// *impl* removes the group's methods and its routes together, before rmcp's
+/// attribute ever runs, and the merge that adds it sits under the same
+/// condition.
 fn router_impl(
     self_ty: &Type,
     (impl_generics, ty_generics, where_clause): &Generics<'_>,
-    methods: &[TokenStream2],
-    router: TokenStream2,
-) -> Option<TokenStream2> {
-    if methods.is_empty() {
-        return None;
+    ops: &[Operation],
+    router: &Router,
+) -> syn::Result<Option<TokenStream2>> {
+    if ops.is_empty() {
+        return Ok(None);
     }
-    Some(quote! {
-        #[#router]
-        impl #impl_generics #self_ty #ty_generics #where_clause {
-            #(#methods)*
+    let mut groups: Vec<(&[TokenStream2], Vec<TokenStream2>)> = Vec::new();
+    for op in ops {
+        let wrapped = wrapper(self_ty, op)?;
+        let own = &op.cfgs;
+        let conditions = quote!(#(#own)*).to_string();
+        match groups
+            .iter_mut()
+            .find(|(cfgs, _)| quote!(#(#cfgs)*).to_string() == conditions)
+        {
+            Some((_, methods)) => methods.push(wrapped),
+            None => groups.push((&op.cfgs, vec![wrapped])),
         }
-    })
+    }
+    let Router {
+        attr,
+        name,
+        ty,
+        vis,
+    } = router;
+    let impls = groups.iter().enumerate().map(|(index, (cfgs, methods))| {
+        // A string, which both of rmcp's router attributes read the name from.
+        let group = LitStr::new(&format!("__nestrs_{name}_{index}"), name.span());
+        quote! {
+            #(#cfgs)*
+            #[#attr(router = #group)]
+            impl #impl_generics #self_ty #ty_generics #where_clause {
+                #(#methods)*
+            }
+        }
+    });
+    let merges = groups.iter().enumerate().map(|(index, (cfgs, _))| {
+        let group = format_ident!("__nestrs_{}_{}", name, index);
+        quote! {
+            #(#cfgs)*
+            __router.merge(Self::#group());
+        }
+    });
+    Ok(Some(quote! {
+        #(#impls)*
+
+        impl #impl_generics #self_ty #ty_generics #where_clause {
+            #vis fn #name() -> #ty<Self> {
+                #[allow(unused_mut)]
+                let mut __router = #ty::<Self>::new();
+                #(#merges)*
+                __router
+            }
+        }
+    }))
 }
 
 /// The three halves of `Generics::split_for_impl`, computed once by `expand` and
@@ -380,7 +482,6 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
         sig,
         posture,
         pipes,
-        passthrough,
         ..
     } = op;
     let name = op.name();
@@ -414,16 +515,14 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     // is the same forwarding list `#[resolver]` builds — from the same helper,
     // which is also where the "binds no name / binds several" diagnostics live.
     let call_args = forwarded_arg_idents(sig)?;
-    let call = if sig.asyncness.is_some() {
-        quote!(<#self_ty>::#name(self, #(#call_args),*).await)
-    } else {
-        quote!(<#self_ty>::#name(self, #(#call_args),*))
-    };
+    let call = await_if_async(sig, quote!(<#self_ty>::#name(self, #(#call_args),*)));
     let body = mask(posture, sig, call)?;
+    // The wrapper awaits its guard chain whatever the authored method is, so it
+    // is `async` even where the method it delegates to is not.
+    wire_sig.asyncness = Some(syn::token::Async(name.span()));
 
     Ok(quote! {
         #role_attr
-        #(#passthrough)*
         #wire_sig {
             #chain
             #gate
@@ -585,39 +684,59 @@ fn result_ok_type(sig: &Signature) -> Option<&Type> {
 /// The attributes are **consumed**: what stays on the re-emitted method is the
 /// developer's own (`#[doc]`, `#[allow]`, …), and nothing the compiler would
 /// reject as unknown.
-fn take_operations(item: &mut ItemImpl, base: &syn::Ident) -> syn::Result<Operations> {
+fn take_operations(
+    item: &mut ItemImpl,
+    base: &syn::Ident,
+) -> syn::Result<(Operations, DispatchKeys)> {
     let mut operations = Operations::default();
+    // Each wire name routes to one method per router: rmcp's router keeps the
+    // last route added under a name, so a second declaration replaced the first
+    // in silence. Refused by the macro when neither carries a `#[cfg]`, by rustc
+    // through the marker when both are compiled.
+    let mut declared = DispatchKeys::new(
+        "#[tools]",
+        "a host routes each tool name, and each prompt name, to one method, so one of the \
+         two would never run — give one a distinct `name`",
+    );
 
     for entry in item.items.iter_mut() {
         let ImplItem::Fn(method) = entry else {
             return Err(unsupported(entry));
         };
-        // **Every role attribute, not the first.** `find_map` took the first and
-        // `take_operation` removed only that one, so a method carrying both
-        // `#[tool]` and `#[prompt]` left the second on the re-emitted item for
-        // rmcp to route as an operation nobody declared. The four sibling
-        // orchestrators all refuse their second by name; this was the silence.
-        let roles: Vec<(usize, Role)> = method
-            .attrs
-            .iter()
-            .enumerate()
-            .filter_map(|(index, attr)| Role::from_attr(attr).map(|role| (index, role)))
-            .collect();
-        if let [(first, _), (second, _), ..] = roles.as_slice() {
-            let declared = [
-                nest_rs_codegen::key_as_written(method.attrs[*first].path()),
-                nest_rs_codegen::key_as_written(method.attrs[*second].path()),
-            ];
-            return Err(syn::Error::new_spanned(
-                &method.attrs[*second],
-                nest_rs_codegen::one_role_per_method("role", &declared, &Role::names()),
-            ));
-        }
-        let Some((index, role)) = roles.into_iter().next() else {
+        // **Every role attribute, not the first**, through the family's helper:
+        // a method carrying both `#[tool]` and `#[prompt]` used to leave the
+        // second on the re-emitted item for rmcp to route as an operation nobody
+        // declared.
+        let Some(index) =
+            nest_rs_codegen::one_role_per_method("role", &method.attrs, &Role::names(), "")?
+        else {
             // Helpers belong beside the struct: left here they would move into
             // the generated module, where a reader would not look for them.
             return Err(unsupported(entry));
         };
+        let Some(role) = Role::from_attr(&method.attrs[index]) else {
+            return Err(unsupported(entry));
+        };
+        shared_receiver(method, "#[tools]", base, HostBorrow::Host)?;
+        nest_rs_codegen::concrete_signature(method, "#[tools]")?;
+
+        let role_attr = &method.attrs[index];
+        let wire_name = match stated_name(role_attr)? {
+            Some(name) => name,
+            None => method.sig.ident.to_string(),
+        };
+        declared.declare(
+            Collision::Marker,
+            role.label(),
+            &wire_name,
+            &format!(
+                "{}(name = {wire_name:?})]",
+                role.attr().trim_end_matches(']')
+            ),
+            &method.sig.ident,
+            &cfg_attrs(&method.attrs),
+            role_attr,
+        )?;
 
         let operation = take_operation(method, index, role, base)?;
         match role {
@@ -626,7 +745,25 @@ fn take_operations(item: &mut ItemImpl, base: &syn::Ident) -> syn::Result<Operat
         }
     }
 
-    Ok(operations)
+    Ok((operations, declared))
+}
+
+/// The `name = "…"` stated inside `#[tool(...)]` / `#[prompt(...)]`, when one is.
+fn stated_name(attr: &Attribute) -> syn::Result<Option<String>> {
+    let Meta::List(_) = &attr.meta else {
+        return Ok(None);
+    };
+    let args = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+    Ok(args.iter().find_map(|meta| match meta {
+        Meta::NameValue(value) if value.path.is_ident("name") => match &value.value {
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(name),
+                ..
+            }) => Some(name.value()),
+            _ => None,
+        },
+        _ => None,
+    }))
 }
 
 /// Everything one decorated method declares, taken off it.
@@ -668,17 +805,11 @@ fn take_operation(
     normalize_forwarded_args(sig.inputs.iter_mut())?;
     let pipes = piped_args(&sig)?;
 
-    // `#[cfg]` and `#[allow]` have to reach the wrapper too — it is a separate
-    // item, and a `#[cfg]`-ed-out operation whose wrapper survived would not
-    // compile. A doc comment stays behind: it is the authored method's prose for
-    // a reader, and the wrapper already carries the model's copy as
-    // `description`.
-    let passthrough: Vec<Attribute> = method
-        .attrs
-        .iter()
-        .filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("allow"))
-        .cloned()
-        .collect();
+    // The method's conditions reach every item emitted for it — its wrapper, its
+    // route, its guards. Nothing else does: a doc comment is the authored
+    // method's prose for a reader (the wrapper carries the model's copy as
+    // `description`), and an `#[allow]` governs a body the wrapper does not hold.
+    let cfgs = cfg_attrs(&method.attrs);
 
     Ok(Operation {
         role,
@@ -689,7 +820,7 @@ fn take_operation(
         force_guards,
         posture,
         pipes,
-        passthrough,
+        cfgs,
     })
 }
 

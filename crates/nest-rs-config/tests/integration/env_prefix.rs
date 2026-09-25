@@ -34,7 +34,7 @@ impl Config for WidgetConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
             port: env.parse("PORT")?.unwrap_or(base.port),
-            label: env.get("LABEL").unwrap_or(base.label),
+            label: env.get("LABEL")?.unwrap_or(base.label),
         })
     }
 }

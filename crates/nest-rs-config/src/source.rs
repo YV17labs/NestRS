@@ -59,9 +59,26 @@ fn env_var_from(name: &str, dotenv: &HashMap<String, String>) -> Option<String> 
 /// be sourced from the cascade (and reading it via [`env_var`] would recurse
 /// into `dotenv_values`, which reads `NESTRS_ENV`).
 pub(crate) fn real_env_var(name: &str) -> Option<String> {
-    match env::var(name) {
+    real_env_var_from(name, env::var(name))
+}
+
+/// Core of [`real_env_var`], with the read supplied — a non-UTF-8 value cannot
+/// be put in the process environment without `unsafe`, so the branch is tested
+/// here. It is the deployment tier's read, the one a pinned config takes, and it
+/// warns exactly as [`env_var`] does: a value the deployment set and the reader
+/// cannot decode is a mistake, never a silent unset.
+fn real_env_var_from(name: &str, read: Result<String, env::VarError>) -> Option<String> {
+    match read {
         Ok(v) if !v.is_empty() => Some(v),
-        _ => None,
+        Ok(_) | Err(env::VarError::NotPresent) => None,
+        Err(env::VarError::NotUnicode(_)) => {
+            tracing::warn!(
+                target: crate::TARGET,
+                name,
+                "environment variable is not valid UTF-8 — treated as unset",
+            );
+            None
+        }
     }
 }
 
@@ -105,6 +122,18 @@ pub trait ConfigSource: Send + Sync + 'static {
     fn get_from_deployment(&self, var: &str) -> Option<String> {
         self.get(var)
     }
+
+    /// Whether the **deployment** names `var` at all — an empty value included,
+    /// which is how a deployment unsets a value a lower tier carries.
+    ///
+    /// Asked for both spellings of a key (`<KEY>` and `<KEY>_FILE`): when either
+    /// answers `true`, the deployment has chosen the spelling, and neither is read
+    /// from a lower tier. Defaults to whether
+    /// [`get_from_deployment`](Self::get_from_deployment) holds a value — a source
+    /// with one tier has nothing lower to shadow.
+    fn in_deployment(&self, var: &str) -> bool {
+        self.get_from_deployment(var).is_some()
+    }
 }
 
 /// Default [`ConfigSource`] — resolves from the real process environment with a
@@ -130,6 +159,12 @@ impl ConfigSource for EnvSource {
     fn get_from_deployment(&self, var: &str) -> Option<String> {
         deployment_env_var(var)
     }
+
+    /// Present in the real process environment, empty included, and not merged
+    /// there from the cascade by `Environment::init`.
+    fn in_deployment(&self, var: &str) -> bool {
+        std::env::var_os(var).is_some() && !crate::dotenv::published_from_cascade(var)
+    }
 }
 
 /// A [`ConfigSource`] backed by an in-memory map — resolves each variable from
@@ -149,8 +184,9 @@ impl ConfigSource for EnvSource {
 /// let port = var_name("app", "PORT");
 /// let source = MapSource::from_iter([(port.as_str(), "8080")]);
 /// let cfg = ConfigService::with_source("app", Arc::new(source));
-/// assert_eq!(cfg.get("PORT").as_deref(), Some("8080"));
-/// assert_eq!(cfg.get("MISSING"), None); // absent ⇒ falls back to in-code defaults
+/// assert_eq!(cfg.get("PORT")?.as_deref(), Some("8080"));
+/// assert_eq!(cfg.get("MISSING")?, None); // absent ⇒ falls back to in-code defaults
+/// # Ok::<(), nest_rs_config::ConfigError>(())
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct MapSource(HashMap<String, String>);
@@ -177,6 +213,34 @@ impl ConfigSource for MapSource {
 #[allow(clippy::result_large_err)]
 mod tests {
     use super::*;
+
+    /// The deployment tier — what a config pinned in code reads — reports a
+    /// value it cannot decode instead of dropping it in silence.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_deployment_variable_is_reported_not_silently_unset() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let read = Err(env::VarError::NotUnicode(std::ffi::OsString::from_vec(
+            vec![0x66, 0xff],
+        )));
+        assert_eq!(real_env_var_from("FIXTURE_DEPLOY__BYTES", read), None);
+        let event = logs
+            .find(
+                crate::TARGET,
+                "environment variable is not valid UTF-8 — treated as unset",
+            )
+            .into_iter()
+            .next()
+            .expect("an undecodable deployment value is reported");
+        assert_eq!(event.level, "warn");
+        assert_eq!(
+            event.field("name").as_deref(),
+            Some("FIXTURE_DEPLOY__BYTES"),
+            "{event:?}"
+        );
+    }
 
     // `env_var` resolves the real env first, then the dotenv map, and mutates
     // nothing. Pin the precedence directly on the pure core so the tests don't

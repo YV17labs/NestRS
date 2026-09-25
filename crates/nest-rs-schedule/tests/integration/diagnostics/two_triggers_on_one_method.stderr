@@ -2,4 +2,4 @@ error: a method declares exactly one trigger — this one declares `#[every]` an
   --> tests/integration/diagnostics/two_triggers_on_one_method.rs:15:5
    |
 15 |     #[cron("0 0 * * * *")]
-   |     ^
+   |     ^^^^^^^^^^^^^^^^^^^^^^

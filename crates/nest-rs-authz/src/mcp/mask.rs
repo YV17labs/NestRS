@@ -183,7 +183,7 @@ where
         detail,
         Some(transport::MCP),
         None,
-        err.map(|e| e as &dyn std::fmt::Display),
+        err.map(|e| e as &(dyn std::error::Error + 'static)),
     );
     denial_to_mcp_error(Denial::internal("response masking failed"))
 }

@@ -129,7 +129,7 @@ impl<F: AbilityFactory> Guard for AbilityGuard<F> {
             Some(Err(err)) => {
                 tracing::error!(
                     target: crate::TARGET,
-                    error = %err,
+                    error = %nest_rs_core::error_message(&err),
                     "ability construction failed — denying the request",
                 );
                 Err(Denial::internal("authorization rules are misconfigured"))
@@ -242,14 +242,14 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "posts")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub published: bool,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -262,14 +262,14 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "comments")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
             pub post_id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {
+        pub(super) enum Relation {
             #[sea_orm(
                 belongs_to = "super::post::Entity",
                 from = "Column::PostId",

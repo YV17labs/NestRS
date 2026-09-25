@@ -190,7 +190,8 @@ where
         // One read, one decision. Resolved twice, the two calls disagree on the
         // path that has to mint — the extensions would carry one id and the
         // inline install another, for the same operation.
-        let correlation = nest_rs_core::current_correlation().unwrap_or_else(Correlation::mint);
+        let correlation =
+            nest_rs_core::current_correlation().unwrap_or_else(|| Correlation::minted(None));
         let captured = self.context.as_ref().map(|context| context.capture(&req));
         // The guard captures for its own `around` the same way — post-`before`,
         // so it sees the ability its chain just attached.

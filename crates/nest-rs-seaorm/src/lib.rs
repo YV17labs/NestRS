@@ -61,11 +61,11 @@ pub mod ws;
 
 pub use config::SeaOrmConfig;
 pub use database::SeaOrmDatabaseModule;
-pub use error::ServiceError;
 #[cfg(feature = "http")]
 pub use error::crud_error;
+pub use error::{CommitError, ServiceError};
 pub use executor::{
-    CommitError, Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
+    Executor, ExecutorScope, FinalizeOutcome, LazyTransaction, current_executor,
     current_executor_scope, with_executor, with_job_executor, with_request_executor,
 };
 pub use module::{SeaOrmModule, SeaOrmSetup, connect_from_env};

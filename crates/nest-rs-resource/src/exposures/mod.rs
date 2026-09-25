@@ -3,5 +3,5 @@
 //! because they all serve the same generated code.
 
 #[cfg(feature = "graphql")]
-pub mod relations;
-pub mod wire;
+pub(crate) mod relations;
+pub(crate) mod wire;

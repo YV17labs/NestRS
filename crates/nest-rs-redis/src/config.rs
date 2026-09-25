@@ -86,7 +86,7 @@ impl Config for RedisConfig {
             None => base.connect_timeout,
         };
         Ok(Self {
-            url: resolve_url(env.get("URL").or(Some(base.url)), Environment::from_env())?,
+            url: resolve_url(env.get("URL")?.or(Some(base.url)), Environment::from_env())?,
             connect_timeout,
         })
     }

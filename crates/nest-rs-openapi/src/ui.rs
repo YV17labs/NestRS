@@ -17,28 +17,28 @@ const SWAGGER_BUNDLE_JS: &[u8] = include_bytes!("../assets/swagger-ui-bundle.js"
 const SWAGGER_PRESET_JS: &[u8] = include_bytes!("../assets/swagger-ui-standalone-preset.js");
 
 #[handler]
-pub fn swagger_index() -> Response {
+pub(crate) fn swagger_index() -> Response {
     Response::builder()
         .content_type("text/html; charset=utf-8")
         .body(INDEX_HTML)
 }
 
 #[handler]
-pub fn swagger_css() -> Response {
+pub(crate) fn swagger_css() -> Response {
     asset("text/css", SWAGGER_CSS)
 }
 
 #[handler]
-pub fn swagger_bundle() -> Response {
+pub(crate) fn swagger_bundle() -> Response {
     asset("application/javascript", SWAGGER_BUNDLE_JS)
 }
 
 #[handler]
-pub fn swagger_preset() -> Response {
+pub(crate) fn swagger_preset() -> Response {
     asset("application/javascript", SWAGGER_PRESET_JS)
 }
 
-pub fn spec_endpoint(spec: String) -> impl Endpoint {
+pub(crate) fn spec_endpoint(spec: String) -> impl Endpoint {
     make_sync(move |_req| {
         Response::builder()
             .content_type("application/json")

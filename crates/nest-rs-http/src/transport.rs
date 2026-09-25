@@ -14,7 +14,7 @@ use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
 use crate::controller::HttpControllerMeta;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::interceptor::HttpEndpointWrap;
-use crate::tls::TlsConfig;
+use crate::tls::HttpTls;
 use crate::versioning::VersionedEndpoint;
 
 type MountFn = Box<dyn Fn(&Container, Route) -> Route + Send + Sync>;
@@ -110,13 +110,13 @@ pub struct HttpTransport {
     bind: String,
     mounts: Vec<NamedMount>,
     cors: Option<Cors>,
-    tls: Option<TlsConfig>,
+    tls: Option<HttpTls>,
     server_header: Option<&'static str>,
     global_prefix: Option<String>,
     max_body_bytes: Option<usize>,
     request_timeout: Option<std::time::Duration>,
     fail_secure_strict: bool,
-    security_headers: crate::SecurityHeadersConfig,
+    security_headers: crate::HttpSecurityHeaders,
     compression: bool,
     version_selector: Option<crate::VersionSelector>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
@@ -213,7 +213,7 @@ impl HttpTransport {
             // mounting unguarded. Opt out via `fail_secure_strict(false)` /
             // `NESTRS_HTTP__FAIL_SECURE_STRICT=false`.
             fail_secure_strict: true,
-            security_headers: crate::SecurityHeadersConfig::default(),
+            security_headers: crate::HttpSecurityHeaders::default(),
             compression: false,
             // `None` is the URI strategy: the version is already in the path a
             // controller mounts at, so there is nothing to resolve per request.
@@ -273,7 +273,7 @@ impl HttpTransport {
     /// Pin the default security-header policy. [`HttpModule`](crate::HttpModule)
     /// passes `HttpConfig.security_headers`; defaults are safe (nosniff +
     /// `X-Frame-Options: DENY` + HSTS under TLS).
-    pub fn security_headers(mut self, cfg: crate::SecurityHeadersConfig) -> Self {
+    pub fn security_headers(mut self, cfg: crate::HttpSecurityHeaders) -> Self {
         self.security_headers = cfg;
         self
     }
@@ -343,9 +343,9 @@ impl HttpTransport {
         self
     }
 
-    /// Serve HTTPS directly from [`TlsConfig`] (poem's `rustls` listener)
+    /// Serve HTTPS directly from [`HttpTls`] (poem's `rustls` listener)
     /// instead of plain HTTP. Without this call the transport stays plaintext.
-    pub fn tls(mut self, tls: TlsConfig) -> Self {
+    pub fn tls(mut self, tls: HttpTls) -> Self {
         self.tls = Some(tls);
         self
     }
@@ -921,8 +921,8 @@ mod tests {
 
     #[test]
     fn tls_pins_the_supplied_config() {
-        // TlsConfig is opaque, so just check the option flips on.
-        let t = HttpTransport::new().tls(TlsConfig::new(b"cert".to_vec(), b"key".to_vec()));
+        // HttpTls is opaque, so just check the option flips on.
+        let t = HttpTransport::new().tls(HttpTls::new(b"cert".to_vec(), b"key".to_vec()));
         assert!(t.tls.is_some());
     }
 

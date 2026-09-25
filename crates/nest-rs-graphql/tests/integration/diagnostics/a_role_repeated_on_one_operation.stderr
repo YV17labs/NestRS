@@ -1,0 +1,5 @@
+error: a method declares exactly one role — this one writes `#[query]` 3 times. Accepted: `#[query]`, `#[mutation]`, `#[subscription]`, `#[entity]` or `#[field_resolver]`. A method that must be two is two methods.
+  --> tests/integration/diagnostics/a_role_repeated_on_one_operation.rs:12:5
+   |
+12 |     #[query]
+   |     ^^^^^^^^

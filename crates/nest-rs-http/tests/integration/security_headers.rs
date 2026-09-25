@@ -14,7 +14,7 @@
 //! *response* would think to look for, because nothing asked for it to be gone.
 
 use nest_rs_core::{Module, module};
-use nest_rs_http::{HttpTransport, SecurityHeadersConfig, controller, routes};
+use nest_rs_http::{HttpSecurityHeaders, HttpTransport, controller, routes};
 use poem::endpoint::BoxEndpoint;
 use poem::test::TestClient;
 
@@ -32,10 +32,10 @@ impl PagesController {
 #[module(providers = [PagesController])]
 struct PagesModule;
 
-/// [`crate::boot`], with a `SecurityHeadersConfig` pinned on the transport
+/// [`crate::boot`], with a `HttpSecurityHeaders` pinned on the transport
 /// rather than resolved from the environment.
 async fn boot_with<M>(
-    headers: SecurityHeadersConfig,
+    headers: HttpSecurityHeaders,
 ) -> TestClient<BoxEndpoint<'static, poem::Response>>
 where
     M: Module + 'static,
@@ -48,7 +48,7 @@ async fn the_default_headers_are_stamped_on_every_response() {
     // The baseline the failure below is a departure from — without it, a run
     // where *no* security header is ever emitted would satisfy the assertions
     // that follow.
-    let client = boot_with::<PagesModule>(SecurityHeadersConfig::default()).await;
+    let client = boot_with::<PagesModule>(HttpSecurityHeaders::default()).await;
     let resp = client.get("/pages").send().await;
     resp.assert_status_is_ok();
     resp.assert_header("x-frame-options", "DENY");
@@ -58,11 +58,11 @@ async fn the_default_headers_are_stamped_on_every_response() {
 #[tokio::test]
 async fn a_header_value_that_cannot_be_built_is_reported_rather_than_dropped() {
     let logs = nest_rs_testing::LogCapture::install();
-    let client = boot_with::<PagesModule>(SecurityHeadersConfig {
+    let client = boot_with::<PagesModule>(HttpSecurityHeaders {
         // A newline: legal in a `String`, refused by `HeaderValue::from_str`,
         // and the shape a value assembled from a template would take.
         frame_options: Some("DENY\nX-Injected: yes".to_owned()),
-        ..SecurityHeadersConfig::default()
+        ..HttpSecurityHeaders::default()
     })
     .await;
 

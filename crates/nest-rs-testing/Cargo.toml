@@ -119,3 +119,11 @@ nest-rs-queue = { path = "../nest-rs-queue" }
 # an HTTP `Json` body needs `JsonSchema` for the OpenAPI document.
 serde.workspace = true
 schemars.workspace = true
+
+# The workspace lints minus `unsafe_code = "forbid"`, which this crate states in
+# its `lib.rs` instead (its tests write the environment).
+[lints.rust]
+unreachable_pub = "warn"
+
+[lints.clippy]
+needless_update = "allow"

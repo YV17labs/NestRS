@@ -64,7 +64,7 @@ use std::sync::Arc;
 use nest_rs_core::{Container, ContainerBuilder, Discovery};
 use nest_rs_http::{HttpBootCheck, HttpEndpointMeta, normalize_mount_path};
 use poem::Route;
-use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo, Tool};
+use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerConfig, Tool};
 
 use crate::composite::{CompositeHandler, common_protocol_versions};
 use crate::endpoint::{McpMount, endpoint};
@@ -518,7 +518,7 @@ fn warn_undeclared_tools(path: &str, hosts: &[ResolvedHost]) {
 ///   of `imports = [..]` order, which is the accident the whole seam removes. A
 ///   name with no version behind it fails there too.
 /// * **Nobody naming it at all is a `warn`**, because the fallback still serves:
-///   a host that does not override `get_info` gets rmcp's `ServerInfo::new`,
+///   a host that does not override `get_info` gets rmcp's `ServerConfig::new`,
 ///   whose `server_info` is the **SDK's own** build identity — so the endpoint
 ///   tells every client it is `rmcp`, at rmcp's version. Compared against that
 ///   same constructor rather than a literal, so the check cannot drift from the
@@ -537,7 +537,7 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
         return Ok(());
     };
 
-    let sdk_default = ServerInfo::new(ServerCapabilities::default()).server_info;
+    let sdk_default = ServerConfig::new(ServerCapabilities::default()).server_info;
     let reported = first.instance.get_info().server_info;
     let names = hosts
         .iter()
@@ -552,7 +552,7 @@ fn check_identity(container: &Container, path: &str, hosts: &[ResolvedHost]) -> 
     // literally true. One message covering both would contradict its own
     // `reports_as` field the moment a host had named itself.
     if reported == sdk_default {
-        // rmcp's `ServerInfo::new` leaves the **SDK's** build identity in place,
+        // rmcp's `ServerConfig::new` leaves the **SDK's** build identity in place,
         // so this endpoint tells every client it is `rmcp`, at rmcp's version.
         tracing::warn!(
             target: crate::TARGET,

@@ -71,7 +71,7 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
             transactional,
         } = args;
 
-        let job_ty = match payload_arg_type(method, "#[process]", "job") {
+        let job_ty = match payload_arg_type(method, "#[process]", "job", &provider_ident) {
             Ok(ty) => ty,
             Err(err) => return err.to_compile_error().into(),
         };

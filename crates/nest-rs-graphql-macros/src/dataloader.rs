@@ -8,7 +8,7 @@ use syn::{
     Type, parse_macro_input,
 };
 
-use nest_rs_codegen::{impl_self_ident, pascal_case};
+use nest_rs_codegen::{cfg_attrs, impl_self_ident, pascal_case};
 
 pub(crate) fn dataloader(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
@@ -41,7 +41,7 @@ fn dataloader_impl(item: ItemImpl) -> TokenStream {
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
-        match dataloader_for_method(&self_ty, &base, &method.sig) {
+        match dataloader_for_method(&self_ty, &base, &method.sig, &cfg_attrs(&method.attrs)) {
             Ok(loader) => loaders.push(loader),
             Err(err) => return err.to_compile_error().into(),
         }
@@ -61,6 +61,7 @@ fn dataloader_for_method(
     self_ty: &Type,
     base: &Ident,
     sig: &Signature,
+    cfgs: &[TokenStream2],
 ) -> syn::Result<TokenStream2> {
     let key_ty = loader_key_type(sig)?;
     let (value_ty, error_ty) = loader_value_and_error(&sig.output)?;
@@ -82,11 +83,11 @@ fn dataloader_for_method(
          through `Repo` (ability-scoped, per request)."
     );
 
-    let call = if sig.asyncness.is_some() {
-        quote! { self.0.#method_name(__keys).await }
-    } else {
-        quote! { self.0.#method_name(__keys) }
-    };
+    // By path, never `self.0.method(..)`: the loader holds its owner in an `Arc`,
+    // and method lookup tries the `Arc` before it derefs, so a trait method of
+    // the same name implemented for `Arc<T>` ran in the batch's place.
+    let call =
+        nest_rs_codegen::await_if_async(sig, quote! { <#self_ty>::#method_name(&*self.0, __keys) });
     let (error_ty, load_body) = match error_ty {
         Some(err) => (quote!(#err), call),
         None => (
@@ -95,16 +96,21 @@ fn dataloader_for_method(
         ),
     };
 
+    // The method's conditions travel to every item emitted for it: a loader for
+    // a method compiled out would name a method that is not there.
     Ok(quote! {
+        #(#cfgs)*
         #[doc = #loader_doc]
         pub struct #loader_name(::std::sync::Arc<#self_ty>);
 
+        #(#cfgs)*
         impl #loader_name {
             fn from_container(container: &::nest_rs_core::Container) -> Self {
                 Self(container.get::<#self_ty>().expect(#missing))
             }
         }
 
+        #(#cfgs)*
         impl ::nest_rs_graphql::async_graphql::dataloader::Loader<#key_ty> for #loader_name {
             type Value = #value_ty;
             type Error = #error_ty;
@@ -120,6 +126,7 @@ fn dataloader_for_method(
             }
         }
 
+        #(#cfgs)*
         ::nest_rs_graphql::inventory::submit! {
             ::nest_rs_graphql::GraphqlLoaderRegistration {
                 owner_type_id: || ::core::any::TypeId::of::<#self_ty>(),

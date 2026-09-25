@@ -59,7 +59,7 @@ fn with_scope_extension(inner: impl IntoEndpoint) -> impl Endpoint {
     poem::endpoint::make(move |req| {
         let inner = Arc::clone(&inner);
         let scope = Arc::new(RequestScope::new(container.clone()));
-        let correlation = nest_rs_core::Correlation::mint();
+        let correlation = nest_rs_core::Correlation::minted(None);
         async move { nest_rs_core::with_request_scope(Some(scope), correlation, inner.call(req)).await }
     })
 }

@@ -58,11 +58,11 @@ pub(crate) mod reason {
     /// No principal at all — the gate's first rung. Only a build with an
     /// in-band edge forms a verdict, and the verdict is what reports this.
     #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-    pub const ANONYMOUS_CALLER: &str = "anonymous_caller";
+    pub(crate) const ANONYMOUS_CALLER: &str = "anonymous_caller";
     /// A principal with no grant on the subject class.
-    pub const NO_CLASS_GRANT: &str = "no_class_grant";
+    pub(crate) const NO_CLASS_GRANT: &str = "no_class_grant";
     /// A principal whose token is too narrow — RFC 6750 §3.1.
-    pub const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
+    pub(crate) const INSUFFICIENT_SCOPE: &str = "insufficient_scope";
     /// Nothing installed an ability, so nothing decided what this caller may
     /// do. A wiring failure rather than a client one, and the reason every
     /// fail-closed exit reports — the guard's per-operation entries, the in-band
@@ -70,7 +70,7 @@ pub(crate) mod reason {
     /// [`mask_reason`](crate::ability::mask_reason) so an incident query on this
     /// one value finds all three.
     #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
-    pub const NO_AMBIENT_ABILITY: &str = crate::ability::mask_reason::NO_AMBIENT_ABILITY;
+    pub(crate) const NO_AMBIENT_ABILITY: &str = crate::ability::mask_reason::NO_AMBIENT_ABILITY;
     /// A field grant stripped a key the answer cannot be delivered without.
     /// The refusal a *mask* makes rather than a gate, and the same decision on
     /// every edge that reaches it — which is why it is one value here and not
@@ -78,7 +78,7 @@ pub(crate) mod reason {
     /// back are the ones that can reach it; HTTP drops the key from the body
     /// and WS from the frame, so neither refuses.
     #[cfg(any(feature = "graphql", feature = "mcp"))]
-    pub const FIELD_NOT_GRANTED: &str = "field_not_granted";
+    pub(crate) const FIELD_NOT_GRANTED: &str = "field_not_granted";
 }
 
 /// The edge a refusal was filed on, spelled once per edge.
@@ -90,16 +90,16 @@ pub(crate) mod reason {
 pub(crate) mod transport {
     /// The HTTP edge — a route's `Authorize<A, E>` shaper.
     #[cfg(feature = "http")]
-    pub const HTTP: &str = "http";
+    pub(crate) const HTTP: &str = "http";
     /// The GraphQL edge — a resolver operation or a federation root field.
     #[cfg(feature = "graphql")]
-    pub const GRAPHQL: &str = "graphql";
+    pub(crate) const GRAPHQL: &str = "graphql";
     /// The WebSocket edge — one message on an established connection.
     #[cfg(feature = "ws")]
-    pub const WS: &str = "ws";
+    pub(crate) const WS: &str = "ws";
     /// The MCP edge — one tool call or prompt fetch.
     #[cfg(feature = "mcp")]
-    pub const MCP: &str = "mcp";
+    pub(crate) const MCP: &str = "mcp";
 }
 
 #[cfg(any(feature = "graphql", feature = "ws", feature = "mcp"))]
@@ -127,7 +127,7 @@ impl GateVerdict {
 /// and stay silent on the rest — and a field added here reaches every site at
 /// once, which is the whole reason the emitter is shared.
 #[derive(Clone, Copy)]
-pub struct Refusal<'a> {
+pub(crate) struct Refusal<'a> {
     /// The edge that refused — a [`transport`] constant.
     pub transport: &'static str,
     /// The edge's own name for the unit of work, where it has one beside the
@@ -152,7 +152,7 @@ pub struct Refusal<'a> {
 
 impl<'a> Refusal<'a> {
     /// A refusal on `transport`, with nothing else stated yet.
-    pub fn on(transport: &'static str) -> Self {
+    pub(crate) fn on(transport: &'static str) -> Self {
         Self {
             transport,
             event: None,
@@ -166,7 +166,7 @@ impl<'a> Refusal<'a> {
 
     /// A refusal by the class gate or the response mask, which always name
     /// what `#[authorize(Action, Entity)]` declared.
-    pub fn of<A: ActionMarker, S: Subject>(transport: &'static str) -> Self {
+    pub(crate) fn of<A: ActionMarker, S: Subject>(transport: &'static str) -> Self {
         Self {
             action: Some(A::ACTION),
             subject: Some(std::any::type_name::<S>()),
@@ -186,7 +186,7 @@ impl<'a> Refusal<'a> {
 /// what having a copy per transport buys, and so is a second *name* for one
 /// decision: a mask's field refusal filed under its own event name is a denial
 /// an incident query by `reason` never returns.
-pub fn warn_denied(refusal: Refusal<'_>) {
+pub(crate) fn warn_denied(refusal: Refusal<'_>) {
     let Refusal {
         transport,
         event,

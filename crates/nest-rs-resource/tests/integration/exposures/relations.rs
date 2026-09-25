@@ -17,7 +17,7 @@ use nest_rs_seaorm::CrudService;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub mod tickets {
+pub(super) mod tickets {
     use super::*;
 
     #[expose(name = "Ticket", service = TicketsService, graphql)]
@@ -27,7 +27,7 @@ pub mod tickets {
         table_name = "tickets",
         model_attrs(derive(PartialEq, Serialize, Deserialize))
     )]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -61,14 +61,14 @@ pub mod tickets {
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    pub struct TicketsService;
+    pub(crate) struct TicketsService;
 
     impl CrudService for TicketsService {
         type Entity = Entity;
     }
 }
 
-pub mod people {
+pub(super) mod people {
     use super::*;
 
     #[expose(name = "Person", service = PeopleService, graphql)]
@@ -78,7 +78,7 @@ pub mod people {
         table_name = "people",
         model_attrs(derive(PartialEq, Serialize, Deserialize))
     )]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -96,7 +96,7 @@ pub mod people {
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    pub struct PeopleService;
+    pub(crate) struct PeopleService;
 
     impl CrudService for PeopleService {
         type Entity = Entity;
@@ -145,7 +145,7 @@ fn a_sole_foreign_key_still_resolves_without_naming_a_column() {
     );
 }
 
-pub mod notes {
+pub(super) mod notes {
     use super::*;
 
     #[expose(name = "Note", service = NotesService, graphql)]
@@ -155,7 +155,7 @@ pub mod notes {
         table_name = "notes",
         model_attrs(derive(PartialEq, Serialize, Deserialize))
     )]
-    pub struct Model {
+    pub(crate) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         #[expose]
         pub id: Uuid,
@@ -170,7 +170,7 @@ pub mod notes {
 
     impl ActiveModelBehavior for ActiveModel {}
 
-    pub struct NotesService;
+    pub(crate) struct NotesService;
 
     impl CrudService for NotesService {
         type Entity = Entity;

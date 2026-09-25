@@ -153,7 +153,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                     Err(err) => tracing::warn!(
                         target: crate::TARGET,
                         path = %dest.display(),
-                        error = %err,
+                        error = %nest_rs_core::error_message(&err),
                         "failed to write GraphQL SDL"
                     ),
                 }

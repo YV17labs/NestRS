@@ -30,7 +30,7 @@ mod post {
 
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Deserialize, Serialize)]
     #[sea_orm(table_name = "federated_probe_posts")]
-    pub struct Model {
+    pub(super) struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: Uuid,
         pub title: String,
@@ -39,7 +39,7 @@ mod post {
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-    pub enum Relation {}
+    pub(super) enum Relation {}
 
     impl ActiveModelBehavior for ActiveModel {}
 }

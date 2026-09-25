@@ -30,7 +30,7 @@ impl Default for DemoConfig {
 impl Config for DemoConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            url: env.get("URL").unwrap_or(base.url),
+            url: env.get("URL")?.unwrap_or(base.url),
             max_connections: env
                 .parse("MAX_CONNECTIONS")?
                 .unwrap_or(base.max_connections),

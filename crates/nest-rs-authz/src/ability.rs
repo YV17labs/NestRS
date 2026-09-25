@@ -29,7 +29,7 @@ pub(crate) fn warn_mask_failure(
     // passes nothing and the field is simply absent.
     transport: Option<&'static str>,
     event: Option<&str>,
-    err: Option<&dyn std::fmt::Display>,
+    err: Option<&(dyn std::error::Error + 'static)>,
 ) {
     // Two arms rather than one, because `tracing` fixes an event's fields at
     // the macro: an absent `error` has to be a different event, and the whole
@@ -43,7 +43,7 @@ pub(crate) fn warn_mask_failure(
             detail,
             transport,
             event,
-            error = %err,
+            error = %nest_rs_core::error_message(err),
             "response masking failed",
         ),
         None => tracing::warn!(
@@ -80,9 +80,9 @@ pub(crate) mod mask_reason {
     /// states. Aliasing the gated one made a feature-less build fail to find
     /// `crate::gate`, and only the scaffold e2e — which compiles a real
     /// generated workspace — could see it.
-    pub const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
+    pub(crate) const NO_AMBIENT_ABILITY: &str = "no_ambient_ability";
     /// The value could not be turned into, or read back from, JSON.
-    pub const NOT_SERIALIZABLE: &str = "not_serializable";
+    pub(crate) const NOT_SERIALIZABLE: &str = "not_serializable";
     /// The wire value and the entity model could not be reconciled, so the
     /// mask had no model to apply.
     ///
@@ -91,48 +91,16 @@ pub(crate) mod mask_reason {
     /// at all is, but saying so with a `cfg` keeps dead-code detection working
     /// for the ones that really would be.
     #[cfg(any(feature = "http", feature = "graphql", feature = "ws", feature = "mcp"))]
-    pub const IRRECONCILABLE: &str = "irreconcilable_wire_value";
+    pub(crate) const IRRECONCILABLE: &str = "irreconcilable_wire_value";
     /// The response carried no content type, so it could not be classified as
     /// maskable at all. HTTP's alone — it is the one edge with a content type
     /// to be missing.
     #[cfg(feature = "http")]
-    pub const UNCLASSIFIED_BODY: &str = "unclassified_body";
+    pub(crate) const UNCLASSIFIED_BODY: &str = "unclassified_body";
     // `field_not_granted` is deliberately **not** here: it is a *gate*'s verdict
     // about a grant, not a mask's failure to run, and
     // `gate::reason::FIELD_NOT_GRANTED` already owns it. A second constant for
     // one value is the drift this module exists to remove.
-}
-
-/// A rule whose relational predicate was malformed — [`PredicateBuilder::related`]
-/// rejected it (a composite key, or a relation not pointing at the declared
-/// related entity) and produced the [`Predicate::Deny`] sentinel. Raised by
-/// [`AbilityBuilder::build`] so the misconfiguration fails **loudly** at ability
-/// construction rather than silently.
-///
-/// Left unchecked this is a security defect on the denial side: a malformed
-/// `cannot(...)` lowers its condition to `1 = 0`, and the query pre-filter
-/// combines a denial as `grant AND NOT(deny)` — so `NOT(1 = 0)` is *true* and
-/// the restriction evaporates (fail-*open*). On the grant side the same
-/// sentinel is fail-closed (deny-all) but still hides a developer error, so
-/// both are surfaced.
-///
-/// [`PredicateBuilder::related`]: crate::predicate::PredicateBuilder::related
-/// [`Predicate::Deny`]: crate::predicate::Predicate::Deny
-/// [`AbilityBuilder::build`]: crate::AbilityBuilder::build
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "malformed authorization rule: the {kind} for `{action:?}` on `{subject}` uses an invalid \
-     relation predicate — the relation is composite-keyed or does not point at the related \
-     entity. Fix the `related(...)` call in your `AbilityFactory`."
-)]
-pub struct MalformedRuleError {
-    /// The action the faulty rule was declared for.
-    pub action: Action,
-    /// Type name of the subject entity the faulty rule scopes.
-    pub subject: &'static str,
-    /// `"grant"` (a `can`) or `"denial"` (a `cannot`) — a denial is the
-    /// fail-open case, a grant merely the silent one.
-    pub kind: &'static str,
 }
 
 /// Which fields of a subject may be read back in the response.
@@ -467,13 +435,13 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
         #[sea_orm(table_name = "widgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -483,13 +451,13 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
         #[sea_orm(table_name = "gadgets")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key)]
             pub id: i32,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }

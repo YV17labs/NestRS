@@ -23,7 +23,9 @@
 use std::collections::HashSet;
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
+
+use crate::attrs::Conditional;
 use syn::Path;
 use syn::spanned::Spanned;
 
@@ -38,18 +40,34 @@ use syn::spanned::Spanned;
 /// at each call site — by rendered path, the same key
 /// [`layer_deps`](crate::layer_deps) uses on this very list a line later — so a
 /// reused guard costs one assertion, not one per binding.
+///
+/// A guard bound on a method compiled out by `#[cfg]` arrives with the method's
+/// conditions ([`Conditional`]) and its assertion is emitted under them — the
+/// guard may not exist in that build. One bound unconditionally anywhere is
+/// asserted once, unconditionally.
 pub fn guard_capability_bounds<'a>(
-    guards: impl IntoIterator<Item = &'a Path>,
+    guards: impl IntoIterator<Item = impl Into<Conditional<'a, Path>>>,
     marker: TokenStream,
 ) -> TokenStream {
+    let guards: Vec<Conditional<'a, Path>> = guards.into_iter().map(Into::into).collect();
+    let unconditional: HashSet<String> = guards
+        .iter()
+        .filter(|entry| entry.cfgs.is_empty())
+        .map(|entry| entry.item.to_token_stream().to_string())
+        .collect();
     let mut seen = HashSet::new();
     let asserts = guards
         .into_iter()
-        .filter(|guard| seen.insert(quote!(#guard).to_string()))
-        .map(|guard| {
+        .filter(|Conditional { cfgs, item }| {
+            let rendered = item.to_token_stream().to_string();
+            (cfgs.is_empty() || !unconditional.contains(&rendered))
+                && seen.insert(format!("{} {rendered}", quote!(#(#cfgs)*)))
+        })
+        .map(|Conditional { cfgs, item: guard }| {
             // Spanned at the guard's own path so the error underlines the name
             // inside `#[use_guards(...)]` rather than the whole item.
             quote::quote_spanned! { guard.span() =>
+                #(#cfgs)*
                 const _: () = {
                     fn __nestrs_assert_guard_capability<T: #marker + ?::core::marker::Sized>() {}
                     let _ = __nestrs_assert_guard_capability::<#guard>;

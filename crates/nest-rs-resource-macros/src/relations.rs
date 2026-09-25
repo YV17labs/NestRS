@@ -67,7 +67,7 @@ use crate::attr::{
 pub(crate) const DEFAULT_HAS_MANY_COMPLEXITY: &str =
     "first.unwrap_or(20).clamp(1, 100) as usize * child_complexity";
 
-pub fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
+pub(crate) fn emit(model: &ResourceModel) -> syn::Result<TokenStream2> {
     let Some(service) = model.service.clone() else {
         if model.has_auto_relations() {
             return Err(syn::Error::new_spanned(

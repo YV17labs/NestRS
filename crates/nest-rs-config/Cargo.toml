@@ -29,6 +29,11 @@ tracing.workspace = true
 # tokens, so it never depends back on this surface crate.
 nest-rs-config-macros.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# `O_NONBLOCK` for `read_material`: opening a FIFO a `_FILE` variable names
+# would otherwise block the boot, and checking the path first races a swap.
+libc.workspace = true
+
 [dev-dependencies]
 # `LogCapture`: the cascade's refusals are `warn`s and nothing else — a skipped
 # line or an unreadable file leaves the value absent, so the event is the only
@@ -43,3 +48,11 @@ trybuild.workspace = true
 # async factory), which is what proves the declared prefix reaches the field —
 # compiling only proves the name was built.
 tokio.workspace = true
+
+# The workspace lints minus `unsafe_code = "forbid"`, which this crate states in
+# its `lib.rs` instead (its tests write the environment).
+[lints.rust]
+unreachable_pub = "warn"
+
+[lints.clippy]
+needless_update = "allow"

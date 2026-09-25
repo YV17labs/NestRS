@@ -23,7 +23,7 @@ use crate::config::OpenApiConfig;
 /// across them is what keeps `warn` at *one event, said once* instead of three
 /// identical lines with nothing to tell them apart.
 #[derive(Default)]
-pub struct Reported {
+pub(crate) struct Reported {
     ids: std::collections::HashSet<String>,
 }
 
@@ -43,7 +43,7 @@ pub struct Reported {
 ///
 /// `reported` is the boot-scoped ledger that keeps each diagnostic to one event
 /// however many documents that boot builds.
-pub fn build_document(
+pub(crate) fn build_document(
     container: &Container,
     config: &OpenApiConfig,
     claims: Option<&str>,

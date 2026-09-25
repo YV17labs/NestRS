@@ -298,3 +298,42 @@ async fn one_authored_impl_feeds_both_routers() {
         "the prompt half of the same block is mounted too: {prompts}",
     );
 }
+
+/// A host whose only tool is compiled out. The attribute macro still reads the
+/// method — `#[cfg]` is evaluated after it — so a capability derived from the
+/// methods *written* claimed a tools surface that no method serves.
+#[mcp(path = "/mcp/impl-witness/prompts-only")]
+#[derive(Clone, Default)]
+struct PromptsOnlyTool;
+
+#[tools]
+impl PromptsOnlyTool {
+    #[cfg(any())]
+    #[tool(description = "Not in this build.")]
+    #[public]
+    async fn compiled_out(&self) -> Result<String, McpError> {
+        Ok(String::new())
+    }
+
+    #[prompt(description = "Draft a greeting.")]
+    #[public]
+    async fn greet(&self) -> Result<GetPromptResult, McpError> {
+        Ok(GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            "hello",
+        )]))
+    }
+}
+
+#[test]
+fn a_capability_whose_every_method_is_compiled_out_is_not_advertised() {
+    let capabilities = nest_rs_mcp::ServerHandler::get_info(&PromptsOnlyTool).capabilities;
+    assert!(
+        capabilities.tools.is_none(),
+        "no `#[tool]` survives `#[cfg]`, so nothing claims the tools surface",
+    );
+    assert!(
+        capabilities.prompts.is_some(),
+        "…while the `#[prompt]` that does survive still advertises its own",
+    );
+}

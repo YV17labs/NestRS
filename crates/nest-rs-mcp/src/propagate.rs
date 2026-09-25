@@ -65,7 +65,7 @@ use rmcp::model::{
     ListResourcesResult, ListToolsRequestMethod, ListToolsResult, PaginatedRequestParams,
     PingRequestMethod, ProgressNotificationMethod, ProgressNotificationParam, ProtocolVersion,
     ReadResourceRequestMethod, ReadResourceRequestParams, ReadResourceResponse, Reference,
-    RootsListChangedNotificationMethod, ServerInfo, SetLevelRequestMethod, SetLevelRequestParams,
+    RootsListChangedNotificationMethod, ServerConfig, SetLevelRequestMethod, SetLevelRequestParams,
     SubscribeRequestMethod, SubscribeRequestParams, SubscriptionFilter,
     SubscriptionsListenRequestMethod, Tool, UnsubscribeRequestMethod, UnsubscribeRequestParams,
     UpdateTaskMethod, UpdateTaskParams,
@@ -508,7 +508,7 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
         self.inner.supported_protocol_versions()
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         self.inner.get_info()
     }
 
@@ -553,7 +553,7 @@ mod tests {
                 request.protocol_version, THE_CALLER_ASKS_FOR,
                 "the wrapper substituted a request of its own",
             );
-            let mut negotiated = ServerInfo::default();
+            let mut negotiated = ServerConfig::default();
             negotiated.protocol_version = THE_HOST_ANSWERS_WITH;
             Ok(negotiated)
         }

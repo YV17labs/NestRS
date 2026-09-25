@@ -15,8 +15,8 @@ categories = ["authentication", "web-programming"]
 # `OAuthClient` is provided through the factory phase; `OAuthClientModule` is the
 # `DynamicModule` that queues it.
 nest-rs-core.workspace = true
-# `OAuthClientModule` owns `OAuthClientConfig` (namespace `oauth_client`), loaded from
-# `NESTRS_OAUTH_CLIENT__*`; `validator` backs this crate's own `Validate` impls.
+# `OAuthClientModule` owns `OAuthClientConfig` (namespace `oauth__client`), loaded from
+# `NESTRS_OAUTH__CLIENT__*`; `validator` backs this crate's own `Validate` impls.
 nest-rs-config.workspace = true
 validator.workspace = true
 # `AuthError` is the framework's authentication failure, and the CSRF/PKCE

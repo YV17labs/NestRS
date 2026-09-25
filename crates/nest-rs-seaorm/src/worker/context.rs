@@ -110,7 +110,7 @@ impl JobContext for WorkerDbContext {
                         tracing::error!(
                             target: crate::TARGET,
                             transport = TRANSPORT,
-                            error = %err,
+                            error = %nest_rs_core::error_message(&err),
                             retryable,
                             "job transaction commit failed",
                         );

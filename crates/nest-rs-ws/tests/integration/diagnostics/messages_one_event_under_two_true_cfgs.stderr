@@ -1,0 +1,8 @@
+error[E0592]: duplicate definitions with name `__nestrs_messages_dispatches_event_ping_to_one_method`
+  --> tests/integration/diagnostics/messages_one_event_under_two_true_cfgs.rs:42:7
+   |
+36 |     #[subscribe_message("ping")]
+   |       ----------------- other definition for `__nestrs_messages_dispatches_event_ping_to_one_method`
+...
+42 |     #[subscribe_message("ping")]
+   |       ^^^^^^^^^^^^^^^^^ duplicate definitions for `__nestrs_messages_dispatches_event_ping_to_one_method`

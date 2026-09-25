@@ -11,7 +11,7 @@ use nest_rs_codegen::{
     injected_names_method, optional_dependencies_method, parse_provider_host,
 };
 
-pub fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
+pub(crate) fn injectable(args: TokenStream, input: TokenStream) -> TokenStream {
     let scope = match parse_injectable_scope(args.into()) {
         Ok(s) => s,
         Err(err) => return err.to_compile_error().into(),

@@ -107,7 +107,7 @@ fn rank_per_parent<E: EntityTrait>(
 /// `(items, has_more)` from a `limit + 1` cursor fetch. Truncates `items` to
 /// `limit` when an extra row was returned. The pure-data half of `Repo::page`,
 /// extracted so its boundary behaviour is unit-testable without a DB.
-pub fn split_overfetched<M>(mut items: Vec<M>, limit: u64) -> (Vec<M>, bool) {
+pub(crate) fn split_overfetched<M>(mut items: Vec<M>, limit: u64) -> (Vec<M>, bool) {
     let has_more = items.len() as u64 > limit;
     items.truncate(limit as usize);
     (items, has_more)
@@ -337,14 +337,14 @@ mod tests {
 
         #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
         #[sea_orm(table_name = "child")]
-        pub struct Model {
+        pub(super) struct Model {
             #[sea_orm(primary_key, auto_increment = false)]
             pub id: Uuid,
             pub parent_id: Uuid,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }
@@ -357,7 +357,7 @@ mod tests {
         use sea_orm::entity::prelude::*;
 
         #[derive(Copy, Clone, Default, Debug, DeriveEntity)]
-        pub struct Entity;
+        pub(super) struct Entity;
 
         impl EntityName for Entity {
             fn table_name(&self) -> &'static str {
@@ -366,12 +366,12 @@ mod tests {
         }
 
         #[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel)]
-        pub struct Model {
+        pub(super) struct Model {
             pub label: String,
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
-        pub enum Column {
+        pub(super) enum Column {
             Label,
         }
 
@@ -387,7 +387,7 @@ mod tests {
 
         /// The whole point: no variants, so `PrimaryKey::iter()` is empty.
         #[derive(Copy, Clone, Debug, EnumIter)]
-        pub enum PrimaryKey {}
+        pub(super) enum PrimaryKey {}
 
         impl sea_orm::Iden for PrimaryKey {
             fn unquoted(&self) -> &str {
@@ -422,7 +422,7 @@ mod tests {
         }
 
         #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-        pub enum Relation {}
+        pub(super) enum Relation {}
 
         impl ActiveModelBehavior for ActiveModel {}
     }

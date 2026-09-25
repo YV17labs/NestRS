@@ -22,8 +22,6 @@
 //! `404` a client can act on — those exist to be *read*, and they already carry
 //! a wire-safe message. Return them directly; `ProblemDetails` is how.
 
-use std::fmt::Display;
-
 use nest_rs_core::OPAQUE_CLIENT_MESSAGE;
 use poem::Error;
 
@@ -31,7 +29,8 @@ use crate::problem::ProblemDetails;
 
 /// Turn a failure the client must not read into one it may.
 ///
-/// Implemented for every `Result` whose error is printable, so it covers a
+/// Implemented for every `Result` whose error converts into a boxed error, so
+/// the whole cause chain reaches the operator's line. It covers a
 /// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
 /// any of them having to know HTTP exists.
 ///
@@ -43,12 +42,16 @@ pub trait Opaque<T> {
     fn opaque(self) -> Result<T, Error>;
 }
 
-impl<T, E: Display> Opaque<T> for Result<T, E> {
+impl<T, E> Opaque<T> for Result<T, E>
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
     fn opaque(self) -> Result<T, Error> {
         self.map_err(|err| {
+            let err: Box<dyn std::error::Error + Send + Sync> = err.into();
             tracing::error!(
                 target: crate::target::HTTP,
-                error = %err,
+                error = %nest_rs_core::error_message(&*err),
                 "request failed",
             );
             // A `ProblemDetails`, not a bare 500: the response shape a client
@@ -65,10 +68,15 @@ mod tests {
     use poem::error::ResponseError;
     use poem::http::StatusCode;
 
+    use std::fmt::Display;
+
     use super::*;
 
     /// An error whose `Display` carries exactly what must not ship.
+    #[derive(Debug)]
     struct Leaky;
+
+    impl std::error::Error for Leaky {}
 
     impl Display for Leaky {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

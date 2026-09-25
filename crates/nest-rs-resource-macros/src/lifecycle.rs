@@ -10,7 +10,7 @@ use crate::attr::ResourceModel;
 // `parse` (attr.rs) has already validated that the conventional `deleted_at` /
 // `created_at` / `updated_at` columns exist and have the right shape, so the
 // emitters here rely on those fixed names rather than re-discovering them.
-pub fn emit(model: &ResourceModel) -> TokenStream2 {
+pub(crate) fn emit(model: &ResourceModel) -> TokenStream2 {
     let mut blocks = Vec::new();
     if model.soft_delete {
         blocks.push(emit_soft_deletable());

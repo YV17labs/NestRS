@@ -3,45 +3,54 @@
 use nest_rs_config::{Config, ConfigService, config};
 
 // No `Debug`: `client_secret` must not leak through a derived format.
-/// Env-driven OAuth2 provider endpoints (namespace `oauth_client`). Every URL/credential
+/// Env-driven OAuth2 provider endpoints (namespace `oauth__client`). Every URL/credential
 /// field is required (`length(min = 1)`), so an unconfigured app fails boot
 /// loudly rather than running a broken flow. No `Debug`: `client_secret` must
 /// not leak through a format.
-#[config(namespace = "oauth_client")]
+#[config(namespace = "oauth__client")]
 #[derive(Clone, Default)]
 pub struct OAuthClientConfig {
     /// The registered OAuth2 client id.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "not_blank"))]
     pub client_id: String,
     /// The registered OAuth2 client secret.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "not_blank"))]
     pub client_secret: String,
     /// Provider authorization endpoint (where the user is redirected to consent).
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "not_blank"))]
     pub auth_url: String,
     /// Provider token endpoint (where the auth code is exchanged for tokens).
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "not_blank"))]
     pub token_url: String,
     /// This app's callback URL the provider redirects back to.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "not_blank"))]
     pub redirect_url: String,
     /// Provider userinfo endpoint used to fetch the caller's profile.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "not_blank"))]
     pub userinfo_url: String,
     /// Scopes requested at authorization; empty by default.
     pub scopes: Vec<String>,
 }
 
+/// A required value holding only whitespace configures nothing, exactly like an
+/// empty one, and is refused the same way.
+fn not_blank(value: &str) -> Result<(), validator::ValidationError> {
+    if value.trim().is_empty() {
+        return Err(validator::ValidationError::new("blank"));
+    }
+    Ok(())
+}
+
 impl Config for OAuthClientConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            client_id: env.get("CLIENT_ID").unwrap_or(base.client_id),
-            client_secret: env.get("CLIENT_SECRET").unwrap_or(base.client_secret),
-            auth_url: env.get("AUTH_URL").unwrap_or(base.auth_url),
-            token_url: env.get("TOKEN_URL").unwrap_or(base.token_url),
-            redirect_url: env.get("REDIRECT_URL").unwrap_or(base.redirect_url),
-            userinfo_url: env.get("USERINFO_URL").unwrap_or(base.userinfo_url),
-            scopes: env.list("SCOPES", base.scopes),
+            client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
+            client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
+            auth_url: env.get("AUTH_URL")?.unwrap_or(base.auth_url),
+            token_url: env.get("TOKEN_URL")?.unwrap_or(base.token_url),
+            redirect_url: env.get("REDIRECT_URL")?.unwrap_or(base.redirect_url),
+            userinfo_url: env.get("USERINFO_URL")?.unwrap_or(base.userinfo_url),
+            scopes: env.list("SCOPES", base.scopes)?,
         })
     }
 }
@@ -112,6 +121,30 @@ mod tests {
             assert!(
                 err.field_errors().contains_key(field),
                 "blanking {field} did not trip validation: {err:?}",
+            );
+        }
+    }
+
+    /// Whitespace is not a credential or a URL: each required field holding
+    /// only whitespace fails validation naming that field, like an empty one.
+    #[test]
+    fn a_whitespace_only_required_field_is_refused_like_an_empty_one() {
+        type Setter = fn(&mut OAuthClientConfig);
+        let setters: [(Setter, &str); 6] = [
+            (|c| c.client_id = "  ".into(), "client_id"),
+            (|c| c.client_secret = "\t".into(), "client_secret"),
+            (|c| c.auth_url = " ".into(), "auth_url"),
+            (|c| c.token_url = " ".into(), "token_url"),
+            (|c| c.redirect_url = "\n".into(), "redirect_url"),
+            (|c| c.userinfo_url = " ".into(), "userinfo_url"),
+        ];
+        for (mutate, field) in setters {
+            let mut cfg = complete();
+            mutate(&mut cfg);
+            let err = cfg.validate().expect_err("blank is refused");
+            assert!(
+                err.field_errors().contains_key(field),
+                "a blank {field} did not trip validation: {err:?}",
             );
         }
     }

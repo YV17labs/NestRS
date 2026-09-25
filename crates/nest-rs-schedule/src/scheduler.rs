@@ -310,7 +310,7 @@ async fn fire(id: JobId, task: Task, container: &Container, ctx: &Option<Arc<dyn
     // That is the whole of what makes a scheduled job's events attributable: a
     // job that enqueues work seals this id into the payload, so the worker that
     // picks it up files under the tick that caused it.
-    let correlation = nest_rs_core::Correlation::mint();
+    let correlation = nest_rs_core::Correlation::minted(None);
     let span = nest_rs_core::operation_span!(
         target: crate::TARGET,
         // No caller and no wire: the clock is not a producer.

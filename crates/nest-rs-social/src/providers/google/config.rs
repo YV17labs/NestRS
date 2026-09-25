@@ -9,13 +9,13 @@ use crate::registry::SocialProviderConfig;
 #[derive(Clone, Default)]
 pub struct GoogleSocialConfig {
     /// The Google OAuth client id.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub client_id: String,
     /// The Google OAuth client secret.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub client_secret: String,
     /// The registered redirect URL the callback returns to.
-    #[validate(length(min = 1))]
+    #[validate(length(min = 1), custom(function = "crate::providers::not_blank"))]
     pub redirect_url: String,
     /// Defaults to `openid email profile` when unset.
     pub scopes: Vec<String>,
@@ -54,10 +54,10 @@ impl GoogleSocialConfig {
 impl Config for GoogleSocialConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            client_id: env.get("CLIENT_ID").unwrap_or(base.client_id),
-            client_secret: env.get("CLIENT_SECRET").unwrap_or(base.client_secret),
-            redirect_url: env.get("REDIRECT_URL").unwrap_or(base.redirect_url),
-            scopes: env.list("SCOPES", base.scopes),
+            client_id: env.get("CLIENT_ID")?.unwrap_or(base.client_id),
+            client_secret: env.get("CLIENT_SECRET")?.unwrap_or(base.client_secret),
+            redirect_url: env.get("REDIRECT_URL")?.unwrap_or(base.redirect_url),
+            scopes: env.list("SCOPES", base.scopes)?,
         })
     }
 }
@@ -87,5 +87,32 @@ mod tests {
             vec!["openid".to_string(), "email".into(), "profile".into()],
         );
         assert_eq!(cfg.oauth2_config().auth_url, GoogleSocialConfig::AUTH_URL);
+    }
+
+    /// A credential holding only whitespace is configured, not absent — so the
+    /// provider is not inert — and it fails validation naming the field, as a
+    /// partial set does.
+    #[test]
+    fn whitespace_only_credentials_are_refused_like_a_partial_set() {
+        use validator::Validate;
+
+        type Setter = fn(&mut GoogleSocialConfig);
+        let setters: [(Setter, &str); 3] = [
+            (|c| c.client_id = "  ".into(), "client_id"),
+            (|c| c.client_secret = "\t".into(), "client_secret"),
+            (|c| c.redirect_url = "\n".into(), "redirect_url"),
+        ];
+        for (mutate, field) in setters {
+            let mut cfg = GoogleSocialConfig {
+                client_id: "id".into(),
+                client_secret: "secret".into(),
+                redirect_url: "https://app.example/social/google/callback".into(),
+                scopes: vec![],
+            };
+            mutate(&mut cfg);
+            assert!(!cfg.is_unconfigured(), "{field}: blank is not unconfigured");
+            let err = cfg.validate().expect_err("blank is refused");
+            assert!(err.field_errors().contains_key(field), "{field}: {err:?}");
+        }
     }
 }

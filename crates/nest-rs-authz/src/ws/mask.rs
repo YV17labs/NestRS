@@ -122,7 +122,7 @@ where
         detail,
         Some(transport::WS),
         Some(event),
-        err.map(|e| e as &dyn std::fmt::Display),
+        err.map(|e| e as &(dyn std::error::Error + 'static)),
     );
     denial_to_ws_error(Denial::internal("response masking failed"))
 }

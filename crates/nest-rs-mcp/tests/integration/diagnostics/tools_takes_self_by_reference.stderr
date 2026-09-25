@@ -1,0 +1,5 @@
+error: a `#[tools]` method borrows its host — `&self` — and this one takes no receiver: a host is one instance shared by every call, and each method is lent a shared borrow of it
+  --> tests/integration/diagnostics/tools_takes_self_by_reference.rs:13:5
+   |
+13 |     async fn run() -> Result<String, nest_rs_mcp::McpError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

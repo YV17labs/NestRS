@@ -340,7 +340,9 @@ mod tests {
 
         // No `#[tokio::test]`: this is the teardown case, where there may be no
         // runtime left to reach a task-local through.
-        drop(SubscriptionLine::new(nest_rs_core::Correlation::mint()));
+        drop(SubscriptionLine::new(nest_rs_core::Correlation::minted(
+            None,
+        )));
 
         let served = logs.find(
             nest_rs_core::operation_log::TARGET,
@@ -364,7 +366,7 @@ mod tests {
     #[tokio::test]
     async fn the_subscription_line_fires_once_inside_a_runtime() {
         let logs = nest_rs_testing::LogCapture::install();
-        let correlation = nest_rs_core::Correlation::mint();
+        let correlation = nest_rs_core::Correlation::minted(None);
 
         nest_rs_core::with_request_scope(None, correlation.clone(), async {
             let _line = SubscriptionLine::new(correlation);
@@ -427,7 +429,7 @@ mod tests {
     /// against the trace the client already has from its upgrade.
     #[tokio::test]
     async fn a_socket_runs_in_the_upgrades_trace() {
-        let upgrade = Correlation::mint();
+        let upgrade = Correlation::minted(None);
         let captured =
             nest_rs_core::with_request_scope(None, upgrade.clone(), async { socket_correlation() })
                 .await;
@@ -439,7 +441,7 @@ mod tests {
     /// upgrade's guard resolved is the only answer there will ever be.
     #[tokio::test]
     async fn a_socket_runs_under_the_upgrades_actor() {
-        let captured = nest_rs_core::with_request_scope(None, Correlation::mint(), async {
+        let captured = nest_rs_core::with_request_scope(None, Correlation::minted(None), async {
             nest_rs_core::set_actor_id("alice-42");
             socket_correlation()
         })

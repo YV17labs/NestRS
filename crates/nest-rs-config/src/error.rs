@@ -38,11 +38,11 @@ pub enum ConfigError {
     },
     /// Two config types read one environment variable.
     ///
-    /// `<PREFIX>_<DOMAIN>__<KEY>` is a flat, process-global name space, and
-    /// several types sharing a `<DOMAIN>` is deliberate — `nest-rs-authn`'s JWT,
-    /// OAuth and oauth-resource configs are all `authn`, because a domain is
-    /// the operator's word for a subsystem rather than one struct's identity.
-    /// What may not be shared is a **variable**: two types reading one name means
+    /// `<PREFIX>_<DOMAIN>__<KEY>` is a flat, process-global name space, and a
+    /// namespace is read off the declaring file's path, so two types may well
+    /// meet under one prefix — a registry and the members it discovers, a
+    /// config and a sub-struct it delegates to. What may not be shared is a
+    /// **variable**: two types reading one name means
     /// a deployment setting it configures whichever happens to read it, both
     /// silently, and what the operator sees is "the value I set did nothing".
     ///
@@ -64,6 +64,19 @@ pub enum ConfigError {
         owner: &'static str,
         /// The type that claimed it second.
         claimant: &'static str,
+    },
+    /// A `<KEY>_FILE` variable names a file that could not be read.
+    ///
+    /// The variable's value is never carried: an operator who pastes key
+    /// material where a path belongs would otherwise see it printed, and no
+    /// test of the value's shape tells a path from a headerless base64 key.
+    #[error("could not read the file named by {var}")]
+    File {
+        /// The `<PREFIX>_<DOMAIN>__<KEY>_FILE` variable naming the file.
+        var: String,
+        /// Why reading it failed.
+        #[source]
+        source: std::io::Error,
     },
 }
 

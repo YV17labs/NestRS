@@ -14,7 +14,7 @@ categories = ["authentication", "web-programming"]
 [dependencies]
 nest-rs-core.workspace = true
 # `ProtectedResourceModule` owns `ProtectedResourceConfig` (namespace
-# `oauth_resource`), loaded from `NESTRS_OAUTH_RESOURCE__*`. The `#[config]`
+# `oauth__resource`), loaded from `NESTRS_OAUTH__RESOURCE__*`. The `#[config]`
 # derive routes through `nest_rs_config::validator`, so no `validator` here.
 nest-rs-config.workspace = true
 # The document is served by a `#[controller]`, and the challenge is an
@@ -41,8 +41,10 @@ tracing.workspace = true
 nest-rs-testing = { path = "../nest-rs-testing" }
 # `mcp` brings `GlobalPoolMcpGuard`, the fallback that folds the global guard
 # pool in-band on `/mcp`. Without it a `use_guards_global` denial never reaches
-# the MCP endpoint and the step-up parity test silently proves nothing.
-nest-rs-guards = { path = "../nest-rs-guards", features = ["mcp"] }
+# the MCP endpoint and the step-up parity test silently proves nothing. `ws`
+# brings `GuardAsWsMessageCheck`, which the test gateway's `#[messages]` expands
+# to; without it `cargo nextest run -p nest-rs-oauth-resource` does not compile.
+nest-rs-guards = { path = "../nest-rs-guards", features = ["mcp", "ws"] }
 # The challenge is attached once at the transport edge; these prove it reaches
 # an MCP client and a WS client, not only an HTTP one.
 nest-rs-mcp = { path = "../nest-rs-mcp" }

@@ -11,6 +11,7 @@ mod fail_secure;
 mod global_prefix;
 mod header;
 mod input;
+mod opaque;
 mod response_body;
 mod route_decorators;
 mod security_headers;
@@ -41,7 +42,7 @@ where
 /// The same boot, on a transport the caller has already configured by hand.
 ///
 /// Half this suite pins one builder call — a body cap, a compression mode, a
-/// global prefix, a `SecurityHeadersConfig` — and every one of them had copied
+/// global prefix, a `HttpSecurityHeaders` — and every one of them had copied
 /// the six lines around it, `expect` strings included. The transport is the only
 /// thing that ever differed, so it is the only thing a caller passes.
 pub(crate) async fn boot_on<M>(

@@ -125,11 +125,20 @@ it is created.
 
 ## CI is NOT the gate
 
-`.github/workflows/` holds only `publish.yml` (tag `v*.*.*` →
-`cargo workspaces publish`) and `docs-pages.yml` (docs lint + deploy).
+`.github/workflows/` holds `publish.yml` (tag `v*.*.*` →
+`cargo workspaces publish`), `docs-pages.yml` (docs lint + deploy) and
+`security-watch.yml` (daily, and on a lockfile change on `main`:
+cargo-audit over the three lockfiles with warnings denied, plus a build
+on the Rust beta toolchain; a failure opens or updates one issue).
 **No CI runs clippy/fmt/nextest.** The *Definition of done* in
 `CLAUDE.md` is enforced locally, by you, every time — never assume CI
 will catch what you skipped.
+
+The watch is a **monitor, not a gate**: nothing waits on it and it is
+never a required check. It exists because the local loop cannot notice
+an advisory published while nobody touches the repo — RUSTSEC-2026-0285
+sat in all three lockfiles for eleven days. Every advisory it accepts is
+argued in `.cargo/audit.toml`, one reason per ignore.
 
 ## Release
 

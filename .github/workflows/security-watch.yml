@@ -1,0 +1,148 @@
+# Scheduled advisory watch — a monitor, never a gate.
+#
+# The Definition of done runs locally (see `.claude/rules/manifests-ci.md`,
+# "CI is NOT the gate"), so nothing here blocks a merge or a release. What the
+# local loop cannot do is notice the world changing while nobody touches the
+# repo: RUSTSEC-2026-0285 (rustls) was published on 2026-09-14 and sat in all
+# three lockfiles for eleven days. This workflow is the part that notices.
+#
+# Two watches, one signal:
+#   * `audit` — cargo-audit over every lockfile the repo owns (the framework's,
+#     the demo's, the benchmark SUT's), warnings denied, so an `unsound` or
+#     `unmaintained` advisory fails too. Every accepted advisory is argued in
+#     `.cargo/audit.toml`, which cargo-audit reads from the repo root.
+#   * `future-incompat` — the framework built on the Rust *beta* toolchain.
+#     apalis-redis 0.7.4 carries a never-type-fallback lint that rustc says will
+#     become a hard error "in a future release in all editions"; beta runs six
+#     weeks ahead of stable, so a failure here is the notice before the break.
+#
+# A failure opens one issue, or comments on it while it stays open, so the
+# signal outlives the Actions tab. `GITHUB_TOKEN` is scoped to that one write.
+
+name: Security — advisory watch
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '**/Cargo.lock'
+      - '.cargo/audit.toml'
+      - '.github/workflows/security-watch.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-watch
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97'
+
+      # Keyed on the tool's version so only a version change pays the compile.
+      - name: Cache cargo-audit binary
+        id: cache-cargo-audit
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-0.22.2-${{ runner.os }}
+
+      - name: Install cargo-audit
+        if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit every lockfile the repo owns
+        run: |
+          status=0
+          for lock in Cargo.lock demo/Cargo.lock bench/sut/nestrs/Cargo.lock; do
+            echo "::group::$lock"
+            if cargo audit --file "$lock" --deny warnings; then
+              echo "- \`$lock\`: clean" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`$lock\`: **advisories found**" >> "$GITHUB_STEP_SUMMARY"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $status
+
+  future-incompat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust beta toolchain
+        uses: dtolnay/rust-toolchain@beta
+
+      # .cargo/config.toml selects mold on Linux; without it the link fails.
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-beta-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-beta-
+
+      # The toolchain file pins 1.97 for local work; this job is the one place
+      # that deliberately builds ahead of it.
+      - name: Build the framework on beta
+        run: cargo +beta check --workspace --all-targets
+
+      - name: Report future incompatibilities
+        run: cargo +beta report future-incompatibilities || echo "no future-incompatibility report"
+
+  report:
+    needs: [audit, future-incompat]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the watch issue
+        uses: actions/github-script@v9
+        env:
+          AUDIT: ${{ needs.audit.result }}
+          FUTURE_INCOMPAT: ${{ needs.future-incompat.result }}
+        with:
+          script: |
+            const title = 'Security watch: a scheduled check failed';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Run: ${run}`,
+              '',
+              `- advisory audit (three lockfiles): **${process.env.AUDIT}**`,
+              `- beta build (future-incompat lints): **${process.env.FUTURE_INCOMPAT}**`,
+              '',
+              'An audit failure means a lockfile resolves a crate with an advisory that `.cargo/audit.toml` does not argue away: update the crate, or add an ignore with the reason it is unreachable. A beta failure means the next stable will not build the framework.',
+            ].join('\n');
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'open', per_page: 100,
+            });
+            const existing = open.find((issue) => issue.title === title && !issue.pull_request);
+            if (existing) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body });
+            }

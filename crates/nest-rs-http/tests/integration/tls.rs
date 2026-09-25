@@ -80,9 +80,16 @@ impl Drop for Material {
 /// A client that trusts the fixture CA and resolves both test names to the
 /// bound port, so the *only* reason a request can fail is the certificate the
 /// server presents.
+///
+/// The CA is the client's *only* root, verified by rustls itself. Merged into
+/// the platform's store instead, macOS applies Apple's policy for server
+/// certificates on top — the fixture leaves are valid for twenty years, past
+/// its 825-day ceiling — and the handshake fails there for a reason unrelated
+/// to the swap under test. The suite asserts which certificate is served, not
+/// what one operating system accepts.
 fn client(host: &str, port: u16) -> reqwest::Client {
     reqwest::Client::builder()
-        .add_root_certificate(reqwest::Certificate::from_pem(CA).expect("fixture CA parses"))
+        .tls_certs_only([reqwest::Certificate::from_pem(CA).expect("fixture CA parses")])
         .resolve(host, ([127, 0, 0, 1], port).into())
         .build()
         .expect("client builds")

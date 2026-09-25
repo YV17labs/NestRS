@@ -51,7 +51,7 @@ It is therefore a `#[query]` in every respect that matters:
 | Argument pipes | run — `Valid<T>` / `Piped<P, T>` on the key arguments |
 | Response mask | runs — the entity is masked against the caller's ability like any other row |
 
-Six things it refuses that a `#[query]` does not, each a named compile error:
+Five things it refuses that a `#[query]` does not, each a named compile error:
 
 - a **`Result` return** is required — the guard chain is only emitted where a
   denial has somewhere to go, and a chain compiled out here is invisible in the
@@ -65,8 +65,10 @@ Six things it refuses that a `#[query]` does not, each a named compile error:
   *first* one on a method, and the decorator has to emit `#[graphql(entity)]`
   there, so yours would silently take its place and the method would quietly stop
   being an entity resolver;
-- the method must be **`async`**;
 - and it must take **at least one argument**, since the arguments are the key.
+
+The method itself may be a plain `fn` or an `async fn`: the resolver
+async-graphql awaits is the one the decorator emits, which is always `async`.
 
 Two more are decided at **boot**, because only the built schema holds the
 fact. An `#[entity]` whose resolved type carries no `@key` — a list, a

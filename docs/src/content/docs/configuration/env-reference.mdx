@@ -20,12 +20,21 @@ neighbours in `module.rs`.
 with that prefix instead — `ACME_HTTP__PORT`, `ACME_LOG` — and the `NESTRS_`
 spellings resolve nothing.
 
+**Every namespaced variable can also be given as a file.**
+`NESTRS_<NAMESPACE>__<KEY>_FILE` names a file whose content is the value — the
+form a mounted secret takes, [read the same way for every key](/configuration/#configservice-api).
+The tables below name the `_FILE` spelling only where a key is usually given
+that way.
+
 **The namespace is the path of the crate that parses it — never chosen.** It is
 the same stem the config type is named from: the crate's word, then the
 binding folder's when the config sits in one, joined by `__`. `HttpConfig` reads
 `NESTRS_HTTP__*`; `SeaOrmConfig` reads `NESTRS_SEAORM__*`; `RedisWorkerConfig`
 (in `nest-rs-redis`'s `worker/` folder) reads `NESTRS_REDIS__WORKER__*`;
-`SocialGithubConfig` reads `NESTRS_SOCIAL__GITHUB__*`. So from any variable on
+`GithubSocialConfig` reads `NESTRS_SOCIAL__GITHUB__*`. A crate in a family puts
+the family first: `OAuthClientConfig`, in `nest-rs-oauth-client`, reads
+`NESTRS_OAUTH__CLIENT__*` — the same string as its path,
+`nest_rs::oauth::client`. So from any variable on
 this page you can name the type and the file that parse it, and from any
 `<X>Module::for_root` in a composition root you can name its variables: the
 vendor is in the variable exactly when it is in the type. That is also why there

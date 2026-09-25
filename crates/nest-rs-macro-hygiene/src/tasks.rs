@@ -37,4 +37,17 @@ impl HygieneTasks {
     async fn heartbeat(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }
+
+    /// A synchronous tick is called without an `.await`.
+    #[every("30s")]
+    fn sweep(&self) -> nest_rs::core::anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// A tick compiled out takes its schedule entry with it.
+    #[cfg(any())]
+    #[every("1m")]
+    async fn compiled_out(&self) -> crate::does_not_exist::Answer {
+        crate::does_not_exist::tick()
+    }
 }

@@ -2,7 +2,7 @@
 //! methods, finds those tagged with `#[cron(...)]` / `#[every("...")]` /
 //! `#[after("...")]`, strips the attribute, and submits one
 //! `ScheduledMethod` per method to the link-time inventory. The methods stay
-//! on the impl block unchanged so they remain regular `async fn` callable
+//! on the impl block unchanged so they remain regular methods callable
 //! from anywhere.
 //!
 //! Discoverable is NOT emitted here — the provider's own `#[injectable]` owns
@@ -12,13 +12,15 @@
 use std::str::FromStr;
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, TRANSACTIONAL, duplicate_argument, impl_self_ident,
-    job_argument_needs_a_value, job_transaction, require_str_lit, transactional_value,
-    unknown_argument,
+    DecoratorPair, Edge, HostBorrow, TRANSACTIONAL, await_if_async, cfg_attrs, duplicate_argument,
+    duration_millis, impl_self_ident, job_argument_needs_a_value, job_argument_refused,
+    job_returns_a_result, job_transaction, require_str_lit, returns_unit, shared_receiver,
+    transactional_value, unknown_argument,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -30,6 +32,14 @@ const SCHEDULED_PAIR: DecoratorPair =
     DecoratorPair::on_provider("#[scheduled]", "#[every] / #[cron] / #[after]");
 
 pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
+    let written = TokenStream2::from(input.clone());
+    let expansion = expand(args, input).into();
+    SCHEDULED_PAIR
+        .keep_item_on_refusal(written, expansion, &TRIGGER_ATTRS, |_| TokenStream2::new())
+        .into()
+}
+
+fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     if let Err(err) = reject_args(args) {
         return err.to_compile_error().into();
     }
@@ -39,12 +49,14 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = item.self_ty.clone();
-    let provider_name = match impl_self_ident(&self_ty, "#[scheduled]") {
-        Ok(ident) => ident.to_string(),
+    let provider = match impl_self_ident(&self_ty, "#[scheduled]") {
+        Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
     };
+    let provider_name = provider.unraw().to_string();
 
     let mut submissions: Vec<TokenStream2> = Vec::new();
+    let mut refusals: Option<syn::Error> = None;
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
@@ -63,16 +75,48 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
         };
         let trigger_attr = method.attrs.remove(index);
 
-        let (trigger_tokens, transactional) = match parse_trigger(&trigger_attr) {
+        // The trigger as written is the attribute the reader looks at, so it is
+        // the one the shape refusals name — as `#[on_event]`'s name `#[on_event]`.
+        let key = nest_rs_codegen::key_as_written(trigger_attr.path());
+        let written = format!("#[{key}]");
+        if let Err(err) = shared_receiver(method, &written, &provider, HostBorrow::Arc) {
+            return err.to_compile_error().into();
+        }
+        if let Err(err) = nest_rs_codegen::concrete_signature(method, &written) {
+            return err.to_compile_error().into();
+        }
+        // The expansion hands the method's answer to the scheduler, which reads
+        // `Ok` and `Err`; a `()` would surface as a type mismatch inside it.
+        if returns_unit(&method.sig.output) {
+            return syn::Error::new_spanned(&method.sig, job_returns_a_result(&key))
+                .to_compile_error()
+                .into();
+        }
+
+        // Every method's keys are read before the first refusal is returned, so
+        // a host with several wrong triggers learns about all of them at once.
+        let ParsedTrigger {
+            trigger: trigger_tokens,
+            transactional,
+        } = match parse_trigger(&trigger_attr) {
             Ok(parsed) => parsed,
-            Err(err) => return err.to_compile_error().into(),
+            Err(err) => {
+                match &mut refusals {
+                    Some(refusals) => refusals.combine(err),
+                    None => refusals = Some(err),
+                }
+                continue;
+            }
         };
         let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_schedule));
 
         let method_ident = method.sig.ident.clone();
-        let method_name = method_ident.to_string();
+        let method_name = method_ident.unraw().to_string();
+        let cfgs = cfg_attrs(&method.attrs);
+        let call = await_if_async(&method.sig, quote!(<#self_ty>::#method_ident(&__provider)));
 
         submissions.push(quote! {
+            #(#cfgs)*
             ::nest_rs_core::inventory::submit! {
                 ::nest_rs_schedule::ScheduledMethod {
                     origin: ::core::module_path!(),
@@ -88,13 +132,16 @@ pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
                                 "` is not registered — add it to a reachable module's \
                                  `providers = [...]`",
                             ));
-                        <#self_ty>::#method_ident(&__provider).await
+                        #call
                     }),
                 }
             }
         });
     }
 
+    if let Some(refusals) = refusals {
+        return refusals.to_compile_error().into();
+    }
     let host_check = SCHEDULED_PAIR.provider_host_check(&self_ty);
     let out = quote! {
         #item
@@ -115,16 +162,33 @@ fn reject_args(args: TokenStream) -> syn::Result<()> {
     SCHEDULED_PAIR.reject_args(&args, "the provider's scope is declared by")
 }
 
-/// The closed trigger vocabulary, read by the one-role refusal.
+/// The closed trigger vocabulary, read by the one-role helper both to find a
+/// method's trigger and to list what is accepted — so the set a method is
+/// checked against and the set it is told about cannot disagree.
 const TRIGGER_ATTRS: [&str; 3] = ["cron", "every", "after"];
 
-/// The trigger tokens, plus whatever the shared `transactional` key said.
+/// What a trigger attribute declared: the trigger itself, and the shared keys a
+/// trigger may carry after its own argument.
+struct ParsedTrigger {
+    trigger: TokenStream2,
+    /// The shared `transactional` key, `None` when unwritten.
+    transactional: Option<bool>,
+}
+
+/// The keys a trigger wrote after its own argument.
+struct TrailingKeys {
+    transactional: Option<bool>,
+    /// The one key the trigger itself owns — `tz`, on `#[cron]`.
+    owned: Option<MetaNameValue>,
+}
+
+/// The trigger tokens, plus whatever the shared keys said.
 ///
-/// All three triggers take the key in the same place — after the trigger's own
-/// argument, as a named value — so `#[every("30s", transactional = false)]`,
+/// All three triggers take their keys in the same place — after the trigger's
+/// own argument, as named values — so `#[every("30s", transactional = false)]`,
 /// `#[after(..)]` and `#[cron(.., tz = .., transactional = false)]` are one
 /// grammar rather than three that happen to spell a word alike.
-fn parse_trigger(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> {
+fn parse_trigger(attr: &Attribute) -> syn::Result<ParsedTrigger> {
     let key = attr
         .path()
         .get_ident()
@@ -132,31 +196,37 @@ fn parse_trigger(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> 
         .unwrap_or_default();
     match key.as_str() {
         "every" => {
-            let (lit, transactional) = parse_period(attr, &key)?;
-            let ms = period_millis(&lit)?;
-            Ok((
-                quote! {
+            let (period, keys) = parse_period(attr, &key)?;
+            let ms = duration_millis(&key, None, &period)?;
+            Ok(ParsedTrigger {
+                trigger: quote! {
                     ::nest_rs_schedule::Trigger::Interval(
                         ::std::time::Duration::from_millis(#ms)
                     )
                 },
-                transactional,
-            ))
+                transactional: keys.transactional,
+            })
         }
         "after" => {
-            let (lit, transactional) = parse_period(attr, &key)?;
-            let ms = period_millis(&lit)?;
-            Ok((
-                quote! {
+            let (period, keys) = parse_period(attr, &key)?;
+            let ms = duration_millis(&key, None, &period)?;
+            Ok(ParsedTrigger {
+                trigger: quote! {
                     ::nest_rs_schedule::Trigger::Timeout(
                         ::std::time::Duration::from_millis(#ms)
                     )
                 },
-                transactional,
-            ))
+                transactional: keys.transactional,
+            })
         }
-        "cron" => parse_cron(attr),
-        _ => unreachable!("is_trigger_attr filtered the attribute set"),
+        "cron" => {
+            let (trigger, keys) = parse_cron(attr)?;
+            Ok(ParsedTrigger {
+                trigger,
+                transactional: keys.transactional,
+            })
+        }
+        _ => unreachable!("one_role_per_method matched a trigger attribute"),
     }
 }
 
@@ -171,26 +241,32 @@ fn list_tokens(attr: &Attribute, expects: String) -> syn::Result<TokenStream2> {
         .clone())
 }
 
-/// `#[every("30s")]` / `#[after("10s")]`, with the optional shared key after it.
-fn parse_period(attr: &Attribute, key: &str) -> syn::Result<(LitStr, Option<bool>)> {
+/// `#[every("30s")]` / `#[after("10s")]`, with the optional shared keys after it.
+///
+/// The period is read as any expression and judged by the duration grammar, so
+/// `#[every(30)]` gets the grammar's sentence rather than syn's bare "expected
+/// string literal".
+fn parse_period(attr: &Attribute, key: &str) -> syn::Result<(Expr, TrailingKeys)> {
     let tokens = list_tokens(
         attr,
         format!(
             "#[{key}] expects `#[{key}(\"30s\")]`, optionally followed by `{TRANSACTIONAL} = false`"
         ),
     )?;
-    let parser = |stream: syn::parse::ParseStream<'_>| -> syn::Result<(LitStr, Option<bool>)> {
-        let lit: LitStr = stream.parse()?;
-        let (transactional, _) = parse_trailing_keys(stream, key, None)?;
-        Ok((lit, transactional))
+    let parser = |stream: syn::parse::ParseStream<'_>| -> syn::Result<(Expr, TrailingKeys)> {
+        let period: Expr = stream.parse()?;
+        let keys = parse_trailing_keys(stream, key, None)?;
+        Ok((period, keys))
     };
     parser.parse2(tokens)
 }
 
 /// The named keys a trigger accepts after its own argument: the shared
-/// `transactional`, plus the one key the trigger itself may own (`tz`, on
-/// `#[cron]`). Returns both, so the one "unknown key" sentence is worded here
-/// and lists exactly what this trigger takes.
+/// `transactional` plus the one key the trigger itself may own (`tz`, on
+/// `#[cron]`). A key another member of the job family takes and this trigger
+/// cannot — `retries` on any — is refused through `job_argument_refused`, naming
+/// why. Returned together, so the one "unknown key" sentence is worded here and
+/// lists exactly what this trigger takes.
 ///
 /// **A repeated key is refused, not last-write-wins.** `#[cron("…", tz = "A",
 /// tz = "B")]` has no reading a developer could have meant, and accepting it
@@ -200,16 +276,18 @@ fn parse_trailing_keys(
     stream: syn::parse::ParseStream<'_>,
     key: &str,
     extra: Option<&str>,
-) -> syn::Result<(Option<bool>, Option<MetaNameValue>)> {
-    let mut transactional: Option<bool> = None;
-    let mut owned: Option<MetaNameValue> = None;
+) -> syn::Result<TrailingKeys> {
+    let mut keys = TrailingKeys {
+        transactional: None,
+        owned: None,
+    };
     if !stream.peek(Token![,]) {
-        return Ok((transactional, owned));
+        return Ok(keys);
     }
     stream.parse::<Token![,]>()?;
     // Allow a trailing comma.
     if stream.is_empty() {
-        return Ok((transactional, owned));
+        return Ok(keys);
     }
     // `Meta`, not `MetaNameValue`: a bare `transactional` is a legal `Meta::Path`
     // and reaches the loop, where it earns a sentence naming the key. Parsed as
@@ -220,6 +298,12 @@ fn parse_trailing_keys(
     for meta in metas {
         let path = meta.path().clone();
         let name = nest_rs_codegen::key_as_written(&path);
+        // Before the unknown-key check, and whatever the value: a key another
+        // member of the job family takes is not misspelled here, it is
+        // meaningless, and the family's sentence says why.
+        if let Some(refusal) = job_argument_refused(key, &name) {
+            return Err(syn::Error::new_spanned(&path, refusal));
+        }
         let known = name == TRANSACTIONAL || extra == Some(name.as_str());
         if !known {
             let mut accepted = Vec::new();
@@ -239,9 +323,9 @@ fn parse_trailing_keys(
             ));
         };
         let taken = if name == TRANSACTIONAL {
-            transactional.is_some()
+            keys.transactional.is_some()
         } else {
-            owned.is_some()
+            keys.owned.is_some()
         };
         if taken {
             return Err(syn::Error::new_spanned(
@@ -250,15 +334,15 @@ fn parse_trailing_keys(
             ));
         }
         if name == TRANSACTIONAL {
-            transactional = Some(transactional_value(&meta.value)?);
+            keys.transactional = Some(transactional_value(&meta.value)?);
         } else {
-            owned = Some(meta);
+            keys.owned = Some(meta);
         }
     }
-    Ok((transactional, owned))
+    Ok(keys)
 }
 
-fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> {
+fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, TrailingKeys)> {
     let tokens = list_tokens(
         attr,
         format!(
@@ -269,18 +353,20 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> {
     )?;
 
     let parser =
-        |stream: syn::parse::ParseStream<'_>| -> syn::Result<(Expr, Option<LitStr>, Option<bool>)> {
+        |stream: syn::parse::ParseStream<'_>| -> syn::Result<(Expr, Option<LitStr>, TrailingKeys)> {
             let expr: Expr = stream.parse()?;
-            let (transactional, tz) = parse_trailing_keys(stream, "cron", Some("tz"))?;
-            let tz = tz
+            let mut keys = parse_trailing_keys(stream, "cron", Some("tz"))?;
+            let tz = keys
+                .owned
+                .take()
                 .map(|meta| require_str_lit(&meta.value, "cron", "tz", "Europe/Paris"))
                 .transpose()?;
             if let Some(name) = &tz {
                 validate_timezone_literal(name)?;
             }
-            Ok((expr, tz, transactional))
+            Ok((expr, tz, keys))
         };
-    let (expr, tz, transactional) = parser.parse2(tokens)?;
+    let (expr, tz, keys) = parser.parse2(tokens)?;
 
     // Literal cron expressions validate now; `CronExpression::X` paths wait
     // for boot (the `Scheduler::configure` call).
@@ -298,7 +384,7 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, Option<bool>)> {
         quote! {
             ::nest_rs_schedule::Trigger::Cron { expr: #expr, tz: #tz_tokens }
         },
-        transactional,
+        keys,
     ))
 }
 
@@ -334,40 +420,6 @@ fn validate_cron_literal(s: &LitStr) -> syn::Result<()> {
         .map_err(|e| syn::Error::new(s.span(), format!("invalid cron expression: {e}")))
 }
 
-fn period_millis(lit: &LitStr) -> syn::Result<u64> {
-    let raw = lit.value();
-    let s = raw.trim();
-    let bad = || {
-        syn::Error::new(
-            lit.span(),
-            "duration must be a positive number with an `ms`, `s`, `m`, or `h` suffix \
-             (e.g. \"500ms\", \"30s\", \"5m\", \"1h\")",
-        )
-    };
-    // `ms` before `s` so "500ms" is not mis-read as "500m".
-    let (number, multiplier) = if let Some(n) = s.strip_suffix("ms") {
-        (n, 1u64)
-    } else if let Some(n) = s.strip_suffix('s') {
-        (n, 1_000)
-    } else if let Some(n) = s.strip_suffix('m') {
-        (n, 60_000)
-    } else if let Some(n) = s.strip_suffix('h') {
-        (n, 3_600_000)
-    } else {
-        return Err(bad());
-    };
-    let value: u64 = number.trim().parse().map_err(|_| bad())?;
-    if value == 0 {
-        return Err(syn::Error::new(
-            lit.span(),
-            "duration must be greater than zero",
-        ));
-    }
-    value
-        .checked_mul(multiplier)
-        .ok_or_else(|| syn::Error::new(lit.span(), "duration overflows u64 milliseconds"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,19 +442,5 @@ mod tests {
             err.to_string().contains("invalid cron expression"),
             "error names the problem, got: {err}",
         );
-    }
-
-    #[test]
-    fn period_millis_parses_each_suffix() {
-        assert_eq!(period_millis(&lit("500ms")).unwrap(), 500);
-        assert_eq!(period_millis(&lit("30s")).unwrap(), 30_000);
-        assert_eq!(period_millis(&lit("5m")).unwrap(), 300_000);
-        assert_eq!(period_millis(&lit("1h")).unwrap(), 3_600_000);
-    }
-
-    #[test]
-    fn period_millis_rejects_zero_and_missing_suffix() {
-        assert!(period_millis(&lit("0s")).is_err());
-        assert!(period_millis(&lit("10")).is_err());
     }
 }

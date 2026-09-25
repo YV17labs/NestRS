@@ -1,0 +1,5 @@
+error: #[every] takes a duration literal: a whole number above zero with an `ms`, `s`, `m` or `h` suffix, at most `u64::MAX` milliseconds (e.g. "500ms", "30s", "5m", "1h")
+  --> tests/integration/diagnostics/every_duration_is_not_a_literal.rs:14:13
+   |
+14 |     #[every(30)]
+   |             ^^

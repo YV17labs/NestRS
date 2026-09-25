@@ -20,9 +20,14 @@ mod scheduled;
 ///   an IANA timezone (default UTC):
 ///   `#[cron("0 9 * * MON", tz = "Europe/Paris")]`.
 ///
-/// A `cron` string literal is validated at compile time; a preset path and
-/// any timezone are validated when `Scheduler` configures, naming the
-/// offending job.
+/// A trigger's method borrows its host (`&self`, or `self: &Arc<Self>`) and
+/// takes nothing else, declares no type or const parameter, and returns
+/// `anyhow::Result<()>`, whose `Err` fails the occurrence. It may be `async` or
+/// not; only an `async` one is awaited.
+///
+/// A `cron` string literal and a `tz` name are validated at compile time; a
+/// preset path is validated when `Scheduler` configures, naming the offending
+/// job.
 ///
 /// Multiple decorated methods on the same `#[scheduled]` impl block all
 /// share the provider's `#[inject]` dependencies — pooling related cron
@@ -43,6 +48,7 @@ mod scheduled;
 ///         provider: "ReportTasks", method: "nightly",
 ///         provider_type_id: || TypeId::of::<ReportTasks>(),
 ///         trigger: ::nest_rs_schedule::Trigger::Cron { expr, tz }, // or Interval / Timeout
+///         transaction: ::nest_rs_schedule::nest_rs_worker::JobTransaction::PerAttempt,
 ///         run: |c| Box::pin(async move { /* resolve + call */ }),
 ///     }
 /// }

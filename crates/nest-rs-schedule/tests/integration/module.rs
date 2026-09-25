@@ -14,10 +14,10 @@ use tokio::time::{Duration, sleep};
 
 static HITS: AtomicUsize = AtomicUsize::new(0);
 
-pub struct Counter(pub AtomicUsize);
+pub(crate) struct Counter(pub AtomicUsize);
 
 #[injectable]
-pub struct Tasks {
+pub(crate) struct Tasks {
     #[inject]
     counter: Arc<Counter>,
 }
@@ -99,7 +99,7 @@ macro_rules! declare_scheduled_settlement {
     ($settle:expr) => {
         #[injectable]
         #[derive(Default)]
-        pub struct FragmentTasks;
+        pub(crate) struct FragmentTasks;
 
         #[scheduled]
         impl FragmentTasks {
@@ -129,4 +129,70 @@ fn a_transactional_fragment_is_read_the_same_wherever_the_key_sits() {
         "both fragment-declared triggers registered, and both read the fragment \
          as the `false` it was — not as the `PerAttempt` default",
     );
+}
+
+#[injectable]
+#[derive(Default)]
+struct ShapedTasks;
+
+#[scheduled]
+impl ShapedTasks {
+    #[allow(clippy::needless_arbitrary_self_type)]
+    #[every("30s")]
+    async fn typed_receiver(self: &Self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[cfg(any())]
+    #[every("30s")]
+    async fn compiled_out(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[every("30s")]
+    async fn r#type(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[every("30s")]
+    async fn arc_receiver(self: &std::sync::Arc<Self>) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[injectable]
+#[derive(Default)]
+#[allow(non_camel_case_types)]
+struct r#yield;
+
+#[scheduled]
+impl r#yield {
+    #[every("30s")]
+    async fn sweep(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Compiling is the first half: a trigger compiled out takes its entry with
+/// it — without that the entry's `run` names a method that does not exist. The
+/// typed `self: &Self` is `&self` spelled out, `self: &Arc<Self>` borrows what the
+/// container holds, and both are scheduled.
+#[test]
+fn a_compiled_out_trigger_submits_nothing_and_a_typed_receiver_is_scheduled() {
+    let mut methods: Vec<&str> =
+        nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
+            .filter(|m| (m.provider_type_id)() == std::any::TypeId::of::<ShapedTasks>())
+            .map(|m| m.method)
+            .collect();
+    methods.sort_unstable();
+    assert_eq!(
+        methods,
+        ["arc_receiver", "type", "typed_receiver"],
+        "a raw identifier is labelled by its name"
+    );
+    let raw_hosts: Vec<&str> = nest_rs_core::inventory::iter::<nest_rs_schedule::ScheduledMethod>()
+        .filter(|m| (m.provider_type_id)() == std::any::TypeId::of::<r#yield>())
+        .map(|m| m.provider)
+        .collect();
+    assert_eq!(raw_hosts, ["yield"], "a raw host is labelled by its name");
 }

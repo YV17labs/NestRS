@@ -24,7 +24,12 @@ paths:
   **exact** (`=`) with a bump procedure documented in the root
   manifest comments — respect the procedure, never bump casually.
   A new dependency answers to the 12-month freshness bar
-  (`CLAUDE.md` hard no).
+  (`CLAUDE.md` hard no). **An existing one that crosses the bar is
+  flagged at its pin, never kept silently:** `apalis` / `apalis-redis`
+  0.7.4 is the one 7.0 keeps past it, with the evidence (the 1.0 RC
+  line fails dead-replica recovery) and the condition to move written
+  in the root manifest. No fork, no vendoring, no `[patch]` of a
+  third-party crate: an upstream defect is reported upstream.
 
 ### `major.minor` — the one requirement form
 

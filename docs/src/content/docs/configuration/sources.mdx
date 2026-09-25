@@ -9,8 +9,11 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 `ConfigService` reads its raw values through a small trait:
-`ConfigSource`. The default `EnvSource` returns process env vars after
-the `.env` cascade has merged. Swap it for anything that can answer
+`ConfigSource`. The default `EnvSource` reads the process environment and,
+for a variable absent there, falls back to the `.env` cascade parsed into an
+in-crate map — reading never writes to the process environment. A variable
+present but empty in the process environment counts as unset and still keeps
+the `.env` value from being read. Swap it for anything that can answer
 "what's the value of `NESTRS_SEAORM__URL`?" and the same `Config`
 struct loads from there — HashiCorp Vault, a K8s ConfigMap, AWS Parameter
 Store, an in-process map for tests.
@@ -159,13 +162,17 @@ assertions: it answers from a map, so nothing is cached and nothing is shared.
 implications:
 
 - The source receives the **uppercased** namespace + key — the casing
-  conversion happens in `ConfigService::var` before the lookup.
+  conversion happens in `var_name` before the lookup.
 - The source has no idea which `Config` struct is being loaded. It's a
   flat key-value store. If you need per-namespace routing (e.g.
-  `database` from Vault, `http` from env), wrap a couple of sources in a
+  `seaorm` from Vault, `http` from env), wrap a couple of sources in a
   dispatching one.
-- Empty strings are **unset**. A Vault entry with an empty value will
-  not blank an in-code default — return `None` instead.
+- Empty strings are **unset**. `ConfigService` drops an empty value whatever
+  the source returns, so a Vault entry with an empty value never blanks an
+  in-code default.
+- Every key is looked up under two names, `<KEY>` and `<KEY>_FILE`: the source
+  answers each like any other variable, `ConfigService` reads the file the second
+  one names, and a value for both is refused, naming the two.
 
 A dispatching source for two backends:
 

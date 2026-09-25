@@ -169,10 +169,10 @@ Everything else is the GraphQL module's own configuration — see
 
 ## Limits
 
-- **The method must be `async` and its fallible return spelled
-  `Result<…>`.** async-graphql reads the last path segment of the return
-  type, so an aliased `Result` is taken for an ordinary value. Both are
-  compile errors naming the rule.
+- **The fallible return is spelled `Result<…>`.** async-graphql reads the last
+  path segment of the return type, so an aliased `Result` is taken for an
+  ordinary value; it is a compile error naming the rule. The method may be `fn`
+  or `async fn`.
 - **An item that cannot be masked is dropped, not raised.** A stream
   field's type is the item's, not a `Result`, so there is no error channel
   per item: failing closed means the item does not ship. The drop is

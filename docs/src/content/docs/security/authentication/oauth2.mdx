@@ -36,7 +36,7 @@ as its shared flow.
 ## Wire it in
 
 `OAuthClientModule::for_root(None)` registers an `OAuthClient` as global
-infrastructure, configured via `NESTRS_OAUTH_CLIENT__*` env vars. Pin the
+infrastructure, configured via `NESTRS_OAUTH__CLIENT__*` env vars. Pin the
 config in code by passing an `OAuthClientConfig`.
 
 ```rust title="apps/auth/src/module.rs"
@@ -109,7 +109,7 @@ alert, WAF rule or rate limit keyed on `401`.
 
 ## Configuration
 
-`OAuthClientConfig` lives in `nest-rs-oauth-client` and reads the `oauth_client`
+`OAuthClientConfig` lives in `nest-rs-oauth-client` and reads the `oauth__client`
 namespace — the OAuth *client* role has its own crate, so it has its own
 namespace rather than borrowing the one belonging to the crate that answers
 *who the caller is*.
@@ -120,13 +120,13 @@ follow the dual-path rule.
 
 | Field | Env var | Validation |
 |-------|---------|------------|
-| `client_id` | `NESTRS_OAUTH_CLIENT__CLIENT_ID` | length ≥ 1 |
-| `client_secret` | `NESTRS_OAUTH_CLIENT__CLIENT_SECRET` | length ≥ 1 |
-| `auth_url` | `NESTRS_OAUTH_CLIENT__AUTH_URL` | length ≥ 1 + parses as URL |
-| `token_url` | `NESTRS_OAUTH_CLIENT__TOKEN_URL` | length ≥ 1 + parses as URL |
-| `redirect_url` | `NESTRS_OAUTH_CLIENT__REDIRECT_URL` | absolute URL |
-| `userinfo_url` | `NESTRS_OAUTH_CLIENT__USERINFO_URL` | length ≥ 1 |
-| `scopes` | `NESTRS_OAUTH_CLIENT__SCOPES` | comma-separated list |
+| `client_id` | `NESTRS_OAUTH__CLIENT__CLIENT_ID` | length ≥ 1 |
+| `client_secret` | `NESTRS_OAUTH__CLIENT__CLIENT_SECRET` | length ≥ 1 |
+| `auth_url` | `NESTRS_OAUTH__CLIENT__AUTH_URL` | length ≥ 1 + parses as URL |
+| `token_url` | `NESTRS_OAUTH__CLIENT__TOKEN_URL` | length ≥ 1 + parses as URL |
+| `redirect_url` | `NESTRS_OAUTH__CLIENT__REDIRECT_URL` | absolute URL |
+| `userinfo_url` | `NESTRS_OAUTH__CLIENT__USERINFO_URL` | length ≥ 1 |
+| `scopes` | `NESTRS_OAUTH__CLIENT__SCOPES` | comma-separated list |
 
 `OAuthClient::new` runs `validate()` first, then constructs the
 underlying `BasicClient`. The HTTP backend refuses redirects during

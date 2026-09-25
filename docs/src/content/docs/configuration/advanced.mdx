@@ -13,19 +13,28 @@ payload** (a JSON blob in one variable) and a **rule spanning the whole
 struct**. This is the real `IssuerConfig` from `features/oauth` (signs
 the OAuth clients accepted by `apps/auth`) — it needs both:
 
-```rust title="crates/features/src/oauth/config.rs (from the demo, abridged)"
+```rust title="crates/features/src/oauth/config.rs (from the demo)"
+use nest_rs::config::{Config, ConfigService, config};
 use nest_rs::oauth::server::RegisteredClient;
-use nest_rs::config::{config, Config, ConfigError, ConfigService};
 use uuid::Uuid;
 use validator::{Validate, ValidationError, ValidationErrors};
 
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
-#[config(namespace = "issuer")]
-#[derive(Clone, Debug, Default)]
+#[config(namespace = "issuer", validate = "manual")]
+#[derive(Clone)]
 pub struct IssuerConfig {
     pub clients: Vec<RegisteredClient<Uuid>>,
     pub default_org_id: Uuid,
+}
+
+impl Default for IssuerConfig {
+    fn default() -> Self {
+        Self {
+            clients: Vec::new(),
+            default_org_id: DEFAULT_ORG,
+        }
+    }
 }
 
 impl Validate for IssuerConfig {
@@ -34,25 +43,31 @@ impl Validate for IssuerConfig {
         if self.clients.is_empty() {
             errors.add("clients", ValidationError::new("at_least_one_client"));
         }
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
-    }
-}
-
-impl Default for IssuerConfig {
-    fn default() -> Self {
-        Self { clients: Vec::new(), default_org_id: DEFAULT_ORG }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
 impl Config for IssuerConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
-        let clients = match env.get("CLIENTS") {
-            Some(raw) => serde_json::from_str(&raw)
-                .map_err(|e| ConfigError::parse(env.var_name("CLIENTS"), e.to_string()))?,
+        let clients = match env.setting("CLIENTS")? {
+            Some(raw) => serde_json::from_str(&raw.value).map_err(|e| {
+                if raw.from_file() {
+                    raw.refuse("does not hold a JSON list of clients")
+                } else {
+                    raw.refuse(e)
+                }
+            })?,
             None => base.clients,
         };
         let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(base.default_org_id);
-        Ok(Self { clients, default_org_id })
+        Ok(Self {
+            clients,
+            default_org_id,
+        })
     }
 }
 ```
@@ -61,11 +76,12 @@ impl Config for IssuerConfig {
   `NESTRS_ISSUER__CLIENTS` keeps `base.clients` rather than resetting to an
   empty list, so a deployment can override the org id without also wiping the
   clients a `for_root` pinned in code.
-- **`clients` is a JSON array in a single variable.** `env.get("CLIENTS")`
-  returns the raw string and `serde_json::from_str` does the structured
-  parse — mapping the failure through
-  `ConfigError::parse(env.var_name("CLIENTS"), …)` so the boot error
-  still names `NESTRS_ISSUER__CLIENTS`. The element type is the framework's
+- **`clients` is a JSON array in a single variable.** `env.setting("CLIENTS")`
+  returns the raw string with the spelling that supplied it, and
+  `serde_json::from_str` does the structured parse — refusing through
+  `raw.refuse(…)`, so the boot error names `NESTRS_ISSUER__CLIENTS` or
+  `NESTRS_ISSUER__CLIENTS_FILE`, whichever was set. serde's reason may quote
+  the input, so it is kept only for an inline value. The element type is the framework's
   `RegisteredClient<P>` (from `nest-rs-authn`); the app fills the generic
   `payload` — here `Uuid`, the org each client acts as — so the framework
   owns the credential shape and the app owns only what it authorizes on.

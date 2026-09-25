@@ -163,11 +163,15 @@ Each of these is a boot refusal, not a silent hole — the point of the design i
 that a half-wired login never serves an unprotected route.
 
 - **No signing key.** With neither a secret nor a key pair set, the boot stops
-  on `no JWT key configured: set NESTRS_AUTHN__SECRET (HS256) or
-  NESTRS_AUTHN__PUBLIC_KEY (EdDSA)`.
+  on `no JWT key configured: set NESTRS_AUTHN__SECRET (or
+  NESTRS_AUTHN__SECRET_FILE) for HS256, or NESTRS_AUTHN__PUBLIC_KEY (or
+  NESTRS_AUTHN__PUBLIC_KEY_FILE) for EdDSA — or the same field in a JwtConfig or
+  JwtOptions built in code`.
 - **A secret under 32 bytes.** HS256 draws its security from the secret's
   entropy, so a short one is refused at boot rather than used to mint forgeable
-  tokens: `NESTRS_AUTHN__SECRET must be at least 32 bytes for HS256`.
+  tokens: `NESTRS_AUTHN__SECRET (or NESTRS_AUTHN__SECRET_FILE), or secret in a
+  JwtConfig or JwtOptions built in code, must be at least 32 bytes (256 bits) for
+  HS256`. HS384 and HS512 take 48 and 64 bytes, their hash's size (RFC 7518 §3.2).
 - **The feature's HTTP module does not import `AuthzModule`.** The guard bound
   on the controller is then unreachable through the access graph, and the boot
   names it. The route is never served unprotected.

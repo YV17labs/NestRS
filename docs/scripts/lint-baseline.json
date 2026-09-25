@@ -1,6 +1,5 @@
 [
   "architecture.mdx::fence-drift::crates/features/src/users/mod.rs (from the demo) shows `mod entity;` and demo/crates/features/src/users/mod.rs does not contain that line",
-  "configuration/advanced.mdx::fence-drift::crates/features/src/oauth/config.rs (from the demo, abridged) shows `use nest_rs::config::{config, Config, ConfigError, ConfigSer` and demo/crates/features/src/oauth/config.rs does not contain that line",
   "configuration/advanced.mdx::fence-drift::crates/features/src/oauth/module.rs (from the demo) shows `use super::service::OAuthFlow;` and demo/crates/features/src/oauth/module.rs does not contain that line",
   "configuration/advanced.mdx::fence-drift::crates/features/src/oauth/service.rs (from the demo) shows `pub struct OAuthFlow {` and demo/crates/features/src/oauth/service.rs does not contain that line",
   "configuration/testing.mdx::fence-drift::crates/features/src/oauth/config.rs (from the demo) shows `#[allow(clippy::result_large_err)]` and demo/crates/features/src/oauth/config.rs does not contain that line",

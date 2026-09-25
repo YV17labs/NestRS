@@ -87,16 +87,14 @@ NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS=5 nestrs run dev api
 or pin it in code, as with any other field:
 
 ```rust title="apps/api/src/module.rs"
-OpenTelemetryConfig::from_env("api").with_metric_interval(Duration::from_secs(5))
+OpenTelemetryConfig::from_env("api")?.with_metric_interval(Duration::from_secs(5))
 ```
 
 A value of `0` is the sentinel for "keep the 60 s default" — a `PeriodicReader`
 on a zero period is a tight export loop, which is worse than a slow one. A
-**non-numeric** value is a typo, not a sentinel: the default is kept and the
-variable is named on stderr (`nestrs: WARNING — unparseable
-NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS=…`). It is reported rather than
-boot-fatal because this config is what installs the subscriber, so it is built
-before there is anywhere to log or anything to propagate an error to.
+**non-numeric** value is a typo, not a sentinel: `OpenTelemetry::init` fails
+with `OpenTelemetryError::Config`, naming the variable, as every framework
+variable does when it is set and cannot be read.
 
 ## Resource attributes
 
@@ -105,8 +103,8 @@ Every exported metric carries the service-level resource attributes built from
 
 - `service.name` — argument to `OpenTelemetry::init`
 - `service.version` — `NESTRS_OPENTELEMETRY__SERVICE_VERSION`
-- `deployment.environment` — `NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT`
-- `service.instance_id` — `NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID` (a
+- `deployment.environment.name` — `NESTRS_OPENTELEMETRY__SERVICE_ENVIRONMENT`
+- `service.instance.id` — `NESTRS_OPENTELEMETRY__SERVICE_INSTANCE_ID` (a
   fresh UUIDv7 per process by default, so restarts get distinct identities in
   the backend)
 

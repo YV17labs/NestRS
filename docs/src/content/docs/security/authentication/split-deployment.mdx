@@ -97,6 +97,10 @@ export NESTRS_AUTHN__PUBLIC_KEY="$(cat jwt.pub)"
 # NESTRS_AUTHN__PRIVATE_KEY is unset — the boot picks `eddsa_verify`
 ```
 
+Each key also reads from a file: `NESTRS_AUTHN__PUBLIC_KEY_FILE=/run/secrets/jwt.pub`
+names the path instead of carrying the PEM, which is the form a mounted secret
+takes.
+
 `JwtConfig::into_options` walks the three key env vars and chooses
 verify-only mode when only the public key is set. `JwtService::sign`
 on a verify-only service returns `AuthError::Failed("this JwtService
@@ -104,8 +108,15 @@ is verify-only — no signing key configured")` — even a buggy resource
 server cannot mint a token.
 
 A misconfiguration (`PRIVATE_KEY` set, `PUBLIC_KEY` missing) fails the
-boot loudly with `"NESTRS_AUTHN__PRIVATE_KEY is set without
-NESTRS_AUTHN__PUBLIC_KEY"`.
+boot loudly with `"NESTRS_AUTHN__PRIVATE_KEY (or NESTRS_AUTHN__PRIVATE_KEY_FILE),
+or private_key in a JwtConfig or JwtOptions built in code, is set without
+NESTRS_AUTHN__PUBLIC_KEY (or NESTRS_AUTHN__PUBLIC_KEY_FILE), or public_key in a
+JwtConfig or JwtOptions built in code"`,
+and so does a private key beside the public key of another pair. A
+`NESTRS_AUTHN__SECRET` left beside either key fails the boot as well, naming
+both — whether both come from the environment, from a `.env` file or from code,
+or the environment beside code; a config pinned in code stops `.env` being read
+for the namespace — so moving a service to EdDSA means removing its secret.
 
 ## Two `main` files, one feature set
 
@@ -231,10 +242,10 @@ pub struct ApiModule;
 ```
 
 ```bash
-NESTRS_OAUTH_RESOURCE__RESOURCE=https://api.example.com
-NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
+NESTRS_OAUTH__RESOURCE__RESOURCE=https://api.example.com
+NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS=https://auth.example.com
 NESTRS_AUTHN__AUDIENCE=https://api.example.com
-NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED=users:read,users:write
+NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=users:read,users:write
 ```
 
 Three optional members of the RFC 9728 document round out the deployment's
@@ -243,11 +254,11 @@ description of itself. Each is omitted from the served JSON when unset, as
 
 | Env var | Document member | What it says |
 |---|---|---|
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_NAME` | `resource_name` | a human-readable name for this resource (§2 RECOMMENDs it) |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION` | `resource_documentation` | where a developer reads about it |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
-| `NESTRS_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
-| `NESTRS_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
+| `NESTRS_OAUTH__RESOURCE__RESOURCE_NAME` | `resource_name` | a human-readable name for this resource (§2 RECOMMENDs it) |
+| `NESTRS_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION` | `resource_documentation` | where a developer reads about it |
+| `NESTRS_OAUTH__RESOURCE__RESOURCE_POLICY_URI` | `resource_policy_uri` | where a developer reads how this resource's data may be used |
+| `NESTRS_OAUTH__RESOURCE__RESOURCE_TOS_URI` | `resource_tos_uri` | the terms of service |
+| `NESTRS_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED` | `bearer_methods_supported` | how a token may be presented. §2's defined values are `header`, `body` and `query`; the framework reads a bearer token only from the `Authorization` header, so anything but `header` **fails the boot** rather than advertising a form this server refuses |
 
 §2 defines fourteen members and the framework serves eight. The other six are refused in writing on `ProtectedResourceMetadata`, each
 naming the fact that makes it impossible here: nothing signs a response, so

@@ -203,11 +203,15 @@ there.
 |---|---|---|
 | `services/`, `strategies/`, `pipes/` | bare: `input.rs` | `InputService` |
 | `entities/` | bare: `user.rs` | `User` |
-| `dtos/`, `commands/`, `events/` | suffixed: `login_dto.rs` | `LoginDto` |
+| `dtos/`, `commands/` | suffixed: `login_dto.rs` | `LoginDto` |
 
 A provider's role is already spelled by its folder and its type, so the file
 does not spell it a third time. A transfer object is read far from its folder —
 in a handler signature — so it keeps the suffix at both ends.
+
+Events take no plural folder, because `events/` is the edge that holds the
+listener. One event payload is `event.rs`; several sit flat at the port as
+`<fact>_event.rs` — `post_published_event.rs`.
 
 Two services in one module is a last resort. Extracting a factory or an enum
 leaves the count at one, and that is the common case.

@@ -193,15 +193,43 @@ exactly like every other module's.
 ## `ConfigService` API
 
 The reader handed to `from_env` is a thin wrapper around the namespace
-prefix. Five methods, all sync.
+prefix. Every method is sync, and every one that reads a value returns a
+`Result`, because reading can fail before parsing does.
 
-| Method                                      | Reads                                       |
-|---------------------------------------------|---------------------------------------------|
-| `env.get("KEY")` → `Option<String>`         | `NESTRS_<NS>__KEY` as a raw string          |
-| `env.parse::<T>("KEY")?` → `Option<T>`      | Same, parsed via `FromStr`                  |
-| `env.flag("KEY", default)?` → `bool`        | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
-| `env.list("KEY", default)` → `Vec<String>`  | Comma-separated, trimmed, empties dropped   |
-| `env.var_name("KEY")` → `String`            | The full env-var **name** (for error messages) |
+| Method                                         | Reads                                       |
+|------------------------------------------------|---------------------------------------------|
+| `env.get("KEY")?` → `Option<String>`           | `NESTRS_<NS>__KEY` as a raw string          |
+| `env.parse::<T>("KEY")?` → `Option<T>`         | Same, parsed via `FromStr`                  |
+| `env.flag("KEY", default)?` → `bool`           | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
+| `env.list("KEY", default)?` → `Vec<String>`    | Comma-separated, trimmed, empties dropped   |
+| `env.seconds("KEY", base)?` → `Option<Duration>` | Whole seconds; `0` means off              |
+| `env.count("KEY", base)?` → `Option<usize>`    | A whole count; `0` means unlimited          |
+| `env.setting("KEY")?` → `Option<Setting>`      | The raw string and the spelling that supplied it — for a value your own code refuses |
+| `env.material("KEY")?` → `Option<Setting<Material>>` | The bytes as given, and the file they came from — for certificates and keys |
+| `env.var_name("KEY")` → `String`               | The full env-var **name** (for error messages) |
+| `env.spellings("KEY")` → `String`              | Both spellings, `NESTRS_<NS>__KEY (or NESTRS_<NS>__KEY_FILE)` — for a message naming a setting that was not read |
+
+**Every variable can be given as a file.** `NESTRS_<NS>__KEY_FILE=/run/secrets/key`
+supplies `KEY` from the file it names — the Docker and Kubernetes secrets
+convention, so a secret never has to sit in the process environment. The file
+must be a regular file of at most a mebibyte; for text, it must be UTF-8 and its
+trailing line breaks are dropped, and a file holding nothing but line breaks is
+unset. An unreadable file fails the boot naming the variable — never its value.
+
+**One key, one spelling per tier.** `KEY` and `KEY_FILE` both set in the process
+environment, or both in the `.env` cascade, fail the boot naming both. Between
+the two tiers the deployment chooses: either spelling in the process environment
+— empty included — shadows both spellings in `.env`, exactly as it shadows a
+`.env` value of its own name.
+
+**A value you judge yourself is refused through its `Setting`.** `get` hands
+back the string alone, so a message built around it can only guess which
+spelling was set, and may quote a value a file held. `env.setting("KEY")?` keeps
+both: `setting.refuse(reason)` names the variable the deployment actually set,
+and `setting.shown()` renders the value when it was inline and
+`<the content of the file NESTRS_<NS>__KEY_FILE names>` when it was not.
+`env.parse` refuses the same way, and drops the parser's own reason for a value
+read from a file, since that reason may quote its input.
 
 Empty strings count as unset, so `FOO=` in a `.env` file does not blank
 an in-code default.

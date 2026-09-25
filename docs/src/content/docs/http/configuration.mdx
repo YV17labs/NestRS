@@ -49,9 +49,9 @@ Real env always wins over the `.env` cascade.
 |-------|--------------|---------|-------------|
 | `host` | `NESTRS_HTTP__HOST` | `0.0.0.0` | `HttpConfig { host: "127.0.0.1".into(), ..Default::default() }` |
 | `port` | `NESTRS_HTTP__PORT` | `3000` | `HttpConfig { port: 3002, ..Default::default() }` |
-| `tls.cert` | `NESTRS_HTTP__TLS_CERT` (inline PEM) or `NESTRS_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(TlsConfig::new(cert, key)), ..Default::default() }` |
+| `tls.cert` | `NESTRS_HTTP__TLS_CERT` (inline PEM) or `NESTRS_HTTP__TLS_CERT_FILE` (path) | unset ⇒ plain HTTP | `HttpConfig { tls: Some(HttpTls::new(cert, key)), ..Default::default() }` |
 | `tls.key`  | `NESTRS_HTTP__TLS_KEY` or `NESTRS_HTTP__TLS_KEY_FILE`  | unset ⇒ plain HTTP | (set together with `tls.cert`) |
-| `cors.origins` | `NESTRS_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `CorsConfig { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
+| `cors.origins` | `NESTRS_HTTP__CORS_ORIGINS` (comma list) | unset ⇒ CORS off | `HttpCors { origins: vec!["https://app.example.com".into()], ..Default::default() }` |
 | `cors.methods` | `NESTRS_HTTP__CORS_METHODS` | empty | `methods: vec!["GET".into(), "POST".into()]` |
 | `cors.headers` | `NESTRS_HTTP__CORS_HEADERS` | empty | `headers: vec!["Content-Type".into()]` |
 | `cors.exposed_headers` | `NESTRS_HTTP__CORS_EXPOSED` | empty | `exposed_headers: vec!["X-Total-Count".into()]` |
@@ -62,7 +62,7 @@ Real env always wins over the `.env` cascade.
 | `max_body_bytes` | `NESTRS_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
 | `request_timeout` | `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
 | `fail_secure_strict` | `NESTRS_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
-| `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: SecurityHeadersConfig { enabled: false, ..Default::default() }, ..Default::default() }` |
+| `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
 | `compression` | `NESTRS_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
 
 See [Compression](/http/compression/) for what the flag negotiates and when to leave it off.
@@ -73,7 +73,10 @@ Setting **both** `NESTRS_HTTP__TLS_CERT[_FILE]` and `NESTRS_HTTP__TLS_KEY[_FILE]
 makes the transport serve over [rustls](https://docs.rs/rustls) (through
 poem's listener) instead of plain HTTP. Setting only one of the pair fails
 the boot — a half-configured TLS is a deployment mistake, not a silent
-fall back to plaintext.
+fall back to plaintext. Setting both spellings of one half — `TLS_CERT` and
+`TLS_CERT_FILE` — in the same tier fails the boot too, naming both, since
+nothing says which was meant. Across tiers the process environment chooses,
+[as it does for every variable](/configuration/#configservice-api).
 
 ```bash frame="terminal"
 # Inline (suits k8s secrets, systemd EnvironmentFile, …)
@@ -114,12 +117,12 @@ that writes the two files in sequence should write them together, or set
 
 Inline PEM has no source to watch, so it is loaded once, as before.
 
-Pinning TLS material in code uses `TlsConfig::new` — rarely useful outside
+Pinning TLS material in code uses `HttpTls::new` — rarely useful outside
 tests (production deploys carry secrets in the environment):
 
 ```rust title="apps/api/src/module.rs"
 use nest_rs::core::module;
-use nest_rs::http::{HttpConfig, HttpModule, TlsConfig};
+use nest_rs::http::{HttpConfig, HttpModule, HttpTls};
 
 let cert = std::fs::read("fullchain.pem")?;
 let key  = std::fs::read("privkey.pem")?;
@@ -127,7 +130,7 @@ let key  = std::fs::read("privkey.pem")?;
 #[module(imports = [
     HttpModule::for_root(HttpConfig {
         port: 3002,
-        tls: Some(TlsConfig::new(cert, key)),
+        tls: Some(HttpTls::new(cert, key)),
         ..Default::default()
     }),
 ])]
@@ -155,12 +158,12 @@ NESTRS_HTTP__CORS_MAX_AGE=3600
 use std::time::Duration;
 
 use nest_rs::core::module;
-use nest_rs::http::{CorsConfig, HttpConfig, HttpModule};
+use nest_rs::http::{HttpCors, HttpConfig, HttpModule};
 
 #[module(imports = [
     HttpModule::for_root(HttpConfig {
         port: 3002,
-        cors: Some(CorsConfig {
+        cors: Some(HttpCors {
             origins: vec!["https://app.example.com".into()],
             methods: vec!["GET".into(), "POST".into()],
             headers: vec!["Content-Type".into(), "Authorization".into()],
@@ -294,21 +297,23 @@ be the framework guessing about a document it does not serve:
 | `Permissions-Policy` | `permissions_policy` / `__PERMISSIONS_POLICY` | It governs camera / geolocation / payment in a document; a restrictive guess silently disables a feature the app's own front end asked for. |
 
 Every value is tunable through the dual path. Disable the whole set with
-the master switch, or drop one header by setting its value to an empty
-string:
+the master switch, or drop one header by setting its variable to `off` — in
+code, by setting its field to `None`, or `content_type_options` to `false`. A
+blank value is refused at boot, and an empty one counts as unset, as it does for
+every variable, so that header keeps its default:
 
 ```bash title=".env" frame="terminal"
 NESTRS_HTTP__SECURITY_HEADERS=false                    # all off
 NESTRS_HTTP__FRAME_OPTIONS=SAMEORIGIN                  # override one value
-NESTRS_HTTP__HSTS=                                     # empty ⇒ drop just HSTS
+NESTRS_HTTP__HSTS=off                                  # off ⇒ drop just HSTS
 NESTRS_HTTP__CONTENT_SECURITY_POLICY="default-src 'self'"
 ```
 
 ```rust title="apps/api/src/module.rs"
-use nest_rs::http::{HttpConfig, HttpModule, SecurityHeadersConfig};
+use nest_rs::http::{HttpConfig, HttpModule, HttpSecurityHeaders};
 
 HttpModule::for_root(HttpConfig {
-    security_headers: SecurityHeadersConfig {
+    security_headers: HttpSecurityHeaders {
         frame_options: Some("SAMEORIGIN".into()),
         ..Default::default()
     },

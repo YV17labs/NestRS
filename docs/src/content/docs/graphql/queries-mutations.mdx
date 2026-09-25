@@ -60,8 +60,12 @@ $ curl -sX POST http://localhost:3000/graphql \
 {"data":{"userCount":42}}
 ```
 
-The method name is camelCased; primitive returns map to their GraphQL
-scalar (`i32` → `Int`, `String` → `String`, `bool` → `Boolean`).
+The method name is camelCased by one rule: split at each `_`, and capitalise
+the first letter of every part after the first — `user_count` is `userCount`,
+`get_2fa` is `get2fa`. The framework states that name on the field itself, so the
+name a duplicate is checked under is the name served; `#[graphql(name = "…")]`
+overrides it. Primitive returns map to their GraphQL scalar (`i32` → `Int`,
+`String` → `String`, `bool` → `Boolean`).
 
 ## Arguments
 

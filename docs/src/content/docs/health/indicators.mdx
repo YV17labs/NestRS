@@ -128,8 +128,8 @@ The orchestrator decorator walks the impl block, finds each method
 tagged with exactly one probe attribute, strips the attribute, and
 submits one `HealthIndicator` entry per method to the link-time
 inventory `HealthService` drains at probe time. The method stays on
-the impl block unchanged — still a regular `async fn` you can call
-from anywhere.
+the impl block unchanged — still a regular method you can call from
+anywhere.
 
 - **`#[injectable]`** makes the indicator an ordinary DI provider —
   same `#[inject]` shape as any other service.
@@ -138,9 +138,10 @@ from anywhere.
 - **`#[liveness]` / `#[readiness]` / `#[startup]`** route the method
   to its probe. Exactly one per method — the macro rejects two at
   compile time.
-- Methods must be `async fn` returning `anyhow::Result<()>` (or any
-  `Result<(), E: Into<anyhow::Error>>`). A bare `async fn` with no
-  return is treated as infallible — always `up`.
+- Methods take `&self` and return `anyhow::Result<()>` (or any
+  `Result<(), E: Into<anyhow::Error>>`); an `async fn` is awaited, a
+  plain `fn` is called. A method with no return is treated as
+  infallible — always `up`.
 
 Multiple decorated methods on the same impl block share the
 provider's `#[inject]` dependencies — pool a DB ping, a Redis ping,

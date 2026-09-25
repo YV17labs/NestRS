@@ -145,7 +145,7 @@ The scopes your rules require and the scopes your resource server
 advertises must be the same set:
 
 ```bash title=".env"
-NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
+NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED=posts:read,posts:write,audio:transcode
 ```
 
 A scope a rule requires but the metadata document omits is a dead end —

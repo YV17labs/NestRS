@@ -176,8 +176,8 @@ passed to `AuthnModule::for_root(config)`.
 | Field | Env var | Notes |
 |-------|---------|-------|
 | `secret` | `NESTRS_AUTHN__SECRET` | HS256 shared secret |
-| `private_key` | `NESTRS_AUTHN__PRIVATE_KEY` | EdDSA PEM, issuer only |
-| `public_key` | `NESTRS_AUTHN__PUBLIC_KEY` | EdDSA PEM, verifier needs it |
+| `private_key` | `NESTRS_AUTHN__PRIVATE_KEY`, or a path in `NESTRS_AUTHN__PRIVATE_KEY_FILE` | EdDSA PEM, issuer only |
+| `public_key` | `NESTRS_AUTHN__PUBLIC_KEY`, or a path in `NESTRS_AUTHN__PUBLIC_KEY_FILE` | EdDSA PEM, verifier needs it |
 | `leeway_secs` | `NESTRS_AUTHN__LEEWAY_SECS` | Clock skew, default 30 |
 | `audience` | `NESTRS_AUTHN__AUDIENCE` | `aud` claim — set makes it mandatory; unset still refuses a foreign `aud` |
 | `issuer` | `NESTRS_AUTHN__ISSUER` | `iss` claim — set makes it mandatory; unset means no issuer check (§4.1.1 states no rejection clause) |
@@ -188,14 +188,22 @@ passed to `AuthnModule::for_root(config)`.
 `JwtConfig::into_options` walks the three key fields and chooses a
 mode:
 
-- `secret` set → HMAC HS256 (both sign and verify).
-- `private_key` + `public_key` → EdDSA (sign and verify).
+- `private_key` + `public_key` → EdDSA (sign and verify). The two are proved
+  one pair at boot: a signature the private key makes has to verify under the
+  public key.
 - `public_key` alone → EdDSA verify-only — a resource server with no
   private key cannot mint a token even if it wanted to.
+- `secret` alone → HMAC HS256 (both sign and verify).
 - nothing → boot fails with `"no JWT key configured"`.
 
-A misconfiguration (`private_key` without `public_key`) fails the boot
-loudly, naming the offending env var.
+Each field is read on its own, like every other setting, and the combination
+is then judged whole. A `secret` beside either key fails the boot — two signing
+modes, and nothing says which one is meant — whether both come from the
+environment, from `.env`, from code, or the environment beside code. A config
+pinned in code stops `.env` being read for this namespace, so a `.env` value
+never meets a pinned one. A `private_key` without its `public_key` fails the
+boot too, and so does key material that does not parse as EdDSA PEM. Each
+refusal names the settings that are set.
 
 ## HS256 vs EdDSA — pick on deployment shape
 

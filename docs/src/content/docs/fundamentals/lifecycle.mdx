@@ -104,7 +104,8 @@ reverse-intent order.
 
 ## Method shape
 
-A hook method is **`async fn`** and takes `&self`. Its return is either:
+A hook method takes `&self`, and is an `async fn` or a plain `fn` — only
+an `async fn` is awaited. Its return is either:
 
 - **nothing** — the hook is infallible (`async fn flush(&self)`), or
 - **`Result<(), E>`** where `E: Into<anyhow::Error>` — the hook can

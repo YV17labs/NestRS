@@ -207,7 +207,7 @@ use nest_rs::throttler::ThrottlerModule;
 
 #[module(imports = [
     ThrottlerModule::for_root(None),   // the policy and the guard — unchanged
-    RedisModule::for_root(None),       // the one Redis connection (NESTRS_REDIS__URL)
+    RedisModule::for_root(None),       // the one RedisConnection (NESTRS_REDIS__URL)
     RedisThrottlerModule,              // the counters move to Redis
 ])]
 pub struct AppModule;
@@ -219,13 +219,15 @@ throttler's whatever store counts them) and the `ThrottlerGuard` that applies it
 `RedisThrottlerModule` is a bare import that *declares* `RedisThrottler` as the
 `dyn ThrottlerStore`, which supersedes the port's in-process default wherever
 the three fall in `imports`; it runs over the connection `RedisModule::for_root`
-opens, and an app that also queues shares that one connection with its
+opens, and an app that also queues shares that one `RedisConnection` with its
 producer. You add a line to move the counters off-process and remove none. A
 second vendor binding beside it is a named boot failure, never a silent
 last-one-wins.
 
-The counter is a single `EVAL` — `INCR`, read the TTL, set it on the first hit —
-so it is atomic across replicas with no check-then-act race. A backend failure
+The counter is one Lua script — `INCR`, read the TTL, set it on the first hit —
+so it is atomic across replicas with no check-then-act race. It is sent as
+`EVALSHA`, with a `SCRIPT LOAD` the first time Redis has not cached it, so a Redis
+ACL has to allow both. A backend failure
 **denies**: a rate limiter that fails open is not a rate limiter.
 
 ### Writing your own

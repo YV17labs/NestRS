@@ -1,11 +1,5 @@
-error: expected identifier, found keyword `use`
- --> tests/integration/diagnostics/processor_on_a_request_scoped_provider.rs:8:5
-  |
-8 | use use serde::{Deserialize, Serialize};
-  |     ^^^ expected identifier, found keyword
-
-error: expected one of `::`, `;`, or `as`, found `serde`
- --> tests/integration/diagnostics/processor_on_a_request_scoped_provider.rs:8:9
-  |
-8 | use use serde::{Deserialize, Serialize};
-  |         ^^^^^ expected one of `::`, `;`, or `as`
+error[E0080]: evaluation panicked: a provider-hosted decorator (#[hooks], #[scheduled], #[listeners], #[indicators], #[processor]) resolves its host with Container::get::<Self>(), outside any request, so the host must be a provider the container holds under its own type for the app's lifetime. This one is not: an edge host (#[controller], #[gateway], #[resolver], #[mcp]) is built at mount, `scope = request` builds one per request, and `scope = transient` would hand it a throwaway whose effects are dropped. Move these methods to a plain #[injectable] provider.
+  --> tests/integration/diagnostics/processor_on_a_request_scoped_provider.rs:22:1
+   |
+22 | #[processor]
+   | ^^^^^^^^^^^^ evaluation of `_` failed here

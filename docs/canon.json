@@ -98,7 +98,8 @@
     ],
     "ConfigSource": [
       "get",
-      "get_from_deployment"
+      "get_from_deployment",
+      "in_deployment"
     ],
     "Controller": [
       "mount"
@@ -140,6 +141,12 @@
     "DynamicModule": [
       "collect",
       "register"
+    ],
+    "ErrorReportChain": [
+      "into_frame"
+    ],
+    "ErrorReportFallback": [
+      "into_frame"
     ],
     "ExceptionFilter": [
       "catch"
@@ -277,7 +284,7 @@
     ],
     "RelatedTo": [],
     "ReplyValueFallback": [
-      "into_reply"
+      "into_outcome"
     ],
     "ResponseShaping": [
       "apply"
@@ -333,7 +340,7 @@
       "type_key"
     ]
   },
-  "test_count": 2114,
+  "test_count": 2233,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -414,13 +421,6 @@
       ],
       "profile_split": false
     },
-    "HygieneConfig": {
-      "source": "crates/nest-rs-macro-hygiene/src/config.rs",
-      "fields": [
-        "retries"
-      ],
-      "profile_split": false
-    },
     "JwtConfig": {
       "source": "crates/nest-rs-authn/src/config.rs",
       "fields": [
@@ -433,6 +433,13 @@
         "expires_in_secs",
         "allow_any_audience",
         "explicit_typing"
+      ],
+      "profile_split": false
+    },
+    "MacroHygieneConfig": {
+      "source": "crates/nest-rs-macro-hygiene/src/config.rs",
+      "fields": [
+        "retries"
       ],
       "profile_split": false
     },

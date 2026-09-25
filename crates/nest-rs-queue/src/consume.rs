@@ -19,7 +19,7 @@ use nest_rs_core::{
 };
 use tracing::Instrument;
 
-use crate::inventory::JobError;
+use crate::error::JobError;
 use crate::inventory::{ProcessMethod, check_duplicate_queue_claims};
 use crate::{TARGET, envelope, unit};
 

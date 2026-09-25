@@ -1,0 +1,5 @@
+# Compile-fail fixtures that do not parse. **Empty, and that is the state to keep.**
+#
+# Three `nest-rs-queue` fixtures shipped with a `use use` typo, so their
+# snapshots pinned the parser instead of the residency refusal; they were fixed
+# on the day this join landed, and none is recorded here.

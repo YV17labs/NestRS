@@ -18,6 +18,7 @@ mod naming;
 mod panics;
 mod seams;
 mod shapes;
+mod snapshots;
 mod targets;
 mod umbrella;
 mod units;

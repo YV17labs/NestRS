@@ -5,7 +5,7 @@
 
 use nest_rs_core::injectable;
 use nest_rs_queue::{processor, queue};
-use use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DemoCommand {

@@ -27,6 +27,9 @@ use syn::Item;
 const MODULES_BASELINE: &str = "naming-baseline.txt";
 const BINDINGS_BASELINE: &str = "bindings-baseline.txt";
 const NAMESPACE_BASELINE: &str = "namespace-baseline.txt";
+const ERRORS_BASELINE: &str = "errors-baseline.txt";
+const ROOT_FILES_BASELINE: &str = "root-files-baseline.txt";
+const CONFIG_NAMES_BASELINE: &str = "config-names-baseline.txt";
 
 /// Below one of these the scan is reading the wrong tree and every agreement it
 /// reports is an artefact.
@@ -38,14 +41,16 @@ const NAMESPACE_BASELINE: &str = "namespace-baseline.txt";
 /// between a scan that silently reads nothing and a baseline diff that looks
 /// green.
 mod floors {
-    pub const MODULE_TYPES: usize = 18;
-    pub const EDGE_ADAPTERS: usize = 12;
-    pub const DISPATCH_MARKERS: usize = 10;
-    pub const DISPATCH_ENTRIES: usize = 4;
-    pub const EDGE_FOLDER_FILES: usize = 60;
-    pub const BINDING_FOLDER_FILES: usize = 8;
-    pub const CONFIGS: usize = 10;
-    pub const VOCABULARY_FILES: usize = 150;
+    pub(super) const MODULE_TYPES: usize = 18;
+    pub(super) const EDGE_ADAPTERS: usize = 12;
+    pub(super) const DISPATCH_MARKERS: usize = 10;
+    pub(super) const DISPATCH_ENTRIES: usize = 4;
+    pub(super) const EDGE_FOLDER_FILES: usize = 60;
+    pub(super) const BINDING_FOLDER_FILES: usize = 8;
+    pub(super) const CONFIGS: usize = 10;
+    pub(super) const VOCABULARY_FILES: usize = 150;
+    pub(super) const ERROR_TYPES: usize = 30;
+    pub(super) const ADAPTER_ROOT_FILES: usize = 6;
 }
 
 /// Fold a name to what it *says*, discarding how it was cased or separated:
@@ -814,6 +819,251 @@ fn no_binding_folder_names_a_sibling_bindings_type() {
     );
 }
 
+/// **Every error type lives in `error.rs`** — `CLAUDE.md`, *Naming — strict*:
+/// public or crate-private, domain or driver defect.
+///
+/// An error type is a struct or enum deriving `Error` (`thiserror`'s or any
+/// other), or one a file implements `std::error::Error` for. A `#[cfg(test)]`
+/// module is a fixture and is skipped. Both workspaces: the rule is the layout's,
+/// and a product's `service.rs` holding its errors is the case it was written for.
+#[test]
+fn every_error_type_lives_in_error_rs() {
+    fn derives_error(attrs: &[syn::Attribute]) -> bool {
+        attrs.iter().any(|attr| {
+            attr.path().is_ident("derive")
+                && attr
+                    .parse_args_with(
+                        syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+                    )
+                    .is_ok_and(|paths| {
+                        paths
+                            .iter()
+                            .any(|path| path.segments.last().is_some_and(|s| s.ident == "Error"))
+                    })
+        })
+    }
+    fn is_test_module(attrs: &[syn::Attribute]) -> bool {
+        attrs.iter().any(|attr| {
+            attr.path().is_ident("cfg") && attr.meta.to_token_stream().to_string().contains("test")
+        })
+    }
+    fn walk(items: &[Item], out: &mut Vec<String>) {
+        for item in items {
+            match item {
+                Item::Struct(i) if derives_error(&i.attrs) => out.push(i.ident.to_string()),
+                Item::Enum(i) if derives_error(&i.attrs) => out.push(i.ident.to_string()),
+                Item::Impl(i) => {
+                    let implements_error = i.trait_.as_ref().is_some_and(|(path, _)| {
+                        path.segments.last().is_some_and(|s| s.ident == "Error")
+                    });
+                    if implements_error
+                        && let syn::Type::Path(ty) = &*i.self_ty
+                        && let Some(last) = ty.path.segments.last()
+                    {
+                        out.push(last.ident.to_string());
+                    }
+                }
+                Item::Mod(m) if !is_test_module(&m.attrs) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    use quote::ToTokens;
+
+    let root = repo_root();
+    let mut holes = BTreeSet::new();
+    let mut scanned = 0usize;
+    for krate in crate_dirs() {
+        for path in nest_rs_conformance::sources::rust_files(&krate.join("src")) {
+            let Some(ast) = parsed(&path) else { continue };
+            let mut found = Vec::new();
+            walk(&ast.items, &mut found);
+            scanned += found.len();
+            if path.file_name().is_some_and(|n| n == "error.rs") {
+                continue;
+            }
+            for ident in found {
+                holes.insert(format!(
+                    "{ident} is declared by {}",
+                    nest_rs_conformance::sources::relative(&path, &root),
+                ));
+            }
+        }
+    }
+    baseline::floor(scanned, floors::ERROR_TYPES, "error types");
+    baseline::gate(
+        ERRORS_BASELINE,
+        &holes,
+        scanned,
+        "error types",
+        "error types declared outside `error.rs`",
+        "an error type filed beside the code that raises it — move it to the \
+         module's `error.rs`",
+    );
+}
+
+/// **A root file of an adapter crate serves several bindings, or the root
+/// itself** — `architecture.md`: *what several bindings share sits at the root —
+/// and only that.* A root file one binding folder alone reaches reads as shared
+/// and is not; it belongs in that binding's folder.
+///
+/// "Reaches" is read off identifiers: a binding's files naming the root file's
+/// module (`crate::key::…`) or an item it declares. A root file another root file
+/// also uses — `module.rs` opening the connection — is the root's own, whatever
+/// the bindings do. Framework crates with two binding folders or more, since a
+/// crate with one has nothing to share.
+#[test]
+fn a_root_file_of_an_adapter_crate_serves_more_than_one_binding() {
+    const ROOT_OWN: [&str; 3] = ["lib.rs", "error.rs", "testing.rs"];
+    let root = repo_root();
+    let framework = root.join("crates");
+    let mut holes = BTreeSet::new();
+    let mut scanned = 0usize;
+    for krate in crate_dirs() {
+        if !krate.starts_with(&framework) {
+            continue;
+        }
+        let src = krate.join("src");
+        let files = nest_rs_conformance::sources::rust_files(&src);
+        let bindings: BTreeSet<String> = files
+            .iter()
+            .filter(|p| p.file_name().is_some_and(|n| n == "module.rs"))
+            .filter_map(|p| p.parent())
+            .filter(|d| *d != src)
+            .filter_map(|d| d.file_name().and_then(|n| n.to_str()))
+            .map(str::to_owned)
+            .collect();
+        if bindings.len() < 2 {
+            continue;
+        }
+        let parsed_files: Vec<(std::path::PathBuf, BTreeSet<String>, syn::File)> = files
+            .iter()
+            .filter_map(|p| parsed(p).map(|ast| (p.clone(), idents_in(&ast), ast)))
+            .collect();
+        for (path, _, ast) in &parsed_files {
+            if path.parent() != Some(src.as_path()) {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if ROOT_OWN.contains(&name) {
+                continue;
+            }
+            let stem = name.trim_end_matches(".rs").to_owned();
+            let mut declared: BTreeSet<String> = ast
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Struct(i) => Some(i.ident.to_string()),
+                    Item::Enum(i) => Some(i.ident.to_string()),
+                    Item::Trait(i) => Some(i.ident.to_string()),
+                    Item::Fn(i) => Some(i.sig.ident.to_string()),
+                    Item::Const(i) => Some(i.ident.to_string()),
+                    Item::Static(i) => Some(i.ident.to_string()),
+                    Item::Type(i) => Some(i.ident.to_string()),
+                    _ => None,
+                })
+                .filter(|ident| ident != "TARGET")
+                .collect();
+            declared.insert(stem.clone());
+            scanned += 1;
+            let mut reached_by = BTreeSet::new();
+            let mut reached_at_root = false;
+            for (other, idents, _) in &parsed_files {
+                if other == path || other.file_name().is_some_and(|n| n == "lib.rs") {
+                    continue;
+                }
+                if !declared.iter().any(|d| idents.contains(d)) {
+                    continue;
+                }
+                match binding_of(other, &src, &bindings) {
+                    Some(binding) => {
+                        reached_by.insert(binding);
+                    }
+                    None => reached_at_root = true,
+                }
+            }
+            if reached_by.len() == 1 && !reached_at_root {
+                holes.insert(format!(
+                    "{} is reached by {}/ alone",
+                    nest_rs_conformance::sources::relative(path, &root),
+                    reached_by
+                        .iter()
+                        .next()
+                        .map(String::as_str)
+                        .unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    baseline::floor(scanned, floors::ADAPTER_ROOT_FILES, "adapter root files");
+    baseline::gate(
+        ROOT_FILES_BASELINE,
+        &holes,
+        scanned,
+        "adapter root files",
+        "root files one binding alone reaches",
+        "a file that reads as shared and serves one binding — move it into that \
+         binding's folder",
+    );
+}
+
+/// **`Config` names a `#[config]`, and nothing else** — `architecture.md`,
+/// *Configuration*. A public struct ending in `Config` is a `#[config]`, or sits
+/// in a `config.rs` (a config assembled by hand, such as one resolved before the
+/// container exists); anything else is a settings struct a config nests, and takes
+/// the crate's subject and the file's kind instead (`HttpTls`, `RedisTls`).
+/// Framework crates only: a product names its own vocabulary.
+#[test]
+fn config_names_a_config() {
+    let root = repo_root();
+    let framework = root.join("crates");
+    let mut holes = BTreeSet::new();
+    let mut scanned = 0usize;
+    for krate in crate_dirs() {
+        if !krate.starts_with(&framework) {
+            continue;
+        }
+        for path in nest_rs_conformance::sources::rust_files(&krate.join("src")) {
+            let Some(ast) = parsed(&path) else { continue };
+            let in_config_rs = path.file_name().is_some_and(|n| n == "config.rs");
+            for item in &ast.items {
+                let Item::Struct(i) = item else { continue };
+                if !matches!(i.vis, syn::Visibility::Public(_)) {
+                    continue;
+                }
+                let ident = i.ident.to_string();
+                if !ident.ends_with("Config") {
+                    continue;
+                }
+                scanned += 1;
+                let declared = nest_rs_conformance::sources::config_namespace(&i.attrs).is_some();
+                if !declared && !in_config_rs {
+                    holes.insert(format!(
+                        "{ident} is declared by {} and is no `#[config]`",
+                        nest_rs_conformance::sources::relative(&path, &root),
+                    ));
+                }
+            }
+        }
+    }
+    baseline::floor(scanned, floors::CONFIGS, "public `*Config` structs");
+    baseline::gate(
+        CONFIG_NAMES_BASELINE,
+        &holes,
+        scanned,
+        "public `*Config` structs",
+        "`*Config` structs that are no `#[config]`",
+        "a settings struct wearing a config's suffix — name it for the crate's \
+         subject and its file's kind",
+    );
+}
+
 /// The binding folder a path sits under, or `None` when it sits at the crate
 /// root or under something that declares no module.
 fn binding_of(path: &Path, src: &Path, bindings: &BTreeSet<String>) -> Option<String> {
@@ -881,6 +1131,22 @@ const PLURAL_ROLE_FOLDERS: [&str; 7] = [
     "providers",
 ];
 
+/// The leading segments of a crate's namespace: its subject, folded — or, for a
+/// member of a family, the family and the member as two levels, read off the one
+/// `TARGET` the crate declares (`nest_rs::oauth::client` → `oauth`, `client`), so
+/// the variable, the span target and the path a caller types say one string.
+fn subject_segments(krate: &str, subject: &str) -> Vec<String> {
+    let own = nest_rs_conformance::sources::declared_targets()
+        .iter()
+        .filter(|(_, owner, konst)| *owner == krate && *konst == "TARGET")
+        .filter_map(|(target, _, _)| target.strip_prefix("nest_rs::"))
+        .find(|tail| tail.contains("::"));
+    match own {
+        Some(tail) => tail.split("::").map(folded).collect(),
+        None => vec![folded(subject)],
+    }
+}
+
 #[test]
 fn namespace_is_the_stem() {
     let root = repo_root();
@@ -917,7 +1183,8 @@ fn namespace_is_the_stem() {
                     continue;
                 };
                 scanned += 1;
-                let expected: Vec<String> = std::iter::once(folded(subject))
+                let expected: Vec<String> = subject_segments(name, subject)
+                    .into_iter()
                     .chain(
                         folders
                             .iter()

@@ -38,10 +38,8 @@ pub mod unit;
 // identically. A seam between framework crates, not a surface an app calls.
 pub mod consume;
 pub mod envelope;
-pub use error::QueueError;
-pub use inventory::{
-    JobError, JobHandler, ProcessMethod, WIRE_FORMAT_VERSION, check_duplicate_queue_claims,
-};
+pub use error::{JobError, QueueError};
+pub use inventory::{JobHandler, ProcessMethod, WIRE_FORMAT_VERSION, check_duplicate_queue_claims};
 pub use processor::{Job, Processor};
 pub use producer::{JobProducer, JobProducerExt};
 pub use queue_name::QueueName;

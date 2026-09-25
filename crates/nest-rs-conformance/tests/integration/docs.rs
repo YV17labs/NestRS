@@ -56,10 +56,10 @@ const CORPUS: &str = "docs/src/content/docs";
 mod floors {
     /// The corpus walk itself: 125 pages stand today. Declared here rather than
     /// beside `CORPUS` so this module has one place a floor is read from.
-    pub const PAGES: usize = 100;
-    pub const UNITS: usize = 8;
-    pub const TARGETS: usize = 20;
-    pub const ENV_KEYS: usize = 40;
+    pub(super) const PAGES: usize = 100;
+    pub(super) const UNITS: usize = 8;
+    pub(super) const TARGETS: usize = 20;
+    pub(super) const ENV_KEYS: usize = 40;
 }
 
 /// The prefix a framework variable carries by default, **read from its

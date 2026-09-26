@@ -139,9 +139,8 @@ section does not bind it.
   out where it declares them.** A test that needs a Redis logical database
   of its own takes it from the one `DB_*` list in its suite's `main.rs`
   (`nest-rs-redis`'s e2e holds it), which a `const` block checks at compile
-  time — every index from 1 to 15,
-  no two equal — so a collision is a build error rather than two tests
-  flushing each other's keys. A test that starts a worker drains a queue
+  time — every index from 1 to 15, no two equal — so a collision is a build
+  error rather than two tests flushing each other's keys. A test that starts a worker drains a queue
   named for that test alone, since a worker in one process takes another
   test's jobs; a test that pushes where no worker drains uses a name or a
   key unique to its run, and deletes what it filed.

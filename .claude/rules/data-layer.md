@@ -215,8 +215,8 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   stores a save at once, while a failed transactional attempt rolls its database
   work back, so the retry would resume past work that was undone; the decorator
   refuses a `Checkpoint` parameter on a transactional method. Such a job owns its
-  idempotency. The key is one word on
-  all four job decorators, worded once in `nest_rs_codegen::job`.
+  idempotency. The key is one word on all four job decorators, worded once in
+  `nest_rs_codegen::job`.
 
   **An abandoned attempt holds its locks until its statement drains, and that
   is new.** Dropping the job future mid-statement — the framework's own shutdown

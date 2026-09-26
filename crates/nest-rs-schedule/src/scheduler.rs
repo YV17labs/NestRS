@@ -1488,6 +1488,101 @@ mod tests {
         }
     }
 
+    /// A lock written without `#[async_trait]` can panic in the method itself,
+    /// before it hands back a future, and that panic is contained like one inside
+    /// the future: the occurrence is skipped and named, and nothing unwinds the
+    /// job's loop.
+    #[tokio::test]
+    async fn a_lock_panicking_before_it_hands_back_a_future_is_contained() {
+        struct PanicsWhenCalled;
+        impl OccurrenceLock for PanicsWhenCalled {
+            fn claim<'a, 'b, 'c>(
+                &'a self,
+                _occurrence: &'b str,
+                _hold: Duration,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<bool, crate::OccurrenceLockError>>
+                        + Send
+                        + 'c,
+                >,
+            >
+            where
+                'a: 'c,
+                'b: 'c,
+            {
+                panic!("the lock panicked before handing back its claim")
+            }
+
+            fn claimed<'a, 'b, 'c>(
+                &'a self,
+                _occurrence: &'b str,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<bool, crate::OccurrenceLockError>>
+                        + Send
+                        + 'c,
+                >,
+            >
+            where
+                'a: 'c,
+                'b: 'c,
+            {
+                panic!("the lock panicked before handing back its answer")
+            }
+        }
+        fn run(
+            _: &Container,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let runner = Runner {
+            container: Container::builder().build(),
+            ctx: None,
+            lock: Some(Arc::new(PanicsWhenCalled)),
+        };
+        let id = JobId {
+            provider: "EagerTasks",
+            method: "sweep",
+        };
+        let task = Task {
+            run,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::One,
+        };
+        let now_ms = epoch_millis(SystemTime::now());
+
+        runner.claim_then_fire(id, task, now_ms, MIN_HOLD).await;
+        runner
+            .report_overrun(
+                id,
+                0,
+                1_000,
+                interval_overrun(0, 100, 2),
+                stale_at(now_ms, MIN_HOLD),
+            )
+            .await;
+
+        let claiming = logs.expect_one(
+            crate::TARGET,
+            "occurrence skipped: its lock panicked while claiming it",
+        );
+        assert_eq!(
+            claiming.field("panic").as_deref(),
+            Some("the lock panicked before handing back its claim")
+        );
+        let answering = logs.expect_one(
+            crate::TARGET,
+            "occurrence lock panicked answering whether an overrun occurrence was claimed",
+        );
+        assert_eq!(
+            answering.field("panic").as_deref(),
+            Some("the lock panicked before handing back its answer")
+        );
+    }
+
     /// A claim the lock never answers is abandoned when its occurrence goes
     /// stale: the occurrence is not fired — the key may have been taken, so
     /// firing could be the second time — and the skip is said, naming the job,

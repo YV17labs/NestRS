@@ -357,7 +357,7 @@
       "type_key"
     ]
   },
-  "test_count": 2427,
+  "test_count": 2428,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [

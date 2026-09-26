@@ -38,6 +38,10 @@ libc.workspace = true
 # `LogCapture`: a schedule reports a job it could not settle by logging it and
 # firing again, so the log *is* the outcome and only a capture can assert it.
 nest-rs-testing = { path = "../nest-rs-testing" }
+# `test-util` (not part of tokio's `full`) pauses time, so a lock that never
+# answers is abandoned at its occurrence's stale threshold — most of a minute —
+# without the suite waiting that minute out.
+tokio = { workspace = true, features = ["test-util"] }
 
 # The workspace lints minus `unsafe_code = "forbid"`, which this crate states in
 # its `lib.rs` instead (its tests write the environment).

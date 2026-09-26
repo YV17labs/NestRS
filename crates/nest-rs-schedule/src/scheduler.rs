@@ -447,9 +447,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                                 count: skipped,
                                 capped: false,
                             };
-                            runner
-                                .report_overrun(id, task, now_ms.saturating_sub(since_ms), now_ms, overrun)
-                                .await;
+                            report_skipped(id, now_ms.saturating_sub(since_ms), now_ms, &overrun);
                         }
                         previous = deadline;
                         runner.fire(id, task, None).await;
@@ -482,7 +480,13 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                 if skipped > 0 {
                     let overrun = interval_overrun(last_ms, period_ms, skipped);
                     tokio::join!(
-                        runner.report_overrun(id, task, last_ms, now_ms, overrun),
+                        runner.report_overrun(
+                            id,
+                            last_ms,
+                            now_ms,
+                            overrun,
+                            stale_at(instant_ms, hold)
+                        ),
                         claim
                     );
                 } else {
@@ -534,30 +538,45 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                     CronDue::NoneYet => (Some(target), Overrun::default()),
                     CronDue::PastCap(overrun) => (None, overrun),
                 };
+                // The instant reached and how long its claim holds: the gap to the
+                // following occurrence, so a key outlives any replica still
+                // reaching this one.
+                let reached = instant.map(|instant| {
+                    let hold = next_occurrence(&schedule, tz, instant)
+                        .and_then(|following| (following - instant).to_std().ok())
+                        .map_or(MIN_HOLD, |gap| gap.max(MIN_HOLD));
+                    (u64::try_from(instant.timestamp_millis()).unwrap_or(0), hold)
+                });
                 let fire = async {
-                    let Some(instant) = instant else {
+                    let Some((instant_ms, hold)) = reached else {
                         return;
                     };
                     match task.replicas {
                         Replicas::Each => runner.fire(id, task, None).await,
-                        Replicas::One => {
-                            // The gap to the following occurrence, so a key
-                            // outlives any replica still reaching this one.
-                            let hold = next_occurrence(&schedule, tz, instant)
-                                .and_then(|following| (following - instant).to_std().ok())
-                                .map_or(MIN_HOLD, |gap| gap.max(MIN_HOLD));
-                            let instant_ms = u64::try_from(instant.timestamp_millis()).unwrap_or(0);
-                            runner.claim_then_fire(id, task, instant_ms, hold).await;
-                        }
+                        Replicas::One => runner.claim_then_fire(id, task, instant_ms, hold).await,
                     }
                 };
                 if overrun.count > 0 {
                     let from_ms = u64::try_from(last.timestamp_millis()).unwrap_or(0);
                     let now_ms = u64::try_from(now.timestamp_millis()).unwrap_or(0);
-                    tokio::join!(
-                        runner.report_overrun(id, task, from_ms, now_ms, overrun),
-                        fire
-                    );
+                    match task.replicas {
+                        Replicas::Each => {
+                            report_skipped(id, from_ms, now_ms, &overrun);
+                            fire.await;
+                        }
+                        Replicas::One => {
+                            // Bounded by the occurrence it runs beside — past the
+                            // cap there is none, and an occurrence reached now at the
+                            // shortest hold stands in for it.
+                            let stale = reached.map_or(stale_at(now_ms, MIN_HOLD), |(ms, hold)| {
+                                stale_at(ms, hold)
+                            });
+                            tokio::join!(
+                                runner.report_overrun(id, from_ms, now_ms, overrun, stale),
+                                fire
+                            );
+                        }
+                    }
                 } else {
                     fire.await;
                 }
@@ -698,6 +717,57 @@ fn reached_after_hold(now_ms: u64, instant_ms: u64, hold_ms: u64) -> Option<u64>
     (late_ms >= hold_ms.saturating_sub(skew_ms)).then_some(late_ms)
 }
 
+/// When the occurrence at `instant_ms`, claimed for `hold`, goes **stale**: the
+/// instant from which [`reached_after_hold`] skips it, since a peer's claim on it
+/// may be forgotten by then.
+///
+/// It is also where waiting on the occurrence's lock stops being worth anything,
+/// and that is what makes it the bound on every lock call: an answer arriving
+/// later could not be acted on, so the call is abandoned there and the occurrence
+/// skipped. Without the bound a lock that never answers — a backend holding a
+/// command, a network dropping it without a reset — held its job's loop for as
+/// long, and the job stopped firing with nothing said, while the process stayed
+/// healthy.
+fn stale_at(instant_ms: u64, hold: Duration) -> u64 {
+    let hold_ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
+    let skew_ms = u64::try_from(MAX_SKEW.as_millis()).unwrap_or(u64::MAX);
+    instant_ms.saturating_add(hold_ms.saturating_sub(skew_ms))
+}
+
+/// How long a lock call may still be awaited: from the wall clock now to
+/// `stale_at_ms`, and nothing once it has passed.
+fn left_until(stale_at_ms: u64) -> Duration {
+    Duration::from_millis(stale_at_ms.saturating_sub(epoch_millis(SystemTime::now())))
+}
+
+/// What a lock call returned when it was awaited no longer than its budget:
+/// `None` when it had not answered by then, the panic's payload when it
+/// panicked, and its answer otherwise.
+type Bounded<T> = Option<std::thread::Result<T>>;
+
+/// Await `call` — a claim, or a question about a claim — for `budget` and no
+/// longer, containing a panic the way every call into a lock is contained.
+async fn bounded<T>(budget: Duration, call: impl std::future::Future<Output = T>) -> Bounded<T> {
+    tokio::time::timeout(budget, AssertUnwindSafe(call).catch_unwind())
+        .await
+        .ok()
+}
+
+/// Say that the occurrences a job firing on every replica overran were skipped:
+/// they were this replica's own, so no lock is asked about them.
+fn report_skipped(id: JobId, from_ms: u64, now_ms: u64, overrun: &Overrun) {
+    tracing::warn!(
+        target: crate::TARGET,
+        provider = id.provider,
+        method = id.method,
+        occurrence = from_ms,
+        skipped = overrun.count,
+        capped = overrun.capped.then_some(true),
+        overrun_ms = now_ms.saturating_sub(from_ms),
+        "occurrences skipped: they fell due while the previous one was claimed or run",
+    );
+}
+
 /// Refuse two jobs sharing one `Provider::method`, naming where each was
 /// declared.
 fn refuse_shared_identities(origins: &[(JobId, &'static str)]) -> Result<()> {
@@ -762,6 +832,12 @@ impl Runner {
     /// occurrence, since the peer's key may already be gone; firing could be the
     /// second time. And so does a claim answered that late, however early it was
     /// sent: the key it set may be one a peer's forgotten claim left room for.
+    ///
+    /// The claim itself is awaited until the occurrence goes stale and no longer
+    /// ([`stale_at`]): a lock that has not answered by then is abandoned, and the
+    /// occurrence skipped with a `warn`. At most once still holds — an abandoned
+    /// claim may have taken the key, and then nobody fires the occurrence — which
+    /// is the side the port's rule chooses.
     async fn claim_then_fire(&self, id: JobId, task: Task, instant_ms: u64, hold: Duration) {
         let hold_ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
         if let Some(late_ms) =
@@ -781,15 +857,29 @@ impl Runner {
             return;
         }
         let occurrence = id.occurrence(instant_ms);
+        let budget = left_until(stale_at(instant_ms, hold));
         let claimed = match &self.lock {
-            Some(lock) => match AssertUnwindSafe(async { lock.claim(&occurrence, hold).await })
-                .catch_unwind()
-                .await
-            {
-                Ok(claimed) => claimed,
+            Some(lock) => match bounded(budget, lock.claim(&occurrence, hold)).await {
+                Some(Ok(claimed)) => claimed,
+                // Not answered while an answer could still be acted on: the call
+                // is dropped, the occurrence skipped, and the loop goes on to the
+                // next one rather than waiting on a lock that may never answer.
+                None => {
+                    tracing::warn!(
+                        target: crate::TARGET,
+                        provider = id.provider,
+                        method = id.method,
+                        occurrence = instant_ms,
+                        waited_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
+                        hold_ms,
+                        "occurrence skipped: its lock did not answer the claim before the \
+                         occurrence went stale",
+                    );
+                    return;
+                }
                 // A lock that panics answers nothing: the occurrence is skipped,
                 // the panic named, and the schedule goes on.
-                Err(payload) => {
+                Some(Err(payload)) => {
                     tracing::error!(
                         target: crate::TARGET,
                         provider = id.provider,
@@ -845,52 +935,60 @@ impl Runner {
         }
     }
 
-    /// Say what a slow claim or run overran, from the occurrence at `from_ms`.
+    /// Say what a slow claim or run overran on a job firing once, from the
+    /// occurrence at `from_ms`.
     ///
-    /// On a job firing on every replica, the overrun occurrences were this
-    /// replica's own, and are skipped. On a job firing once, a peer may have
-    /// claimed and fired them while this replica was busy, so the lock is asked
-    /// about the first [`CHECKED`]: only those nobody claimed — with those it
-    /// could not answer, and those past the ones asked — are reported skipped,
-    /// at `warn`; an overrun whose every occurrence a peer claimed is a `debug`.
+    /// A peer may have claimed and fired the overrun occurrences while this
+    /// replica was busy, so the lock is asked about the first [`CHECKED`]: only
+    /// those nobody claimed — with those it could not answer, and those past the
+    /// ones asked — are reported skipped, at `warn`; an overrun whose every
+    /// occurrence a peer claimed is a `debug`. Each question is awaited until
+    /// `stale_at_ms`, the stale threshold of the occurrence the report runs beside,
+    /// and a question not answered by then counts as unanswered: the loop reaching
+    /// that occurrence is not held past the point its own claim is abandoned at.
     async fn report_overrun(
         &self,
         id: JobId,
-        task: Task,
         from_ms: u64,
         now_ms: u64,
         overrun: Overrun,
+        stale_at_ms: u64,
     ) {
         let overrun_ms = now_ms.saturating_sub(from_ms);
         let capped = overrun.capped.then_some(true);
-        let lock = match (&self.lock, task.replicas) {
-            (Some(lock), Replicas::One) => lock,
-            _ => {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    provider = id.provider,
-                    method = id.method,
-                    occurrence = from_ms,
-                    skipped = overrun.count,
-                    capped,
-                    overrun_ms,
-                    "occurrences skipped: they fell due while the previous one was claimed or run",
-                );
-                return;
-            }
+        // No lock: `configure` refused the boot already, so nothing is asked and
+        // every overrun occurrence is this replica's to report.
+        let Some(lock) = &self.lock else {
+            report_skipped(id, from_ms, now_ms, &overrun);
+            return;
         };
+        let budget = left_until(stale_at_ms);
         let answers = futures_util::future::join_all(overrun.first.iter().map(|instant| {
             let occurrence = id.occurrence(*instant);
-            async move {
-                AssertUnwindSafe(async { lock.claimed(&occurrence).await })
-                    .catch_unwind()
-                    .await
-            }
+            async move { bounded(budget, lock.claimed(&occurrence)).await }
         }))
         .await;
+        // A question the lock left unanswered past the threshold counts as
+        // unanswered, and the abandoned ones are named once for the whole report.
+        let abandoned = answers.iter().filter(|answer| answer.is_none()).count() as u64;
+        if abandoned > 0 {
+            tracing::warn!(
+                target: crate::TARGET,
+                provider = id.provider,
+                method = id.method,
+                occurrence = from_ms,
+                abandoned,
+                waited_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
+                "occurrence lock did not answer whether an overrun occurrence was claimed before \
+                 the occurrence reached went stale",
+            );
+        }
         // A lock that panicked answering counts as unanswered, and the first panic
         // is named once for the whole report rather than once per occurrence asked.
-        if let Some(payload) = answers.iter().find_map(|answer| answer.as_ref().err()) {
+        if let Some(payload) = answers
+            .iter()
+            .find_map(|answer| answer.as_ref().and_then(|answer| answer.as_ref().err()))
+        {
             tracing::error!(
                 target: crate::TARGET,
                 provider = id.provider,
@@ -903,11 +1001,9 @@ impl Runner {
         // A lock that *answered* with an error counts as unanswered too, and
         // `unanswered` alone says how many and never why — the half an operator
         // acts on.
-        if let Some(error) = answers.iter().find_map(|answer| {
-            answer
-                .as_ref()
-                .ok()
-                .and_then(|claimed| claimed.as_ref().err())
+        if let Some(error) = answers.iter().find_map(|answer| match answer {
+            Some(Ok(Err(error))) => Some(error),
+            _ => None,
         }) {
             tracing::warn!(
                 target: crate::TARGET,
@@ -921,11 +1017,11 @@ impl Runner {
         let checked = answers.len() as u64;
         let claimed_elsewhere = answers
             .iter()
-            .filter(|answer| matches!(answer, Ok(Ok(true))))
+            .filter(|answer| matches!(answer, Some(Ok(Ok(true)))))
             .count() as u64;
         let unanswered = answers
             .iter()
-            .filter(|answer| !matches!(answer, Ok(Ok(_))))
+            .filter(|answer| !matches!(answer, Some(Ok(Ok(_)))))
             .count() as u64;
         let skipped = checked - claimed_elsewhere - unanswered;
         let unchecked = overrun.count.saturating_sub(checked);
@@ -1139,11 +1235,6 @@ mod tests {
                 panic!("the lock store's client panicked")
             }
         }
-        fn run(
-            _: &Container,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
-            Box::pin(async { Ok(()) })
-        }
 
         let logs = nest_rs_testing::LogCapture::install();
         let runner = Runner {
@@ -1155,13 +1246,9 @@ mod tests {
             provider: "OverrunTasks",
             method: "sweep",
         };
-        let task = Task {
-            run,
-            transaction: JobTransaction::Pool,
-            replicas: Replicas::One,
-        };
+        let stale = stale_at(epoch_millis(SystemTime::now()), MIN_HOLD);
         runner
-            .report_overrun(id, task, 0, 1_000, interval_overrun(0, 100, 3))
+            .report_overrun(id, 0, 1_000, interval_overrun(0, 100, 3), stale)
             .await;
 
         let panicked = logs.find(
@@ -1271,19 +1358,25 @@ mod tests {
     }
 
     /// The check before a claim reads the clock before the claim is answered, and
-    /// an answer can take a connect budget: a key set that late may be a fresh one
-    /// a peer's forgotten claim left room for. Judged again once answered.
+    /// the claim's bound cannot cover a replica that stalls while it waits —
+    /// paused by its platform, starved of CPU — so that the stall and the answer
+    /// end together, past the threshold the wait was bounded at. A key set that
+    /// late may be a fresh one a peer's forgotten claim left room for, so the
+    /// answer is judged again once it arrives.
+    ///
+    /// The double blocks its thread to stand for the stall: the answer is ready
+    /// the first time the bound polls it, as it is when a stalled process resumes.
     #[tokio::test]
     async fn a_claim_answered_too_near_its_holds_end_is_not_fired() {
-        struct SlowlyGranting;
+        struct GrantingAfterAStall;
         #[async_trait]
-        impl OccurrenceLock for SlowlyGranting {
+        impl OccurrenceLock for GrantingAfterAStall {
             async fn claim(
                 &self,
                 _occurrence: &str,
                 _hold: Duration,
             ) -> Result<bool, crate::OccurrenceLockError> {
-                tokio::time::sleep(Duration::from_millis(1_200)).await;
+                std::thread::sleep(Duration::from_millis(1_200));
                 Ok(true)
             }
 
@@ -1305,7 +1398,7 @@ mod tests {
         let runner = Runner {
             container: Container::builder().build(),
             ctx: None,
-            lock: Some(Arc::new(SlowlyGranting)),
+            lock: Some(Arc::new(GrantingAfterAStall)),
         };
         let id = JobId {
             provider: "SlowTasks",
@@ -1342,6 +1435,215 @@ mod tests {
                 .field("late_ms")
                 .is_some_and(|late| late.parse::<u64>().is_ok_and(|ms| ms >= 50_000)),
             "{skipped:?}"
+        );
+    }
+
+    /// The bound on a lock call and the check on a late reach are one threshold:
+    /// the millisecond an occurrence goes stale is the first one the check skips
+    /// it at, so a call is never abandoned while its answer could still be acted
+    /// on, nor awaited once it could not.
+    #[test]
+    fn an_occurrence_goes_stale_exactly_where_reaching_it_is_judged_too_late() {
+        let instant_ms = 1_000;
+        let stale = stale_at(instant_ms, MIN_HOLD);
+        assert_eq!(
+            stale, 51_000,
+            "the hold, less the clock skew two replicas may carry"
+        );
+        assert_eq!(reached_after_hold(stale - 1, instant_ms, 60_000), None);
+        assert_eq!(reached_after_hold(stale, instant_ms, 60_000), Some(50_000));
+        assert_eq!(
+            stale_at(u64::MAX - 1, MIN_HOLD),
+            u64::MAX,
+            "saturates rather than wrapping"
+        );
+    }
+
+    /// A lock whose calls never answer — a backend holding every command, a
+    /// network dropping them without a reset — and whose every call is counted.
+    struct NeverAnswering {
+        claims: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl OccurrenceLock for NeverAnswering {
+        async fn claim(
+            &self,
+            _occurrence: &str,
+            _hold: Duration,
+        ) -> Result<bool, crate::OccurrenceLockError> {
+            self.claims
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::pending().await
+        }
+
+        async fn claimed(&self, _occurrence: &str) -> Result<bool, crate::OccurrenceLockError> {
+            std::future::pending().await
+        }
+    }
+
+    /// A claim the lock never answers is abandoned when its occurrence goes
+    /// stale: the occurrence is not fired — the key may have been taken, so
+    /// firing could be the second time — and the skip is said, naming the job,
+    /// the occurrence and how long the claim was waited on.
+    ///
+    /// On paused time, so the minute a real claim would wait passes at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_the_lock_never_answers_is_abandoned_once_its_occurrence_is_stale() {
+        static RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        fn run(
+            _: &Container,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async {
+                RAN.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let runner = Runner {
+            container: Container::builder().build(),
+            ctx: None,
+            lock: Some(Arc::new(NeverAnswering {
+                claims: std::sync::atomic::AtomicUsize::new(0),
+            })),
+        };
+        let id = JobId {
+            provider: "HungTasks",
+            method: "sweep",
+        };
+        let task = Task {
+            run,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::One,
+        };
+        let instant_ms = epoch_millis(SystemTime::now());
+
+        runner.claim_then_fire(id, task, instant_ms, MIN_HOLD).await;
+
+        assert!(
+            !RAN.load(std::sync::atomic::Ordering::SeqCst),
+            "the occurrence is not fired"
+        );
+        let skipped = logs.expect_one(
+            crate::TARGET,
+            "occurrence skipped: its lock did not answer the claim before the occurrence went \
+             stale",
+        );
+        assert_eq!(skipped.level, "warn");
+        assert_eq!(skipped.field("provider").as_deref(), Some("HungTasks"));
+        assert_eq!(skipped.field("method").as_deref(), Some("sweep"));
+        assert_eq!(
+            skipped.field("occurrence").as_deref(),
+            Some(instant_ms.to_string().as_str())
+        );
+        assert!(
+            skipped.field("waited_ms").is_some_and(|waited| waited
+                .parse::<u64>()
+                .is_ok_and(|ms| ms > 40_000 && ms <= 50_000)),
+            "waited until the hold less the skew: {skipped:?}"
+        );
+    }
+
+    /// The same bound on the question an overrun asks: an unanswered one is
+    /// abandoned at the threshold of the occurrence the report runs beside,
+    /// counted unanswered rather than skipped, and named once for the report.
+    #[tokio::test(start_paused = true)]
+    async fn an_overrun_question_the_lock_never_answers_is_abandoned_and_counted_unanswered() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let runner = Runner {
+            container: Container::builder().build(),
+            ctx: None,
+            lock: Some(Arc::new(NeverAnswering {
+                claims: std::sync::atomic::AtomicUsize::new(0),
+            })),
+        };
+        let id = JobId {
+            provider: "HungTasks",
+            method: "sweep",
+        };
+        let now_ms = epoch_millis(SystemTime::now());
+        let stale = stale_at(now_ms, MIN_HOLD);
+
+        runner
+            .report_overrun(id, 0, 1_000, interval_overrun(0, 100, 3), stale)
+            .await;
+
+        let abandoned = logs.expect_one(
+            crate::TARGET,
+            "occurrence lock did not answer whether an overrun occurrence was claimed before the \
+             occurrence reached went stale",
+        );
+        assert_eq!(abandoned.level, "warn");
+        assert_eq!(abandoned.field("provider").as_deref(), Some("HungTasks"));
+        assert_eq!(abandoned.field("occurrence").as_deref(), Some("0"));
+        assert_eq!(abandoned.field("abandoned").as_deref(), Some("3"));
+        let skipped = logs.expect_one(
+            crate::TARGET,
+            "occurrences skipped: they fell due while the previous one was claimed or run",
+        );
+        assert_eq!(skipped.field("unanswered").as_deref(), Some("3"));
+        assert_eq!(skipped.field("skipped").as_deref(), Some("0"));
+    }
+
+    /// What the bound is for: a lock that never answers holds no loop. Without
+    /// it the job's first claim held its loop for good and the job never fired
+    /// again, with nothing said; with it every occurrence is claimed in turn,
+    /// each abandoned and each named, until shutdown.
+    #[tokio::test(start_paused = true)]
+    async fn a_lock_that_never_answers_stops_no_schedule() {
+        fn run(
+            _: &Container,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let lock = Arc::new(NeverAnswering {
+            claims: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let runner = Runner {
+            container: Container::builder().build(),
+            ctx: None,
+            lock: Some(Arc::clone(&lock) as Arc<dyn OccurrenceLock>),
+        };
+        let job = Job::Interval {
+            id: JobId {
+                provider: "HungTasks",
+                method: "sweep",
+            },
+            period: Duration::from_millis(100),
+            task: Task {
+                run,
+                transaction: JobTransaction::Pool,
+                replicas: Replicas::One,
+            },
+        };
+        let token = CancellationToken::new();
+        let looping = tokio::spawn(run_job(job, runner, token.clone()));
+
+        let deadline = Instant::now() + Duration::from_secs(3_600);
+        while lock.claims.load(std::sync::atomic::Ordering::SeqCst) < 3 {
+            assert!(
+                Instant::now() < deadline,
+                "the loop claimed {} occurrences in an hour of a lock that never answers",
+                lock.claims.load(std::sync::atomic::Ordering::SeqCst),
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        token.cancel();
+        looping.await.expect("the loop ends at shutdown");
+
+        assert!(
+            logs.find(
+                crate::TARGET,
+                "occurrence skipped: its lock did not answer the claim before the occurrence \
+                 went stale",
+            )
+            .len()
+                >= 2,
+            "each abandoned claim is named: {:#?}",
+            logs.events()
         );
     }
 

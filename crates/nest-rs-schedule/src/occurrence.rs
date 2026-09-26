@@ -2,9 +2,10 @@
 //!
 //! **Fail closed, at most once per occurrence.** The scheduler claims an
 //! occurrence at its instant and fires it only when the claim says this replica
-//! won it. A claim that errors skips the occurrence with a `warn`: firing
-//! unclaimed would fire it on every replica, which is exactly what the
-//! declaration exists to prevent. So a replica that crashes after claiming loses
+//! won it. A claim that errors skips the occurrence with a `warn`, and so does a
+//! claim still unanswered when the occurrence goes stale: firing unclaimed would
+//! fire it on every replica, which is exactly what the declaration exists to
+//! prevent. So a replica that crashes after claiming loses
 //! that occurrence, and work that must not be lost belongs in a queue job the
 //! tick enqueues — a queue delivers at least once.
 //!
@@ -33,10 +34,15 @@ use crate::OccurrenceLockError;
 /// The token is the port's: a backend prefixes it with its own structure and
 /// never parses it.
 ///
-/// **Both methods answer or fail in bounded time.** The scheduler waits on the
-/// answer before its job's next occurrence, so a call that never returns holds
-/// that job's loop until it does; a backend bounds each command it sends, as the
-/// connection it claims over already does for every other caller.
+/// **Both methods answer or fail in bounded time.** The scheduler waits on an
+/// answer only while it could still act on it — until the occurrence goes stale,
+/// its hold less the clock skew two replicas may carry — then abandons the call
+/// and skips the occurrence with a `warn`, so a call that never returns costs
+/// occurrences rather than stopping its job. That bound is the scheduler's net,
+/// not a backend's budget: a backend bounds each command it sends, as the
+/// connection it claims over already does for every other caller, so an outage
+/// reaches the `warn` as the backend's own error and promptly, rather than as a
+/// minute of silence per occurrence.
 #[async_trait]
 pub trait OccurrenceLock: Send + Sync + 'static {
     /// Claim `occurrence` for `hold`.

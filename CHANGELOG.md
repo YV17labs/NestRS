@@ -129,6 +129,58 @@ future handlebars that restores the default flips it back.
 - **`cargo-chef` 0.1.78** in `demo/Dockerfile`, still pinned at 0.1.77. It is a
   `cargo install` build tool rather than a requirement, and no test walks it.
 
+### A scheduled job can fire once across replicas
+
+`#[every]` and `#[cron]` fire on every replica of an app. That is right for a
+heartbeat and wrong for a tick that enqueues work: three replicas enqueue three
+jobs per occurrence, and nothing said so.
+
+- **`replicas = "one"`** on `#[every]` or `#[cron]` fires each occurrence on the
+  one replica whose claim on it succeeds. `"each"`, the default, keeps the
+  previous behaviour. `#[after]` refuses the key at compile time, because each
+  replica's boot is its own event.
+- **The claim goes through a port, `OccurrenceLock`**, which a backend binds as
+  one declared factory for `Arc<dyn OccurrenceLock>` carrying
+  `nest_rs::schedule::BACKEND_REMEDY`. The boot fails when a reachable job
+  declares `replicas = "one"` and no lock is bound, naming the job and that
+  remedy; two lock bindings fail it too.
+- **An `#[every]` declared `replicas = "one"` ticks on multiples of its period
+  since the Unix epoch**, so replicas booted at different moments reach the same
+  instants. `replicas = "each"` still first fires one period after boot.
+- **At most once per occurrence, never at least once.** A claim the lock cannot
+  answer skips the occurrence with a `warn` on `nest_rs::schedule` carrying
+  `provider`, `method`, `occurrence` and `error`, and so does a replica reaching
+  an occurrence within ten seconds of its claim's hold ending, or whose claim is
+  answered that late: its peer's claim may already be gone. A replica that
+  crashes after claiming loses that occurrence; work that must not be lost
+  belongs in a queue job the tick enqueues. Replica clocks must agree within ten
+  seconds. A claim is made under `<provider>:<method>:<instant>` — a level per
+  `::` — and lasts until the following occurrence, at least a minute.
+- **Occurrences that fall due while the previous one is claimed or run are
+  counted aloud**, whichever `replicas` a job declares: one `warn`,
+  `occurrences skipped`, with `skipped`, the `occurrence` it started from and
+  `overrun_ms`. The loop reaches the latest occurrence due, late, rather than
+  firing the stale one it slept for and then the latest. A job firing once asks
+  the lock about the first hundred it overran, so the ones a peer fired are told
+  apart from the ones nobody did (`claimed_elsewhere`, `unanswered`,
+  `unchecked`).
+- **Breaking:** `ScheduledMethod` and `CronJobMeta` gain a `replicas` field, and
+  the `scheduled job (…)` boot lines and the `schedule.tick` line carry
+  `replicas`; a job firing once carries the `occurrence` it claimed on its tick.
+- **Breaking:** two jobs sharing one `Provider::method` fail the boot, naming
+  both and where each was declared. Their lines could not be told apart, and
+  firing once they would claim each other's occurrences.
+- A job registered by hand with a zero interval fails the boot instead of
+  panicking the scheduler, and so does a one-shot declaring one replica.
+- A cron occurrence reached a moment early no longer fires twice: the next
+  occurrence is computed from the one just fired.
+- A panic outside a scheduled method — in the scheduler's own loop, or in a run
+  function before it hands back its future — ended its job in silence while the
+  process reported healthy. The first is named at `error` with the job it
+  stopped; the second is caught like a panicking tick, and the job fires again.
+- A failed tick's `error` names every cause beneath its error, not the wrapper
+  alone.
+
 ## [6.1.0] - 2026-08-29
 
 ### `nestrs lint` — a file's stem, read against what it declares

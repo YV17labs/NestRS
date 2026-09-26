@@ -11,7 +11,9 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
     use sea_orm::{ConnectionTrait, Database};
 
     nest_rs::testing::load_project_env();
-    let url = std::env::var(nest_rs::config::var_name("seaorm", "URL"))
+    let url = nest_rs::config::ConfigService::for_namespace("seaorm")
+        .get("URL")
+        .expect("a readable database URL")
         .expect("the database URL must point at a reachable Postgres for this test");
     let db = Database::connect(&url).await.expect("connect to Postgres");
 

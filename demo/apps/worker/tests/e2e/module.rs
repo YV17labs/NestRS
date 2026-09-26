@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 use worker::WorkerModule;
 
 fn redis_url() -> String {
-    std::env::var(nest_rs::config::var_name("redis", "URL"))
-        .unwrap_or_else(|_| "redis://127.0.0.1/".into())
+    nest_rs::config::ConfigService::for_namespace("redis")
+        .get("URL")
+        .expect("a readable Redis URL")
+        .unwrap_or_else(|| "redis://127.0.0.1/".into())
 }
 
 fn unique_tag() -> String {

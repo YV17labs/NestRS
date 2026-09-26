@@ -198,6 +198,60 @@ jobs per occurrence, and nothing said so.
 - A failed tick's `error` names every cause beneath its error, not the wrapper
   alone.
 
+### The Redis queue lives under `nestrs:queue:`, runs a twice-delivered job once, and keeps every capability the port names
+
+- **Breaking: every queue lives under `nestrs:queue:<queue>`.** apalis derives
+  its lists from that namespace — `…:active` is now the list a KEDA trigger
+  names — and the framework keeps its own records beside them, so a Redis user
+  whose ACL reaches `~nestrs:*` runs a queue end to end. 6.x kept jobs at the
+  root of the keyspace under the queue's bare name: a 7.0 worker refuses to start
+  beside them, naming the keys and the two ways out — drain them with a 6.x
+  worker, or `RENAME` them under the namespace — and a 7.0 producer says so once
+  per queue.
+- **A job apalis delivers twice runs once.** A delivery takes the job's lease
+  before its attempt and leaves a settled mark after it; a second delivery is
+  handed back while the lease is held, and acknowledged without running once the
+  job settled. Every replica consumes under an id of its own, a peer sweeps a
+  silent replica's jobs only after `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS`
+  (300), the lease lasts `NESTRS_REDIS__WORKER__LEASE_SECS` (30), and a shutdown
+  hands back what still runs before its window closes.
+- **`Capability::DelayedPush`.** A delayed push, and a retry's next attempt, wait
+  on the queue's schedule; the producer that filed them moves them onto the queue
+  when due, so they reach the list an autoscaler reads with no worker running.
+- **`Capability::UniquePush`.** A push under a held key is refused with
+  `QueueError::UniqueKeyHeld`, naming the job that holds it, and files nothing;
+  the key is claimed in the step that reads it, so racing pushes queue one job,
+  and it is let go when the job completes, dead-letters or is cancelled. At most
+  once over pushes, never a lock.
+- **`Capability::Cancellation`.** `cancel(&receipt)` and `cancel_unique(queue,
+  key)` answer `true` only while no attempt runs — a job waiting on its queue, on
+  its delay or for its next attempt — and the delivery that meets the cancel
+  acknowledges the job without running it. A job never known, or long finished,
+  answers `false`.
+- **`Capability::Throttle`.** `#[process(throttle(limit, window))]` is counted
+  across every replica in one fixed window per queue, opened by its first start;
+  an attempt over the limit waits for the window's end, keeps its attempt number,
+  and is never dropped.
+- **`Capability::Checkpoint`.** A job's `Checkpoint<S>` outlives its retries and
+  a replica that died holding it, and goes with the job's outcome.
+- **Nothing a job leaves waits forever.** Its open record, unique key,
+  checkpoint and a cancel's tombstone last a week past the instant the job is
+  due, renewed by every delivery — the bound on a key whose job vanished, which
+  `cancel_unique` frees sooner.
+
+### A queue per runtime key is not offered
+
+**Breaking.** `#[queue(prefix = "tenant", job = ..)]` and `TenantQueue::instance(&key)?`
+are gone, and the decorator refuses `prefix` with the reason: the Redis backend
+drains every queue from a list of its own, polled by each worker replica — one
+idle queue costs Redis about 58 commands a second, measured on 8.6 — so a queue
+per key costs a poller per key and leaves an autoscaler no single list to read.
+Declare one queue and carry the key in the job. `QueueKind`, `DynamicQueue`,
+`QueueInstance`, `INSTANCE_SEPARATOR`, `Capability::DynamicQueues`,
+`QueueName::{instance, parse, queue, instance_key, kind}` and the job span's
+`messaging.destination.template` go with it; `QueueName::new` is the one
+constructor.
+
 ## [6.1.0] - 2026-08-29
 
 ### `nestrs lint` — a file's stem, read against what it declares

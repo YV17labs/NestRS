@@ -1,6 +1,6 @@
 ---
 title: Retries and failure
-description: "What an Err from a #[process] method means — the retry budget and its backoff, panic handling, and where a dead-lettered job goes."
+description: "What an Err from a #[process] method means — the retry budget and its backoff, resuming from a checkpoint, panic handling, and where a dead-lettered job goes."
 tier: all-options
 sidebar:
   order: 4
@@ -65,6 +65,36 @@ A failure a retry cannot fix is **non-retryable** and dead-letters on the
 attempt it happens: a payload that does not deserialize, a pipe rejection, a
 missing provider. Every `Err` your method returns is retryable — the budget is
 how many times a transient fault gets another chance.
+
+## Resuming where an attempt stopped
+
+A retry replays the whole body. A job that works through a long list can keep
+its place instead, with a `Checkpoint<S>` parameter beside the job:
+
+```rust title="crates/features/src/imports/queue/processor.rs"
+#[process(queue = ImportQueue, retries = 3, transactional = false)]
+async fn import(&self, job: ImportCommand, mut progress: Checkpoint<ImportProgress>) -> Result<()> {
+    let start = progress.get().map_or(0, |saved| saved.row);
+    for batch in self.svc.rows(&job.file, start).await?.chunks(500) {
+        self.svc.import(batch).await?;
+        progress.save(ImportProgress { row: batch.last_row() }).await?;
+    }
+    Ok(())
+}
+```
+
+`get` answers the last state saved for this job — by an earlier attempt, or by
+a replica that died holding it — and `save` stores a new one at once. The
+state lasts through the job's retries and redeliveries, and is cleared when
+the job completes, dead-letters or is cancelled.
+
+The method must declare `transactional = false`, and the decorator refuses a
+`Checkpoint` without it: a save reaches the backend at once, while a
+transactional attempt rolls its database work back when it fails, so the retry
+would resume past rows that were undone. A checkpoint needs a backend declaring
+`Capability::Checkpoint`; on Redis it is one key beside the job, kept for as
+long as the job's other records — see
+[Delivery on Redis](/queue/delivery/#what-a-job-keeps-and-for-how-long).
 
 ## Where failed jobs go
 
@@ -171,6 +201,8 @@ always wrap.
 - `crates/nest-rs-queue/src/consume.rs` — `attempt`: the budget, the backoff,
   the events and the operation line.
 - `crates/nest-rs-queue/src/backoff.rs` — the wait before each retry.
+- `crates/nest-rs-queue/src/checkpoint.rs` — `Checkpoint<S>`, and the
+  `CheckpointStore` a backend keeps it in.
 - `crates/nest-rs-redis/src/worker/delivery.rs` — how an outcome settles on
   Redis: acknowledged, filed for later, or dead-lettered.
 

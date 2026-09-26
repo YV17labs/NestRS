@@ -1,6 +1,6 @@
 ---
 title: Producing jobs
-description: How an HTTP handler enqueues — the typed queue handle, the JobProducer publisher, and the service-as-choke-point rule.
+description: How a feature enqueues — the typed queue handle, the service as the choke point, and a delay, a unique key or a cancel.
 tier: basics
 sidebar:
   order: 2
@@ -145,6 +145,77 @@ naming itself, before anything is filed — a delay is never dropped in silence.
 On Redis the job waits on the queue's schedule and reaches the queue once due,
 whether or not a worker runs — see [Delivery on Redis](/queue/delivery/#delayed-jobs).
 
+## One job per key
+
+A unique key keeps a queue from holding the same piece of work twice. While a
+job pushed under a key is pending or running, a second push under that key is
+refused with `QueueError::UniqueKeyHeld`, which names the job holding it, and
+files nothing:
+
+```rust title="src/billing/service.rs"
+let pushed = self
+    .queue
+    .push(
+        InvoiceQueue,
+        InvoiceCommand { customer },
+        PushOptions::default().with_unique(format!("invoice-{customer}")),
+    )
+    .await;
+match pushed {
+    Ok(receipt) => Ok(Some(receipt)),
+    Err(QueueError::UniqueKeyHeld { holder, .. }) => {
+        tracing::debug!(target: "features::billing", holder = %holder, "invoice already queued");
+        Ok(None)
+    }
+    Err(error) => Err(error.into()),
+}
+```
+
+The key is held from the push until the job reaches its outcome — it
+completes, it dead-letters, or it is cancelled — and is free for the next push
+from then on. It is scoped to the queue: the same key on two queues names two
+jobs. `push_many` refuses a unique key, since a key names one job.
+
+**At most once over pushes, never a lock.** A unique key keeps a sequence of
+pushes from queueing one piece of work twice. It does not make two replicas or
+two methods take turns at anything, and a job redelivered after its replica
+died runs again under the key it already holds.
+
+A unique key needs a backend declaring `Capability::UniquePush`. On Redis the
+key is claimed in the same step that reads it, before the job is filed, so
+pushes racing for one key queue one job; how long a key whose job vanished
+holds out is on [Delivery on Redis](/queue/delivery/#what-a-job-keeps-and-for-how-long).
+
+## Cancelling a job
+
+The receipt a push returns names the job, and `cancel` takes it back while it
+waits:
+
+```rust title="src/audio/service.rs"
+let receipt = self.queue.push(AudioQueue, job, None).await?;
+
+if self.queue.cancel(&receipt).await? {
+    tracing::info!(target: "features::audio", job_id = %receipt.id(), "transcode withdrawn");
+}
+```
+
+`Ok(true)` is a promise: the job had not started, and now never will —
+whether it waited on its queue, on the schedule its delay holds it on, or for
+the next attempt a failed one left it. Cancelling is the job's outcome, so the
+unique key it held is free again and its checkpoint is gone. `Ok(false)` says
+the job already started — it then runs to its own outcome — already finished,
+or was never known to the backend. A job is never stopped mid-attempt.
+
+A receipt is data: it serializes as `{"queue": …, "id": …}`, so a caller that
+cancels later, from another request or another process, keeps it wherever it
+keeps state. `cancel_unique(AudioQueue, key)` cancels the job holding a unique
+key instead, with the same answer.
+
+Cancelling needs a backend declaring `Capability::Cancellation`. On Redis a
+cancel leaves a tombstone beside the job rather than touching the queue's
+storage, written only while no attempt holds the job, and the delivery that
+meets it acknowledges the job without running it.
+
 ## The HTTP adapter
 
 The controller is a thin transport. It accepts a `TranscodeDto` — the
@@ -233,7 +304,8 @@ push side. The service is the contract; transports adapt.
   `JobProducerExt::push`.
 - `crates/nest-rs-queue/src/push_options.rs` — `PushOptions`, and the
   capability each option needs.
-- `crates/nest-rs-redis/src/queue/producer.rs` — the Redis `JobProducer`.
+- `crates/nest-rs-redis/src/queue/producer.rs` — the Redis `JobProducer`:
+  the unique claim, and the cancel.
 
 ## Going further
 

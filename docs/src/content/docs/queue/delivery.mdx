@@ -1,6 +1,6 @@
 ---
 title: Delivery on Redis
-description: "What the Redis worker promises about each job — where it lives, when it can be delivered twice, how shutdown and delays behave, and how to leave 6.x."
+description: "What the Redis backend promises about each job — its keys, when it is delivered twice, shutdown, delays, what each capability keeps, and leaving 6.x."
 tier: all-options
 sidebar:
   order: 5
@@ -10,8 +10,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 Everything a queue holds lives under one prefix, and a job apalis delivers
 twice still runs once. This page is the contract behind that sentence: the
-keys, the guard that keeps the promise, and what shutdown, delays and an
-upgrade from 6.x do to a job in flight.
+keys, the guard that keeps the promise, what shutdown and an upgrade from 6.x
+do to a job in flight, and what each capability the Redis backend declares
+keeps beside the queue.
 
 A queue named `audio`, after one job completed, one dead-lettered and one held
 back for an hour:
@@ -24,15 +25,18 @@ nestrs:queue:audio:data::result
 nestrs:queue:audio:dead
 nestrs:queue:audio:done
 nestrs:queue:audio:failed
+nestrs:queue:audio:open:01a0de7d-ceb5-778a-bf40-ac44a74a55c8
 nestrs:queue:audio:scheduled
-nestrs:queue:audio:settled:01a0de3f-2231-75cf-a401-78dfcb3ecc7d
+nestrs:queue:audio:settled:01a0de7d-ceb3-73dd-8d85-847b2157a83e
+nestrs:queue:audio:settled:01a0de7d-ceb4-75bd-aca2-7ebb6298cccd
 ```
 
 ## Where a queue lives
 
 The queue's namespace is `nestrs:queue:<queue>`. apalis, the library the Redis
 binding is built on, derives its own structures from it; the framework adds
-two of its own beside them, under words apalis does not use.
+its own beside them, under words apalis does not use, each keyed by the job id
+a push returns.
 
 | Key | Holds | Written by |
 |---|---|---|
@@ -40,8 +44,13 @@ two of its own beside them, under words apalis does not use.
 | `nestrs:queue:<queue>:scheduled` | Jobs held back: a delayed push, a retry's next attempt, a job handed back | apalis |
 | `nestrs:queue:<queue>:inflight:<worker>` | Jobs one replica has fetched and not yet settled | apalis |
 | `nestrs:queue:<queue>:data`, `…:dead`, `…:done`, `…:failed` | Records, and the ids of finished, dead-lettered and rescheduled jobs | apalis |
+| `nestrs:queue:<queue>:open:<job_id>` | That the job was pushed and has not reached its outcome, and the unique key it holds | the framework |
 | `nestrs:queue:<queue>:leases:<job_id>` | Which delivery runs the job right now | the framework |
 | `nestrs:queue:<queue>:settled:<job_id>` | That the job reached its outcome, and which one | the framework |
+| `nestrs:queue:<queue>:cancelled:<job_id>` | That a cancel promised the job never starts | the framework |
+| `nestrs:queue:<queue>:checkpoints:<job_id>` | The progress the job saved | the framework |
+| `nestrs:queue:<queue>:unique:<key>` | The id of the job holding a unique key | the framework |
+| `nestrs:queue:<queue>:throttle` | How many attempts of the queue's method started in the current window | the framework |
 
 Nothing sits at the root of the keyspace, so a Redis user whose ACL reaches
 `~nestrs:*` and nothing else runs a queue end to end. The framework never reads
@@ -130,6 +139,64 @@ Keep `minReplicaCount: 1` on a queue that takes delayed pushes from short-lived
 producers.
 </Aside>
 
+## Unique keys
+
+A push under a unique key claims `…:unique:<key>` for its job in the same
+script that reads it, and opens the job's record, before the job is filed —
+so pushes racing for one key queue one job, and a push refused because the
+key is held files nothing. The job lets go of the key in the step that settles
+it, completed or dead-lettered, and a cancel lets go of it too.
+
+A push can fail after the claim. When Redis answered the filing — refused it
+— the job is not on the queue, and the push lets go of the key before it
+returns the error. When the answer never came, the job may be on the queue, so
+the key stays held by it, and a `warn` naming the job and the key says so:
+retrying such a push is refused naming a job the caller never received, and
+`cancel_unique` frees the key if that job never started.
+
+## Cancels
+
+A cancel never touches apalis's storage. It writes a tombstone beside the job,
+`…:cancelled:<job_id>`, in one script that first checks the job is still
+open and that no delivery holds its lease — so `true` is only ever answered
+while no attempt runs, and an attempt can never start after it. The same
+script closes what the job held: its open record, its unique key and its
+checkpoint. The job stays where it waits; the delivery that eventually meets
+the tombstone acknowledges it without running, and files
+`job delivered after it was cancelled; acknowledged without running`.
+
+## Throttles
+
+A method's throttle is counted in `…:throttle` by the step that admits an
+attempt, in the same script as the lease, so every replica counts against one
+number and no two admissions race. The window is fixed and opens with its
+first start: the key expires `window` later, and the count starts again with
+the next start after that — the scheme the HTTP rate limiter uses. Starts on
+either side of a window's end can therefore reach twice the limit within a
+short span; nothing ever exceeds it within one window.
+
+An attempt over the limit is handed back to the schedule for when the window
+ends, as it was fetched: it keeps its attempt number, costs the retry budget
+nothing, and files `job deferred to its throttle's next window` as detail.
+apalis schedules on whole seconds, so a window shorter than a second still
+defers by one.
+
+## What a job keeps, and for how long
+
+Every record the framework keeps for a job — its open record, its unique key,
+its checkpoint, a cancel's tombstone — lives **a week past the instant the job
+is due**, renewed each time a delivery admits the job, files its next attempt
+or hands it back. A job that is delivered stays well inside it; the bound is
+for a job that never is.
+
+A job can vanish without reaching an outcome a worker sees: a producer that
+stops between claiming a key and filing the job leaves the claim behind. That
+claim refuses pushes under its key for at most a week past the job's due time,
+and `cancel_unique` frees it sooner. The same week caps a job that waits: one
+still waiting a week past its due time has been forgotten — its key is free,
+its checkpoint gone, and a cancel's promise no longer outlives the tombstone
+that kept it.
+
 ## Upgrading from 6.x
 
 6.x handed apalis the queue's bare name, so its jobs sit at the root of the
@@ -170,13 +237,23 @@ start and names them; a 7.0 producer pushing to it warns once. Two ways out:
   their `concurrency`. More replicas is the lever.
 - **`failed` only grows.** apalis records there every job it reschedules — a
   retry, a hand-back — and nothing trims it.
+- **A settle Redis refuses closes nothing.** The step that marks a job settled
+  also lets go of its unique key and closes its open record; when Redis refuses
+  it, the worker says so at `warn`, and until the job's records lapse a push under
+  its key is refused and a cancel could answer `true` for a job that ran.
 
 ## Reference
 
-- `crates/nest-rs-redis/src/layout.rs` — the namespace, and the 6.x check.
-- `crates/nest-rs-redis/src/worker/lease.rs` — the lease and the settled mark.
+- `crates/nest-rs-redis/src/layout.rs` — the namespace, every key the
+  framework keeps beside it, the week they are kept, and the 6.x check.
+- `crates/nest-rs-redis/src/queue/producer.rs` — the unique claim, and the cancel.
+- `crates/nest-rs-redis/src/worker/lease.rs` — the lease, the settled mark, the
+  tombstone a delivery meets, and the throttle.
+- `crates/nest-rs-redis/src/worker/checkpoint.rs` — a job's checkpoint.
 - `crates/nest-rs-redis/src/worker/delivery.rs` — one delivery, and every hand-back.
-- `crates/nest-rs-redis/tests/e2e/worker/lease.rs` — each redelivery, run twice and counted once.
+- `crates/nest-rs-redis/tests/e2e/worker/lease.rs` — each redelivery, run twice and
+  counted once; a cancel met by a delivery; a unique key let go; a throttle
+  across replicas.
 
 ## Going further
 

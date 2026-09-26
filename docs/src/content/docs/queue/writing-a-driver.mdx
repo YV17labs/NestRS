@@ -8,8 +8,9 @@ sidebar:
 
 The [`nest-rs-queue`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-queue)
 crate is a seam: a `JobProducer` trait on the push side, a link-time
-`ProcessMethod` inventory + a wire envelope on the consume side, and a
-`Transport` slot the framework drives at boot. The seam names no storage
+`ProcessMethod` inventory + a wire envelope on the consume side, a
+`Transport` slot the framework drives at boot, and a `QueueBackend` constant
+saying what your storage honours beyond what every backend owes. The seam names no storage
 and no worker runtime — Redis, NATS JetStream, SQS, RabbitMQ, an
 in-process channel, a Postgres queue table all plug in the same way.
 This page gives you the **shape** of a driver, not its implementation:
@@ -28,10 +29,13 @@ The contract without a backend: `redis` would pull the first-party producer and 
 
 ## What you'll implement
 
-- A `JobProducer` impl: wrap the wire envelope, push to your storage.
+- A `QueueBackend` constant: your backend's name and the capabilities it
+  honours.
+- A `JobProducer` impl: file the envelopes the port sealed on your storage —
+  and take one back, if you declare cancellation.
 - A `Transport` impl: a receive loop that calls the port's
   `consume::attempt` and translates its outcome into your backend's
-  ack / retry / dead-letter.
+  ack / re-file / dead-letter.
 - Three modules, three shapes — the substrate (`<Vendor>Module::for_root`),
   the producer binding (bare), the worker binding (`for_root`).
 
@@ -65,71 +69,106 @@ attempt; key your backend's records by it, never by an id of your own.
 for a retry carries the next one. `unique_key` is present only when the push
 declared one.
 
-You never write that shape by hand: `envelope::seal(payload)` builds it,
-and `envelope::open(value)` takes the trace context back off, leaving the
-`{ v, payload }` envelope the macro decodes. A queue is the one hop that
-crosses a **process**, so a hand-rolled wrapper silently costs every job
-its link back to the request that enqueued it — see
+You never write that shape, nor read it: the port seals it at the push — the
+id, the trace context, the unique key — and hands your producer sealed
+`Envelope`s, and `consume::attempt` opens it again. A queue is the one hop
+that crosses a **process**, so a hand-rolled wrapper would silently cost every
+job its link back to the request that enqueued it — see
 [Correlation](/fundamentals/correlation/).
 
 The macro on the `#[process]` side validates the version and fails closed
 with a clear error on mismatch, so a producer that wraps a different
 shape surfaces immediately.
 
-## Step 1 — The producer
+## Step 1 — The backend and the producer
 
-`JobProducer::push_json` is the only method the framework asks a
-producer to implement. Per-job options, batching, scheduled jobs,
-priority hints — those are your driver's own API on the same struct.
+Declare what your backend is once, as a constant every site reads. The name is
+its `messaging.system` on every job span; the capabilities are the optional
+ones it honours, one by one:
+
+```rust title="crates/yourqueue/src/backend.rs"
+use nest_rs::queue::{Capabilities, Capability, QueueBackend};
+
+pub(crate) static BACKEND: QueueBackend = QueueBackend::new(
+    "yourqueue",
+    Capabilities::NONE.with(Capability::DelayedPush),
+);
+```
+
+| Capability | What a push or a method declares | What your backend then owes |
+|---|---|---|
+| `DelayedPush` | `PushOptions::with_delay` | hold the job until the instant, and re-file a retry for later |
+| `UniquePush` | `PushOptions::with_unique` | refuse a second job under a held key with `QueueError::UniqueKeyHeld`, and let go of the key at the job's outcome |
+| `Cancellation` | `cancel`, `cancel_unique` | `remove` and `remove_unique`: `true` only for a job no attempt has started |
+| `Throttle` | `#[process(throttle(..))]` | count the method's attempt starts across every replica, and hold back the ones over the limit |
+| `Checkpoint` | a `Checkpoint<_>` parameter | a `CheckpointStore` per job that outlives its delivery |
+
+Everything you do not declare, the port refuses before your code sees it — at
+the push, at the cancel, or at the worker's boot for a `#[process]` key — with a
+sentence naming your backend. Declaring one you do not keep is the silent
+failure those refusals exist to prevent.
+
+The producer files what the port sealed. The port has already checked the
+queue's name, refused every option your backend does not declare, minted each
+job's id and sealed its envelope; it answers the caller with the receipts
+itself.
 
 ```rust title="crates/yourqueue/src/queue/producer.rs"
-use nest_rs::queue::async_trait;
-use nest_rs::queue::QueueError;
+use nest_rs::queue::{Envelope, JobProducer, PushOptions, QueueBackend, QueueError, QueueName, async_trait};
 
-/// Your driver's connection handle. The producer side of a queue.
+use crate::backend::BACKEND;
+
 #[derive(Clone)]
-pub struct YourConnection {
-    // your storage handle — a Redis pool, an SQS client, a NATS
-    // connection, a channel sender, a Postgres pool...
+pub struct YourQueueProducer {
+    // your storage handle — a pool, an SQS client, a NATS connection…
 }
 
 #[async_trait]
-impl nest_rs::queue::JobProducer for YourConnection {
-    async fn push_json(&self, queue: &str, payload: serde_json::Value) -> Result<(), QueueError> {
-        // (1) Wrap in the wire envelope — required for the
-        //     macro-emitted consumer to decode it. `seal` stamps the
-        //     version and seals the ambient trace context into the value.
-        let envelope = nest_rs::queue::envelope::seal(payload);
+impl JobProducer for YourQueueProducer {
+    fn backend(&self) -> &'static QueueBackend {
+        &BACKEND
+    }
 
-        // (2) Push the envelope onto your storage for `queue`.
-        //     Your code: `self.client.send(queue, envelope).await?`,
-        //     `RPUSH`, `Publish`, `INSERT INTO jobs (...) VALUES (...)`,
-        //     `SendMessage`, ...
+    async fn enqueue(
+        &self,
+        queue: &QueueName,
+        envelopes: Vec<Envelope>,
+        options: &PushOptions,
+    ) -> Result<(), QueueError> {
+        for envelope in envelopes {
+            let id = envelope.id().clone();
+            let record = envelope.into_json();
+            // Your code: store `record` on `queue`, keyed by `id` — held back
+            // until `options.delay()` ends when there is one.
+        }
         Ok(())
     }
 }
 ```
 
-The typed `producer.push::<Job>(queue, job).await` call sites see is a
-blanket impl on top of `push_json` — no extra code on your side.
+`push`, `push_many`, `cancel` and `cancel_unique` are the port's, on
+`JobProducerExt`, over any producer — no extra code on your side. A backend
+declaring `Cancellation` also overrides `remove` (and `remove_unique` beside
+`UniquePush`); one that declares it and does not is told so, as the driver
+defect it is.
 
 ## Step 2 — The worker (Transport)
 
-This is the meat, and it is smaller than it used to be. The worker is a
-`nest_rs::core::Transport`: the framework calls `configure` with the assembled
-container at boot, then `serve` with a cancellation token. **Two calls into the port do everything that is not your storage's.**
+The worker is a `nest_rs::core::Transport`: the framework calls `configure`
+with the assembled container at boot, then `serve` with a cancellation token.
+**Two calls into the port do everything that is not your storage's.**
 `consume::discover` drains the `#[process]` inventory — module-gated,
-duplicate-checked, announced. `consume::attempt` runs one attempt: it opens
-the envelope, continues or mints the trace, opens the `queue.job` span and
-the ambient scope, catches a panic, classifies the outcome, and files the
-events and the `nest_rs::operation` line.
-You never restate any of that: an adapter that opens a `queue.job` span of its
-own has taken semantics it does not own, and the conformance suite says so.
+duplicate-checked, announced — and refuses at boot every declaration your
+backend does not honour. `consume::attempt` runs one attempt: it opens the
+envelope, continues or mints the trace, opens the `queue.job` span and the
+ambient scope, catches a panic, spends or ends the retry budget, clears a
+checkpoint at the job's end, and files the events and the `nest_rs::operation`
+line. You never restate any of that: an adapter that opens a `queue.job` span of
+its own has taken semantics it does not own, and the conformance suite says so.
 
-What your code owns is the **transport**: how envelopes arrive (block-pop,
-subscribe, long-poll, `ReceiveMessage`), how retries and visibility timeouts
-wire up, and the translation of an `Attempt` into your backend's vocabulary.
-Those are storage decisions.
+What your code owns is the **transport**: how records arrive (block-pop,
+subscribe, long-poll, `ReceiveMessage`), and the translation of an
+`AttemptOutcome` into your backend's vocabulary. Those are storage decisions.
 
 One contract is *not* a storage decision: a `#[process]` method runs at most
 [its declared `concurrency`](/queue/#how-many-at-once) at once per replica,
@@ -137,16 +176,15 @@ one by default. Bound each method in your receive loop, the way
 `nest-rs-redis` does, so a handler behaves the same whichever driver is
 underneath it.
 
-```rust title="crates/yourqueue/src/worker/transport.rs"
+```rust title="crates/yourqueue/src/worker/consumer.rs"
 use nest_rs::core::{Container, Transport};
-use nest_rs::queue::async_trait;
-use nest_rs::queue::consume::{self, Attempt};
-use nest_rs::queue::ProcessMethod;
+use nest_rs::queue::consume::{self, AttemptOutcome, Delivery};
+use nest_rs::queue::{ProcessMethod, QueueName, async_trait};
 use tokio_util::sync::CancellationToken;
 
+use crate::backend::BACKEND;
+
 pub struct YourWorker {
-    // `serve` takes only a cancellation token, so everything it needs is
-    // captured in `configure`: the reachable methods and the container.
     methods: Vec<&'static ProcessMethod>,
     container: Option<Container>,
 }
@@ -154,57 +192,52 @@ pub struct YourWorker {
 #[async_trait]
 impl Transport for YourWorker {
     async fn configure(&mut self, container: &Container) -> anyhow::Result<()> {
-        // (1) Which methods this app serves is the port's answer.
-        self.methods = consume::discover(container)?;
-        // Fail fast here if your connection is not in the container — name the
-        // module that opens it, the way `RedisWorker` names `RedisModule`.
+        self.methods = consume::discover(container, &BACKEND)?;
         self.container = Some(container.clone());
         Ok(())
     }
 
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
         let container = self.container.expect("configure runs before serve");
-
-        // (2) One receive loop per method, serialized. Your code: replace
-        //     `your_pop_from_queue(...)` with your storage's receive primitive —
-        //     BRPOP, subscribe, ReceiveMessage, NOTIFY/LISTEN, a channel `recv`…
-        //     Respect `cancel` for graceful shutdown.
         for method in self.methods {
-            let container = container.clone();
-            let cancel = cancel.clone();
+            let (container, cancel) = (container.clone(), cancel.clone());
+            let queue = QueueName::new(method.queue())?;
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
                         _ = cancel.cancelled() => break,
-                        (job_id, attempt_no, payload) = /* your_pop_from_queue(method.queue) */ => {
-                            // (3) The attempt is the port's — envelope, trace, span,
-                            //     panic, classification, events and line included.
-                            match consume::attempt(method, payload, job_id, attempt_no, container.clone()).await {
-                                // (4) What you decide: how each outcome maps onto your
-                                //     backend — ack / retry-later / dead-letter.
-                                Attempt::Ok => { /* ack */ }
-                                Attempt::Retry(error) => { /* nak / re-queue within `method.retries` */ let _ = error; }
-                                Attempt::DeadLetter(error) => { /* term / dead-letter now */ let _ = error; }
+                        record = /* your_receive(&queue) */ => {
+                            let mut delivery = Delivery::new(&BACKEND, queue.clone(), record);
+                            match consume::attempt(method, &mut delivery, container.clone()).await {
+                                AttemptOutcome::Ok => { /* ack */ }
+                                AttemptOutcome::Retry { after } => {
+                                    /* re-file delivery.retry_envelope() for `after`, then ack */
+                                }
+                                AttemptOutcome::DeadLetter(error) => { /* dead-letter */ let _ = error; }
                             }
                         }
                     }
                 }
             });
         }
-
         Ok(())
     }
 }
 ```
 
-`Attempt::Retry` is the user method's `Err` — re-run it within
-`method.retries`. `Attempt::DeadLetter` is deterministic (an undeserializable
-payload, a pipe rejection, a missing provider, a panic): re-running would burn
-the budget on a payload that cannot succeed, so dead-letter it at once. Inside
-`attempt` the macro-emitted handler already did the `serde_json::from_value` to
-the user's job type, the `Container::get` of the `#[injectable]` host and the
-`run_in_job_context` wrap. Your code is the transport. The port is the
-dispatcher.
+The retry budget and its backoff are the port's: `Retry { after }` says the
+budget holds another attempt and how long to wait before it, and the
+`Delivery` already counts it. A backend declaring `DelayedPush` re-files
+`delivery.retry_envelope()` to become available once `after` has passed, then
+acknowledges this delivery; one without it waits `after` itself — giving up
+the wait, never the job, at shutdown — and calls `attempt` again with the same
+delivery. `DeadLetter` is final: a deterministic failure, or the last attempt
+of the budget. A record your storage cannot route to any method goes through
+`consume::refuse`, which files the dead-letter the way an attempt would.
+
+A method whose options declare a checkpoint needs its store on the delivery —
+`Delivery::with_checkpoint(store)`, one `CheckpointStore` per job, keyed by
+`delivery.id()`.
 
 ## Step 3 — The modules
 
@@ -253,21 +286,30 @@ impl DynamicModule for YourSetup {
     }
 }
 
-/// The producer binding — bare. Declares it runs *after* the connection's
-/// factory, so `imports` order stays a readability choice.
+/// The producer binding — bare. Runs *after* the connection's factory, so
+/// `imports` order stays a readability choice, and **declares** the portable
+/// name: two queue backends imported together fail the boot naming both.
 pub struct YourQueueModule;
 
 impl Module for YourQueueModule {
     fn register(builder: ContainerBuilder) -> ContainerBuilder { builder }
     fn collect(builder: ContainerBuilder) -> ContainerBuilder {
-        builder.provide_factory_dyn_after::<YourQueueProducer, dyn JobProducer, YourConnection, _, _>(
-            |container| async move {
-                let conn = container.get::<YourConnection>()
+        builder
+            .provide_factory_after::<YourQueueProducer, YourConnection, _, _>(|container| async move {
+                let conn = container
+                    .get::<YourConnection>()
                     .ok_or_else(|| anyhow::anyhow!("import YourModule::for_root(None) beside YourQueueModule"))?;
                 Ok(YourQueueProducer::new((*conn).clone()))
-            },
-            |producer| Arc::new(producer) as Arc<dyn JobProducer>,
-        )
+            })
+            .provide_declared_factory_after::<Arc<dyn JobProducer>, YourQueueProducer, _, _>(
+                nest_rs::queue::BACKEND_REMEDY,
+                |container| async move {
+                    let producer = container
+                        .get::<YourQueueProducer>()
+                        .ok_or_else(|| anyhow::anyhow!("YourQueueProducer is resolved first"))?;
+                    Ok(producer as Arc<dyn JobProducer>)
+                },
+            )
     }
 }
 
@@ -337,21 +379,23 @@ No tradeoff is hidden. Both shapes plug into the same `JobProducer` and
 
 ## What you don't get for free
 
-The framework gives you the contract — `Job`, `Processor`,
-`JobHandler`, `WIRE_FORMAT_VERSION`, the `Transport` slot, the
-`JobContext` ambient executor for handlers that touch a DB.
-**Retry semantics, batching, priorities, scheduled jobs, ordering,
-visibility timeouts, dead-letter routing** — those are your driver's
-contract with its storage. Decide them deliberately, document them in
-the driver's README.
+The framework gives you the contract — the envelope, the attempt, the retry
+budget and its backoff, the capability refusals, the `Transport` slot, the
+`JobContext` ambient executor for handlers that touch a DB. **How your storage
+delivers — at least once or at most once, how it holds a job back, how a
+redelivery is kept from running twice, where a dead letter goes, how long
+anything you keep for a job lives** — is your driver's contract with its
+storage. Decide it deliberately, and write it on the driver's own page, the
+way [Delivery on Redis](/queue/delivery/) does for `nest-rs-redis`.
 
 ## Reference
 
 - [`crates/nest-rs-redis/`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-redis) —
-  the reference impl; read its `connection.rs` + `module.rs` (the shared
-  connection), `queue/producer.rs` + `queue/module.rs` (the producer) and
-  `worker/consumer.rs` + `worker/module.rs` (the transport) whenever a
-  placeholder above needs a concrete shape.
+  the reference impl; read its `backend.rs` (every capability declared),
+  `connection.rs` + `module.rs` (the shared connection), `queue/producer.rs` +
+  `queue/module.rs` (the producer, the unique claim and the cancel) and
+  `worker/consumer.rs` + `worker/delivery.rs` + `worker/module.rs` (the
+  transport) whenever a placeholder above needs a concrete shape.
 - [`crates/nest-rs-queue/README.md`](https://github.com/YV17labs/NestRS/blob/main/crates/nest-rs-queue/README.md) —
   the extension contract, the `ProcessMethod` registry, the envelope spec.
 - [Database driver](/database/writing-a-driver/) — the analogous scaffold

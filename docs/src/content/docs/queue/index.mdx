@@ -162,6 +162,30 @@ whose effects leave the process keeps its own idempotency key. See
 [Delivery on Redis](/queue/delivery/).
 </Aside>
 
+## How many per window
+
+`concurrency` bounds one replica; a throttle bounds the deployment. A method
+calling an API that allows ten requests a minute declares it once:
+
+```rust title="crates/features/src/billing/queue/processor.rs"
+#[process(queue = InvoiceQueue, throttle(limit = 10, window = "1m"))]
+async fn send(&self, job: InvoiceCommand) -> Result<()> {
+    self.svc.send(job).await
+}
+```
+
+At most `limit` attempts of the method **start** per window, counted across
+every replica draining the queue, and a retry is an attempt like any other. An
+attempt over the limit is not an attempt: it waits for the window to end,
+keeps its attempt number, and is never dropped. The window is `"30s"`, `"1m"`,
+`"1h"` — a duration longer than zero.
+
+A throttle needs a backend declaring `Capability::Throttle`, and a worker whose
+backend lacks it refuses to boot, naming the method. On Redis the window is
+fixed and opens with its first start, so starts on either side of a window's
+end can reach twice the limit within a short span; see
+[Delivery on Redis](/queue/delivery/#throttles).
+
 ## One attempt, one transaction
 
 A job has **no caller** — system work, intentionally — so no ability is
@@ -319,16 +343,18 @@ full field set.
 ### Basics
 
 - [Producing jobs](/queue/producing-jobs/) — typing payloads, the publisher
-  handle, and the rule that keeps a push behind a service.
+  handle, the rule that keeps a push behind a service, and a delay, a unique
+  key or a cancel.
 - [Wiring](/queue/wiring/) — `RedisModule`, `RedisQueueModule` and
   `RedisWorkerModule`, and module-gating across a shared features crate.
 
 ### All options
 
 - [Retries and failure](/queue/retries-and-failure/) — what an `Err` means,
-  the retry budget and its backoff, panics, dead-lettering.
+  the retry budget and its backoff, checkpoints, panics, dead-lettering.
 - [Delivery on Redis](/queue/delivery/) — where a queue's keys live, leases
-  and redeliveries, shutdown, delayed jobs, and upgrading from 6.x.
+  and redeliveries, shutdown, delayed jobs, what each capability keeps, and
+  upgrading from 6.x.
 - [Observability](/queue/observability/) — the span, its fields, and the
   lines a worker emits per job.
 - [Writing a queue driver](/queue/writing-a-driver/) — the scaffold for a

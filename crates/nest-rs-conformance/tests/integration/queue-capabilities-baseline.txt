@@ -1,15 +1,7 @@
 # Queue capability cells no test or page fills. **It only shrinks.**
 #
-# The refusal cell is filled for every capability: the port's suite proves each
-# one refused, by name, against a backend declaring none. The e2e cell is owed
-# only where a first-party backend declares the capability — `nest-rs-redis`
-# declares `DelayedPush`, and its e2e names it — and a capability it claims later
-# brings its e2e with it or fails here.
-#
-# What is left is the page cell, for the four no page documents yet. A line goes
-# when the page that documents the member names it the way a backend declares
-# it, as the queue pages now do for `Capability::DelayedPush`.
-Cancellation :: docs page naming `Capability::Cancellation`
-Checkpoint :: docs page naming `Capability::Checkpoint`
-Throttle :: docs page naming `Capability::Throttle`
-UniquePush :: docs page naming `Capability::UniquePush`
+# Empty: every capability the port names is refused by name in the port's own
+# suite against a backend declaring none; `nest-rs-redis` declares all of them,
+# and its e2e suite names each one it proves; and a queue page names each the
+# way a backend declares it, `Capability::<Member>`. A capability the port adds
+# later brings its three cells with it, or fails here.

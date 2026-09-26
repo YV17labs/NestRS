@@ -57,6 +57,7 @@ mod scheduled;
 ///         trigger: ::nest_rs_schedule::Trigger::Cron { expr, tz }, // or Interval / Timeout
 ///         transaction: ::nest_rs_schedule::nest_rs_worker::JobTransaction::PerAttempt,
 ///         replicas: ::nest_rs_schedule::Replicas::Each,
+///         origin: ::core::module_path!(),
 ///         run: |c| Box::pin(async move { /* resolve + call */ }),
 ///     }
 /// }

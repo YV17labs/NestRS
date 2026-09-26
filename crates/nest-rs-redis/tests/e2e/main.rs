@@ -2,9 +2,10 @@
 //! [`connection`] for the shared connection's boot, bound and recovery,
 //! [`tls`] for `rediss://`, [`throttler`] for the cross-process rate-limit
 //! store, [`concurrency`] and [`replicas`] for the worker's fetch guarantees,
-//! [`correlation`] for the trace context that crosses the producer/consumer
-//! process boundary, and [`portable_producer`] for the two names
-//! `RedisQueueModule` binds.
+//! [`retries`] for the port's retry budget and backoff as the worker honours
+//! them, [`correlation`] for the trace context that crosses the
+//! producer/consumer process boundary, and [`portable_producer`] for the two
+//! names `RedisQueueModule` binds.
 //!
 //! Needs a reachable Redis — gated out of `unit` by the nextest `binary(e2e)`
 //! filter, and behind the `throttler` feature (off by default, so producer /
@@ -25,6 +26,7 @@ mod connection;
 mod correlation;
 mod portable_producer;
 mod replicas;
+mod retries;
 mod throttler;
 mod tls;
 

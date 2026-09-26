@@ -3141,6 +3141,7 @@ dependencies = [
  "nest-rs-queue",
  "nest-rs-throttler",
  "redis",
+ "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -3191,6 +3192,7 @@ dependencies = [
  "nest-rs-core",
  "nest-rs-schedule-macros",
  "nest-rs-worker",
+ "thiserror 2.0.20",
  "tokio",
  "tokio-util",
  "tracing",
@@ -4315,12 +4317,16 @@ dependencies = [
  "num-bigint",
  "percent-encoding",
  "pin-project-lite",
+ "rustls",
+ "rustls-native-certs",
  "ryu",
  "sha1_smol",
  "socket2",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]

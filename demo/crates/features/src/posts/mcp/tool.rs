@@ -4,13 +4,13 @@ use nest_rs::authz::Action;
 use nest_rs::mcp::model::{
     GetPromptResult, ListResourcesResult, PaginatedRequestParams, PromptMessage,
     ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, Role, ServerCapabilities, ServerInfo,
+    ResourceContents, Role,
 };
 use nest_rs::mcp::rmcp;
 use nest_rs::mcp::service::{RequestContext, RoleServer};
 use nest_rs::mcp::{
-    CallToolResult, ContentBlock, McpError, Opaque, ServerHandler, mcp, prompt, prompt_handler,
-    prompt_router, tool, tool_handler, tool_router,
+    CallToolResult, ContentBlock, McpError, Opaque, ServerCapabilities, ServerConfig,
+    ServerHandler, mcp, prompt, prompt_handler, prompt_router, tool, tool_handler, tool_router,
 };
 use nest_rs::seaorm::{Access, CrudService};
 use uuid::Uuid;
@@ -78,8 +78,8 @@ impl PostsTool {
 #[tool_handler]
 #[prompt_handler]
 impl ServerHandler for PostsTool {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()

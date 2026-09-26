@@ -21,8 +21,8 @@ see:
 | Edge | Bucket |
 |---|---|
 | HTTP | the matched route pattern + the client address |
-| GraphQL | the field name — an operation carries no client address, so every caller shares that field's bucket |
-| MCP | the tool or prompt name — same, and the operation runs on a task rmcp spawned |
+| GraphQL | the field name + the caller's actor — an operation carries no client address, but it runs inside the request's scope |
+| MCP | the tool or prompt + the caller's actor — the same, carried across the task rmcp spawns for the operation |
 | WS | the event name + the connection — the peer that keyed the upgrade is gone by the time a message runs |
 
 That is not a nicety: `/graphql` and `/mcp` are `EdgePosture::Exempt` and a
@@ -30,6 +30,13 @@ WS message runs after the upgrade's chain returned, so **none of the three
 is reachable from an HTTP-scope binding**. Bind the guard globally *as well*
 where those mounts are public, so the request carrying the document, the
 session or the upgrade is metered per address too.
+
+The actor is the principal the authentication guard resolved, so one caller
+spending the window exhausts their own bucket and nobody else's. An anonymous
+operation has none, and every anonymous caller then shares the field's or the
+operation's bucket; the guard reports that once per process, at `warn`, as
+`rate-limit keying degraded to a shared bucket`. The global binding is what
+meters that traffic per address.
 
 Only HTTP carries per-unit metadata, so `#[meta(Throttle::…)]` overrides the
 module default there and nowhere else; the other three count against

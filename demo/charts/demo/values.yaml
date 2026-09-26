@@ -213,15 +213,18 @@ apps:
     terminationGracePeriodSeconds: 45
     # Two facts about this worker, both from the framework's own source:
     #
-    # 1. It runs `concurrency(1)` per `#[process]` method — throughput comes
-    #    from replicas, never from a bigger pod. Both demo jobs are pure I/O
-    #    (S3 round-trip, one INSERT), so a pod draining a huge backlog sits
-    #    near 0% CPU and a CPU-driven HPA never fires. Turn `autoscaling` on
-    #    only if your own processor is genuinely CPU-bound.
+    # 1. A `#[process]` method runs one job at a time unless it declares
+    #    `concurrency`, and the demo's declare none — throughput comes from
+    #    replicas. Both demo jobs are pure I/O (S3 round-trip, one INSERT), so a
+    #    pod draining a huge backlog sits near 0% CPU and a CPU-driven HPA never
+    #    fires. Turn `autoscaling` on only if your own processor is genuinely
+    #    CPU-bound.
     # 2. apalis re-enqueues orphaned jobs on every worker start, with a cutoff
-    #    that matches all registered consumers — a scale-up therefore re-runs
-    #    its peers' in-flight jobs. `#[process]` handlers must be idempotent,
-    #    and scaling stays deliberately unhurried.
+    #    that matches all registered consumers — a scale-up puts its peers'
+    #    in-flight jobs back on the queue. Each job's lease and settled mark keep
+    #    them from running twice, so a scale-up delays them rather than re-runs
+    #    them; a handler whose effects leave the process still keeps its own
+    #    idempotency key.
     autoscaling:
       enabled: false
     # Queue depth, the signal that actually reflects a backlog. Needs KEDA in
@@ -235,23 +238,25 @@ apps:
       triggers:
         - type: redis
           metadata:
-            listName: audio:active
+            listName: nestrs:queue:audio:active
             listLength: "5"
         - type: redis
           metadata:
-            listName: notifications:active
+            listName: nestrs:queue:notifications:active
             listLength: "20"
 
 # --- KEDA ---------------------------------------------------------------------
 # KEDA connects to Redis itself, from the operator — not through the app's env.
 # Its scaler wants `host:port`, not the `redis://` URL the framework reads.
 #
-# Why minReplicaCount defaults to 1 rather than 0: with no worker running,
-# nothing promotes `<queue>:scheduled` into `<queue>:active` and nothing
-# recovers `<queue>:inflight` from a pod that died mid-job. Neither is reachable
-# from today's demo — the producer pushes straight to `:active` and retries are
-# in-process — but scale-to-zero makes both permanent the day a delayed push
-# appears. Set it to 0 knowingly.
+# Why minReplicaCount defaults to 1 rather than 0: a job held back — a retry
+# waiting for its backoff, a delayed push — waits on
+# `nestrs:queue:<queue>:scheduled`, which the trigger does not read, and only a
+# running worker (or the producer that filed it, while it has delayed jobs
+# ahead) moves it onto the list the trigger reads. With no worker running, a
+# retry therefore waits for the next push to wake the deployment, and nothing
+# recovers the jobs a pod that died mid-job held. Every demo job retries. Set it
+# to 0 knowingly.
 keda:
   redis:
     address: ""

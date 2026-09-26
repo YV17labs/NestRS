@@ -53,11 +53,12 @@ half the pair behind. Anything in `config` still wins.
 **Queue depth is the right signal, and KEDA is how you read it.** Two facts
 from the framework's own source decide this:
 
-1. The worker runs `concurrency(1)` per `#[process]` method — throughput comes
-   from replicas, never from a bigger pod — and the demo's processors are pure
-   I/O (an S3 round-trip, one INSERT). A pod draining a backlog of thousands
-   sits near 0% CPU, so a CPU-driven HPA never fires. `autoscaling` is there for
-   a processor that is genuinely CPU-bound; on these jobs it is inert.
+1. A `#[process]` method runs one job at a time unless it declares
+   `concurrency`, the demo's declare none — throughput comes from replicas —
+   and they are pure I/O (an S3 round-trip, one INSERT). A pod draining a
+   backlog of thousands sits near 0% CPU, so a CPU-driven HPA never fires.
+   `autoscaling` is there for a processor that is genuinely CPU-bound; on these
+   jobs it is inert.
 2. Kubernetes has no native queue-depth trigger. HPA reads CPU, memory, or an
    external metric that something else must publish — and `HPAScaleToZero` was
    alpha from 1.16 to 1.36. [KEDA](https://keda.sh) is the one moving part that
@@ -73,9 +74,9 @@ apps:
       enabled: true
 ```
 
-The triggers ship pre-wired to the demo's two queues. The key names are apalis's
-own layout — `<queue>:active` is the pending list, and `<queue>` is the name the
-`#[queue]` declaration gives it.
+The triggers ship pre-wired to the demo's two queues. Each names the list a
+worker fetches from, `nestrs:queue:<queue>:active`, where `<queue>` is the name
+the `#[queue]` declaration gives it.
 
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
 its own, and two of them would scale the same Deployment against each other.
@@ -84,17 +85,17 @@ its own, and two of them would scale the same Deployment against each other.
 
 Scale-to-zero is one value away and deliberately not the default:
 
-- a worker start re-enqueues orphaned jobs across **all** registered consumers,
-  not just its own previous incarnation, so every scale-up re-runs its peers'
-  in-flight jobs. `#[process]` handlers must be idempotent — the framework says
-  so already — and scaling stays unhurried on purpose;
-- at zero replicas nothing promotes `<queue>:scheduled` into `<queue>:active`
-  and nothing recovers `<queue>:inflight` from a pod that died mid-job. Neither
-  is reachable from today's demo, where the producer pushes straight to
-  `:active` and retries are in-process, but both become permanent the day a
-  delayed push appears.
+- a job held back — a retry waiting for its backoff, a delayed push — waits on
+  `nestrs:queue:<queue>:scheduled`, which the trigger does not read, and only a
+  running worker, or the producer that filed it while it has delayed jobs
+  ahead, moves it onto the list the trigger reads. Every demo job retries, so
+  at zero replicas a retry waits for the next push to wake the deployment;
+- at zero replicas nothing recovers the jobs a pod that died mid-job held,
+  until a replica starts.
 
-Set it to 0 knowing that.
+A scale-up is safe either way: a worker start puts its peers' in-flight jobs
+back on the queue, and each job's lease and settled mark keep them from running
+twice. Set it to 0 knowing that.
 
 ## Graceful shutdown
 

@@ -197,8 +197,8 @@ after two failures. **Breaking for code that reached the manager.**
 
 - **`RedisConnection` implements `redis::aio::ConnectionLike` and `Clone`** over
   the one `ConnectionManager` every binding shares: apalis's storage runs on it
-  (`RedisStorage<_, RedisConnection>`), the rate limiter and the occurrence lock run
-  their scripts on a clone, and a command of your own runs on one too.
+  (`RedisStorage<_, RedisConnection>`), the rate limiter and the occurrence lock send
+  their commands on a clone, and a command of your own runs on one too.
   `manager()` is gone — there is nothing left to hand out.
 - **Every command is bounded end to end by `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`**,
   the wait for a reopened connection included, and fails as a timeout the caller

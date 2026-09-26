@@ -95,6 +95,18 @@ Two moves in this need judgement and have no grep: noticing that something has
 **become** a family, and writing a cell body that would actually fail. Both are
 work for an agent; the join itself never is.
 
+**A join reads the tree, never the directories above it.** Every path a join
+classifies is read below the repository root — `sources::segments` for its
+components, `sources::relative` for its spelling, both through `sources::below`,
+which refuses a path outside the tree rather than falling back to the absolute
+one. Until 7.0 some joins read absolute components, so a checkout under `~/src/`
+or inside a folder named like an edge changed verdicts: under `…/schedule/`, the
+framework's guards read as schedule adapters.
+`naming::no_verdict_depends_on_where_the_checkout_sits` plants one tree under a
+plain root and under `…/src/schedule/nestrs` and asks the path-reading joins and
+`nestrs lint` for the same written verdict, and a unit test keeps `.components()`
+and `.ancestors()` out of every join.
+
 Before writing any test: **which family is this a member of, what does that
 family owe, and how is the member spelled?** A test that answers none of the
 three is covering product behaviour, not a framework obligation, and this
@@ -123,3 +135,35 @@ section does not bind it.
   `max-threads = 1` on a group scoped to that binary is the fix;
   per-test target directories are not, since each would rebuild the
   whole tree.
+- **A live backend is shared the same way, so an e2e suite hands its parts
+  out where it declares them.** A test that needs a Redis logical database
+  of its own takes it from the one `DB_*` list in its suite's `main.rs`,
+  which a `const` block checks at compile time — every index from 1 to 15,
+  no two equal — so a collision is a build error rather than two tests
+  flushing each other's keys. A test that starts a worker drains a queue
+  named for that test alone, since a worker in one process takes another
+  test's jobs; a test that pushes where no worker drains uses a name or a
+  key unique to its run, and deletes what it filed.
+- **A test that needs its own database or user seeds its config**
+  (`TestApp::provide`) rather than pinning a `for_root` base: the suite's
+  own `<PREFIX>_REDIS__URL` outranks a pin, field by field, and would move
+  the app back onto the shared database — or around the proxy the test put
+  in front of it.
+- **The events join reads what `syn` parses, and `syn` never parses a
+  macro's tokens.** A message spelled inside `assert!` or `assert_eq!`
+  reads as unasserted, however the test fares. Bind the line first —
+  `let line = logs.expect_one(TARGET, "…");` — then assert on the binding.
+- **A procedure the docs hand an operator is run by an e2e test**, as
+  printed: a move, a drain, anything that changes data an operator cannot
+  get back. The 6.x queue move is one
+  (`layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once`),
+  and like any filled cell it is proved: leaving out the `ZADD` that
+  re-registers the moved in-flight set fails it.
+- **A second checkout takes its own `CARGO_TARGET_DIR`.** Sharing one, cargo
+  reuses the other checkout's test binaries, whose `CARGO_MANIFEST_DIR`
+  still points there — so every conformance join reads the other tree, or,
+  once that tree is gone, an empty one whose floors fail within
+  milliseconds. `cargo clean -p nest-rs-conformance -p nest-rs-cli` recovers.
+- **trybuild and doctests compile the sources on disk when they run**, so a
+  file edited while a suite runs voids that run; re-run it rather than
+  reading its failures.

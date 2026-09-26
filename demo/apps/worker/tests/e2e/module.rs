@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use nest_rs::core::{injectable, module};
 use nest_rs::queue::{JobProducerExt, processor, queue};
 use nest_rs::redis::{RedisConfig, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker};
+use nest_rs::schedule::Scheduler;
 use nest_rs::testing::TestApp;
 use serde::{Deserialize, Serialize};
 use worker::WorkerModule;
@@ -109,4 +110,21 @@ async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
         matches!(saw_our_job, Ok(true)),
         "the enqueued job was consumed end-to-end via Redis",
     );
+}
+
+#[tokio::test]
+async fn worker_app_binds_the_lock_its_one_replica_purge_claims_through() {
+    let worker = TestApp::builder()
+        .module::<WorkerModule>()
+        .build_headless()
+        .await
+        .expect("WorkerModule boots against Postgres and Redis");
+    let scheduler = worker
+        .spawn_transport(Scheduler::new())
+        .await
+        .expect("the scheduler configures: the purge declared replicas = \"one\" has a lock");
+    scheduler
+        .shutdown()
+        .await
+        .expect("the scheduler stops cleanly");
 }

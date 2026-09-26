@@ -1,5 +1,7 @@
 mod audio;
 
+mod notifications;
+
 mod orgs;
 
 mod posts;

@@ -3139,6 +3139,7 @@ dependencies = [
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-queue",
+ "nest-rs-schedule",
  "nest-rs-throttler",
  "redis",
  "rustls",

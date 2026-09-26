@@ -32,8 +32,12 @@
 //! apalis never retries on its own. The budget is the port's; a dead letter is
 //! apalis's `Abort` rather than a plain error, which apalis would re-queue under
 //! a count of its own, invisible to the method's. The one place a delivery
-//! answers with a plain error is a hand-back Redis refused, where the job staying
-//! in flight — and so running again — is the point.
+//! answers with a plain error is a hand-back Redis refused, where apalis filing
+//! the record back as it was fetched — and so the job running again — is the
+//! point. apalis would kill instead once its own count of the record's
+//! deliveries reached its cap, so every record this crate files lifts the cap
+//! past any count (`uncapped_context`): hand-backs, deferrals and retries
+//! never add up to an ending the port did not decide.
 //!
 //! **A hand-back never waits on an acknowledgement.** apalis-redis 0.7
 //! acknowledges a task through a channel its worker's heartbeat drains, and the
@@ -85,6 +89,10 @@ pub(crate) struct Deliveries {
     pub(crate) worker: String,
     pub(crate) container: Container,
     pub(crate) storage: RedisStorage<serde_json::Value, RedisConnection>,
+    /// What a record this method's deliveries file back carries: apalis's
+    /// attempt cap lifted, and this worker as the one that fetched it — see
+    /// `uncapped_context`.
+    pub(crate) filing: RedisContext,
     pub(crate) leases: Arc<Leases>,
     /// The shutdown began: no job is fetched any more, and a job settled from
     /// here on may lose its acknowledgement.
@@ -98,13 +106,19 @@ pub(crate) struct Deliveries {
 pub(crate) struct Task {
     pub(crate) id: TaskId,
     pub(crate) attempt: Attempt,
-    pub(crate) context: RedisContext,
 }
 
 impl Task {
-    /// The task, carrying `record` in place of what it was fetched with.
-    fn carrying(&self, record: serde_json::Value) -> Request<serde_json::Value, RedisContext> {
-        let mut request = Request::new_with_ctx(record, self.context.clone());
+    /// The task, carrying `record` in place of what it was fetched with, under
+    /// `context` — the worker's filing context, whatever the record was fetched
+    /// with: a record filed before apalis's cap was lifted gets the lift at its
+    /// first hand-back.
+    fn carrying(
+        &self,
+        record: serde_json::Value,
+        context: &RedisContext,
+    ) -> Request<serde_json::Value, RedisContext> {
+        let mut request = Request::new_with_ctx(record, context.clone());
         request.parts.task_id = self.id.clone();
         request.parts.attempt = self.attempt.clone();
         request
@@ -359,12 +373,12 @@ impl Deliveries {
         let record = record.into_json();
         let mut storage = self.storage.clone();
         let outcome = match storage
-            .schedule_request(task.carrying(record.clone()), at)
+            .schedule_request(task.carrying(record.clone(), &self.filing), at)
             .await
         {
             Err(error) => HandBack::NotScheduled(error),
             Ok(_) => match storage
-                .reschedule(task.carrying(record), wait_until(at))
+                .reschedule(task.carrying(record, &self.filing), wait_until(at))
                 .await
             {
                 Ok(()) => HandBack::Whole,
@@ -475,10 +489,14 @@ fn wait_until(at: i64) -> Duration {
 /// which way it went.
 ///
 /// A task Redis would not schedule is failed rather than acknowledged: it is
-/// still in flight, so it is delivered again — at the latest once its replica
-/// is swept — from the record it was stored with. Acknowledging it would drop the
-/// job, and dead-lettering it would bury a job over a failure that was never its
-/// own. A task scheduled and still in flight is acknowledged: when the
+/// still in flight under the record it was stored with, and apalis's answer to a
+/// plain failure files that record back on the schedule, due at once — the job
+/// runs again at the attempt it was fetched at, or, should that answer be lost
+/// too, once a sweep takes it. The record's context lifts apalis's attempt cap,
+/// so no count of earlier deliveries turns the failure into a kill.
+/// Acknowledging it would drop the job, and dead-lettering it would bury a job
+/// over a failure that was never its own. A task scheduled and still in flight
+/// is acknowledged: when the
 /// acknowledgement lands it takes the task out of flight, and when it does not,
 /// the job is delivered twice — which the line says — and the lease and the
 /// settled mark keep the second delivery from running it twice.
@@ -539,7 +557,8 @@ where
                 job_id = %job,
                 reason = why.as_str(),
                 error = %nest_rs_core::error_message(&error),
-                "job not handed back; it is delivered again from its stored attempt",
+                "job not handed back; apalis files it again as it was fetched, due at once, and it \
+                 runs again at that attempt",
             );
             Err(Box::new(error))
         }
@@ -690,7 +709,8 @@ mod tests {
 
         let event = logs.expect_one(
             nest_rs_queue::TARGET,
-            "job not handed back; it is delivered again from its stored attempt",
+            "job not handed back; apalis files it again as it was fetched, due at once, and it \
+             runs again at that attempt",
         );
         assert_eq!(event.level, "error");
         assert_eq!(event.field("job_id"), Some(delivery.id().to_string()));
@@ -805,6 +825,33 @@ mod tests {
             "job delivery was cancelled outside its attempt; it is delivered again",
         );
         assert_eq!(said.level, "error");
+    }
+
+    /// A hand-back files the task under the worker's filing context — apalis's
+    /// attempt cap lifted, this worker as the one that fetched it — whatever the
+    /// record was fetched with, and keeps the task's id and the deliveries apalis
+    /// counted.
+    #[test]
+    fn a_hand_back_files_the_task_under_the_workers_uncapped_context() {
+        let filing = crate::backend::uncapped_context(Some("host:01")).expect("apalis's form");
+        let task = Task {
+            id: TaskId::new(),
+            attempt: Attempt::new_with_value(6),
+        };
+        let filed = task.carrying(serde_json::json!({ "clip": 1 }), &filing);
+        assert_eq!(filed.parts.task_id, task.id);
+        assert_eq!(filed.parts.attempt.current(), 6);
+        let context = serde_json::to_value(&filed.parts.context).expect("serializes");
+        assert_eq!(
+            context["max_attempts"],
+            serde_json::Value::from(usize::MAX),
+            "{context}"
+        );
+        assert_eq!(
+            context,
+            serde_json::to_value(&filing).expect("serializes"),
+            "the filing context, not what the record was fetched with",
+        );
     }
 
     /// A hand-back waits at least as long as asked, counted in apalis's whole

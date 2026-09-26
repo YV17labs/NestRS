@@ -20,7 +20,8 @@
 //! bounds how many attempts of that method one worker replica runs at once
 //! (default 1); throughput beyond it comes from running more replicas, which the
 //! platform schedules and meters. Each method is its own apalis worker, so one
-//! method's jobs never wait on another's permits.
+//! method's jobs never wait on another's permits, and it fetches up to `N` jobs
+//! per poll while a permit is free — see `storage`.
 //!
 //! **Every replica is its own consumer.** apalis names a worker's in-flight set
 //! after the worker's id, and hands a worker's jobs to its peers once the worker
@@ -33,7 +34,8 @@
 //! **apalis's startup sweep is the one that takes a live peer's jobs**, and it
 //! cannot be configured away: a worker starting calls `reenqueue_orphaned` with
 //! a cutoff of *now*, which matches every registered consumer, alive or not, and
-//! puts up to ten of their in-flight jobs back on the queue. The delivery guard
+//! puts up to ten times its fetch size — the method's `concurrency` — of their
+//! in-flight jobs back on the queue. The delivery guard
 //! is what makes that harmless — the job's lease is held by the delivery running
 //! it, so the second delivery hands it back until the first has settled it, then
 //! acknowledges it without running. Measured in `tests/e2e/worker/`.
@@ -53,7 +55,7 @@ use apalis::layers::ErrorHandlingLayer;
 use apalis::layers::WorkerBuilderExt;
 use apalis::layers::catch_panic::CatchPanicLayer;
 use apalis::prelude::{Attempt, Event, Monitor, TaskId, Worker, WorkerBuilder, WorkerFactoryFn};
-use apalis_redis::{RedisContext, RedisPollError, RedisStorage};
+use apalis_redis::{RedisPollError, RedisStorage};
 use async_trait::async_trait;
 use nest_rs_core::{Container, Transport};
 use nest_rs_queue::consume;
@@ -62,13 +64,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::delivery::{Deliveries, Task};
 use super::lease::Leases;
-use crate::backend::BACKEND;
+use crate::backend::{BACKEND, uncapped_context};
 use crate::connection::CONNECTION_REMEDY;
 use crate::error::LegacyLayoutError;
 use crate::{RedisConnection, RedisWorkerConfig, layout};
 
 /// How often a worker moves the records whose time has come from Redis's
-/// scheduled set to its queue — see `storage`.
+/// scheduled set to its queue, up to its fetch size each time — see `storage`.
 const SCHEDULED_SCAN: Duration = Duration::from_secs(1);
 
 /// What a drain keeps back from its window to hand interrupted jobs back in:
@@ -152,13 +154,20 @@ impl Transport for RedisWorker {
         let reporter = Reporter::new(workers);
         let mut monitor = Monitor::new().on_event(move |event| reporter.report(&event));
         for (method, queue, id) in built {
+            let filing = uncapped_context(Some(&id)).with_context(|| {
+                format!(
+                    "RedisWorker could not build the apalis context queue `{queue}`'s records are \
+                     handed back under"
+                )
+            })?;
             let deliveries = Arc::new(Deliveries {
                 method,
                 queue: queue.clone(),
                 conn: (*connection).clone(),
                 worker: id.clone(),
                 container: container.clone(),
-                storage: storage(&connection, &queue, &config),
+                storage: storage(&connection, &queue, &config, concurrency(method)),
+                filing,
                 leases: Leases::new(
                     (*connection).clone(),
                     queue,
@@ -268,19 +277,31 @@ where
 
 /// The storage one method's worker reads, under its queue's namespace.
 ///
-/// Fetch one job per poll. apalis 0.7 drives a fetched batch through a
-/// `FuturesUnordered` and keeps polling while those futures are in flight, so
-/// the buffer alone bounds nothing — it is `concurrency` that bounds the work.
-/// Sizing the buffer at one matters anyway: a job sitting in a saturated
-/// worker's buffer is invisible to every other replica, which is exactly the
-/// throughput the deployment is paying for.
+/// **A fetch takes up to the method's `concurrency`, once per poll.** apalis
+/// asks Redis for jobs every [`RedisWorkerConfig::poll_interval`], and only
+/// while the worker is ready — which the method's permits decide, a worker
+/// with every permit taken being not ready. One script then claims up to
+/// `buffer_size` jobs, handed to the worker through a channel where each waits
+/// for a permit. Sized at `concurrency`, one poll fills every permit a method
+/// has, so a method whose jobs are short runs up to `concurrency` jobs per poll
+/// on one replica, not one. The price is what a busy replica holds: a fetch
+/// needs one free permit and may bring `concurrency` jobs, so a replica keeps
+/// up to `concurrency - 1` jobs it fetched and has not started — `concurrency`
+/// when Redis takes longer than a poll to answer, since apalis then fetches
+/// again before the worker has seen the first batch. They wait in its in-flight
+/// set for its next free permits, invisible to its peers and to an autoscaler
+/// reading the queue, and a replica that dies hands them over with its running
+/// jobs.
 ///
-/// A record scheduled for later — a delayed push, a retry, a job handed back —
-/// becomes available on apalis's `enqueue_scheduled` heartbeat, which sleeps
-/// before its first tick and defaults to thirty seconds: that would run a job's
-/// next attempt up to half a minute after the wait the port asked for, which at
-/// a one-second backoff is thirty times it. A second keeps the lateness under
-/// the port's own jitter, for one scheduled-set scan per method per second.
+/// The fetch size bounds apalis's two other loops the same way. A record
+/// scheduled for later — a delayed push, a retry, a job handed back — becomes
+/// available on apalis's `enqueue_scheduled` scan, which moves up to
+/// `buffer_size` due records per scan; it sleeps before its first tick and
+/// defaults to thirty seconds, which would run a job's next attempt up to half a
+/// minute after the wait the port asked for — at a one-second backoff, thirty
+/// times it — so it runs every second, keeping the lateness under the port's
+/// own jitter. And every poll, as at start, apalis sweeps up to ten times
+/// `buffer_size` of the jobs silent peers held back onto the queue.
 ///
 /// The heartbeat and the orphan threshold are the config's: a worker proves it
 /// is alive every tenth of the threshold, so a peer only ever sweeps one that
@@ -289,15 +310,23 @@ fn storage(
     conn: &RedisConnection,
     queue: &QueueName,
     config: &RedisWorkerConfig,
+    concurrency: usize,
 ) -> RedisStorage<serde_json::Value, RedisConnection> {
     RedisStorage::new_with_config(
         conn.clone(),
         layout::config(queue)
-            .set_buffer_size(1)
+            .set_buffer_size(concurrency)
+            .set_poll_interval(config.poll_interval)
             .set_enqueue_scheduled(SCHEDULED_SCAN)
             .set_keep_alive(config.heartbeat())
             .set_reenqueue_orphaned_after(config.orphan_after),
     )
+}
+
+/// How many attempts of `method` one replica runs at once — its permits, and
+/// the most one fetch of its takes.
+fn concurrency(method: &ProcessMethod) -> usize {
+    usize::try_from(method.options().concurrency().get()).unwrap_or(usize::MAX)
 }
 
 /// Register one apalis worker for a `ProcessMethod` on `monitor`. The wire
@@ -324,19 +353,15 @@ fn register(
         // service, so with every permit held the fetch loop backs off rather
         // than piling work into memory: the next job stays in Redis, where
         // another replica can take it.
-        .concurrency(method.options().concurrency().get() as usize)
+        .concurrency(concurrency(method))
         .layer(ErrorHandlingLayer::new())
         .layer(CatchPanicLayer::new())
         .backend(storage)
         .build_fn(
-            move |job: serde_json::Value,
-                  task_id: TaskId,
-                  attempt: Attempt,
-                  context: RedisContext| {
+            move |job: serde_json::Value, task_id: TaskId, attempt: Attempt| {
                 let task = Task {
                     id: task_id,
                     attempt,
-                    context,
                 };
                 Arc::clone(&deliveries).deliver(job, task)
             },

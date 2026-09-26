@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{Config, ConfigError, ConfigService, Result, config};
 
 /// Default drain window on shutdown: 30s — comfortably under a typical
 /// Kubernetes `terminationGracePeriodSeconds` (30s) so the worker drains
@@ -23,12 +23,46 @@ const MIN_ORPHAN_AFTER_SECS: u64 = 5;
 /// Default lease: thirty seconds, renewed every ten while the attempt runs.
 const DEFAULT_LEASE_SECS: u64 = 30;
 
+/// Default poll: a tenth of a second, apalis's own.
+const DEFAULT_POLL_INTERVAL_MS: u64 = 100;
+
 /// How many heartbeats fit in the orphan threshold.
 const HEARTBEATS_PER_THRESHOLD: u32 = 10;
 
 /// The fastest a replica beats, whatever the threshold: apalis records a
 /// heartbeat to the second, so a faster one would record nothing new.
 const MIN_HEARTBEAT: Duration = Duration::from_secs(1);
+
+/// The shortest orphan threshold accepted, the variable that sets it, and why.
+const ORPHAN_AFTER_FLOOR: Floor = Floor {
+    key: "ORPHAN_AFTER_SECS",
+    field: "orphan_after",
+    unit: Unit::Seconds,
+    least: MIN_ORPHAN_AFTER_SECS,
+    why: "five heartbeats of one second each — anything shorter reads a slow answer as a death",
+};
+
+/// The shortest lease accepted, the variable that sets it, and why.
+const LEASE_FLOOR: Floor = Floor {
+    key: "LEASE_SECS",
+    field: "lease",
+    unit: Unit::Seconds,
+    least: 1,
+    why: "a lease renewed every third of it needs at least a second to renew in",
+};
+
+/// The shortest poll accepted, the variable that sets it, and why: every poll
+/// costs Redis a fetch and a sweep of silent peers per method per replica, jobs
+/// or none, so ten milliseconds already spends two hundred scripts a second on a
+/// method with nothing to do.
+const POLL_INTERVAL_FLOOR: Floor = Floor {
+    key: "POLL_INTERVAL_MS",
+    field: "poll_interval",
+    unit: Unit::Millis,
+    least: 10,
+    why: "every poll costs Redis a fetch and a sweep per method per replica, jobs or none — two \
+          hundred scripts a second at the floor",
+};
 
 /// Consumer settings, settable via `NESTRS_REDIS__WORKER__*` or pinned through
 /// [`RedisWorkerModule::for_root`](crate::RedisWorkerModule::for_root).
@@ -57,6 +91,14 @@ pub struct RedisWorkerConfig {
     /// the longest a crashed replica's job waits for a restarted one. Read from
     /// `NESTRS_REDIS__WORKER__LEASE_SECS`, at least 1; defaults to 30s.
     pub lease: Duration,
+    /// How often each method of a replica asks Redis for jobs while one of its
+    /// permits is free. Each ask takes up to the method's `concurrency` jobs, so
+    /// a method whose jobs are short starts at most `concurrency` of them per
+    /// interval on one replica: a shorter interval raises that ceiling, and costs
+    /// Redis a fetch and a sweep of silent peers every interval per method per
+    /// replica, busy or idle. Read from
+    /// `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS`, at least 10; defaults to 100 ms.
+    pub poll_interval: Duration,
 }
 
 impl RedisWorkerConfig {
@@ -73,6 +115,7 @@ impl Default for RedisWorkerConfig {
             shutdown_timeout: Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS),
             orphan_after: Duration::from_secs(DEFAULT_ORPHAN_AFTER_SECS),
             lease: Duration::from_secs(DEFAULT_LEASE_SECS),
+            poll_interval: Duration::from_millis(DEFAULT_POLL_INTERVAL_MS),
         }
     }
 }
@@ -84,39 +127,72 @@ impl Config for RedisWorkerConfig {
                 .parse::<u64>("SHUTDOWN_TIMEOUT_SECS")?
                 .map(Duration::from_secs)
                 .unwrap_or(base.shutdown_timeout),
-            orphan_after: seconds_at_least(
-                env,
-                "ORPHAN_AFTER_SECS",
-                MIN_ORPHAN_AFTER_SECS,
-                "five heartbeats of one second each — anything shorter reads a slow answer as a death",
-            )?
-            .unwrap_or(base.orphan_after),
-            lease: seconds_at_least(
-                env,
-                "LEASE_SECS",
-                1,
-                "a lease renewed every third of it needs at least a second to renew in",
-            )?
-            .unwrap_or(base.lease),
+            orphan_after: ORPHAN_AFTER_FLOOR.read(env, base.orphan_after)?,
+            lease: LEASE_FLOOR.read(env, base.lease)?,
+            poll_interval: POLL_INTERVAL_FLOOR.read(env, base.poll_interval)?,
         })
     }
 }
 
-/// A whole number of seconds read from `key`, refused below `floor` with `why`
-/// — naming the spelling that supplied it, so a value given as a file is
-/// refused under `_FILE`.
-fn seconds_at_least(
-    env: &ConfigService,
-    key: &str,
-    floor: u64,
-    why: &str,
-) -> Result<Option<Duration>> {
-    let Some(setting) = env.setting(key)? else {
-        return Ok(None);
-    };
-    match setting.parse::<u64>()? {
-        secs if secs < floor => Err(setting.refuse(format!("must be at least {floor} — {why}"))),
-        secs => Ok(Some(Duration::from_secs(secs))),
+/// The whole-number unit a duration's variable is written in.
+#[derive(Clone, Copy)]
+enum Unit {
+    Seconds,
+    Millis,
+}
+
+impl Unit {
+    fn duration(self, count: u64) -> Duration {
+        match self {
+            Self::Seconds => Duration::from_secs(count),
+            Self::Millis => Duration::from_millis(count),
+        }
+    }
+}
+
+/// The shortest value a duration setting accepts, and what refuses a shorter
+/// one — the same whichever side set it, since a value below it breaks the
+/// worker the same way from code as from the environment.
+struct Floor {
+    /// The variable's key in the namespace.
+    key: &'static str,
+    /// The field the value is pinned through in code.
+    field: &'static str,
+    unit: Unit,
+    /// The floor, in `unit`s.
+    least: u64,
+    /// Why nothing shorter holds.
+    why: &'static str,
+}
+
+impl Floor {
+    /// The setting's value — the variable's when it is set, `base` when it is
+    /// not — refused below the floor, never clamped in silence: under the
+    /// spelling that supplied it, so a value given as a file is refused under
+    /// `_FILE`, or, for a value pinned in code, under the variable that would
+    /// override it, naming the field.
+    fn read(&self, env: &ConfigService, base: Duration) -> Result<Duration> {
+        let least = self.unit.duration(self.least);
+        match env.setting(self.key)? {
+            Some(setting) => {
+                let value = self.unit.duration(setting.parse::<u64>()?);
+                if value < least {
+                    return Err(
+                        setting.refuse(format!("must be at least {} — {}", self.least, self.why))
+                    );
+                }
+                Ok(value)
+            }
+            None if base < least => Err(ConfigError::parse(
+                env.var_name(self.key),
+                format!(
+                    "is not set, and `RedisWorkerConfig::{}` pinned in code is {base:?}, below the \
+                     {least:?} it must be at least — {}",
+                    self.field, self.why
+                ),
+            )),
+            None => Ok(base),
+        }
     }
 }
 
@@ -174,12 +250,32 @@ mod tests {
         );
     }
 
-    /// A threshold that would read one slow answer as a death, and a lease with
-    /// no time to renew in, are refused naming the variable — never clamped in
-    /// silence.
+    /// The poll reads the env over the base, in milliseconds, and defaults to
+    /// apalis's own tenth of a second.
     #[test]
-    fn a_threshold_or_a_lease_too_short_to_hold_is_refused_naming_the_variable() {
-        for (key, value) in [("ORPHAN_AFTER_SECS", "4"), ("LEASE_SECS", "0")] {
+    fn the_poll_defaults_to_a_tenth_of_a_second_and_reads_the_env_in_milliseconds() {
+        assert_eq!(
+            RedisWorkerConfig::default().poll_interval,
+            Duration::from_millis(100)
+        );
+        let cfg = RedisWorkerConfig::from_env(
+            &ConfigService::with_vars("redis__worker", [("POLL_INTERVAL_MS", "25")]),
+            Default::default(),
+        )
+        .expect("ok");
+        assert_eq!(cfg.poll_interval, Duration::from_millis(25));
+    }
+
+    /// A threshold that would read one slow answer as a death, a lease with no
+    /// time to renew in, and a poll that would spend Redis on nothing, are
+    /// refused naming the variable — never clamped in silence.
+    #[test]
+    fn a_threshold_a_lease_or_a_poll_too_short_to_hold_is_refused_naming_the_variable() {
+        for (key, value) in [
+            ("ORPHAN_AFTER_SECS", "4"),
+            ("LEASE_SECS", "0"),
+            ("POLL_INTERVAL_MS", "9"),
+        ] {
             let refused = RedisWorkerConfig::from_env(
                 &ConfigService::with_vars("redis__worker", [(key, value)]),
                 Default::default(),
@@ -192,5 +288,66 @@ mod tests {
             );
             assert!(refused.contains("must be at least"), "{refused}");
         }
+    }
+
+    /// A floor holds for a value pinned in code as it does for the
+    /// environment's: the refusal names the field and the variable that would
+    /// override it, and the floor itself is accepted.
+    #[test]
+    fn a_value_pinned_below_its_floor_is_refused_naming_the_field_and_the_variable() {
+        for (pinned, field, key) in [
+            (
+                RedisWorkerConfig {
+                    poll_interval: Duration::from_millis(9),
+                    ..Default::default()
+                },
+                "poll_interval",
+                "POLL_INTERVAL_MS",
+            ),
+            (
+                RedisWorkerConfig {
+                    orphan_after: Duration::from_secs(4),
+                    ..Default::default()
+                },
+                "orphan_after",
+                "ORPHAN_AFTER_SECS",
+            ),
+            (
+                RedisWorkerConfig {
+                    lease: Duration::from_millis(999),
+                    ..Default::default()
+                },
+                "lease",
+                "LEASE_SECS",
+            ),
+        ] {
+            let refused = RedisWorkerConfig::from_env(
+                &ConfigService::with_vars("redis__worker", Vec::<(&str, &str)>::new()),
+                pinned,
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(
+                refused.contains(&format!("`RedisWorkerConfig::{field}` pinned in code")),
+                "{refused}"
+            );
+            assert!(
+                refused.contains(&nest_rs_config::var_name("redis__worker", key)),
+                "{refused}"
+            );
+        }
+
+        let floor = RedisWorkerConfig {
+            poll_interval: Duration::from_millis(10),
+            orphan_after: Duration::from_secs(MIN_ORPHAN_AFTER_SECS),
+            lease: Duration::from_secs(1),
+            ..Default::default()
+        };
+        let accepted = RedisWorkerConfig::from_env(
+            &ConfigService::with_vars("redis__worker", Vec::<(&str, &str)>::new()),
+            floor.clone(),
+        )
+        .expect("the floor itself is accepted");
+        assert_eq!(accepted.poll_interval, floor.poll_interval);
     }
 }

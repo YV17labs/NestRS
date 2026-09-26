@@ -325,12 +325,13 @@ async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
 
 /// The worker settings the guard's suites run under: a lease of two seconds, so
 /// a job a dead replica held is free again within a test, and the shortest
-/// orphan threshold accepted.
+/// orphan threshold accepted — polling as a deployment does by default.
 fn brisk() -> RedisWorkerConfig {
     RedisWorkerConfig {
         shutdown_timeout: Duration::from_secs(2),
         orphan_after: Duration::from_secs(5),
         lease: Duration::from_secs(2),
+        ..Default::default()
     }
 }
 

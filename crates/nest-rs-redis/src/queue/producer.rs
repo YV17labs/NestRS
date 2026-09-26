@@ -14,7 +14,9 @@
 //!
 //! A push holding the job back files it on the queue's schedule instead of its
 //! list, due on the second its delay ends, and the producer's [`Promoter`]
-//! moves it onto the list once due.
+//! moves it onto the list once due. Either way the record carries a context
+//! whose apalis attempt cap no count of deliveries reaches, so apalis never ends
+//! a job the port has not (see `uncapped_context`).
 //!
 //! **Before a job is filed, its records are opened** — its `open` mark, and the
 //! claim on the unique key it was pushed under (see [`crate::layout`]) — so a
@@ -46,7 +48,7 @@ use redis::Script;
 
 use super::promoter::Promoter;
 use crate::RedisConnection;
-use crate::backend::{BACKEND, due_second};
+use crate::backend::{BACKEND, due_second, uncapped_context};
 use crate::layout::{self, CANCELLED, CHECKPOINTS, KEPT_PAST_DUE, LEASES, OPEN, job_key, millis};
 
 /// Open a job pushed under a unique key: claim the key for it and open its
@@ -379,6 +381,10 @@ impl JobProducer for RedisQueueProducer {
         options: &PushOptions,
     ) -> Result<(), QueueError> {
         self.look_for_legacy_jobs(queue).await;
+        // apalis's own attempt cap, lifted on every record filed here — see
+        // `uncapped_context`. Built before anything is opened, so a refusal
+        // leaves nothing behind.
+        let context = uncapped_context(None).map_err(QueueError::backend)?;
         let now = SystemTime::now();
         let due = match options.delay() {
             None => None,
@@ -405,13 +411,10 @@ impl JobProducer for RedisQueueProducer {
         let mut storage = self.storage(queue);
         let second = due.map(due_second);
         for (at, envelope) in envelopes.into_iter().enumerate() {
-            let record = envelope.into_json();
+            let record = Request::new_with_ctx(envelope.into_json(), context.clone());
             let filed = match second {
-                None => storage.push(record).await.map(drop),
-                Some(second) => storage
-                    .schedule_request(Request::new(record), second)
-                    .await
-                    .map(drop),
+                None => storage.push_request(record).await.map(drop),
+                Some(second) => storage.schedule_request(record, second).await.map(drop),
             };
             let Err(error) = filed else {
                 continue;

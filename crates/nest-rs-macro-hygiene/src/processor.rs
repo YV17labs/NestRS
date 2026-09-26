@@ -23,9 +23,9 @@ pub struct HygieneCommand {
 #[queue(name = "hygiene", job = HygieneCommand)]
 pub struct HygieneQueue;
 
-/// A dynamic queue: one instance per runtime key, each drained on its own.
-#[queue(prefix = "hygiene-tenant", job = HygieneCommand)]
-pub struct HygieneTenantQueue;
+/// The queue a tuned method drains.
+#[queue(name = "hygiene-tuned", job = HygieneCommand)]
+pub struct HygieneTunedQueue;
 
 /// The queue a resumable method drains.
 #[queue(name = "hygiene-import", job = HygieneCommand)]
@@ -54,10 +54,10 @@ impl HygieneProcessor {
         Ok(())
     }
 
-    /// Every tuning key on a dynamic queue: the expansion builds the method's
-    /// options, its queue kind and its throttle through `nest-rs-queue` alone.
+    /// Every tuning key: the expansion builds the method's options and its
+    /// throttle through `nest-rs-queue` alone.
     #[process(
-        queue = HygieneTenantQueue,
+        queue = HygieneTunedQueue,
         concurrency = 4,
         throttle(limit = 10, window = "1m"),
     )]

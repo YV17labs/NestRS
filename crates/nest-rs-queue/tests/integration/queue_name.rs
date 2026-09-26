@@ -1,6 +1,6 @@
-//! The rule a queue name, a dynamic queue's prefix and its key share — the
-//! port's copy, pinned against the one `#[queue]` checks its literals with,
-//! since the macro crate cannot depend on this one.
+//! The rule a queue name follows — the port's copy, pinned against the one
+//! `#[queue]` checks its literals with, since the macro crate cannot depend on
+//! this one.
 
 use nest_rs_queue::QueueName;
 
@@ -42,7 +42,7 @@ fn the_decorators_refusal_is_the_ports_with_the_site_in_front() {
             .expect_err("outside the rule")
             .to_string();
         assert_eq!(
-            nest_rs_codegen::invalid_queue_name("queue", "name", "queue name", value),
+            nest_rs_codegen::invalid_queue_name("queue", "name", value),
             format!("#[queue] `name`: {port}"),
         );
     }

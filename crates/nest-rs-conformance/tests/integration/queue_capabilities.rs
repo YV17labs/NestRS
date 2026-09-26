@@ -34,7 +34,7 @@ const BASELINE: &str = "queue-capabilities-baseline.txt";
 
 /// The variants `Capability` declares today. Below this the scan is reading the
 /// wrong file.
-const FLOOR: usize = 6;
+const FLOOR: usize = 5;
 
 #[test]
 fn every_queue_capability_is_refused_by_the_port_proved_on_its_backends_and_documented() {

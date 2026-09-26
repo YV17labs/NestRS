@@ -462,7 +462,7 @@ mod tests {
                 "window",
             ),
             (
-                crate::queue_name::invalid_queue_name("probe", "name", "queue name", "a b"),
+                crate::queue_name::invalid_queue_name("probe", "name", "a b"),
                 "name",
             ),
             (

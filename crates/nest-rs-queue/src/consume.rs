@@ -33,8 +33,8 @@ use crate::checkpoint::CheckpointCell;
 use crate::envelope::{self, Opened, Unusable};
 use crate::inventory::{HandlerContext, JobHandler};
 use crate::{
-    CheckpointStore, Envelope, INSTANCE_SEPARATOR, JobError, JobId, ProcessMethod, QueueBackend,
-    QueueKind, QueueName, TARGET, backoff, unit,
+    CheckpointStore, Envelope, JobError, JobId, ProcessMethod, QueueBackend, QueueName, TARGET,
+    backoff, unit,
 };
 
 /// A job span's `messaging.operation.name` and `messaging.operation.type`:
@@ -77,13 +77,8 @@ pub fn discover(
     for method in &methods {
         // A decorator's literals were checked at compile time; an entry built by
         // hand reaches the boot unchecked, so the boot checks what the decorator
-        // would have — in the sentences the port already words, a prefix as a
-        // prefix.
-        let named = match method.queue_kind() {
-            QueueKind::Static => QueueName::new(method.queue()),
-            QueueKind::Dynamic => QueueName::instance(method.queue(), "key"),
-        };
-        if let Err(refused) = named {
+        // would have — in the sentence the port already words.
+        if let Err(refused) = QueueName::new(method.queue()) {
             refusals.push(format!(
                 "`{}` drains a queue whose name is refused: {refused}",
                 method.name()
@@ -119,7 +114,6 @@ pub fn discover(
             target: TARGET,
             processor = method.name(),
             queue = method.queue(),
-            dynamic = (method.queue_kind() == QueueKind::Dynamic).then_some(true),
             retries = options.retries(),
             concurrency = options.concurrency().get(),
             throttle_limit = throttle.map(|throttle| throttle.limit().get()),
@@ -138,13 +132,12 @@ pub fn discover(
 /// draining it twice is never the shape a developer meant: each job would go to
 /// whichever handler a backend happened to hand it to, and the retry budget would
 /// fork with it. The way to run more jobs at once is `concurrency`, not a second
-/// handler. A static queue and a dynamic queue's prefix never collide — an
-/// instance's name carries a `#`, which a static name cannot.
+/// handler.
 fn check_duplicate_queue_claims(methods: &[&ProcessMethod]) -> Result<(), String> {
-    let mut claimants: BTreeMap<(&'static str, &'static str), Vec<&'static str>> = BTreeMap::new();
+    let mut claimants: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
     for method in methods {
         claimants
-            .entry((method.queue_kind().as_str(), method.queue()))
+            .entry(method.queue())
             .or_default()
             .push(method.name());
     }
@@ -152,7 +145,7 @@ fn check_duplicate_queue_claims(methods: &[&ProcessMethod]) -> Result<(), String
     let clashes: Vec<String> = claimants
         .into_iter()
         .filter(|(_, names)| names.len() > 1)
-        .map(|((kind, queue), names)| format!("{kind} queue {queue:?} ({})", names.join(" and ")))
+        .map(|(queue, names)| format!("queue {queue:?} ({})", names.join(" and ")))
         .collect();
 
     if clashes.is_empty() {
@@ -260,7 +253,7 @@ impl Delivery {
         self
     }
 
-    /// The queue the job was fetched from — for a dynamic queue, its instance.
+    /// The queue the job was fetched from.
     pub fn queue(&self) -> &QueueName {
         &self.queue
     }
@@ -349,14 +342,6 @@ pub async fn attempt(
     let first_opening = !delivery.announced;
     delivery.announced = true;
     let queue = delivery.queue.as_str();
-    // A dynamic queue's instance is one key's queue. The conventions name a span
-    // after the destination's template when there is one — a span name per queue
-    // a method drains, never one per key — and carry the template beside the name.
-    let template = delivery
-        .queue
-        .instance_key()
-        .map(|_| format!("{}{INSTANCE_SEPARATOR}{{key}}", delivery.queue.queue()));
-    let destination = template.as_deref().unwrap_or(queue);
     // One span per attempt; `.instrument` (not an entered guard held across
     // `.await`) keeps it current for the whole poll. Through `operation_span!` so
     // a job declares the canonical fields every edge does, and in OpenTelemetry's
@@ -368,12 +353,11 @@ pub async fn attempt(
         kind: nest_rs_core::operation_log::kind::CONSUMER,
         unit::JOB,
         &correlation,
-        otel.name = %format_args!("{PROCESS} {destination}"),
+        otel.name = %format_args!("{PROCESS} {queue}"),
         messaging.system = delivery.backend.name(),
         messaging.operation.name = PROCESS,
         messaging.operation.type = PROCESS,
         messaging.destination.name = queue,
-        messaging.destination.template = template.as_deref(),
         messaging.message.id = %delivery.id,
         backend_id = delivery.backend_id.as_deref(),
         processor = method.name(),
@@ -477,8 +461,8 @@ async fn clear_checkpoint(checkpoints: &CheckpointCell, job_id: &JobId) {
 /// envelope carries are read from it, as an attempt reads them, so following the
 /// push's trace — or its receipt — reaches the dead-letter. Nothing here trusts
 /// `queue`: the span is named for it only when it is a name a push could have
-/// written — for a dynamic queue's instance, for its template — and the raw
-/// string reaches the event alone, where the formatter escapes it.
+/// written, and the raw string reaches the event alone, where the formatter
+/// escapes it.
 pub async fn refuse(
     backend: &'static QueueBackend,
     queue: Option<&str>,
@@ -487,7 +471,7 @@ pub async fn refuse(
     error: JobError,
 ) -> JobError {
     let started = Instant::now();
-    let named = queue.and_then(|raw| QueueName::parse(raw).ok());
+    let named = queue.and_then(|raw| QueueName::new(raw.to_owned()).ok());
     let job_id = message.and_then(|message| envelope::identify(message).id);
     let continued = match (message, named.as_ref()) {
         (Some(message), Some(name)) => match envelope::open(message.clone(), name.as_str()) {
@@ -497,14 +481,7 @@ pub async fn refuse(
         _ => None,
     };
     let correlation = continued.unwrap_or_else(|| Correlation::minted(None));
-    let template = named.as_ref().and_then(|name| {
-        name.instance_key()
-            .map(|_| format!("{}{INSTANCE_SEPARATOR}{{key}}", name.queue()))
-    });
-    let destination = template
-        .as_deref()
-        .or(named.as_ref().map(QueueName::as_str))
-        .unwrap_or("unknown");
+    let destination = named.as_ref().map_or("unknown", QueueName::as_str);
     let job_id = job_id.as_ref().map(ToString::to_string);
     let span = nest_rs_core::operation_span!(
         target: TARGET,
@@ -516,7 +493,6 @@ pub async fn refuse(
         messaging.operation.name = PROCESS,
         messaging.operation.type = PROCESS,
         messaging.destination.name = named.as_ref().map(QueueName::as_str),
-        messaging.destination.template = template.as_deref(),
         messaging.message.id = job_id.as_deref(),
         backend_id,
         attempt = 1u32,

@@ -203,13 +203,12 @@ fn emit_method(
     // receives the carrier. Matches the HTTP / GraphQL forms.
     let (deser_ty, job_wrap) = pipe_binding(&job_ty);
 
-    // The queue is named by its `Queue` type, which yields the name and the kind
-    // as constants and additionally asserts, at compile time, that the method's
+    // The queue is named by its `Queue` type, which yields the name as a
+    // constant and additionally asserts, at compile time, that the method's
     // payload is exactly the queue's `Job` — a mismatch is an error naming both
     // types.
     let QueueId::Type(queue_ty) = &queue;
     let queue_str = quote!(<#queue_ty as ::nest_rs_queue::Queue>::NAME);
-    let queue_kind = quote!(<#queue_ty as ::nest_rs_queue::Queue>::KIND);
     let queue_assert = quote! {
         const _: () = {
             // Requires `<#queue_ty as Queue>::Job == #deser_ty`; a mismatch
@@ -368,7 +367,6 @@ fn emit_method(
                 ::core::module_path!(),
                 #qualified_name,
                 #queue_str,
-                #queue_kind,
                 #options,
                 || ::std::any::TypeId::of::<#self_ty>(),
                 #handler_ident,
@@ -463,8 +461,8 @@ fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
 }
 
 /// How a `#[process]` names its queue: the `Queue` type its `#[queue]` marker
-/// implements (`#[process(queue = AudioQueue)]`), which links the name, the kind
-/// and the payload type to the one declaration at the feature port.
+/// implements (`#[process(queue = AudioQueue)]`), which links the name and the
+/// payload type to the one declaration at the feature port.
 ///
 /// A bare string used to be accepted too. It is gone: it named the queue without
 /// naming its payload, so a consumer could deserialize a type the producer never

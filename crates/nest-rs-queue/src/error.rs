@@ -32,19 +32,16 @@ pub enum QueueError {
         /// The backend that does not provide it.
         backend: &'static str,
     },
-    /// A queue name, a dynamic queue's prefix or its key outside the rule
-    /// [`QueueName`] states.
+    /// A queue name outside the rule [`QueueName`] states.
     #[error(
-        "{name:?} is not a valid {what}: it takes 1 to {max} ASCII letters, digits, `_`, `.` or \
-         `-` — `:` and `#` are the separators a backend's keys and a dynamic queue's instances are \
-         built with, and whitespace would reach a log field or a metric label",
+        "{name:?} is not a valid queue name: it takes 1 to {max} ASCII letters, digits, `_`, `.` \
+         or `-` — `:` separates the levels of a backend's keys, and whitespace would reach a log \
+         field or a metric label",
         max = QueueName::MAX_LEN,
     )]
     InvalidQueueName {
         /// The value refused, truncated to [`QueueName::MAX_LEN`] characters.
         name: String,
-        /// What it was meant to be.
-        what: &'static str,
     },
     /// A unique key no backend could enqueue.
     #[error(

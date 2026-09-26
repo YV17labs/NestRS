@@ -110,8 +110,8 @@ pub use process_options::{ProcessOptions, Throttle};
 pub use producer::{JobProducer, JobProducerExt};
 pub use push_options::{Delay, PushOptions};
 pub use push_receipt::PushReceipt;
-pub use queue::{DynamicQueue, Queue, QueueInstance, QueueKind};
-pub use queue_name::{INSTANCE_SEPARATOR, QueueName};
+pub use queue::Queue;
+pub use queue_name::QueueName;
 
 // Re-export `async_trait` so backends implement the async traits this crate
 // defines without depending on it directly.

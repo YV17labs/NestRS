@@ -1,8 +1,0 @@
-error[E0599]: no associated function or constant named `instance` found for struct `AudioQueue` in the current scope
-  --> tests/integration/diagnostics/queue_instance_on_a_static_queue.rs:10:25
-   |
- 7 | struct AudioQueue;
-   | ----------------- associated function or constant `instance` not found for this struct
-...
-10 |     let _ = AudioQueue::instance("acme");
-   |                         ^^^^^^^^ associated function or constant not found in `AudioQueue`

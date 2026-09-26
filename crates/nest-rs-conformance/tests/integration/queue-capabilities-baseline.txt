@@ -6,11 +6,10 @@
 # declares `DelayedPush`, and its e2e names it — and a capability it claims later
 # brings its e2e with it or fails here.
 #
-# What is left is the page cell, for the five no page documents yet. A line goes
+# What is left is the page cell, for the four no page documents yet. A line goes
 # when the page that documents the member names it the way a backend declares
 # it, as the queue pages now do for `Capability::DelayedPush`.
 Cancellation :: docs page naming `Capability::Cancellation`
 Checkpoint :: docs page naming `Capability::Checkpoint`
-DynamicQueues :: docs page naming `Capability::DynamicQueues`
 Throttle :: docs page naming `Capability::Throttle`
 UniquePush :: docs page naming `Capability::UniquePush`

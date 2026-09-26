@@ -29,7 +29,7 @@ impl PushReceipt {
         Self { queue, id }
     }
 
-    /// The queue the job was pushed onto — for a dynamic queue, its instance.
+    /// The queue the job was pushed onto.
     pub fn queue(&self) -> &QueueName {
         &self.queue
     }

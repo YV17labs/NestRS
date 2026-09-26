@@ -17,7 +17,7 @@ mod queue;
 ///
 /// The `queue` is named by its `Queue` **type**, declared with
 /// [`queue`](macro@crate::queue) at the feature port. The macro reads the
-/// queue's name and kind into the inventory entry **and** asserts, at compile
+/// queue's name into the inventory entry **and** asserts, at compile
 /// time, that this method's job argument is the queue's `Job` — a mismatch is a
 /// build error naming both types, not a job that silently never drains.
 ///
@@ -30,10 +30,9 @@ mod queue;
 ///   a fifth either way — the port's backoff, the same on every backend.
 /// - `concurrency = 4` — how many attempts of this method one worker replica
 ///   runs at once; default `1`, one at a time. **Per method, per replica**:
-///   another method's jobs never wait on this one's permits, and a method
-///   draining a dynamic queue has one pool of permits across all its instances,
-///   not one per key. It is the vertical bound; the horizontal one is the number
-///   of replicas the platform runs. Not a capability — every backend honours it.
+///   another method's jobs never wait on this one's permits. It is the vertical
+///   bound; the horizontal one is the number of replicas the platform runs. Not
+///   a capability — every backend honours it.
 /// - `throttle(limit = 10, window = "1m")` — at most `limit` attempts of this
 ///   method **start** per window, **across the deployment**: every replica
 ///   draining the queue counts against the one limit, and a retry is an attempt
@@ -61,7 +60,7 @@ mod queue;
 /// ::nest_rs_core::inventory::submit! {
 ///     ::nest_rs_queue::ProcessMethod::new(
 ///         module_path!(), "AudioProcessor::transcode",
-///         <AudioQueue as Queue>::NAME, <AudioQueue as Queue>::KIND,
+///         <AudioQueue as Queue>::NAME,
 ///         ProcessOptions::DEFAULT.with_retries(3),
 ///         || TypeId::of::<AudioProcessor>(),
 ///         __nestrs_process_handler_audio_processor_transcode,
@@ -73,26 +72,22 @@ pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(processor::processor(args, input).into()).into()
 }
 
-/// Stamp a unit struct with a queue's compile-time identity — its wire name or
-/// prefix and the `Job` payload it carries — by implementing `Queue`. Lives
-/// beside the payload at the feature port; the producer (`queue.push(Q, job,
-/// None)`) and the consumer (`#[process(queue = Q)]`) both name the type, so a
-/// typo'd name or a mismatched payload is a compile error.
-///
-/// Two shapes:
+/// Stamp a unit struct with a queue's compile-time identity — its wire name and
+/// the `Job` payload it carries — by implementing `Queue`. Lives beside the
+/// payload at the feature port; the producer (`queue.push(Q, job, None)`) and
+/// the consumer (`#[process(queue = Q)]`) both name the type, so a typo'd name or
+/// a mismatched payload is a compile error.
 ///
 /// ```ignore
-/// // One queue. The marker is the destination a push names.
+/// // The marker is the destination a push names.
 /// #[queue(name = "audio", job = TranscodeCommand)]
 /// pub struct AudioQueue;
-///
-/// // One queue per runtime key: `TenantQueue::instance(&slug)?` is the destination.
-/// #[queue(prefix = "tenant", job = SyncCommand)]
-/// pub struct TenantQueue;
 /// ```
 ///
-/// A name and a prefix follow the rule `QueueName` states, checked here at
-/// compile time.
+/// The name follows the rule `QueueName` states, checked here at compile time.
+/// A queue per runtime key (`prefix = ..`) is refused, naming why: the Redis
+/// backend drains every queue from a list of its own that each replica polls, so
+/// a key that varies at runtime rides in the job instead.
 ///
 /// # Expands to
 ///
@@ -100,14 +95,10 @@ pub fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
 /// pub struct AudioQueue;
 /// impl ::nest_rs_queue::Queue for AudioQueue {
 ///     const NAME: &'static str = "audio";
-///     const KIND: QueueKind = QueueKind::Static;
 ///     type Job = TranscodeCommand;
 /// }
 /// impl ::nest_rs_queue::Destination for AudioQueue { /* the queue's name */ }
 /// ```
-///
-/// A `prefix` queue implements `Queue` and `DynamicQueue` instead of
-/// `Destination`, and gains an inherent `instance(key)` constructor.
 #[proc_macro_attribute]
 pub fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(queue::queue(args, input).into()).into()

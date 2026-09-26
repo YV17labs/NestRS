@@ -1,8 +1,7 @@
-//! `#[queue(name = "…", job = Payload)]` and `#[queue(prefix = "…", job =
-//! Payload)]` — the attribute that gives a unit struct a queue's compile-time
-//! identity: its wire name or prefix, its kind and its payload type. Emits
-//! absolute `::nest_rs_queue::*` paths so the macros crate never depends on its
-//! surface crate.
+//! `#[queue(name = "…", job = Payload)]` — the attribute that gives a unit
+//! struct a queue's compile-time identity: its wire name and its payload type.
+//! Emits absolute `::nest_rs_queue::*` paths so the macros crate never depends
+//! on its surface crate.
 
 use nest_rs_codegen::{
     invalid_queue_name, is_valid_queue_name, missing_argument, needs_a_value,
@@ -15,7 +14,18 @@ use syn::spanned::Spanned;
 use syn::{Ident, Item, LitStr, Token, Type, parse_macro_input};
 
 /// Every key `#[queue]` takes, in the order its unknown-key refusal lists them.
-const KEYS: [&str; 3] = ["name", "prefix", "job"];
+const KEYS: [&str; 2] = ["name", "job"];
+
+/// The key 6.x offered for a queue per runtime key, refused by name rather than
+/// as unknown: a developer writing it is owed the reason it is gone and what to
+/// write instead.
+const PREFIX: &str = "prefix";
+
+/// Why `#[queue]` takes no `prefix`, in the facts a reader can check.
+const NO_PREFIX: &str = "#[queue] takes no `prefix`: one queue per runtime key is not offered — the \
+     Redis backend drains every queue from a list of its own, polled by each worker replica, so a \
+     queue per key would cost Redis a poller per key and leave an autoscaler no single list to \
+     read. Declare one queue with `name` and carry the key in the job";
 
 pub(crate) fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as QueueArgs);
@@ -62,55 +72,27 @@ pub(crate) fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     let ident = &item.ident;
-    let QueueArgs { address, job } = args;
+    let QueueArgs { name, job } = args;
 
-    let out = match address {
-        Address::Name(name) => quote! {
-            #item
+    quote! {
+        #item
 
-            impl ::nest_rs_queue::Queue for #ident {
-                const NAME: &'static str = #name;
-                const KIND: ::nest_rs_queue::QueueKind = ::nest_rs_queue::QueueKind::Static;
-                type Job = #job;
+        impl ::nest_rs_queue::Queue for #ident {
+            const NAME: &'static str = #name;
+            type Job = #job;
+        }
+
+        impl ::nest_rs_queue::Destination for #ident {
+            type Job = #job;
+
+            fn queue_name(
+                &self,
+            ) -> ::std::result::Result<::nest_rs_queue::QueueName, ::nest_rs_queue::QueueError> {
+                ::nest_rs_queue::QueueName::new(<Self as ::nest_rs_queue::Queue>::NAME)
             }
-
-            impl ::nest_rs_queue::Destination for #ident {
-                type Job = #job;
-
-                fn queue_name(
-                    &self,
-                ) -> ::std::result::Result<::nest_rs_queue::QueueName, ::nest_rs_queue::QueueError> {
-                    ::nest_rs_queue::QueueName::new(<Self as ::nest_rs_queue::Queue>::NAME)
-                }
-            }
-        },
-        Address::Prefix(prefix) => quote! {
-            #item
-
-            impl ::nest_rs_queue::Queue for #ident {
-                const NAME: &'static str = #prefix;
-                const KIND: ::nest_rs_queue::QueueKind = ::nest_rs_queue::QueueKind::Dynamic;
-                type Job = #job;
-            }
-
-            impl ::nest_rs_queue::DynamicQueue for #ident {}
-
-            impl #ident {
-                /// The instance of this dynamic queue under `key` — the
-                /// destination a push to it names. Refused unless `key` follows
-                /// the rule `QueueName` states.
-                pub fn instance(
-                    key: &str,
-                ) -> ::std::result::Result<
-                    ::nest_rs_queue::QueueInstance<Self>,
-                    ::nest_rs_queue::QueueError,
-                > {
-                    ::nest_rs_queue::QueueInstance::new(key)
-                }
-            }
-        },
-    };
-    out.into()
+        }
+    }
+    .into()
 }
 
 /// The refusal of `#[queue]` on anything but a unit struct, naming what it was
@@ -123,21 +105,14 @@ fn not_a_unit_struct(shape: &str) -> String {
     )
 }
 
-/// Where a queue lives: one name, or a prefix every runtime key extends.
-enum Address {
-    Name(LitStr),
-    Prefix(LitStr),
-}
-
 struct QueueArgs {
-    address: Address,
+    name: LitStr,
     job: Type,
 }
 
 impl Parse for QueueArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name: Option<LitStr> = None;
-        let mut prefix: Option<LitStr> = None;
         let mut job: Option<Type> = None;
 
         while !input.is_empty() {
@@ -146,6 +121,9 @@ impl Parse for QueueArgs {
             // the key rather than dying on syn's `` expected `=` `` — and a bare
             // *unknown* key still reads as unknown rather than as missing a value.
             let spelled = key.to_string();
+            if spelled == PREFIX {
+                return Err(syn::Error::new(key.span(), NO_PREFIX));
+            }
             if !KEYS.contains(&spelled.as_str()) {
                 return Err(syn::Error::new(
                     key.span(),
@@ -163,52 +141,28 @@ impl Parse for QueueArgs {
                 reject_duplicate_argument(job.is_some(), &key, "queue", &spelled)?;
                 job = Some(input.parse()?);
             } else {
-                let slot = if spelled == "name" {
-                    &mut name
-                } else {
-                    &mut prefix
-                };
-                reject_duplicate_argument(slot.is_some(), &key, "queue", &spelled)?;
+                reject_duplicate_argument(name.is_some(), &key, "queue", &spelled)?;
                 let literal: LitStr = input.parse()?;
                 // The rule `QueueName` states, refused at the literal.
                 if !is_valid_queue_name(&literal.value()) {
-                    let what = if spelled == "name" {
-                        "queue name"
-                    } else {
-                        "dynamic queue prefix"
-                    };
                     return Err(syn::Error::new(
                         literal.span(),
-                        invalid_queue_name("queue", &spelled, what, &literal.value()),
+                        invalid_queue_name("queue", &spelled, &literal.value()),
                     ));
                 }
-                *slot = Some(literal);
+                name = Some(literal);
             }
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
             }
         }
 
-        let address = match (name, prefix) {
-            (Some(name), None) => Address::Name(name),
-            (None, Some(prefix)) => Address::Prefix(prefix),
-            (Some(_), Some(prefix)) => {
-                return Err(syn::Error::new(
-                    prefix.span(),
-                    "#[queue] takes `name` or `prefix`, not both — `name` declares one queue, \
-                     `prefix` one queue per runtime key",
-                ));
-            }
-            (None, None) => {
-                return Err(syn::Error::new(
-                    input.span(),
-                    format!(
-                        "{} (or `prefix = \"tenant\"` for one queue per runtime key)",
-                        missing_argument("queue", "name", "\"emails\""),
-                    ),
-                ));
-            }
-        };
+        let name = name.ok_or_else(|| {
+            syn::Error::new(
+                input.span(),
+                missing_argument("queue", "name", "\"emails\""),
+            )
+        })?;
         let job = job.ok_or_else(|| {
             syn::Error::new(
                 input.span(),
@@ -219,6 +173,6 @@ impl Parse for QueueArgs {
             )
         })?;
 
-        Ok(Self { address, job })
+        Ok(Self { name, job })
     }
 }

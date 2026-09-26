@@ -13,7 +13,7 @@ use nest_rs_queue::{
 };
 use serde_json::{Value, json};
 
-use crate::{BARE, FULL, SyncCommand, TenantQueue, TranscodeCommand, TranscodeQueue};
+use crate::{BARE, FULL, TranscodeCommand, TranscodeQueue};
 
 /// One call the port made to the backend: the queue, the envelopes as stored,
 /// the options.
@@ -26,14 +26,6 @@ const HELD_KEY: &str = "song-1";
 static UNIQUE_ONLY: QueueBackend = QueueBackend::new(
     "unique-only",
     Capabilities::NONE.with(Capability::UniquePush),
-);
-
-/// A backend removing a static queue's unique jobs, with no dynamic queues.
-static STATIC_CANCELS: QueueBackend = QueueBackend::new(
-    "static-cancels",
-    Capabilities::NONE
-        .with(Capability::UniquePush)
-        .with(Capability::Cancellation),
 );
 
 /// A backend that records every call and keeps what it filed in memory: a job
@@ -258,12 +250,12 @@ async fn a_push_of_nothing_is_still_refused_what_the_backend_cannot_honour() {
 async fn the_raw_hatch_takes_a_runtime_name_and_checks_it() {
     let producer = RecordingProducer::on(&FULL);
     producer
-        .push_json("tenant#acme", json!({ "org": "acme" }), None)
+        .push_json("billing.invoices", json!({ "invoice": 7 }), None)
         .await
-        .expect("an instance name is a name");
-    assert_eq!(producer.filed()[0].0, "tenant#acme");
+        .expect("a runtime name inside the rule");
+    assert_eq!(producer.filed()[0].0, "billing.invoices");
 
-    for refused in ["nestrs:queue:dead", "", "with space"] {
+    for refused in ["nestrs:queue:dead", "", "with space", "tenant#acme"] {
         let error = producer
             .push_json(refused, json!({}), None)
             .await
@@ -324,16 +316,6 @@ async fn unique_push_is_refused_at_the_push_by_a_backend_without_it() {
         )
         .await;
     assert_refused_at_the_push(result, Capability::UniquePush, &producer);
-}
-
-#[tokio::test]
-async fn dynamic_queues_are_refused_at_the_push_by_a_backend_without_them() {
-    let producer = RecordingProducer::on(&BARE);
-    let acme = TenantQueue::instance("acme").expect("a valid key");
-    let result = producer
-        .push(acme, SyncCommand { org: "acme".into() }, None)
-        .await;
-    assert_refused_at_the_push(result, Capability::DynamicQueues, &producer);
 }
 
 #[tokio::test]
@@ -489,25 +471,6 @@ async fn cancellation_is_refused_by_a_backend_without_what_it_needs() {
         Capability::Cancellation,
         "unique-only",
         &unique_only,
-    );
-
-    let static_cancels = RecordingProducer::on(&STATIC_CANCELS);
-    let acme = TenantQueue::instance("acme").expect("a valid key");
-    assert_cancel_refused(
-        static_cancels.cancel_unique(acme, HELD_KEY).await,
-        Capability::DynamicQueues,
-        "static-cancels",
-        &static_cancels,
-    );
-    let acme_receipt = PushReceipt::new(
-        QueueName::instance("tenant", "acme").expect("a valid instance"),
-        stray_receipt().id().clone(),
-    );
-    assert_cancel_refused(
-        static_cancels.cancel(&acme_receipt).await,
-        Capability::DynamicQueues,
-        "static-cancels",
-        &static_cancels,
     );
 }
 

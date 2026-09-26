@@ -1,5 +1,0 @@
-error: #[queue] `prefix`: "tenant#" is not a valid dynamic queue prefix: it takes 1 to 128 ASCII letters, digits, `_`, `.` or `-` — `:` and `#` are the separators a backend's keys and a dynamic queue's instances are built with, and whitespace would reach a log field or a metric label
- --> tests/integration/diagnostics/queue_prefix_outside_the_rule.rs:6:18
-  |
-6 | #[queue(prefix = "tenant#", job = String)]
-  |                  ^^^^^^^^^

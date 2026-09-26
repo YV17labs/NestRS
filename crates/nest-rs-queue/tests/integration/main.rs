@@ -42,9 +42,9 @@ struct SyncCommand {
     org: String,
 }
 
-// A dynamic queue: one instance per runtime key.
-#[queue(prefix = "tenant", job = SyncCommand)]
-struct TenantQueue;
+// A second static queue, for the method declaring every key.
+#[queue(name = "sync", job = SyncCommand)]
+struct SyncQueue;
 
 /// A backend declaring no optional capability — what every refusal is proved
 /// against.
@@ -59,8 +59,7 @@ static FULL: QueueBackend = QueueBackend::new(
         .with(Capability::UniquePush)
         .with(Capability::Cancellation)
         .with(Capability::Throttle)
-        .with(Capability::Checkpoint)
-        .with(Capability::DynamicQueues),
+        .with(Capability::Checkpoint),
 );
 
 /// The files `TranscodeProcessor` saw. Process-wide, and nextest runs each test

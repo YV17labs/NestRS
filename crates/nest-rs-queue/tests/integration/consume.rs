@@ -14,8 +14,8 @@ use std::time::Duration;
 use nest_rs_core::Container;
 use nest_rs_queue::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::{
-    HandlerContext, JobError, JobId, ProcessMethod, ProcessOptions, QueueBackend, QueueKind,
-    QueueName, Throttle, WIRE_FORMAT_VERSION, nest_rs_worker, processor, queue,
+    HandlerContext, JobError, JobId, ProcessMethod, ProcessOptions, QueueBackend, QueueName,
+    Throttle, WIRE_FORMAT_VERSION, nest_rs_worker, processor, queue,
 };
 use serde_json::json;
 
@@ -559,8 +559,6 @@ fn never_runs(_payload: serde_json::Value, _context: HandlerContext) -> Handled 
 
 struct ThrottledHost;
 struct CheckpointHost;
-struct DynamicHost;
-struct StaticTenantHost;
 struct FirstClaimant;
 struct SecondClaimant;
 struct BadlyNamedHost;
@@ -568,7 +566,7 @@ struct ZeroWindowHost;
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "ThrottledHost::run", "throttled", QueueKind::Static,
+        module_path!(), "ThrottledHost::run", "throttled",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_secs(1))),
         TypeId::of::<ThrottledHost>, never_runs,
     )
@@ -576,7 +574,7 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "CheckpointHost::run", "resumable", QueueKind::Static,
+        module_path!(), "CheckpointHost::run", "resumable",
         ProcessOptions::DEFAULT.with_checkpoint(true),
         TypeId::of::<CheckpointHost>, never_runs,
     )
@@ -584,23 +582,7 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "DynamicHost::run", "tenant", QueueKind::Dynamic,
-        ProcessOptions::DEFAULT,
-        TypeId::of::<DynamicHost>, never_runs,
-    )
-}
-
-nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
-        module_path!(), "StaticTenantHost::run", "tenant", QueueKind::Static,
-        ProcessOptions::DEFAULT,
-        TypeId::of::<StaticTenantHost>, never_runs,
-    )
-}
-
-nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
-        module_path!(), "FirstClaimant::drain", "contested", QueueKind::Static,
+        module_path!(), "FirstClaimant::drain", "contested",
         ProcessOptions::DEFAULT,
         TypeId::of::<FirstClaimant>, never_runs,
     )
@@ -608,7 +590,7 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "SecondClaimant::drain", "contested", QueueKind::Static,
+        module_path!(), "SecondClaimant::drain", "contested",
         ProcessOptions::DEFAULT.with_retries(9),
         TypeId::of::<SecondClaimant>, never_runs,
     )
@@ -616,7 +598,7 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "BadlyNamedHost::run", "nestrs:queue:dead", QueueKind::Static,
+        module_path!(), "BadlyNamedHost::run", "nestrs:queue:dead",
         ProcessOptions::DEFAULT,
         TypeId::of::<BadlyNamedHost>, never_runs,
     )
@@ -624,7 +606,7 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "ZeroWindowHost::run", "unwindowed", QueueKind::Static,
+        module_path!(), "ZeroWindowHost::run", "unwindowed",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::ZERO)),
         TypeId::of::<ZeroWindowHost>, never_runs,
     )
@@ -667,11 +649,6 @@ fn checkpoint_is_refused_at_boot_by_a_backend_without_it() {
 }
 
 #[test]
-fn dynamic_queues_are_refused_at_boot_by_a_backend_without_them() {
-    assert_refused_at_boot::<DynamicHost>("DynamicHost::run", "dynamic queues");
-}
-
-#[test]
 fn two_methods_on_one_queue_fail_the_boot_naming_both() {
     let refusal = consume::discover(
         &reaching(&[
@@ -687,19 +664,6 @@ fn two_methods_on_one_queue_fail_the_boot_naming_both() {
     for part in ["contested", "FirstClaimant::drain", "SecondClaimant::drain"] {
         assert!(refusal.contains(part), "{refusal}");
     }
-}
-
-#[test]
-fn a_static_queue_and_a_dynamic_prefix_spelled_alike_are_two_queues() {
-    let methods = consume::discover(
-        &reaching(&[
-            TypeId::of::<StaticTenantHost>(),
-            TypeId::of::<DynamicHost>(),
-        ]),
-        &FULL,
-    )
-    .expect("`tenant` and every `tenant#<key>` never share a job");
-    assert_eq!(methods.len(), 2);
 }
 
 #[test]
@@ -736,42 +700,10 @@ fn a_method_another_app_owns_is_not_this_apps_to_refuse() {
     assert!(methods.is_empty());
 }
 
-/// OpenTelemetry's messaging conventions name a span after the destination's
-/// template when it has one, so a dynamic queue's attempts share one name per
-/// queue a method drains instead of one per key.
+/// An attempt's span is named for the queue it drains, as OpenTelemetry's
+/// messaging conventions name a `process` span.
 #[tokio::test]
-async fn a_dynamic_queue_attempt_is_named_for_its_template_and_carries_its_instance() {
-    let logs = nest_rs_testing::LogCapture::install();
-    let mut delivery = Delivery::new(
-        &FULL,
-        QueueName::instance("tenant", "acme").expect("a valid instance"),
-        json!({ "v": WIRE_FORMAT_VERSION, "payload": { "org": "acme" } }),
-    );
-
-    consume::attempt(
-        method("DynamicHost::run"),
-        &mut delivery,
-        Container::builder().build(),
-    )
-    .await;
-
-    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB);
-    assert_eq!(
-        span.field("otel.name").as_deref(),
-        Some("process tenant#{key}")
-    );
-    assert_eq!(
-        span.field("messaging.destination.template").as_deref(),
-        Some("tenant#{key}"),
-    );
-    assert_eq!(
-        span.field("messaging.destination.name").as_deref(),
-        Some("tenant#acme"),
-    );
-}
-
-#[tokio::test]
-async fn a_static_queue_attempt_is_named_for_its_queue_and_carries_no_template() {
+async fn an_attempt_is_named_for_its_queue() {
     let logs = nest_rs_testing::LogCapture::install();
     let container = Container::builder().provide(TranscodeProcessor).build();
     let mut delivery = transcode_delivery("named.wav");
@@ -792,7 +724,6 @@ async fn a_static_queue_attempt_is_named_for_its_queue_and_carries_no_template()
         span.field("messaging.destination.name").as_deref(),
         Some("transcode"),
     );
-    assert_eq!(span.field("messaging.destination.template"), None);
 }
 
 /// A record no method can take is still a unit of work: the port files its

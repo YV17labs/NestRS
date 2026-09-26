@@ -69,9 +69,7 @@ impl ProcessOptions {
     }
 
     /// `concurrency = N`: at most `N` attempts of this method at once in one
-    /// worker replica — for a method draining a dynamic queue, across all its
-    /// instances together, one pool of permits per method. Not a capability:
-    /// every backend honours it.
+    /// worker replica. Not a capability: every backend honours it.
     pub const fn with_concurrency(mut self, concurrency: NonZeroU32) -> Self {
         self.concurrency = concurrency;
         self

@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use nest_rs_core::{Container, ReachableProviders, Transport};
-use nest_rs_queue::{HandlerContext, JobError, ProcessMethod, ProcessOptions, QueueKind, Throttle};
+use nest_rs_queue::{HandlerContext, JobError, ProcessMethod, ProcessOptions, Throttle};
 use nest_rs_redis::RedisWorker;
 use tokio_util::sync::CancellationToken;
 
@@ -29,11 +29,10 @@ struct FirstClaimant;
 struct SecondClaimant;
 struct ThrottledHost;
 struct CheckpointHost;
-struct DynamicHost;
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "ProbeHost::run", "probe", QueueKind::Static,
+        module_path!(), "ProbeHost::run", "probe",
         ProcessOptions::DEFAULT,
         TypeId::of::<ProbeHost>, never_runs,
     )
@@ -43,7 +42,7 @@ nest_rs_core::inventory::submit! {
 // one apalis worker per entry so both polled the same stream.
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "FirstClaimant::drain", "contested", QueueKind::Static,
+        module_path!(), "FirstClaimant::drain", "contested",
         ProcessOptions::DEFAULT.with_retries(1),
         TypeId::of::<FirstClaimant>, never_runs,
     )
@@ -51,7 +50,7 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "SecondClaimant::drain", "contested", QueueKind::Static,
+        module_path!(), "SecondClaimant::drain", "contested",
         ProcessOptions::DEFAULT.with_retries(9),
         TypeId::of::<SecondClaimant>, never_runs,
     )
@@ -59,7 +58,7 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "ThrottledHost::run", "throttled", QueueKind::Static,
+        module_path!(), "ThrottledHost::run", "throttled",
         ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_secs(60))),
         TypeId::of::<ThrottledHost>, never_runs,
     )
@@ -67,17 +66,9 @@ nest_rs_core::inventory::submit! {
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
-        module_path!(), "CheckpointHost::run", "resumable", QueueKind::Static,
+        module_path!(), "CheckpointHost::run", "resumable",
         ProcessOptions::DEFAULT.with_checkpoint(true),
         TypeId::of::<CheckpointHost>, never_runs,
-    )
-}
-
-nest_rs_core::inventory::submit! {
-    ProcessMethod::new(
-        module_path!(), "DynamicHost::run", "tenant", QueueKind::Dynamic,
-        ProcessOptions::DEFAULT,
-        TypeId::of::<DynamicHost>, never_runs,
     )
 }
 
@@ -156,11 +147,6 @@ async fn a_declaration_redis_does_not_honour_fails_configure_naming_the_backend(
             TypeId::of::<CheckpointHost>(),
             "CheckpointHost::run",
             "checkpoints",
-        ),
-        (
-            TypeId::of::<DynamicHost>(),
-            "DynamicHost::run",
-            "dynamic queues",
         ),
     ] {
         let refusal = configure(&reaching(&[host]))

@@ -26,7 +26,7 @@ use crate::error::Unimplemented;
 use crate::push_options::check_unique_key;
 use crate::{
     Capabilities, Capability, Destination, Envelope, JobId, PushOptions, PushReceipt, QueueBackend,
-    QueueError, QueueKind, QueueName, TARGET, envelope,
+    QueueError, QueueName, TARGET, envelope,
 };
 
 /// What a queue backend implements to enqueue jobs. Inject it as
@@ -92,8 +92,7 @@ pub trait JobProducer: Send + Sync + 'static {
 /// `JobProducer` and every method below is on the handle you injected.
 #[async_trait]
 pub trait JobProducerExt: JobProducer {
-    /// Push `job` onto `destination`: a static queue's marker, or an instance of a
-    /// dynamic queue (`TenantQueue::instance(&slug)?`). `options` is `None` for
+    /// Push `job` onto `destination`, a queue's marker. `options` is `None` for
     /// an immediate push, or a [`PushOptions`].
     ///
     /// The queue and the payload type both come from `destination`, so a push
@@ -113,8 +112,8 @@ pub trait JobProducerExt: JobProducer {
     ///
     /// The receipt names the queue and the [`JobId`] the port minted for the job.
     ///
-    /// Fails with [`QueueError::Unsupported`] for an option or a dynamic queue
-    /// the backend does not declare, [`QueueError::InvalidQueueName`] or
+    /// Fails with [`QueueError::Unsupported`] for an option the backend does not
+    /// declare, [`QueueError::InvalidQueueName`] or
     /// [`QueueError::InvalidUniqueKey`] for a value no backend could file,
     /// [`QueueError::Serialize`] for a payload that does not serialize,
     /// [`QueueError::UniqueKeyHeld`] for a unique key another job still holds, and
@@ -174,8 +173,8 @@ pub trait JobProducerExt: JobProducer {
             .collect::<Result<Vec<_>, _>>()?;
         // **An empty batch is refused on the same grounds a full one is.** The
         // short-circuit used to return before `push_values`, so a push declaring
-        // an option the backend does not honour — a delay, or a dynamic queue's
-        // instance — answered `Ok(vec![])` instead of `Unsupported`, and the
+        // an option the backend does not honour — a delay — answered
+        // `Ok(vec![])` instead of `Unsupported`, and the
         // answer depended on the runtime length of the iterator: a
         // `push_many(q, ids.filter(..), delayed)` was `Ok` in staging over an
         // empty list and `Unsupported` in production on the first match. Nothing
@@ -184,16 +183,13 @@ pub trait JobProducerExt: JobProducer {
         push_values(self, &queue, payloads, &options).await
     }
 
-    /// Push a JSON `payload` onto the queue named `queue` — a static name, or a
-    /// dynamic queue's `prefix#key` — for the one case no marker type is in
-    /// reach: a queue **this binary does not declare**, drained by another
-    /// deployment whose `#[queue]` types it does not link.
+    /// Push a JSON `payload` onto the queue named `queue`, for the one case no
+    /// marker type is in reach: a queue **this binary does not declare**, drained
+    /// by another deployment whose `#[queue]` types it does not link.
     ///
-    /// A name merely unknown until runtime is not that case and has a typed
-    /// answer: `#[queue(prefix = ..)]` plus [`QueueInstance`](crate::QueueInstance)
-    /// keeps the job type and the declaration. This hatch checks neither the
-    /// name against a declared queue nor the payload against its job type, so
-    /// prefer [`push`](Self::push) wherever a marker exists.
+    /// This hatch checks neither the name against a declared queue nor the
+    /// payload against its job type, so prefer [`push`](Self::push) wherever a
+    /// marker exists.
     async fn push_json<O>(
         &self,
         queue: &str,
@@ -204,7 +200,7 @@ pub trait JobProducerExt: JobProducer {
         O: Into<Option<PushOptions>> + Send,
     {
         let options = options.into().unwrap_or_default();
-        let queue = QueueName::parse(queue)?;
+        let queue = QueueName::new(queue.to_owned())?;
         push_value(self, &queue, payload, &options).await
     }
 
@@ -217,15 +213,11 @@ pub trait JobProducerExt: JobProducer {
     /// runs to its own outcome — already finished, or is unknown to the backend.
     ///
     /// Fails with [`QueueError::Unsupported`] on a backend without
-    /// [`Capability::Cancellation`] — or, for a dynamic queue's instance, without
-    /// [`Capability::DynamicQueues`] — before the backend sees the call.
+    /// [`Capability::Cancellation`], before the backend sees the call.
     async fn cancel(&self, receipt: &PushReceipt) -> Result<bool, QueueError> {
         let queue = receipt.queue();
-        let mut required = Capabilities::NONE.with(Capability::Cancellation);
-        if queue.kind() == QueueKind::Dynamic {
-            required = required.with(Capability::DynamicQueues);
-        }
-        self.backend().check(required)?;
+        self.backend()
+            .check(Capabilities::NONE.with(Capability::Cancellation))?;
         let removed = self.remove(queue, receipt.id()).await?;
         if removed {
             tracing::info!(
@@ -245,22 +237,19 @@ pub trait JobProducerExt: JobProducer {
     /// already finished, or no job holds the key.
     ///
     /// Fails with [`QueueError::InvalidUniqueKey`] for a key no push could file,
-    /// and with [`QueueError::Unsupported`] on a backend without unique jobs,
-    /// without cancellation or — for a dynamic queue's instance — without
-    /// dynamic queues, before the backend sees the call.
+    /// and with [`QueueError::Unsupported`] on a backend without unique jobs or
+    /// without cancellation, before the backend sees the call.
     async fn cancel_unique<D>(&self, destination: D, key: &str) -> Result<bool, QueueError>
     where
         D: Destination + Send,
     {
         let queue = destination.queue_name()?;
         check_unique_key(key)?;
-        let mut required = Capabilities::NONE
-            .with(Capability::UniquePush)
-            .with(Capability::Cancellation);
-        if queue.kind() == QueueKind::Dynamic {
-            required = required.with(Capability::DynamicQueues);
-        }
-        self.backend().check(required)?;
+        self.backend().check(
+            Capabilities::NONE
+                .with(Capability::UniquePush)
+                .with(Capability::Cancellation),
+        )?;
         let removed = self.remove_unique(&queue, key).await?;
         if removed {
             tracing::info!(
@@ -284,7 +273,7 @@ async fn push_values<P: JobProducer + ?Sized>(
     payloads: Vec<Value>,
     options: &PushOptions,
 ) -> Result<Vec<PushReceipt>, QueueError> {
-    refuse_what_no_push_may_carry(producer.backend(), queue, options)?;
+    refuse_what_no_push_may_carry(producer.backend(), options)?;
 
     // Refused above, answered here: the port owes an empty batch the same
     // refusals as a full one, and the backend owes it no round trip.
@@ -311,7 +300,7 @@ async fn push_value<P: JobProducer + ?Sized>(
     payload: Value,
     options: &PushOptions,
 ) -> Result<PushReceipt, QueueError> {
-    refuse_what_no_push_may_carry(producer.backend(), queue, options)?;
+    refuse_what_no_push_may_carry(producer.backend(), options)?;
     let envelope = envelope::seal(payload, JobId::mint(), options.unique_key());
     let receipt = PushReceipt::new(queue.clone(), envelope.id().clone());
     producer.enqueue(queue, vec![envelope], options).await?;
@@ -322,15 +311,10 @@ async fn push_value<P: JobProducer + ?Sized>(
 /// declare — before anything reaches it.
 fn refuse_what_no_push_may_carry(
     backend: &QueueBackend,
-    queue: &QueueName,
     options: &PushOptions,
 ) -> Result<(), QueueError> {
     options.check()?;
-    let mut required = options.required_capabilities();
-    if queue.kind() == QueueKind::Dynamic {
-        required = required.with(Capability::DynamicQueues);
-    }
-    backend.check(required)
+    backend.check(options.required_capabilities())
 }
 
 /// What a backend's default removal body answers: the refusal a backend without

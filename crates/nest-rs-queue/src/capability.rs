@@ -53,21 +53,18 @@ pub enum Capability {
     /// Progress a job keeps across its retries and redeliveries: a
     /// `Checkpoint<_>` parameter.
     Checkpoint,
-    /// One queue per runtime key: `#[queue(prefix = ..)]`.
-    DynamicQueues,
 }
 
 impl Capability {
     /// Every capability, in declaration order — what `Capabilities` derives its
     /// own `ALL` and its iterator from. `pub(crate)`: a driver declares the
     /// capabilities it honours one by one, and never enumerates the port's.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::DelayedPush,
         Self::UniquePush,
         Self::Cancellation,
         Self::Throttle,
         Self::Checkpoint,
-        Self::DynamicQueues,
     ];
 
     const fn bit(self) -> u16 {
@@ -84,7 +81,6 @@ impl Capability {
             Self::Cancellation => "`JobProducerExt::cancel` or `cancel_unique`",
             Self::Throttle => "`#[process(throttle(..))]`",
             Self::Checkpoint => "a `Checkpoint<_>` parameter",
-            Self::DynamicQueues => "a dynamic queue (`#[queue(prefix = ..)]`)",
         }
     }
 }
@@ -97,7 +93,6 @@ impl fmt::Display for Capability {
             Self::Cancellation => "job cancellation",
             Self::Throttle => "throttling",
             Self::Checkpoint => "checkpoints",
-            Self::DynamicQueues => "dynamic queues",
         })
     }
 }

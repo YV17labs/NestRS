@@ -1,4 +1,4 @@
-error: #[queue] requires `name` — write `name = "emails"` (or `prefix = "tenant"` for one queue per runtime key)
+error: #[queue] requires `name` — write `name = "emails"`
  --> tests/integration/diagnostics/queue_without_a_name.rs:7:1
   |
 7 | #[queue(job = Payload)]

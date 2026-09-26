@@ -150,7 +150,6 @@
       "collect",
       "register"
     ],
-    "DynamicQueue": [],
     "ErrorReportChain": [
       "into_frame"
     ],
@@ -356,7 +355,7 @@
       "type_key"
     ]
   },
-  "test_count": 2450,
+  "test_count": 2443,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [

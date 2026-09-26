@@ -1,4 +1,4 @@
-error: unknown #[queue] argument `topic`; expected `name`, `prefix` or `job`
+error: unknown #[queue] argument `topic`; expected `name` or `job`
  --> tests/integration/diagnostics/queue_unknown_argument.rs:8:9
   |
 8 | #[queue(topic = "emails")]

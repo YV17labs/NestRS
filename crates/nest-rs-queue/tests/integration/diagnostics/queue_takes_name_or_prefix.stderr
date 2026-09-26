@@ -1,5 +1,0 @@
-error: #[queue] takes `name` or `prefix`, not both — `name` declares one queue, `prefix` one queue per runtime key
- --> tests/integration/diagnostics/queue_takes_name_or_prefix.rs:6:36
-  |
-6 | #[queue(name = "tenants", prefix = "tenant", job = String)]
-  |                                    ^^^^^^^^

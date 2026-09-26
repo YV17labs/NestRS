@@ -16,7 +16,7 @@ use std::sync::Arc;
 use nest_rs_core::Container;
 
 use crate::checkpoint::CheckpointCell;
-use crate::{Capabilities, Capability, JobError, ProcessOptions, QueueKind};
+use crate::{Capabilities, Capability, JobError, ProcessOptions};
 
 /// The type-erased handler `#[processor]` emits for each `#[process]` method:
 /// deserializes the job payload, resolves the provider, runs the method inside
@@ -47,7 +47,6 @@ pub struct ProcessMethod {
     origin: &'static str,
     name: &'static str,
     queue: &'static str,
-    queue_kind: QueueKind,
     options: ProcessOptions,
     provider_type_id: fn() -> TypeId,
     handler: JobHandler,
@@ -61,7 +60,6 @@ impl ProcessMethod {
         origin: &'static str,
         name: &'static str,
         queue: &'static str,
-        queue_kind: QueueKind,
         options: ProcessOptions,
         provider_type_id: fn() -> TypeId,
         handler: JobHandler,
@@ -70,7 +68,6 @@ impl ProcessMethod {
             origin,
             name,
             queue,
-            queue_kind,
             options,
             provider_type_id,
             handler,
@@ -93,15 +90,9 @@ impl ProcessMethod {
         self.name
     }
 
-    /// The static queue's name, or the dynamic queue's prefix, this method
-    /// drains.
+    /// The name of the queue this method drains.
     pub const fn queue(&self) -> &'static str {
         self.queue
-    }
-
-    /// Whether the method drains one queue or every instance of a dynamic one.
-    pub const fn queue_kind(&self) -> QueueKind {
-        self.queue_kind
     }
 
     /// Everything else the method declared.
@@ -124,9 +115,6 @@ impl ProcessMethod {
         if self.options.checkpoint() {
             required = required.with(Capability::Checkpoint);
         }
-        if self.queue_kind == QueueKind::Dynamic {
-            required = required.with(Capability::DynamicQueues);
-        }
         required
     }
 
@@ -144,7 +132,6 @@ impl std::fmt::Debug for ProcessMethod {
         f.debug_struct("ProcessMethod")
             .field("name", &self.name)
             .field("queue", &self.queue)
-            .field("queue_kind", &self.queue_kind)
             .field("options", &self.options)
             .finish_non_exhaustive()
     }

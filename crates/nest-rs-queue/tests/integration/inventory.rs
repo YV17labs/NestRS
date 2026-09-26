@@ -6,16 +6,15 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use nest_rs_queue::{
-    Capabilities, Capability, Checkpoint, ProcessMethod, Queue, QueueKind, Throttle, processor,
+    Capabilities, Capability, Checkpoint, ProcessMethod, Queue, Throttle, processor,
 };
 
-use crate::{SyncCommand, TenantQueue, TranscodeCommand, TranscodeQueue, method};
+use crate::{SyncCommand, SyncQueue, TranscodeCommand, TranscodeQueue, method};
 
 #[test]
 fn a_process_method_is_submitted_with_its_queue_and_its_options() {
     let transcode = method("TranscodeProcessor::transcode");
     assert_eq!(transcode.queue(), <TranscodeQueue as Queue>::NAME);
-    assert_eq!(transcode.queue_kind(), QueueKind::Static);
     let options = transcode.options();
     assert_eq!(options.retries(), 1);
     assert_eq!(
@@ -41,7 +40,7 @@ impl nest_rs_core::ProviderResidency for SyncProcessor {
 #[processor]
 impl SyncProcessor {
     #[process(
-        queue = TenantQueue,
+        queue = SyncQueue,
         retries = 2,
         concurrency = 4,
         throttle(limit = 10, window = "1m"),
@@ -57,13 +56,12 @@ impl SyncProcessor {
 fn every_key_reaches_the_options_and_the_capabilities_it_needs() {
     let sync = method("SyncProcessor::sync");
     // The literal is right here, and reading it as a copy was the mistake: the
-    // fixture *declares* `prefix = "tenant"` three lines up, so `"tenant"` is
-    // this test's own input, while `<TenantQueue as Queue>::NAME` is the very
-    // const `#[processor]` emits — asserting one against the other can only fail
-    // if the macro stops emitting it, never if it emits the wrong name. Proved:
+    // fixture *declares* `name = "sync"` in the suite root, so `"sync"` is this
+    // test's own input, while `<SyncQueue as Queue>::NAME` is the very const
+    // `#[processor]` emits — asserting one against the other can only fail if
+    // the macro stops emitting it, never if it emits the wrong name. Proved:
     // mangling `#[queue]`'s emitted `NAME` keeps this assertion green.
-    assert_eq!(sync.queue(), "tenant");
-    assert_eq!(sync.queue_kind(), QueueKind::Dynamic);
+    assert_eq!(sync.queue(), "sync");
     let options = sync.options();
     assert_eq!(options.retries(), 2);
     assert_eq!(options.concurrency(), NonZeroU32::new(4).expect("non-zero"));
@@ -80,11 +78,7 @@ fn every_key_reaches_the_options_and_the_capabilities_it_needs() {
     );
 
     let required = sync.required_capabilities();
-    for capability in [
-        Capability::Throttle,
-        Capability::Checkpoint,
-        Capability::DynamicQueues,
-    ] {
+    for capability in [Capability::Throttle, Capability::Checkpoint] {
         assert!(required.contains(capability), "{capability:?}");
     }
     assert!(

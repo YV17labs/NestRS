@@ -41,7 +41,7 @@ impl AudioService {
 
     pub async fn enqueue_transcode(&self, file: String) -> Result<(), AudioError> {
         self.queue
-            .push_to::<AudioQueue>(TranscodeCommand { file: file.clone() })
+            .push(AudioQueue, TranscodeCommand { file: file.clone() }, None)
             .await?;
         tracing::debug!(target: "features::audio", file, "enqueued transcode job");
         Ok(())

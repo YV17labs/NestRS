@@ -21,11 +21,12 @@ impl NotificationsListener {
             org_id: event.org_id,
             message: format!("Post \"{}\" was published", event.post.title),
         };
-        match self.queue.push_to::<NotifyQueue>(command).await {
-            Ok(()) => tracing::debug!(
+        match self.queue.push(NotifyQueue, command, None).await {
+            Ok(receipt) => tracing::debug!(
                 target: "features::notifications",
                 post_id = %event.post_id,
                 org_id = %event.org_id,
+                job_id = %receipt.id(),
                 "enqueued a publish notification for the worker",
             ),
             Err(error) => tracing::error!(

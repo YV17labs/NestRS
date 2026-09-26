@@ -83,7 +83,7 @@ async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
         .container()
         .get::<RedisQueueProducer>()
         .expect("RedisQueueModule bound the producer over the shared connection");
-    conn.push_to::<ProbeQueue>(ProbeCommand { tag: tag.clone() })
+    conn.push(ProbeQueue, ProbeCommand { tag: tag.clone() }, None)
         .await
         .expect("enqueue onto the probe queue");
 

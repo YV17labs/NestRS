@@ -14,6 +14,9 @@
 //!   declares. Producer-only apps skip it.
 //! - **throttler** (feature) — [`RedisThrottlerModule`] binds the
 //!   cross-process `dyn ThrottlerStore` the `nest-rs-throttler` guard injects.
+//! - **schedule** (feature) — [`RedisScheduleModule`] binds the
+//!   `dyn OccurrenceLock` a scheduled job declared `replicas = "one"` claims
+//!   each occurrence through, so one replica of the deployment fires it.
 //!
 //! The queue contract lives in [`nest-rs-queue`](::nest_rs_queue) (the
 //! [`Job`] marker, the [`ProcessMethod`] inventory, the [`JobProducer`] seam and
@@ -44,6 +47,8 @@ mod connection;
 mod error;
 mod module;
 mod queue;
+#[cfg(feature = "schedule")]
+mod schedule;
 #[cfg(feature = "throttler")]
 mod throttler;
 mod tls;
@@ -54,6 +59,8 @@ pub use connection::RedisConnection;
 pub use error::RedisError;
 pub use module::{RedisModule, RedisSetup};
 pub use queue::{RedisQueueModule, RedisQueueProducer};
+#[cfg(feature = "schedule")]
+pub use schedule::{RedisOccurrenceLock, RedisScheduleModule};
 #[cfg(feature = "throttler")]
 pub use throttler::{RedisThrottler, RedisThrottlerModule};
 pub use tls::{RedisTls, RedisTlsIdentity};

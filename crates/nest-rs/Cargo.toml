@@ -44,7 +44,7 @@ default = ["http", "config"]
 # under `full` and does not find it is meeting a decision, not a hole.
 full = [
     "http", "config", "database", "seaorm", "graphql", "ws", "mcp", "queue",
-    "redis", "redis-throttler", "schedule", "events", "authn", "authz",
+    "redis", "redis-throttler", "redis-schedule", "schedule", "events", "authn", "authz",
     "oauth-client", "oauth-server", "oauth-resource", "social", "opentelemetry",
     "openapi", "health", "throttler", "server-timing", "guards", "pipes",
     "interceptors", "filters", "exception-filters", "worker",
@@ -147,6 +147,12 @@ redis = ["dep:nest-rs-redis", "queue"]
 # are independent: a producer/consumer app that never rate-limits should not
 # compile `nest-rs-throttler`, which is the split `nest-rs-redis` already made.
 redis-throttler = ["redis", "throttler", "nest-rs-redis/throttler"]
+# The occurrence lock a `replicas = "one"` job claims through
+# (`nest_rs::redis::RedisScheduleModule`). Its own feature for the throttler's
+# reason: an app that schedules nothing once should not compile it. It closes
+# over `schedule` because the binding is imported beside `ScheduleModule` and
+# the `#[scheduled]` host it serves — both named by the developer's own code.
+redis-schedule = ["redis", "schedule", "nest-rs-redis/schedule"]
 schedule = ["dep:nest-rs-schedule"]
 events = ["dep:nest-rs-events"]
 # `Strategy::authenticate` takes a `poem::Request` and a custom strategy's

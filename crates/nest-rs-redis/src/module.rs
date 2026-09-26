@@ -1,6 +1,7 @@
 //! [`RedisModule`] — the substrate seam. `RedisModule::for_root(None)` opens
 //! the one [`RedisConnection`] this crate's bindings share; each binding
-//! (`RedisQueueModule`, `RedisWorkerModule`, `RedisThrottlerModule`) is then a
+//! (`RedisQueueModule`, `RedisWorkerModule`, `RedisThrottlerModule`,
+//! `RedisScheduleModule`) is then a
 //! bare import beside it, or its own `for_root` when it owns a config of its
 //! own, and reads the connection from the container.
 //!

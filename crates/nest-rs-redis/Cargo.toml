@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Redis for nest-rs: one shared connection (RedisModule), and one binding per port over it — the queue producer (RedisQueueModule), the RedisWorker consumer transport (RedisWorkerModule), and the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`). The user-facing storage is Redis; apalis is an implementation detail."
+description = "Redis for nest-rs: one shared connection (RedisModule), and one binding per port over it — the queue producer (RedisQueueModule), the RedisWorker consumer transport (RedisWorkerModule), the cross-process rate-limit store (RedisThrottlerModule, feature `throttler`), and the occurrence lock that fires a scheduled job once across replicas (RedisScheduleModule, feature `schedule`). The user-facing storage is Redis; apalis is an implementation detail."
 keywords = ["framework", "nestrs", "redis", "queue", "apalis"]
 categories = ["asynchronous", "database"]
 
@@ -46,6 +46,10 @@ apalis-redis.workspace = true
 # changes), running the atomic fixed-window Lua script over the shared
 # `RedisConnection`.
 nest-rs-throttler = { workspace = true, optional = true }
+# `schedule` feature only: the `dyn OccurrenceLock` seam a job declared
+# `replicas = "one"` claims its occurrences through, and the remedy sentence
+# every lock binding shares.
+nest-rs-schedule = { workspace = true, optional = true }
 # The user-facing Redis surface (`redis::RedisError`, the `aio::ConnectionLike`
 # `RedisConnection` implements, the command API a caller runs on it) is named
 # through the `redis` crate directly — apalis-redis only re-exports these
@@ -64,18 +68,22 @@ rustls.workspace = true
 # one integration home, per the crate's future-expansion note. Off by default:
 # producer/consumer apps that never rate-limit don't pull `nest-rs-throttler`.
 throttler = ["dep:nest-rs-throttler"]
+# The occurrence lock for scheduled jobs that fire once across replicas. Off by
+# default for the same reason: an app with no such job pulls no scheduler.
+schedule = ["dep:nest-rs-schedule"]
 
 [dev-dependencies]
 # A dead-lettered job that logs nothing passes every outcome assertion —
 # `LogCapture` covers the event half of the worker's contract.
 nest-rs-testing = { path = "../nest-rs-testing" }
-# Self dev-dependency: turn on the `throttler` feature for this crate's own test
-# targets, so the `[[test]] e2e` target's `required-features` below are
-# satisfied under `cargo nextest run --workspace -E 'binary(e2e)'`. Without it
-# the live-Redis suite is skipped in silence rather than run. Dev-deps do not
-# propagate, and a path-only dev-dep is stripped from the published manifest, so
-# a producer-only consumer still pulls neither `redis` nor `nest-rs-throttler`.
-nest-rs-redis = { path = ".", features = ["throttler"] }
+# Self dev-dependency: turn on the `throttler` and `schedule` features for this
+# crate's own test targets, so the `[[test]] e2e` target's `required-features`
+# below are satisfied under `cargo nextest run --workspace -E 'binary(e2e)'`.
+# Without it the live-Redis suite is skipped in silence rather than run.
+# Dev-deps do not propagate, and a path-only dev-dep is stripped from the
+# published manifest, so a producer-only consumer still pulls neither
+# `nest-rs-throttler` nor `nest-rs-schedule`.
+nest-rs-redis = { path = ".", features = ["throttler", "schedule"] }
 nest-rs-core = { path = "../nest-rs-core" }
 # The `#[processor]` macro emits `::nest_rs_worker::*` paths and the test
 # implements `JobContext` directly.
@@ -86,6 +94,9 @@ nest-rs-pipes = { path = "../nest-rs-pipes" }
 # `RedisThrottler` store directly. Path-only (intra-workspace dev-dep) and only
 # built when the `throttler` feature is on — see the `[[test]]` below.
 nest-rs-throttler = { path = "../nest-rs-throttler" }
+# The live-Redis `e2e` binary declares `#[scheduled]` jobs and drives the
+# `Scheduler` against `RedisOccurrenceLock`.
+nest-rs-schedule = { path = "../nest-rs-schedule" }
 tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
@@ -96,14 +107,15 @@ tower.workspace = true
 # Already in the tree through `redis`'s rustls support.
 tokio-rustls.workspace = true
 
-# The `e2e` binary exercises the `RedisThrottler`, which only exists under the
-# `throttler` feature — so the target is skipped entirely unless that feature is
-# on (`cargo nextest run -p nest-rs-redis --features throttler -E 'binary(e2e)'`).
-# `tests/integration/main.rs` stays auto-discovered.
+# The `e2e` binary exercises the `RedisThrottler` and the `RedisOccurrenceLock`,
+# which only exist under their features — so the target is skipped entirely
+# unless both are on (`cargo nextest run -p nest-rs-redis --features
+# throttler,schedule -E 'binary(e2e)'`). `tests/integration/main.rs` stays
+# auto-discovered.
 [[test]]
 name = "e2e"
 path = "tests/e2e/main.rs"
-required-features = ["throttler"]
+required-features = ["throttler", "schedule"]
 
 [lints]
 workspace = true

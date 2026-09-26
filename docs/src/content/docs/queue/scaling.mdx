@@ -73,11 +73,12 @@ connection, and a running job holds none of its own.
 
 On Redis, each method of each replica asks for jobs once per poll, and only
 while one of its permits is free. One ask claims up to the method's
-`concurrency` in a single script, so a poll can fill every permit at once. The
+`concurrency` in a single script — 799 at the most, see
+[Limits](/queue/delivery/#limits) — so a poll can fill every permit at once. The
 poll is `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` — 100 ms by default, 10 at
 the least — or `poll_interval` pinned through `RedisWorkerModule::for_root`.
 
-**The ceiling is `concurrency` jobs per poll, per replica.** A method whose
+**The ceiling is one fetch per poll, per replica.** A method whose
 jobs end within a poll runs at most `concurrency` of them per interval — about
 ten times its `concurrency` a second by default. Each poll lands a few
 milliseconds late, since apalis re-arms its timer once it notices the tick, so

@@ -318,6 +318,47 @@ async fn a_busy_replica_holds_at_most_its_concurrency_in_jobs_it_has_not_started
     );
 }
 
+// --- the fetch's ceiling rests on Lua's -----------------------------------------
+
+/// apalis hands a fetch's ids to Redis in one Lua `unpack` — `sadd`, `hmget` and
+/// `rpush` take them all as arguments — and a sweep hands over ten fetches' worth
+/// the same way, so the worker sizes a fetch for ten of them to fit: 7,999
+/// values in one call, the shape apalis's scripts use. Pinned on the Redis the
+/// suite runs against, since a release that moved the limit moves the ceiling.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn redis_lua_unpacks_the_values_a_fetch_is_sized_under_and_no_more() {
+    let mut conn = crate::connect().await;
+    let key = crate::unique_key("lua-unpack");
+    let unpack = redis::Script::new(
+        r"
+local ids = {}
+for i = 1, tonumber(ARGV[1]) do
+  ids[i] = i
+end
+local pushed = redis.call('rpush', KEYS[1], unpack(ids))
+redis.call('del', KEYS[1])
+return pushed
+",
+    );
+    let fits: i64 = unpack
+        .key(&key)
+        .arg(7_999)
+        .invoke_async(&mut conn)
+        .await
+        .expect("7,999 values unpack into one call");
+    assert_eq!(fits, 7_999);
+    let refused = unpack
+        .key(&key)
+        .arg(8_000)
+        .invoke_async::<i64>(&mut conn)
+        .await
+        .expect_err("8,000 do not");
+    assert!(
+        refused.to_string().contains("too many results to unpack"),
+        "{refused}"
+    );
+}
+
 // --- the fetch never hands one job to two replicas ------------------------------
 
 /// Long enough that the batch spreads across both replicas.

@@ -252,6 +252,11 @@ A value below its floor fails the boot, whether the environment set it or
 - **A fetch per poll.** A method starts at most `concurrency` jobs per poll on
   one replica, and a busy replica holds up to `concurrency` jobs it has not
   started — see [Fetching on Redis](/queue/scaling/#fetching-on-redis).
+- **A fetch claims 799 jobs at the most.** apalis passes a fetch's ids to
+  Redis's Lua in one call, and a sweep ten fetches' worth; Lua takes at most
+  7,999 values per call, and a sweep past that loses the jobs it has popped. A
+  method whose `concurrency` exceeds 799 still runs that many at once, fetching
+  799 per poll.
 - **`failed` only grows.** apalis records there every job it reschedules — a
   retry, a hand-back — and nothing trims it.
 - **apalis's own attempt cap binds only what 6.x filed.** apalis 0.7 keeps an

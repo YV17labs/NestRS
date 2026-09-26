@@ -55,7 +55,7 @@ use apalis::layers::ErrorHandlingLayer;
 use apalis::layers::WorkerBuilderExt;
 use apalis::layers::catch_panic::CatchPanicLayer;
 use apalis::prelude::{Attempt, Event, Monitor, TaskId, Worker, WorkerBuilder, WorkerFactoryFn};
-use apalis_redis::{RedisPollError, RedisStorage};
+use apalis_redis::{Config, RedisPollError, RedisStorage};
 use async_trait::async_trait;
 use nest_rs_core::{Container, Transport};
 use nest_rs_queue::consume;
@@ -276,22 +276,50 @@ where
 }
 
 /// The storage one method's worker reads, under its queue's namespace.
+fn storage(
+    conn: &RedisConnection,
+    queue: &QueueName,
+    config: &RedisWorkerConfig,
+    concurrency: usize,
+) -> RedisStorage<serde_json::Value, RedisConnection> {
+    RedisStorage::new_with_config(conn.clone(), fetching(queue, config, concurrency))
+}
+
+/// How many values Redis's Lua hands to one command through `unpack`: 7,999,
+/// its stack's 8,000 slots less the command itself. Pinned against every Redis
+/// the e2e suite runs on.
+const LUA_UNPACK_LIMIT: usize = 7_999;
+
+/// How many fetches' worth of a silent peer's in-flight jobs apalis's sweep
+/// moves in one script.
+const FETCHES_PER_SWEEP: usize = 10;
+
+/// The most jobs one fetch claims, whatever the method's `concurrency`.
+/// apalis's scripts hand a fetch's ids to Redis in one Lua `unpack`, and its
+/// sweep hands over ten fetches' worth of a peer's jobs the same way. Past the
+/// limit a fetch fails on every poll for as long as that many jobs wait, and a
+/// sweep fails *after* popping the jobs it could not push — losing them. Ten
+/// fetches of 799 stay under it.
+const MOST_PER_FETCH: usize = LUA_UNPACK_LIMIT / FETCHES_PER_SWEEP;
+
+/// The settings one method's storage reads Redis with, on top of its queue's
+/// namespace.
 ///
-/// **A fetch takes up to the method's `concurrency`, once per poll.** apalis
-/// asks Redis for jobs every [`RedisWorkerConfig::poll_interval`], and only
-/// while the worker is ready — which the method's permits decide, a worker
-/// with every permit taken being not ready. One script then claims up to
-/// `buffer_size` jobs, handed to the worker through a channel where each waits
-/// for a permit. Sized at `concurrency`, one poll fills every permit a method
-/// has, so a method whose jobs are short runs up to `concurrency` jobs per poll
-/// on one replica, not one. The price is what a busy replica holds: a fetch
-/// needs one free permit and may bring `concurrency` jobs, so a replica keeps
-/// up to `concurrency - 1` jobs it fetched and has not started — `concurrency`
-/// when Redis takes longer than a poll to answer, since apalis then fetches
-/// again before the worker has seen the first batch. They wait in its in-flight
-/// set for its next free permits, invisible to its peers and to an autoscaler
-/// reading the queue, and a replica that dies hands them over with its running
-/// jobs.
+/// **A fetch takes up to the method's `concurrency`, once per poll** — 799 at
+/// the most (`MOST_PER_FETCH`). apalis asks Redis for jobs every
+/// [`RedisWorkerConfig::poll_interval`], and only while the worker is ready —
+/// which the method's permits decide, a worker with every permit taken being
+/// not ready. One script then claims up to `buffer_size` jobs, handed to the
+/// worker through a channel where each waits for a permit. Sized at
+/// `concurrency`, one poll fills every permit a method has, so a method whose
+/// jobs are short runs up to `concurrency` jobs per poll on one replica, not
+/// one. The price is what a busy replica holds: a fetch needs one free permit
+/// and may bring `concurrency` jobs, so a replica keeps up to `concurrency - 1`
+/// jobs it fetched and has not started — `concurrency` when Redis takes longer
+/// than a poll to answer, since apalis then fetches again before the worker has
+/// seen the first batch. They wait in its in-flight set for its next free
+/// permits, invisible to its peers and to an autoscaler reading the queue, and a
+/// replica that dies hands them over with its running jobs.
 ///
 /// The fetch size bounds apalis's two other loops the same way. A record
 /// scheduled for later — a delayed push, a retry, a job handed back — becomes
@@ -306,21 +334,13 @@ where
 /// The heartbeat and the orphan threshold are the config's: a worker proves it
 /// is alive every tenth of the threshold, so a peer only ever sweeps one that
 /// missed ten in a row.
-fn storage(
-    conn: &RedisConnection,
-    queue: &QueueName,
-    config: &RedisWorkerConfig,
-    concurrency: usize,
-) -> RedisStorage<serde_json::Value, RedisConnection> {
-    RedisStorage::new_with_config(
-        conn.clone(),
-        layout::config(queue)
-            .set_buffer_size(concurrency)
-            .set_poll_interval(config.poll_interval)
-            .set_enqueue_scheduled(SCHEDULED_SCAN)
-            .set_keep_alive(config.heartbeat())
-            .set_reenqueue_orphaned_after(config.orphan_after),
-    )
+fn fetching(queue: &QueueName, config: &RedisWorkerConfig, concurrency: usize) -> Config {
+    layout::config(queue)
+        .set_buffer_size(concurrency.min(MOST_PER_FETCH))
+        .set_poll_interval(config.poll_interval)
+        .set_enqueue_scheduled(SCHEDULED_SCAN)
+        .set_keep_alive(config.heartbeat())
+        .set_reenqueue_orphaned_after(config.orphan_after)
 }
 
 /// How many attempts of `method` one replica runs at once — its permits, and
@@ -587,6 +607,36 @@ mod tests {
     use nest_rs_testing::LogCapture;
 
     use super::*;
+
+    /// One fetch takes the method's `concurrency` — up to the most apalis's
+    /// scripts can hand Redis's Lua, sweep included — at the poll and the
+    /// liveness the config sets.
+    #[test]
+    fn a_fetch_takes_the_methods_concurrency_up_to_what_lua_can_unpack() {
+        let queue = QueueName::new("audio").expect("a valid name");
+        let config = RedisWorkerConfig {
+            poll_interval: Duration::from_millis(25),
+            ..Default::default()
+        };
+        for (concurrency, fetched) in [(1, 1), (16, 16), (799, 799), (800, 799), (100_000, 799)] {
+            let settings = fetching(&queue, &config, concurrency);
+            assert_eq!(
+                settings.get_buffer_size(),
+                fetched,
+                "concurrency {concurrency}"
+            );
+            assert!(
+                settings.get_buffer_size() * FETCHES_PER_SWEEP <= LUA_UNPACK_LIMIT,
+                "a sweep of ten fetches unpacks within Lua's limit"
+            );
+        }
+        let settings = fetching(&queue, &config, 4);
+        assert_eq!(settings.get_poll_interval(), &Duration::from_millis(25));
+        assert_eq!(settings.get_keep_alive(), &config.heartbeat());
+        assert_eq!(settings.reenqueue_orphaned_after(), config.orphan_after);
+        assert_eq!(settings.get_enqueue_scheduled(), &SCHEDULED_SCAN);
+        assert_eq!(settings.get_namespace(), &layout::namespace(&queue));
+    }
 
     /// Two workers in one process are two consumers: an id is never reused, so
     /// no two replicas — nor two methods of one — share an in-flight set.

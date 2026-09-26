@@ -257,7 +257,12 @@ delete. The framework explains itself in prose because it is a library
 whose *why* is not in the code; the product does not. If a line seems to
 need one, the code is wrong — rename it, split it, or move the decision
 into `CLAUDE.md` where decisions live. This binds the whole workspace:
-`apps/`, `crates/`, tests, `build.rs`.
+`apps/`, `crates/`, tests, `build.rs`. **It binds Rust, and only Rust**: a
+comment carrying a *why* in a file Rust does not read — the chart's values
+and templates, the `Dockerfile`, a `Justfile` or `.just` recipe, a
+manifest, a `.env` file — stays where it is. Moving those reasons into the
+rules was proposed for 7.0 and refused, because a reason kept away from the
+value it explains is one the next editor of that value never reads.
 
 **It binds `demo/` and stops there** — it is *this* paragraph, and the next one
 is a different rule with a wider reach. A scaffolded project is not
@@ -799,7 +804,7 @@ assert success.**
 ```
 cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all --check
 cargo nextest run --workspace -E 'not binary(e2e)' && cargo test --workspace --doc
-cargo nextest run --workspace -E 'binary(e2e)'   # if it touches seaorm/storage
+cargo nextest run --workspace -E 'binary(e2e)'   # if it touches seaorm/storage/redis
 cargo audit                                      # if a manifest or the lockfile moved
 ```
 

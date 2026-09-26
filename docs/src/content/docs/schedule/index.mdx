@@ -255,40 +255,57 @@ error: invalid cron expression: Invalid pattern: Pattern must have between 5 and
 
 A scheduled method fires on **every** replica by default — `replicas = "each"`,
 which is right for work that is per-process: a cache warm-up, a local sweep.
-Work that is the deployment's — close the hour's invoices, send the digest —
-declares `replicas = "one"` on `#[every]` or `#[cron]`, and each occurrence then
-fires on one replica:
+Work that is the deployment's — purge what has expired, close the hour's
+invoices, send the digest — declares `replicas = "one"` on `#[every]` or
+`#[cron]`, and each occurrence then fires on one replica. The demo's worker
+purges expired notifications that way:
 
-```rust title="crates/features/src/billing/schedule/tasks.rs"
+```rust title="crates/features/src/notifications/schedule/tasks.rs (from the demo, abridged)"
 #[scheduled]
-impl BillingTasks {
-    #[cron("0 0 * * * *", replicas = "one")]
-    async fn close_hourly_invoices(&self) -> Result<()> {
-        self.svc.close_hourly_invoices().await
+impl NotificationsTasks {
+    #[every("1h", replicas = "one")]
+    async fn purge_expired(&self) -> Result<()> {
+        self.svc.purge_expired().await?;
+        Ok(())
     }
 }
 ```
+
+The worker is the app the demo's chart scales on queue depth, up to ten
+replicas. Declared with the default, the purge would run ten times an hour, each
+run racing the others over the same rows; declared `"one"`, one replica deletes
+and the others wait for the next hour.
 
 The replicas agree through Redis. Enable `redis-schedule` (see
 [Install](#install)), then import the binding beside `ScheduleModule` in every
 app that runs such a job:
 
-```rust title="apps/worker/src/module.rs"
+```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisScheduleModule};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule, RedisWorkerModule};
 use nest_rs::schedule::ScheduleModule;
 
-#[module(imports = [
-    ScheduleModule,
-    RedisModule::for_root(None),       // the one RedisConnection (NESTRS_REDIS__URL)
-    RedisScheduleModule,               // occurrences are claimed in Redis
-])]
+use features::notifications::{NotificationsQueueModule, NotificationsScheduleModule};
+
+#[module(
+    imports = [
+        // …
+        RedisModule::for_root(None),
+        RedisQueueModule,
+        RedisWorkerModule::for_root(None),
+        ScheduleModule,
+        RedisScheduleModule,
+        // …
+        NotificationsQueueModule,
+        NotificationsScheduleModule,
+    ],
+)]
 pub struct WorkerModule;
 ```
 
 `RedisScheduleModule` is a bare import: it owns no configuration, and runs over
-the connection `RedisModule::for_root` opens — an app that also queues or rate
-limits shares that one `RedisConnection`. The boot holds you to it both ways: a
+the connection `RedisModule::for_root` opens — the worker's queue bindings
+share that one `RedisConnection`. The boot holds you to it both ways: a
 reachable job declaring `replicas = "one"` with no lock bound fails the boot
 naming the job, and a second lock binding beside this one fails it too, naming
 the contested lock and the same remedy.
@@ -352,12 +369,12 @@ nestrs:schedule:claims:<provider>:<method>:<instant_ms>
 ```
 
 One key per occurrence claimed, the instant in milliseconds since the Unix
-epoch — `nestrs:schedule:claims:BillingTasks:close_hourly_invoices:1789002000000`.
+epoch — `nestrs:schedule:claims:NotificationsTasks:purge_expired:1789002000000`.
 Its value names the replica that claimed it — its `HOSTNAME` and process id —
 for an operator reading it during an incident; the lock decides on the key's
 existence alone.
-`SCAN 0 MATCH nestrs:schedule:claims:BillingTasks:*` lists one provider's claims
-still held. The prefix is fixed rather than the deployment's: two deployments
+`SCAN 0 MATCH nestrs:schedule:claims:NotificationsTasks:*` lists one provider's
+claims still held. The prefix is fixed rather than the deployment's: two deployments
 sharing a Redis are separated by the logical database in `NESTRS_REDIS__URL`.
 A Redis ACL for the app has to allow `SET` and `EXISTS` on that pattern.
 
@@ -376,27 +393,39 @@ run on the pool instead, which is right for a tick that brackets long work
 that is not the database's. See
 [Repo and the executor](/database/repo-and-executor/).
 
-```rust title="crates/features/src/posts/schedule/tasks.rs"
-#[injectable]
-pub struct CleanupTasks {
-    #[inject]
-    svc: Arc<PostsService>,
-}
+The demo's purge is that shape. Its tick only calls the service, and the service
+reaches the rows through `Repo` as any request would:
 
-#[scheduled]
-impl CleanupTasks {
-    #[every("1h")]
-    async fn delete_expired(&self) -> Result<()> {
-        self.svc.delete_expired().await
+```rust title="crates/features/src/notifications/service.rs (from the demo, abridged)"
+pub async fn purge_expired(&self) -> Result<u64, ServiceError> {
+    let cutoff = chrono::Utc::now().fixed_offset() - RETENTION;
+    let conn = Repo::<Notifications>::conn()?;
+    let expired = Repo::<Notifications>::scoped(Action::Delete)
+        .filter(entity::Column::CreatedAt.lt(cutoff))
+        .limit(PURGE_BATCH)
+        .all(&conn)
+        .await?;
+    let mut purged = 0;
+    for model in expired {
+        purged += Repo::<Notifications>::delete(model).await?.rows_affected;
     }
+    // …
+    Ok(purged)
 }
 ```
 
+On the tick, `scoped(Action::Delete)` selects every expired row, because a job
+has no principal to scope to; called from a request that carries no ability,
+the same method selects nothing, and each `Repo::delete` is filtered again. The
+deletes share the tick's transaction, so a batch lands whole or not at all.
 Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbing.
 
 ## Reference
 
 - `crates/features/src/audio/schedule/tasks.rs` — the canonical multi-method exemplar.
+- `crates/features/src/notifications/schedule/tasks.rs` — a job firing once
+  across the worker's replicas, and `apps/worker/src/module.rs`, which binds its
+  lock.
 - `crates/nest-rs-schedule/` — `#[scheduled]`, `ScheduleModule`,
   `Scheduler`, `CronExpression`, `Trigger`, `Replicas`, and the
   `OccurrenceLock` port a job firing once claims through.

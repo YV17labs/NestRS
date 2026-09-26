@@ -16,7 +16,7 @@ instead, and names them:
 
 ```text frame="terminal"
 $ nestrs run dev worker
- INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=1
+ INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=4
 Error: queue `audio` still holds jobs under the 6.x key layout (…), which this worker never reads, so it does not start beside them. Drain them first: run a 6.x worker until those keys are gone. Or move them, with every worker of the queue stopped and before anything is pushed under `nestrs:queue:audio`: …
 ```
 

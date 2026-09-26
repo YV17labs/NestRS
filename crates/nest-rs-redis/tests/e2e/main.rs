@@ -2,7 +2,8 @@
 //! [`connection`] for the shared connection's boot, bound and recovery,
 //! [`tls`] for `rediss://`, [`throttler`] for the cross-process rate-limit
 //! store, [`layout`] for where a queue lives — its namespace, the 6.x layout a
-//! worker refuses to start beside, and a user confined to the framework's keys —
+//! worker refuses to start beside and the documented move out of it, and a user
+//! confined to the framework's keys —
 //! [`queue`] for the producer binding, a delayed push and its promotion, and
 //! [`worker`] for the consumer: its fetch and concurrency, each delivery's
 //! retries and hand-backs, and the lease that keeps a job from running twice.

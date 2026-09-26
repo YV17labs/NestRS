@@ -4,6 +4,11 @@
 //!   the keyspace, under the queue's bare name, are where a 7.0 worker never
 //!   reads, so a worker serving that queue refuses to start and names the way
 //!   out, and a producer pushing to it says once that they wait there.
+//! - **The way out the documentation prescribes is run, not described.** The move
+//!   the queue pages publish — every structure renamed under the namespace, the
+//!   in-flight set registered as a consumer — is played on a layout written the
+//!   way 6.x wrote it, and a 7.0 worker then runs every job it held exactly once:
+//!   the one waiting, the one held back, and the one a 6.x replica died running.
 //! - **Everything a queue holds is under the framework's prefix.** A Redis user
 //!   whose ACL reaches `nestrs:*` and nothing else runs a queue end to end — a
 //!   push, a delayed push, a completion, a retry and a dead letter — and the
@@ -15,8 +20,10 @@
 //! read, to the keys join, as the framework still writing it.
 
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use apalis::prelude::{Monitor, Storage, WorkerBuilder, WorkerFactoryFn};
+use apalis_redis::{Config, RedisStorage};
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobId, JobProducerExt, PushOptions, processor, queue};
 use nest_rs_redis::{
@@ -135,6 +142,245 @@ async fn jobs_left_under_the_6x_layout_refuse_the_worker_and_warn_the_producer_o
         .await
         .expect("with the 6.x jobs gone, the worker starts");
     worker.shutdown().await.expect("clean shutdown");
+}
+
+// --- moving a queue out of the 6.x layout ------------------------------------------
+
+const MOVED_QUEUE: &str = "nestrs-e2e-layout-moved";
+
+/// Every structure apalis keeps for a queue besides its in-flight sets, in the
+/// order the upgrade page's loop renames them. The page and this list are one
+/// procedure: a structure the page left out is one this test would leave at the
+/// root, where the check below fails.
+const STRUCTURES: [&str; 9] = [
+    "active",
+    "scheduled",
+    "data",
+    "data::result",
+    "done",
+    "dead",
+    "failed",
+    "signal",
+    "consumers",
+];
+
+static MOVED: Runs = Runs::new();
+
+/// When each moved job started, on the wall clock its due second is counted on.
+static MOVED_AT: Mutex<Vec<(u64, SystemTime)>> = Mutex::new(Vec::new());
+
+#[queue(name = "nestrs-e2e-layout-moved", job = LayoutCommand)]
+struct MovedQueue;
+
+#[injectable]
+#[derive(Default)]
+struct MovedProcessor;
+
+#[processor]
+impl MovedProcessor {
+    #[process(queue = MovedQueue, retries = 0)]
+    async fn run(&self, job: LayoutCommand) -> anyhow::Result<()> {
+        MOVED_AT
+            .lock()
+            .expect("lock")
+            .push((job.run, SystemTime::now()));
+        MOVED.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    providers = [MovedProcessor],
+)]
+struct MovedModule;
+
+/// A job as 6.x sealed it: the wire envelope before it carried a job id or an
+/// attempt. The version is the one 6.x wrote, spelled rather than read, so a
+/// 7.x that stops reading it fails here and sends the upgrade page back to be
+/// rewritten.
+fn sealed_by_6x(run: u64) -> serde_json::Value {
+    serde_json::json!({ "v": 1, "payload": { "run": run, "fail": false } })
+}
+
+/// The storage a 6.x producer and worker opened for `queue`: apalis's defaults
+/// under the queue's bare name, fetching one job per poll.
+fn storage_of_6x(
+    conn: &RedisConnection,
+    queue: &str,
+) -> RedisStorage<serde_json::Value, RedisConnection> {
+    RedisStorage::new_with_config(
+        conn.clone(),
+        Config::default().set_namespace(queue).set_buffer_size(1),
+    )
+}
+
+/// A 6.x replica killed mid-job: an apalis worker consuming under the queue's
+/// bare name — the id every 6.x replica shared — takes the one job waiting, and
+/// dies with it in flight.
+async fn leave_a_6x_job_in_flight(admin: &mut RedisConnection, queue: &str) {
+    let worker = WorkerBuilder::new(queue)
+        .backend(storage_of_6x(admin, queue))
+        .build_fn(|_job: serde_json::Value| {
+            std::future::pending::<Result<(), Box<dyn std::error::Error + Send + Sync>>>()
+        });
+    let running = tokio::spawn(Monitor::new().register(worker).run());
+    let in_flight = format!("{queue}:inflight:{queue}");
+    let mut taken = 0;
+    for _ in 0..200 {
+        taken = redis::cmd("SCARD")
+            .arg(&in_flight)
+            .query_async::<i64>(admin)
+            .await
+            .expect("SCARD");
+        if taken == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    running.abort();
+    let _ = running.await;
+    assert_eq!(taken, 1, "the 6.x replica died holding one job");
+}
+
+/// Rename `from` to `to` the way the documented loop does — `RENAMENX`, which
+/// refuses to overwrite a key 7.0 already wrote — answering whether `from` was
+/// there to move.
+async fn rename_if_there(admin: &mut RedisConnection, from: &str, to: &str) -> bool {
+    match redis::cmd("RENAMENX")
+        .arg(from)
+        .arg(to)
+        .query_async::<i64>(admin)
+        .await
+    {
+        Ok(1) => true,
+        Ok(_) => panic!("`{to}` already exists; the move would have lost `{from}`"),
+        Err(error) if error.to_string().contains("no such key") => false,
+        Err(error) => panic!("RENAMENX {from}: {error}"),
+    }
+}
+
+/// The move the upgrade page publishes, as an operator runs it: each structure
+/// renamed to the same structure under the namespace, the in-flight set with
+/// them, and that set registered as a consumer, so the first sweep of a 7.0
+/// worker puts its jobs back on the queue.
+async fn move_out_of_the_6x_layout(admin: &mut RedisConnection, queue: &str) {
+    let namespace = crate::namespace(queue);
+    let in_flight = format!("inflight:{queue}");
+    for structure in STRUCTURES.into_iter().chain([in_flight.as_str()]) {
+        rename_if_there(
+            admin,
+            &format!("{queue}:{structure}"),
+            &format!("{namespace}:{structure}"),
+        )
+        .await;
+    }
+    let _: i64 = redis::cmd("ZADD")
+        .arg(format!("{namespace}:consumers"))
+        .arg(0)
+        .arg(format!("{namespace}:{in_flight}"))
+        .query_async(admin)
+        .await
+        .expect("ZADD");
+}
+
+/// Every key left for `queue` at the root of the keyspace.
+async fn left_at_the_root(admin: &mut RedisConnection, queue: &str) -> Vec<String> {
+    redis::cmd("KEYS")
+        .arg(format!("{queue}:*"))
+        .query_async(admin)
+        .await
+        .expect("KEYS")
+}
+
+/// A queue a 6.x release left jobs in — one waiting, one held back, one in
+/// flight on a replica that died — moved the way the upgrade page says: nothing
+/// is left at the root, the 7.0 worker starts, and each of the three jobs runs
+/// exactly once — the held-back one no sooner than its due second.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once() {
+    let mut admin = crate::connect().await;
+    let stale = left_at_the_root(&mut admin, MOVED_QUEUE).await;
+    if !stale.is_empty() {
+        let _: i64 = redis::cmd("DEL")
+            .arg(&stale)
+            .query_async(&mut admin)
+            .await
+            .expect("DEL");
+    }
+    crate::forget(MOVED_QUEUE).await;
+
+    let run = crate::this_run();
+    let (in_flight, waiting, held_back) = (run, run + 1, run + 2);
+    let mut storage = storage_of_6x(&admin, MOVED_QUEUE);
+    storage
+        .push(sealed_by_6x(in_flight))
+        .await
+        .expect("a 6.x push");
+    leave_a_6x_job_in_flight(&mut admin, MOVED_QUEUE).await;
+    storage
+        .push(sealed_by_6x(waiting))
+        .await
+        .expect("a 6.x push");
+    let due = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_secs()
+        + 2;
+    storage
+        .schedule(
+            sealed_by_6x(held_back),
+            i64::try_from(due).expect("a second"),
+        )
+        .await
+        .expect("a 6.x job held back");
+
+    move_out_of_the_6x_layout(&mut admin, MOVED_QUEUE).await;
+    let stale = left_at_the_root(&mut admin, MOVED_QUEUE).await;
+    assert!(stale.is_empty(), "nothing is left at the root: {stale:?}");
+
+    let replica = crate::replica::<MovedModule>().await;
+    crate::wait_until(Duration::from_secs(20), || {
+        [in_flight, waiting, held_back]
+            .iter()
+            .all(|run| !MOVED.of(*run).is_empty())
+    })
+    .await;
+    // Long enough for a second delivery of any of them to have run.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+
+    for (job, run) in [
+        ("in flight", in_flight),
+        ("waiting", waiting),
+        ("held back", held_back),
+    ] {
+        assert_eq!(MOVED.of(run).len(), 1, "the job {job} ran exactly once");
+    }
+    let moved_in_flight = format!("{}:inflight:{MOVED_QUEUE}", crate::namespace(MOVED_QUEUE));
+    let still_there: i64 = redis::cmd("EXISTS")
+        .arg(&moved_in_flight)
+        .query_async(&mut admin)
+        .await
+        .expect("EXISTS");
+    assert_eq!(still_there, 0, "the sweep emptied the moved in-flight set");
+    let started = MOVED_AT
+        .lock()
+        .expect("lock")
+        .iter()
+        .find(|(run, _)| *run == held_back)
+        .map(|(_, at)| *at)
+        .expect("the job held back started");
+    assert!(
+        started
+            .duration_since(UNIX_EPOCH)
+            .expect("after the epoch")
+            .as_secs()
+            >= due,
+        "the job held back ran no sooner than its due second",
+    );
+
+    crate::forget(MOVED_QUEUE).await;
 }
 
 // --- a user confined to the framework's prefix ---------------------------------------

@@ -70,7 +70,7 @@ name.
 ```rust title="crates/features/src/audio/service.rs (from the demo, abridged)"
 use std::sync::Arc;
 
-use nest_rs::core::injectable;
+use nest_rs::core::{error_message, injectable};
 use nest_rs::queue::{JobProducer, JobProducerExt};
 
 use super::command::{AudioQueue, TranscodeCommand};

@@ -845,7 +845,7 @@ mod tests {
         let context = serde_json::to_value(&filed.parts.context).expect("serializes");
         assert_eq!(
             context["max_attempts"],
-            serde_json::Value::from(usize::MAX),
+            serde_json::Value::from(u32::MAX),
             "{context}"
         );
         assert_eq!(

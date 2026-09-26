@@ -61,10 +61,21 @@ const ATTEMPT_CAP: &str = "max_attempts";
 /// set apalis's `reschedule` takes the record out of.
 const FETCHED_BY: &str = "lock_by";
 
+/// The attempt cap every record this backend files carries: 4,294,967,295
+/// deliveries, past any count a job reaches.
+///
+/// **`u32::MAX`, not `usize::MAX`.** apalis keeps the cap as a `usize`, which
+/// is as wide as the host that reads the record. A record a 64-bit replica filed
+/// with its own `usize::MAX` does not decode where a `usize` is 32 bits wide,
+/// and apalis's fetch then fails on every poll for the batch that holds it, so
+/// a mixed deployment would stop the queue. `u32::MAX` fits a `usize` on every
+/// target apalis builds for, and no job is delivered four billion times.
+const LIFTED_CAP: u32 = u32::MAX;
+
 /// The apalis context every record this backend files carries — a push, a
 /// delayed push, a retry's next attempt, a job handed back: apalis's own attempt
-/// cap lifted past any count a job can reach, and, for a record a worker files
-/// back, the worker it was fetched by.
+/// cap lifted past any count a job can reach ([`LIFTED_CAP`]), and, for a record
+/// a worker files back, the worker it was fetched by.
 ///
 /// **apalis's count never ends a job.** apalis-redis 0.7 counts every
 /// delivery of a record — a retry, a throttle's deferral, a hand-back alike —
@@ -86,7 +97,7 @@ pub(crate) fn uncapped_context(
     let mut form = serde_json::to_value(RedisContext::default())?;
     let fetched_by = serde_json::to_value(fetched_by.map(WorkerId::new))?;
     for (field, value) in [
-        (ATTEMPT_CAP, serde_json::Value::from(usize::MAX)),
+        (ATTEMPT_CAP, serde_json::Value::from(LIFTED_CAP)),
         (FETCHED_BY, fetched_by),
     ] {
         let Some(slot) = form.get_mut(field) else {
@@ -169,16 +180,37 @@ mod tests {
         let read: Request<serde_json::Value, RedisContext> =
             serde_json::from_slice(&stored).expect("decodes as apalis does");
         let context = serde_json::to_value(&read.parts.context).expect("serializes");
-        assert_eq!(context[ATTEMPT_CAP], serde_json::Value::from(usize::MAX));
+        assert_eq!(context[ATTEMPT_CAP], serde_json::Value::from(u32::MAX));
         assert!(context[FETCHED_BY].is_null());
 
         let handed_back = uncapped_context(Some("host:01")).expect("apalis's form holds both");
         let context = serde_json::to_value(&handed_back).expect("serializes");
-        assert_eq!(context[ATTEMPT_CAP], serde_json::Value::from(usize::MAX));
+        assert_eq!(context[ATTEMPT_CAP], serde_json::Value::from(u32::MAX));
         assert_eq!(
             context[FETCHED_BY],
             serde_json::to_value(WorkerId::new("host:01")).expect("serializes"),
         );
+    }
+
+    /// A record filed on a 64-bit host decodes on a 32-bit one: the cap it
+    /// stores fits the `usize` apalis reads it into there. Decoded here into a
+    /// `u32`, which is that `usize` — a cap one past it is refused the same way
+    /// a 32-bit apalis would refuse it, fetch after fetch.
+    #[test]
+    fn the_cap_a_record_stores_decodes_where_a_usize_is_32_bits() {
+        #[derive(Debug, serde::Deserialize)]
+        struct ThirtyTwoBit {
+            max_attempts: u32,
+        }
+
+        let stored = serde_json::to_value(uncapped_context(None).expect("apalis's form"))
+            .expect("serializes");
+        let read = serde_json::from_value::<ThirtyTwoBit>(stored).expect("a 32-bit usize holds it");
+        assert_eq!(read.max_attempts, LIFTED_CAP);
+
+        let wider = serde_json::json!({ ATTEMPT_CAP: u64::from(u32::MAX) + 1 });
+        serde_json::from_value::<ThirtyTwoBit>(wider)
+            .expect_err("a cap past u32::MAX does not decode where a usize is 32 bits");
     }
 
     /// The capabilities this backend keeps, each with the keys and the e2e that

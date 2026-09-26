@@ -265,9 +265,13 @@ A value out of its bounds fails the boot, whether the environment set it or
   a record answered with a failure once the count reaches the record's cap —
   five by default — with none of the port's events. A hand-back Redis refuses is
   answered that way, so the job is delivered again. Every record 7.0 files — a
-  push, a delayed push, a retry, a hand-back — lifts the cap past any count, so
-  apalis's count never ends a job; a record a 6.x producer filed keeps the cap
-  of five until a retry or a hand-back files it again.
+  push, a delayed push, a retry, a hand-back — lifts the cap to `u32::MAX`
+  deliveries, past any count a job reaches, so apalis's count never ends a job;
+  a record a 6.x producer filed keeps the cap of five until a retry or a
+  hand-back files it again. The cap is `u32::MAX` and not `usize::MAX` because
+  apalis reads it into a `usize`, as wide as the host reading it: a record a
+  64-bit replica filed with its own `usize::MAX` would not decode on a 32-bit
+  one, and apalis's fetch would fail on every poll for the batch holding it.
 - **A settle Redis refuses closes nothing.** The step that marks a job settled
   also lets go of its unique key and closes its open record; when Redis refuses
   it, the worker says so at `warn`, and until the job's records lapse a push under

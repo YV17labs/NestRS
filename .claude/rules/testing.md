@@ -137,8 +137,9 @@ section does not bind it.
   whole tree.
 - **A live backend is shared the same way, so an e2e suite hands its parts
   out where it declares them.** A test that needs a Redis logical database
-  of its own takes it from the one `DB_*` list in its suite's `main.rs`,
-  which a `const` block checks at compile time — every index from 1 to 15,
+  of its own takes it from the one `DB_*` list in its suite's `main.rs`
+  (`nest-rs-redis`'s e2e holds it), which a `const` block checks at compile
+  time — every index from 1 to 15,
   no two equal — so a collision is a build error rather than two tests
   flushing each other's keys. A test that starts a worker drains a queue
   named for that test alone, since a worker in one process takes another

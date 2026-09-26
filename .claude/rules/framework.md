@@ -268,8 +268,8 @@ the fact each refused cell states — and the four parsers and the refusal read 
 never a hand-listed copy. So a key added to one member fails the table's closure
 test until each of the other three builds it or refuses it by name; it never
 reaches them as an unknown word. `transactional` is the one key every member
-builds. Each refused cell has its trybuild snapshot (`*_refused_keys`), and each
-built one a use site in `nest-rs-macro-hygiene`.
+builds. Every refused cell is pinned by its decorator's `*_refused_keys` trybuild
+snapshot, and every built one compiled by a use site in `nest-rs-macro-hygiene`.
 
 Two of the schedule's refusals are decisions rather than impossibilities, and they
 are this framework's recorded contract, not a gap: a tick has no retry — its retry
@@ -471,7 +471,8 @@ misspells a variable, or keeps a name a release renamed, gets the default — an
 without a report, no signal, since nothing ever asks for the value. So the loader
 reports two shapes at `warn` on `nest_rs::config`, once per variable, **by name and
 never by value**: a key under a namespace this binary read that no config read
-(`UNREAD_CONFIG_VARIABLE`, the nearest key that was read as `suggestion`), and a
+(`UNREAD_CONFIG_VARIABLE`, with the nearest key that was read as `suggestion`
+when one is near enough), and a
 namespace equal to a linked one once separators are set aside
 (`MISSPELLED_CONFIG_NAMESPACE` — `OAUTH_RESOURCE` for 7.0's `oauth__resource`,
 `SEAORM_URL` for `SEAORM__URL`). **Everything else is silent, by design**: one
@@ -581,8 +582,8 @@ nestrs:<concern>:<structure>[:<member>]
   operator looking at Redis is looking for the queue's keys, not "the Redis
   crate's".
 - **`<structure>` is what the key is within the concern** — `buckets`, `claims`,
-  `leases` — one word, never the concern's own word said again, plural when it
-  holds one member per thing.
+  `leases`, `settled` — one word, never the concern's own word said again, and
+  inside a queue's namespace never a word apalis uses for a structure of its own.
 - **`<member>` is what varies** — a queue, a job's id, an occurrence, a client's
   bucket. A queue name holds no `:`, so a queue is one level.
 
@@ -605,8 +606,8 @@ empty and only shrink:
 - **Every fixed part is a `const` whose literal opens with `nestrs:`**, declared
   by the crate that writes the key, and a key that varies is built from exactly
   one such constant — a template whose slots are filled (`nestrs:queue:{queue}`)
-  or `format!("{CONST}:{member}")`. A fixed segment inside a format string is a
-  key nothing checks.
+  or `format!("{CONST}:{member}")`. A fixed segment written after a `{CONST}` in
+  a format string is a key nothing checks.
 - **No key prefixes another without a visible level.** `SCAN` and `KEYS` match by
   glob, so `<ns>:queue` beside `<ns>:queue_configs` means the pattern an operator
   types — `<ns>:queue*` — returns both: the hazard `EnvFilter`'s `starts_with`
@@ -722,7 +723,7 @@ the one this framework uses most.**
   imports; the consumer injects `dyn Port` and never names the backend. Two
   imported is a **boot error naming both**, worded once and shared by every
   backend so the halves cannot drift — `nest_rs_throttler::BACKEND_REMEDY` is
-  that shape already built. Every such port declares its `BACKEND_REMEDY` **in
+  that shape already built. A port carrying a `BACKEND_REMEDY` declares it **in
   the file holding what a backend supplies** — `nest_rs_queue::backend`,
   `nest_rs_schedule::occurrence`, `nest_rs_throttler::store` — never in a
   `module.rs`, because the contract is what a backend author opens and the module
@@ -1353,9 +1354,9 @@ name order; init failure aborts boot, shutdown is best-effort.
   without running, answered as the first was. **The guard may delay a job, never
   lose one**, and each of its steps is one Lua script or one command. Each replica
   consumes under an apalis worker id of its own — the host, then a UUID v7 — and
-  the periodic sweep waits out ten of a peer's heartbeats (`orphan_after`) before
-  taking its jobs: only apalis's startup sweep uses *now*, and the guard is what
-  makes that one harmless.
+  the periodic sweep takes a peer's jobs only once it has missed its heartbeats
+  for `orphan_after` (ten of them, by default): only apalis's startup sweep uses
+  *now*, and the guard is what makes that one harmless.
 
   **apalis never retries, and never ends a job, on its own.** A dead letter is
   apalis's `Abort`; a `Retry { after }` re-files the same apalis task, carrying
@@ -1363,12 +1364,13 @@ name order; init failure aborts boot, shutdown is best-effort.
   schedule first, out of flight second, so no failure between the two loses the
   job — and a held lease, a throttle window and a shutdown hand a job back the
   same way. A retry is therefore a filing on the schedule, never a wait holding a
-  permit or a shutdown, which is why the backend declares `DelayedPush`. apalis
-  also counts every delivery, and kills a record answered with a plain error once
-  that count reaches its context's private `max_attempts`, 5 by default: the
-  adapter answers so only where a hand-back failed, but retries, throttle
-  deferrals and lease hand-backs all count toward it, and no port event fires. So
-  every record the adapter files — push, delayed push, re-filing, hand-back —
+  permit or a shutdown — the port's rule for a backend declaring `DelayedPush`,
+  which this one does. apalis also counts every delivery, and kills a record
+  answered with a plain error once that count reaches its context's private
+  `max_attempts`, 5 by default: the adapter answers so only where a hand-back
+  failed, but retries, throttle deferrals and lease hand-backs all count toward
+  it, and no port event fires. So every record the adapter files — push, delayed
+  push, re-filing, hand-back —
   carries a context whose `max_attempts` is `usize::MAX`, built through
   `RedisContext`'s public `Deserialize`, and a unit test pins apalis's serde field
   names, so a bump that renames them fails the tests, not a deployment.
@@ -1393,10 +1395,10 @@ name order; init failure aborts boot, shutdown is best-effort.
   records outstanding, so a due job reaches `…:active` — the list KEDA reads —
   with no worker running, and a deployment with no producer process running keeps
   `minReplicaCount: 1`; a unique key is claimed atomically before the job is filed
-  and released at the job's terminal outcome — **at most once over pushes, never
-  a lock**; a cancel writes its tombstone only while no attempt holds the lease,
-  so `Ok(true)` means the job never starts, and apalis's structures are never
-  touched; a throttle is a fixed window per queue, opened by its first start and
+  and released when the job settles or is cancelled — **at most once over pushes,
+  never a lock**; a cancel writes its tombstone only while no attempt holds the
+  lease, so `Ok(true)` means the job never starts, and apalis's structures are
+  never touched; a throttle is a fixed window per queue, opened by its first start and
   closed by its key's expiry — the HTTP limiter's algorithm, so no two replicas
   have to agree on a clock — and starts either side of a window's end can reach
   twice the limit in a short span, which the page says; a checkpoint is one key

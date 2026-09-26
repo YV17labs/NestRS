@@ -254,7 +254,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut is_pk = false;
         let mut is_belongs_to = false;
         let mut is_has_many = false;
-        let mut from_col: Option<String> = None;
+        let mut from_col: Option<Ident> = None;
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("sea_orm")) {
             // Surface a sea_orm-side parse failure — silently swallowing it
             // (the previous `let _ = ...`) hid malformed `from = some_expr`
@@ -413,10 +413,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                         "`belongs_to` relation needs `#[sea_orm(from = \"...\")]`",
                     )
                 })?;
-                Some(RelationKind::BelongsTo {
-                    from: format_ident!("{}", from),
-                    target,
-                })
+                Some(RelationKind::BelongsTo { from, target })
             }
             (Some((Cardinality::Many, target)), _, true) => Some(RelationKind::HasMany {
                 target,
@@ -569,8 +566,9 @@ fn type_name(written: &Expr) -> syn::Result<String> {
 /// it is where the value is written. What `#[expose]` adds is only what it needs
 /// of the value: a string, naming a field, since it becomes one of this
 /// struct's identifiers (a name that is not one used to panic in
-/// `format_ident!`).
-fn foreign_key(written: &Expr) -> syn::Result<String> {
+/// `format_ident!`). The ident keeps the literal's span, so a later refusal of
+/// the name — a column this entity does not have — lands on the name.
+fn foreign_key(written: &Expr) -> syn::Result<Ident> {
     let lit = nest_rs_codegen::require_str_lit(written, "sea_orm", "from", "org_id")?;
     let column = lit.value();
     if syn::parse_str::<Ident>(&column).is_err() {
@@ -583,7 +581,7 @@ fn foreign_key(written: &Expr) -> syn::Result<String> {
             ),
         ));
     }
-    Ok(column)
+    Ok(Ident::new(&column, lit.span()))
 }
 
 /// A field key's list value — `input(create, update)` — each element read as

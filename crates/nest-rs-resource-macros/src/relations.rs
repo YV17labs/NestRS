@@ -205,21 +205,22 @@ fn emit_pk_loadable_impl(model: &ResourceModel, loader: &Ident) -> TokenStream2 
 
 /// The scalar column a `belongs_to` names in `from = "…"`, or the refusal both
 /// emission sites raise when the entity has no such column — one lookup, one
-/// sentence, so the two cannot come to word it differently. Spanned at the
-/// relation field, which is where the developer wrote the name.
+/// sentence, so the two cannot come to word it differently.
+///
+/// A value outside the set this entity declares, so it is refused as one: at
+/// the name as written (the ident carries the literal's span) and opening with
+/// the site it is written at, SeaORM's `from`.
 ///
 /// Exposure is deliberately **not** required here: a loader keys on the
 /// entity's `Column`, which exists whether or not the column crosses the wire.
-fn fk_column<'a>(
-    model: &'a ResourceModel,
-    relation: &Ident,
-    fk: &Ident,
-) -> syn::Result<&'a ResourceField> {
+fn fk_column<'a>(model: &'a ResourceModel, fk: &Ident) -> syn::Result<&'a ResourceField> {
     model.fields.iter().find(|f| &f.ident == fk).ok_or_else(|| {
         syn::Error::new_spanned(
-            relation,
+            fk,
             format!(
-                "`belongs_to` declares `from = \"{fk}\"` but this entity has no column with that name",
+                "{}: \"{fk}\" is not a column of this entity — `#[expose]` reads it as the field \
+                 holding this relation's foreign key",
+                nest_rs_codegen::site("sea_orm", Some("from")),
             ),
         )
     })
@@ -238,7 +239,7 @@ fn exposed_fk_column<'a>(
     relation: &Ident,
     fk: &Ident,
 ) -> syn::Result<&'a ResourceField> {
-    let column = fk_column(model, relation, fk)?;
+    let column = fk_column(model, fk)?;
     if !column.read {
         return Err(syn::Error::new_spanned(
             relation,
@@ -302,7 +303,7 @@ fn emit_fk_loaders(
             .find(|(k, _)| k == &key)
             .is_some_and(|(_, count)| *count == 1);
 
-        let fk_ty = &fk_column(model, &field.ident, from)?.ty;
+        let fk_ty = &fk_column(model, from)?.ty;
         let fk_col_pascal = pascal_case(from);
         let method_name = format_ident!("by_{}", from);
         let loader_ident = format_ident!("{}By{}", last_segment_ident(service), fk_col_pascal,);

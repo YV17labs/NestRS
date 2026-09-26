@@ -38,3 +38,11 @@ libc.workspace = true
 # `LogCapture`: a schedule reports a job it could not settle by logging it and
 # firing again, so the log *is* the outcome and only a capture can assert it.
 nest-rs-testing = { path = "../nest-rs-testing" }
+
+# The workspace lints minus `unsafe_code = "forbid"`, which this crate states in
+# its `lib.rs` instead (its tests write the environment).
+[lints.rust]
+unreachable_pub = "warn"
+
+[lints.clippy]
+needless_update = "allow"

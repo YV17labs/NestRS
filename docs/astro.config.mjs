@@ -261,6 +261,10 @@ export default defineConfig({
             { label: 'Getting started', slug: 'getting-started' },
             { label: 'CLI', slug: 'cli' },
             { label: 'The demo apps (Publish)', slug: 'publish' },
+            // Last in the group a returning reader opens first: the one page a
+            // 6.x project follows to 7.0, beside the orientation it no longer
+            // needs, rather than under Reference, three screens down.
+            { label: 'Upgrading from 6.x', slug: 'upgrading' },
           ],
         },
         { label: 'Tutorial', items: [{ autogenerate: { directory: 'tutorial' } }] },

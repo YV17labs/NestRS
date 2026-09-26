@@ -107,9 +107,9 @@ sea-orm picks it, the variable does not change.
 ## `redis` — `NESTRS_REDIS__*`
 
 The one Redis connection every Redis binding shares — the queue producer, the
-worker and the rate-limit store — opened by `RedisModule::for_root`. One
-connection, one variable: a throttler-only app sets the same `URL` a queue app
-does. The TLS material is read at boot, so a renewed file takes effect at the
+worker, the rate-limit store and the schedule's occurrence lock — opened by
+`RedisModule::for_root`. One connection, one variable: a throttler-only app sets
+the same `URL` a queue app does. The TLS material is read at boot, so a renewed file takes effect at the
 next restart.
 
 | Key | Meaning |
@@ -253,6 +253,34 @@ way their section is, so the page is named rather than left to a search:
 | `throttler` | [Rate limiting](/rate-limiting/) |
 | `ws` | [WebSockets](/websockets/) |
 | `issuer` | the demo feature library — [the Publish workspace](/publish/) |
+
+## A variable nothing reads
+
+A variable under the prefix that no config reads used to cost the deployment
+its value in silence: a misspelled key, or a name a release renamed, left the
+default in place and nothing said so. The boot now does, once per variable, at
+`warn` on `nest_rs::config`, by name and never by value:
+
+| Message | When | Fields |
+|---|---|---|
+| `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough |
+| `config variable under a misspelled namespace` | the variable's namespace equals one this binary links once separators and case are set aside — `NESTRS_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `NESTRS_SEAORM_URL` for `seaorm` | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
+
+Everything else stays silent, and that is the design. One `.env` serves several
+binaries, so a namespace this binary does not link is another binary's, and a
+key holding `__` under a namespace it does read is a sub-namespace another
+binary links — `redis__worker` under `redis` — reported only when it is a near
+miss of a key read here. The framework's process-level names, `NESTRS_LOG*`,
+`NESTRS_ENV` and `NESTRS_ENV_PREFIX`, are never reported.
+
+The check runs where each config is read, against the keys its `from_env`
+actually asked for. A key read only behind a branch — `HttpCors` reads its other
+keys only when `CORS_ORIGINS` is set — is therefore reported exactly when the
+deployment did not take the branch, which is when it does nothing. A read made
+before any subscriber listens waits for the first read that has one, and a
+deployment that filters `nest_rs::config` out pays nothing for the scan.
+[Upgrading from 6.x](/upgrading/#what-fails-if-you-get-it-wrong) shows what it
+prints for a boot that kept a renamed variable.
 
 ## The `.env` cascade
 

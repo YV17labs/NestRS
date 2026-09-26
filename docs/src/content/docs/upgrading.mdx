@@ -1,0 +1,233 @@
+---
+title: Upgrading from 6.x to 7.0
+description: "The order that moves a 6.1 project to 7.0 — the manifest, fifteen renamed variables, the queue's calls and keys — and what the boot says when a step is missed."
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+7.0 changes how a job is pushed and where Redis keeps it, renames fifteen OAuth
+variables, and renames a handful of types and signatures. This page is the order
+to take them in: a 6.1 workspace goes in, a 7.0 one comes out, and each step ends
+on something you can check. The
+[changelog](https://github.com/YV17labs/NestRS/blob/main/CHANGELOG.md) says why each
+change was made; this page says what to do about it.
+
+You need the 6.1 project building, and — for a queue on Redis — either a short
+stop of its workers or a 6.x worker you can leave running while the new code
+rolls out (step 7).
+
+<Steps>
+
+1. **Move the CLI and the one manifest line.** `nestrs update` installs the 7.0
+   CLI, whose scaffolds, `lint` and `doctor` follow the release. In the root
+   `Cargo.toml`, the `nest-rs` requirement under `[workspace.dependencies]` goes
+   from `6.1` to `7.0`; its features stay as they are. `redis-schedule` is the one
+   new feature, and only a job firing once across replicas needs it (step 4). Take
+   the patched rustls while the lockfile moves — 0.23.44 carries RUSTSEC-2026-0285:
+
+   ```bash frame="terminal"
+   nestrs update
+   cargo update -p rustls
+   cargo check --workspace
+   ```
+
+   The check now fails on the calls steps 3 to 6 change. A refusal beyond them
+   names the rule it applies: 7.0 judges every decorated method by one grammar,
+   and the [changelog](https://github.com/YV17labs/NestRS/blob/main/CHANGELOG.md)
+   lists what it refuses.
+
+2. **Rename the fifteen OAuth variables.** A crate in a family puts the family
+   first in its namespace, so the OAuth client and resource server read
+   `NESTRS_OAUTH__CLIENT__*` and `NESTRS_OAUTH__RESOURCE__*` — the same string as
+   their paths, `nest_rs::oauth::client` and `nest_rs::oauth::resource`. No other
+   variable changed its name. Rename them wherever the deployment sets them: the
+   `.env` files, the chart's values, the platform's secrets.
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `NESTRS_OAUTH_CLIENT__CLIENT_ID` | `NESTRS_OAUTH__CLIENT__CLIENT_ID` |
+   | `NESTRS_OAUTH_CLIENT__CLIENT_SECRET` | `NESTRS_OAUTH__CLIENT__CLIENT_SECRET` |
+   | `NESTRS_OAUTH_CLIENT__AUTH_URL` | `NESTRS_OAUTH__CLIENT__AUTH_URL` |
+   | `NESTRS_OAUTH_CLIENT__TOKEN_URL` | `NESTRS_OAUTH__CLIENT__TOKEN_URL` |
+   | `NESTRS_OAUTH_CLIENT__REDIRECT_URL` | `NESTRS_OAUTH__CLIENT__REDIRECT_URL` |
+   | `NESTRS_OAUTH_CLIENT__USERINFO_URL` | `NESTRS_OAUTH__CLIENT__USERINFO_URL` |
+   | `NESTRS_OAUTH_CLIENT__SCOPES` | `NESTRS_OAUTH__CLIENT__SCOPES` |
+   | `NESTRS_OAUTH_RESOURCE__RESOURCE` | `NESTRS_OAUTH__RESOURCE__RESOURCE` |
+   | `NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS` | `NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS` |
+   | `NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED` | `NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED` |
+   | `NESTRS_OAUTH_RESOURCE__BEARER_METHODS_SUPPORTED` | `NESTRS_OAUTH__RESOURCE__BEARER_METHODS_SUPPORTED` |
+   | `NESTRS_OAUTH_RESOURCE__RESOURCE_NAME` | `NESTRS_OAUTH__RESOURCE__RESOURCE_NAME` |
+   | `NESTRS_OAUTH_RESOURCE__RESOURCE_DOCUMENTATION` | `NESTRS_OAUTH__RESOURCE__RESOURCE_DOCUMENTATION` |
+   | `NESTRS_OAUTH_RESOURCE__RESOURCE_POLICY_URI` | `NESTRS_OAUTH__RESOURCE__RESOURCE_POLICY_URI` |
+   | `NESTRS_OAUTH_RESOURCE__RESOURCE_TOS_URI` | `NESTRS_OAUTH__RESOURCE__RESOURCE_TOS_URI` |
+
+   Under a prefix of your own, the same holds with `ACME_` for `NESTRS_`. Every
+   one of them — every namespaced variable, in fact — can now be given as a file
+   instead, through its `_FILE` spelling; see the
+   [ConfigService API](/configuration/#configservice-api). A name you miss is not
+   silent: the boot names it and its new spelling, as shown
+   [below](#what-fails-if-you-get-it-wrong).
+
+3. **Push through the queue's type.** `push_to::<Q>(job)` and the string-taking
+   `push(name, job)` are gone. A push names the queue's `#[queue]` marker, takes
+   `PushOptions` — `None` for an immediate push — and answers with a
+   `PushReceipt` naming the job's id:
+
+   ```rust title="crates/features/src/audio/service.rs" del={2} ins={3}
+   self.queue
+       .push_to::<AudioQueue>(TranscodeCommand { file: file.clone() })
+       .push(AudioQueue, TranscodeCommand { file: file.clone() }, None)
+       .await?;
+   ```
+
+   The queue section lists every call a producer changes, `push_many` and
+   `push_json` included, under
+   [Your code](/queue/upgrading/#your-code). `QueueName` is now the checked name a
+   backend receives, so a queue's type is `Queue`:
+   `<AudioQueue as QueueName>::NAME` becomes `<AudioQueue as Queue>::NAME`.
+
+4. **Check what each consumer declares.** A `#[process]` method compiles as it
+   did, and three things read differently now:
+
+   - `retries = N` runs a failed attempt again **after a backoff** — one second
+     after the first failure, doubling, at most five minutes — where 6.x ran it
+     again at once. See [Retries and failure](/queue/retries-and-failure/).
+   - `concurrency = N` is accepted again, per method and per replica, and so are
+     `throttle(limit, window)` and a `Checkpoint<S>` parameter; see
+     [Concurrency and scaling](/queue/scaling/).
+   - A queue name is checked: 1 to 128 of `[A-Za-z0-9_.-]`. A name holding `:`
+     or whitespace no longer compiles, so that queue takes a new name — and its
+     6.x jobs are drained in step 7 rather than moved.
+
+   A scheduled job that should fire on one replica rather than all of them can
+   now say so with `replicas = "one"`, beside `RedisScheduleModule` — see
+   [Firing once across replicas](/schedule/#firing-once-across-replicas).
+
+5. **Follow the renamed types and signatures.** Each row is a compile error
+   naming the old spelling, so the compiler finds every site:
+
+   | 6.x | 7.0 |
+   |---|---|
+   | `env.get("KEY")` and `env.list("KEY", default)` in a `from_env` | `env.get("KEY")?` and `env.list("KEY", default)?` — a `_FILE` read can fail |
+   | `Correlation::mint()` | `Correlation::minted(None)` |
+   | `TlsConfig`, `CorsConfig`, `SecurityHeadersConfig` | `HttpTls`, `HttpCors`, `HttpSecurityHeaders` |
+   | `ServerInfo`, returned by a host's `get_info` | `nest_rs::mcp::ServerConfig` |
+   | `RedisConnection::connect(url)`, `connect_within(url, budget)` | `RedisConnection::connect(&config)` |
+   | `conn.manager()` | the connection itself — it is `ConnectionLike` and `Clone` |
+   | `OpenTelemetryConfig::from_env(name)` | `OpenTelemetryConfig::from_env(name)?` |
+   | `method.retries`, `method.queue` on a `ProcessMethod` | `method.options().retries()`, `method.queue()` |
+
+   `.opaque()` now takes an error that converts into `Box<dyn Error + Send +
+   Sync>`, so it logs the whole cause chain; an error type that was only
+   `Display` implements `std::error::Error` first. Do the same for your own
+   `error` fields, through the framework's one walk of a chain:
+
+   ```rust title="crates/features/src/chat/ws/gateway.rs" ins={1,3} del={2}
+   use nest_rs::core::error_message;
+   tracing::warn!(target: "features::chat", error = %e, "broadcast failed");
+   tracing::warn!(target: "features::chat", error = %error_message(&e), "broadcast failed");
+   ```
+
+6. **If you write decorators on `nest_rs_codegen`**, one signature changed, one
+   helper left and one type was renamed. `transactional_value` names the
+   decorator, so its refusal opens with the site as every value refusal now does;
+   `must_be_async` is gone with the rule it worded — a method may be synchronous,
+   and `await_if_async` emits the call either way; `CrudConfig` is
+   `CrudDeclaration`.
+
+   ```rust title="nest_rs_codegen::transactional_value" del={1} ins={2}
+   let transactional = nest_rs_codegen::transactional_value(&meta.value)?;
+   let transactional = nest_rs_codegen::transactional_value("every", &meta.value)?;
+   ```
+
+7. **Move each Redis queue's jobs out of the 6.x layout.** 6.x kept a queue's
+   jobs at the root of the keyspace; 7.0 keeps them under `nestrs:queue:<queue>`
+   and reads nothing else. Before any 7.0 worker serves a queue, either drain it
+   with a 6.x worker or move its keys —
+   [Upgrading queues from 6.x](/queue/upgrading/) is the procedure for both, and
+   the 7.0 worker's boot refuses to start while 6.x jobs wait.
+
+8. **Update the deployment around Redis.**
+
+   - **KEDA** reads `nestrs:queue:<queue>:active`: a trigger naming the 6.x list
+     reads zero forever. Keep `minReplicaCount: 1` on a queue that takes delayed
+     pushes or retries while no producer runs — they wait where no trigger
+     looks; see [On queue depth, with KEDA](/queue/scaling/#on-queue-depth-with-keda).
+   - **An ACL** confined to `~nestrs:*` now runs every Redis binding — the queue,
+     the rate limiter under `nestrs:throttler:buckets:*`, a schedule's claims.
+     The 6.x check in step 7 reads the root, so run the upgrade with a user that
+     reaches it. A dashboard or an ACL naming `nestrs:throttle:*` follows the
+     rate limiter's new keys.
+   - **TLS**: `rediss://` is verified against the URL's host.
+     `NESTRS_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and
+     `TLS_KEY` a client certificate, each with its `_FILE` form, and `#insecure`
+     fails the boot — see the [Redis variables](/configuration/env-reference/#redis--nestrs_redis__).
+   - **Shutdown**: the worker hands back what still runs before
+     `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes, so give the pod a grace
+     period above it — see [Shutdown](/queue/delivery/#shutdown).
+   - **Redis 6.2 or later, and no Cluster** — the limits of apalis 0.7 the
+     [delivery page](/queue/delivery/#limits) states.
+
+9. **Boot every app, and read its first lines.** A 7.0 boot names what it cannot
+   use rather than falling back in silence: no `nest_rs::config` warning means
+   every variable was read by the config it names, and a worker that starts has
+   found no 6.x jobs under the queues it serves — or said, at `warn`, that its
+   ACL kept it from looking.
+
+</Steps>
+
+## What fails if you get it wrong
+
+- **A variable kept under its 6.x name** is read by nothing, and the boot says so
+  once per variable, at `warn`, before a missing required value stops it. The
+  demo's `assistant`, started with a 6.x `.env`:
+
+  ```text frame="terminal"
+   WARN nest_rs::config: config variable under a misspelled namespace variable="NESTRS_OAUTH_RESOURCE__AUTHORIZATION_SERVERS" namespace="oauth__resource" suggestion="NESTRS_OAUTH__RESOURCE__AUTHORIZATION_SERVERS"
+   WARN nest_rs::config: config variable under a misspelled namespace variable="NESTRS_OAUTH_RESOURCE__RESOURCE" namespace="oauth__resource" suggestion="NESTRS_OAUTH__RESOURCE__RESOURCE"
+   WARN nest_rs::config: config variable under a misspelled namespace variable="NESTRS_OAUTH_RESOURCE__SCOPES_SUPPORTED" namespace="oauth__resource" suggestion="NESTRS_OAUTH__RESOURCE__SCOPES_SUPPORTED"
+  Error: authentication failed: NESTRS_OAUTH__RESOURCE__RESOURCE (or NESTRS_OAUTH__RESOURCE__RESOURCE_FILE) must name this deployment's canonical URI (for example https://api.example.com)
+  ```
+
+  Rename what the `suggestion` names. The report, and what it leaves silent, is
+  described under
+  [A variable nothing reads](/configuration/env-reference/#a-variable-nothing-reads).
+- **A 7.0 worker started beside 6.x jobs** refuses to start, naming the keys that
+  still hold them and both ways out; nothing is lost. Finish step 7 — the refusal
+  is quoted on [Upgrading queues from 6.x](/queue/upgrading/).
+- **A queue per runtime key** — `#[queue(prefix = ..)]` — does not compile: 7.0
+  offers none, since each queue is a list every worker replica polls. Declare one
+  queue and carry the key in the job.
+- **A Redis URL ending in `#insecure`** fails the boot — it
+  ``asks to skip certificate verification (`#insecure`), which is refused`` —
+  where 6.x never spoke TLS to Redis at all. Trust the authority that signed
+  Redis's certificate with `NESTRS_REDIS__TLS_CA_CERT` instead.
+- **Half a storage credential pair** — `NESTRS_STORAGE__ACCESS_KEY` without
+  `SECRET_KEY`, or the reverse — fails the boot where 6.x paired it with a
+  default. **An HMAC secret shorter than its hash** fails `JwtService::new`: a
+  `JwtOptions` choosing HS384 needs 48 bytes, HS512 64. **An unparseable
+  `NESTRS_OPENTELEMETRY__SAMPLE_RATIO` or `METRIC_INTERVAL_SECS`** fails
+  `OpenTelemetry::init` where 6.x kept the default.
+
+## Reference
+
+- `crates/nest-rs-config/src/unclaimed.rs` — the boot's report of a variable
+  nothing reads, and `tests/integration/unclaimed.rs` beside it.
+- `demo/crates/features/src/audio/service.rs` and
+  `demo/crates/features/src/chat/ws/gateway.rs` — the 7.0 lines of steps 3
+  and 5, as the demo writes them.
+- `crates/nest-rs-queue/src/producer.rs` — `push`, `push_many`, `push_json` and
+  the receipt; `crates/nest-rs-queue/tests/integration/diagnostics/` — each
+  `#[queue]` and `#[process]` refusal, pinned.
+- `crates/nest-rs-schedule-macros/src/scheduled.rs` — `transactional_value`
+  called with the decorator's name, as step 6 writes it.
+- `crates/nest-rs-redis/src/error.rs` — the boot's refusals: a 6.x layout, an
+  `#insecure` URL, TLS that cannot work.
+
+## Going further
+
+- [Upgrading queues from 6.x](/queue/upgrading/) — draining or moving a queue's
+  jobs, run end to end by the Redis e2e suite.
+- [Env-var reference](/configuration/env-reference/) — every variable 7.0 reads.
+- [Delivery on Redis](/queue/delivery/) — where a 7.0 queue keeps what, and what
+  it guarantees.

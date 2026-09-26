@@ -327,6 +327,13 @@ replica — the thing the declaration exists to prevent. So:
   reaches an occurrence that late, stalled by its platform or starved of CPU,
   skips it too: a peer's claim may already be forgotten, and firing could be the
   second time.
+- **Shutdown never waits on a claim.** A claim still unanswered when the app is
+  asked to stop is abandoned at once and its occurrence skipped with a `warn`,
+  `occurrence skipped: shutdown was asked for before its lock answered the
+  claim`, so a Redis that stopped answering cannot hold the scheduler's shutdown
+  until the claim goes stale — most of a day, for a daily cron. A claim answered
+  before that, and a run already started, are not cut short: the run finishes,
+  then the scheduler stops.
 - **A replica that stops after claiming loses that occurrence.** Nobody else
   will fire it.
 

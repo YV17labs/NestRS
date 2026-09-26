@@ -11,7 +11,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use nest_rs_core::{Container, Transport};
 use nest_rs_schedule::nest_rs_worker::{JobSettlement, JobTransaction};
 use nest_rs_schedule::{
-    CronExpression, CronJobMeta, OccurrenceLock, OccurrenceLockError, Replicas, Scheduler, Trigger,
+    CronExpression, CronJobMeta, OccurrenceLock, OccurrenceLockError, Replicas, RunFn, Scheduler,
+    Trigger,
 };
 use nest_rs_testing::LogCapture;
 use nest_rs_worker::{self, JobContext};
@@ -1646,6 +1647,11 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
 /// taken where the next instant is chosen, so a slow claim, a long run and the
 /// report itself cannot move the loop past an occurrence without naming it; the
 /// report was timed from before it ran, and lost what fell due while it did.
+///
+/// Counted means counted under any of the report's heads. Most are `skipped`
+/// here, since this lock answers that nobody claimed them — but the report in
+/// flight when shutdown is asked for is cut short, and its instants are counted
+/// `unanswered`, which is still every one of them named once.
 #[tokio::test]
 async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
     struct StalledHost;
@@ -1695,7 +1701,11 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
                     .and_then(|value| value.parse::<u64>().ok())
                     .unwrap_or_else(|| panic!("the event carries `{field}`: {event:?}"))
             };
-            (number("occurrence"), number("skipped"))
+            let named = ["skipped", "claimed_elsewhere", "unanswered", "unchecked"]
+                .into_iter()
+                .map(number)
+                .sum();
+            (number("occurrence"), named)
         })
         .collect();
     for pair in claims.windows(2) {
@@ -2032,4 +2042,171 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
         .await
         .expect("serve task joins")
         .expect("serve returns Ok at shutdown");
+}
+
+/// A lock whose claims never answer — a backend holding every command, a
+/// network dropping them without a reset — and which says when one was sent.
+#[derive(Default)]
+struct HungLock {
+    sent: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl OccurrenceLock for HungLock {
+    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+        self.sent.notify_one();
+        std::future::pending().await
+    }
+
+    async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
+        std::future::pending().await
+    }
+}
+
+struct HungHost;
+
+/// Serve one job firing once across replicas over a [`HungLock`], wait until
+/// its first claim is in flight, ask for shutdown, and return how long `serve`
+/// took to return after that.
+///
+/// Measured on the runtime's clock, which a paused test moves only when every
+/// task is waiting on a timer: a loop still waiting on its claim shows up as the
+/// time to that claim's stale threshold, and a loop that let go shows up as none.
+async fn shut_down_while_a_claim_hangs(
+    method: &'static str,
+    trigger: Trigger,
+    run: RunFn,
+) -> Duration {
+    let lock = Arc::new(HungLock::default());
+    let shared: Arc<dyn OccurrenceLock> = lock.clone();
+    let container = crate::hermetic()
+        .provide_dyn::<dyn OccurrenceLock>(shared)
+        .attach_meta::<HungHost, CronJobMeta>(CronJobMeta {
+            provider: "HungHost",
+            method,
+            trigger,
+            run,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::One,
+        })
+        .build();
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("configures with a lock bound");
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+
+    lock.sent.notified().await;
+    let asked = tokio::time::Instant::now();
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve task joins")
+        .expect("serve returns Ok at shutdown");
+    asked.elapsed()
+}
+
+/// What a shutdown that let go of a hung claim leaves behind: one `warn` naming
+/// the job and the occurrence it was claiming, and no word of staleness — the
+/// claim was abandoned because the replica is leaving, not because it waited out
+/// its occurrence.
+fn assert_abandoned_once_at_shutdown(logs: &LogCapture, method: &str) {
+    let abandoned = logs.expect_one(
+        "nest_rs::schedule",
+        "occurrence skipped: shutdown was asked for before its lock answered the claim",
+    );
+    assert_eq!(abandoned.level, "warn");
+    assert_eq!(abandoned.field("provider").as_deref(), Some("HungHost"));
+    assert_eq!(abandoned.field("method").as_deref(), Some(method));
+    assert!(
+        abandoned
+            .field("occurrence")
+            .is_some_and(|ms| ms.parse::<u64>().is_ok()),
+        "the line names the occurrence it was claiming: {abandoned:?}",
+    );
+    logs.expect_none(
+        "nest_rs::schedule",
+        "occurrence skipped: its lock did not answer the claim before the occurrence went stale",
+    );
+}
+
+static HUNG_INTERVAL_HITS: AtomicU64 = AtomicU64::new(0);
+
+fn tick_hung_interval(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        HUNG_INTERVAL_HITS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })
+}
+
+/// Shutdown is bounded by the loops' own teardown, never by a lock. A claim
+/// the lock never answers was awaited until its occurrence went stale — the
+/// hold less the clock skew, most of a minute for an interval job — and `serve`
+/// returns only once every loop has, so the whole scheduler's shutdown waited
+/// on it. It now lets go the moment shutdown is asked for, says so once, and
+/// fires nothing.
+#[tokio::test(start_paused = true)]
+async fn shutdown_lets_go_of_an_interval_claim_its_lock_never_answers() {
+    let logs = LogCapture::install();
+
+    let waited = shut_down_while_a_claim_hangs(
+        "sweep",
+        Trigger::Interval(Duration::from_millis(100)),
+        tick_hung_interval,
+    )
+    .await;
+
+    assert_eq!(
+        waited,
+        Duration::ZERO,
+        "shutdown returned without waiting on the lock"
+    );
+    assert_eq!(
+        HUNG_INTERVAL_HITS.load(Ordering::SeqCst),
+        0,
+        "nothing fires once shutdown is asked for",
+    );
+    assert_abandoned_once_at_shutdown(&logs, "sweep");
+}
+
+static HUNG_CRON_HITS: AtomicU64 = AtomicU64::new(0);
+
+fn tick_hung_cron(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        HUNG_CRON_HITS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    })
+}
+
+/// The case the bound was worst at: a cron job's claim holds for the gap to its
+/// next occurrence, so its stale threshold — the only thing that ended a hung
+/// claim — was most of a day away for a daily job, and the scheduler's shutdown
+/// with it.
+#[tokio::test(start_paused = true)]
+async fn shutdown_lets_go_of_a_daily_cron_claim_its_lock_never_answers() {
+    let logs = LogCapture::install();
+
+    let waited = shut_down_while_a_claim_hangs(
+        "close_the_day",
+        Trigger::Cron {
+            expr: CronExpression::EVERY_DAY_AT_MIDNIGHT,
+            tz: None,
+        },
+        tick_hung_cron,
+    )
+    .await;
+
+    assert_eq!(
+        waited,
+        Duration::ZERO,
+        "shutdown returned without waiting on the lock"
+    );
+    assert_eq!(
+        HUNG_CRON_HITS.load(Ordering::SeqCst),
+        0,
+        "nothing fires once shutdown is asked for",
+    );
+    assert_abandoned_once_at_shutdown(&logs, "close_the_day");
 }

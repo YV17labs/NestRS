@@ -3,11 +3,11 @@
 //! **Fail closed, at most once per occurrence.** The scheduler claims an
 //! occurrence at its instant and fires it only when the claim says this replica
 //! won it. A claim that errors skips the occurrence with a `warn`, and so does a
-//! claim still unanswered when the occurrence goes stale: firing unclaimed would
-//! fire it on every replica, which is exactly what the declaration exists to
-//! prevent. So a replica that crashes after claiming loses
-//! that occurrence, and work that must not be lost belongs in a queue job the
-//! tick enqueues — a queue delivers at least once.
+//! claim still unanswered when the occurrence goes stale or when shutdown is
+//! asked for: firing unclaimed would fire it on every replica, which is exactly
+//! what the declaration exists to prevent. So a replica that crashes — or stops
+//! — after claiming loses that occurrence, and work that must not be lost
+//! belongs in a queue job the tick enqueues — a queue delivers at least once.
 //!
 //! **Selected by import**, like the throttler's store. A backend binds
 //! `Arc<dyn OccurrenceLock>` as a declared factory carrying [`BACKEND_REMEDY`]
@@ -43,6 +43,13 @@ use crate::OccurrenceLockError;
 /// connection it claims over already does for every other caller, so an outage
 /// reaches the `warn` as the backend's own error and promptly, rather than as a
 /// minute of silence per occurrence.
+///
+/// **A call may be dropped at any `.await`** — at that threshold, and the moment
+/// the scheduler shuts down, which waits on no lock. A claim dropped after its
+/// command reached the backend may still have taken the key, and that is the
+/// at-most-once side the port already chooses: nobody fires the occurrence, and
+/// the key expires with its hold. So a backend keeps no state a dropped call
+/// would have had to undo.
 #[async_trait]
 pub trait OccurrenceLock: Send + Sync + 'static {
     /// Claim `occurrence` for `hold`.

@@ -225,6 +225,9 @@ fn every_module_type_is_named_for_its_path() {
 /// `UsersGateway`. The **module** owns the name, not the edge folder: an edge is
 /// an adapter *of* something, and `HttpController` would name the adapter twice
 /// and the thing it adapts never.
+///
+/// **An edge folder directly under a crate's `src/` adapts the crate itself**,
+/// so its adapter takes the crate's subject — see [`module_word`].
 #[test]
 fn every_edge_adapter_is_named_for_the_module_it_adapts() {
     let (scanned, offenders) = misnamed_adapters(&repo_root());
@@ -264,10 +267,12 @@ fn misnamed_adapters(root: &Path) -> (usize, Vec<String>) {
             let Some(edge_at) = parts.len().checked_sub(2) else {
                 continue;
             };
-            if edge_at == 0 || !crate::EDGES.contains(&&*parts[edge_at]) {
+            if !crate::EDGES.contains(&&*parts[edge_at]) {
                 continue;
             }
-            let module = folded(&parts[edge_at - 1]);
+            let Some(module) = module_word(&parts[..edge_at]).map(folded) else {
+                continue;
+            };
             let Some(ast) = parsed(&path) else { continue };
             for item in &ast.items {
                 let syn::Item::Struct(s) = item else { continue };
@@ -282,7 +287,117 @@ fn misnamed_adapters(root: &Path) -> (usize, Vec<String>) {
             }
         }
     }
+    // The walk follows the filesystem's order; a verdict does not.
+    offenders.sort();
     (scanned, offenders)
+}
+
+/// The word the adapters in an edge folder are named for, read off the folders
+/// above that edge folder (`above`, from the repository root down).
+///
+/// **The module folder above the edge — unless that folder is a source root**,
+/// which names a layout level and no module. An edge folder directly under a
+/// crate's `src/` adapts the crate itself, so it takes the crate's subject:
+/// `nest-rs-x/src/http/controller.rs` is `XController`, the stem the module join
+/// already gives `nest-rs-x/src/http/module.rs` (`XHttpModule`). Read as a
+/// module, `src` expected a `SrcController` and refused the right name. A
+/// product crate's subject is its directory, as it is for its module
+/// (`demo/apps/api/src/http/controller.rs` is `ApiController`, beside
+/// `ApiModule`).
+///
+/// **A suite root is the same level**, because a suite's module tree mirrors
+/// `src/` (`testing.md`): `tests/integration/http/` is the mirror of `src/http/`,
+/// and the suite's name is no more a module than `src` is. The reserved
+/// vocabulary keeps both words out of a module's name, so neither reading can
+/// shadow a real module.
+fn module_word<'a>(above: &'a [std::borrow::Cow<'a, str>]) -> Option<&'a str> {
+    match above {
+        [.., krate, root] if root == "src" => Some(subject_of(krate)),
+        [.., krate, tests, _suite] if tests == "tests" => Some(subject_of(krate)),
+        [.., module] => Some(module),
+        [] => None,
+    }
+}
+
+/// Write each `(path, text)` of `tree` below `root`, creating its folders — the
+/// planted trees the joins' own verdicts are taken over.
+fn plant(root: &Path, tree: &[(&str, &str)]) {
+    for (file, text) in tree {
+        let path = root.join(file);
+        let folder = path.parent().expect("a planted file sits in a folder");
+        std::fs::create_dir_all(folder).expect("the scratch tree is writable");
+        std::fs::write(&path, text).expect("the scratch tree is writable");
+    }
+}
+
+/// [`module_word`], on a planted tree: every level an edge folder can sit under,
+/// with a name that passes and a decoy that the old reading — the folder above
+/// the edge, whatever it named — judged the other way.
+#[test]
+fn an_edge_folder_directly_under_src_adapts_the_crate() {
+    const TREE: [(&str, &str); 9] = [
+        (
+            "crates/nest-rs-probe/src/http/controller.rs",
+            "pub struct ProbeController;",
+        ),
+        // Named for the layout level, which the old reading asked for.
+        (
+            "crates/nest-rs-probe/src/ws/gateway.rs",
+            "pub struct SrcGateway;",
+        ),
+        // A subject of several words folds as one, as the module join folds it.
+        (
+            "crates/nest-rs-oauth-probe/src/http/controller.rs",
+            "pub struct OAuthProbeController;",
+        ),
+        // A product crate's subject is its directory.
+        (
+            "demo/apps/api/src/graphql/resolver.rs",
+            "pub struct ApiResolver;",
+        ),
+        // The suite mirror of `src/http/`, and a decoy named for the suite.
+        (
+            "crates/nest-rs-probe/tests/integration/http/controller.rs",
+            "pub struct ProbeController;",
+        ),
+        (
+            "crates/nest-rs-probe/tests/integration/queue/processor.rs",
+            "pub struct IntegrationProcessor;",
+        ),
+        // A module folder above the edge still owns the name, in source and in
+        // the mirror — and the crate's subject does not stand in for it.
+        (
+            "crates/nest-rs-probe/src/users/http/controller.rs",
+            "pub struct UsersController;",
+        ),
+        (
+            "crates/nest-rs-probe/tests/integration/users/ws/gateway.rs",
+            "pub struct UsersGateway;",
+        ),
+        (
+            "crates/nest-rs-probe/src/posts/events/listener.rs",
+            "pub struct ProbeListener;",
+        ),
+    ];
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("naming-edge-under-src-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    plant(&root, &TREE);
+    let verdict = misnamed_adapters(&root);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(
+        verdict,
+        (
+            9,
+            vec![
+                "IntegrationProcessor in crates/nest-rs-probe/tests/integration/queue/processor.rs"
+                    .to_owned(),
+                "ProbeListener in crates/nest-rs-probe/src/posts/events/listener.rs".to_owned(),
+                "SrcGateway in crates/nest-rs-probe/src/ws/gateway.rs".to_owned(),
+            ],
+        ),
+    );
 }
 
 /// `architecture.md`: "**No `*_module.rs`, ever.** One `#[module]` per file, one
@@ -1349,12 +1464,7 @@ fn no_verdict_depends_on_where_the_checkout_sits() {
     let plain = scratch.join("plain/nestrs");
     let hostile = scratch.join("src/schedule/nestrs");
     for root in [&plain, &hostile] {
-        for (file, text) in TREE {
-            let path = root.join(file);
-            let folder = path.parent().expect("a planted file sits in a folder");
-            std::fs::create_dir_all(folder).expect("the scratch tree is writable");
-            std::fs::write(&path, text).expect("the scratch tree is writable");
-        }
+        plant(root, &TREE);
     }
     let (from_plain, from_hostile) = (verdicts(&plain), verdicts(&hostile));
     let _ = std::fs::remove_dir_all(&scratch);

@@ -1,12 +1,15 @@
 # TLS fixtures
 
-Throwaway material for `tests/e2e/tls.rs`, generated once with `openssl` and
-committed so the suite needs no toolchain beyond cargo:
+Throwaway material for `tests/e2e/tls.rs` and the TLS unit tests, generated once
+with `openssl` and committed so the suite needs no toolchain beyond cargo:
 
-- `tls_ca.pem` — a self-signed CA the tests pin as the trust anchor.
+- `tls_ca.pem` — a self-signed CA the tests pin as the trust anchor. Its key was
+  discarded after signing the three leaves below.
 - `tls_server.pem` / `tls_server.key.pem` — the leaf the test's TLS proxy
   presents in front of the dev container Redis, for `localhost` and
   `127.0.0.1`.
+- `tls_misnamed.pem` / `tls_misnamed.key.pem` — a server leaf under the same CA
+  for `redis.invalid` only: trusted, and issued for a name the tests never dial.
 - `tls_client.pem` / `tls_client.key.pem` — a client certificate under the same
   CA, for the mutual-TLS case.
 

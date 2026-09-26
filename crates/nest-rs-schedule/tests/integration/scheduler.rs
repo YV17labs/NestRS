@@ -53,7 +53,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
     struct TimeoutHost;
     struct CronHost;
 
-    let container = Container::builder()
+    let container = crate::hermetic()
         .attach_meta::<IntervalHost, CronJobMeta>(CronJobMeta {
             provider: "IntervalHost",
             method: "interval",
@@ -138,7 +138,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
     struct PanicHost;
     struct SurvivorHost;
 
-    let container = Container::builder()
+    let container = crate::hermetic()
         .attach_meta::<PanicHost, CronJobMeta>(CronJobMeta {
             provider: "PanicHost",
             method: "panics",
@@ -188,7 +188,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
 async fn invalid_cron_expression_fails_configure() {
     struct BadHost;
 
-    let container = Container::builder()
+    let container = crate::hermetic()
         .attach_meta::<BadHost, CronJobMeta>(CronJobMeta {
             provider: "BadHost",
             method: "broken",
@@ -249,7 +249,7 @@ fn tick_observe(_: &Container) -> RunFuture<'_> {
 async fn jobs_run_inside_the_bound_job_context() {
     struct ObserveHost;
 
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn JobContext>(Arc::new(MarkerContext))
         .attach_meta::<ObserveHost, CronJobMeta>(CronJobMeta {
             provider: "ObserveHost",
@@ -322,7 +322,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
     struct NamedPanicHost;
 
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder()
+    let container = crate::hermetic()
         .attach_meta::<NamedPanicHost, CronJobMeta>(CronJobMeta {
             provider: "NamedPanicHost",
             method: "panics",
@@ -403,9 +403,7 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
     struct WrappedFailureHost;
 
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder()
-        // No inventory entry fires beside it: the event under test is this job's alone.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
+    let container = crate::hermetic()
         .attach_meta::<WrappedFailureHost, CronJobMeta>(CronJobMeta {
             provider: "WrappedFailureHost",
             method: "tick",
@@ -451,7 +449,7 @@ async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
     struct UnsettleableHost;
 
     let logs = nest_rs_testing::LogCapture::install();
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn JobContext>(Arc::new(UnsettleableContext(
             nest_rs_worker::Unhonoured::deterministic(
                 "the job's transaction could not be committed",
@@ -532,7 +530,7 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
     // installed here would never see the event it exists to read.
     let logs = LogCapture::install_global();
 
-    let container = Container::builder()
+    let container = crate::hermetic()
         .attach_meta::<NeverHost, CronJobMeta>(CronJobMeta {
             provider: "NeverHost",
             method: "never",
@@ -544,13 +542,6 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
         })
-        // Empty and *present*: `configure` also walks the link-time
-        // `ScheduledMethod` registry, and with no gate seeded it starts every
-        // `#[scheduled]` compiled into this binary — four panicking ticks from
-        // another module's fixtures in 300 ms. `expect_one` discriminates only
-        // by target and message, so one more `#[cron]` in this binary would
-        // turn that into a false failure of this test.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
         .build();
 
     let mut scheduler = Scheduler::new();
@@ -649,7 +640,7 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
     let mut serving = Vec::new();
     for _ in 0..2 {
         let shared: Arc<dyn OccurrenceLock> = lock.clone();
-        let container = Container::builder()
+        let container = crate::hermetic()
             .provide_dyn::<dyn OccurrenceLock>(shared)
             .attach_meta::<OnceHost, CronJobMeta>(CronJobMeta {
                 provider: PROVIDER,
@@ -724,7 +715,7 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
 
     let lock = Arc::new(SharedLock::default());
     let shared: Arc<dyn OccurrenceLock> = lock.clone();
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(shared)
         .attach_meta::<CronOnceHost, CronJobMeta>(CronJobMeta {
             provider: "CronOnceHost",
@@ -770,7 +761,7 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
 async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
     struct LonelyHost;
 
-    let container = Container::builder()
+    let container = crate::hermetic()
         .attach_meta::<LonelyHost, CronJobMeta>(CronJobMeta {
             provider: "LonelyHost",
             method: "once",
@@ -800,7 +791,7 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
     struct OneShotHost;
 
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<OneShotHost, CronJobMeta>(CronJobMeta {
             provider: "OneShotHost",
@@ -825,7 +816,7 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
 async fn a_zero_interval_fails_the_boot() {
     struct ZeroHost;
 
-    let container = Container::builder()
+    let container = crate::hermetic()
         .attach_meta::<ZeroHost, CronJobMeta>(CronJobMeta {
             provider: "ZeroHost",
             method: "spin",
@@ -887,7 +878,7 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
 
     let logs = LogCapture::install();
     let lock: Arc<dyn OccurrenceLock> = Arc::new(FailingLock);
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<UnclaimedHost, CronJobMeta>(CronJobMeta {
             provider: "UnclaimedHost",
@@ -998,7 +989,7 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
 
     let logs = LogCapture::install();
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SlowLock::default());
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<OverrunHost, CronJobMeta>(CronJobMeta {
             provider: "OverrunHost",
@@ -1090,7 +1081,7 @@ async fn two_jobs_sharing_one_identity_fail_the_boot_naming_both() {
         transaction: JobTransaction::Pool,
         replicas: Replicas::One,
     };
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<FirstTasks, CronJobMeta>(meta())
         .attach_meta::<SecondTasks, CronJobMeta>(meta())
@@ -1143,10 +1134,8 @@ async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_
 
     let logs = LogCapture::install();
     let lock: Arc<dyn OccurrenceLock> = Arc::new(PeerFiredLock::default());
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        // No inventory entry fires beside it: the timing under test is this job's alone.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
         .attach_meta::<PeerFiredHost, CronJobMeta>(CronJobMeta {
             provider: "PeerFiredHost",
             method: "sweep",
@@ -1215,10 +1204,8 @@ async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_tha
 
     let logs = LogCapture::install();
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        // No inventory entry fires beside it: the timing under test is this job's alone.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
         .attach_meta::<BackToBackHost, CronJobMeta>(CronJobMeta {
             provider: "BackToBackHost",
             method: "crunch",
@@ -1309,10 +1296,8 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
 
     let logs = LogCapture::install();
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        // No inventory entry fires beside them: the timing under test is theirs alone.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
         .attach_meta::<StalledIntervalHost, CronJobMeta>(CronJobMeta {
             provider: "StalledIntervalHost",
             method: "tick",
@@ -1403,9 +1388,7 @@ async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud
     const PERIOD: Duration = Duration::from_millis(200);
 
     let logs = LogCapture::install();
-    let container = Container::builder()
-        // No inventory entry fires beside it: the timing under test is this job's alone.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
+    let container = crate::hermetic()
         .attach_meta::<LongRunHost, CronJobMeta>(CronJobMeta {
             provider: "LongRunHost",
             method: "crunch",
@@ -1473,9 +1456,7 @@ async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
     struct SlightlyLongHost;
 
     let logs = LogCapture::install();
-    let container = Container::builder()
-        // No inventory entry fires beside it: the timing under test is this job's alone.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
+    let container = crate::hermetic()
         .attach_meta::<SlightlyLongHost, CronJobMeta>(CronJobMeta {
             provider: "SlightlyLongHost",
             method: "crunch",
@@ -1580,9 +1561,8 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
 
     let lock = Arc::new(RecordingLock::default());
     let bound: Arc<dyn OccurrenceLock> = lock.clone();
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
         .attach_meta::<RecordedHost, CronJobMeta>(CronJobMeta {
             provider: PROVIDER,
             method: METHOD,
@@ -1639,10 +1619,8 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
     let logs = LogCapture::install();
     let lock = Arc::new(StallingLock::default());
     let bound: Arc<dyn OccurrenceLock> = lock.clone();
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
-        // No inventory entry fires beside it: the timing under test is this job's alone.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
         .attach_meta::<StalledHost, CronJobMeta>(CronJobMeta {
             provider: "StalledHost",
             method: "sweep",
@@ -1728,10 +1706,8 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
 
     let logs = LogCapture::install();
     let lock: Arc<dyn OccurrenceLock> = Arc::new(UnanswerableLock::default());
-    let container = Container::builder()
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
-        // No inventory entry fires beside it: the timing under test is this job's alone.
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
         .attach_meta::<UnanswerableHost, CronJobMeta>(CronJobMeta {
             provider: "UnanswerableHost",
             method: "sweep",
@@ -1843,8 +1819,7 @@ async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
         claims: AtomicU64::new(0),
     });
     let bound: Arc<dyn OccurrenceLock> = lock.clone();
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
         .attach_meta::<PanickedLockHost, CronJobMeta>(CronJobMeta {
             provider: "PanickedLockHost",
@@ -1911,8 +1886,7 @@ fn tick_panicking_before_its_future(_: &Container) -> RunFuture<'_> {
 async fn a_run_panicking_before_its_future_keeps_its_schedule() {
     struct EarlyPanicHost;
 
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
+    let container = crate::hermetic()
         .attach_meta::<EarlyPanicHost, CronJobMeta>(CronJobMeta {
             provider: "EarlyPanicHost",
             method: "panics_early",
@@ -1984,8 +1958,7 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
 
     let logs = LogCapture::install();
     let lock: Arc<dyn OccurrenceLock> = Arc::new(UnwritableLock);
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
+    let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<DoomedHost, CronJobMeta>(CronJobMeta {
             provider: "DoomedHost",

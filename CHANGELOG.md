@@ -206,8 +206,9 @@ jobs per occurrence, and nothing said so.
   whose ACL reaches `~nestrs:*` runs a queue end to end. 6.x kept jobs at the
   root of the keyspace under the queue's bare name: a 7.0 worker refuses to start
   beside them, naming the keys and the two ways out — drain them with a 6.x
-  worker, or `RENAME` them under the namespace — and a 7.0 producer says so once
-  per queue.
+  worker, or `RENAMENX` them under the namespace, as the queue documentation's
+  *Upgrading queues from 6.x* page lays out and the e2e suite runs — and a 7.0
+  producer says so once per queue.
 - **A job apalis delivers twice runs once.** A delivery takes the job's lease
   before its attempt and leaves a settled mark after it; a second delivery is
   handed back while the lease is held, and acknowledged without running once the

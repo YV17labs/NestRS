@@ -171,7 +171,7 @@ subscribe, long-poll, `ReceiveMessage`), and the translation of an
 `AttemptOutcome` into your backend's vocabulary. Those are storage decisions.
 
 One contract is *not* a storage decision: a `#[process]` method runs at most
-[its declared `concurrency`](/queue/#how-many-at-once) at once per replica,
+[its declared `concurrency`](/queue/scaling/#concurrency) at once per replica,
 one by default. Bound each method in your receive loop, the way
 `nest-rs-redis` does, so a handler behaves the same whichever driver is
 underneath it.

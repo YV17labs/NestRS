@@ -45,25 +45,33 @@ dead".
 
 ## The worker app
 
-The worker imports the substrate, both queue bindings and the feature's queue
+The worker imports the substrate, both queue bindings and each feature's queue
 adapter. That's it — `AudioQueueModule` pulls in the `AudioModule` port itself.
 
-```rust title="apps/worker/src/module.rs (from the demo)"
+```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
 
 use features::audio::AudioQueueModule;
+use features::notifications::NotificationsQueueModule;
 
-#[module(imports = [
-    ConfigModule::for_root(),
-    RedisModule::for_root(None),
-    RedisQueueModule,
-    RedisWorkerModule::for_root(None),
-    AudioQueueModule,
-])]
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        RedisModule::for_root(None),
+        RedisQueueModule,
+        RedisWorkerModule::for_root(None),
+        AudioQueueModule,
+        NotificationsQueueModule,
+    ],
+)]
 pub struct WorkerModule;
 ```
+
+The demo's worker also opens the database — the notifications job writes a
+row — and serves its health probes over HTTP; the excerpt keeps the queue's
+lines.
 
 At boot:
 
@@ -77,9 +85,10 @@ At boot:
 5. `AudioQueueModule` brings `AudioProcessor` (the `#[processor]` host) and
    its `#[process]` methods into the reachable set.
 6. `RedisWorker::configure` drains `inventory::iter::<ProcessMethod>()`,
-   keeps only the methods whose provider is reachable, and logs each
-   one. `serve` builds one apalis worker per method on a shared
-   `Monitor`.
+   keeps only the methods whose provider is reachable, refuses what the
+   backend cannot honour, and logs each one; it also refuses to start while a
+   queue it serves still holds jobs under the 6.x key layout. `serve` runs one
+   apalis worker per method on a shared `Monitor`, each under an id of its own.
 
 ## The producer-only app
 
@@ -91,22 +100,30 @@ inventory, no apalis monitor.
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::http::HttpModule;
+use nest_rs::http::{HttpConfig, HttpModule};
 use nest_rs::redis::{RedisModule, RedisQueueModule};
-use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmModule};
+use nest_rs::schedule::ScheduleModule;
+use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 
 use features::audio::{AudioHttpModule, AudioScheduleModule};
 
-#[module(imports = [
-    ConfigModule::for_root(),
-    HttpModule::for_root(None),
-    SeaOrmModule::for_root(None),
-    SeaOrmDatabaseModule,
-    RedisModule::for_root(None),
-    RedisQueueModule,
-    AudioHttpModule,
-    AudioScheduleModule,
-])]
+#[module(
+    imports = [
+        ConfigModule::for_root(),
+        SeaOrmModule::for_root(None),
+        SeaOrmDatabaseModule,
+        RedisModule::for_root(None),
+        RedisQueueModule,
+        ScheduleModule,
+        HttpModule::for_root(HttpConfig {
+            port: 3002,
+            compression: true,
+            ..Default::default()
+        }),
+        AudioHttpModule,
+        AudioScheduleModule,
+    ],
+)]
 pub struct ApiModule;
 ```
 
@@ -148,14 +165,16 @@ injects something its module doesn't own or import transitively.
 ```text frame="terminal"
 $ nestrs run dev worker
  INFO nest_rs::app: attached module-contributed transport transport="RedisWorker"
- INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3
+ INFO nest_rs::queue: registered queue processor processor="AudioProcessor::transcode" queue="audio" retries=3 concurrency=1
+ INFO nest_rs::queue: queue worker started queue="audio" worker="01a0deaa-c93b-74dd-b345-7b4cf2a53f3c"
 ```
 
 One `attached` line per transport, one `registered` line per
-discovered method that survived the reachability filter. The
+discovered method that survived the reachability filter, and one `started` line
+per method once its worker consumes, naming the id it consumes under. The
 producer-only API's boot opens the same connection, but logs no `attached
-transport=RedisWorker` and no `registered queue processor` lines — the worker
-side never wakes up.
+transport=RedisWorker`, no `registered queue processor` and no `queue worker
+started` lines — the worker side never wakes up.
 
 ## Reference
 

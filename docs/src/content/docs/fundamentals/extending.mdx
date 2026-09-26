@@ -36,7 +36,6 @@ types leak.
 | the crate that *binds* the port | delegates to | which already drives |
 |---|---|---|
 | `nest-rs-seaorm` | `sea-orm` | PostgreSQL, MySQL, SQLite |
-| `nest-rs-redis` | `apalis` | Redis, SQL backends |
 | `nest-rs-storage` | `object_store` | S3, GCS, Azure, local filesystem, in-memory |
 
 Note which column the crate names sit in. The question is answered by whoever
@@ -52,7 +51,12 @@ a different object store, you do not write a NestRS driver: you point
 
 **Owned.** Nothing abstracts the concern, so NestRS defines the trait, the
 registration seam and the arbitration sentence itself — `ThrottlerStore`,
-`SocialProvider`, `Strategy`.
+`JobProducer`, `SocialProvider`, `Strategy`. A library may still carry one
+adapter's transport without owning the concern: `nest-rs-redis` fetches and
+acknowledges jobs through apalis, while what a job attempt *is* — its id, its
+retries and their backoff, its trace, the capabilities a backend declares — is
+`nest-rs-queue`'s, so a second queue backend implements the port rather than
+pointing apalis at another store.
 
 ### What selects the active implementation?
 
@@ -84,13 +88,13 @@ pub type AuthnGuard = nest_rs::authn::AuthnGuard<AuthnStrategy>;
 The same shape carries `AbilityGuard<F: AbilityFactory>` and the GraphQL and MCP
 bridges. This is the mode NestRS uses most.
 
-:::caution[Two by-import ports do not yet arbitrate]
-`ThrottlerStore` declares its binding, so importing both backends fails the boot
-naming both. `dyn JobProducer` (queue) and `dyn JobContext` (database) bind
-through a container call that records no duplicate, so **two drivers of either
-would resolve to whichever module was imported last, silently**. Until that is
-closed, link exactly one driver per port and do not rely on a boot error to tell
-you.
+:::caution[One by-import port does not yet arbitrate]
+`ThrottlerStore` and `dyn JobProducer` (queue) declare their binding, so
+importing two backends of either fails the boot naming both. `dyn JobContext`
+(database) binds through a container call that records no duplicate, so **two
+database drivers would resolve to whichever module was imported last,
+silently**. Until that is closed, link exactly one database driver and do not
+rely on a boot error to tell you.
 :::
 
 **By configuration.** The import only **opens the gate**; configuration decides

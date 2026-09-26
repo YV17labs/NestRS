@@ -94,7 +94,7 @@ re-exports it, so import it from the one the file already uses
 |---|---|---|---|
 | `#[queue]` | unit struct | Declares a queue's wire name and payload type in one artifact both producer and consumer import | [Queue](/queue/) |
 | `#[processor]` | impl block | Orchestrates queue consumers on a provider | [Queue](/queue/) |
-| `#[process]` | method | Binds the method to a queue with an optional `retries` budget and `transactional` settling | [Queue](/queue/) |
+| `#[process]` | method | Binds the method to a queue with a `retries` budget, a per-replica `concurrency`, a deployment-wide `throttle` and `transactional` settling | [Queue](/queue/) |
 
 ## Schedule
 

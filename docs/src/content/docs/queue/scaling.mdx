@@ -1,0 +1,213 @@
+---
+title: Concurrency and scaling
+description: How many of a method's jobs run at once and how fast they may start — per replica, across the deployment — and adding replicas on queue depth.
+tier: all-options
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Two `#[process]` keys decide how a method's jobs are scheduled, and the platform
+decides the rest. `concurrency` bounds how many attempts run at once in one
+worker replica, `throttle` caps how many may start per window across the whole
+deployment, and the number of replicas is what an autoscaler changes:
+
+```rust title="crates/features/src/notifications/queue/processor.rs"
+#[processor]
+impl NotificationsProcessor {
+    #[process(queue = NotifyQueue, retries = 3, concurrency = 4, throttle(limit = 120, window = "1m"))]
+    async fn notify(&self, job: NotifyCommand) -> Result<()> {
+        self.svc.persist(job).await?;
+        Ok(())
+    }
+}
+```
+
+The worker states both at boot, beside the retry budget:
+
+```text frame="terminal"
+ INFO nest_rs::queue: registered queue processor processor="NotificationsProcessor::notify" queue="notifications" retries=3 concurrency=4 throttle_limit=120 throttle_window_ms=60000
+```
+
+## Where each key applies
+
+| Key | Default | What it counts | Across |
+|---|---|---|---|
+| `concurrency = N` | `1` | attempts running at once | one method, in one worker replica |
+| `throttle(limit = N, window = "…")` | none | attempts starting per window | one queue, every replica together |
+| `retries = N` | `0` | attempts of one job | the job, wherever it runs — see [Retries and failure](/queue/retries-and-failure/) |
+
+## Concurrency
+
+`concurrency = N` runs at most `N` attempts of the method at once in one worker
+replica — one when the key is absent, so a method that declares nothing runs its
+jobs one after another. The bound belongs to the method: each method has permits
+of its own, so a slow queue never takes another's. And it belongs to the
+replica: three replicas run up to three times `N`.
+
+A job holds its permit for its whole delivery, and a replica whose permits are
+all taken fetches nothing. The job it would have fetched stays in Redis, where a
+peer replica can take it — nothing is prefetched into a busy replica's memory,
+so adding a replica redistributes work rather than shuffling it between buffers.
+
+`concurrency` is not a capability: every backend honours it, so a method runs
+the same bound whichever driver is underneath it.
+
+### Sizing against the database pool
+
+The pool that caps a worker is the database's. An attempt is one transaction by
+default, and that transaction holds one connection from the job's first `Repo`
+call until it commits or rolls back. A replica whose methods all reach the
+database at the same moment wants as many connections as the sum of their
+`concurrency` values. Keep that sum within `NESTRS_SEAORM__MAX_CONNECTIONS`, or
+the attempts past it wait for a connection — and one that waits past
+`NESTRS_SEAORM__CONNECT_TIMEOUT_SECS` fails, retryably. A method declared
+`transactional = false` borrows a connection per statement instead.
+
+Redis is not what bounds it: a replica reaches Redis over one multiplexed
+connection, and a running job holds none of its own.
+
+### One fetch per poll
+
+On Redis, each method of each replica fetches one job every 100 ms. A method
+whose jobs finish faster than that runs about ten a second per replica, whatever
+its `concurrency`; `concurrency` pays once a job takes longer than the poll, and
+past that, throughput is replicas.
+
+## Throttling starts
+
+`throttle(limit = N, window = "…")` caps how many of the method's attempts may
+**start** in a window, counted across every replica draining the queue. Both
+keys are required, and the window is a whole number above zero with an `ms`,
+`s`, `m` or `h` suffix — `"500ms"`, `"30s"`, `"5m"`, `"1h"`.
+
+Reach for a throttle when the constraint is a rate someone else imposes, such as
+a provider's requests per minute; reach for `concurrency` when it is a resource
+the job holds while it runs. Both apply at once: a throttled method still runs at
+most its `concurrency` attempts at a time.
+
+- **A retry is an attempt like any other**, and counts against the limit.
+- **An attempt over the limit is not an attempt.** It goes back to the schedule
+  for when the window ends, keeps its attempt number, costs the retry budget
+  nothing, and is never dropped.
+- **It limits the deployment.** On Redis the count is one key per queue,
+  incremented by the step that admits an attempt, so every replica counts against
+  one number and no two admissions race.
+
+After 125 pushes to the method above, 120 started and the window's count had 44
+seconds left; the other five waited on the schedule for it to end:
+
+```text frame="terminal"
+$ redis-cli GET nestrs:queue:notifications:throttle
+"120"
+$ redis-cli PTTL nestrs:queue:notifications:throttle
+(integer) 44009
+$ redis-cli ZCARD nestrs:queue:notifications:scheduled
+(integer) 5
+```
+
+The Redis window is **fixed** and opens with its first start: the key expires
+`window` later, and the count starts again with the next start after that — the
+scheme the [HTTP rate limiter](/rate-limiting/) uses. Nothing exceeds the limit
+within one window, and starts on either side of a window's end can reach twice
+the limit within a short span. apalis schedules on whole seconds, so a window
+under a second still defers an attempt by one.
+
+A throttle needs a backend declaring `Capability::Throttle`. Redis declares it;
+on a backend that does not, the worker's boot fails naming the declaration, the
+method and the backend.
+
+## Adding replicas
+
+Throughput past one replica's permits comes from running more replicas of the
+worker app — the unit the platform already schedules, meters and restarts:
+
+```bash frame="terminal"
+$ kubectl scale deploy/worker --replicas=6
+```
+
+Every replica consumes under an id of its own, and no two of them receive the
+same job from the queue. A replica starting puts its peers' in-flight jobs back
+on the queue — apalis does so on every start — and the delivery guard keeps each
+of them from running twice; see [Delivery on Redis](/queue/delivery/).
+
+### On queue depth, with KEDA
+
+A worker whose jobs wait on I/O — a storage round-trip, one `INSERT` — sits near
+0% CPU however deep its backlog, so a CPU-driven autoscaler never fires. Queue
+depth is the signal that moves with the work: `nestrs:queue:<queue>:active` is
+the list a worker fetches from, and [KEDA](https://keda.sh)'s `redis` scaler
+reads its length.
+
+```yaml title="worker-scaledobject.yaml"
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker
+spec:
+  scaleTargetRef:
+    name: worker
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  triggers:
+    - type: redis
+      metadata:
+        address: redis:6379
+        listName: nestrs:queue:audio:active
+        listLength: "5"
+```
+
+`listLength` is the backlog one replica is sized for: ten jobs waiting ask for
+two replicas. Declare one trigger per queue the worker drains, and KEDA follows
+the busiest. KEDA dials Redis itself, so `address` is `host:port` rather than the
+URL the framework reads; a password, TLS and a database index are the scaler's
+own metadata.
+
+<Aside type="caution">
+**Scaling to zero strands work the trigger cannot see.** A job held back — a
+delayed push, a retry waiting for its backoff — waits on
+`nestrs:queue:<queue>:scheduled`, and reaches the list the trigger reads only
+when something scans the schedule: every running worker does, once a second, and
+so does the producer that filed it, while it has delayed jobs of its own ahead.
+With no worker running, a delay pushed by a producer that exits first, and every
+retry, waits where no trigger looks — and so does a job a crashed replica held,
+until a replica starts. Keep `minReplicaCount: 1` unless every delayed push comes
+from a producer that outlives its delays and a retry can wait for the next job to
+wake the deployment.
+</Aside>
+
+## What fails if you get it wrong
+
+- `concurrency = 0` does not compile: `` `concurrency` takes a whole number of at
+  least 1 — how many jobs of this method one worker replica runs at once; 0 would
+  never run a job ``.
+- `throttle(limit = 10)` with no window does not compile:
+  `` #[process] `throttle` needs both `limit` and `window` — write `throttle(limit = 10, window = "1m")` ``.
+- `window = "60"` does not compile: the window takes a duration literal, and a
+  number with no suffix is not one.
+- A trigger naming a list the worker does not fill reads zero forever and holds
+  the deployment at `minReplicaCount`, saying nothing. The 6.x layout's list is
+  one such name — see [Upgrading queues from 6.x](/queue/upgrading/).
+
+## Reference
+
+- `crates/nest-rs-queue/src/process_options.rs` — `ProcessOptions` and
+  `Throttle`.
+- `crates/nest-rs-redis/src/worker/consumer.rs` — each method's permits, the
+  fetch of one job per poll, and each replica's id.
+- `crates/nest-rs-redis/src/worker/lease.rs` — the throttle's window, counted in
+  the step that admits an attempt.
+- `crates/nest-rs-redis/src/queue/promoter.rs` — the producer moving the delayed
+  jobs it filed onto the list KEDA reads.
+- `crates/nest-rs-redis/tests/e2e/worker/consumer.rs`, `worker/lease.rs` and
+  `queue/promoter.rs` — both bounds, and a delayed job reaching that list with no
+  worker running, against live Redis.
+
+## Going further
+
+- [Delivery on Redis](/queue/delivery/) — what a replica starting, dying or
+  stopping does to the jobs it holds.
+- [Retries and failure](/queue/retries-and-failure/) — the budget a retry spends.
+- [Repo and the executor](/database/repo-and-executor/) — what one transaction
+  per attempt holds.

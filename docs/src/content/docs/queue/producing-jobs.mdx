@@ -95,41 +95,49 @@ impl AudioService {
 
 `push` takes both the wire name and the accepted payload from the marker, so
 enqueueing onto the wrong queue, or with the wrong payload, does not compile,
-and answers with a receipt naming the queue and the job's id. `push` comes
-from `JobProducerExt`, a blanket extension
-over any producer — import the trait, and it is available on
-`Arc<dyn JobProducer>` and on a backend's concrete producer alike. It is `async`
-because Redis is async; that is the whole producer surface from a
-feature's point of view. Inside the call, `nest-rs-redis` wraps your
-payload in the wire envelope (`{ "v": 1, "payload": ... }`) so any other
-backend can drain it, and seals your trace context into it so the job
+and answers with a `PushReceipt` naming the queue and the job's id. `push`
+comes from `JobProducerExt`, a blanket extension over any producer — import the
+trait, and it is available on `Arc<dyn JobProducer>` and on a backend's
+concrete producer alike. `push_many` takes an iterator of jobs for one queue and
+answers one receipt per job, in order. Both are `async` because the backend is.
+
+The port does the rest before the backend sees the job: it checks the options,
+mints the job's id — a UUID v7, the `job_id` every attempt at the job reports —
+and seals your payload in the wire envelope with your trace context, so the job
 runs under the trace that enqueued it. You never see either — see
 [Correlation](/fundamentals/correlation/).
 
 <Aside type="caution">
-One escape hatch: `push_json(name, value)` takes a raw name and a JSON
+One escape hatch: `push_json(name, value, None)` takes a raw name and a JSON
 payload — correct **only** for a queue this binary does not declare, drained
 by another deployment whose `#[queue]` types it does not link. It opts out of
 both the name check and the payload check, so it is never the default path.
 </Aside>
 
-<Aside type="tip">
 `Arc<dyn nest_rs::queue::JobProducer>` is the form to inject: the feature names
 no backend, so it compiles unchanged against a different driver.
 `RedisQueueModule` binds **both** that name and the concrete
 `nest_rs::redis::RedisQueueProducer` over the one connection `RedisModule`
 opens, so the concrete type resolves too when a service genuinely needs it.
-Same publisher surface either way — `push` is on the extension trait, not
-the concrete type.
-</Aside>
+
+## When a push fails
+
+A push is refused before anything is filed when its options cannot be honoured
+— `QueueError::Unsupported` for an option the backend does not declare,
+`QueueError::InvalidUniqueKey` for a key no backend could file — or when a
+unique key is held. Past those, an error from the backend is a failure to
+*answer*: the job may be queued and its reply lost, so a caller that retries such
+a push can queue it twice unless it carries a unique key. On Redis each command
+a push sends waits at most `NESTRS_REDIS__CONNECT_TIMEOUT_SECS` for its answer,
+and one that times out fails the push. `push_many` is not atomic: when it fails,
+some of its jobs may already be queued.
 
 ## Holding a job back
 
 The third argument carries what a push declares besides its queue and its
-payload. A delay holds the job until a duration has passed, or until an
-instant:
+payload. A delay holds the job for a `Duration`, or until a `SystemTime`:
 
-```rust title="src/audio/service.rs"
+```rust title="crates/features/src/audio/service.rs"
 self.queue
     .push(
         AudioQueue,
@@ -152,19 +160,19 @@ job pushed under a key is pending or running, a second push under that key is
 refused with `QueueError::UniqueKeyHeld`, which names the job holding it, and
 files nothing:
 
-```rust title="src/billing/service.rs"
+```rust title="crates/features/src/audio/service.rs"
 let pushed = self
     .queue
     .push(
-        InvoiceQueue,
-        InvoiceCommand { customer },
-        PushOptions::default().with_unique(format!("invoice-{customer}")),
+        AudioQueue,
+        TranscodeCommand { file: file.clone() },
+        PushOptions::default().with_unique(format!("transcode-{file}")),
     )
     .await;
 match pushed {
     Ok(receipt) => Ok(Some(receipt)),
     Err(QueueError::UniqueKeyHeld { holder, .. }) => {
-        tracing::debug!(target: "features::billing", holder = %holder, "invoice already queued");
+        tracing::debug!(target: "features::audio", holder = %holder, "transcode already queued");
         Ok(None)
     }
     Err(error) => Err(error.into()),
@@ -174,7 +182,8 @@ match pushed {
 The key is held from the push until the job reaches its outcome — it
 completes, it dead-letters, or it is cancelled — and is free for the next push
 from then on. It is scoped to the queue: the same key on two queues names two
-jobs. `push_many` refuses a unique key, since a key names one job.
+jobs. A key is 1 to 256 bytes with no control character, and `push_many`
+refuses one, since a key names one job.
 
 **At most once over pushes, never a lock.** A unique key keeps a sequence of
 pushes from queueing one piece of work twice. It does not make two replicas or
@@ -191,7 +200,7 @@ holds out is on [Delivery on Redis](/queue/delivery/#what-a-job-keeps-and-for-ho
 The receipt a push returns names the job, and `cancel` takes it back while it
 waits:
 
-```rust title="src/audio/service.rs"
+```rust title="crates/features/src/audio/service.rs"
 let receipt = self.queue.push(AudioQueue, job, None).await?;
 
 if self.queue.cancel(&receipt).await? {
@@ -227,7 +236,7 @@ Declare the DTO with `#[input]`: a `Json<T>` handler argument requires
 derives it along with `Deserialize` and `Validate`. A hand-derived DTO needs
 `#[derive(schemars::JsonSchema)]` and the `schemars` dependency to go with it.
 
-```rust title="crates/features/src/audio/dtos/transcode_dto.rs (from the demo)"
+```rust title="crates/features/src/audio/dtos/transcode_dto.rs (from the demo, abridged)"
 use nest_rs::http::input;
 
 #[input]
@@ -236,18 +245,24 @@ pub struct TranscodeDto {
 }
 ```
 
-```rust title="crates/features/src/audio/http/controller.rs (from the demo)"
+```rust title="crates/features/src/audio/http/controller.rs (from the demo, abridged)"
 use std::sync::Arc;
 
-use nest_rs::http::{controller, routes};
-use nest_rs::http::poem::http::StatusCode;
-use nest_rs::http::poem::web::Json;
-use nest_rs::http::poem::{Error, Result};
+use nest_rs::http::{Header, PartExt, SseEvent, SseStream, Valid, controller, routes};
+use nest_rs::throttler::{Throttle, ThrottlerGuard};
+use poem::web::{Json, Query};
+use poem::{Body, Error, Response, Result};
 
-use crate::audio::{AudioService, TranscodeDto};
+use crate::audio::TranscodeGuard;
+use crate::audio::{
+    AudioService, DirectUploadDto, PresignedUrlDto, StreamResumeDto, TranscodeDto, TranscodeState,
+    UploadRequestDto,
+};
+use crate::authn::AuthnGuard;
+use crate::authz::AuthzGuard;
 
 #[controller(path = "/audio")]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(ThrottlerGuard, AuthnGuard, AuthzGuard, TranscodeGuard)]
 pub struct AudioController {
     #[inject]
     svc: Arc<AudioService>,
@@ -256,12 +271,10 @@ pub struct AudioController {
 #[routes]
 impl AudioController {
     #[post("/transcode")]
-    async fn transcode(&self, body: Json<TranscodeDto>) -> Result<Json<TranscodeDto>> {
-        let job = body.0;
-        self.svc
-            .enqueue_transcode(job.file.clone())
-            .await
-            .map_err(|e| Error::from_string(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR))?;
+    #[meta(Throttle::per_minute(20))]
+    async fn transcode(&self, body: Valid<Json<TranscodeDto>>) -> Result<Json<TranscodeDto>> {
+        let job = body.into_inner();
+        self.svc.enqueue_transcode(job.file.clone()).await?;
         Ok(Json(job))
     }
 }
@@ -283,7 +296,7 @@ Three reasons the `push` call hides behind a service:
    service holds it. Adding a second producer doesn't duplicate that.
 3. **The consumer can change without touching producers.** Renaming the
    queue, splitting `audio` into `audio.fast` and `audio.slow`, moving
-   from Redis to SQS — one file changes, every adapter follows. And
+   from Redis to another backend — one file changes, every adapter follows. And
    because the name lives on the `#[queue]` type, a rename that misses a
    call site is a compile error rather than a queue nobody drains.
 
@@ -298,14 +311,13 @@ push side. The service is the contract; transports adapt.
 - `crates/features/src/audio/http/controller.rs` — the HTTP producer.
 - `crates/features/src/audio/schedule/tasks.rs` — the scheduled
   producer (a timer that calls the same service).
-- `crates/nest-rs-queue/src/queue.rs` — the `Queue` trait the
-  `#[queue]` macro implements.
-- `crates/nest-rs-queue/src/producer.rs` — `JobProducer`,
-  `JobProducerExt::push`.
+- `crates/nest-rs-queue/src/producer.rs` — `JobProducer`, and
+  `JobProducerExt`'s `push`, `push_many`, `cancel` and `cancel_unique`.
 - `crates/nest-rs-queue/src/push_options.rs` — `PushOptions`, and the
   capability each option needs.
-- `crates/nest-rs-redis/src/queue/producer.rs` — the Redis `JobProducer`:
-  the unique claim, and the cancel.
+- `crates/nest-rs-queue/src/push_receipt.rs` — `PushReceipt`.
+- `crates/nest-rs-redis/tests/e2e/queue/producer.rs` — a delay, a unique key
+  held, raced and let go, and a cancel, against live Redis.
 
 ## Going further
 

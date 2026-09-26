@@ -1,21 +1,25 @@
 ---
 title: Delivery on Redis
-description: "What the Redis backend promises about each job — its keys, when it is delivered twice, shutdown, delays, what each capability keeps, and leaving 6.x."
+description: "What the Redis backend promises about each job — its keys, at least once and the guard, a crash, a timeout, shutdown, delays, and what each capability keeps."
 tier: all-options
 sidebar:
-  order: 5
+  order: 6
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 Everything a queue holds lives under one prefix, and a job apalis delivers
-twice still runs once. This page is the contract behind that sentence: the
-keys, the guard that keeps the promise, what shutdown and an upgrade from 6.x
-do to a job in flight, and what each capability the Redis backend declares
-keeps beside the queue.
+twice still runs once. This page is the contract behind that sentence: the keys,
+the guard that keeps the promise, what a crash, a Redis timeout and a shutdown
+do to a job in flight, and what each capability the backend declares keeps
+beside the queue.
 
-A queue named `audio`, after one job completed, one dead-lettered and one held
-back for an hour:
+The backend runs on [apalis-redis](https://docs.rs/apalis-redis/0.7.4) 0.7.4,
+which fetches, schedules and acknowledges jobs. What a job attempt *is* — its
+id, its retries, its trace — is the queue port's, and what this page adds to
+apalis lives in keys of the framework's own, reached through apalis's calls and
+never around them. A queue named `audio`, after one job completed, one
+dead-lettered and one held back for an hour:
 
 ```text frame="terminal"
 $ redis-cli --scan --pattern 'nestrs:queue:audio:*' | sort
@@ -33,17 +37,17 @@ nestrs:queue:audio:settled:01a0de7d-ceb4-75bd-aca2-7ebb6298cccd
 
 ## Where a queue lives
 
-The queue's namespace is `nestrs:queue:<queue>`. apalis, the library the Redis
-binding is built on, derives its own structures from it; the framework adds
-its own beside them, under words apalis does not use, each keyed by the job id
-a push returns.
+The queue's namespace is `nestrs:queue:<queue>`. apalis derives its own
+structures from it; the framework adds its own beside them, under words apalis
+does not use, each keyed by the job id a push returns.
 
 | Key | Holds | Written by |
 |---|---|---|
 | `nestrs:queue:<queue>:active` | Job ids waiting to be fetched — the list an autoscaler reads | apalis |
 | `nestrs:queue:<queue>:scheduled` | Jobs held back: a delayed push, a retry's next attempt, a job handed back | apalis |
 | `nestrs:queue:<queue>:inflight:<worker>` | Jobs one replica has fetched and not yet settled | apalis |
-| `nestrs:queue:<queue>:data`, `…:dead`, `…:done`, `…:failed` | Records, and the ids of finished, dead-lettered and rescheduled jobs | apalis |
+| `nestrs:queue:<queue>:consumers` | Each replica's in-flight set, scored by its last heartbeat | apalis |
+| `nestrs:queue:<queue>:data`, `…:dead`, `…:done`, `…:failed`, `…:signal` | Records, the ids of finished, dead-lettered and rescheduled jobs, and a wake-up list | apalis |
 | `nestrs:queue:<queue>:open:<job_id>` | That the job was pushed and has not reached its outcome, and the unique key it holds | the framework |
 | `nestrs:queue:<queue>:leases:<job_id>` | Which delivery runs the job right now | the framework |
 | `nestrs:queue:<queue>:settled:<job_id>` | That the job reached its outcome, and which one | the framework |
@@ -53,22 +57,21 @@ a push returns.
 | `nestrs:queue:<queue>:throttle` | How many attempts of the queue's method started in the current window | the framework |
 
 Nothing sits at the root of the keyspace, so a Redis user whose ACL reaches
-`~nestrs:*` and nothing else runs a queue end to end. The framework never reads
-or writes apalis's structures except through apalis's own calls.
+`~nestrs:*` and nothing else runs a queue end to end.
 
 ## At least once, and the guard
 
-Two replicas never fetch the same job from `active`: the fetch claims ids in
-one atomic script. A job can still reach a second delivery three ways — a
-replica **starting** sweeps every peer's in-flight jobs back onto the queue
-(apalis sweeps with a cutoff of *now*, which matches the living too), a
-replica whose heartbeat falls behind the orphan threshold has its jobs swept by
-a peer, and an acknowledgement can be lost on its way to Redis.
+Delivery is **at least once**. Two replicas never fetch the same job from
+`active`: the fetch claims ids in one atomic script. A job can still reach a
+second delivery three ways — a replica **starting** sweeps every peer's in-flight
+jobs back onto the queue (apalis sweeps with a cutoff of *now*, which matches the
+living too), a replica whose heartbeat falls behind the orphan threshold has its
+jobs swept by a peer, and an acknowledgement can be lost on its way to Redis.
 
 So each delivery takes the job's **lease** before the attempt runs, and renews
-it while the attempt runs. When the job reaches its outcome, the delivery
-writes the **settled** mark and drops the lease. A second delivery then does
-one of two things, and neither runs the job:
+it every third of its length while the attempt runs. When the job reaches its
+outcome, the delivery writes the **settled** mark and drops the lease, in one
+script. A second delivery then does one of two things, and neither runs the job:
 
 - the lease is held elsewhere — the job goes back on the schedule until the
   lease would lapse, and is never acknowledged, so the guard can delay a job
@@ -98,7 +101,37 @@ once it has missed ten proofs in a row.
 A replica that crashes mid-attempt leaves its job in flight. The next replica
 to start sweeps it back onto the queue at once and runs it once the dead
 replica's lease lapses; with none starting, a running peer sweeps it after the
-orphan threshold.
+orphan threshold. The attempt that died is not counted: the job runs again at
+the attempt it was at, from the start of its body, so a crash between a
+database commit and the settled mark writes twice — the transaction bounds a
+retry, never a redelivery.
+
+## When Redis is slow or gone
+
+Every command a worker sends — apalis's and the guard's alike — answers or fails
+within `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so an
+outage fails calls rather than holding them. A timeout says the answer did not
+arrive in time, never that the command did not run. What a delivery does when a
+call fails:
+
+| The call that failed | What happens to the job | The line, on `nest_rs::queue` |
+|---|---|---|
+| taking the lease | handed back for a second later; never run unguarded | `job lease not asked for; …`, `warn` |
+| handing a job back | stays in flight, and is delivered again from its stored attempt once swept | `job not handed back; …`, `error` |
+| renewing the lease | the attempt runs on, and the renewal is tried again | `job lease not renewed; retrying`, `warn` |
+| writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
+| the acknowledgement | delivered again once swept, and answered by its settled mark without running | `job acknowledgement lost; …`, `error` |
+
+A fetch, a heartbeat or a scan of the schedule that fails is retried by apalis
+on its next tick, and said at `warn`. A heartbeat that keeps failing past the
+orphan threshold lets a peer take the replica's jobs — the case the lease
+exists for.
+
+**An attempt has no timeout of its own.** A handler that never returns holds its
+permit and keeps its lease renewed, so its job is neither lost nor run elsewhere,
+and its method runs one attempt fewer at a time until a shutdown interrupts it.
+Bound a slow call inside the handler, with `tokio::time::timeout`, and return
+the `Err` the retry budget decides on.
 
 ## Shutdown
 
@@ -106,15 +139,17 @@ A shutdown stops fetching at once. Running attempts get the shutdown window,
 less a reserve of five seconds (half the window when that is shorter), to
 finish where they run. What still runs when the window closes is interrupted
 and its job handed back to the queue inside the reserve, so the orchestrator's
-`SIGKILL` never lands on a job the worker still holds. A retry's next attempt
-is already on the schedule, so it holds nothing up.
+`SIGKILL` never lands on a job the worker still holds — give the pod a grace
+period above the window. A retry's next attempt is already on the schedule, so
+it holds nothing up. An attempt that outlives even the reserve is said at
+`error` and left in flight, and runs again elsewhere once its lease lapses.
 
 ## Delayed jobs
 
 The Redis backend declares `Capability::DelayedPush`, so a push can hold a job
 back:
 
-```rust title="src/audio/service.rs"
+```rust title="crates/features/src/audio/service.rs"
 self.queue
     .push(
         AudioQueue,
@@ -124,20 +159,15 @@ self.queue
     .await?;
 ```
 
-The job waits on `scheduled`, due on the second its delay ends. Every worker
-moves due jobs onto `active` once a second, and so does the producer that
-filed them, for as long as it has delayed jobs of its own still ahead — so a
-due job appears on the list an autoscaler reads even while no worker runs. A
-retry is the same filing: the port's backoff decides when, and the next
-attempt waits on the schedule rather than in a worker.
-
-<Aside type="note">
-A producer that exits before its delayed jobs are due stops moving them. If
-nothing else runs — no worker, no producer pushing delayed jobs to that queue —
-they wait on `scheduled`, where a KEDA trigger on `active` cannot see them.
-Keep `minReplicaCount: 1` on a queue that takes delayed pushes from short-lived
-producers.
-</Aside>
+The job waits on `scheduled`, due on the second its delay ends — apalis
+schedules on whole seconds, and the backend rounds up, so a job never runs
+before its instant. Every worker moves due jobs onto `active` once a second, and
+so does the producer that filed them, for as long as it has delayed jobs of its
+own still ahead — so a due job reaches the list an autoscaler reads even while
+no worker runs. A retry is the same filing: the port's backoff decides when, and
+the next attempt waits on the schedule rather than in a worker. What that means
+for a deployment scaled to zero is on
+[Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).
 
 ## Unique keys
 
@@ -169,17 +199,11 @@ the tombstone acknowledges it without running, and files
 
 A method's throttle is counted in `…:throttle` by the step that admits an
 attempt, in the same script as the lease, so every replica counts against one
-number and no two admissions race. The window is fixed and opens with its
-first start: the key expires `window` later, and the count starts again with
-the next start after that — the scheme the HTTP rate limiter uses. Starts on
-either side of a window's end can therefore reach twice the limit within a
-short span; nothing ever exceeds it within one window.
-
-An attempt over the limit is handed back to the schedule for when the window
-ends, as it was fetched: it keeps its attempt number, costs the retry budget
-nothing, and files `job deferred to its throttle's next window` as detail.
-apalis schedules on whole seconds, so a window shorter than a second still
-defers by one.
+number and no two admissions race. An attempt over the limit is handed back to
+the schedule for when the window ends, as it was fetched, and files
+`job deferred to its throttle's next window` as detail. The window's shape, and
+what it allows at its edges, is on
+[Concurrency and scaling](/queue/scaling/#throttling-starts).
 
 ## What a job keeps, and for how long
 
@@ -197,23 +221,6 @@ still waiting a week past its due time has been forgotten — its key is free,
 its checkpoint gone, and a cancel's promise no longer outlives the tombstone
 that kept it.
 
-## Upgrading from 6.x
-
-6.x handed apalis the queue's bare name, so its jobs sit at the root of the
-keyspace. A 7.0 worker serving a queue that still holds jobs there refuses to
-start and names them; a 7.0 producer pushing to it warns once. Two ways out:
-
-- **Drain.** Keep a 6.x worker running until the old keys are gone, then
-  start the 7.0 workers. Producers can move first: they push under the new
-  namespace, which the 6.x worker does not read.
-- **Move.** With every worker of the queue stopped, and before anything is
-  pushed under the new namespace, rename each of the queue's 6.x keys to the
-  same structure under it — `RENAME <queue>:<structure> nestrs:queue:<queue>:<structure>`.
-  The in-flight set, named for the queue twice, goes to
-  `nestrs:queue:<queue>:inflight:6x`; then
-  `ZADD nestrs:queue:<queue>:consumers 0 nestrs:queue:<queue>:inflight:6x`
-  lets the first worker to start put its jobs back on the queue.
-
 ## Configuration
 
 `RedisWorkerModule::for_root(RedisWorkerConfig { .. })`, or the environment:
@@ -227,14 +234,15 @@ start and names them; a 7.0 producer pushing to it warns once. Two ways out:
 ## Limits
 
 - **Redis Cluster is unsupported.** apalis 0.7's scripts touch several of a
-  queue's keys in one call without a shared hash tag, which a cluster refuses.
-  A primary with replicas, or a managed single-shard Redis, is the shape.
-- **Redis 6.2 or later.** The e2e suite runs on 6.2, 7.0 and 8.6. Before 7.0,
-  a worker a starting peer swept fetches nothing until its next heartbeat:
-  apalis registers it again on an error text only Redis 7 writes.
-- **One fetch per poll.** A method fetches one job every 100 ms per replica,
-  so jobs shorter than that run at about ten a second per replica whatever
-  their `concurrency`. More replicas is the lever.
+  queue's keys in one call — some of them read out of another key rather than
+  declared — without a shared hash tag, which a cluster refuses. A primary with
+  replicas, or a managed single-shard Redis, is the shape.
+- **Redis 6.2 or later.** 7.0's Redis suite passed on 6.2.20, 7.0.15 and 8.6.3,
+  and 6.2 is the oldest it ran on. Before 7.0, a worker a starting peer swept
+  fetches nothing until its next heartbeat: apalis registers it again on an
+  error text only Redis 7 writes.
+- **One fetch per poll.** A method fetches one job every 100 ms per replica —
+  see [Concurrency and scaling](/queue/scaling/#one-fetch-per-poll).
 - **`failed` only grows.** apalis records there every job it reschedules — a
   retry, a hand-back — and nothing trims it.
 - **A settle Redis refuses closes nothing.** The step that marks a job settled
@@ -249,14 +257,15 @@ start and names them; a 7.0 producer pushing to it warns once. Two ways out:
 - `crates/nest-rs-redis/src/queue/producer.rs` — the unique claim, and the cancel.
 - `crates/nest-rs-redis/src/worker/lease.rs` — the lease, the settled mark, the
   tombstone a delivery meets, and the throttle.
-- `crates/nest-rs-redis/src/worker/checkpoint.rs` — a job's checkpoint.
 - `crates/nest-rs-redis/src/worker/delivery.rs` — one delivery, and every hand-back.
-- `crates/nest-rs-redis/tests/e2e/worker/lease.rs` — each redelivery, run twice and
-  counted once; a cancel met by a delivery; a unique key let go; a throttle
-  across replicas.
+- `crates/nest-rs-redis/src/worker/consumer.rs` — each replica's id, what apalis
+  reports, and the drain.
+- `crates/nest-rs-redis/tests/e2e/worker/` — each redelivery, run twice and
+  counted once; a connection dropped under a running attempt; a cancel met by a
+  delivery; a unique key let go; a throttle across replicas; the drain.
 
 ## Going further
 
 - [Retries and failure](/queue/retries-and-failure/) — the budget, the backoff and the dead set.
-- [Observability](/queue/observability/) — the lines a delivery files when it hands a job back.
-- [Wiring](/queue/wiring/) — the modules that open the connection and start the worker.
+- [Upgrading queues from 6.x](/queue/upgrading/) — moving jobs out of the layout 6.x left at the root.
+- [Observability](/queue/observability/) — every line a delivery files.

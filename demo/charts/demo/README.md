@@ -83,6 +83,11 @@ asks for a replica per 20 waiting because each one runs four transcodes at once.
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
 its own, and two of them would scale the same Deployment against each other.
 
+Scaling the worker does not multiply its schedule. The one job it runs on a
+clock, the hourly notifications purge, is declared `replicas = "one"`: each
+occurrence is claimed in the Redis the queues already use and fires on one
+replica, whatever `maxReplicaCount` allows.
+
 ### Why `minReplicaCount` is 1
 
 Scale-to-zero is one value away and deliberately not the default:

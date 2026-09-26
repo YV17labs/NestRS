@@ -6,19 +6,14 @@ publish = false
 
 [dependencies]
 nest-rs.workspace = true
-# `http` feature: the worker mounts an HTTP transport (health, port 3005), so
-# the per-request OTel interceptor must exist in a standalone build too — not
-# only when feature-unified with api/live in a workspace build.
 features.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
 nest-rs.workspace = true
-# The e2e test defines its own `#[processor]`/`#[queue]` types and drives
-# `JobProducerExt::push_to` — the binary itself only consumes the queue via
-# `nest_rs_redis::RedisWorkerModule`, so the abstractions crate is test-only here.
-# `#[processor]` in the e2e test emits absolute `::nest_rs_worker::*` paths.
+# The e2e test declares a probe `#[queue]` of its own; `serde` derives the
+# payload it pushes onto it.
 serde.workspace = true
 
 [lints]

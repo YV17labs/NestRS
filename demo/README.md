@@ -59,11 +59,12 @@ other. Full map: [nestrs.dev/publish](https://nestrs.dev/publish/).
 | `api` | REST + GraphQL + OpenAPI, persisted & authorized | 3002 |
 | `assistant` | Model Context Protocol server | 3003 |
 | `live` | Real-time WebSocket gateway | 3004 |
-| `worker` | Background jobs & scheduling (headless) | — |
+| `worker` | Background jobs & scheduling (health only over HTTP) | 3005 |
 
-`api` and `auth` need Postgres; `worker` needs Redis — run `nestrs run db up`
-once first (or `nestrs run db reset` to also load demo users). `assistant` and
-`live` need neither.
+Every app opens Postgres — run `nestrs run db up` once first (or
+`nestrs run db reset` to also load demo users). `api`, `assistant` and `worker`
+also open Redis, and their audio routes and jobs read and write the object
+store.
 
 The richest reference is `api`. Read it before inventing a second pattern —
 copy it to start a new feature.

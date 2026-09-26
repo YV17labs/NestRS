@@ -3230,6 +3230,7 @@ dependencies = [
  "nest-rs-schedule-macros",
  "nest-rs-testing",
  "nest-rs-worker",
+ "thiserror 2.0.20",
  "tokio",
  "tokio-util",
  "tracing",

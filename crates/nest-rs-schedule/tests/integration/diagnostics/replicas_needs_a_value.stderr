@@ -1,0 +1,5 @@
+error: #[every] `replicas` needs a value — write `replicas = ...`
+  --> tests/integration/diagnostics/replicas_needs_a_value.rs:12:20
+   |
+12 |     #[every("30s", replicas)]
+   |                    ^^^^^^^^

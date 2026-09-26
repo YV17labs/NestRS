@@ -23,6 +23,8 @@ tokio-util.workspace = true
 # silently kills its schedule (mirrors the queue's CatchPanicLayer).
 futures-util.workspace = true
 tracing.workspace = true
+# `OccurrenceLockError`, the opaque failure a lock backend reports.
+thiserror.workspace = true
 croner.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true

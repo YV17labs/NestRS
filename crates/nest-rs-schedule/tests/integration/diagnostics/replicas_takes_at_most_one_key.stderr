@@ -1,0 +1,5 @@
+error: #[cron] takes at most one `replicas`
+  --> tests/integration/diagnostics/replicas_takes_at_most_one_key.rs:13:45
+   |
+13 |     #[cron("0 0 * * * *", replicas = "one", replicas = "each")]
+   |                                             ^^^^^^^^

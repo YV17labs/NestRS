@@ -25,6 +25,13 @@ mod scheduled;
 /// `anyhow::Result<()>`, whose `Err` fails the occurrence. It may be `async` or
 /// not; only an `async` one is awaited.
 ///
+/// `#[every]` and `#[cron]` take `replicas = "one"` to fire each occurrence on
+/// one replica of the app rather than on every one: the replica that claims it
+/// through the occurrence lock the app imports. An `#[every]` declared so ticks
+/// on multiples of its period since the Unix epoch, so replicas booted at
+/// different times share their instants. `replicas = "each"` is the default,
+/// and `#[after]` refuses the key — each replica's boot is its own event.
+///
 /// A `cron` string literal and a `tz` name are validated at compile time; a
 /// preset path is validated when `Scheduler` configures, naming the offending
 /// job.
@@ -49,6 +56,7 @@ mod scheduled;
 ///         provider_type_id: || TypeId::of::<ReportTasks>(),
 ///         trigger: ::nest_rs_schedule::Trigger::Cron { expr, tz }, // or Interval / Timeout
 ///         transaction: ::nest_rs_schedule::nest_rs_worker::JobTransaction::PerAttempt,
+///         replicas: ::nest_rs_schedule::Replicas::Each,
 ///         run: |c| Box::pin(async move { /* resolve + call */ }),
 ///     }
 /// }

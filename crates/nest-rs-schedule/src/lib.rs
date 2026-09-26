@@ -9,6 +9,11 @@
 //! offending job. `#[cron]`'s `tz` is in the first group with its expression:
 //! it is always a literal over the closed IANA name set, so both keys of that
 //! one attribute are refused at the line that wrote them.
+//!
+//! Every replica of an app fires every occurrence unless a job says otherwise:
+//! `replicas = "one"` on `#[every]` or `#[cron]` fires each occurrence on the one
+//! replica whose claim on it succeeds, through the [`OccurrenceLock`] a backend
+//! binds — at most once, never at least once.
 
 // Opts OUT of the workspace `unsafe_code = "forbid"` lint (no `[lints]
 // workspace = true` in Cargo.toml): `tests/integration/module.rs` needs
@@ -28,14 +33,20 @@
 /// `nest-rs-core` holding a name for a concern it does not know exists.
 pub const TARGET: &str = "nest_rs::schedule";
 
+mod error;
 mod inventory;
 mod module;
+mod occurrence;
+mod replicas;
 mod scheduler;
 mod trigger;
 pub mod unit;
 
+pub use error::OccurrenceLockError;
 pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
+pub use occurrence::{BACKEND_REMEDY, OccurrenceLock};
+pub use replicas::Replicas;
 // Re-exported so `#[every]` / `#[cron]` / `#[after]` emit their
 // `JobTransaction` through this crate's own root, the way every other path the
 // decorators name is routed.

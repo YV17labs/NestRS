@@ -21,7 +21,7 @@ use std::pin::Pin;
 use nest_rs_core::Container;
 use nest_rs_worker::JobTransaction;
 
-use crate::Trigger;
+use crate::{Replicas, Trigger};
 
 /// The async closure a [`ScheduledMethod`] / [`CronJobMeta`] dispatches.
 /// Resolves the provider from the assembled container and runs the method.
@@ -50,6 +50,9 @@ pub struct CronJobMeta {
     /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one
     /// transaction per attempt.
     pub transaction: JobTransaction,
+    /// How many replicas fire each occurrence — from the `replicas` key on its
+    /// `#[every]` / `#[cron]`, defaulting to every replica.
+    pub replicas: Replicas,
 }
 
 /// Link-time inventory entry submitted by `#[scheduled]` per `#[every]` /
@@ -78,6 +81,9 @@ pub struct ScheduledMethod {
     /// key on its `#[every]` / `#[cron]` / `#[after]`, defaulting to one
     /// transaction per attempt.
     pub transaction: JobTransaction,
+    /// How many replicas fire each occurrence — from the `replicas` key on its
+    /// `#[every]` / `#[cron]`, defaulting to every replica.
+    pub replicas: Replicas,
 }
 
 ::nest_rs_core::inventory::collect!(ScheduledMethod);

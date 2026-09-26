@@ -73,12 +73,54 @@ fn collect(dir: &Path, keep: &dyn Fn(&Path) -> bool, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The path as the repo spells it, for a message a reader can paste into `rg`.
+/// The part of `path` below `base` — the only part of a path a verdict may read.
+///
+/// **Never the absolute path.** A join that reads `path.components()` reads
+/// where the clone happens to sit as well as where the file sits in the repo,
+/// and the two are indistinguishable once they are one list: cloned under
+/// `~/src/`, every folder in the tree reads as being inside a `src/` tree, and
+/// cloned under a folder named like an edge (`…/schedule/nestrs`), every file
+/// with no edge folder of its own reads as that edge's adapter. Both shipped —
+/// the edge-folder join answered a different question on a machine whose
+/// checkout path held one of seven words. `base` is the repository root for a
+/// repo-relative reading, or a crate's `src/` for a module-relative one; either
+/// way the answer depends on the tree and nothing above it.
+///
+/// **Panics when `path` is not below `base`**, and that is the point rather than
+/// a shortcut: every population a join reads is walked from the root, so a path
+/// outside it is a join reading the wrong tree. The fallback `relative` used to
+/// take — the absolute path, whole — is exactly the reading this function exists
+/// to refuse, so it is not offered as a quiet alternative.
+pub fn below<'p>(path: &'p Path, base: &Path) -> &'p Path {
+    path.strip_prefix(base).unwrap_or_else(|_| {
+        panic!(
+            "{} is not below {} — a join read a path from outside the tree it walks",
+            path.display(),
+            base.display(),
+        )
+    })
+}
+
+/// The folders and file name of `path` below `base`, in order — what a join
+/// matches a layout word against (`src`, an edge, `diagnostics`).
+///
+/// The one door to a path's components in this crate: [`below`] first, always.
+/// A component that is not UTF-8 is kept in its lossy form rather than dropped,
+/// so every index still names the level it did — and a lossy name can never
+/// equal a layout word, which are all ASCII, so the verdict is the one the real
+/// name would get.
+pub fn segments<'p>(path: &'p Path, base: &Path) -> Vec<std::borrow::Cow<'p, str>> {
+    below(path, base)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect()
+}
+
+/// The path as the repo spells it, for a message a reader can paste into `rg` —
+/// and for a join that classifies on the spelling. Read through [`below`], so a
+/// message and a verdict can never be taken from two different readings.
 pub fn relative(path: &Path, root: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    below(path, root).display().to_string()
 }
 
 /// A file parsed as Rust, or `None` when it is not (a fixture that must not
@@ -1107,5 +1149,87 @@ impl<'ast> Visit<'ast> for UnderCfgTest {
             return;
         }
         syn::visit::visit_item_fn(self, node);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proc_macro2::Delimiter;
+
+    use super::*;
+
+    /// A root spelling every word a join classifies a path on — `src`, an edge,
+    /// a suite, a fixture folder, a template folder.
+    const HOSTILE_ROOT: &str = "/home/dev/src/tests/diagnostics/templates/schedule/nestrs";
+
+    #[test]
+    fn a_path_reads_the_same_below_any_root() {
+        let rel = "crates/nest-rs-probe/src/http/guard.rs";
+        for root in ["/repo", HOSTILE_ROOT] {
+            let root = Path::new(root);
+            let path = root.join(rel);
+            assert_eq!(
+                segments(&path, root),
+                ["crates", "nest-rs-probe", "src", "http", "guard.rs"],
+            );
+            assert_eq!(relative(&path, root), rel);
+        }
+    }
+
+    #[test]
+    fn a_path_reads_below_a_crates_src_as_well() {
+        let src = Path::new(HOSTILE_ROOT).join("crates/nest-rs-redis/src");
+        assert_eq!(
+            segments(&src.join("queue/module.rs"), &src),
+            ["queue", "module.rs"],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is not below")]
+    fn a_path_outside_the_tree_is_refused_rather_than_read_whole() {
+        let _ = segments(
+            Path::new("/elsewhere/src/http/guard.rs"),
+            Path::new("/repo"),
+        );
+    }
+
+    /// The one door stays the only one: no join calls `.components()` or
+    /// `.ancestors()` itself, which is the spelling four joins read the absolute
+    /// path with before [`segments`] existed.
+    ///
+    /// What this cannot see, stated rather than implied: `Path::iter()` walks
+    /// the same components under a name every iterator shares, and a whole path
+    /// read as a string (`to_string_lossy()`, `display()`) is also how a message
+    /// prints one. Both stay a reviewer's — the fifth instance, in `shapes`, was
+    /// the string form.
+    #[test]
+    fn no_join_reads_a_paths_components_but_through_segments() {
+        let joins = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/integration");
+        let files = rust_files(&joins);
+        crate::baseline::floor(files.len(), 10, "join sources");
+        let mut around = Vec::new();
+        for file in &files {
+            let text = read(file).expect("a join's source is readable");
+            let tokens: TokenStream = text.parse().expect("a join's source lexes");
+            let mut flat = Vec::new();
+            flatten(tokens, &mut flat);
+            for window in flat.windows(3) {
+                if let (TokenTree::Punct(dot), TokenTree::Ident(method), TokenTree::Group(args)) =
+                    (&window[0], &window[1], &window[2])
+                    && dot.as_char() == '.'
+                    && (method == "components" || method == "ancestors")
+                    && args.delimiter() == Delimiter::Parenthesis
+                {
+                    around.push(format!("{} calls `.{method}()`", relative(file, &joins)));
+                }
+            }
+        }
+        assert!(
+            around.is_empty(),
+            "a join reads a path's components through `sources::segments`, below \
+             the root it walked — read off the absolute path, the answer depends \
+             on where the checkout sits: {around:#?}",
+        );
     }
 }

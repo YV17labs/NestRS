@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use nest_rs_conformance::baseline;
-use nest_rs_conformance::sources::{crate_dirs, parsed, repo_root};
+use nest_rs_conformance::sources::{crate_dirs, parsed, relative, repo_root, rust_files, segments};
 use syn::Item;
 
 /// One per gated join in this module. Named rather than written at the call
@@ -167,28 +167,23 @@ fn every_module_type_is_named_for_its_path() {
         };
 
         let src = dir.join("src");
-        for path in nest_rs_conformance::sources::rust_files(&src) {
+        for path in rust_files(&src) {
             if path.file_name().is_some_and(|n| n != "module.rs") {
                 continue;
             }
             let Some(ast) = parsed(&path) else { continue };
-            let folders: String = path
-                .strip_prefix(&src)
-                .ok()
-                .and_then(|rel| rel.parent())
-                .map(|p| {
-                    p.components()
-                        .filter_map(|c| c.as_os_str().to_str())
-                        .map(|seg| {
-                            SPELLED
-                                .iter()
-                                .find(|(k, _)| *k == seg)
-                                .map(|(_, v)| (*v).to_owned())
-                                .unwrap_or_else(|| pascal(seg))
-                        })
-                        .collect()
+            let parts = segments(&path, &src);
+            let folders: String = parts[..parts.len() - 1]
+                .iter()
+                .map(|seg| &**seg)
+                .map(|seg| {
+                    SPELLED
+                        .iter()
+                        .find(|(k, _)| *k == seg)
+                        .map(|(_, v)| (*v).to_owned())
+                        .unwrap_or_else(|| pascal(seg))
                 })
-                .unwrap_or_default();
+                .collect();
             // A framework crate with no folder is its own stem; a product
             // module with no folder would have none, and there are none.
             let stem = if base.is_empty() && folders.is_empty() {
@@ -202,7 +197,7 @@ fn every_module_type_is_named_for_its_path() {
                 if !name.starts_with(&stem) {
                     holes.insert(format!(
                         "{name}  ({})  — expected `{stem}…`",
-                        nest_rs_conformance::sources::relative(&path, &root),
+                        relative(&path, &root),
                     ));
                 }
             }
@@ -232,6 +227,19 @@ fn every_module_type_is_named_for_its_path() {
 /// and the thing it adapts never.
 #[test]
 fn every_edge_adapter_is_named_for_the_module_it_adapts() {
+    let (scanned, offenders) = misnamed_adapters(&repo_root());
+    baseline::floor(scanned, floors::EDGE_ADAPTERS, "edge adapters");
+    assert!(
+        offenders.is_empty(),
+        "an adapter is named for the module it adapts, so a reader finds it from \
+         the feature they are working on rather than from the transport: \
+         {offenders:#?}",
+    );
+}
+
+/// The edge adapters under `root` whose type does not open with the module they
+/// adapt, and how many adapter types were read.
+fn misnamed_adapters(root: &Path) -> (usize, Vec<String>) {
     const ROLES: [(&str, &str); 5] = [
         ("controller.rs", "Controller"),
         ("resolver.rs", "Resolver"),
@@ -239,33 +247,28 @@ fn every_edge_adapter_is_named_for_the_module_it_adapts() {
         ("processor.rs", "Processor"),
         ("listener.rs", "Listener"),
     ];
-    let root = repo_root();
     let mut offenders = Vec::new();
     let mut scanned = 0usize;
 
     for area in ["crates", "demo"] {
-        for path in nest_rs_conformance::sources::rust_files(&root.join(area)) {
-            let path = path.as_path();
+        for path in rust_files(&root.join(area)) {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
             let Some((_, role)) = ROLES.iter().find(|(f, _)| *f == name) else {
                 continue;
             };
-            let segments: Vec<&str> = path
-                .components()
-                .filter_map(|c| c.as_os_str().to_str())
-                .collect();
+            let parts = segments(&path, root);
             // …/<module>/<edge>/<role>.rs — the edge folder is what marks this
             // file as an adapter rather than a module-root role file.
-            let Some(edge_at) = segments.len().checked_sub(2) else {
+            let Some(edge_at) = parts.len().checked_sub(2) else {
                 continue;
             };
-            if !crate::EDGES.contains(&segments[edge_at]) || edge_at == 0 {
+            if edge_at == 0 || !crate::EDGES.contains(&&*parts[edge_at]) {
                 continue;
             }
-            let module = folded(segments[edge_at - 1]);
-            let Some(ast) = parsed(path) else { continue };
+            let module = folded(&parts[edge_at - 1]);
+            let Some(ast) = parsed(&path) else { continue };
             for item in &ast.items {
                 let syn::Item::Struct(s) = item else { continue };
                 let ident = s.ident.to_string();
@@ -274,22 +277,12 @@ fn every_edge_adapter_is_named_for_the_module_it_adapts() {
                 }
                 scanned += 1;
                 if !folded(&ident).starts_with(&module) {
-                    offenders.push(format!(
-                        "{ident} in {}",
-                        nest_rs_conformance::sources::relative(path, &root),
-                    ));
+                    offenders.push(format!("{ident} in {}", relative(&path, root)));
                 }
             }
         }
     }
-
-    baseline::floor(scanned, floors::EDGE_ADAPTERS, "edge adapters");
-    assert!(
-        offenders.is_empty(),
-        "an adapter is named for the module it adapts, so a reader finds it from \
-         the feature they are working on rather than from the transport: \
-         {offenders:#?}",
-    );
+    (scanned, offenders)
 }
 
 /// `architecture.md`: "**No `*_module.rs`, ever.** One `#[module]` per file, one
@@ -302,13 +295,13 @@ fn no_file_is_named_for_a_module_instead_of_being_one() {
     let root = repo_root();
     let mut offenders = Vec::new();
     for area in ["crates", "demo"] {
-        for path in nest_rs_conformance::sources::rust_files(&root.join(area)) {
+        for path in rust_files(&root.join(area)) {
             if path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.ends_with("_module.rs"))
             {
-                offenders.push(nest_rs_conformance::sources::relative(&path, &root));
+                offenders.push(relative(&path, &root));
             }
         }
     }
@@ -329,6 +322,17 @@ fn no_file_is_named_for_a_module_instead_of_being_one() {
 /// quotation rather than an invention.
 #[test]
 fn no_module_invents_a_folder_to_group_things_that_go_together() {
+    let offenders = invented_folders(&repo_root());
+    assert!(
+        offenders.is_empty(),
+        "each of these is a bag, and every file in it is already named by a role \
+         table — split the module instead: {offenders:#?}",
+    );
+}
+
+/// The folders under a `src/` tree below `root` that carry one of the names the
+/// rule enumerates.
+fn invented_folders(root: &Path) -> Vec<String> {
     const INVENTED: [&str; 6] = [
         "contract",
         "types",
@@ -337,30 +341,24 @@ fn no_module_invents_a_folder_to_group_things_that_go_together() {
         "common",
         "interfaces",
     ];
-    let root = repo_root();
     let mut offenders = Vec::new();
 
     for area in ["crates", "demo"] {
         walk_dirs(&root.join(area), &mut |dir| {
             // Only folders *inside* a `src/` tree are module vocabulary; a
-            // crate may legitimately be called `nest-rs-core`.
-            if !dir.components().any(|c| c.as_os_str() == "src") {
+            // crate may legitimately be called `nest-rs-core`, and a suite may
+            // keep what its siblings share in a `common/`. Read below the root:
+            // a checkout under `~/src/` put every folder of the tree inside one.
+            let parts = segments(dir, root);
+            if !parts.iter().any(|part| part == "src") {
                 return;
             }
-            if dir
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| INVENTED.contains(&n))
-            {
-                offenders.push(nest_rs_conformance::sources::relative(dir, &root));
+            if parts.last().is_some_and(|name| INVENTED.contains(&&**name)) {
+                offenders.push(relative(dir, root));
             }
         });
     }
-    assert!(
-        offenders.is_empty(),
-        "each of these is a bag, and every file in it is already named by a role \
-         table — split the module instead: {offenders:#?}",
-    );
+    offenders
 }
 
 /// `architecture.md`: "**A module may not take a name from the structural
@@ -409,7 +407,7 @@ fn no_module_takes_a_name_from_the_structural_vocabulary() {
                 continue;
             };
             if reserved.contains(name.as_str()) {
-                offenders.push(nest_rs_conformance::sources::relative(&entry.path(), &root));
+                offenders.push(relative(&entry.path(), &root));
             }
         }
     }
@@ -546,38 +544,76 @@ fn walk_dirs(dir: &Path, visit: &mut impl FnMut(&Path)) {
 /// chain in band is the thing under test.
 #[test]
 fn no_file_under_an_edge_folder_answers_another_edge() {
-    let root = repo_root();
-    let (markers, entries) = edge_dispatch_vocabulary(&root);
+    let scan = edge_folders(&repo_root());
     baseline::floor(
-        markers.len(),
+        scan.markers,
         floors::DISPATCH_MARKERS,
         "edge dispatch markers",
     );
     baseline::floor(
-        entries.len(),
+        scan.entries,
         floors::DISPATCH_ENTRIES,
         "edge dispatch entries",
     );
+    baseline::floor(
+        scan.scanned,
+        floors::EDGE_FOLDER_FILES,
+        "files under an edge folder",
+    );
+    let offenders = scan.offenders;
+    assert!(
+        offenders.is_empty(),
+        "an edge folder says the file serves that edge; answering another from \
+         inside it makes the path a false statement, and the fix is the move — \
+         a type answering every edge belongs where every edge can reach it, not \
+         in the folder of whichever one asked first: {offenders:#?}",
+    );
+}
 
+/// What [`edge_folders`] read, and what it found.
+#[derive(Debug, PartialEq)]
+struct EdgeFolders {
+    /// Edge-marker traits in the dispatch vocabulary.
+    markers: usize,
+    /// Edge-entry methods in the dispatch vocabulary.
+    entries: usize,
+    /// Source files sitting under an edge folder.
+    scanned: usize,
+    /// Each file answering an edge other than its folder's, with what it answers.
+    offenders: Vec<String>,
+}
+
+/// The source files under `root` that sit in one edge's folder and answer
+/// another's dispatch surface.
+///
+/// **The edge folder is looked for between the file and its `src/`, and nowhere
+/// else.** Above `src/` a folder is a crate or a workspace, and a crate or an app
+/// named like an edge is not an adapter folder; above the root it is not the
+/// tree at all — read off the absolute path, a checkout under
+/// `…/schedule/nestrs` made every file with no edge folder of its own a
+/// `schedule` adapter, and `nest-rs-authz`'s one guard for all four transports
+/// was reported as a scheduler answering them.
+fn edge_folders(root: &Path) -> EdgeFolders {
+    let (markers, entries) = edge_dispatch_vocabulary(root);
     let mut offenders = Vec::new();
     let mut scanned = 0usize;
 
     for area in ["crates", "demo"] {
-        for path in nest_rs_conformance::sources::rust_files(&root.join(area)) {
-            let segments: Vec<&str> = path
-                .components()
-                .filter_map(|c| c.as_os_str().to_str())
-                .collect();
-            if !segments.contains(&"src") {
+        for path in rust_files(&root.join(area)) {
+            let parts = segments(&path, root);
+            let folders = &parts[..parts.len() - 1];
+            // Source only: a suite's files are out of population, for the reason
+            // the test above gives.
+            let Some(src_at) = folders.iter().position(|folder| folder == "src") else {
                 continue;
-            }
+            };
             // The deepest edge folder above the file — `audio/mcp/tool.rs` is
             // mcp's, and a nested one would be read the same way.
-            let Some(owner) = segments
+            let Some(owner) = folders[src_at + 1..]
                 .iter()
-                .take(segments.len() - 1)
                 .rev()
-                .find(|s| crate::EDGES.contains(s))
+                .map(|folder| &**folder)
+                .find(|folder| crate::EDGES.contains(folder))
             else {
                 continue;
             };
@@ -590,14 +626,14 @@ fn no_file_under_an_edge_folder_answers_another_edge() {
                 if let Some((trait_path, _)) = &block.trait_
                     && let Some(last) = trait_path.segments.last()
                     && let Some(edge) = markers.get(&last.ident.to_string())
-                    && edge != *owner
+                    && edge != owner
                 {
                     foreign.insert(format!("impl {} ({edge})", last.ident));
                 }
                 for sub in &block.items {
                     let syn::ImplItem::Fn(f) = sub else { continue };
                     if let Some(edge) = entries.get(&f.sig.ident.to_string())
-                        && edge != *owner
+                        && edge != owner
                     {
                         foreign.insert(format!("fn {}() ({edge})", f.sig.ident));
                     }
@@ -606,25 +642,19 @@ fn no_file_under_an_edge_folder_answers_another_edge() {
             if !foreign.is_empty() {
                 offenders.push(format!(
                     "{} sits under {owner}/ and answers {}",
-                    nest_rs_conformance::sources::relative(&path, &root),
+                    relative(&path, root),
                     foreign.into_iter().collect::<Vec<_>>().join(", "),
                 ));
             }
         }
     }
 
-    baseline::floor(
+    EdgeFolders {
+        markers: markers.len(),
+        entries: entries.len(),
         scanned,
-        floors::EDGE_FOLDER_FILES,
-        "files under an edge folder",
-    );
-    assert!(
-        offenders.is_empty(),
-        "an edge folder says the file serves that edge; answering another from \
-         inside it makes the path a false statement, and the fix is the move — \
-         a type answering every edge belongs where every edge can reach it, not \
-         in the folder of whichever one asked first: {offenders:#?}",
-    );
+        offenders,
+    }
 }
 
 /// The edge dispatch surface, read off the framework's own trait declarations.
@@ -632,7 +662,9 @@ fn no_file_under_an_edge_folder_answers_another_edge() {
 /// Returns `(markers, entries)` — trait idents that open with an edge word, and
 /// method idents declared inside a `pub trait` carrying one as a `_`-delimited
 /// segment. `__`-prefixed idents are macro seams rather than a surface a
-/// developer implements, so they are skipped.
+/// developer implements, so they are skipped. A trait a suite declares is a
+/// fixture rather than a surface, so only a `src/` tree below `root` is read —
+/// below it, because under `~/src/` every suite's traits read as source.
 fn edge_dispatch_vocabulary(
     root: &Path,
 ) -> (
@@ -642,12 +674,12 @@ fn edge_dispatch_vocabulary(
     let mut markers = std::collections::BTreeMap::new();
     let mut entries = std::collections::BTreeMap::new();
 
-    for path in nest_rs_conformance::sources::rust_files(&root.join("crates")) {
-        let segments: Vec<&str> = path
-            .components()
-            .filter_map(|c| c.as_os_str().to_str())
-            .collect();
-        if !segments.contains(&"src") {
+    for path in rust_files(&root.join("crates")) {
+        let parts = segments(&path, root);
+        if !parts[..parts.len() - 1]
+            .iter()
+            .any(|folder| folder == "src")
+        {
             continue;
         }
         let Some(ast) = parsed(&path) else { continue };
@@ -747,7 +779,7 @@ fn no_binding_folder_names_a_sibling_bindings_type() {
             continue;
         }
         let src = krate.join("src");
-        let bindings: BTreeSet<String> = nest_rs_conformance::sources::rust_files(&src)
+        let bindings: BTreeSet<String> = rust_files(&src)
             .iter()
             .filter(|p| p.file_name().is_some_and(|n| n == "module.rs"))
             .filter_map(|p| p.parent())
@@ -765,7 +797,7 @@ fn no_binding_folder_names_a_sibling_bindings_type() {
         let mut declared: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();
         let mut files = Vec::new();
-        for path in nest_rs_conformance::sources::rust_files(&src) {
+        for path in rust_files(&src) {
             let Some(folder) = binding_of(&path, &src, &bindings) else {
                 continue;
             };
@@ -795,7 +827,7 @@ fn no_binding_folder_names_a_sibling_bindings_type() {
                 if home != folder && named.contains(ident) {
                     holes.insert(format!(
                         "{ident} is {home}/'s, named by {}",
-                        nest_rs_conformance::sources::relative(path, &root),
+                        relative(path, &root),
                     ));
                 }
             }
@@ -878,7 +910,7 @@ fn every_error_type_lives_in_error_rs() {
     let mut holes = BTreeSet::new();
     let mut scanned = 0usize;
     for krate in crate_dirs() {
-        for path in nest_rs_conformance::sources::rust_files(&krate.join("src")) {
+        for path in rust_files(&krate.join("src")) {
             let Some(ast) = parsed(&path) else { continue };
             let mut found = Vec::new();
             walk(&ast.items, &mut found);
@@ -887,10 +919,7 @@ fn every_error_type_lives_in_error_rs() {
                 continue;
             }
             for ident in found {
-                holes.insert(format!(
-                    "{ident} is declared by {}",
-                    nest_rs_conformance::sources::relative(&path, &root),
-                ));
+                holes.insert(format!("{ident} is declared by {}", relative(&path, &root),));
             }
         }
     }
@@ -928,7 +957,7 @@ fn a_root_file_of_an_adapter_crate_serves_more_than_one_binding() {
             continue;
         }
         let src = krate.join("src");
-        let files = nest_rs_conformance::sources::rust_files(&src);
+        let files = rust_files(&src);
         let bindings: BTreeSet<String> = files
             .iter()
             .filter(|p| p.file_name().is_some_and(|n| n == "module.rs"))
@@ -991,7 +1020,7 @@ fn a_root_file_of_an_adapter_crate_serves_more_than_one_binding() {
             if reached_by.len() == 1 && !reached_at_root {
                 holes.insert(format!(
                     "{} is reached by {}/ alone",
-                    nest_rs_conformance::sources::relative(path, &root),
+                    relative(path, &root),
                     reached_by
                         .iter()
                         .next()
@@ -1029,7 +1058,7 @@ fn config_names_a_config() {
         if !krate.starts_with(&framework) {
             continue;
         }
-        for path in nest_rs_conformance::sources::rust_files(&krate.join("src")) {
+        for path in rust_files(&krate.join("src")) {
             let Some(ast) = parsed(&path) else { continue };
             let in_config_rs = path.file_name().is_some_and(|n| n == "config.rs");
             for item in &ast.items {
@@ -1046,7 +1075,7 @@ fn config_names_a_config() {
                 if !declared && !in_config_rs {
                     holes.insert(format!(
                         "{ident} is declared by {} and is no `#[config]`",
-                        nest_rs_conformance::sources::relative(&path, &root),
+                        relative(&path, &root),
                     ));
                 }
             }
@@ -1067,9 +1096,8 @@ fn config_names_a_config() {
 /// The binding folder a path sits under, or `None` when it sits at the crate
 /// root or under something that declares no module.
 fn binding_of(path: &Path, src: &Path, bindings: &BTreeSet<String>) -> Option<String> {
-    let rest = path.strip_prefix(src).ok()?;
-    let first = rest.components().next()?.as_os_str().to_str()?;
-    bindings.contains(first).then(|| first.to_owned())
+    let first = segments(path, src).into_iter().next()?;
+    bindings.contains(&*first).then(|| first.into_owned())
 }
 
 /// Every identifier the file's tokens carry. A token walk rather than a text
@@ -1163,19 +1191,10 @@ fn namespace_is_the_stem() {
         };
         let subject = subject_of(name);
         let src = krate.join("src");
-        for path in nest_rs_conformance::sources::rust_files(&src) {
+        for path in rust_files(&src) {
             let Some(ast) = parsed(&path) else { continue };
-            let folders: Vec<String> = path
-                .strip_prefix(&src)
-                .ok()
-                .and_then(|rel| rel.parent())
-                .map(|dir| {
-                    dir.components()
-                        .filter_map(|c| c.as_os_str().to_str())
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
+            let parts = segments(&path, &src);
+            let folders = &parts[..parts.len() - 1];
             for item in &ast.items {
                 let Item::Struct(s) = item else { continue };
                 let Some(namespace) = nest_rs_conformance::sources::config_namespace(&s.attrs)
@@ -1188,15 +1207,16 @@ fn namespace_is_the_stem() {
                     .chain(
                         folders
                             .iter()
-                            .filter(|f| !PLURAL_ROLE_FOLDERS.contains(&f.as_str()))
-                            .map(|f| folded(f)),
+                            .map(|f| &**f)
+                            .filter(|f| !PLURAL_ROLE_FOLDERS.contains(f))
+                            .map(folded),
                     )
                     .collect();
                 let declared: Vec<String> = namespace.split("__").map(folded).collect();
                 if declared != expected {
                     holes.insert(format!(
                         "`{namespace}` is declared by {} — its stem says `{}`",
-                        nest_rs_conformance::sources::relative(&path, &root),
+                        relative(&path, &root),
                         expected.join("__"),
                     ));
                 }
@@ -1213,5 +1233,158 @@ fn namespace_is_the_stem() {
         "namespaces that disagree with their stem",
         "a namespace chosen rather than read off the path — move the config to \
          where its word belongs, or take the word of where it sits",
+    );
+}
+
+/// **No verdict here depends on where the checkout sits.**
+///
+/// A join judges the tree, and the directories above the repository root are not
+/// part of it. Four of the joins above once read `path.components()` of the
+/// absolute path, so a clone under `~/src/` put every folder inside a `src/`
+/// tree, and a clone under a folder named like an edge put every file with no
+/// edge folder of its own in that edge's folder. Each now reads
+/// `sources::segments`, below the root.
+///
+/// Proved on the joins' own code rather than on the helper alone: one small tree
+/// is planted twice — under a plain root and under one spelling both words,
+/// `…/src/schedule/nestrs` — and every path-reading verdict of this module is
+/// taken over each, `nestrs lint`'s scan included since
+/// [`every_file_is_named_for_what_it_declares`] runs it over the same tree. Both
+/// must equal the verdict written below, so the test is not satisfied by two
+/// readings that are wrong the same way. Each decoy is a file the absolute
+/// reading judged differently; the comment beside it says how.
+#[test]
+fn no_verdict_depends_on_where_the_checkout_sits() {
+    const TREE: [(&str, &str); 12] = [
+        // The dispatch vocabulary: an HTTP marker and a WS one, both source.
+        (
+            "crates/nest-rs-probe/src/lib.rs",
+            "pub trait HttpProbe { fn check_http(&self); }\n\
+             pub trait WsProbe { fn check_ws_message(&self); }",
+        ),
+        // A guard answering both edges from where both can reach it. Under
+        // `…/schedule/…` it read as sitting in `schedule/`.
+        (
+            "crates/nest-rs-probe/src/guard.rs",
+            "pub struct ProbeGuard;\n\
+             impl HttpProbe for ProbeGuard { fn check_http(&self) {} }\n\
+             impl WsProbe for ProbeGuard { fn check_ws_message(&self) {} }",
+        ),
+        // The one real edge-folder offender: under `http/`, answering WS.
+        (
+            "crates/nest-rs-probe/src/http/guard.rs",
+            "pub struct HttpOnlyGuard;\n\
+             impl WsProbe for HttpOnlyGuard { fn check_ws_message(&self) {} }",
+        ),
+        // Answers a method only a suite declares. Under `~/src/` the suite's
+        // trait read as source, and this file as answering GraphQL.
+        (
+            "crates/nest-rs-probe/src/http/bridge.rs",
+            "pub struct Bridge;\nimpl Bridge { pub fn check_graphql(&self) {} }",
+        ),
+        (
+            "crates/nest-rs-probe/tests/integration/vocabulary.rs",
+            "pub trait GraphqlProbe { fn check_graphql(&self); }",
+        ),
+        // A suite's fixture under an edge folder, out of population — until
+        // `~/src/` put it in a `src/` tree.
+        (
+            "crates/nest-rs-probe/tests/integration/http/fixture.rs",
+            "pub struct FixtureGuard;\n\
+             impl WsProbe for FixtureGuard { fn check_ws_message(&self) {} }",
+        ),
+        // A suite's `common/`, which the invented-folder rule does not reach —
+        // until `~/src/` — and a module's `shared/`, which it does.
+        (
+            "crates/nest-rs-probe/tests/integration/common/mod.rs",
+            "pub fn fixture() {}",
+        ),
+        (
+            "crates/nest-rs-probe/src/shared/mod.rs",
+            "pub fn helper() {}",
+        ),
+        // An adapter named for its module, and one named for another.
+        (
+            "crates/nest-rs-probe/src/users/http/controller.rs",
+            "pub struct UsersController;",
+        ),
+        (
+            "crates/nest-rs-probe/src/posts/http/controller.rs",
+            "pub struct UsersController;",
+        ),
+        // A stem reaching nothing it declares, in source and in a suite:
+        // `nestrs lint` judges source only.
+        (
+            "crates/nest-rs-probe/src/principal.rs",
+            "pub struct DeskOperator;",
+        ),
+        (
+            "crates/nest-rs-probe/tests/integration/principal.rs",
+            "pub struct DeskOperator;",
+        ),
+    ];
+
+    #[derive(Debug, PartialEq)]
+    struct Verdicts {
+        adapters: (usize, Vec<String>),
+        invented: Vec<String>,
+        edges: EdgeFolders,
+        lint_checked: usize,
+        lint_findings: Vec<std::path::PathBuf>,
+    }
+    fn verdicts(root: &Path) -> Verdicts {
+        let lint = nest_rs_cli::lint::scan(root);
+        Verdicts {
+            adapters: misnamed_adapters(root),
+            invented: invented_folders(root),
+            edges: edge_folders(root),
+            lint_checked: lint.checked,
+            lint_findings: lint.findings.into_iter().map(|f| f.path).collect(),
+        }
+    }
+
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("naming-checkout-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let plain = scratch.join("plain/nestrs");
+    let hostile = scratch.join("src/schedule/nestrs");
+    for root in [&plain, &hostile] {
+        for (file, text) in TREE {
+            let path = root.join(file);
+            let folder = path.parent().expect("a planted file sits in a folder");
+            std::fs::create_dir_all(folder).expect("the scratch tree is writable");
+            std::fs::write(&path, text).expect("the scratch tree is writable");
+        }
+    }
+    let (from_plain, from_hostile) = (verdicts(&plain), verdicts(&hostile));
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    let expected = Verdicts {
+        adapters: (
+            2,
+            vec!["UsersController in crates/nest-rs-probe/src/posts/http/controller.rs".to_owned()],
+        ),
+        invented: vec!["crates/nest-rs-probe/src/shared".to_owned()],
+        edges: EdgeFolders {
+            markers: 2,
+            entries: 2,
+            scanned: 4,
+            offenders: vec![
+                "crates/nest-rs-probe/src/http/guard.rs sits under http/ and answers \
+                 fn check_ws_message() (ws), impl WsProbe (ws)"
+                    .to_owned(),
+            ],
+        },
+        lint_checked: 1,
+        lint_findings: vec!["crates/nest-rs-probe/src/principal.rs".into()],
+    };
+    assert_eq!(
+        from_plain, expected,
+        "the plain root read the planted tree wrong"
+    );
+    assert_eq!(
+        from_hostile, expected,
+        "a root spelling `src` and an edge changed a verdict — a join is reading \
+         above the repository root",
     );
 }

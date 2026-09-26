@@ -34,7 +34,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use nest_rs_conformance::baseline;
-use nest_rs_conformance::sources::{Pair, declared_pairs, repo_root, rust_files};
+use nest_rs_conformance::sources::{Pair, declared_pairs, repo_root, rust_files, segments};
 
 const BASELINE: &str = "shapes-baseline.txt";
 
@@ -61,7 +61,10 @@ fn fixtures() -> BTreeMap<String, String> {
     let root = repo_root();
     rust_files(&root.join("crates"))
         .into_iter()
-        .filter(|p| p.to_string_lossy().contains("/diagnostics/"))
+        // Below the root, never the absolute path: in a checkout under a folder
+        // named `diagnostics` every source file read as a fixture, and one
+        // sharing a real fixture's stem could take its entry in this map.
+        .filter(|p| segments(p, &root).iter().any(|s| s == "diagnostics"))
         .filter_map(|p| {
             let stem = p.file_stem().and_then(|s| s.to_str())?.to_owned();
             let snapshot = std::fs::read_to_string(p.with_extension("stderr")).unwrap_or_default();

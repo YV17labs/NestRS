@@ -16,6 +16,10 @@ use crate::Scheduler;
 /// `#[scheduled]` method on a provider reachable from the app's module
 /// tree fires under its declared trigger. Without this import,
 /// `#[scheduled]` methods compile in but never tick.
+///
+/// A job declaring `replicas = "one"` also needs one occurrence lock binding
+/// imported beside it — the boot names the job and
+/// [`BACKEND_REMEDY`](crate::BACKEND_REMEDY) when none is.
 pub struct ScheduleModule;
 
 impl Module for ScheduleModule {

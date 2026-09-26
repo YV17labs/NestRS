@@ -395,9 +395,10 @@ impl Transport for Scheduler {
                 ),
             }
         }
-        // Every loop ended, yet no shutdown was asked for: each ended in a panic,
-        // named above. A schedule left with nothing to run idles until shutdown, as
-        // one with no job does, rather than ending an app it is the only transport of.
+        // Every loop has ended. At shutdown this returns at once; otherwise each
+        // ended in a panic, named above, and a schedule left with nothing to run
+        // idles until shutdown, as one with no job does, rather than ending an app
+        // it is the only transport of.
         cancel.cancelled().await;
         Ok(())
     }

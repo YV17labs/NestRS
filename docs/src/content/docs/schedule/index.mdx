@@ -10,9 +10,9 @@ A scheduled job is **a method** on any `#[injectable]` provider, tagged with
 Importing `ScheduleModule` in your `AppModule` attaches the scheduler at
 boot.
 
-Triggers are validated **at compile time** (string literals) or **at boot**
-(`CronExpression` presets, IANA timezones); a bad value fails the boot
-naming the offending job.
+Triggers are validated **at compile time** (string literals, the IANA
+timezone included) or **at boot** (`CronExpression` presets); a bad preset
+fails the boot naming the offending job.
 
 `nest-rs-schedule` builds on [croner](https://docs.rs/croner) — the framework
 wraps it for cron expression parsing (5/6/7-field), with `chrono` /
@@ -151,9 +151,10 @@ block — same convention as `#[routes]`.
 | `#[cron("0 9 * * MON", tz = "Europe/Paris")]` | Cron + named timezone (default UTC)      |
 | `#[every("5m", replicas = "one")]`            | Once per occurrence across replicas — see [Firing once across replicas](#firing-once-across-replicas) |
 
-A literal cron expression is validated at **compile time**; presets and
-timezones at boot. Either way, an invalid trigger fails the boot naming
-the job and the offending value — never silently skipped.
+A cron string literal and a `tz` name are validated at **compile time**; a
+`CronExpression` constant when the scheduler configures at boot, which fails
+naming the job and the offending value. An invalid trigger is never
+silently skipped.
 
 ## Wire it in
 
@@ -244,10 +245,10 @@ A bad cron **literal** never reaches boot — it fails `cargo build`:
 
 ```bash frame="terminal"
 $ nestrs run dev api
-error: invalid cron expression: Invalid pattern: Pattern must have between 5 and 7 fields.
-  --> crates/features/src/audio/schedule/tasks.rs:35:12
+error: #[cron]: "every monday" is not a cron expression: Invalid pattern: Pattern must have between 5 and 7 fields.
+  --> crates/features/src/audio/schedule/tasks.rs:40:12
    |
-35 |     #[cron("every monday")]
+40 |     #[cron("every monday")]
    |            ^^^^^^^^^^^^^^
 ```
 

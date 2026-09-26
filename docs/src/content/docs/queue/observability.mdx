@@ -3,7 +3,7 @@ title: Observability
 description: The span and events the queue worker emits per job — what you see at debug, info, and warn levels, and the boot lines that precede them.
 tier: all-options
 sidebar:
-  order: 5
+  order: 6
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -38,8 +38,9 @@ tagged with the span's fields:
 |---|---|
 | `queue` | The Redis queue name. |
 | `processor` | The processor host name, e.g. `AudioProcessor::transcode`. |
-| `job_id` | The apalis `TaskId` for this job. |
-| `attempt` | The apalis attempt counter (`1` on the first try, higher on retries). |
+| `job_id` | The job's id — the one its push returned, the same across its attempts and redeliveries. |
+| `backend_id` | The backend's own id for the stored record — apalis's, on Redis. |
+| `attempt` | Which attempt this is, from `1`, counted by the queue port across retries. |
 | `trace_id` / `span_id` | This job's [W3C trace context](/fundamentals/correlation/) — always present. |
 | `parent_span_id` | The span that enqueued the job: the HTTP request, the message, the tick. |
 | `continued_trace` | `true` when the envelope carried a `traceparent`, `false` when this job started a trace of its own. |
@@ -71,11 +72,26 @@ dead-letters — and the `queue.job` line reports `outcome="error"` (or
 `outcome="panic"`) beside it. The two never restate each other: the
 detail carries the cause, the line carries the timing and the identity.
 
-`attempt` is how you correlate a retry: apalis re-runs the same `job_id`
-with `attempt=2`, opening a fresh `process job` span and filing a fresh
-line — same `trace_id`, new `span_id`. See
+`attempt` is how you correlate a retry: the same `job_id` runs again with
+`attempt=2`, opening a fresh span and filing a fresh line — same `trace_id`,
+new `span_id`. See
 [Retries and failure](/queue/retries-and-failure/) for the policy behind
 `attempt`.
+
+## What the Redis worker says
+
+Beside each attempt, the Redis worker files a line when a job leaves a replica
+without an outcome, and when apalis itself reports trouble — all on
+`nest_rs::queue`, each carrying `queue` and either `job_id` or `worker`:
+
+| Message | Level | When |
+|---|---|---|
+| `queue worker started` / `queue worker stopped` | `info` | Once per method per replica, naming the id it consumes under. |
+| `job handed back to the queue` | `info` | A job goes back without an outcome — `reason` is `shutdown` or `leased elsewhere`. |
+| `job delivered again after it settled; acknowledged without running` | `info` | A redelivery the settled mark absorbed. |
+| `job lease lost while its attempt runs; another delivery may run it too` | `error` | The attempt's lease lapsed under it — see [Delivery on Redis](/queue/delivery/). |
+| `job acknowledgement lost; …` | `error` | apalis could not record an outcome; the job is delivered again once swept. |
+| `queue worker heartbeat failed; …`, `queue fetch failed; …` | `warn` | Redis refused one of apalis's own calls. |
 
 ## What boot looks like
 

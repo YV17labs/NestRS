@@ -55,7 +55,7 @@ the `queue/` adapter. The producer is usually the port's own service, so
 this is the artifact both sides reach for:
 
 ```rust title="crates/features/src/audio/command.rs (from the demo)"
-use nest_rs::queue::{QueueName, queue};
+use nest_rs::queue::{Queue, queue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,12 +66,12 @@ pub struct TranscodeCommand {
 #[queue(name = "audio", job = TranscodeCommand)]
 pub struct AudioQueue;
 
-pub const AUDIO_QUEUE: &str = <AudioQueue as QueueName>::NAME;
+pub const AUDIO_QUEUE: &str = <AudioQueue as Queue>::NAME;
 ```
 
 Re-export both from the feature's `mod.rs`. A marker that is not reachable
-from the port leaves the untyped `push(name, job)` escape hatch as the only
-way to enqueue — which loses the check `QueueName` exists to provide.
+from the port leaves the untyped `push_json(name, payload)` escape hatch as
+the only way to enqueue — which loses the check `Queue` exists to provide.
 
 ## A first queue handler
 
@@ -79,10 +79,10 @@ A regular `#[injectable]` service with one decorated method. The
 `#[processor]` attribute marks the impl block; `#[process]` marks the
 method as a queue consumer.
 
-```rust title="crates/features/src/audio/queue/processor.rs (from the demo)"
+```rust title="crates/features/src/audio/queue/processor.rs (from the demo, abridged)"
 use std::sync::Arc;
 
-use nest_rs::core::anyhow::Result;
+use anyhow::Result;
 use nest_rs::core::injectable;
 use nest_rs::queue::processor;
 
@@ -98,7 +98,8 @@ pub struct AudioProcessor {
 impl AudioProcessor {
     #[process(queue = AudioQueue, retries = 3)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
-        self.svc.transcode(&job.file).await
+        self.svc.transcode(&job.file).await?;
+        Ok(())
     }
 }
 ```
@@ -113,7 +114,7 @@ Adapters carry transport mechanics; the service carries intent.
 - **`#[processor]`** on the impl block orchestrates the per-method
   `#[process]` attributes and submits one queue consumer per decorated
   method.
-- **`#[process(queue, retries)]`** binds the method to a `QueueName`
+- **`#[process(queue, retries)]`** binds the method to a `Queue`
   **type** and gives it a retry budget. The job type is read from the
   method's first parameter after `&self`, and the macro asserts it is
   `AudioQueue::Job` — a handler consuming the wrong payload is a compile
@@ -124,44 +125,41 @@ The job argument also binds a [pipe](/fundamentals/pipes/):
 after deserialization, and hand the handler the transformed value — a
 rejection is a job error, so the queue's retry/failure policy applies.
 
-## One job at a time
+## How many at once
 
-A `#[process]` method processes **one job at a time**, and there is no
-knob to change that. Throughput comes from running more replicas of the
-worker app:
+A `#[process]` method runs **one job at a time** per replica unless it declares
+more: `#[process(queue = AudioQueue, concurrency = 4)]` lets four attempts of
+that method run side by side in each replica. Throughput beyond that comes from
+running more replicas of the worker app:
 
 ```bash frame="terminal"
-$ kubectl scale deploy/worker --replicas=6   # six jobs in flight, not one
+$ kubectl scale deploy/worker --replicas=6   # six replicas, each at its own concurrency
 ```
 
-That is a deliberate division of labour. nestrs targets the container, and
-the container platform already schedules, meters and restarts the unit that
-decides how much work runs at once. A per-method ceiling would be a second
-scheduler competing with the first, and the number that makes it correct
-depends on the pod's CPU share — something the source cannot know.
-Serialized-per-method is instead a property you can read off the code:
-every replica carries an identical load, and a handler that guards a
-connection pool or a rate-limited third-party API needs no ceiling of its
-own to stay within its budget.
+The container platform already schedules, meters and restarts the unit that
+decides how much work runs at once, so the per-method bound is deliberately
+local: it caps what one replica asks of a connection pool or a rate-limited
+API, and a replica's share of the queue grows by adding replicas.
 
 Two consequences worth knowing:
 
 - **A slow handler is head-of-line blocking for its own queue** — but only
   its own. Methods on other queues, and other replicas on the same queue,
-  keep draining. Split a long tail onto its own queue rather than reaching
-  for parallelism inside one.
-- **The consumer prefetches nothing.** Each poll fetches a single job, so a
-  job waiting behind a busy worker stays in Redis where a peer replica can
-  take it — scaling out actually redistributes work instead of shuffling it
-  between in-memory buffers.
+  keep draining. Split a long tail onto its own queue rather than raising
+  the bound until it hides the tail.
+- **The consumer prefetches nothing.** Each poll fetches a single job, and
+  only while a permit is free, so a job waiting behind a busy worker stays in
+  Redis where a peer replica can take it — scaling out actually redistributes
+  work instead of shuffling it between in-memory buffers.
 
 <Aside type="caution">
-**Write `#[process]` handlers to be idempotent.** Two replicas never receive
-the same job from the queue — the Redis fetch claims ids atomically — but
-*starting* a replica while another holds a job puts that job back on the queue,
-and it runs again. Scaling the worker up mid-flight therefore re-runs in-flight
-work, not only failed work. The measurement and the cause are in
-[Retries and failure](/queue/retries-and-failure/#limits).
+**Delivery is at least once.** Two replicas never receive the same job from
+the queue, and a job apalis delivers twice — a replica starting mid-flight
+sweeps its peers' jobs back onto the queue — still runs once: each attempt
+holds a lease on its job and leaves a settled mark behind it. A replica cut off
+from Redis for longer than its lease can lose that guarantee, so a handler
+whose effects leave the process keeps its own idempotency key. See
+[Delivery on Redis](/queue/delivery/).
 </Aside>
 
 ## One attempt, one transaction
@@ -321,14 +319,16 @@ full field set.
 ### Basics
 
 - [Producing jobs](/queue/producing-jobs/) — typing payloads, the publisher
-  handle, and the rule that keeps `push_to::<Q>` behind a service.
+  handle, and the rule that keeps a push behind a service.
 - [Wiring](/queue/wiring/) — `RedisModule`, `RedisQueueModule` and
   `RedisWorkerModule`, and module-gating across a shared features crate.
 
 ### All options
 
 - [Retries and failure](/queue/retries-and-failure/) — what an `Err` means,
-  the apalis retry shape, panics, dead-lettering.
+  the retry budget and its backoff, panics, dead-lettering.
+- [Delivery on Redis](/queue/delivery/) — where a queue's keys live, leases
+  and redeliveries, shutdown, delayed jobs, and upgrading from 6.x.
 - [Observability](/queue/observability/) — the span, its fields, and the
   lines a worker emits per job.
 - [Writing a queue driver](/queue/writing-a-driver/) — the scaffold for a

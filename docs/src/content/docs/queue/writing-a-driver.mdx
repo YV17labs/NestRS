@@ -3,7 +3,7 @@ title: Writing a queue driver
 description: "A backend-agnostic scaffold for a queue driver — the traits you implement, the inventory you drain, with storage-specific code marked as your own."
 tier: all-options
 sidebar:
-  order: 6
+  order: 7
 ---
 
 The [`nest-rs-queue`](https://github.com/YV17labs/NestRS/tree/main/crates/nest-rs-queue)
@@ -49,12 +49,21 @@ JSON.
 ```json
 {
   "v": 1,
+  "id": "01a0de3f-2231-75cf-a401-78dfcb3ecc7d",
+  "attempt": 1,
   "payload": <user job as JSON>,
   "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
   "tracestate": "rojo=00f067aa0ba902b7",
-  "actor_id": "01a0…"
+  "actor_id": "01a0…",
+  "unique_key": "track-1.mp3"
 }
 ```
+
+`id` is the job's id, minted by the port at the push and the same on every
+attempt; key your backend's records by it, never by an id of your own.
+`attempt` is the attempt the record is for, and a record the port hands back
+for a retry carries the next one. `unique_key` is present only when the push
+declared one.
 
 You never write that shape by hand: `envelope::seal(payload)` builds it,
 and `envelope::open(value)` takes the trace context back off, leaving the
@@ -122,10 +131,11 @@ subscribe, long-poll, `ReceiveMessage`), how retries and visibility timeouts
 wire up, and the translation of an `Attempt` into your backend's vocabulary.
 Those are storage decisions.
 
-One contract is *not* a storage decision: a `#[process]` method runs
-[one job at a time](/queue/#one-job-at-a-time). Serialize per method in
-your receive loop, the way `nest-rs-redis` does, so a handler behaves the
-same whichever driver is underneath it.
+One contract is *not* a storage decision: a `#[process]` method runs at most
+[its declared `concurrency`](/queue/#how-many-at-once) at once per replica,
+one by default. Bound each method in your receive loop, the way
+`nest-rs-redis` does, so a handler behaves the same whichever driver is
+underneath it.
 
 ```rust title="crates/yourqueue/src/worker/transport.rs"
 use nest_rs::core::{Container, Transport};

@@ -128,7 +128,9 @@ from.
 
 | Key | Meaning |
 |---|---|
-| `SHUTDOWN_TIMEOUT_SECS` | how long the worker waits for in-flight jobs after a shutdown signal; defaults to `30` |
+| `SHUTDOWN_TIMEOUT_SECS` | the drain window after a shutdown signal: running attempts finish inside it, and one still running as it closes is interrupted and its job handed back to the queue before it ends; defaults to `30` |
+| `ORPHAN_AFTER_SECS` | how long a replica may go without proving it is alive before its peers take the jobs it was running; it proves it every tenth of this, at least once a second. Defaults to `300`, and below `5` is rejected |
+| `LEASE_SECS` | how long a running attempt's claim on its job outlives its last renewal — a second delivery of the job waits it out rather than running beside it, and a crashed replica's job runs again once it lapses. Defaults to `30`, and `0` is rejected |
 
 ## `storage` — `NESTRS_STORAGE__*`
 

@@ -8,7 +8,7 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Pushing a job is a one-line call — `queue.push_to::<AudioQueue>(job).await?`
+Pushing a job is a one-line call — `queue.push(AudioQueue, job, None).await?`
 — but *where* that line lives decides whether the feature stays auditable.
 The rule is the same one that holds `Repo` calls behind a service:
 controllers, resolvers, and gateways ask the service to enqueue. The
@@ -23,7 +23,7 @@ convention is to keep payloads small: a reference to the work, not the
 work itself.
 
 ```rust title="crates/features/src/audio/command.rs (from the demo)"
-use nest_rs::queue::{QueueName, queue};
+use nest_rs::queue::{Queue, queue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +34,7 @@ pub struct TranscodeCommand {
 #[queue(name = "audio", job = TranscodeCommand)]
 pub struct AudioQueue;
 
-pub const AUDIO_QUEUE: &str = <AudioQueue as QueueName>::NAME;
+pub const AUDIO_QUEUE: &str = <AudioQueue as Queue>::NAME;
 ```
 
 **Plain `serde` derives, not `#[input]`** — the one place the wire-DTO
@@ -67,15 +67,14 @@ controller, the GraphQL resolver, the scheduled producer — all of them
 delegate. They do **not** hold the producer and do **not** know the queue
 name.
 
-```rust title="crates/features/src/audio/service.rs (from the demo)"
+```rust title="crates/features/src/audio/service.rs (from the demo, abridged)"
 use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::Result;
 use nest_rs::core::injectable;
 use nest_rs::queue::{JobProducer, JobProducerExt};
 
 use super::command::{AudioQueue, TranscodeCommand};
+use super::error::AudioError;
 
 #[injectable]
 pub struct AudioService {
@@ -84,25 +83,20 @@ pub struct AudioService {
 }
 
 impl AudioService {
-    pub async fn enqueue_transcode(&self, file: String) -> Result<()> {
+    pub async fn enqueue_transcode(&self, file: String) -> Result<(), AudioError> {
         self.queue
-            .push_to::<AudioQueue>(TranscodeCommand { file: file.clone() })
+            .push(AudioQueue, TranscodeCommand { file: file.clone() }, None)
             .await?;
-        tracing::info!(target: "features::audio", %file, "enqueued transcode job");
-        Ok(())
-    }
-
-    pub async fn transcode(&self, file: &str) -> Result<()> {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        tracing::info!(target: "features::audio", file, "transcoded");
+        tracing::debug!(target: "features::audio", file, "enqueued transcode job");
         Ok(())
     }
 }
 ```
 
-`push_to::<Q>` takes both the wire name and the accepted payload from
-`Q`, so enqueueing onto the wrong queue, or with the wrong payload, does
-not compile. `push_to` comes from `JobProducerExt`, a blanket extension
+`push` takes both the wire name and the accepted payload from the marker, so
+enqueueing onto the wrong queue, or with the wrong payload, does not compile,
+and answers with a receipt naming the queue and the job's id. `push` comes
+from `JobProducerExt`, a blanket extension
 over any producer — import the trait, and it is available on
 `Arc<dyn JobProducer>` and on a backend's concrete producer alike. It is `async`
 because Redis is async; that is the whole producer surface from a
@@ -113,11 +107,10 @@ runs under the trace that enqueued it. You never see either — see
 [Correlation](/fundamentals/correlation/).
 
 <Aside type="caution">
-Two escape hatches, in descending order of preference. `push(name, job)`
-takes a raw name — correct **only** when the queue is not known until
-runtime, and it opts out of the name check; `push_json(name, value)`
-opts out of the payload check as well and is the seam a backend
-implements. Neither is the default path.
+One escape hatch: `push_json(name, value)` takes a raw name and a JSON
+payload — correct **only** for a queue this binary does not declare, drained
+by another deployment whose `#[queue]` types it does not link. It opts out of
+both the name check and the payload check, so it is never the default path.
 </Aside>
 
 <Aside type="tip">
@@ -126,9 +119,31 @@ no backend, so it compiles unchanged against a different driver.
 `RedisQueueModule` binds **both** that name and the concrete
 `nest_rs::redis::RedisQueueProducer` over the one connection `RedisModule`
 opens, so the concrete type resolves too when a service genuinely needs it.
-Same publisher surface either way — `push_to` is on the extension trait, not
+Same publisher surface either way — `push` is on the extension trait, not
 the concrete type.
 </Aside>
+
+## Holding a job back
+
+The third argument carries what a push declares besides its queue and its
+payload. A delay holds the job until a duration has passed, or until an
+instant:
+
+```rust title="src/audio/service.rs"
+self.queue
+    .push(
+        AudioQueue,
+        TranscodeCommand { file },
+        PushOptions::default().with_delay(Duration::from_secs(60)),
+    )
+    .await?;
+```
+
+A delay needs a backend declaring `Capability::DelayedPush`. The Redis backend
+does; a backend that does not refuses the push with `QueueError::Unsupported`,
+naming itself, before anything is filed — a delay is never dropped in silence.
+On Redis the job waits on the queue's schedule and reaches the queue once due,
+whether or not a worker runs — see [Delivery on Redis](/queue/delivery/#delayed-jobs).
 
 ## The HTTP adapter
 
@@ -188,7 +203,7 @@ transport hits it through `enqueue_transcode`.
 
 ## Why this rule
 
-Three reasons the `push_to` call hides behind a service:
+Three reasons the `push` call hides behind a service:
 
 1. **One audit point per queue.** `AudioQueue` is named in exactly one
    place per side. A grep for `enqueue_transcode` shows every producer.
@@ -212,11 +227,13 @@ push side. The service is the contract; transports adapt.
 - `crates/features/src/audio/http/controller.rs` — the HTTP producer.
 - `crates/features/src/audio/schedule/tasks.rs` — the scheduled
   producer (a timer that calls the same service).
-- `crates/nest-rs-queue/src/queue_name.rs` — the `QueueName` trait the
+- `crates/nest-rs-queue/src/queue.rs` — the `Queue` trait the
   `#[queue]` macro implements.
 - `crates/nest-rs-queue/src/producer.rs` — `JobProducer`,
-  `JobProducerExt::push_to`.
-- `crates/nest-rs-redis/src/connection.rs` — the Redis `JobProducer`.
+  `JobProducerExt::push`.
+- `crates/nest-rs-queue/src/push_options.rs` — `PushOptions`, and the
+  capability each option needs.
+- `crates/nest-rs-redis/src/queue/producer.rs` — the Redis `JobProducer`.
 
 ## Going further
 

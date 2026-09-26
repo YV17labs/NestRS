@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
-use nest_rs::core::injectable;
+use nest_rs::core::{error_message, injectable};
 use nest_rs::queue::{JobProducer, JobProducerExt};
 use nest_rs::storage::Storage;
 use uuid::Uuid;
@@ -141,7 +141,7 @@ impl AudioService {
                         tracing::warn!(
                             target: "features::audio",
                             file = %file,
-                            error = %e,
+                            error = %error_message(&e),
                             "transcode status poll failed",
                         );
                         Some((event(TranscodeState::Error), u32::MAX))

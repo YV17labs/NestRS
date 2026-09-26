@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::future::ready;
 
 use futures_util::StreamExt;
+use nest_rs::core::error_message;
 use nest_rs::http::{Header, PartExt, SseEvent, SseStream, Valid, controller, routes};
 use nest_rs::throttler::{Throttle, ThrottlerGuard};
 use poem::http::StatusCode;
@@ -143,7 +144,7 @@ impl AudioController {
                 let body = serde_json::to_string(&payload).unwrap_or_else(|e| {
                     tracing::error!(
                         target: "features::audio",
-                        error = %e,
+                        error = %error_message(&e),
                         "failed to serialize transcode event",
                     );
                     r#"{"state":"error"}"#.to_string()

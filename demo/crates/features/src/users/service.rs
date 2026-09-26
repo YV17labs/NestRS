@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use nest_rs::authn::{AuthError, CredentialError, burn_verify, hash_password, verify_password};
 use nest_rs::authz::Action;
-use nest_rs::core::{hooks, injectable};
+use nest_rs::core::{error_message, hooks, injectable};
 use nest_rs::graphql::dataloader;
 use nest_rs::seaorm::{
     Creatable, CreateModel, CrudService, Deletable, Executor, Repo, ServiceError, Updatable,
@@ -197,7 +197,7 @@ impl UsersService {
             None,
         )
         .map_err(|e| {
-            tracing::error!(target: "features::users", provider = identity.provider, error = %e, "social user preparation failed");
+            tracing::error!(target: "features::users", provider = identity.provider, error = %error_message(&e), "social user preparation failed");
             AuthError::Failed("identity resolution failed".into())
         })?;
 
@@ -269,7 +269,7 @@ fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identit
 }
 
 fn social_store_unavailable(provider: &str, err: DbErr) -> AuthError {
-    tracing::error!(target: "features::users", provider, error = %err, "social identity store unreachable");
+    tracing::error!(target: "features::users", provider, error = %error_message(&err), "social identity store unreachable");
     AuthError::Unavailable(err.to_string())
 }
 
@@ -293,7 +293,7 @@ fn is_unique_violation(err: &DbErr) -> bool {
 }
 
 fn store_unavailable(email: &str, err: DbErr) -> AuthError {
-    tracing::error!(target: "features::users", identity = %redact_email(email), error = %err, "credential lookup failed");
+    tracing::error!(target: "features::users", identity = %redact_email(email), error = %error_message(&err), "credential lookup failed");
     AuthError::Unavailable(err.to_string())
 }
 
@@ -337,7 +337,7 @@ pub(crate) fn verify_credentials(
             Err(CredentialError)
         }
         Err(e) => {
-            tracing::error!(target: "features::users", identity = %redact_email(email), error = %e, reason = "unverifiable_hash", "login failed");
+            tracing::error!(target: "features::users", identity = %redact_email(email), error = %error_message(&e), reason = "unverifiable_hash", "login failed");
             Err(CredentialError)
         }
     }

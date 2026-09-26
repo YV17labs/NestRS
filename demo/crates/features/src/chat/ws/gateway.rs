@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use nest_rs::core::error_message;
 use nest_rs::ws::{Scoped, WsClient, WsScopeError, gateway, messages, serde_json};
 
 use super::guard::ModerationGuard;
@@ -58,7 +59,7 @@ impl ChatGateway {
     #[public]
     async fn typing(&self, message: SendMessageDto, client: &WsClient) {
         if let Err(e) = client.broadcast("typing", &message) {
-            tracing::warn!(target: "features::chat", error = %e, "broadcast failed");
+            tracing::warn!(target: "features::chat", error = %error_message(&e), "broadcast failed");
         }
     }
 }

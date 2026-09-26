@@ -1,3 +1,4 @@
+use nest_rs::core::error_message;
 use nest_rs::http::ProblemDetails;
 use nest_rs::queue::QueueError;
 use nest_rs::storage::StorageError;
@@ -19,7 +20,7 @@ impl ResponseError for AudioError {
     }
 
     fn as_response(&self) -> Response {
-        tracing::error!(target: "features::audio", error = ?self, "audio operation failed");
+        tracing::error!(target: "features::audio", error = %error_message(self), "audio operation failed");
         ProblemDetails::from_status(StatusCode::INTERNAL_SERVER_ERROR)
             .with_detail(self.to_string())
             .into_response()

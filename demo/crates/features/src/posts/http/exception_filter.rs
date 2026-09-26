@@ -1,4 +1,4 @@
-use nest_rs::core::{Layer, injectable};
+use nest_rs::core::{Layer, error_message, injectable};
 use nest_rs::exception_filters::ExceptionFilter;
 use nest_rs::http::async_trait;
 use poem::Response;
@@ -37,7 +37,7 @@ impl ExceptionFilter for PostProblemFilter {
             Err(error) => {
                 tracing::error!(
                     target: "features::posts",
-                    error = %error,
+                    error = %error_message(&error),
                     "problem+json body failed to serialize",
                 );
                 return Response::builder()

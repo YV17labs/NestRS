@@ -1,3 +1,4 @@
+use nest_rs::core::error_message;
 use nest_rs::ws::{WsClient, gateway, messages};
 
 use crate::authn::AuthnGuard;
@@ -15,7 +16,7 @@ impl NotificationsGateway {
     #[public]
     async fn ping(&self, client: &WsClient) {
         if let Err(e) = client.broadcast("pong", &"hi") {
-            tracing::warn!(target: "features::notifications", error = %e, "broadcast failed");
+            tracing::warn!(target: "features::notifications", error = %error_message(&e), "broadcast failed");
         }
     }
 }

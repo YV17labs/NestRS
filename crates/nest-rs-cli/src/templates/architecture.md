@@ -503,9 +503,10 @@ refuses; every tolerance below is a pass, and files a table already names are
 skipped.
 
 **A file whose principal export is not a type is a namespace, and owes nothing
-above.** `queue/src/consume.rs` exports `consume::discover` and
-`consume::attempt`; the `Attempt` it also declares is that procedure's
-vocabulary rather than the file's subject. The stem names what a caller
+above.** `queue/src/consume.rs` exports `consume::discover`,
+`consume::attempt` and `consume::refuse`; the `Delivery` and `AttemptOutcome` it
+also declares are those procedures' vocabulary rather than the file's subject.
+The stem names what a caller
 *calls*, and the call site reads it as part of the name. A file whose subject
 *is* a type owes the pairing.
 

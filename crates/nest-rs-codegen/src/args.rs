@@ -3,6 +3,8 @@
 use quote::ToTokens;
 use syn::{Expr, ExprLit, Lit, LitStr, Meta};
 
+use crate::ungrouped::ungrouped_expr;
+
 /// Interpret an already-parsed attribute-argument value as a string literal,
 /// cloning it out — the value half of a `syn::MetaNameValue` you already hold,
 /// the caller having parsed the `key =` itself.
@@ -21,21 +23,26 @@ use syn::{Expr, ExprLit, Lit, LitStr, Meta};
 /// [`takes_value`] — ``#[{attr}] `{key}` takes a string literal, e.g.
 /// `{key} = "{example}"` `` — where `example` is the placeholder value shown in
 /// the hint (`"seaorm"`, `"..."`).
+///
+/// **A value a `macro_rules!` forwarded is read through its invisible group**,
+/// as every other value reader here reads it ([`crate::ungrouped_expr`]). This
+/// one did not, so a literal passed down as `$path:expr` was refused as "not a
+/// string literal" by the one reader whose whole question is whether it is one —
+/// and only where syn had kept the group, which depends on the argument's
+/// position in the list.
 pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> syn::Result<LitStr> {
-    if let Expr::Lit(ExprLit {
-        lit: Lit::Str(s), ..
-    }) = value
-    {
-        Ok(s.clone())
-    } else {
-        Err(syn::Error::new_spanned(
-            value,
+    match ungrouped_expr(value) {
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(s), ..
+        }) => Ok(s.clone()),
+        other => Err(syn::Error::new_spanned(
+            other,
             takes_value(
                 attr,
                 Some(key),
                 &format!("a string literal, e.g. `{key} = \"{example}\"`"),
             ),
-        ))
+        )),
     }
 }
 
@@ -395,6 +402,20 @@ fn expected_list(expected: &[&str], empty: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A literal a `macro_rules!` forwarded as `$x:expr` reaches the reader
+    /// inside an invisible group, and is still the literal.
+    #[test]
+    fn a_forwarded_string_literal_is_read_through_its_group() {
+        let forwarded = Expr::Group(syn::ExprGroup {
+            attrs: Vec::new(),
+            group_token: Default::default(),
+            expr: Box::new(syn::parse_quote!("/users")),
+        });
+        let literal = require_str_lit(&forwarded, "controller", "path", "/users")
+            .expect("a string literal, forwarded");
+        assert_eq!(literal.value(), "/users");
+    }
 
     fn refusal(method: syn::ImplItemFn, accepted: &[&str]) -> String {
         one_role_per_method("probe", &method.attrs, accepted, "")

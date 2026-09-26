@@ -15,8 +15,8 @@ use nest_rs_codegen::{
     DecoratorPair, Edge, HostBorrow, JobDecorator, JobKey, await_if_async, cfg_attrs,
     duration_millis, impl_self_ident, job_argument_needs_a_value, job_key, job_keys,
     job_returns_a_result, job_transaction, reject_duplicate_argument, replicas_default,
-    replicas_value, require_str_lit, returns_unit, shared_receiver, transactional_value,
-    unread_job_key,
+    replicas_value, require_str_lit, returns_unit, shared_receiver, site, takes_value,
+    transactional_value, ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -372,12 +372,26 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, TrailingKeys)> {
     let (expr, tz, keys) = parser.parse2(tokens)?;
 
     // Literal cron expressions validate now; `CronExpression::X` paths wait
-    // for boot (the `Scheduler::configure` call).
-    if let Expr::Lit(ExprLit {
-        lit: Lit::Str(s), ..
-    }) = &expr
-    {
-        validate_cron_literal(s)?;
+    // for boot (the `Scheduler::configure` call). A literal of any other kind is
+    // no expression at all, and is refused here rather than as a type mismatch
+    // inside the expansion. Read through the invisible group a `macro_rules!`
+    // forwards a value in, as every value reader is.
+    match ungrouped_expr(&expr) {
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(s), ..
+        }) => validate_cron_literal(s)?,
+        Expr::Lit(other) => {
+            return Err(syn::Error::new_spanned(
+                other,
+                takes_value(
+                    "cron",
+                    None,
+                    "a cron expression — a string literal or a `CronExpression` constant, e.g. \
+                     `#[cron(\"0 0 * * *\")]` or `#[cron(CronExpression::EVERY_HOUR)]`",
+                ),
+            ));
+        }
+        _ => {}
     }
     let tz_tokens = match tz {
         Some(lit) => quote! { ::std::option::Option::Some(#lit) },
@@ -406,9 +420,10 @@ fn validate_timezone_literal(s: &LitStr) -> syn::Result<()> {
     Err(syn::Error::new(
         s.span(),
         format!(
-            "`{name}` is not an IANA time zone name — `tz` takes a `Area/Location` \
+            "{}: {name:?} is not an IANA time zone name — it takes an `Area/Location` \
              identifier from the IANA time zone database (e.g. \"Europe/Paris\", \
              \"America/New_York\", \"UTC\")",
+            site("cron", Some("tz")),
         ),
     ))
 }
@@ -418,9 +433,16 @@ fn validate_timezone_literal(s: &LitStr) -> syn::Result<()> {
 /// boot-time surprise. `CronExpression::X` paths are not literals and validate
 /// at boot instead.
 fn validate_cron_literal(s: &LitStr) -> syn::Result<()> {
-    croner::Cron::from_str(&s.value())
-        .map(|_| ())
-        .map_err(|e| syn::Error::new(s.span(), format!("invalid cron expression: {e}")))
+    croner::Cron::from_str(&s.value()).map(|_| ()).map_err(|e| {
+        syn::Error::new(
+            s.span(),
+            format!(
+                "{}: {:?} is not a cron expression: {e}",
+                site("cron", None),
+                s.value()
+            ),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -465,8 +487,9 @@ mod tests {
         let err = validate_cron_literal(&lit("not a cron expression"))
             .expect_err("a malformed cron literal must fail at macro expansion");
         assert!(
-            err.to_string().contains("invalid cron expression"),
-            "error names the problem, got: {err}",
+            err.to_string()
+                .starts_with("#[cron]: \"not a cron expression\" is not a cron expression: "),
+            "error opens with its site and names the problem, got: {err}",
         );
     }
 }

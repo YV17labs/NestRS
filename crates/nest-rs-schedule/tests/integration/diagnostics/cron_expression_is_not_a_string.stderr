@@ -1,0 +1,5 @@
+error: #[cron] takes a cron expression — a string literal or a `CronExpression` constant, e.g. `#[cron("0 0 * * *")]` or `#[cron(CronExpression::EVERY_HOUR)]`
+  --> tests/integration/diagnostics/cron_expression_is_not_a_string.rs:15:12
+   |
+15 |     #[cron(3600)]
+   |            ^^^^

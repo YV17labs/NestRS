@@ -47,19 +47,24 @@ impl Config for MemberConfig {
     }
 }
 
-/// Namespaces the framework-wide names begin with, read by a config, so the
-/// silence asserted for them is a property of the grammar and not of an
-/// unread namespace.
+/// Namespaces the framework-wide names begin with, read by configs whose keys
+/// make three of those names equal a name read here once separators are set
+/// aside — `<PREFIX>_LOG_FORMAT` and `<PREFIX>_LOG__FORMAT` — so the silence
+/// asserted for them is owed to their being known, and to nothing else.
 #[config(namespace = "log")]
 #[derive(Clone, Default)]
 struct LogShapedConfig {
     level: String,
+    format: String,
+    source_location: String,
 }
 
 impl Config for LogShapedConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
             level: env.get("LEVEL")?.unwrap_or(base.level),
+            format: env.get("FORMAT")?.unwrap_or(base.format),
+            source_location: env.get("SOURCE_LOCATION")?.unwrap_or(base.source_location),
         })
     }
 }
@@ -67,13 +72,13 @@ impl Config for LogShapedConfig {
 #[config(namespace = "env")]
 #[derive(Clone, Default)]
 struct EnvShapedConfig {
-    name: String,
+    prefix: String,
 }
 
 impl Config for EnvShapedConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
-            name: env.get("NAME")?.unwrap_or(base.name),
+            prefix: env.get("PREFIX")?.unwrap_or(base.prefix),
         })
     }
 }
@@ -252,14 +257,17 @@ fn another_binarys_variables_are_left_alone() {
 }
 
 /// A linked config nobody reads has no known keys, and its variables reach
-/// nothing in this binary — so they are not this binary's to report.
+/// nothing in this binary — so they are not this binary's to report, whether
+/// they misspell a key or run the level separator into it.
 #[test]
 #[allow(clippy::result_large_err)]
 fn a_linked_config_that_is_never_read_files_no_key_report() {
     figment::Jail::expect_with(|jail| {
         let unread = var_name("unclaimed__member", "URLL");
+        let run_together = var_name("unclaimed__member", "URL").replace("__", "_");
         let control = var_name("unclaimed_keys", "PROT");
         jail.set_env(&unread, "https://typo.example");
+        jail.set_env(&run_together, "https://run-together.example");
         jail.set_env(&control, "8080");
         let logs = LogCapture::install();
 
@@ -267,13 +275,15 @@ fn a_linked_config_that_is_never_read_files_no_key_report() {
 
         report(&logs, UNREAD_CONFIG_VARIABLE, &control);
         assert_silent(&logs, &unread);
+        assert_silent(&logs, &run_together);
         Ok(())
     });
 }
 
-/// The framework-wide names carry no `__` after the prefix, so no namespace can
-/// hold them — not even one whose config reads a namespace they begin with.
-/// Built from the constants that name them.
+/// The framework-wide names carry no `__` after the prefix, so they are compared
+/// with the names read here whole — and three of them equal one once separators
+/// are set aside. Known from the constants that name them, all five stay
+/// silent; the controls prove both comparisons ran over this very environment.
 #[test]
 #[allow(clippy::result_large_err)]
 fn framework_wide_variables_are_never_reported() {
@@ -291,17 +301,77 @@ fn framework_wide_variables_are_never_reported() {
         for name in &names {
             jail.set_env(name, "");
         }
-        let control = var_name("log", "LEVL");
-        jail.set_env(&control, "debug");
+        let unread = var_name("log", "LEVL");
+        let run_together = var_name("log", "LEVEL").replace("__", "_");
+        jail.set_env(&unread, "debug");
+        jail.set_env(&run_together, "debug");
         let logs = LogCapture::install();
 
         LogShapedConfig::load().expect("the config loads");
         EnvShapedConfig::load().expect("the config loads");
 
-        report(&logs, UNREAD_CONFIG_VARIABLE, &control);
+        report(&logs, UNREAD_CONFIG_VARIABLE, &unread);
+        report(&logs, MISSPELLED_CONFIG_NAMESPACE, &run_together);
         for name in &names {
             assert_silent(&logs, name);
         }
+        Ok(())
+    });
+}
+
+/// The level separator written as a word one — `SEAORM_URL` for `SEAORM__URL`,
+/// the spelling every `DATABASE_URL` teaches — names no namespace, so it is
+/// compared with the names read here whole: equal to one once separators are
+/// set aside, it is answered with it; equal to none, it is left alone.
+#[test]
+#[allow(clippy::result_large_err)]
+fn a_run_together_name_is_answered_with_the_name_that_is_read() {
+    figment::Jail::expect_with(|jail| {
+        let port = var_name("unclaimed_keys", "PORT");
+        let url = var_name("unclaimed__member", "URL");
+        let port_typo = port.replace("__", "_");
+        let url_typo = url.replace("__", "_");
+        let nobody = var_name("unclaimed_elsewhere", "URL").replace("__", "_");
+        jail.set_env(&port_typo, "8080");
+        jail.set_env(&url_typo, "https://run-together.example");
+        jail.set_env(&nobody, "https://nobody.example");
+        let logs = LogCapture::install();
+
+        let keys = KeysConfig::load().expect("the config loads");
+        let member = MemberConfig::load().expect("the config loads");
+
+        assert_eq!((keys.port, member.url.as_str()), (0, ""), "neither reached");
+        for (typo, namespace, read) in [
+            (&port_typo, "unclaimed_keys", port),
+            (&url_typo, "unclaimed__member", url),
+        ] {
+            let event = report(&logs, MISSPELLED_CONFIG_NAMESPACE, typo);
+            assert_eq!(event.field("namespace").as_deref(), Some(namespace));
+            assert_eq!(event.field("suggestion"), Some(read));
+        }
+        assert_silent(&logs, &nobody);
+        Ok(())
+    });
+}
+
+/// A config loaded ahead of any subscriber — in `main`, before the one an `App`
+/// installs — leaves what it found to the first read something hears, instead
+/// of marking it reported to nobody.
+#[test]
+#[allow(clippy::result_large_err)]
+fn a_read_nobody_hears_leaves_its_report_to_the_first_one_heard() {
+    figment::Jail::expect_with(|jail| {
+        let typo = var_name("unclaimed_keys", "PROT");
+        let former = var_name("unclaimed_member", "URL");
+        jail.set_env(&typo, "8080");
+        jail.set_env(&former, "https://former.example");
+
+        KeysConfig::load().expect("the config loads with nothing listening");
+        let logs = LogCapture::install();
+        MemberConfig::load().expect("the next config loads");
+
+        report(&logs, UNREAD_CONFIG_VARIABLE, &typo);
+        report(&logs, MISSPELLED_CONFIG_NAMESPACE, &former);
         Ok(())
     });
 }
@@ -315,14 +385,17 @@ fn the_value_is_never_reported() {
         const SECRET: &str = "hunter2-unclaimed-secret";
         let typo = var_name("unclaimed_keys", "LABLE");
         let former = var_name("unclaimed_member", "URL");
+        let run_together = var_name("unclaimed_keys", "LABEL").replace("__", "_");
         jail.set_env(&typo, SECRET);
         jail.set_env(&former, SECRET);
+        jail.set_env(&run_together, SECRET);
         let logs = LogCapture::install();
 
         KeysConfig::load().expect("the config loads");
 
         report(&logs, UNREAD_CONFIG_VARIABLE, &typo);
         report(&logs, MISSPELLED_CONFIG_NAMESPACE, &former);
+        report(&logs, MISSPELLED_CONFIG_NAMESPACE, &run_together);
         for event in logs.events() {
             assert!(!event.message.contains(SECRET), "{event:?}");
             assert!(

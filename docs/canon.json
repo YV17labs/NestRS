@@ -271,6 +271,10 @@
       "register"
     ],
     "Namespaced": [],
+    "OccurrenceLock": [
+      "claim",
+      "claimed"
+    ],
     "Opaque": [
       "opaque"
     ],
@@ -352,7 +356,7 @@
       "type_key"
     ]
   },
-  "test_count": 2315,
+  "test_count": 2418,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -514,7 +518,8 @@
       "source": "crates/nest-rs-redis/src/config.rs",
       "fields": [
         "url",
-        "connect_timeout"
+        "connect_timeout",
+        "tls"
       ],
       "profile_split": false
     },

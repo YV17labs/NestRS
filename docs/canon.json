@@ -11,6 +11,7 @@
     "queue",
     "redis",
     "redis-throttler",
+    "redis-schedule",
     "schedule",
     "events",
     "authn",
@@ -355,7 +356,7 @@
       "type_key"
     ]
   },
-  "test_count": 2459,
+  "test_count": 2478,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [

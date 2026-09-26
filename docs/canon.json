@@ -330,8 +330,7 @@
     ],
     "Subject": [],
     "ThrottlerStore": [
-      "hit",
-      "name"
+      "hit"
     ],
     "Transport": [
       "configure",
@@ -357,7 +356,7 @@
       "type_key"
     ]
   },
-  "test_count": 2488,
+  "test_count": 2486,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -529,7 +528,8 @@
       "fields": [
         "shutdown_timeout",
         "orphan_after",
-        "lease"
+        "lease",
+        "poll_interval"
       ],
       "profile_split": false
     },

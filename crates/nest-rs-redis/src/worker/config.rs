@@ -53,15 +53,15 @@ const LEASE_FLOOR: Floor = Floor {
 
 /// The shortest poll accepted, the variable that sets it, and why: every poll
 /// costs Redis a fetch and a sweep of silent peers per method per replica, jobs
-/// or none, so ten milliseconds already spends two hundred scripts a second on a
-/// method with nothing to do.
+/// or none, so ten milliseconds already spends up to two hundred scripts a
+/// second on a method with nothing to do.
 const POLL_INTERVAL_FLOOR: Floor = Floor {
     key: "POLL_INTERVAL_MS",
     field: "poll_interval",
     unit: Unit::Millis,
     least: 10,
-    why: "every poll costs Redis a fetch and a sweep per method per replica, jobs or none — two \
-          hundred scripts a second at the floor",
+    why: "every poll costs Redis a fetch and a sweep per method per replica, jobs or none — up \
+          to two hundred scripts a second at the floor",
 };
 
 /// Consumer settings, settable via `NESTRS_REDIS__WORKER__*` or pinned through

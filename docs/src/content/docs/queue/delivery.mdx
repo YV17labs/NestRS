@@ -63,11 +63,11 @@ Nothing sits at the root of the keyspace, so a Redis user whose ACL reaches
 
 Delivery is **at least once**. Two replicas never fetch the same job from
 `active`: the fetch claims ids in one atomic script. A job can still reach a
-second delivery three ways — a replica **starting** sweeps up to ten of its
-peers' in-flight jobs back onto the queue (apalis sweeps with a cutoff of *now*,
-which matches the living too), a replica whose heartbeat falls behind the orphan
-threshold has its jobs swept by a peer, and an acknowledgement can be lost on its
-way to Redis.
+second delivery three ways — a replica **starting** sweeps up to ten times its
+method's `concurrency` of its peers' in-flight jobs back onto the queue (apalis
+sweeps with a cutoff of *now*, which matches the living too), a replica whose
+heartbeat falls behind the orphan threshold has its jobs swept by a peer, and an
+acknowledgement can be lost on its way to Redis.
 
 So each delivery takes the job's **lease** before the attempt runs, and renews
 it every third of its length while the attempt runs. When the job reaches its
@@ -120,7 +120,7 @@ call fails:
 | The call that failed | What happens to the job | The line, on `nest_rs::queue` |
 |---|---|---|
 | taking the lease | handed back for a second later; never run unguarded | `job lease not asked for; …`, `warn` |
-| handing a job back | delivered again from its stored attempt — at once when apalis's acknowledgement lands, once swept when it does not; see the limit on a job's fifth delivery | `job not handed back; …`, `error` |
+| handing a job back | filed again by apalis as it was fetched, due at once, and run again at that attempt — or once swept, when Redis refuses apalis too | `job not handed back; …`, `error` |
 | renewing the lease | the attempt runs on, and the renewal is tried again | `job lease not renewed; retrying`, `warn` |
 | writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
 | the acknowledgement | delivered again once swept, and answered by its settled mark without running | `job acknowledgement lost; …`, `error` |
@@ -164,12 +164,13 @@ self.queue
 
 The job waits on `scheduled`, due on the second its delay ends — apalis
 schedules on whole seconds, and the backend rounds up, so a job never runs
-before its instant. Every worker moves due jobs onto `active` once a second, and
-so does the producer that filed them, for as long as it has delayed jobs of its
-own still ahead — so a due job reaches the list an autoscaler reads even while
-no worker runs. A retry is the same filing: the port's backoff decides when, and
-the next attempt waits on the schedule rather than in a worker. What that means
-for a deployment scaled to zero is on
+before its instant. Every worker scans the schedule once a second, moving up to
+its method's `concurrency` due jobs onto `active` each time, and so does the
+producer that filed them — a hundred at a time — for as long as it has delayed
+jobs of its own still ahead, so a due job reaches the list an autoscaler reads
+even while no worker runs. A retry is the same filing: the port's backoff
+decides when, and the next attempt waits on the schedule rather than in a
+worker. What that means for a deployment scaled to zero is on
 [Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).
 
 ## Unique keys
@@ -233,6 +234,10 @@ that kept it.
 | `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `30` | The drain window, hand-backs included |
 | `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS` | `300` | How long a silent replica keeps its jobs; at least `5` |
 | `NESTRS_REDIS__WORKER__LEASE_SECS` | `30` | How long a claim outlives its last renewal; at least `1` |
+| `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` | `100` | How often a method asks for jobs while a permit is free — its ceiling, and its idle cost; at least `10` |
+
+A value below its floor fails the boot, whether the environment set it or
+`for_root` pinned it, naming the variable.
 
 ## Limits
 
@@ -244,19 +249,19 @@ that kept it.
   and 6.2 is the oldest it ran on. Before 7.0, a worker a starting peer swept
   fetches nothing until its next heartbeat: apalis registers it again on an
   error text only Redis 7 writes.
-- **One fetch per poll.** A method fetches one job every 100 ms per replica —
-  see [Concurrency and scaling](/queue/scaling/#one-fetch-per-poll).
+- **A fetch per poll.** A method starts at most `concurrency` jobs per poll on
+  one replica, and a busy replica holds up to `concurrency` jobs it has not
+  started — see [Fetching on Redis](/queue/scaling/#fetching-on-redis).
 - **`failed` only grows.** apalis records there every job it reschedules — a
   retry, a hand-back — and nothing trims it.
-- **A hand-back that never lands can dead-letter a job by apalis's count.**
-  apalis 0.7 keeps an attempt count of its own on every record, raised by each
-  delivery and capped at five. A hand-back that fails is answered to apalis as a
-  failure, which asks it to deliver the job again — and from the job's fifth
-  delivery on, apalis dead-letters it instead, with none of the port's
-  dead-letter events. The job is lost only when the filing never took effect
-  and the acknowledgement after it did: a refusal Redis answered, or a filing
-  lost with its connection, then Redis reachable again — as across a failover.
-  A filing that merely timed out still lands, and the job runs again.
+- **apalis's own attempt cap binds only what 6.x filed.** apalis 0.7 keeps an
+  attempt count of its own on every record, raised by each delivery, and kills
+  a record answered with a failure once the count reaches the record's cap —
+  five by default — with none of the port's events. A hand-back Redis refuses is
+  answered that way, so the job is delivered again. Every record 7.0 files — a
+  push, a delayed push, a retry, a hand-back — lifts the cap past any count, so
+  apalis never ends a job the port has not; a record a 6.x producer filed keeps
+  the cap of five until a retry or a hand-back files it again.
 - **A settle Redis refuses closes nothing.** The step that marks a job settled
   also lets go of its unique key and closes its open record; when Redis refuses
   it, the worker says so at `warn`, and until the job's records lapse a push under

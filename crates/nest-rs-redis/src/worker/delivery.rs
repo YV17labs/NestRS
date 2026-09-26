@@ -10,8 +10,11 @@
 //! so a worker that stops holds no job running behind its back.
 //!
 //! **Then the guard** ([`Leases`]): the job runs only under its lease; a job
-//! that already reached its outcome is acknowledged without running; a job whose
-//! lease another delivery holds is handed back for when that lease would lapse.
+//! that already reached its outcome, or that a cancel reached first, is
+//! acknowledged without running; a job whose lease another delivery holds is
+//! handed back for when that lease would lapse, and one its method's throttle
+//! holds back for when the window ends — as it was fetched, the attempt it is at
+//! neither counted nor spent.
 //!
 //! **Then the port's attempt** ([`consume::attempt`]), and its outcome settles
 //! the job once:
@@ -21,6 +24,10 @@
 //! | `Ok` | `completed` | acknowledged |
 //! | `DeadLetter` | `dead-lettered` | apalis's `Abort`, which kills it onto the dead set |
 //! | `Retry { after }` | none, the lease dropped | the next attempt filed for `after`, and the task out of flight |
+//!
+//! A method taking a `Checkpoint` reads and saves it through [`RedisCheckpoint`],
+//! keyed by the job's id, so every delivery of the job resumes from the last
+//! save.
 //!
 //! apalis never retries on its own. The budget is the port's; a dead letter is
 //! apalis's `Abort` rather than a plain error, which apalis would re-queue under
@@ -48,6 +55,7 @@ use nest_rs_queue::{Envelope, JobError, JobId, ProcessMethod, QueueName};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
+use super::checkpoint::RedisCheckpoint;
 use super::lease::{Admission, Lease, Leases, Settlement};
 use crate::RedisConnection;
 use crate::backend::{BACKEND, due_second};
@@ -64,12 +72,14 @@ const SHORTEST_HAND_BACK: Duration = Duration::from_secs(1);
 /// The error type apalis's `build_fn` closure returns.
 pub(crate) type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
 
-/// What every delivery of one `#[process]` method shares: the method, its queue
-/// and storage, its guard, the container its attempts resolve from, and the two
-/// signals of a shutdown.
+/// What every delivery of one `#[process]` method shares: the method, its queue,
+/// its connection and storage, its guard, the container its attempts resolve
+/// from, and the two signals of a shutdown.
 pub(crate) struct Deliveries {
     pub(crate) method: &'static ProcessMethod,
     pub(crate) queue: QueueName,
+    /// The shared connection, which a method's checkpoints are kept over.
+    pub(crate) conn: RedisConnection,
     /// The apalis worker this method's deliveries arrive through — the prefix
     /// of every lease its deliveries hold.
     pub(crate) worker: String,
@@ -109,6 +119,8 @@ enum Why {
     Retry,
     /// Another delivery holds its lease.
     Leased,
+    /// Its method's throttle started as many attempts as the window allows.
+    Throttled,
     /// The drain window closed on its attempt.
     Shutdown,
     /// Its lease could not be asked for.
@@ -120,6 +132,7 @@ impl Why {
         match self {
             Self::Retry => "retry",
             Self::Leased => "leased elsewhere",
+            Self::Throttled => "throttled",
             Self::Shutdown => "shutdown",
             Self::Unguarded => "guard unavailable",
         }
@@ -148,8 +161,12 @@ impl Deliveries {
     ) -> Result<(), BoxDynError> {
         // apalis's task id is its record's, never the job's: the job's id is the
         // one the port sealed, and this rides beside it.
-        let delivery = Delivery::new(&BACKEND, self.queue.clone(), record)
+        let mut delivery = Delivery::new(&BACKEND, self.queue.clone(), record)
             .with_backend_id(task.id.to_string());
+        if self.method.options().checkpoint() {
+            let store = RedisCheckpoint::new(self.conn.clone(), &self.queue, delivery.id());
+            delivery = delivery.with_checkpoint(Arc::new(store));
+        }
         let job = delivery.id().clone();
         let queue = self.queue.clone();
         let running = AbortOnDropHandle::new(tokio::spawn(self.run(delivery, task)));
@@ -166,10 +183,31 @@ impl Deliveries {
         // stored value on the job's last attempt.
         let resting = delivery.retry_envelope();
         let holder = format!("{}/{}", self.worker, uuid::Uuid::now_v7());
-        let lease = match self.leases.admit(delivery.id(), holder).await {
+        let admission = self
+            .leases
+            .admit(delivery.id(), delivery.unique_key(), holder)
+            .await;
+        let lease = match admission {
             Ok(Admission::Granted(lease)) => lease,
             Ok(Admission::Settled(settlement)) => {
                 return self.acknowledge_settled(&delivery, settlement).await;
+            }
+            Ok(Admission::Cancelled) => {
+                // What the job held was let go by the step that met the
+                // tombstone, which stays for as long as a settled mark would.
+                tracing::info!(
+                    target: nest_rs_queue::TARGET,
+                    queue = %self.queue,
+                    job_id = %delivery.id(),
+                    "job delivered after it was cancelled; acknowledged without running",
+                );
+                return Ok(());
+            }
+            Ok(Admission::Throttled { ends_in }) => {
+                let wait = ends_in.max(SHORTEST_HAND_BACK);
+                return self
+                    .hand_back(&delivery, &task, resting, wait, Why::Throttled)
+                    .await;
             }
             Ok(Admission::Held { holder, lapses_in }) => {
                 tracing::info!(
@@ -216,7 +254,7 @@ impl Deliveries {
             let answer = self
                 .hand_back(&delivery, &task, resting, Duration::ZERO, Why::Shutdown)
                 .await;
-            self.release(&lease, &delivery).await;
+            self.release(&lease, &delivery, Duration::ZERO).await;
             return answer;
         };
 
@@ -235,7 +273,7 @@ impl Deliveries {
                 let answer = self
                     .hand_back(&delivery, &task, next, after, Why::Retry)
                     .await;
-                self.release(&lease, &delivery).await;
+                self.release(&lease, &delivery, after).await;
                 answer
             }
         }
@@ -290,10 +328,11 @@ impl Deliveries {
         }
     }
 
-    /// Drop the lease of a job that goes back to the queue. One Redis refused
-    /// lapses on its own, and until then delays the job's next delivery.
-    async fn release(&self, lease: &Lease, delivery: &Delivery) {
-        if let Err(error) = lease.release().await {
+    /// Drop the lease of a job that goes back to the queue, due again after
+    /// `next`. One Redis refused lapses on its own, and until then delays the
+    /// job's next delivery.
+    async fn release(&self, lease: &Lease, delivery: &Delivery, next: Duration) {
+        if let Err(error) = lease.release(next).await {
             report_guard(Guard::NotDropped, &self.queue, delivery.id(), &error);
         }
     }
@@ -370,7 +409,10 @@ fn failed_outside_the_attempt(
 enum Guard {
     /// Asking for the lease: the job is handed back rather than run unguarded.
     Unasked,
-    /// Writing the settled mark: a second delivery would run the job again.
+    /// Writing the settled mark — and, in the same step, closing what the job
+    /// held: a second delivery would run the job again, a cancel would find it
+    /// still open once its lease lapsed, and its unique key stays held until the
+    /// week its records are kept runs out.
     NotSettled(Settlement),
     /// Keeping a settled mark past a drain.
     NotExtended,
@@ -396,7 +438,8 @@ fn report_guard(guard: Guard, queue: &QueueName, job: &JobId, error: &redis::Red
             job_id = %job,
             settled = outcome.as_str(),
             error = %error,
-            "job settled mark not written; a second delivery of it would run it again",
+            "job settled mark not written; a second delivery would run it again, a cancel could \
+             still answer true, and its unique key stays held until it lapses",
         ),
         Guard::NotExtended => tracing::warn!(
             target: nest_rs_queue::TARGET,
@@ -461,6 +504,19 @@ where
                 attempt = delivery.attempt(),
                 due_in_ms = millis(wait),
                 "job filed for its next attempt",
+            );
+            Ok(())
+        }
+        // A throttle holding a job back is the throttle doing what it was
+        // declared to do, once per deferred job — detail, like a retry's filing.
+        HandBack::Whole if why == Why::Throttled => {
+            tracing::debug!(
+                target: nest_rs_queue::TARGET,
+                queue = %queue,
+                job_id = %job,
+                attempt = delivery.attempt(),
+                due_in_ms = millis(wait),
+                "job deferred to its throttle's next window",
             );
             Ok(())
         }
@@ -583,6 +639,33 @@ mod tests {
         logs.expect_none(nest_rs_queue::TARGET, "job handed back to the queue");
     }
 
+    /// A job its method's throttle held back is detail too: the throttle doing
+    /// what it was declared to do, once per deferred job.
+    #[test]
+    fn a_throttled_job_deferred_whole_is_detail() {
+        let logs = LogCapture::install();
+        handed_back::<std::io::Error>(
+            &audio(),
+            &delivery(),
+            Why::Throttled,
+            Duration::from_secs(3),
+            HandBack::Whole,
+        )
+        .expect("acknowledged");
+        let event = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "job deferred to its throttle's next window",
+        );
+        assert_eq!(event.level, "debug");
+        assert_eq!(event.field("due_in_ms").as_deref(), Some("3000"));
+        assert_eq!(
+            event.field("attempt").as_deref(),
+            Some("2"),
+            "not an attempt spent"
+        );
+        logs.expect_none(nest_rs_queue::TARGET, "job handed back to the queue");
+    }
+
     /// A hand-back Redis refused must neither drop the job nor bury it: the task
     /// fails as a plain error, which apalis re-queues, and the line says the job
     /// is delivered again rather than that it was handed back.
@@ -663,7 +746,8 @@ mod tests {
         );
         let unsettled = logs.expect_one(
             nest_rs_queue::TARGET,
-            "job settled mark not written; a second delivery of it would run it again",
+            "job settled mark not written; a second delivery would run it again, a cancel could \
+             still answer true, and its unique key stays held until it lapses",
         );
         let unextended = logs.expect_one(
             nest_rs_queue::TARGET,

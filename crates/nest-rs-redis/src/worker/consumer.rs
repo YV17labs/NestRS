@@ -155,6 +155,7 @@ impl Transport for RedisWorker {
             let deliveries = Arc::new(Deliveries {
                 method,
                 queue: queue.clone(),
+                conn: (*connection).clone(),
                 worker: id.clone(),
                 container: container.clone(),
                 storage: storage(&connection, &queue, &config),
@@ -163,6 +164,7 @@ impl Transport for RedisWorker {
                     queue,
                     config.lease,
                     config.orphan_after,
+                    method.options().throttle(),
                 ),
                 draining: cancel.clone(),
                 interrupt: interrupt.clone(),

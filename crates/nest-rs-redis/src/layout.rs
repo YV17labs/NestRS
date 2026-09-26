@@ -8,8 +8,26 @@
 //! and the rest — and this crate hands it `nestrs:queue:<queue>`, so everything a
 //! queue holds is one `SCAN nestrs:queue:<queue>:*` away and nothing of it sits
 //! at the root of the keyspace beside the application's own keys. The framework's
-//! own records for a queue (a delivery's lease, a job's settled mark) are levels
-//! of the same namespace, under words apalis does not use.
+//! own records for a queue are levels of the same namespace, under words apalis
+//! does not use — one structure per fact, keyed by the port's job id:
+//!
+//! | key | holds | from | until |
+//! | --- | --- | --- | --- |
+//! | `…:open:<job>` | the job's unique key, or nothing | its push | it settles, or is cancelled |
+//! | `…:leases:<job>` | the delivery running it | an attempt starts | the attempt ends |
+//! | `…:settled:<job>` | how it ended | its terminal outcome | a second delivery could no longer come |
+//! | `…:cancelled:<job>` | the cancel | a cancel that promised it never starts | its delivery, and past it |
+//! | `…:checkpoints:<job>` | its saved progress | a save | its terminal outcome |
+//! | `…:unique:<key>` | the job holding the key | its push | it settles, or is cancelled |
+//! | `…:throttle` | the attempts started in the current window | the window's first start | the window ends |
+//!
+//! **Nothing here waits forever.** A job can vanish without reaching an outcome
+//! a delivery sees — a producer stopped between opening its records and filing
+//! it, a replica that answered apalis in a way apalis buries on its own — so
+//! every record of a job still waiting carries [`KEPT_PAST_DUE`] past the instant
+//! the job is due, renewed whenever a delivery touches it. That is the bound on
+//! a unique key whose job vanished, and on the records of a job nothing will
+//! ever deliver.
 //!
 //! **6.x handed apalis the queue's bare name**, so its jobs sit at the root —
 //! `<queue>:active`, `<queue>:scheduled`, and the one in-flight set its worker
@@ -17,8 +35,10 @@
 //! left there would wait forever without a word; [`legacy_jobs`] finds them, the
 //! worker refuses to start beside them, and the producer says so once per queue.
 
+use std::time::Duration;
+
 use apalis_redis::Config;
-use nest_rs_queue::QueueName;
+use nest_rs_queue::{JobId, QueueName};
 
 use crate::RedisConnection;
 
@@ -34,12 +54,82 @@ use crate::RedisConnection;
 const NAMESPACE: &str = "nestrs:queue:{queue}";
 
 /// What [`NAMESPACE`] and the keys built beside it write for the queue's name.
-pub(crate) const QUEUE_SLOT: &str = "{queue}";
+const QUEUE_SLOT: &str = "{queue}";
+
+/// What a job's keys write for the job's id — the port's [`JobId`], never
+/// apalis's own task id.
+const JOB_SLOT: &str = "{job}";
+
+/// What a unique claim's key writes for the key the push declared.
+const KEY_SLOT: &str = "{key}";
+
+/// A job that has not reached its outcome, holding the unique key it was pushed
+/// under (empty when it has none): opened by the push, closed when the job
+/// settles or is cancelled. What lets a cancel tell a job still waiting from one
+/// that finished long ago — apalis keeps a finished job's record until someone
+/// vacuums it.
+pub(crate) const OPEN: &str = "nestrs:queue:{queue}:open:{job}";
+
+/// A delivery's claim on its job while an attempt runs — plural like every
+/// structure that holds one member per job.
+pub(crate) const LEASES: &str = "nestrs:queue:{queue}:leases:{job}";
+
+/// The mark a job leaves when it reaches its terminal outcome.
+pub(crate) const SETTLED: &str = "nestrs:queue:{queue}:settled:{job}";
+
+/// A cancel's promise that the job never starts: whichever delivery meets it
+/// acknowledges the job without running it.
+pub(crate) const CANCELLED: &str = "nestrs:queue:{queue}:cancelled:{job}";
+
+/// The progress a job saved through its `Checkpoint`.
+pub(crate) const CHECKPOINTS: &str = "nestrs:queue:{queue}:checkpoints:{job}";
+
+/// The job holding a unique key on the queue.
+const UNIQUE: &str = "nestrs:queue:{queue}:unique:{key}";
+
+/// The attempts of the queue's method started in the current throttle window.
+/// One per queue: a queue is drained by one `#[process]` method, so the queue
+/// already names the method a throttle belongs to.
+const THROTTLE: &str = "nestrs:queue:{queue}:throttle";
+
+/// How long a job's records outlive the instant the job is due while nothing
+/// touches them: a week — the quiet a deployment scaled to zero may sit
+/// through. Every delivery renews it; a job still waiting a week past its due
+/// time has been forgotten, and its unique key is free again.
+pub(crate) const KEPT_PAST_DUE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// The namespace `queue`'s records live under — apalis's structures and the
 /// framework's own.
 pub(crate) fn namespace(queue: &QueueName) -> String {
     NAMESPACE.replace(QUEUE_SLOT, queue.as_str())
+}
+
+/// The key `template` names for `job` on `queue` — one of [`OPEN`], [`LEASES`],
+/// [`SETTLED`], [`CANCELLED`] or [`CHECKPOINTS`].
+pub(crate) fn job_key(template: &str, queue: &QueueName, job: &JobId) -> String {
+    template
+        .replace(QUEUE_SLOT, queue.as_str())
+        .replace(JOB_SLOT, &job.to_string())
+}
+
+/// The key the job holding the unique key `key` on `queue` is named under. The
+/// key is the caller's, written last so nothing it spells is read as a slot.
+pub(crate) fn unique_key(queue: &QueueName, key: &str) -> String {
+    UNIQUE
+        .replace(QUEUE_SLOT, queue.as_str())
+        .replace(KEY_SLOT, key)
+}
+
+/// The key `queue`'s throttle window is counted in.
+pub(crate) fn throttle_key(queue: &QueueName) -> String {
+    THROTTLE.replace(QUEUE_SLOT, queue.as_str())
+}
+
+/// `duration` in whole milliseconds, at least one — Redis refuses a zero `PX`.
+pub(crate) fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1)
 }
 
 /// The storage settings every handle on `queue` starts from: its namespace. A
@@ -111,6 +201,34 @@ mod tests {
             ["nestrs", concern, "audio"],
         );
         assert_eq!(config(&audio()).get_namespace(), &namespace(&audio()));
+    }
+
+    /// Every record of a job is a level of its queue's namespace, under a word
+    /// apalis does not use — so a `SCAN` of the queue finds them, and none of
+    /// apalis's structures is ever mistaken for one of the framework's.
+    #[test]
+    fn a_jobs_records_are_levels_of_its_queues_namespace() {
+        let job = JobId::parse("01890a5d-ac96-774b-bcce-b302099a8057").expect("a job id");
+        let namespace = namespace(&audio());
+        for (template, word) in [
+            (OPEN, "open"),
+            (LEASES, "leases"),
+            (SETTLED, "settled"),
+            (CANCELLED, "cancelled"),
+            (CHECKPOINTS, "checkpoints"),
+        ] {
+            assert_eq!(
+                job_key(template, &audio(), &job),
+                format!("{namespace}:{word}:{job}")
+            );
+        }
+        assert_eq!(
+            unique_key(&audio(), "clip:{job}"),
+            format!("{namespace}:unique:clip:{{job}}"),
+            "the caller's key is written as it came, slots and levels included",
+        );
+        assert_eq!(throttle_key(&audio()), format!("{namespace}:throttle"));
+        assert_eq!(millis(Duration::ZERO), 1);
     }
 
     /// Every 6.x name is the queue's own at the root, which the framework's

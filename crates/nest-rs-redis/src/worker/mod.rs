@@ -4,6 +4,7 @@
 //! this module — [`crate::RedisQueueModule`] is the producer side, and both
 //! read the connection [`crate::RedisModule`] opens.
 
+mod checkpoint;
 mod config;
 mod consumer;
 mod delivery;

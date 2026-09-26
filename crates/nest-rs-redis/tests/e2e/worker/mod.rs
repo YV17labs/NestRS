@@ -2,9 +2,12 @@
 //! transport owns — a method's concurrency, the exclusive fetch, each replica's
 //! identity and the bounded drain — [`delivery`] for what one delivery does with
 //! a job — the port's retries as filings on the schedule, a hand-back, a
-//! connection that drops under it — and [`lease`] for the guard that keeps a job
-//! from running twice when apalis delivers it twice.
+//! connection that drops under it — [`lease`] for the guard that keeps a job
+//! from running twice when apalis delivers it twice, meets a cancel, lets go of
+//! a unique key and counts a throttle, and [`checkpoint`] for a job's progress
+//! across its attempts.
 
+mod checkpoint;
 mod consumer;
 mod delivery;
 mod lease;

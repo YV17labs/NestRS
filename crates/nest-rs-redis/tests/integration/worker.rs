@@ -1,7 +1,7 @@
 //! `RedisWorker`'s boot, in process and without Redis: what `configure` refuses
 //! before the queue storage is ever opened — methods with no connection, two
-//! methods on one queue, a declaration this backend does not honour — and the
-//! idle serve of an app with nothing to drain.
+//! methods on one queue — what it lets through, and the idle serve of an app
+//! with nothing to drain.
 //!
 //! What an attempt at a job *is* — the envelope, the budget, the outcome classes
 //! — belongs to the port and is proved by its own suite; what only a live worker
@@ -132,33 +132,24 @@ async fn a_processor_another_app_owns_does_not_contest_this_queue() {
     );
 }
 
-/// This backend declares no optional capability, so a method declaring one is
-/// refused at boot, naming the method, what it needs and this backend — never
-/// served while the declaration is dropped.
+/// Every declaration a `#[process]` can make is one this backend honours, so a
+/// method declaring a throttle or a checkpoint gets past discovery — as far as
+/// the connection, which this suite never opens. The refusal a backend without
+/// them owes is the port's, proved in its own suite.
 #[tokio::test]
-async fn a_declaration_redis_does_not_honour_fails_configure_naming_the_backend() {
-    for (host, method, needs) in [
-        (
-            TypeId::of::<ThrottledHost>(),
-            "ThrottledHost::run",
-            "throttling",
-        ),
-        (
-            TypeId::of::<CheckpointHost>(),
-            "CheckpointHost::run",
-            "checkpoints",
-        ),
+async fn a_throttle_or_a_checkpoint_gets_past_discovery_on_this_backend() {
+    for host in [
+        TypeId::of::<ThrottledHost>(),
+        TypeId::of::<CheckpointHost>(),
     ] {
         let refusal = configure(&reaching(&[host]))
             .await
-            .expect_err("a declaration the backend does not honour is refused")
+            .expect_err("no connection is seeded")
             .to_string();
-        for part in [method, needs, "`redis` queue backend"] {
-            assert!(
-                refusal.contains(part),
-                "the refusal names {part}: {refusal}"
-            );
-        }
+        assert!(
+            refusal.contains("RedisConnection") && !refusal.contains("does not provide"),
+            "discovery served the method, and only the connection was missing: {refusal}",
+        );
     }
 }
 

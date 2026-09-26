@@ -1,5 +1,6 @@
 //! The delivery guard, against live workers: a job apalis delivers twice runs
-//! once.
+//! once, a job a cancel reached first never runs, a unique key goes with its
+//! job's outcome, and a throttle caps how many attempts start per window.
 //!
 //! apalis-redis delivers **at least once**, and each way it delivers twice is a
 //! test here, because each is a path the guard has to meet from a different
@@ -18,17 +19,28 @@
 //! delivery is handed back while the first holds the lease, and it is
 //! acknowledged without running once the first has settled it.
 //!
+//! The same step meets a cancel: a job cancelled while it waits — on its queue,
+//! on its delay, or for its next attempt — is acknowledged without running when
+//! it is delivered, and a cancel while an attempt runs is refused and the job
+//! runs to its end. Settling a job lets go of its unique key, whether it
+//! completed or dead-lettered. And a method's throttle counts every start across
+//! every replica: an attempt over the limit waits for the window to end, neither
+//! counted as an attempt nor dropped.
+//!
 //! Replicas here run [`brisk`](crate::brisk) settings: a two-second lease, so a
 //! lease a dead replica held is free again within the test.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use apalis::prelude::Storage;
 use apalis_redis::{Config, RedisStorage};
-use nest_rs_core::{injectable, module};
-use nest_rs_queue::{JobId, JobProducerExt, processor, queue};
+use nest_rs_core::{injectable, module, operation_log};
+use nest_rs_queue::{
+    JobError, JobId, JobProducerExt, PushOptions, PushReceipt, QueueError, processor, queue, unit,
+};
 use nest_rs_redis::{
-    RedisConnection, RedisModule, RedisQueueModule, RedisWorkerConfig, RedisWorkerModule,
+    RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorkerConfig,
+    RedisWorkerModule,
 };
 use nest_rs_testing::LogCapture;
 use serde::{Deserialize, Serialize};
@@ -358,4 +370,493 @@ async fn one_job_delivered_twice_at_once_runs_once() {
     );
     assert_eq!(TWICE.of(run).len(), 1, "the job ran once");
     assert_eq!(TWICE.finished(run), 1, "to its end");
+}
+
+// --- a unique key goes with its job's outcome ---------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OutcomeCommand {
+    run: u64,
+    /// Whether the attempt fails for good.
+    fail: bool,
+}
+
+static OUTCOMES: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-unique-outcome", job = OutcomeCommand)]
+struct OutcomeQueue;
+
+#[injectable]
+#[derive(Default)]
+struct OutcomeProcessor;
+
+#[processor]
+impl OutcomeProcessor {
+    #[process(queue = OutcomeQueue, retries = 0)]
+    async fn run(&self, job: OutcomeCommand) -> Result<(), JobError> {
+        OUTCOMES.start(job.run);
+        if job.fail {
+            return Err(JobError::abort(
+                "the payload names a file that does not exist",
+            ));
+        }
+        OUTCOMES.finish(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [OutcomeProcessor],
+)]
+struct OutcomeModule;
+
+/// Push `job` under `key` as soon as the key is free, within `within`: the job
+/// holding it lets go when its delivery settles it, a moment after its handler
+/// returns.
+async fn push_when_free(
+    producer: &RedisQueueProducer,
+    job: OutcomeCommand,
+    key: &str,
+    within: Duration,
+) -> PushReceipt {
+    let deadline = Instant::now() + within;
+    loop {
+        match producer
+            .push(
+                OutcomeQueue,
+                job.clone(),
+                PushOptions::default().with_unique(key),
+            )
+            .await
+        {
+            Ok(receipt) => return receipt,
+            Err(QueueError::UniqueKeyHeld { .. }) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(other) => panic!("the key was never let go: {other}"),
+        }
+    }
+}
+
+/// A unique key is held while its job waits and runs, and free for the next
+/// push once the job completes — and again once a job under it dead-letters.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_unique_push_key_is_let_go_when_its_job_completes_and_when_it_dead_letters() {
+    let run = crate::this_run();
+    let key = format!("outcome-{run}");
+    let replica = crate::replica::<OutcomeModule>().await;
+
+    let completing = replica
+        .producer
+        .push(
+            OutcomeQueue,
+            OutcomeCommand { run, fail: false },
+            PushOptions::default().with_unique(key.as_str()),
+        )
+        .await
+        .expect("the first job under the key");
+    let doomed = push_when_free(
+        &replica.producer,
+        OutcomeCommand {
+            run: run + 1,
+            fail: true,
+        },
+        &key,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(OUTCOMES.finished(run), 1, "the first job completed first");
+    let last = push_when_free(
+        &replica.producer,
+        OutcomeCommand {
+            run: run + 2,
+            fail: false,
+        },
+        &key,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(
+        OUTCOMES.of(run + 1).len(),
+        1,
+        "the second job ran and dead-lettered before the key was free"
+    );
+    assert_eq!(OUTCOMES.finished(run + 1), 0);
+    crate::wait_until(Duration::from_secs(10), || OUTCOMES.finished(run + 2) == 1).await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+
+    assert_ne!(completing.id(), doomed.id());
+    assert_eq!(
+        OUTCOMES.finished(run + 2),
+        1,
+        "the third job ran under it too"
+    );
+    let claim = crate::key_of("nestrs-e2e-unique-outcome", "unique", &key);
+    let open = crate::key_of("nestrs-e2e-unique-outcome", "open", &last.id().to_string());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while crate::read(&claim).await.is_some() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        crate::read(&claim).await,
+        None,
+        "and the last job let go of it"
+    );
+    assert_eq!(
+        crate::read(&open).await,
+        None,
+        "its open record closed with it"
+    );
+}
+
+// --- a cancel met by the delivery ------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CancelCommand {
+    run: u64,
+    /// How long each attempt holds on.
+    hold_ms: u64,
+    /// Whether the first attempt fails, retryably.
+    fail_first: bool,
+}
+
+impl CancelCommand {
+    fn plain(run: u64) -> Self {
+        Self {
+            run,
+            hold_ms: 0,
+            fail_first: false,
+        }
+    }
+}
+
+/// Run a cancel suite's job: count its start, fail the first attempt when it
+/// says so, hold on, count its end.
+async fn run_cancellable(runs: &Runs, job: CancelCommand) -> anyhow::Result<()> {
+    let attempt = runs.start(job.run);
+    if job.fail_first && attempt == 1 {
+        anyhow::bail!("the upstream timed out");
+    }
+    tokio::time::sleep(Duration::from_millis(job.hold_ms)).await;
+    runs.finish(job.run);
+    Ok(())
+}
+
+// Each suite drains a queue of its own: nextest runs every test in a process of
+// its own, and a worker in one would take another's jobs.
+
+static WAITED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-cancel-waiting", job = CancelCommand)]
+struct WaitingCancelQueue;
+
+#[injectable]
+#[derive(Default)]
+struct WaitingCancelProcessor;
+
+#[processor]
+impl WaitingCancelProcessor {
+    #[process(queue = WaitingCancelQueue, retries = 2)]
+    async fn run(&self, job: CancelCommand) -> anyhow::Result<()> {
+        run_cancellable(&WAITED, job).await
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [WaitingCancelProcessor],
+)]
+struct WaitingCancelModule;
+
+static RUNNING: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-cancel-running", job = CancelCommand)]
+struct RunningCancelQueue;
+
+#[injectable]
+#[derive(Default)]
+struct RunningCancelProcessor;
+
+#[processor]
+impl RunningCancelProcessor {
+    #[process(queue = RunningCancelQueue, retries = 2)]
+    async fn run(&self, job: CancelCommand) -> anyhow::Result<()> {
+        run_cancellable(&RUNNING, job).await
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [RunningCancelProcessor],
+)]
+struct RunningCancelModule;
+
+static RETRIED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-cancel-retry", job = CancelCommand)]
+struct RetryCancelQueue;
+
+#[injectable]
+#[derive(Default)]
+struct RetryCancelProcessor;
+
+#[processor]
+impl RetryCancelProcessor {
+    #[process(queue = RetryCancelQueue, retries = 2)]
+    async fn run(&self, job: CancelCommand) -> anyhow::Result<()> {
+        run_cancellable(&RETRIED, job).await
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [RetryCancelProcessor],
+)]
+struct RetryCancelModule;
+
+/// The line a delivery files for a job a cancel reached first.
+const CANCELLED_LINE: &str = "job delivered after it was cancelled; acknowledged without running";
+
+/// A job cancelled while it waited on its queue, and one cancelled while its
+/// delay held it back, are delivered once a worker runs and they are due — and
+/// acknowledged without running, the cancel's `true` kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_of_a_waiting_or_delayed_job_keeps_it_from_ever_running() {
+    let logs = LogCapture::install_global();
+    let run = crate::this_run();
+    let producer = crate::producer().await;
+    let waiting = producer
+        .push(WaitingCancelQueue, CancelCommand::plain(run), None)
+        .await
+        .expect("a job waiting for a worker");
+    let delayed = producer
+        .push(
+            WaitingCancelQueue,
+            CancelCommand::plain(run + 1),
+            PushOptions::default().with_delay(Duration::from_secs(2)),
+        )
+        .await
+        .expect("a delayed job");
+    assert!(producer.cancel(&waiting).await.expect("a cancel"));
+    assert!(producer.cancel(&delayed).await.expect("a cancel"));
+
+    let replica = crate::replica::<WaitingCancelModule>().await;
+    crate::wait_until(Duration::from_secs(15), || {
+        said(&logs, CANCELLED_LINE, waiting.id()) && said(&logs, CANCELLED_LINE, delayed.id())
+    })
+    .await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+
+    for receipt in [&waiting, &delayed] {
+        assert!(
+            said(&logs, CANCELLED_LINE, receipt.id()),
+            "delivered, and acknowledged without running: {}",
+            receipt.id(),
+        );
+    }
+    assert!(WAITED.of(run).is_empty(), "the waiting job never ran");
+    assert!(WAITED.of(run + 1).is_empty(), "the delayed job never ran");
+}
+
+/// A cancel while an attempt runs is refused — the job started — and the job
+/// runs to its end; once it has, a cancel still answers `false`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_while_an_attempt_runs_is_refused_and_the_job_runs_to_its_end() {
+    let run = crate::this_run();
+    let replica = crate::replica::<RunningCancelModule>().await;
+    let receipt = replica
+        .producer
+        .push(
+            RunningCancelQueue,
+            CancelCommand {
+                hold_ms: 1500,
+                ..CancelCommand::plain(run)
+            },
+            None,
+        )
+        .await
+        .expect("enqueue");
+    crate::wait_until(Duration::from_secs(10), || !RUNNING.of(run).is_empty()).await;
+
+    assert!(
+        !replica.producer.cancel(&receipt).await.expect("a cancel"),
+        "an attempt runs, so the job is not cancelled",
+    );
+    crate::wait_until(Duration::from_secs(10), || RUNNING.finished(run) == 1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !replica.producer.cancel(&receipt).await.expect("a cancel"),
+        "a finished job is not cancelled either",
+    );
+    replica.worker.shutdown().await.expect("clean shutdown");
+    assert_eq!(RUNNING.of(run).len(), 1);
+    assert_eq!(RUNNING.finished(run), 1, "it ran to its end");
+}
+
+/// A job whose attempt failed waits on the schedule for its next one; a cancel
+/// there is a cancel of a waiting job — `true`, and the next attempt never runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_of_a_job_waiting_for_its_retry_keeps_it_from_its_next_attempt() {
+    let logs = LogCapture::install_global();
+    let run = crate::this_run();
+    let replica = crate::replica::<RetryCancelModule>().await;
+    let receipt = replica
+        .producer
+        .push(
+            RetryCancelQueue,
+            CancelCommand {
+                fail_first: true,
+                ..CancelCommand::plain(run)
+            },
+            None,
+        )
+        .await
+        .expect("enqueue");
+    crate::wait_until(Duration::from_secs(10), || !RETRIED.of(run).is_empty()).await;
+
+    // The first attempt's delivery files the next one, then lets go of the job:
+    // from then until the next attempt starts, the job waits.
+    let deadline = Instant::now() + Duration::from_millis(700);
+    let mut cancelled = false;
+    while !cancelled && Instant::now() < deadline {
+        cancelled = replica.producer.cancel(&receipt).await.expect("a cancel");
+        if !cancelled {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+    assert!(cancelled, "the job waiting for its retry was cancelled");
+    crate::wait_until(Duration::from_secs(10), || {
+        said(&logs, CANCELLED_LINE, receipt.id())
+    })
+    .await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+
+    assert!(said(&logs, CANCELLED_LINE, receipt.id()));
+    assert_eq!(
+        RETRIED.of(run).len(),
+        1,
+        "the first attempt ran, and the next never did"
+    );
+}
+
+// --- a throttle across replicas ----------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ThrottledCommand {
+    run: u64,
+    take: u64,
+}
+
+static THROTTLED: Runs = Runs::new();
+
+/// The window the throttled method declares.
+const THROTTLE_WINDOW: Duration = Duration::from_secs(2);
+
+#[queue(name = "nestrs-e2e-throttle", job = ThrottledCommand)]
+struct ThrottledQueue;
+
+#[injectable]
+#[derive(Default)]
+struct ThrottledProcessor;
+
+#[processor]
+impl ThrottledProcessor {
+    #[process(queue = ThrottledQueue, concurrency = 4, throttle(limit = 2, window = "2s"))]
+    async fn run(&self, job: ThrottledCommand) -> anyhow::Result<()> {
+        THROTTLED.start(job.run.wrapping_add(1 + job.take));
+        THROTTLED.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [ThrottledProcessor],
+)]
+struct ThrottledModule;
+
+/// Two replicas with four permits each could start six jobs at once; a
+/// throttle of two per two-second window, counted in Redis, lets two start in
+/// the first window and holds the rest back for the windows after — every job
+/// runs once, on its first attempt, and none is dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_throttle_caps_attempt_starts_per_window_across_replicas_and_defers_the_rest() {
+    /// How far a start may land before the window it opened by Redis's clock, as
+    /// read by this process's — the time between the counting step and the
+    /// handler's first line.
+    const SLACK: Duration = Duration::from_millis(250);
+    let logs = LogCapture::install_global();
+    let run = crate::this_run();
+    // A window an earlier run of this suite opened would count this run's first
+    // starts, and the first window has to open with this run's first job.
+    let _: i64 = redis::cmd("DEL")
+        .arg(format!(
+            "{}:throttle",
+            crate::namespace("nestrs-e2e-throttle")
+        ))
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("DEL");
+    let first = crate::replica::<ThrottledModule>().await;
+    let second = crate::replica::<ThrottledModule>().await;
+    let mut receipts = Vec::new();
+    for take in 0..6 {
+        receipts.push(
+            first
+                .producer
+                .push(ThrottledQueue, ThrottledCommand { run, take }, None)
+                .await
+                .expect("enqueue"),
+        );
+    }
+    crate::wait_until(Duration::from_secs(30), || THROTTLED.of(run).len() == 6).await;
+    first.worker.shutdown().await.expect("clean shutdown");
+    second.worker.shutdown().await.expect("clean shutdown");
+
+    for take in 0..6 {
+        assert_eq!(
+            THROTTLED.of(run.wrapping_add(1 + take)).len(),
+            1,
+            "job {take} ran once, never dropped"
+        );
+    }
+    let mut started = THROTTLED.of(run);
+    started.sort();
+    assert!(
+        started[2] - started[0] + SLACK >= THROTTLE_WINDOW,
+        "the first window let two jobs start, not three: {:?}",
+        started[2] - started[0],
+    );
+    assert!(
+        started[5] - started[0] + SLACK >= THROTTLE_WINDOW * 2,
+        "six jobs at two a window took three windows, not {:?}",
+        started[5] - started[0],
+    );
+    let lines: Vec<_> = logs
+        .find(operation_log::TARGET, unit::JOB)
+        .into_iter()
+        .filter(|line| {
+            receipts
+                .iter()
+                .any(|receipt| crate::names(line, receipt.id()))
+        })
+        .collect();
+    assert_eq!(lines.len(), 6, "one attempt per job: {lines:#?}");
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.field("attempt").as_deref() == Some("1")
+                && line.field("outcome").as_deref() == Some(operation_log::OK)),
+        "a job held back by the throttle keeps its first attempt: {lines:#?}",
+    );
+    assert!(
+        !logs
+            .find(
+                nest_rs_queue::TARGET,
+                "job deferred to its throttle's next window"
+            )
+            .is_empty(),
+        "the jobs over the limit were deferred",
+    );
 }

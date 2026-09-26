@@ -41,7 +41,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nest_rs_core::Transport;
 use nest_rs_redis::{
-    RedisConfig, RedisConnection, RedisQueueProducer, RedisWorker, RedisWorkerConfig,
+    RedisConfig, RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker,
+    RedisWorkerConfig,
 };
 use nest_rs_testing::{CapturedEvent, TestApp, TransportHandle};
 use tokio::net::{TcpListener, TcpStream};
@@ -82,6 +83,31 @@ const DB_TLS_REFUSED_REOPEN: u8 = 13;
 /// Claims only: every scheduler the `schedule` tests boot claims here, so the
 /// key layout is asserted over the whole database.
 const DB_SCHEDULE: u8 = 14;
+const DB_UNIQUE_REFUSED: u8 = 15;
+
+// Two tests sharing a database meet each other's keys and connections, and
+// Redis ships sixteen: both facts are checked where the list is written.
+const _: () = {
+    let dbs = [
+        DB_CONFINED_TO_THE_PREFIX,
+        DB_CONNECTION_RESET_MID_ATTEMPT,
+        DB_CONNECTION_DROP,
+        DB_TLS_FLUSH,
+        DB_TLS_REFUSED_REOPEN,
+        DB_SCHEDULE,
+        DB_UNIQUE_REFUSED,
+    ];
+    let mut i = 0;
+    while i < dbs.len() {
+        assert!(dbs[i] != 0 && dbs[i] < 16, "an e2e database is 1 to 15");
+        let mut j = i + 1;
+        while j < dbs.len() {
+            assert!(dbs[i] != dbs[j], "two e2e tests share a logical database");
+            j += 1;
+        }
+        i += 1;
+    }
+};
 
 /// The dev container Redis's URL on database `db`, for a test whose keys must
 /// not meet another test's — a connection drop aimed at its clients, or a
@@ -401,4 +427,68 @@ async fn waiting(queue: &str) -> i64 {
         .query_async(&mut admin)
         .await
         .expect("LLEN")
+}
+
+/// The key of `member` in the structure `structure` under the queue named
+/// `queue` — `…:unique:<key>`, `…:checkpoints:<job>` — spelled from the layout
+/// the documentation states, like [`namespace`].
+fn key_of(queue: &str, structure: &str, member: &str) -> String {
+    format!("{}:{structure}:{member}", namespace(queue))
+}
+
+/// How long `key` has left, in milliseconds: `-2` when it is gone, `-1` when it
+/// never lapses.
+async fn pttl(key: &str) -> i64 {
+    redis::cmd("PTTL")
+        .arg(key)
+        .query_async(&mut connect().await)
+        .await
+        .expect("PTTL")
+}
+
+/// What `key` holds, if it is there.
+async fn read(key: &str) -> Option<String> {
+    redis::cmd("GET")
+        .arg(key)
+        .query_async(&mut connect().await)
+        .await
+        .expect("GET")
+}
+
+/// Remove every key under the queue named `queue` — what a test that files jobs
+/// no worker drains leaves behind.
+async fn forget(queue: &str) {
+    let mut admin = connect().await;
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("{}:*", namespace(queue)))
+        .query_async(&mut admin)
+        .await
+        .expect("KEYS");
+    if !keys.is_empty() {
+        let _: i64 = redis::cmd("DEL")
+            .arg(&keys)
+            .query_async(&mut admin)
+            .await
+            .expect("DEL");
+    }
+}
+
+#[nest_rs_core::module(imports = [RedisModule::for_root(redis_config()), RedisQueueModule])]
+struct ProducerOnlyModule;
+
+/// A producer-only app's producer: pushes, and cancels, with no worker running
+/// anywhere to take a job.
+async fn producer() -> RedisQueueProducer {
+    let app = TestApp::builder()
+        .module::<ProducerOnlyModule>()
+        .build_headless()
+        .await
+        .expect("a producer-only app boots against the dev container Redis");
+    let producer = RedisQueueProducer::clone(
+        &app.container()
+            .get::<RedisQueueProducer>()
+            .expect("the producer binding"),
+    );
+    Box::leak(Box::new(app));
+    producer
 }

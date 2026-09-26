@@ -1,5 +1,6 @@
-//! [`Leases`] — the delivery guard: which delivery of a job may run it, and
-//! whether the job already reached its outcome.
+//! [`Leases`] — the delivery guard: which delivery of a job may run it, whether
+//! the job already reached its outcome or was cancelled before it started, and
+//! whether its method's throttle lets another attempt start now.
 //!
 //! apalis-redis delivers a job **at least once**. Its fetch is exclusive, but a
 //! replica's startup sweep puts every peer's in-flight jobs back on the queue
@@ -10,14 +11,22 @@
 //! finished, and without a guard it runs again.
 //!
 //! So before an attempt runs, its delivery takes the job's **lease** —
-//! `nestrs:queue:<queue>:leases:<job_id>`, `SET NX PX`, renewed while the
-//! attempt runs — and when the job reaches its terminal outcome the delivery
-//! writes its **settled** mark, `nestrs:queue:<queue>:settled:<job_id>`, and
-//! drops the lease. A delivery that finds the mark acknowledges the job without
-//! running it; one that finds the lease held elsewhere hands the job back for
-//! when the lease would lapse, and never acknowledges it — the guard may delay a
-//! job, never lose one. Every step is one Lua script, so no two deliveries ever
-//! see the lease between a check and a write.
+//! `nestrs:queue:<queue>:leases:<job_id>`, renewed while the attempt runs — and
+//! when the job reaches its terminal outcome the delivery writes its **settled**
+//! mark, `nestrs:queue:<queue>:settled:<job_id>`, and drops the lease. A delivery
+//! that finds the mark acknowledges the job without running it; one that finds
+//! the lease held elsewhere hands the job back for when the lease would lapse,
+//! and never acknowledges it — the guard may delay a job, never lose one.
+//!
+//! **The same step answers the capabilities that act before an attempt.** A job
+//! a cancel reached first carries its **tombstone**, and the delivery meeting it
+//! acknowledges the job without running it — the cancel's promise, kept on
+//! whichever replica the job reaches. A method declaring a throttle counts the
+//! attempts it starts in its queue's **window**, and an attempt over the limit is
+//! handed back for when the window ends, neither counted nor dropped. Settling a
+//! job closes what it held: its open record and its unique key. Every step is one
+//! Lua script, so no cancel, no second delivery and no other replica's start ever
+//! sees the lease between a check and a write.
 //!
 //! **What it does not make exclusive** is a replica that stops renewing — a
 //! network partition, a process frozen longer than the lease — while it goes on
@@ -28,45 +37,86 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use nest_rs_queue::{JobId, QueueName};
+use nest_rs_queue::{JobId, QueueName, Throttle};
 use redis::Script;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::RedisConnection;
-use crate::layout::QUEUE_SLOT;
-
-/// A delivery's claim on its job while an attempt runs, `{queue}` and `{job}`
-/// standing for the queue's name and the job's id.
-///
-/// Levels of the queue's namespace ([`crate::layout`]), under a structure word
-/// apalis does not use — `leases`, plural like every structure that holds one
-/// member per job.
-const LEASE: &str = "nestrs:queue:{queue}:leases:{job}";
-
-/// The mark a job leaves when it reaches its terminal outcome, `{queue}` and
-/// `{job}` standing for the queue's name and the job's id.
-const SETTLED: &str = "nestrs:queue:{queue}:settled:{job}";
-
-/// What [`LEASE`] and [`SETTLED`] write for the job's id.
-const JOB_SLOT: &str = "{job}";
+use crate::layout::{
+    self, CANCELLED, CHECKPOINTS, KEPT_PAST_DUE, LEASES, OPEN, SETTLED, job_key, millis,
+};
 
 /// How long a settled job is remembered at the least: an hour, which covers a
 /// second delivery waiting behind a backlog of that length — the case a startup
 /// sweep creates, since it puts the job at the end of the queue.
 const SETTLED_FLOOR: Duration = Duration::from_secs(60 * 60);
 
-/// The admission step: settled ⇒ `{0, 0, how it settled}`; the lease taken ⇒
-/// `{1, 0, ''}`; held by another delivery ⇒ `{2, ms until it lapses, its
-/// holder}`. Always three members: a Lua table ends at its first `nil`.
+/// The admission step, in the order a delivery owes its answers:
+///
+/// | answer | reply |
+/// | --- | --- |
+/// | settled | `{0, 0, how it settled}` |
+/// | the lease taken | `{1, 0, ''}` |
+/// | held by another delivery | `{2, ms until it lapses, its holder}` |
+/// | cancelled | `{3, 0, ''}` |
+/// | over its throttle | `{4, ms until the window ends, ''}` |
+///
+/// Always three members: a Lua table ends at its first `nil`.
+///
+/// `KEYS`: settled, lease, cancelled, open, checkpoints, throttle, then the
+/// unique claim when the job holds one. `ARGV`: the holder, the lease's length,
+/// how long the job's records are kept, the job's id, the throttle's limit (`0`
+/// for none) and its window.
+///
+/// A job met cancelled lets go of what it held and keeps its tombstone for as
+/// long as a delivery of it could come again. A job granted or deferred renews
+/// what it holds by as long, counted from its next delivery.
 const ADMIT: &str = r"
 local settled = redis.call('GET', KEYS[1])
 if settled then
   return {0, 0, settled}
 end
-if redis.call('SET', KEYS[2], ARGV[1], 'NX', 'PX', ARGV[2]) then
-  return {1, 0, ''}
+if redis.call('EXISTS', KEYS[3]) == 1 then
+  redis.call('PEXPIRE', KEYS[3], ARGV[3])
+  redis.call('DEL', KEYS[4], KEYS[5])
+  if KEYS[7] and redis.call('GET', KEYS[7]) == ARGV[4] then
+    redis.call('DEL', KEYS[7])
+  end
+  return {3, 0, ''}
 end
-return {2, redis.call('PTTL', KEYS[2]), redis.call('GET', KEYS[2])}
+local holder = redis.call('GET', KEYS[2])
+if holder then
+  return {2, redis.call('PTTL', KEYS[2]), holder}
+end
+local limit = tonumber(ARGV[5])
+if limit > 0 then
+  local started = tonumber(redis.call('GET', KEYS[6]) or '0')
+  local ends = redis.call('PTTL', KEYS[6])
+  if started >= limit then
+    if ends < 0 then
+      redis.call('PEXPIRE', KEYS[6], ARGV[6])
+      ends = tonumber(ARGV[6])
+    end
+    local kept = tonumber(ARGV[3]) + ends
+    redis.call('PEXPIRE', KEYS[4], kept)
+    redis.call('PEXPIRE', KEYS[5], kept)
+    if KEYS[7] and redis.call('GET', KEYS[7]) == ARGV[4] then
+      redis.call('PEXPIRE', KEYS[7], kept)
+    end
+    return {4, ends, ''}
+  end
+  redis.call('INCR', KEYS[6])
+  if ends < 0 then
+    redis.call('PEXPIRE', KEYS[6], ARGV[6])
+  end
+end
+redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2])
+redis.call('PEXPIRE', KEYS[4], ARGV[3])
+redis.call('PEXPIRE', KEYS[5], ARGV[3])
+if KEYS[7] and redis.call('GET', KEYS[7]) == ARGV[4] then
+  redis.call('PEXPIRE', KEYS[7], ARGV[3])
+end
+return {1, 0, ''}
 ";
 
 /// Extend the lease while its holder still holds it: `1` renewed, `0` lost.
@@ -77,11 +127,20 @@ end
 return 0
 ";
 
-/// Mark the job settled, and drop the lease if this delivery still holds it.
+/// Mark the job settled, drop the lease if this delivery still holds it, and
+/// close what the job held: its open record, and its unique key if it is still
+/// the job's.
+///
+/// `KEYS`: settled, lease, open, then the unique claim when the job holds one.
+/// `ARGV`: the holder, the outcome, how long the mark is kept, the job's id.
 const SETTLE: &str = r"
 redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
 if redis.call('GET', KEYS[2]) == ARGV[1] then
   redis.call('DEL', KEYS[2])
+end
+redis.call('DEL', KEYS[3])
+if KEYS[4] and redis.call('GET', KEYS[4]) == ARGV[4] then
+  redis.call('DEL', KEYS[4])
 end
 return 1
 ";
@@ -95,21 +154,34 @@ return 0
 ";
 
 /// Drop the lease if this delivery still holds it — an attempt that ends
-/// without settling the job: a retry filed for later, a job handed back.
+/// without settling the job: a retry filed for later, a job handed back — and
+/// renew what the job holds until its next delivery and past it.
+///
+/// `KEYS`: lease, open, checkpoints, then the unique claim when the job holds
+/// one. `ARGV`: the holder, how long the job's records are kept from now, the
+/// job's id.
 const RELEASE: &str = r"
+local released = 0
 if redis.call('GET', KEYS[1]) == ARGV[1] then
-  return redis.call('DEL', KEYS[1])
+  released = redis.call('DEL', KEYS[1])
 end
-return 0
+redis.call('PEXPIRE', KEYS[2], ARGV[2])
+redis.call('PEXPIRE', KEYS[3], ARGV[2])
+if KEYS[4] and redis.call('GET', KEYS[4]) == ARGV[3] then
+  redis.call('PEXPIRE', KEYS[4], ARGV[2])
+end
+return released
 ";
 
-/// The delivery guard of one queue: its scripts, its connection and how long its
-/// leases and settled marks last. One per worker, shared by its deliveries.
+/// The delivery guard of one queue: its scripts, its connection, how long its
+/// leases and settled marks last, and the throttle its method declares. One per
+/// worker, shared by its deliveries.
 pub(crate) struct Leases {
     conn: RedisConnection,
     queue: QueueName,
     lease: Duration,
     settled_for: Duration,
+    throttle: Option<Throttle>,
     admit: Script,
     renew: Script,
     settle: Script,
@@ -123,6 +195,9 @@ pub(crate) enum Admission {
     Granted(Lease),
     /// Answer it without running: the job already reached this outcome.
     Settled(Settlement),
+    /// Answer it without running: a cancel reached it before any attempt
+    /// started, and promised it never would.
+    Cancelled,
     /// Hand it back: another delivery is running it, and its lease lapses in
     /// `lapses_in` unless renewed.
     Held {
@@ -130,6 +205,13 @@ pub(crate) enum Admission {
         holder: String,
         /// How long until the lease lapses, if its holder stops renewing.
         lapses_in: Duration,
+    },
+    /// Hand it back: its method started as many attempts as its throttle allows
+    /// in the current window, which ends in `ends_in`. Not an attempt: nothing
+    /// was counted.
+    Throttled {
+        /// How long until the window ends.
+        ends_in: Duration,
     },
 }
 
@@ -165,19 +247,21 @@ impl Settlement {
 
 impl Leases {
     /// The guard of `queue`, over `conn`: leases lasting `lease` past their last
-    /// renewal, and settled marks outliving a second delivery a sweep after
-    /// `orphan_after` could make.
+    /// renewal, settled marks outliving a second delivery a sweep after
+    /// `orphan_after` could make, and the starts `throttle` allows, if any.
     pub(crate) fn new(
         conn: RedisConnection,
         queue: QueueName,
         lease: Duration,
         orphan_after: Duration,
+        throttle: Option<Throttle>,
     ) -> Arc<Self> {
         Arc::new(Self {
             conn,
             queue,
             lease,
             settled_for: settled_for(orphan_after, lease),
+            throttle,
             admit: Script::new(ADMIT),
             renew: Script::new(RENEW),
             settle: Script::new(SETTLE),
@@ -186,20 +270,37 @@ impl Leases {
         })
     }
 
-    /// Ask whether the delivery `holder` may run `job`, taking the lease when
-    /// it may.
+    /// Ask whether the delivery `holder` may run `job`, which holds the unique
+    /// key `unique` if it was pushed under one — taking the lease, and counting
+    /// the start against the throttle, when it may.
     pub(crate) async fn admit(
         self: &Arc<Self>,
         job: &JobId,
+        unique: Option<&str>,
         holder: String,
     ) -> Result<Admission, redis::RedisError> {
-        let lease = key(LEASE, &self.queue, job);
-        let answer: (i64, i64, String) = self
-            .admit
-            .key(key(SETTLED, &self.queue, job))
+        let lease = job_key(LEASES, &self.queue, job);
+        let claim = unique.map(|key| layout::unique_key(&self.queue, key));
+        let (limit, window) = self.throttle.map_or((0, 0), |throttle| {
+            (throttle.limit().get(), millis(throttle.window()))
+        });
+        let mut invocation = self.admit.key(job_key(SETTLED, &self.queue, job));
+        invocation
             .key(&lease)
+            .key(job_key(CANCELLED, &self.queue, job))
+            .key(job_key(OPEN, &self.queue, job))
+            .key(job_key(CHECKPOINTS, &self.queue, job))
+            .key(layout::throttle_key(&self.queue));
+        if let Some(claim) = &claim {
+            invocation.key(claim);
+        }
+        let answer: (i64, i64, String) = invocation
             .arg(&holder)
             .arg(millis(self.lease))
+            .arg(millis(KEPT_PAST_DUE))
+            .arg(job.to_string())
+            .arg(limit)
+            .arg(window)
             .invoke_async(&mut self.conn.clone())
             .await?;
         Ok(match answer {
@@ -207,18 +308,21 @@ impl Leases {
             (1, ..) => Admission::Granted(Lease {
                 leases: Arc::clone(self),
                 key: lease,
+                claim,
                 job: job.clone(),
                 holder,
             }),
+            (3, ..) => Admission::Cancelled,
+            (4, ends_in, _) => Admission::Throttled {
+                ends_in: Duration::from_millis(u64::try_from(ends_in).unwrap_or(0)),
+            },
             (_, lapses_in, holder) => Admission::Held {
                 holder,
                 lapses_in: Duration::from_millis(u64::try_from(lapses_in).unwrap_or(0)),
             },
         })
     }
-}
 
-impl Leases {
     /// Keep `job`'s settled mark for `longer` from now — a second delivery of a
     /// settled job, acknowledged while the worker drains, may lose that
     /// acknowledgement and come back after the mark would have lapsed.
@@ -228,7 +332,7 @@ impl Leases {
         longer: Duration,
     ) -> Result<(), redis::RedisError> {
         self.remember
-            .key(key(SETTLED, &self.queue, job))
+            .key(job_key(SETTLED, &self.queue, job))
             .arg(millis(longer.max(self.settled_for)))
             .invoke_async::<i64>(&mut self.conn.clone())
             .await
@@ -240,6 +344,8 @@ impl Leases {
 pub(crate) struct Lease {
     leases: Arc<Leases>,
     key: String,
+    /// The key of the unique claim the job holds, if it was pushed under one.
+    claim: Option<String>,
     job: JobId,
     holder: String,
 }
@@ -273,9 +379,10 @@ impl Lease {
         }))
     }
 
-    /// Record that the job reached `outcome`, and drop the lease. The mark is
-    /// kept for the guard's usual span, or for `remember` when the caller knows a
-    /// second delivery may come later than any sweep would bring it.
+    /// Record that the job reached `outcome`, drop the lease, and close what the
+    /// job held. The mark is kept for the guard's usual span, or for `remember`
+    /// when the caller knows a second delivery may come later than any sweep
+    /// would bring it.
     pub(crate) async fn settle(
         &self,
         outcome: Settlement,
@@ -283,26 +390,42 @@ impl Lease {
     ) -> Result<(), redis::RedisError> {
         let leases = &self.leases;
         let remember = remember.map_or(leases.settled_for, |longer| longer.max(leases.settled_for));
-        leases
+        let mut invocation = leases
             .settle
-            .key(key(SETTLED, &leases.queue, &self.job))
+            .key(job_key(SETTLED, &leases.queue, &self.job));
+        invocation
             .key(&self.key)
+            .key(job_key(OPEN, &leases.queue, &self.job));
+        if let Some(claim) = &self.claim {
+            invocation.key(claim);
+        }
+        invocation
             .arg(&self.holder)
             .arg(outcome.as_str())
             .arg(millis(remember))
+            .arg(self.job.to_string())
             .invoke_async::<i64>(&mut leases.conn.clone())
             .await
             .map(drop)
     }
 
     /// Drop the lease without settling the job: its next attempt is filed for
-    /// later, or it was handed back.
-    pub(crate) async fn release(&self) -> Result<(), redis::RedisError> {
-        self.leases
-            .release
-            .key(&self.key)
+    /// `next` from now, or it was handed back. What the job holds is renewed
+    /// until that delivery and past it.
+    pub(crate) async fn release(&self, next: Duration) -> Result<(), redis::RedisError> {
+        let leases = &self.leases;
+        let mut invocation = leases.release.key(&self.key);
+        invocation
+            .key(job_key(OPEN, &leases.queue, &self.job))
+            .key(job_key(CHECKPOINTS, &leases.queue, &self.job));
+        if let Some(claim) = &self.claim {
+            invocation.key(claim);
+        }
+        invocation
             .arg(&self.holder)
-            .invoke_async::<i64>(&mut self.leases.conn.clone())
+            .arg(millis(next.saturating_add(KEPT_PAST_DUE)))
+            .arg(self.job.to_string())
+            .invoke_async::<i64>(&mut leases.conn.clone())
             .await
             .map(drop)
     }
@@ -345,25 +468,11 @@ fn still_held(
     }
 }
 
-/// `template` for `job` on `queue`.
-fn key(template: &str, queue: &QueueName, job: &JobId) -> String {
-    template
-        .replace(QUEUE_SLOT, queue.as_str())
-        .replace(JOB_SLOT, &job.to_string())
-}
-
 /// How long a settled mark is kept: at least [`SETTLED_FLOOR`], and always past
 /// the latest a sweep could hand the job to a second delivery — the orphan
 /// threshold, then a lease left by the replica that was swept.
 fn settled_for(orphan_after: Duration, lease: Duration) -> Duration {
     SETTLED_FLOOR.max(orphan_after.saturating_mul(2).saturating_add(lease))
-}
-
-/// `duration` in whole milliseconds, at least one — Redis refuses a zero `PX`.
-fn millis(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis())
-        .unwrap_or(u64::MAX)
-        .max(1)
 }
 
 #[cfg(test)]
@@ -372,23 +481,6 @@ mod tests {
 
     fn audio() -> QueueName {
         QueueName::new("audio").expect("a valid name")
-    }
-
-    /// Both keys are levels of the queue's namespace, under words apalis does
-    /// not use — so a `SCAN` of the queue finds them, and none of apalis's
-    /// structures is ever mistaken for one of the guard's.
-    #[test]
-    fn the_guards_keys_are_levels_of_the_queues_namespace() {
-        let job = JobId::parse("01890a5d-ac96-774b-bcce-b302099a8057").expect("a job id");
-        let namespace = crate::layout::namespace(&audio());
-        assert_eq!(
-            key(LEASE, &audio(), &job),
-            format!("{namespace}:leases:{job}")
-        );
-        assert_eq!(
-            key(SETTLED, &audio(), &job),
-            format!("{namespace}:settled:{job}")
-        );
     }
 
     /// A settled job is remembered past anything a sweep could redeliver it
@@ -402,7 +494,6 @@ mod tests {
         );
         let long = settled_for(hour, Duration::from_secs(30));
         assert!(long >= hour * 2 + Duration::from_secs(30), "{long:?}");
-        assert_eq!(millis(Duration::ZERO), 1);
     }
 
     /// A renewal that finds the lease gone is the one guard failure that can run

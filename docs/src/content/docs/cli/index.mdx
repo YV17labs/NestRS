@@ -329,11 +329,13 @@ controller together.
 ### `g graphql` over a resource carries the same guarantee
 
 The GraphQL adapter for a resource port is the `#[crud]` resolver behind the
-same two guards, and it comes with the per-operation bridge it is enforced
-through: `crates/features/src/authz/graphql/` plus the `AuthzGraphqlModule`
-import in the adapter's `module.rs`. That folder is not optional decoration —
-`/graphql` runs no guard at the HTTP edge, so the bridge is the only thing that
-authenticates the caller and installs the ability the resolvers read. Over a
+ability guard — `#[use_guards(AuthzGuard)]` alone, since `AuthnGuard` checks
+HTTP requests only and a resolver refuses it at compile time — and it comes with
+the per-operation bridge that authenticates each operation:
+`crates/features/src/authz/graphql/` plus the `AuthzGraphqlModule` import in the
+adapter's `module.rs`. That folder is not optional decoration — `/graphql` runs
+no guard at the HTTP edge, so the bridge is the only thing that authenticates the
+caller and installs the ability the resolvers read. Over a
 plain `g feature` port there are no rows to guard, so the resolver stays the
 `#[public]` stand-in and nothing else is generated.
 

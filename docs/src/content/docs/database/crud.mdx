@@ -177,7 +177,7 @@ type. `User` ⇒ `users`, `user`, `create_user`, `update_user`,
 
 ```rust title="crates/features/src/users/graphql/resolver.rs (from the demo)"
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct UsersResolver {
     #[inject]
     svc: Arc<UsersService>,
@@ -202,7 +202,10 @@ impl UsersResolver {
     #[query]
     #[authorize(Read, UserEntity)]
     async fn user(&self, ctx: &Context<'_>, id: String) -> Result<Option<User>> {
-        Ok(bind::<Read, UsersService>(ctx, &id).await?.as_ref().map(User::from))
+        Ok(bind::<Read, UsersService>(ctx, &id)
+            .await?
+            .as_ref()
+            .map(User::from))
     }
 }
 ```

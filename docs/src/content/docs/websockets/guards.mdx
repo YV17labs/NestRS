@@ -112,12 +112,15 @@ you get this error, the guard almost certainly belongs on the **gateway
 struct** instead, which the diagnostic says:
 
 ```text frame="terminal"
-error[E0277]: `AuthnGuard` does not check WebSocket messages
-   |
-   |     #[use_guards(AuthnGuard)]
-   |                  ^^^^^^^^^^ this guard has no `check_ws_message`
-   = note: override `check_ws_message`, then declare `impl WsGuard for AuthnGuard {}`;
-           or move it to the `#[gateway]` struct, where guards run on the HTTP upgrade
+$ cargo check -p features
+error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not check WebSocket messages
+   --> crates/features/src/users/ws/gateway.rs:21:18
+    |
+ 21 |     #[use_guards(AuthnGuard)]
+    |                  ^^^^^^^^^^ this guard has no `check_ws_message`
+    |
+    = note: override `check_ws_message`, then declare `impl WsGuard for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`;
+            or move it to the `#[gateway]` struct, where guards run on the HTTP upgrade instead
 ```
 
 **A guard on the `#[gateway]` struct attests `HttpGuard`, not `WsGuard`**:

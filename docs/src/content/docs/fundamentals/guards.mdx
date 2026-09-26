@@ -200,7 +200,7 @@ from the same provider — declare once, choose *where* it runs.
 | Scope | Binding | Resolved by |
 |-------|---------|-------------|
 | **Global** | `App::builder().use_guards_global([guard::<AuthnGuard>()])` in `main` | Per-route shaper, post-routing (self-mount edge for gateways) |
-| **Controller / Resolver / Gateway** | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct | Container, at mount |
+| **Controller / Resolver / Gateway** | `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct — a resolver binds `AuthzGuard` alone, [authenticated in band](#a-guard-must-declare-the-transports-it-checks) | Container, at mount |
 | **Per-handler** | `#[use_guards(AdminGuard)]` beside a verb / `#[query]` / `#[subscribe_message]` | Container, at mount |
 
 Multiple guards in one attribute run in **declaration order**, outermost
@@ -394,15 +394,20 @@ entry used to compile and pass everything. Four marker traits close that:
 Declare the marker next to the `check_*` it attests — `impl GraphqlGuard
 for RequireAdmin {}` — and the binding compiles. Bind a guard that lacks
 one and it does not, with a diagnostic naming the missing method and the
-two ways out:
+two ways out. `AuthnGuard` is the guard it catches most often: it checks
+HTTP requests only, which is why a resolver binds `AuthzGuard` alone and
+leaves authentication to the per-operation bridge. Bound on one anyway:
 
 ```text frame="terminal"
-error[E0277]: `ThrottlerGuard` does not check GraphQL operations
-   |
-   | #[use_guards(ThrottlerGuard)]
-   |              ^^^^^^^^^^^^^^ this guard has no `check_graphql`
-   = note: override `check_graphql`, then declare `impl GraphqlGuard for ThrottlerGuard {}`;
-           or bind this guard on an HTTP `#[controller]` / `#[routes]` instead
+$ cargo check -p features
+error[E0277]: `nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>>` does not check GraphQL operations
+   --> crates/features/src/users/graphql/resolver.rs:14:14
+    |
+ 14 | #[use_guards(AuthnGuard, AuthzGuard)]
+    |              ^^^^^^^^^^ this guard has no `check_graphql`
+    |
+    = note: override `check_graphql`, then declare `impl GraphqlGuard for nest_rs::nest_rs_authn::AuthnGuard<JwtStrategy<Claims>> {}`;
+            or bind this guard on an HTTP `#[controller]` / `#[routes]` instead
 ```
 
 The marker never proves the *method* exists — the `Ok(())` default gives

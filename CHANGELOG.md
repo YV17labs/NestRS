@@ -144,6 +144,20 @@ jobs per occurrence, and nothing said so.
   `nest_rs::schedule::BACKEND_REMEDY`. The boot fails when a reachable job
   declares `replicas = "one"` and no lock is bound, naming the job and that
   remedy; two lock bindings fail it too.
+- **Redis binds it: `nest_rs::redis::RedisScheduleModule`**, behind the new
+  umbrella feature `redis-schedule` (`cargo add nest-rs --features
+  redis-schedule`). A bare import beside `ScheduleModule` and
+  `RedisModule::for_root`, it claims each occurrence with one `SET … NX PX` on
+  the shared connection, under `nestrs:schedule:claims:<occurrence>`, and asks
+  about an overrun one with `EXISTS`. A Redis ACL has to allow both on that
+  pattern.
+- **The scheduler bounds every lock call itself.** A claim, or a question about
+  an overrun occurrence, not answered by the time the occurrence goes stale — its
+  hold less the ten seconds of clock skew — is abandoned: the occurrence is
+  skipped with a `warn`, `occurrence skipped: its lock did not answer the claim
+  before the occurrence went stale`, carrying `provider`, `method`, `occurrence`
+  and `waited_ms`, and an abandoned question counts as `unanswered`. A lock that
+  never answered used to hold its job's loop for good, with nothing said.
 - **An `#[every]` declared `replicas = "one"` ticks on multiples of its period
   since the Unix epoch**, so replicas booted at different moments reach the same
   instants. `replicas = "each"` still first fires one period after boot.

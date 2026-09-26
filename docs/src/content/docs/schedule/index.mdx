@@ -24,6 +24,14 @@ wraps it for cron expression parsing (5/6/7-field), with `chrono` /
 cargo add nest-rs --features schedule
 ```
 
+Every replica of an app runs its own scheduler, so four pods fire a job four
+times. A job that must fire **once** across them claims each occurrence in
+Redis — a second feature on the same page:
+
+```bash frame="terminal"
+cargo add nest-rs --features redis-schedule
+```
+
 ## A first scheduled method
 
 A regular `#[injectable]` service with one decorated method. The `#[scheduled]`
@@ -141,6 +149,7 @@ block — same convention as `#[routes]`.
 | `#[cron("0 */5 * * * *")]`                    | 6-field cron expression                  |
 | `#[cron(CronExpression::EVERY_5_SECONDS)]`    | Named preset (compile-time validated)    |
 | `#[cron("0 9 * * MON", tz = "Europe/Paris")]` | Cron + named timezone (default UTC)      |
+| `#[every("5m", replicas = "one")]`            | Once per occurrence across replicas — see [Firing once across replicas](#firing-once-across-replicas) |
 
 A literal cron expression is validated at **compile time**; presets and
 timezones at boot. Either way, an invalid trigger fails the boot naming
@@ -242,6 +251,107 @@ error: invalid cron expression: Invalid pattern: Pattern must have between 5 and
    |            ^^^^^^^^^^^^^^
 ```
 
+## Firing once across replicas
+
+A scheduled method fires on **every** replica by default — `replicas = "each"`,
+which is right for work that is per-process: a cache warm-up, a local sweep.
+Work that is the deployment's — close the hour's invoices, send the digest —
+declares `replicas = "one"` on `#[every]` or `#[cron]`, and each occurrence then
+fires on one replica:
+
+```rust title="crates/features/src/billing/schedule/tasks.rs"
+#[scheduled]
+impl BillingTasks {
+    #[cron("0 0 * * * *", replicas = "one")]
+    async fn close_hourly_invoices(&self) -> Result<()> {
+        self.svc.close_hourly_invoices().await
+    }
+}
+```
+
+The replicas agree through Redis. Enable `redis-schedule` (see
+[Install](#install)), then import the binding beside `ScheduleModule` in every
+app that runs such a job:
+
+```rust title="apps/worker/src/module.rs"
+use nest_rs::core::module;
+use nest_rs::redis::{RedisModule, RedisScheduleModule};
+use nest_rs::schedule::ScheduleModule;
+
+#[module(imports = [
+    ScheduleModule,
+    RedisModule::for_root(None),       // the one RedisConnection (NESTRS_REDIS__URL)
+    RedisScheduleModule,               // occurrences are claimed in Redis
+])]
+pub struct WorkerModule;
+```
+
+`RedisScheduleModule` is a bare import: it owns no configuration, and runs over
+the connection `RedisModule::for_root` opens — an app that also queues or rate
+limits shares that one `RedisConnection`. The boot holds you to it both ways: a
+reachable job declaring `replicas = "one"` with no lock bound fails the boot
+naming the job, and a second lock binding beside this one fails it naming both.
+`#[after]` refuses the key — a one-shot fires on the replica that booted, and
+there is no shared occurrence to claim.
+
+### How an occurrence is claimed
+
+Every replica reaches **the same instants**: an `#[every]` declared so ticks on
+multiples of its period counted from the Unix epoch rather than from its own
+boot, and a `#[cron]` on the instants its expression names. At each one, every
+replica sends one atomic `SET … NX PX` for that occurrence's key; the replica
+whose `SET` created the key fires the method, and the others log `occurrence
+claimed by another replica` at `debug` and wait for the next one. The key is
+held for the job's period — for a cron job, the gap to its next occurrence — and
+never less than a minute, then Redis forgets it, so claims never accumulate.
+
+### At most once, not exactly once
+
+The rule is **fail closed**. An occurrence is fired only when this replica is
+known to have claimed it, because firing unclaimed would fire it on every
+replica — the thing the declaration exists to prevent. So:
+
+- **A claim Redis cannot answer skips the occurrence.** A Redis outage, a
+  refused command, a claim that fails at the connection's budget
+  (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`) — each one is a `warn` on
+  `nest_rs::schedule`, `occurrence skipped: its lock could not be claimed`,
+  carrying the job's `provider` and `method`, the `occurrence` and Redis's
+  `error`. Every occurrence of the outage is said, and when Redis answers again
+  the next one is claimed and fired — no restart, nothing to replay.
+- **The scheduler never waits on a claim past the point it could still act on
+  it.** An occurrence goes stale ten seconds before its claim's hold ends — the
+  margin two replicas' clocks may disagree by — and a claim not answered by then
+  is abandoned and the occurrence skipped with a `warn`, `occurrence skipped: its
+  lock did not answer the claim before the occurrence went stale`. A replica that
+  reaches an occurrence that late, stalled by its platform or starved of CPU,
+  skips it too: a peer's claim may already be forgotten, and firing could be the
+  second time.
+- **A replica that stops after claiming loses that occurrence.** Nobody else
+  will fire it.
+
+Work that must not be lost belongs in a [queue](/queue/) job the tick pushes —
+a queue delivers at least once, with retries — and the tick itself stays the
+thin *when* of the first section.
+
+When a claim or a long run holds a replica past later occurrences, the replica
+asks Redis which of them a peer claimed: those are fine and say so at `debug`,
+and the rest are reported skipped at `warn`, counted.
+
+### The key
+
+```text
+nestrs:schedule:claims:<provider>:<method>:<instant_ms>
+```
+
+One key per occurrence claimed, the instant in milliseconds since the Unix
+epoch — `nestrs:schedule:claims:BillingTasks:close_hourly_invoices:1789002000000`.
+Its value names the replica that claimed it (`HOSTNAME:pid`), for an operator
+reading it during an incident; the lock decides on the key's existence alone.
+`SCAN 0 MATCH nestrs:schedule:claims:BillingTasks:*` lists one provider's claims
+still held. The prefix is fixed rather than the deployment's: two deployments
+sharing a Redis are separated by the logical database in `NESTRS_REDIS__URL`.
+A Redis ACL for the app has to allow `SET` and `EXISTS` on that pattern.
+
 ## The ambient data context
 
 A scheduled method has **no caller** — system work, intentionally. So **no
@@ -279,7 +389,10 @@ Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbin
 
 - `crates/features/src/audio/schedule/tasks.rs` — the canonical multi-method exemplar.
 - `crates/nest-rs-schedule/` — `#[scheduled]`, `ScheduleModule`,
-  `Scheduler`, `CronExpression`, `Trigger`.
+  `Scheduler`, `CronExpression`, `Trigger`, `Replicas`, and the
+  `OccurrenceLock` port a job firing once claims through.
+- `crates/nest-rs-redis/src/schedule/` — `RedisScheduleModule` and
+  `RedisOccurrenceLock`, the Redis binding of that port.
 
 ## Going further
 

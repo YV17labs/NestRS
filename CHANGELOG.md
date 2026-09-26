@@ -172,7 +172,9 @@ jobs per occurrence, and nothing said so.
   both and where each was declared. Their lines could not be told apart, and
   firing once they would claim each other's occurrences.
 - A job registered by hand with a zero interval fails the boot instead of
-  panicking the scheduler, and so does a one-shot declaring one replica.
+  panicking the scheduler, and so does one under a millisecond — finer than the
+  duration grammar writes or the timer resolves — and a one-shot declaring one
+  replica.
 - A cron occurrence reached a moment early no longer fires twice: the next
   occurrence is computed from the one just fired.
 - A panic outside a scheduled method — in the scheduler's own loop, or in a run

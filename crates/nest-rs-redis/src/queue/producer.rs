@@ -35,8 +35,8 @@ impl RedisQueueProducer {
 
     /// Producer-side storage handle, namespaced under `queue` just like the
     /// consumer's — this is how apalis routes a job to the right worker.
-    fn storage(&self, queue: &str) -> RedisStorage<serde_json::Value> {
-        RedisStorage::new_with_config(self.conn.manager(), Config::default().set_namespace(queue))
+    fn storage(&self, queue: &str) -> RedisStorage<serde_json::Value, RedisConnection> {
+        RedisStorage::new_with_config(self.conn.clone(), Config::default().set_namespace(queue))
     }
 }
 

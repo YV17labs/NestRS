@@ -54,7 +54,7 @@ fn unique_key(tag: &str) -> String {
 }
 
 async fn connect() -> RedisConnection {
-    RedisConnection::connect(&redis_url())
+    RedisConnection::connect(&redis_config())
         .await
         .expect("connect to the dev container Redis")
 }

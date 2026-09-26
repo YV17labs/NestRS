@@ -102,7 +102,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
     // Enqueue *under an ambient context*, the way an HTTP handler does. This id
     // is the one the consumer must end up running under.
     let conn = RedisQueueProducer::new(
-        RedisConnection::connect(&crate::redis_config().url)
+        RedisConnection::connect(&crate::redis_config())
             .await
             .expect("connect"),
     );

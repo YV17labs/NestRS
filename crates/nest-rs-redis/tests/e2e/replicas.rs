@@ -152,7 +152,7 @@ async fn the_fetch_never_hands_one_job_to_two_replicas() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let conn = RedisQueueProducer::new(
-        RedisConnection::connect(&crate::redis_config().url)
+        RedisConnection::connect(&crate::redis_config())
             .await
             .expect("connect"),
     );
@@ -199,7 +199,7 @@ async fn a_replica_starting_mid_flight_re_runs_the_in_flight_job() {
     let first = spawn_replica::<ScaleUpModule>().await;
 
     let conn = RedisQueueProducer::new(
-        RedisConnection::connect(&crate::redis_config().url)
+        RedisConnection::connect(&crate::redis_config())
             .await
             .expect("connect"),
     );

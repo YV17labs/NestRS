@@ -26,9 +26,11 @@ pub struct RedisConfig {
     /// The Redis connection URL (e.g. `redis://127.0.0.1/`).
     pub url: String,
     /// How long boot may spend reaching Redis before failing with a named
-    /// error. The client retries an unreachable endpoint indefinitely on its
-    /// own, so without a budget a wrong URL parks the process forever with an
-    /// empty log — never healthy, never crashed. Read from
+    /// error, and afterwards the most any command a caller waits on may take
+    /// from end to end — past it the command fails as a timeout. The client
+    /// retries an unreachable endpoint on its own, so without a budget a wrong
+    /// URL parks the process with an empty log — never healthy, never crashed —
+    /// and an outage holds every caller. Read from
     /// `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`; defaults to 10s.
     pub connect_timeout: Duration,
 }

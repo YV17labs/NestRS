@@ -52,7 +52,7 @@ pub struct RedisThrottler {
 
 impl RedisThrottler {
     /// `conn` is the app's shared Redis connection (reused, not reopened —
-    /// [`RedisConnection::manager`] hands out the multiplexed handle).
+    /// every hit goes over its multiplexed socket, bounded by its budget).
     pub fn new(conn: RedisConnection) -> Self {
         Self {
             conn,
@@ -68,7 +68,7 @@ impl RedisThrottler {
         // A namespace prefix keeps throttle counters from colliding with queue
         // keys on a shared Redis, and makes them greppable in `redis-cli`.
         let namespaced = format!("nestrs:throttle:{key}");
-        let mut conn = self.conn.manager();
+        let mut conn = self.conn.clone();
         self.script
             .key(namespaced)
             .arg(window_ms)
@@ -108,7 +108,7 @@ impl ThrottlerStore for RedisThrottler {
                 tracing::warn!(
                     target: nest_rs_throttler::TARGET,
                     key = %key,
-                    error = %error,
+                    error = %nest_rs_core::error_message(&error),
                     "redis throttler unavailable; denying (fail-closed)",
                 );
                 Decision::denied(limit.window)

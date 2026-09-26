@@ -199,7 +199,7 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
     // so a change to the prefix shows up as this test failing instead of
     // passing against a key nothing uses.
     let namespaced = format!("nestrs:throttle:{key}");
-    let mut manager = conn.manager();
+    let mut manager = conn.clone();
     redis::cmd("HSET")
         .arg(&namespaced)
         .arg("field")

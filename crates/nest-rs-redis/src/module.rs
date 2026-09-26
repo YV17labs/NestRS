@@ -45,7 +45,7 @@ impl DynamicModule for RedisSetup {
                 .expect("RedisConfig is resolved by ConfigModule::provide_feature");
             // `?` lifts the typed `RedisError` into the factory's `anyhow`
             // boundary (the composition-root error channel).
-            Ok(RedisConnection::connect_within(&config.url, config.connect_timeout).await?)
+            Ok(RedisConnection::connect(&config).await?)
         })
     }
 }

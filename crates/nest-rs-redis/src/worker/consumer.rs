@@ -147,8 +147,8 @@ fn build_worker(
     // replica, which is exactly the throughput the deployment is paying for.
     // Namespaced under the queue name, which is how apalis routes a producer's
     // job to this worker.
-    let storage: RedisStorage<serde_json::Value> = RedisStorage::new_with_config(
-        conn.manager(),
+    let storage: RedisStorage<serde_json::Value, RedisConnection> = RedisStorage::new_with_config(
+        conn.clone(),
         Config::default()
             .set_namespace(method.queue)
             .set_buffer_size(1),

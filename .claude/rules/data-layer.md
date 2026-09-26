@@ -216,7 +216,8 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
 
   **An abandoned attempt holds its locks until its statement drains, and that
   is new.** Dropping the job future mid-statement — the framework's own shutdown
-  path, `shutdown_timeout` elapsing while apalis is in a `select!` — leaves the
+  path, the Redis worker's drain window closing on an attempt that still runs,
+  which the worker drops where it stood to hand the job back — leaves the
   attempt's transaction open: sea-orm's rollback is queued on `Drop` and cannot
   go out while the connection is busy, so every row lock the attempt took is held
   for the rest of that statement and the connection stays out of the pool. Before
@@ -231,8 +232,9 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   round-trip, which is precisely where the locks are most certainly still held.
   One sentence for both, so an operator greps once. Read it before setting a
   `shutdown_timeout`: the timeout is the ceiling on how long a dying worker holds
-  row locks. The scheduler cannot reach this — `fire(..)` runs in a `select!`
-  *branch body*, which is never dropped mid-poll.
+  row locks. The scheduler cannot reach this: a loop heeds the shutdown only
+  before it fires, and a `fire(..)` already running is never raced against it —
+  `serve` joins every loop rather than aborting one.
 
   **An escaped executor fails the attempt whether or not it had opened
   anything**, and `FinalizeOutcome::Escaped` deliberately carries no flag saying
@@ -265,9 +267,11 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   only what it *knows* rolled back.
 
   **The promise is per attempt, and stops at the queue.** A durable backend
-  delivers at least once, so a worker that dies between `COMMIT` and the ack
-  redelivers a job whose writes already landed — the transaction bounds what a
-  *retry* repeats, never what a *redelivery* does. So the default removes the
+  delivers at least once, so a worker that dies between `COMMIT` and recording the
+  outcome — the ack, or on Redis the settled mark its delivery guard writes first,
+  after which a redelivery is acknowledged without running — redelivers a job
+  whose writes already landed. The transaction bounds what a *retry* repeats,
+  never what a *redelivery* does. So the default removes the
   need for an idempotency key against the framework's own retry and not against
   the backend's redelivery; `transactional = false` needs one against both.
 

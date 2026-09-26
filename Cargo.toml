@@ -188,14 +188,24 @@ chrono-tz = "0.10"
 # before stable does.
 apalis = "0.7"
 apalis-redis = "0.7"
-# Same 0.32 line apalis-redis pins, so the two share one connection type — a
-# semver divergence would break the `#[from]` conversion at compile time
-# (wanted). This is why redis 1.x waits on apalis-redis 1.0.
+# Same 0.32 line apalis-redis pins, so the two share one connection type:
+# `RedisConnection` is the connection apalis's storage runs on, which a second
+# line would make two unrelated traits. This is why redis 1.x waits on
+# apalis-redis 1.0.
+#
+# `rediss://` goes through rustls, verified against the webpki roots compiled
+# into the binary: with `tls-rustls-webpki-roots` redis never reads the system's
+# store, which it would re-read on every connection it opens, blocking the
+# runtime while it does, and fail the connection whenever that read failed.
+# `tls-rustls-insecure`, which honours `#insecure`, stays off — nest-rs-redis
+# refuses that fragment at boot, and this is what makes the refusal final.
 redis = { version = "0.32", default-features = false, features = [
     "aio",
     "connection-manager",
     "script",
     "tokio-comp",
+    "tokio-rustls-comp",
+    "tls-rustls-webpki-roots",
 ] }
 
 # CLI (nest-rs-cli)
@@ -213,6 +223,11 @@ proc-macro-crate = "3.5"
 
 # Dev-only (test targets)
 tempfile = "3.27"
+# The TLS server side `nest-rs-redis`'s tests put in front of its client: a
+# refusing listener in the unit tests, and in the e2e suite a TLS-terminating
+# proxy before the dev container's plaintext Redis, so `rediss://` is exercised
+# against it.
+tokio-rustls = "0.26"
 tower = "0.5"
 libc = "0.2"
 

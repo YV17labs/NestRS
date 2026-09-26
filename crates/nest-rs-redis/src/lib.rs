@@ -1,8 +1,9 @@
 //! Redis for nestrs — one crate, one connection, one binding per port.
 //!
 //! [`RedisModule::for_root`] opens the one multiplexed [`RedisConnection`]
-//! (`NESTRS_REDIS__*`); the bindings sit beside it in the composition root and
-//! share it:
+//! (`NESTRS_REDIS__*`; a `rediss://` URL encrypts it and verifies Redis's
+//! certificate, against what [`RedisTls`] trusts); the bindings sit beside it in
+//! the composition root and share it:
 //!
 //! - **queue** — [`RedisQueueModule`] binds the portable `dyn JobProducer`
 //!   over it: inject `Arc<dyn JobProducer>` and call
@@ -42,6 +43,7 @@ mod module;
 mod queue;
 #[cfg(feature = "throttler")]
 mod throttler;
+mod tls;
 mod worker;
 
 pub use config::RedisConfig;
@@ -51,4 +53,5 @@ pub use module::{RedisModule, RedisSetup};
 pub use queue::{RedisQueueModule, RedisQueueProducer};
 #[cfg(feature = "throttler")]
 pub use throttler::{RedisThrottler, RedisThrottlerModule};
+pub use tls::{RedisTls, RedisTlsIdentity};
 pub use worker::{RedisWorker, RedisWorkerConfig, RedisWorkerModule, RedisWorkerSetup};

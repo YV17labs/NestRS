@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Namespaced, Result, config};
 
+use crate::RedisTls;
+
 const DEFAULT_URL: &str = "redis://127.0.0.1/";
 
 /// Default boot budget for reaching Redis: 10s — long enough to ride out a
@@ -18,12 +20,13 @@ const DEFAULT_URL: &str = "redis://127.0.0.1/";
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 /// Redis settings, settable via `NESTRS_REDIS__*` or pinned through
-/// [`RedisModule::for_root`](crate::RedisModule::for_root). The URL is redacted
-/// in `Debug` output — it may embed credentials.
+/// [`RedisModule::for_root`](crate::RedisModule::for_root). The URL and the
+/// private key are redacted in `Debug` output — the URL may embed credentials.
 #[config(namespace = "redis")]
 #[derive(Clone)]
 pub struct RedisConfig {
-    /// The Redis connection URL (e.g. `redis://127.0.0.1/`).
+    /// The Redis connection URL (e.g. `redis://127.0.0.1/`); `rediss://`
+    /// connects over TLS.
     pub url: String,
     /// How long boot may spend reaching Redis before failing with a named
     /// error, and afterwards the most any command a caller waits on may take
@@ -33,6 +36,11 @@ pub struct RedisConfig {
     /// and an outage holds every caller. Read from
     /// `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`; defaults to 10s.
     pub connect_timeout: Duration,
+    /// What a `rediss://` URL trusts and presents: nothing set trusts the
+    /// authorities of Mozilla's root program compiled into the client and
+    /// presents no certificate. Read from `NESTRS_REDIS__TLS_*` — see
+    /// [`RedisTls`].
+    pub tls: RedisTls,
 }
 
 impl std::fmt::Debug for RedisConfig {
@@ -40,6 +48,7 @@ impl std::fmt::Debug for RedisConfig {
         f.debug_struct("RedisConfig")
             .field("url", &"<redacted>")
             .field("connect_timeout", &self.connect_timeout)
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -49,6 +58,7 @@ impl Default for RedisConfig {
         Self {
             url: DEFAULT_URL.to_string(),
             connect_timeout: Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
+            tls: RedisTls::default(),
         }
     }
 }
@@ -77,19 +87,23 @@ impl Config for RedisConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         // A zero budget would restore the unbounded hang this knob exists to
         // prevent, so it is rejected rather than silently normalized.
-        let connect_timeout = match env.parse::<u64>("CONNECT_TIMEOUT_SECS")? {
-            Some(0) => {
-                return Err(ConfigError::parse(
-                    env.var_name("CONNECT_TIMEOUT_SECS"),
-                    "must be at least 1 second — a zero budget cannot bound the connect",
-                ));
-            }
-            Some(secs) => Duration::from_secs(secs),
+        // The refusal names the spelling that supplied the value, so a zero given
+        // as a file is refused under `_FILE`.
+        let connect_timeout = match env.setting("CONNECT_TIMEOUT_SECS")? {
+            Some(setting) => match setting.parse::<u64>()? {
+                0 => {
+                    return Err(setting.refuse(
+                        "must be at least 1 second — a zero budget cannot bound the connect",
+                    ));
+                }
+                secs => Duration::from_secs(secs),
+            },
             None => base.connect_timeout,
         };
         Ok(Self {
             url: resolve_url(env.get("URL")?.or(Some(base.url)), Environment::from_env())?,
             connect_timeout,
+            tls: RedisTls::from_env(env, base.tls)?,
         })
     }
 }
@@ -109,7 +123,9 @@ fn resolve_url(raw: Option<String>, environment: Environment) -> Result<String> 
                 return Err(ConfigError::parse(
                     nest_rs_config::var_name(RedisConfig::NAMESPACE, "URL"),
                     format!(
-                        "must be set in the `{}` environment (no localhost fallback outside dev/test)",
+                        "must be set, inline or through {}, in the `{}` environment (no localhost \
+                         fallback outside dev/test)",
+                        nest_rs_config::var_name(RedisConfig::NAMESPACE, "URL_FILE"),
                         environment.as_str()
                     ),
                 ));
@@ -141,6 +157,7 @@ mod tests {
         let pinned = RedisConfig {
             url: "redis://pinned:6379/".into(),
             connect_timeout: Duration::from_secs(7),
+            ..RedisConfig::default()
         };
         let cfg = RedisConfig::from_env(
             &ConfigService::with_vars("redis", [("URL", "redis://from-env:6379/")]),
@@ -155,6 +172,36 @@ mod tests {
             cfg.connect_timeout,
             Duration::from_secs(7),
             "and the untouched pin survives",
+        );
+    }
+
+    /// A zero budget given as a file is refused under the `_FILE` spelling
+    /// that supplied it.
+    #[test]
+    fn a_zero_connect_timeout_from_a_file_names_its_file_variable() {
+        let path = std::env::temp_dir().join(format!(
+            "nest-rs-redis-connect-timeout-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, "0\n").expect("write the fixture");
+        let refused = RedisConfig::from_env(
+            &ConfigService::with_vars(
+                "redis",
+                [(
+                    "CONNECT_TIMEOUT_SECS_FILE",
+                    path.to_str().expect("a UTF-8 path"),
+                )],
+            ),
+            RedisConfig::default(),
+        );
+        let _ = std::fs::remove_file(&path);
+        let err = refused.expect_err("a zero budget is refused").to_string();
+        assert!(
+            err.contains(&format!(
+                "{}:",
+                nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS_FILE")
+            )),
+            "{err}"
         );
     }
 

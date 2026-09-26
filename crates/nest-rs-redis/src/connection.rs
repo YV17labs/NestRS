@@ -17,19 +17,25 @@
 //! an outage held every caller: the rate limiter's request, a push, and every
 //! loop apalis runs, for as long as the client kept reopening.
 //!
+//! **What the URL and [`RedisTls`](crate::RedisTls) say about TLS holds for every
+//! connection the client opens**, the ones it reopens behind its callers
+//! included: both are read into the one client the connection is opened from.
+//!
 //! It sits at the crate root because three binding folders reach it: filed
 //! under whichever asked first, it was named, configured and module-gated for
 //! the queue, so enabling the throttler obliged an app with no queue to import
 //! the queue's module and set the queue's URL.
 
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use redis::aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig};
-use redis::{Cmd, IntoConnectionInfo, Pipeline, RedisFuture, Value};
+use redis::{Cmd, ConnectionAddr, IntoConnectionInfo, Pipeline, RedisFuture, Value};
 
-use crate::RedisConfig;
 use crate::error::RedisError;
+use crate::{RedisConfig, tls};
 
 /// The sentence every binding's boot error appends when the connection is
 /// missing — one wording, three sites, so the remedy cannot drift.
@@ -57,6 +63,87 @@ pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered �
 pub struct RedisConnection {
     manager: ConnectionManager,
     budget: Duration,
+    /// TLS refusals met reopening the connection — `None` over plaintext, where
+    /// no handshake can be refused.
+    refusals: Option<Arc<TlsRefusals>>,
+}
+
+/// Whether the connection has been refused by TLS since it last answered, and
+/// how to learn why.
+///
+/// The client reopens the connection behind its callers and says nothing when
+/// the handshake fails — a renewed certificate Redis no longer presents
+/// correctly, say — so each caller's command just fails, and nothing names the
+/// cause. And what reaches those callers is the refusal's *text*: `redis` hands
+/// every caller waiting on a reopened connection a copy of the error it met, and
+/// copies an io error by its message, so rustls's reason is gone by the time a
+/// command fails. The first command failing with the shape a refused handshake
+/// leaves therefore starts one handshake of the connection's own, whose error
+/// still carries rustls's reason, and a refusal it meets is reported at `warn`
+/// with what to change — once, until a command answers again.
+struct TlsRefusals {
+    /// The client the connection is opened from, so the diagnosing handshake
+    /// is the one the client keeps failing: same address, same material.
+    client: redis::Client,
+    endpoint: String,
+    budget: Duration,
+    reported: AtomicBool,
+    diagnosing: AtomicBool,
+}
+
+impl TlsRefusals {
+    fn observe<T>(self: &Arc<Self>, outcome: &Result<T, redis::RedisError>) {
+        match outcome {
+            Ok(_) => {
+                if self.reported.load(Ordering::Relaxed) {
+                    self.reported.store(false, Ordering::Relaxed);
+                }
+            }
+            Err(error) if tls::negotiation_failed(error) => self.report(error),
+            Err(error) if tls::handshake_shaped(error) => self.diagnose(),
+            Err(_) => {}
+        }
+    }
+
+    fn report(&self, error: &redis::RedisError) {
+        if !self.reported.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                target: crate::TARGET,
+                endpoint = %self.endpoint,
+                reason = %tls::remedy(error),
+                error = %nest_rs_core::error_message(error),
+                "redis refused a reopened tls connection",
+            );
+        }
+    }
+
+    /// One handshake at a time, and none while the refusal stands reported. It
+    /// runs beside the command that asked for it, which has failed already and
+    /// must not wait on a second handshake past its budget.
+    ///
+    /// It carries no unit of work's trace, deliberately: the refusal is the
+    /// connection's, met by every holder alike, and the command that happened to
+    /// meet it first — a request, a job, one of apalis's own loops — is not the
+    /// one it belongs to, any more than the boot's connection lines are.
+    fn diagnose(self: &Arc<Self>) {
+        if self.reported.load(Ordering::Relaxed) || self.diagnosing.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let refusals = Arc::clone(self);
+        tokio::spawn(async move {
+            let attempt = tokio::time::timeout(
+                refusals.budget,
+                refusals.client.get_multiplexed_async_connection(),
+            )
+            .await;
+            if let Ok(Err(error)) = attempt
+                && tls::negotiation_failed(&error)
+            {
+                refusals.report(&error);
+            }
+            refusals.diagnosing.store(false, Ordering::Relaxed);
+        });
+    }
 }
 
 /// Backoff before the first retry; doubles up to [`MAX_RETRY_BACKOFF`] and is
@@ -92,12 +179,26 @@ impl RedisConnection {
     /// Redis that stops answering fails its caller within it rather than
     /// holding the caller.
     ///
+    /// A `rediss://` URL encrypts every connection and verifies Redis's
+    /// certificate for the URL's host — against the authorities of Mozilla's
+    /// root program compiled into the client, or those in
+    /// [`RedisConfig::tls`] — presenting the client certificate set there, if
+    /// any. A certificate refused after the boot, when the connection reopens,
+    /// is reported once at `warn` on `nest_rs::redis`, with what to change.
+    ///
     /// What fails the same way on every attempt fails at once instead of
     /// spending the budget on retries that cannot succeed, saying what to
-    /// change: a URL the client cannot parse, and an answer Redis gives every
-    /// time — refused credentials, an ACL denying the proof, a database index
-    /// out of range. What may clear — a refused or reset TCP connection, a
-    /// server still loading its dataset — is retried within the budget.
+    /// change: a URL the client cannot parse; TLS settings it will not use —
+    /// `#insecure`, material beside a plaintext URL, material no handshake
+    /// could use; a handshake that fails the same way every time; and an answer
+    /// Redis gives every time — refused credentials, an ACL denying the proof, a
+    /// database index out of range. What may clear — a refused or reset TCP
+    /// connection, a server still loading its dataset — is retried within the
+    /// budget.
+    ///
+    /// A handshake nobody answers is not among them, because it cannot be told
+    /// apart from a network that drops it: a `rediss://` URL pointed at a
+    /// plaintext Redis runs out the budget as an unreachable one does.
     pub async fn connect(config: &RedisConfig) -> Result<Self, RedisError> {
         let budget = config.connect_timeout;
         let endpoint = address(&config.url);
@@ -123,7 +224,24 @@ impl RedisConnection {
                             "connected to redis after retrying",
                         );
                     }
-                    return Ok(Self { manager, budget });
+                    let refusals = matches!(
+                        client.get_connection_info().addr,
+                        ConnectionAddr::TcpTls { .. }
+                    )
+                    .then(|| {
+                        Arc::new(TlsRefusals {
+                            client,
+                            endpoint,
+                            budget,
+                            reported: AtomicBool::new(false),
+                            diagnosing: AtomicBool::new(false),
+                        })
+                    });
+                    return Ok(Self {
+                        manager,
+                        budget,
+                        refusals,
+                    });
                 }
                 // The budget elapsed mid-attempt: one final warn so a hung DNS
                 // or a black-holed port is as legible as a refused connection.
@@ -136,6 +254,13 @@ impl RedisConnection {
                         "redis connect timed out",
                     );
                     break;
+                }
+                Ok(Err(source)) if tls::negotiation_failed(&source) => {
+                    return Err(RedisError::TlsRefused {
+                        reason: tls::remedy(&source),
+                        endpoint,
+                        source: Some(source),
+                    });
                 }
                 Ok(Err(source)) if refused(&source) => {
                     return Err(RedisError::Refused { endpoint, source });
@@ -171,8 +296,15 @@ impl RedisConnection {
 impl ConnectionLike for RedisConnection {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         let budget = self.budget;
+        let refusals = self.refusals.as_ref();
         let call = self.manager.send_packed_command(cmd);
-        Box::pin(async move { bounded(budget, call).await? })
+        Box::pin(async move {
+            let outcome = bounded(budget, call).await?;
+            if let Some(refusals) = refusals {
+                refusals.observe(&outcome);
+            }
+            outcome
+        })
     }
 
     fn req_packed_commands<'a>(
@@ -182,8 +314,15 @@ impl ConnectionLike for RedisConnection {
         count: usize,
     ) -> RedisFuture<'a, Vec<Value>> {
         let budget = self.budget;
+        let refusals = self.refusals.as_ref();
         let call = self.manager.send_packed_commands(pipeline, offset, count);
-        Box::pin(async move { bounded(budget, call).await? })
+        Box::pin(async move {
+            let outcome = bounded(budget, call).await?;
+            if let Some(refusals) = refusals {
+                refusals.observe(&outcome);
+            }
+            outcome
+        })
     }
 
     fn get_db(&self) -> i64 {
@@ -223,7 +362,8 @@ fn refused(error: &redis::RedisError) -> bool {
         || matches!(error.retry_method(), redis::RetryMethod::NoRetry)
 }
 
-/// The client the connection is opened from, and reopened from. Nothing is
+/// The client the connection is opened from, and reopened from, so the URL's
+/// TLS and the material beside it reach every connection it opens. Nothing is
 /// dialled: each refusal here is one every attempt would repeat.
 fn client(config: &RedisConfig, endpoint: &str) -> Result<redis::Client, RedisError> {
     let invalid_url = |source: redis::RedisError| RedisError::InvalidUrl {
@@ -235,7 +375,38 @@ fn client(config: &RedisConfig, endpoint: &str) -> Result<redis::Client, RedisEr
         .as_str()
         .into_connection_info()
         .map_err(invalid_url)?;
-    redis::Client::open(info).map_err(invalid_url)
+    let ConnectionAddr::TcpTls { host, insecure, .. } = &info.addr else {
+        if config.tls.is_set() {
+            return Err(RedisError::PlaintextUrl {
+                endpoint: endpoint.to_owned(),
+            });
+        }
+        return redis::Client::open(info).map_err(invalid_url);
+    };
+    if *insecure {
+        return Err(RedisError::UnverifiedTls {
+            endpoint: endpoint.to_owned(),
+        });
+    }
+    // The name the certificate is verified for, parsed as the handshake parses
+    // it: a host no certificate can carry is the URL's fault, on every attempt.
+    rustls::pki_types::ServerName::try_from(host.as_str())
+        .map_err(|error| invalid_url(error.into()))?;
+    config
+        .tls
+        .check(&tls::crypto_provider())
+        .map_err(|reason| RedisError::TlsRefused {
+            endpoint: endpoint.to_owned(),
+            reason,
+            source: None,
+        })?;
+    redis::Client::build_with_tls(info, config.tls.certificates()).map_err(|source| {
+        RedisError::TlsRefused {
+            endpoint: endpoint.to_owned(),
+            reason: tls::unusable_material(),
+            source: Some(source),
+        }
+    })
 }
 
 /// One boot attempt: a connection of its own, proved with a `PING`, then the
@@ -295,7 +466,18 @@ fn is_scheme(candidate: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
     use super::*;
+    use crate::RedisTlsIdentity;
+
+    const AUTHORITY: &[u8] = include_bytes!("../tests/e2e/fixtures/tls_ca.pem");
+    const SERVER_CERT: &[u8] = include_bytes!("../tests/e2e/fixtures/tls_server.pem");
+    const SERVER_KEY: &[u8] = include_bytes!("../tests/e2e/fixtures/tls_server.key.pem");
+    const CLIENT_CERT: &[u8] = include_bytes!("../tests/e2e/fixtures/tls_client.pem");
+
+    const REFUSED: &str = "redis refused a reopened tls connection";
 
     /// `url` under `budget`, everything else at its default.
     fn config(url: &str, budget: Duration) -> RedisConfig {
@@ -304,6 +486,279 @@ mod tests {
             connect_timeout: budget,
             ..RedisConfig::default()
         }
+    }
+
+    /// A TLS listener presenting the fixtures' server certificate — which the
+    /// test authority signed, and nothing a client trusts by default — and
+    /// answering nothing past the handshake.
+    async fn tls_listener() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let chain = CertificateDer::pem_slice_iter(SERVER_CERT)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("the fixture certificate parses");
+        let key = PrivateKeyDer::from_pem_slice(SERVER_KEY).expect("the fixture key parses");
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("the provider speaks the default protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .expect("the fixture certificate and key correspond");
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a TLS listener");
+        let addr = listener.local_addr().expect("the listener's address");
+        let serving = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let _ = acceptor.accept(socket).await;
+                });
+            }
+        });
+        (addr, serving)
+    }
+
+    /// A refusal's record, over a client opened from `url` as the boot opens
+    /// it — so rustls has its process-default provider when the record
+    /// handshakes.
+    fn refusals(url: &str) -> Arc<TlsRefusals> {
+        let config = config(url, Duration::from_secs(2));
+        let endpoint = address(url);
+        Arc::new(TlsRefusals {
+            client: client(&config, &endpoint).expect("the URL opens a client"),
+            endpoint,
+            budget: config.connect_timeout,
+            reported: AtomicBool::new(false),
+            diagnosing: AtomicBool::new(false),
+        })
+    }
+
+    fn handshake_refused() -> Result<(), redis::RedisError> {
+        Err(redis::RedisError::from(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+        )))
+    }
+
+    fn connection_dropped() -> Result<(), redis::RedisError> {
+        Err(redis::RedisError::from(std::io::Error::from(
+            std::io::ErrorKind::ConnectionReset,
+        )))
+    }
+
+    /// What `redis` hands the callers of a connection it could not reopen: the
+    /// refusal's text, under the io kind rustls's error had.
+    fn reopening_refused() -> Result<(), redis::RedisError> {
+        Err(redis::RedisError::from(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Reconnecting failed: invalid peer certificate: UnknownIssuer",
+        )))
+    }
+
+    /// A TLS refusal is reported once, stays reported while commands keep
+    /// failing — whatever else fails meanwhile — and is reported again only
+    /// after a command answered in between.
+    #[tokio::test]
+    async fn a_tls_refusal_is_reported_once_until_a_command_answers_again() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let refusals = refusals("rediss://redis.internal:6380/");
+
+        refusals.observe(&handshake_refused());
+        refusals.observe(&connection_dropped());
+        refusals.observe(&handshake_refused());
+        refusals.observe(&reopening_refused());
+        assert_eq!(logs.find(crate::TARGET, REFUSED).len(), 1, "once");
+        assert!(
+            !refusals.diagnosing.load(Ordering::Relaxed),
+            "and a refusal already reported sends no handshake to learn it again",
+        );
+
+        refusals.observe(&Ok::<(), redis::RedisError>(()));
+        refusals.observe(&handshake_refused());
+        let reported = logs.find(crate::TARGET, REFUSED);
+        assert_eq!(reported.len(), 2, "and again after a command answered");
+        assert_eq!(reported[0].level, "warn");
+        assert_eq!(
+            reported[0].field("endpoint").as_deref(),
+            Some("redis.internal:6380")
+        );
+        assert!(
+            reported[0].field("reason").is_some_and(
+                |reason| reason.contains(&nest_rs_config::var_name("redis", "TLS_CA_CERT"))
+            ),
+            "with the setting that fixes it: {:?}",
+            reported[0].fields,
+        );
+    }
+
+    /// `redis` hands a caller only the text of a refused reopening, so the
+    /// refusal is learnt from a handshake of the record's own — which still
+    /// carries rustls's reason, so the line says what to change rather than
+    /// quoting a message.
+    #[tokio::test]
+    async fn a_refusal_known_only_by_its_text_is_learnt_from_a_handshake_of_its_own() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let (addr, serving) = tls_listener().await;
+        let refusals = refusals(&format!("rediss://{addr}/"));
+
+        refusals.observe(&reopening_refused());
+        refusals.observe(&reopening_refused());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while logs.find(crate::TARGET, REFUSED).is_empty() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        serving.abort();
+
+        let reported = logs.find(crate::TARGET, REFUSED);
+        assert_eq!(reported.len(), 1, "{:#?}", logs.events());
+        let reason = reported[0].field("reason").unwrap_or_default();
+        assert!(
+            reason.contains("does not chain to an authority")
+                && reason.contains(&nest_rs_config::var_name("redis", "TLS_CA_CERT")),
+            "the handshake's own reason, sending the operator to the authority: {reason}",
+        );
+    }
+
+    /// An error with no handshake in it — a dropped connection, a timeout, an
+    /// answer — sends no handshake after one, and reports nothing.
+    #[tokio::test]
+    async fn an_error_no_handshake_left_sends_no_handshake_to_learn_it() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let refusals = refusals("rediss://127.0.0.1:9/");
+        refusals.observe(&connection_dropped());
+        refusals.observe(&Err::<(), _>(redis::RedisError::from(
+            std::io::Error::from(std::io::ErrorKind::TimedOut),
+        )));
+        refusals.observe(&Err::<(), _>(redis::RedisError::from((
+            redis::ErrorKind::ResponseError,
+            "ERR",
+        ))));
+        assert!(!refusals.diagnosing.load(Ordering::Relaxed));
+        assert!(logs.find(crate::TARGET, REFUSED).is_empty());
+    }
+
+    /// Skipping certificate verification is refused before anything is
+    /// dialled, naming the setting that trusts a private authority instead.
+    #[tokio::test]
+    async fn a_url_asking_to_skip_certificate_verification_is_refused() {
+        let Err(error) = RedisConnection::connect(&config(
+            "rediss://127.0.0.1:9/#insecure",
+            Duration::from_secs(5),
+        ))
+        .await
+        else {
+            panic!("`#insecure` must not connect")
+        };
+        assert!(matches!(error, RedisError::UnverifiedTls { .. }), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains(&nest_rs_config::var_name("redis", "TLS_CA_CERT")),
+            "the refusal names the setting to use instead: {error}",
+        );
+    }
+
+    /// A `rediss://` host no certificate can name is the URL's fault on every
+    /// attempt, so it fails at once as one — not as Redis refusing a connection
+    /// nothing opened.
+    #[tokio::test]
+    async fn a_tls_host_no_certificate_can_name_is_an_invalid_url() {
+        let started = Instant::now();
+        let Err(error) =
+            RedisConnection::connect(&config("rediss://-leading:9/", Duration::from_secs(5))).await
+        else {
+            panic!("a host no certificate can name must not connect")
+        };
+        assert!(matches!(error, RedisError::InvalidUrl { .. }), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "nothing was dialled, took {:?}",
+            started.elapsed(),
+        );
+    }
+
+    /// TLS material beside a URL that would not use it is refused, over TCP and
+    /// over a socket alike: whoever configured it expects it to be used.
+    #[tokio::test]
+    async fn tls_material_beside_a_plaintext_url_is_refused() {
+        for url in [
+            "redis://127.0.0.1:9/",
+            "redis+unix:///tmp/nest-rs-redis-absent.sock",
+        ] {
+            let mut pinned = config(url, Duration::from_secs(5));
+            pinned.tls.ca_cert = Some(AUTHORITY.to_vec());
+            let Err(error) = RedisConnection::connect(&pinned).await else {
+                panic!("{url} must not connect in plaintext beside TLS material")
+            };
+            assert!(
+                matches!(error, RedisError::PlaintextUrl { .. }),
+                "{url}: {error}"
+            );
+        }
+    }
+
+    /// Material no handshake could use is refused before anything is dialled —
+    /// every connection would otherwise fail on it — and the cause names the
+    /// variable holding it.
+    #[tokio::test]
+    async fn tls_material_no_handshake_could_use_fails_before_anything_is_dialled() {
+        let mut trusting_nothing = config("rediss://127.0.0.1:9/", Duration::from_secs(5));
+        trusting_nothing.tls.ca_cert = Some(b"no certificate in here".to_vec());
+        let mut mismatched = config("rediss://127.0.0.1:9/", Duration::from_secs(5));
+        mismatched.tls.identity = Some(RedisTlsIdentity {
+            cert: CLIENT_CERT.to_vec(),
+            key: SERVER_KEY.to_vec(),
+        });
+
+        for (pinned, variable) in [(trusting_nothing, "TLS_CA_CERT"), (mismatched, "TLS_KEY")] {
+            let started = Instant::now();
+            let Err(error) = RedisConnection::connect(&pinned).await else {
+                panic!("material {variable} cannot use must not connect")
+            };
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "nothing was dialled, took {:?}",
+                started.elapsed(),
+            );
+            assert!(matches!(error, RedisError::TlsRefused { .. }), "{error}");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(&nest_rs_config::var_name("redis", variable)),
+                "the refusal names {variable}: {rendered}",
+            );
+        }
+    }
+
+    /// A certificate the client does not accept fails the boot at once, with
+    /// the setting that fixes it: the same certificate is refused on every
+    /// attempt, so retrying it would only spend the budget.
+    #[tokio::test]
+    async fn a_certificate_the_client_does_not_accept_fails_the_boot_at_once() {
+        let (addr, serving) = tls_listener().await;
+        let started = Instant::now();
+        let outcome = RedisConnection::connect(&config(
+            &format!("rediss://{addr}/"),
+            Duration::from_secs(5),
+        ))
+        .await;
+        serving.abort();
+        let Err(error) = outcome else {
+            panic!("a certificate no trusted authority signed must not connect")
+        };
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "a refused certificate spends none of the budget, took {:?}",
+            started.elapsed(),
+        );
+        assert!(matches!(error, RedisError::TlsRefused { .. }), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains(&nest_rs_config::var_name("redis", "TLS_CA_CERT")),
+            "the refusal names the authority's setting: {error}",
+        );
     }
 
     /// The endpoint is what the client dials. Every shape that once reached a

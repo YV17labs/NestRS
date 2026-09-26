@@ -40,15 +40,21 @@ apalis = { workspace = true, features = ["retry", "timeout", "catch-panic", "lim
 apalis-redis.workspace = true
 # `throttler` feature only: the shared `dyn ThrottlerStore` seam + config types
 # reused verbatim (the guard is transport-agnostic; only the backing store
-# changes), running the atomic fixed-window Lua script over
-# `RedisConnection::manager()`.
+# changes), running the atomic fixed-window Lua script over the shared
+# `RedisConnection`.
 nest-rs-throttler = { workspace = true, optional = true }
-# The user-facing Redis surface (`RedisError`, `aio::ConnectionManager`) is
-# named through the `redis` crate directly — apalis-redis only re-exports these
+# The user-facing Redis surface (`redis::RedisError`, the `aio::ConnectionLike`
+# `RedisConnection` implements, the command API a caller runs on it) is named
+# through the `redis` crate directly — apalis-redis only re-exports these
 # types, and the promise is "apalis types never leak". Unconditional: already
 # in the tree via apalis-redis (same 0.32 workspace pin, so one connection
 # type); the direct dep costs nothing.
 redis = { workspace = true }
+# `rediss://`: the process-default crypto provider `redis` builds its client
+# with, installed when the app chose none; the client-certificate check run
+# before anything is dialled; and the `rustls::Error` a refused handshake
+# carries, which is not an outage and must not be retried as one.
+rustls.workspace = true
 
 [features]
 # A second Redis use — a cross-process rate-limit store — as a feature on this
@@ -81,6 +87,11 @@ tokio.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
 tower.workspace = true
+# The TLS server side the tests put in front of the client: the dev container's
+# Redis speaks plaintext, so `rediss://` meets a rustls listener presenting the
+# fixture certificates — the unit tests' refusing one, the e2e suite's proxy.
+# Already in the tree through `redis`'s rustls support.
+tokio-rustls.workspace = true
 
 # The `e2e` binary exercises the `RedisThrottler`, which only exists under the
 # `throttler` feature — so the target is skipped entirely unless that feature is

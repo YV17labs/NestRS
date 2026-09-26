@@ -38,6 +38,62 @@ pub enum RedisError {
         source: redis::RedisError,
     },
 
+    /// A `rediss://` URL carrying `#insecure`, which asks the client to accept
+    /// whatever certificate it is shown. Encryption nobody verified is open to
+    /// whoever sits between the app and Redis, so it is refused rather than
+    /// honoured: a certificate a private authority signed is trusted by
+    /// configuring that authority.
+    #[error(
+        "the Redis URL for {endpoint} asks to skip certificate verification (`#insecure`), which is \
+         refused: remove it from the URL — {url_var}, or `RedisConfig::url` pinned in code — and \
+         trust the authority that signed Redis's certificate with {ca_var}",
+        url_var = ::nest_rs_config::spellings("redis", "URL"),
+        ca_var = ::nest_rs_config::spellings("redis", "TLS_CA_CERT"),
+    )]
+    UnverifiedTls {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+    },
+
+    /// TLS material configured beside a URL that is not `rediss://`. The
+    /// connection would be plaintext and the material unused, while whoever
+    /// configured an authority or a client certificate expects it to be — so
+    /// it is refused rather than ignored.
+    #[error(
+        "TLS material is configured for Redis at {endpoint}, but the URL is not `rediss://`, so the \
+         material would go unused and the connection unencrypted: point {url_var} at a port serving \
+         TLS with `rediss://`, or remove the material — {ca_var}, {cert_var} and {key_var}, their \
+         _FILE forms, or `RedisConfig::tls` pinned in code",
+        url_var = ::nest_rs_config::spellings("redis", "URL"),
+        ca_var = ::nest_rs_config::var_name("redis", "TLS_CA_CERT"),
+        cert_var = ::nest_rs_config::var_name("redis", "TLS_CERT"),
+        key_var = ::nest_rs_config::var_name("redis", "TLS_KEY"),
+    )]
+    PlaintextUrl {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+    },
+
+    /// The TLS settings could not carry a connection: material no handshake
+    /// could use, a certificate the client does not accept, a handshake Redis
+    /// refused, or a peer answering in something other than TLS. The same
+    /// settings fail the same way on every attempt, and none of it is an
+    /// outage, so it fails at once with what to change: read off rustls's reason
+    /// when a handshake refused, or off the material check before anything was
+    /// dialled.
+    #[error("TLS with Redis at {endpoint} was refused: {reason}")]
+    TlsRefused {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// What to change, naming the setting. When a handshake is what
+        /// refused, rustls's reason travels in `source`.
+        reason: String,
+        /// The client's error, when the refusal came from a connection attempt
+        /// or from building the client rather than from checking the material.
+        #[source]
+        source: Option<redis::RedisError>,
+    },
+
     /// Redis answered, and refused in a way every attempt would repeat —
     /// credentials, an ACL denying the proof, a database index out of range.
     /// That is not an outage, and retrying it would only tell the operator to

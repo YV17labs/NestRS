@@ -143,3 +143,14 @@ documented fact fails `cargo nextest run -p nest-rs-conformance` until
 `docs/canon.json` is regenerated and committed — the framework's own
 *Definition of done* is what keeps the docs' facts current, so no CI has
 to watch `crates/` on the docs' behalf.
+
+**And the conformance suite reads pages itself.** Four joins open
+`docs/src/content`: `docs` (every unit of work, span target and env key is
+named on some page), `umbrella` (a capability's `## Install` spells
+`cargo add nest-rs --features <x>`), `queue_capabilities` (each queue
+capability is named as `Capability::<Member>` on a page) and `keys` (every
+datastore key a page spells, read against the ones the code declares —
+*A key a datastore holds* in `framework.md` says what passes, the 6.x layout
+included). The docs job runs none of them, so a page
+change that adds, drops or renames one of those names also runs
+`cargo nextest run -p nest-rs-conformance`.

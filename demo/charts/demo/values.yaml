@@ -39,7 +39,7 @@ config:
   # Mirrors `features::authz::constants` — the scopes the demo's rules gate on.
   # A scope a rule requires but this list omits is a dead end the framework
   # reports at warn on boot.
-  OAUTH_RESOURCE__SCOPES_SUPPORTED: posts:read,posts:write,audio:transcode
+  OAUTH__RESOURCE__SCOPES_SUPPORTED: posts:read,posts:write,audio:transcode
   OPENAPI__DESCRIPTION: Demo API built with nestrs
   STORAGE__REGION: us-east-1
   STORAGE__BUCKET: nestrs

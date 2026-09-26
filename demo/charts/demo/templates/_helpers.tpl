@@ -106,13 +106,13 @@ rename of one hostname from silently breaking the pair.
 {{- $derived := dict -}}
 {{- if $auth -}}
 {{- $_ := set $derived "AUTHN__ISSUER" $auth -}}
-{{- $_ := set $derived "OAUTH_RESOURCE__AUTHORIZATION_SERVERS" $auth -}}
+{{- $_ := set $derived "OAUTH__RESOURCE__AUTHORIZATION_SERVERS" $auth -}}
 {{- $_ := set $derived "SOCIAL__GITHUB__REDIRECT_URL" (printf "%s/social/github/callback" $auth) -}}
 {{- $_ := set $derived "SOCIAL__GOOGLE__REDIRECT_URL" (printf "%s/social/google/callback" $auth) -}}
 {{- end -}}
 {{- if $assistant -}}
 {{- $_ := set $derived "AUTHN__AUDIENCE" $assistant -}}
-{{- $_ := set $derived "OAUTH_RESOURCE__RESOURCE" $assistant -}}
+{{- $_ := set $derived "OAUTH__RESOURCE__RESOURCE" $assistant -}}
 {{- $_ := set $derived "MCP__ALLOWED_HOSTS" (index .Values.apps "assistant").host -}}
 {{- end -}}
 {{- $derived | toYaml -}}

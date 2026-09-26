@@ -159,11 +159,12 @@ jobs per occurrence, and nothing said so.
 - **Occurrences that fall due while the previous one is claimed or run are
   counted aloud**, whichever `replicas` a job declares: one `warn`,
   `occurrences skipped`, with `skipped`, the `occurrence` it started from and
-  `overrun_ms`. The loop reaches the latest occurrence due, late, rather than
-  firing the stale one it slept for and then the latest. A job firing once asks
-  the lock about the first hundred it overran, so the ones a peer fired are told
-  apart from the ones nobody did (`claimed_elsewhere`, `unanswered`,
-  `unchecked`).
+  `overrun_ms`. A cron job, and an `#[every]` firing once, reach the latest
+  occurrence due, late, rather than firing the stale one they slept for and then
+  the latest; an `#[every]` firing on every replica fires the first tick it
+  overran, late, and skips the rest. A job firing once asks the lock about the
+  first hundred it overran, so the ones a peer fired are told apart from the
+  ones nobody did (`claimed_elsewhere`, `unanswered`, `unchecked`).
 - **Breaking:** `ScheduledMethod` and `CronJobMeta` gain a `replicas` field, and
   the `scheduled job (…)` boot lines and the `schedule.tick` line carry
   `replicas`; a job firing once carries the `occurrence` it claimed on its tick.

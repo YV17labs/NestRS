@@ -3167,6 +3167,7 @@ dependencies = [
  "apalis",
  "apalis-redis",
  "async-trait",
+ "chrono",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-pipes",
@@ -3186,6 +3187,7 @@ dependencies = [
  "tokio-util",
  "tower 0.5.3",
  "tracing",
+ "uuid",
  "validator",
 ]
 

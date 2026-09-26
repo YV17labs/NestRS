@@ -6,6 +6,8 @@
 
 mod config;
 mod consumer;
+mod delivery;
+mod lease;
 mod module;
 
 pub use config::RedisWorkerConfig;

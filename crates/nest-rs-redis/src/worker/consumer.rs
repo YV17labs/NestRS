@@ -6,12 +6,15 @@
 //! classes, the retry budget, the events and the operation line — is the port's
 //! (`nest_rs_queue::consume::attempt`), and discovery is the port's too
 //! (`consume::discover`, which refuses every declaration this backend does not
-//! honour). What stays here is what apalis alone knows: the storage handle, the
-//! fetch loop, a method's `concurrency`, the drain at shutdown, and how the
-//! port's [`AttemptOutcome`] settles an apalis task.
+//! honour). What one delivery does with a fetched job — its lease, its attempt,
+//! how it settles — is [`Deliveries`]'s. What stays here is what apalis alone
+//! knows: the storage handle and its settings, each replica's identity, a
+//! method's `concurrency`, what apalis says about itself, and the drain at
+//! shutdown.
 //!
 //! Every queue is consumed as `RedisStorage<serde_json::Value>` — the
-//! backend-agnostic wire format.
+//! backend-agnostic wire format — under the queue's namespace,
+//! `nestrs:queue:<queue>` ([`crate::layout`]).
 //!
 //! **Concurrency is per method, per replica.** `#[process(concurrency = N)]`
 //! bounds how many attempts of that method one worker replica runs at once
@@ -19,67 +22,58 @@
 //! platform schedules and meters. Each method is its own apalis worker, so one
 //! method's jobs never wait on another's permits.
 //!
-//! **apalis never retries on its own.** The budget is the port's: every attempt
-//! a delivery gets runs inside the one apalis task that fetched it, and the task
-//! settles once — done, or dead-lettered through apalis's `Abort`, which its
-//! acknowledgement kills rather than re-queues. A plain error would hand the job
-//! to apalis's own retry count instead, which knows nothing of the method's — so
-//! the one place this file answers with one is a shutdown Redis would not let
-//! hand the job back, where the job still being in flight, and so running again,
-//! is the point.
+//! **Every replica is its own consumer.** apalis names a worker's in-flight set
+//! after the worker's id, and hands a worker's jobs to its peers once the worker
+//! has not proved it is alive for the orphan threshold. So each method of each
+//! replica consumes under an id of its own — the host, then a UUID v7 — and the
+//! threshold is ten of its heartbeats ([`RedisWorkerConfig::orphan_after`]),
+//! never *now*: a live peer's jobs are never taken on the periodic sweep, and a
+//! crashed one's are once the threshold passes.
 //!
-//! **A retry waits here, in process.** This backend does not declare delayed
-//! delivery, so the wait the port names before a job's next attempt
-//! ([`AttemptOutcome::Retry`]) passes inside the delivery, holding the method's
-//! permit — a method with `concurrency = 1` runs nothing else on this replica
-//! while one of its jobs waits. A shutdown ends the wait, never the job: the
-//! apalis task is rescheduled in Redis for when the wait would have ended,
-//! carrying the record the port hands back for the next attempt
-//! ([`Delivery::retry_envelope`]) — so the job keeps its id, its trace and its
-//! attempt count on whichever replica takes it next.
+//! **apalis's startup sweep is the one that takes a live peer's jobs**, and it
+//! cannot be configured away: a worker starting calls `reenqueue_orphaned` with
+//! a cutoff of *now*, which matches every registered consumer, alive or not, and
+//! puts up to ten of their in-flight jobs back on the queue. The delivery guard
+//! is what makes that harmless — the job's lease is held by the delivery running
+//! it, so the second delivery hands it back until the first has settled it, then
+//! acknowledges it without running. Measured in `tests/e2e/worker/`.
 //!
-//! **The hand-back never waits on an acknowledgement.** apalis-redis 0.7
-//! acknowledges a task through a channel its worker's heartbeat drains, and the
-//! heartbeat is dropped the moment the last task of a stopping worker ends — so
-//! the acknowledgement of a task finishing during the drain never reaches Redis,
-//! the task stays in the worker's in-flight set, and the next replica to start
-//! runs it again. A hand-back that relied on it would run the job twice: once
-//! from the stored record, once from the schedule. So the task is moved out of
-//! flight by the hand-back itself, through apalis's own `reschedule`, before the
-//! delivery ends.
-//!
-//! **Delivery is exclusive but at-least-once.** Two replicas never receive the
-//! same job from the queue (`get_jobs.lua` claims ids in one atomic EVAL), yet a
-//! replica's *startup* requeues work its peers are running: apalis-redis calls
-//! `reenqueue_orphaned` with a cutoff of `Utc::now()`, which matches every
-//! registered consumer rather than only this worker's previous incarnation. A
-//! scale-up therefore re-runs in-flight jobs. Both halves are measured in
-//! `tests/e2e/replicas.rs`; a `#[process]` handler must be idempotent.
+//! **A shutdown drains within its window.** The worker stops fetching at once;
+//! attempts running get [`RedisWorkerConfig::shutdown_timeout`] less a reserve to
+//! finish, and whatever still runs when that closes is interrupted and handed
+//! back to the queue inside the reserve — so the orchestrator's SIGKILL never
+//! lands on a job the worker still holds.
 
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use apalis::layers::ErrorHandlingLayer;
 use apalis::layers::WorkerBuilderExt;
 use apalis::layers::catch_panic::CatchPanicLayer;
-use apalis::prelude::{
-    Attempt, Data, Monitor, Request, Storage, TaskId, WorkerBuilder, WorkerFactoryFn,
-};
-use apalis_redis::{Config, RedisContext, RedisStorage};
+use apalis::prelude::{Attempt, Event, Monitor, TaskId, Worker, WorkerBuilder, WorkerFactoryFn};
+use apalis_redis::{RedisContext, RedisPollError, RedisStorage};
 use async_trait::async_trait;
 use nest_rs_core::{Container, Transport};
-use nest_rs_queue::consume::{self, AttemptOutcome, Delivery};
-use nest_rs_queue::{JobError, ProcessMethod, QueueName};
+use nest_rs_queue::consume;
+use nest_rs_queue::{ProcessMethod, QueueName};
 use tokio_util::sync::CancellationToken;
 
-use crate::RedisConnection;
+use super::delivery::{Deliveries, Task};
+use super::lease::Leases;
 use crate::backend::BACKEND;
 use crate::connection::CONNECTION_REMEDY;
+use crate::error::LegacyLayoutError;
+use crate::{RedisConnection, RedisWorkerConfig, layout};
 
 /// How often a worker moves the records whose time has come from Redis's
-/// scheduled set to its queue — see `build_worker`.
+/// scheduled set to its queue — see `storage`.
 const SCHEDULED_SCAN: Duration = Duration::from_secs(1);
+
+/// What a drain keeps back from its window to hand interrupted jobs back in:
+/// five seconds, or half the window when that is shorter.
+const HAND_BACK_RESERVE: Duration = Duration::from_secs(5);
 
 /// The consumer-side transport: drains the `#[processor]` inventory and runs
 /// each job's process method against the Redis queue. Attached by
@@ -115,9 +109,10 @@ impl Transport for RedisWorker {
 
         // Fail fast at boot if methods exist but no connection is seeded.
         if !self.methods.is_empty() {
-            container.get::<RedisConnection>().with_context(|| {
+            let connection = container.get::<RedisConnection>().with_context(|| {
                 format!("RedisWorker found #[processor]s but {CONNECTION_REMEDY}")
             })?;
+            refuse_legacy_jobs(&connection, &self.methods).await?;
         }
 
         self.container = Some(container.clone());
@@ -134,296 +129,430 @@ impl Transport for RedisWorker {
 
         let container = self
             .container
-            .expect("RedisWorker::configure must run before serve");
+            .context("RedisWorker::configure must run before serve")?;
         let connection = container
             .get::<RedisConnection>()
-            .expect("RedisConnection presence is verified in configure");
+            .with_context(|| format!("RedisWorker found #[processor]s but {CONNECTION_REMEDY}"))?;
+        // A factory output `RedisWorkerModule::for_root` resolved; a worker
+        // attached without the module runs on the defaults.
+        let config = container
+            .get::<RedisWorkerConfig>()
+            .map(|config| (*config).clone())
+            .unwrap_or_default();
 
-        let mut monitor = Monitor::new();
+        let interrupt = CancellationToken::new();
+        let mut workers = HashMap::new();
+        let mut built = Vec::new();
         for method in &self.methods {
-            monitor = build_worker(monitor, &connection, container.clone(), method, &cancel)?;
+            let queue = QueueName::new(method.queue())?;
+            let id = worker_id();
+            workers.insert(id.clone(), queue.clone());
+            built.push((method, queue, id));
+        }
+        let reporter = Reporter::new(workers);
+        let mut monitor = Monitor::new().on_event(move |event| reporter.report(&event));
+        for (method, queue, id) in built {
+            let deliveries = Arc::new(Deliveries {
+                method,
+                queue: queue.clone(),
+                worker: id.clone(),
+                container: container.clone(),
+                storage: storage(&connection, &queue, &config),
+                leases: Leases::new(
+                    (*connection).clone(),
+                    queue,
+                    config.lease,
+                    config.orphan_after,
+                ),
+                draining: cancel.clone(),
+                interrupt: interrupt.clone(),
+            });
+            monitor = register(monitor, &id, method, deliveries);
         }
 
-        // Bound the post-signal drain so a hung `#[process]` can't block SIGTERM
-        // until the orchestrator SIGKILLs the pod (QUEUE-I5). The config is a
-        // factory output `RedisWorkerModule::for_root` resolved.
-        let shutdown_timeout = container
-            .get::<crate::RedisWorkerConfig>()
-            .map(|cfg| cfg.shutdown_timeout)
-            .unwrap_or_else(|| crate::RedisWorkerConfig::default().shutdown_timeout);
-
-        monitor
-            .shutdown_timeout(shutdown_timeout)
-            .run_with_signal(async move {
-                cancel.cancelled().await;
-                Ok(())
-            })
-            .await?;
-        Ok(())
+        let signal = cancel.clone();
+        let run = monitor.run_with_signal(async move {
+            signal.cancelled().await;
+            Ok(())
+        });
+        tokio::pin!(run);
+        tokio::select! {
+            finished = &mut run => return Ok(finished?),
+            () = cancel.cancelled() => {}
+        }
+        drain(run, &interrupt, config.shutdown_timeout).await
     }
 }
 
-/// Build one apalis worker for a `ProcessMethod`. The wire payload is always
-/// `serde_json::Value`; the port's `attempt` opens the envelope and the
-/// macro-emitted handler deserializes it to the method's job type, so this
-/// builder never names it.
-fn build_worker(
-    monitor: Monitor,
-    conn: &RedisConnection,
-    container: Container,
-    method: &'static ProcessMethod,
-    shutdown: &CancellationToken,
-) -> Result<Monitor> {
-    // Checked by `discover` already, which refuses a name outside the rule and
-    // every dynamic queue — this backend declares none — so this is the static
-    // name the method drains, parsed once per worker rather than per job.
-    let queue = QueueName::new(method.queue())?;
-    // Fetch one job per poll. apalis 0.7 drives a fetched batch through a
-    // `FuturesUnordered` and keeps polling while those futures are in flight, so
-    // the buffer alone bounds nothing — it is `concurrency` below that bounds the
-    // work. Sizing the buffer at one matters anyway: a job sitting in a saturated
-    // worker's buffer is invisible to every other replica, which is exactly the
-    // throughput the deployment is paying for. Namespaced under the queue name,
-    // which is how apalis routes a producer's job to this worker.
-    //
-    // A record scheduled for later — a job handed back at shutdown — becomes
-    // available on apalis's `enqueue_scheduled` heartbeat, which sleeps before its
-    // first tick and defaults to thirty seconds: that would run a job's next
-    // attempt up to half a minute after the wait the port asked for, which at a
-    // one-second backoff is thirty times it. A second keeps the lateness under the
-    // port's own jitter, for one scheduled-set scan per method per second.
-    let storage: RedisStorage<serde_json::Value, RedisConnection> = RedisStorage::new_with_config(
-        conn.clone(),
-        Config::default()
-            .set_namespace(method.queue())
-            .set_buffer_size(1)
-            .set_enqueue_scheduled(SCHEDULED_SCAN),
+/// Refuse to serve a queue that still holds jobs under the 6.x layout, naming
+/// every such queue and what to do — a worker started beside them would leave
+/// them waiting with nothing to say so.
+async fn refuse_legacy_jobs(conn: &RedisConnection, methods: &[&ProcessMethod]) -> Result<()> {
+    let mut refused = Vec::new();
+    for method in methods {
+        let queue = QueueName::new(method.queue())?;
+        match layout::legacy_jobs(conn, &queue).await {
+            Ok(keys) if keys.is_empty() => {}
+            Ok(keys) => refused.push(
+                LegacyLayoutError {
+                    queue: queue.to_string(),
+                    keys: keys.join(", "),
+                    namespace: layout::namespace(&queue),
+                }
+                .to_string(),
+            ),
+            // A user scoped to the framework's prefix cannot read the root, and
+            // could not have written the 6.x layout either — but another could
+            // have, so the gap is said rather than passed over.
+            Err(error) if layout::outside_the_acl(&error) => tracing::warn!(
+                target: nest_rs_queue::TARGET,
+                queue = %queue,
+                error = %nest_rs_core::error_message(&error),
+                "6.x key layout not checked: the connection's ACL does not reach it; drain any 6.x \
+                 jobs on this database before relying on this worker",
+            ),
+            Err(error) => {
+                return Err(anyhow::Error::new(error).context(format!(
+                    "RedisWorker could not check queue `{queue}` for jobs under the 6.x key layout"
+                )));
+            }
+        }
+    }
+    if refused.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("{}", refused.join("\n")))
+    }
+}
+
+/// Let the running attempts finish within the window, then interrupt the rest
+/// and give them the reserve to hand their jobs back. What still runs past the
+/// whole window is said, and left: its job stays in flight, and runs again
+/// elsewhere once its lease lapses.
+async fn drain<F>(
+    mut run: std::pin::Pin<&mut F>,
+    interrupt: &CancellationToken,
+    window: Duration,
+) -> Result<()>
+where
+    F: std::future::Future<Output = std::io::Result<()>>,
+{
+    let reserve = HAND_BACK_RESERVE.min(window / 2);
+    let patience = window.saturating_sub(reserve);
+    if let Ok(finished) = tokio::time::timeout(patience, run.as_mut()).await {
+        return Ok(finished?);
+    }
+    tracing::warn!(
+        target: nest_rs_queue::TARGET,
+        shutdown_timeout_ms = millis(window),
+        reserve_ms = millis(reserve),
+        "queue jobs still running as the shutdown window closes; interrupting them to hand their \
+         jobs back",
     );
-    // The handle a delivery hands its job back through at shutdown — the same
-    // namespace, so the next attempt lands on this queue.
-    let hand_back_to = storage.clone();
-    let shutdown = shutdown.clone();
-    // Position is load-bearing for the panic layer: `consume::attempt` catches a
-    // handler panic itself (so the event lands inside the per-job span), which
-    // leaves this layer as the **backstop** for a panic outside that call — in
-    // apalis's own fetch/deserialize path, or in the closure prologue. It turns
-    // one into apalis's `Abort`, which dead-letters rather than re-queues, so one
-    // bad job cannot take down the queue's consumer.
-    let worker = WorkerBuilder::new(method.queue())
+    interrupt.cancel();
+    match tokio::time::timeout(reserve, run.as_mut()).await {
+        Ok(finished) => Ok(finished?),
+        Err(_) => {
+            tracing::error!(
+                target: nest_rs_queue::TARGET,
+                shutdown_timeout_ms = millis(window),
+                "queue workers did not stop within the shutdown window; a job still running stays \
+                 in flight and runs again elsewhere once its lease lapses",
+            );
+            Ok(())
+        }
+    }
+}
+
+/// The storage one method's worker reads, under its queue's namespace.
+///
+/// Fetch one job per poll. apalis 0.7 drives a fetched batch through a
+/// `FuturesUnordered` and keeps polling while those futures are in flight, so
+/// the buffer alone bounds nothing — it is `concurrency` that bounds the work.
+/// Sizing the buffer at one matters anyway: a job sitting in a saturated
+/// worker's buffer is invisible to every other replica, which is exactly the
+/// throughput the deployment is paying for.
+///
+/// A record scheduled for later — a delayed push, a retry, a job handed back —
+/// becomes available on apalis's `enqueue_scheduled` heartbeat, which sleeps
+/// before its first tick and defaults to thirty seconds: that would run a job's
+/// next attempt up to half a minute after the wait the port asked for, which at
+/// a one-second backoff is thirty times it. A second keeps the lateness under
+/// the port's own jitter, for one scheduled-set scan per method per second.
+///
+/// The heartbeat and the orphan threshold are the config's: a worker proves it
+/// is alive every tenth of the threshold, so a peer only ever sweeps one that
+/// missed ten in a row.
+fn storage(
+    conn: &RedisConnection,
+    queue: &QueueName,
+    config: &RedisWorkerConfig,
+) -> RedisStorage<serde_json::Value, RedisConnection> {
+    RedisStorage::new_with_config(
+        conn.clone(),
+        layout::config(queue)
+            .set_buffer_size(1)
+            .set_enqueue_scheduled(SCHEDULED_SCAN)
+            .set_keep_alive(config.heartbeat())
+            .set_reenqueue_orphaned_after(config.orphan_after),
+    )
+}
+
+/// Register one apalis worker for a `ProcessMethod` on `monitor`. The wire
+/// payload is always `serde_json::Value`; the port's `attempt` opens the
+/// envelope and the macro-emitted handler deserializes it to the method's job
+/// type, so this builder never names it.
+fn register(
+    monitor: Monitor,
+    id: &str,
+    method: &'static ProcessMethod,
+    deliveries: Arc<Deliveries>,
+) -> Monitor {
+    let storage = deliveries.storage.clone();
+    // Position is load-bearing for the panic layer: a delivery runs on a task of
+    // its own and `consume::attempt` catches a handler panic itself (so the event
+    // lands inside the per-job span), which leaves this layer as the **backstop**
+    // for a panic outside both — in apalis's own fetch/deserialize path, or in
+    // the closure prologue. It turns one into apalis's `Abort`, which
+    // dead-letters rather than re-queues, so one bad job cannot take down the
+    // queue's consumer.
+    let worker = WorkerBuilder::new(id)
         // The method's permits, and the outermost layer so a permit covers a
-        // job's whole delivery — every attempt of its budget included. apalis
-        // delegates `poll_ready` to the inner service, so with every permit held
-        // the fetch loop backs off rather than piling work into memory: the next
-        // job stays in Redis, where another replica can take it.
+        // job's whole delivery. apalis delegates `poll_ready` to the inner
+        // service, so with every permit held the fetch loop backs off rather
+        // than piling work into memory: the next job stays in Redis, where
+        // another replica can take it.
         .concurrency(method.options().concurrency().get() as usize)
         .layer(ErrorHandlingLayer::new())
         .layer(CatchPanicLayer::new())
-        .data(container)
         .backend(storage)
         .build_fn(
             move |job: serde_json::Value,
-                  container: Data<Container>,
                   task_id: TaskId,
                   attempt: Attempt,
                   context: RedisContext| {
-                // apalis's task id is its record's, never the job's: the job's
-                // id is the one the port sealed, and this rides beside it.
-                let delivery = Delivery::new(&BACKEND, queue.clone(), job)
-                    .with_backend_id(task_id.to_string());
                 let task = Task {
                     id: task_id,
                     attempt,
                     context,
                 };
-                let hand_back_to = hand_back_to.clone();
-                let shutdown = shutdown.clone();
-                async move {
-                    deliver(
-                        method,
-                        delivery,
-                        task,
-                        (*container).clone(),
-                        hand_back_to,
-                        shutdown,
-                    )
-                    .await
-                }
+                Arc::clone(&deliveries).deliver(job, task)
             },
         );
-    Ok(monitor.register(worker))
+    monitor.register(worker)
 }
 
-/// The error type apalis's `build_fn` closure returns.
-type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
-
-/// The apalis task a delivery arrived as — what a hand-back rewrites in place.
-struct Task {
-    id: TaskId,
-    attempt: Attempt,
-    context: RedisContext,
-}
-
-impl Task {
-    /// The task, carrying `record` in place of what it was fetched with.
-    fn carrying(&self, record: serde_json::Value) -> Request<serde_json::Value, RedisContext> {
-        let mut request = Request::new_with_ctx(record, self.context.clone());
-        request.parts.task_id = self.id.clone();
-        request.parts.attempt = self.attempt.clone();
-        request
+/// This replica's id for one method's worker: the host it runs on, when the
+/// platform names it, then a UUID v7 — unique per replica and per queue, so no
+/// two replicas share an in-flight set, and the sweep that follows a crash
+/// finds the crashed replica's jobs and only those.
+fn worker_id() -> String {
+    let id = uuid::Uuid::now_v7();
+    match std::env::var("HOSTNAME") {
+        Ok(host)
+            if !host.is_empty()
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) =>
+        {
+            format!("{host}:{id}")
+        }
+        _ => id.to_string(),
     }
 }
 
-/// Run the port's attempts at one fetched job until the port settles it, and
-/// answer apalis once: `Ok` when it completed or was handed back at shutdown,
-/// [`dead_letter`] when it did not complete, and a plain failure when a shutdown
-/// could not hand it back ([`handed_back`] says why).
-async fn deliver(
-    method: &'static ProcessMethod,
-    mut delivery: Delivery,
-    task: Task,
-    container: Container,
-    mut hand_back_to: RedisStorage<serde_json::Value, RedisConnection>,
-    shutdown: CancellationToken,
-) -> Result<(), BoxDynError> {
-    loop {
-        match consume::attempt(method, &mut delivery, container.clone()).await {
-            AttemptOutcome::Ok => return Ok(()),
-            AttemptOutcome::DeadLetter(error) => return Err(dead_letter(error)),
-            AttemptOutcome::Retry { after } => {
-                let due = SystemTime::now() + after;
-                tokio::select! {
-                    () = tokio::time::sleep(after) => {}
-                    () = shutdown.cancelled() => {
-                        return hand_back(&mut hand_back_to, &delivery, &task, due).await;
-                    }
-                }
-            }
+/// How often a worker unregistered by a peer's sweep is said to be, at most:
+/// apalis reports it on every poll until the worker registers again.
+const UNREGISTERED_REPEAT: Duration = Duration::from_secs(30);
+
+/// Says what apalis says about the workers of one replica, at the level each
+/// event deserves. apalis logs nothing through `tracing` itself, so an event
+/// dropped here is a failure nobody hears of.
+struct Reporter {
+    /// Each worker's queue, by the id apalis names it with.
+    workers: HashMap<String, QueueName>,
+    /// When each worker was last said to be unregistered.
+    unregistered: Mutex<HashMap<String, Instant>>,
+}
+
+impl Reporter {
+    fn new(workers: HashMap<String, QueueName>) -> Self {
+        Self {
+            workers,
+            unregistered: Mutex::default(),
         }
     }
-}
 
-/// Reschedule the task for `due`, carrying the record the port hands back for
-/// the job's next attempt, so a shutdown gives up the wait and never the job.
-///
-/// **Onto the schedule first, then out of flight** — two calls, in that order,
-/// so no failure between them loses the job. apalis's `reschedule` removes the
-/// task from the worker's in-flight set *before* it schedules it, as separate
-/// commands, and a failure between the two would leave a job in neither place;
-/// scheduling the same task first means every failure after it leaves the job
-/// scheduled, at worst still in flight as well.
-async fn hand_back(
-    storage: &mut RedisStorage<serde_json::Value, RedisConnection>,
-    delivery: &Delivery,
-    task: &Task,
-    due: SystemTime,
-) -> Result<(), BoxDynError> {
-    let at = schedule_at(due);
-    let record = || task.carrying(delivery.retry_envelope().into_json());
-    let outcome = match storage.schedule_request(record(), at).await {
-        Err(error) => HandBack::NotScheduled(error),
-        Ok(_) => match storage.reschedule(record(), wait_until(at)).await {
-            Ok(()) => HandBack::Whole,
-            Err(error) => HandBack::StillInFlight(error),
-        },
-    };
-    handed_back(delivery, outcome)
-}
+    fn report(&self, event: &Worker<Event>) {
+        let worker = event.id().name();
+        let queue = self
+            .workers
+            .get(worker)
+            .map(QueueName::as_str)
+            .unwrap_or_default();
+        match event.inner() {
+            Event::Start => tracing::info!(
+                target: nest_rs_queue::TARGET,
+                queue,
+                worker,
+                "queue worker started",
+            ),
+            Event::Exit => tracing::info!(
+                target: nest_rs_queue::TARGET,
+                queue,
+                worker,
+                "queue worker stopped",
+            ),
+            Event::Stop | Event::Engage(_) | Event::Idle | Event::Custom(_) => {}
+            Event::Error(error) if unregistered(error.as_ref()) => {
+                self.report_unregistered(queue, worker);
+            }
+            Event::Error(error) => report_error(queue, worker, error.as_ref()),
+        }
+    }
 
-/// `due` as the whole second apalis schedules on — rounded up, so the wait is at
-/// least as long as the port asked for.
-fn schedule_at(due: SystemTime) -> i64 {
-    let on = due
-        .duration_since(UNIX_EPOCH)
-        .map(|since| {
-            since
-                .as_secs()
-                .saturating_add(u64::from(since.subsec_nanos() > 0))
-        })
-        .unwrap_or_default();
-    i64::try_from(on).unwrap_or(i64::MAX)
-}
-
-/// The wait `reschedule` takes to land on the second `at`: it counts whole
-/// seconds from the current one, so a second that ticks over before it reads the
-/// clock only ever makes the wait longer.
-fn wait_until(at: i64) -> Duration {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_secs())
-        .unwrap_or_default();
-    let now = i64::try_from(now).unwrap_or(i64::MAX);
-    Duration::from_secs(u64::try_from(at.saturating_sub(now)).unwrap_or_default())
-}
-
-/// How far a hand-back got.
-enum HandBack<E> {
-    /// Scheduled for the next attempt and out of flight.
-    Whole,
-    /// Redis refused the schedule, so nothing changed: the task is still in
-    /// flight under the record it was fetched with.
-    NotScheduled(E),
-    /// Scheduled for the next attempt, and Redis refused to take it out of
-    /// flight.
-    StillInFlight(E),
-}
-
-/// What a hand-back answers apalis once Redis has answered, and the line saying
-/// which way it went.
-///
-/// A task Redis would not schedule is failed rather than acknowledged: it is
-/// still in flight, so the next replica to start runs it again from the attempt
-/// it was stored at — a budget restarted rather than a job lost. Acknowledging
-/// it would drop the job, and dead-lettering it would bury a job over a failure
-/// that was never its own. A task scheduled and still in flight is
-/// acknowledged: when the acknowledgement lands it takes the task out of flight,
-/// and when it does not, the next replica to start runs the next attempt early
-/// and the schedule runs it again — twice, which the line says, rather than
-/// never.
-fn handed_back<E>(delivery: &Delivery, outcome: HandBack<E>) -> Result<(), BoxDynError>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    match outcome {
-        HandBack::Whole => {
+    /// A starting peer's sweep unregistered this worker along with the jobs it
+    /// took, and apalis fails every fetch until it registers again — at once
+    /// against Redis 7 and later, whose script errors carry the words apalis
+    /// looks for, and at the worker's next heartbeat against Redis 6.2, whose
+    /// errors do not. Said once per stretch, since apalis repeats it every poll.
+    fn report_unregistered(&self, queue: &str, worker: &str) {
+        let now = Instant::now();
+        let fresh = {
+            let mut said = self
+                .unregistered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let fresh = said
+                .get(worker)
+                .is_none_or(|last| now.duration_since(*last) >= UNREGISTERED_REPEAT);
+            if fresh {
+                said.insert(worker.to_owned(), now);
+            }
+            fresh
+        };
+        if fresh {
             tracing::info!(
                 target: nest_rs_queue::TARGET,
-                queue = %delivery.queue(),
-                job_id = %delivery.id(),
-                attempt = delivery.attempt(),
-                "job handed back at shutdown for its next attempt",
+                queue,
+                worker,
+                "queue worker unregistered by a starting peer's sweep; it fetches again once \
+                 registered, at its next heartbeat at the latest",
             );
-            Ok(())
-        }
-        HandBack::NotScheduled(error) => {
-            tracing::error!(
-                target: nest_rs_queue::TARGET,
-                queue = %delivery.queue(),
-                job_id = %delivery.id(),
-                error = %nest_rs_core::error_message(&error),
-                "job not handed back at shutdown; it runs again from its stored attempt",
-            );
-            Err(Box::new(error))
-        }
-        HandBack::StillInFlight(error) => {
-            tracing::warn!(
-                target: nest_rs_queue::TARGET,
-                queue = %delivery.queue(),
-                job_id = %delivery.id(),
-                attempt = delivery.attempt(),
-                error = %nest_rs_core::error_message(&error),
-                "job handed back at shutdown and still in flight; its next attempt may run twice",
-            );
-            Ok(())
         }
     }
 }
 
-/// A job the port dead-lettered, as apalis's `Abort`: its acknowledgement kills
-/// the task onto the dead set at once. A plain error would read as apalis's
-/// `Failed`, which its acknowledgement re-queues under apalis's own attempt
-/// count — a second budget, invisible to the method's.
-fn dead_letter(error: JobError) -> BoxDynError {
-    Box::new(apalis::prelude::Error::Abort(Arc::new(error.source)))
+/// Whether `error` is a fetch refused because a peer's sweep unregistered the
+/// worker.
+fn unregistered(error: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(
+        error.downcast_ref::<RedisPollError>(),
+        Some(RedisPollError::PollNextError(cause)) if cause.to_string().contains("consumer not registered")
+    )
+}
+
+/// An error a worker met, classified by where it came from.
+fn report_error(queue: &str, worker: &str, error: &(dyn std::error::Error + 'static)) {
+    let message = nest_rs_core::error_message(error);
+    // A delivery's own answer — a dead letter, a hand-back Redis refused — is
+    // reported where it was decided; apalis echoing it back is not a second
+    // event.
+    if error.downcast_ref::<apalis::prelude::Error>().is_some() {
+        tracing::debug!(target: nest_rs_queue::TARGET, queue, worker, error = %message, "queue delivery answered with an error");
+        return;
+    }
+    match error.downcast_ref::<RedisPollError>() {
+        Some(poll) => report_trouble(Trouble::of(poll), queue, worker, &message),
+        None => {
+            tracing::warn!(target: nest_rs_queue::TARGET, queue, worker, error = %message, "queue worker error")
+        }
+    }
+}
+
+/// Which of apalis's own calls a worker's heartbeat failed at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Trouble {
+    /// Fetching the next job.
+    Fetch,
+    /// Proving the worker is alive.
+    Heartbeat,
+    /// Moving due records from the schedule onto the queue.
+    Promotion,
+    /// Taking a silent peer's jobs back.
+    Reclaim,
+    /// Handing a fetched job to the worker's own loop.
+    Handoff,
+    /// Recording a job's outcome.
+    Acknowledgement,
+}
+
+impl Trouble {
+    fn of(error: &RedisPollError) -> Self {
+        match error {
+            RedisPollError::PollNextError(_) => Self::Fetch,
+            RedisPollError::KeepAliveError(_) => Self::Heartbeat,
+            RedisPollError::EnqueueScheduledError(_) => Self::Promotion,
+            RedisPollError::ReenqueueOrphanedError(_) => Self::Reclaim,
+            RedisPollError::EnqueueError(_) => Self::Handoff,
+            RedisPollError::AckError(_) => Self::Acknowledgement,
+        }
+    }
+}
+
+/// The line for `trouble`: `warn` for a call apalis makes again on its own, and
+/// `error` for a lost acknowledgement — the one that makes a job run again.
+fn report_trouble(trouble: Trouble, queue: &str, worker: &str, error: &str) {
+    match trouble {
+        Trouble::Fetch => tracing::warn!(
+            target: nest_rs_queue::TARGET,
+            queue,
+            worker,
+            error,
+            "queue fetch failed; retrying at the next poll",
+        ),
+        Trouble::Heartbeat => tracing::warn!(
+            target: nest_rs_queue::TARGET,
+            queue,
+            worker,
+            error,
+            "queue worker heartbeat failed; its peers take its jobs if it keeps failing",
+        ),
+        Trouble::Promotion => tracing::warn!(
+            target: nest_rs_queue::TARGET,
+            queue,
+            worker,
+            error,
+            "scheduled jobs not moved onto the queue; retrying at the next scan",
+        ),
+        Trouble::Reclaim => tracing::warn!(
+            target: nest_rs_queue::TARGET,
+            queue,
+            worker,
+            error,
+            "orphaned jobs not reclaimed; retrying at the next sweep",
+        ),
+        Trouble::Handoff => tracing::warn!(
+            target: nest_rs_queue::TARGET,
+            queue,
+            worker,
+            error,
+            "fetched job not handed to its worker; it stays in flight until swept",
+        ),
+        Trouble::Acknowledgement => tracing::error!(
+            target: nest_rs_queue::TARGET,
+            queue,
+            worker,
+            error,
+            "job acknowledgement lost; the job is delivered again once swept, and its settled mark \
+             keeps it from running twice",
+        ),
+    }
+}
+
+/// `duration` in whole milliseconds, for a line's field.
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -432,124 +561,178 @@ mod tests {
 
     use super::*;
 
-    /// A job waiting out the backoff before its second attempt.
-    fn delivery() -> Delivery {
-        Delivery::new(
-            &BACKEND,
-            QueueName::new("audio").expect("a valid name"),
-            serde_json::json!({
-                "v": nest_rs_queue::WIRE_FORMAT_VERSION,
-                "id": "01890a5d-ac96-774b-bcce-b302099a8057",
-                "attempt": 2,
-                "payload": { "clip": 1 },
-            }),
-        )
+    /// Two workers in one process are two consumers: an id is never reused, so
+    /// no two replicas — nor two methods of one — share an in-flight set.
+    #[test]
+    fn every_worker_consumes_under_an_id_of_its_own() {
+        let (first, second) = (worker_id(), worker_id());
+        assert_ne!(first, second);
+        assert!(!first.contains(char::is_whitespace), "{first}");
     }
 
-    /// The whole hand-back is said once, naming the attempt it hands back.
+    /// apalis's failures reach the log at `warn` or above with the queue, the
+    /// worker and the cause — a lost acknowledgement at `error`, since it is the
+    /// one that makes a job run again — while a delivery's own answer, reported
+    /// where it was decided, is not said twice.
     #[test]
-    fn a_whole_hand_back_is_acknowledged_and_names_the_next_attempt() {
+    fn apalis_failures_are_reported_with_fields_and_a_deliverys_answer_is_not_repeated() {
         let logs = LogCapture::install();
-        let delivery = delivery();
-        handed_back::<std::io::Error>(&delivery, HandBack::Whole).expect("acknowledged");
-
-        let event = logs.expect_one(
+        let failure = || redis::RedisError::from(std::io::Error::other("connection reset"));
+        for (error, trouble) in [
+            (RedisPollError::PollNextError(failure()), Trouble::Fetch),
+            (
+                RedisPollError::KeepAliveError(failure()),
+                Trouble::Heartbeat,
+            ),
+            (
+                RedisPollError::EnqueueScheduledError(failure()),
+                Trouble::Promotion,
+            ),
+            (
+                RedisPollError::ReenqueueOrphanedError(failure()),
+                Trouble::Reclaim,
+            ),
+            (
+                RedisPollError::AckError(failure()),
+                Trouble::Acknowledgement,
+            ),
+        ] {
+            assert_eq!(Trouble::of(&error), trouble);
+        }
+        report_error("audio", "host:01", &RedisPollError::AckError(failure()));
+        let lost = logs.expect_one(
             nest_rs_queue::TARGET,
-            "job handed back at shutdown for its next attempt",
+            "job acknowledgement lost; the job is delivered again once swept, and its settled mark \
+             keeps it from running twice",
         );
-        assert_eq!(
-            event.field("job_id").as_deref(),
-            Some("01890a5d-ac96-774b-bcce-b302099a8057"),
+        assert_eq!(lost.level, "error");
+        assert_eq!(lost.field("queue").as_deref(), Some("audio"));
+        assert_eq!(lost.field("worker").as_deref(), Some("host:01"));
+        assert!(
+            lost.field("error")
+                .is_some_and(|error| error.contains("connection reset")),
+            "{lost:?}"
         );
-        assert_eq!(event.field("attempt").as_deref(), Some("2"));
+
+        for trouble in [
+            Trouble::Fetch,
+            Trouble::Heartbeat,
+            Trouble::Promotion,
+            Trouble::Reclaim,
+            Trouble::Handoff,
+        ] {
+            report_trouble(trouble, "audio", "host:01", "connection reset");
+        }
+        let fetch = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "queue fetch failed; retrying at the next poll",
+        );
+        let heartbeat = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "queue worker heartbeat failed; its peers take its jobs if it keeps failing",
+        );
+        let promotion = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "scheduled jobs not moved onto the queue; retrying at the next scan",
+        );
+        let reclaim = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "orphaned jobs not reclaimed; retrying at the next sweep",
+        );
+        let handoff = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "fetched job not handed to its worker; it stays in flight until swept",
+        );
+        for event in [fetch, heartbeat, promotion, reclaim, handoff] {
+            assert_eq!(event.level, "warn", "{event:?}");
+            assert_eq!(event.field("error").as_deref(), Some("connection reset"));
+            assert_eq!(event.field("worker").as_deref(), Some("host:01"));
+        }
+
+        let answered =
+            apalis::prelude::Error::Abort(Arc::new(Box::new(std::io::Error::other("bad payload"))));
+        report_error("audio", "host:01", &answered);
+        logs.expect_none(nest_rs_queue::TARGET, "queue worker error");
     }
 
-    /// A hand-back Redis refused must neither drop the job nor bury it: the task
-    /// fails as a plain error, which apalis re-queues, and the line says the job
-    /// runs again rather than that it was handed back.
+    /// apalis repeats a sweep's unregistration on every poll until the worker
+    /// registers again — against Redis 6.2, for a whole heartbeat — so it is
+    /// said once per stretch, and a failing fetch that is something else stays
+    /// a `warn`.
     #[test]
-    fn a_hand_back_redis_refuses_fails_the_task_and_says_the_job_runs_again() {
+    fn a_worker_unregistered_by_a_peers_sweep_is_said_once_per_stretch() {
         let logs = LogCapture::install();
-        let delivery = delivery();
-        let failed = handed_back(
-            &delivery,
-            HandBack::NotScheduled(std::io::Error::other("connection refused")),
-        )
-        .expect_err("the task is failed, never acknowledged");
-        assert!(
-            !failed
-                .downcast_ref::<apalis::prelude::Error>()
-                .is_some_and(|e| matches!(e, apalis::prelude::Error::Abort(_))),
-            "a failed hand-back is not a dead letter: {failed}",
+        let reporter = Reporter::new(HashMap::new());
+        let refused = RedisPollError::PollNextError(redis::RedisError::from((
+            redis::ErrorKind::ResponseError,
+            "An error was signalled by the server",
+            "user_script:1: consumer not registered script: 9608…".to_owned(),
+        )));
+        assert!(unregistered(&refused));
+        for _ in 0..3 {
+            reporter.report_unregistered("audio", "host:01");
+        }
+        let said = logs.find(
+            nest_rs_queue::TARGET,
+            "queue worker unregistered by a starting peer's sweep; it fetches again once \
+             registered, at its next heartbeat at the latest",
         );
+        assert_eq!(said.len(), 1, "{said:#?}");
 
-        let event = logs.expect_one(
-            nest_rs_queue::TARGET,
-            "job not handed back at shutdown; it runs again from its stored attempt",
-        );
-        assert_eq!(event.level, "error");
-        assert_eq!(event.field("job_id"), Some(delivery.id().to_string()));
-        assert_eq!(event.field("queue").as_deref(), Some("audio"));
-        assert_eq!(event.field("error").as_deref(), Some("connection refused"));
-        logs.expect_none(
-            nest_rs_queue::TARGET,
-            "job handed back at shutdown for its next attempt",
-        );
+        let other = RedisPollError::PollNextError(redis::RedisError::from(std::io::Error::other(
+            "connection reset",
+        )));
+        assert!(!unregistered(&other));
     }
 
-    /// Scheduled but left in flight: the job's next attempt is safe, and may run
-    /// twice — which is said at `warn`, since it is a duplicate and not a loss.
-    #[test]
-    fn a_hand_back_left_in_flight_is_acknowledged_and_says_the_attempt_may_run_twice() {
+    /// A worker still running once the whole window has passed is left to the
+    /// process's end, and said at `error`: its job stays in flight.
+    #[tokio::test]
+    async fn a_worker_outlasting_the_whole_window_is_said_and_left() {
         let logs = LogCapture::install();
-        let delivery = delivery();
-        handed_back(
-            &delivery,
-            HandBack::StillInFlight(std::io::Error::other("connection reset")),
-        )
-        .expect("acknowledged, so a landing acknowledgement takes it out of flight");
-
-        let event = logs.expect_one(
+        let interrupt = CancellationToken::new();
+        let run = std::future::pending::<std::io::Result<()>>();
+        tokio::pin!(run);
+        drain(run, &interrupt, Duration::from_millis(200))
+            .await
+            .expect("the drain returns");
+        assert!(
+            interrupt.is_cancelled(),
+            "the running attempts were interrupted"
+        );
+        let left = logs.expect_one(
             nest_rs_queue::TARGET,
-            "job handed back at shutdown and still in flight; its next attempt may run twice",
+            "queue workers did not stop within the shutdown window; a job still running stays \
+             in flight and runs again elsewhere once its lease lapses",
         );
-        assert_eq!(event.level, "warn");
-        assert_eq!(event.field("job_id"), Some(delivery.id().to_string()));
-        assert_eq!(event.field("error").as_deref(), Some("connection reset"));
+        assert_eq!(left.level, "error");
     }
 
-    /// apalis schedules on whole seconds, and a wait shortened by the rounding
-    /// would run the next attempt before the backoff the port asked for.
-    #[test]
-    fn a_hand_back_is_scheduled_on_the_second_the_wait_ends_or_after_it() {
-        let at = |millis: u64| UNIX_EPOCH + Duration::from_millis(millis);
-        assert_eq!(schedule_at(at(10_000)), 10);
-        assert_eq!(schedule_at(at(10_001)), 11);
-        assert_eq!(schedule_at(at(10_999)), 11);
-
-        let now = schedule_at(SystemTime::now());
-        assert!(wait_until(now + 5) >= Duration::from_secs(5));
-        assert_eq!(
-            wait_until(0),
-            Duration::ZERO,
-            "a second already past waits for nothing"
-        );
-    }
-
-    /// The mapping is one line and nothing else exercises it in process: a plain
-    /// error in its place would pass every suite here and hand a dead letter to
-    /// apalis's own retry count.
-    #[test]
-    fn a_dead_letter_is_apalis_abort_which_never_re_queues() {
-        let dead = dead_letter(JobError::abort("bad payload"));
+    /// A drain keeps back a reserve to hand interrupted jobs back in, never more
+    /// than half its window, and interrupts what still runs once the rest has
+    /// passed.
+    #[tokio::test]
+    async fn a_drain_interrupts_what_still_runs_and_keeps_within_its_window() {
+        let logs = LogCapture::install();
+        let interrupt = CancellationToken::new();
+        let window = Duration::from_millis(400);
+        let started = tokio::time::Instant::now();
+        let watched = interrupt.clone();
+        let run = async move {
+            watched.cancelled().await;
+            Ok(())
+        };
+        tokio::pin!(run);
+        drain(run, &interrupt, window).await.expect("drained");
+        let took = started.elapsed();
         assert!(
-            dead.downcast_ref::<apalis::prelude::Error>()
-                .is_some_and(|e| matches!(e, apalis::prelude::Error::Abort(_))),
-            "a dead letter is apalis's Abort, which its acknowledgement kills: {dead}",
+            took >= window / 2 && took < window,
+            "interrupted once half the window passed, not {took:?}"
         );
-        assert!(
-            dead.to_string().contains("bad payload"),
-            "and it keeps the port's sentence for the dead set: {dead}",
+        logs.expect_one(
+            nest_rs_queue::TARGET,
+            "queue jobs still running as the shutdown window closes; interrupting them to hand \
+             their jobs back",
         );
     }
 }

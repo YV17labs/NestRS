@@ -8,6 +8,7 @@
 
 mod module;
 mod producer;
+mod promoter;
 
 pub use module::RedisQueueModule;
 pub use producer::RedisQueueProducer;

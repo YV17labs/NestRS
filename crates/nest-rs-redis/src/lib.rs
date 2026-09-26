@@ -45,6 +45,7 @@ mod backend;
 mod config;
 mod connection;
 mod error;
+mod layout;
 mod module;
 mod queue;
 #[cfg(feature = "schedule")]

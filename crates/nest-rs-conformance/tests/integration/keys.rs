@@ -451,9 +451,13 @@ fn rooted_in(text: &str) -> BTreeSet<String> {
 ///
 /// What it deliberately does not check is the **member**: a chart naming a queue
 /// no `#[queue]` declares is an application's own error, and this join derives
-/// keys, not queue names.
+/// keys, not queue names. So a declared name's placeholder level — the `{}` of
+/// `nestrs:queue:{}`, where the code writes each queue's name — accepts
+/// whatever one level a spelling puts there: `nestrs:queue:audio:active`, the
+/// list a KEDA trigger names, is built on it exactly as `nestrs:queue:<queue>:active`
+/// in a page is. The level still has to be there, and still has to be one.
 fn built_from_a_declared_key(key: &str, declared: &BTreeSet<String>) -> bool {
-    if declared.contains(key) {
+    if declared.iter().any(|name| same_levels(name, key)) {
         return true;
     }
     if levels(key) <= 2 {
@@ -464,7 +468,20 @@ fn built_from_a_declared_key(key: &str, declared: &BTreeSet<String>) -> bool {
     declared
         .iter()
         .filter(|name| levels(name) >= 3)
-        .any(|name| key.starts_with(&format!("{name}{SEP}")))
+        .any(|name| levels(key) > levels(name) && within(name, key))
+}
+
+/// Whether `key` opens with every level of `name`, a `{}` level of `name`
+/// standing for any one level.
+fn within(name: &str, key: &str) -> bool {
+    name.split(SEP)
+        .zip(key.split(SEP))
+        .all(|(declared, spelled)| declared == "{}" || declared == spelled)
+}
+
+/// Whether `key` is `name`, level for level, a `{}` level standing for any one.
+fn same_levels(name: &str, key: &str) -> bool {
+    levels(name) == levels(key) && within(name, key)
 }
 
 #[test]
@@ -637,6 +654,29 @@ fn the_apalis_layout_read_here_is_the_pinned_releases() {
         "apalis-redis moved off the release APALIS_STRUCTURES was read from — re-read \
          its key layout (`src/storage.rs`) into the list, then move APALIS_REDIS_PIN",
     );
+}
+
+/// A declared name's placeholder level stands for whatever member a spelling
+/// puts there, and only for that level: every fixed level around it still has
+/// to match, so a spelling that renames the concern or the structure is still a
+/// hole.
+#[test]
+fn a_placeholder_level_accepts_any_member_and_nothing_else() {
+    let declared = BTreeSet::from([["nestrs", "queue", "{}"].join(":")]);
+    let spelled = |segments: &[&str]| segments.join(":");
+    for built in [
+        spelled(&["nestrs", "queue", "audio"]),
+        spelled(&["nestrs", "queue", "audio", "active"]),
+        spelled(&["nestrs", "queue", "{}", "inflight", "{}"]),
+    ] {
+        assert!(built_from_a_declared_key(&built, &declared), "{built}");
+    }
+    for hole in [
+        spelled(&["nestrs", "queues", "audio", "active"]),
+        spelled(&["nestrs", "throttler", "audio"]),
+    ] {
+        assert!(!built_from_a_declared_key(&hole, &declared), "{hole}");
+    }
 }
 
 /// The recogniser reads apalis's root layout wherever a page or a chart writes

@@ -3,27 +3,21 @@
 # regression argued in review, never absorbed by a flag.
 #
 # Every line below is apalis-redis's layout at the root of the keyspace: the
-# 6.x layout, in which the producer and the worker hand apalis the queue's bare
-# name as its namespace, so apalis writes `<queue>:active`, `<queue>:inflight`,
-# `<queue>:data` and the rest beside whatever else the database holds. The
-# demo chart's KEDA triggers poll two of them, its values, notes and README
-# explain the scaling floor with three more, and the retries page shows an
-# operator where a dead job lands.
+# 6.x layout, in which the producer and the worker handed apalis the queue's
+# bare name as its namespace, so apalis wrote `<queue>:active`,
+# `<queue>:inflight`, `<queue>:data` and the rest beside whatever else the
+# database holds. The demo chart's KEDA triggers poll two of them, and its
+# values, notes and README explain the scaling floor with three more.
 #
-# They leave with the queue re-namespacing, which hands apalis the namespace
-# `nestrs:queue:<queue>` — so apalis writes `nestrs:queue:<queue>:active` — and
-# which moves the producer, the worker, the chart's triggers, its notes and the
-# page together, then deletes these lines. Until then the triggers are right
-# about what the code writes, and these lines are what keep that move from
-# leaving KEDA polling a list nobody fills.
+# The code has moved: the producer and the worker hand apalis the namespace
+# `nestrs:queue:<queue>` (`nest-rs-redis/src/layout.rs`), so apalis now writes
+# `nestrs:queue:<queue>:active`, and the queue pages spell that. The chart is
+# the demo's, and these lines leave when its triggers and notes follow — until
+# then KEDA polls a list the 7.0 worker no longer fills, which is what these
+# lines exist to keep in view.
 
 `audio:active` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (demo/charts/demo/values.yaml)
-`audio:consumers` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (docs/src/content/docs/queue/retries-and-failure.mdx)
-`audio:data::result` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (docs/src/content/docs/queue/retries-and-failure.mdx)
-`audio:data` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (docs/src/content/docs/queue/retries-and-failure.mdx)
-`audio:dead` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (docs/src/content/docs/queue/retries-and-failure.mdx)
 `notifications:active` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (demo/charts/demo/values.yaml)
 `{}:active` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (demo/charts/demo/README.md, demo/charts/demo/values.yaml)
-`{}:data::result` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (docs/src/content/docs/queue/retries-and-failure.mdx)
 `{}:inflight` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (demo/charts/demo/README.md, demo/charts/demo/templates/NOTES.txt, demo/charts/demo/values.yaml)
 `{}:scheduled` is apalis's layout at the root of the keyspace — its namespace does not open with `nestrs:`, so it names no concern, no constant reaches it, and a scan of the framework's keys misses it (demo/charts/demo/README.md, demo/charts/demo/templates/NOTES.txt, demo/charts/demo/values.yaml)

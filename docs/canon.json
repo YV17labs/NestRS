@@ -11,7 +11,6 @@
     "queue",
     "redis",
     "redis-throttler",
-    "redis-schedule",
     "schedule",
     "events",
     "authn",
@@ -357,7 +356,7 @@
       "type_key"
     ]
   },
-  "test_count": 2430,
+  "test_count": 2450,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -527,7 +526,9 @@
     "RedisWorkerConfig": {
       "source": "crates/nest-rs-redis/src/worker/config.rs",
       "fields": [
-        "shutdown_timeout"
+        "shutdown_timeout",
+        "orphan_after",
+        "lease"
       ],
       "profile_split": false
     },

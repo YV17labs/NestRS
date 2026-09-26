@@ -9,7 +9,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, ExprLit, Lit};
 
-use crate::args::unknown_value;
+use crate::args::{takes_one_of, unknown_value};
 use crate::ungrouped::ungrouped_expr;
 
 /// The key, spelled once.
@@ -26,6 +26,10 @@ const WHAT_THE_VALUES_DO: &str = "`\"each\"` (the default) fires every occurrenc
 
 /// The `Replicas` variant a `replicas = …` value selects, rooted at the surface
 /// crate the calling macro emits through (`::nest_rs_schedule`).
+///
+/// Both refusals name the decorator: a value of the wrong kind through
+/// [`crate::args::takes_value`], listing [`VALUES`] as the string literals the
+/// key takes, and a string outside them through [`unknown_value`].
 pub fn replicas_value(attr: &str, expr: &Expr, surface: &TokenStream) -> syn::Result<TokenStream> {
     let unwrapped = ungrouped_expr(expr);
     let Expr::Lit(ExprLit {
@@ -33,9 +37,13 @@ pub fn replicas_value(attr: &str, expr: &Expr, surface: &TokenStream) -> syn::Re
         ..
     }) = unwrapped
     else {
+        let literals = VALUES.map(|value| format!("{value:?}"));
         return Err(syn::Error::new_spanned(
             unwrapped,
-            format!("`{REPLICAS}` takes `\"each\"` or `\"one\"` — {WHAT_THE_VALUES_DO}"),
+            format!(
+                "{} — {WHAT_THE_VALUES_DO}",
+                takes_one_of(attr, REPLICAS, &literals.each_ref().map(String::as_str))
+            ),
         ));
     };
     match value.value().as_str() {

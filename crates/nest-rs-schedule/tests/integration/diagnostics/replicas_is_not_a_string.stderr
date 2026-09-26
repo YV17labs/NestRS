@@ -1,4 +1,4 @@
-error: `replicas` takes `"each"` or `"one"` — `"each"` (the default) fires every occurrence on every replica of the app; `"one"` fires each occurrence on exactly one replica, the one that claims it through the occurrence lock the app imports
+error: #[every] `replicas` takes `"each"` or `"one"` — `"each"` (the default) fires every occurrence on every replica of the app; `"one"` fires each occurrence on exactly one replica, the one that claims it through the occurrence lock the app imports
   --> tests/integration/diagnostics/replicas_is_not_a_string.rs:14:31
    |
 14 |     #[every("30s", replicas = one)]

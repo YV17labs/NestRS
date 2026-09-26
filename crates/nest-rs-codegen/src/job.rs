@@ -17,6 +17,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, ExprLit, Lit};
 
+use crate::args::{site, takes_one_of};
 use crate::replicas::REPLICAS;
 use crate::ungrouped::ungrouped_expr;
 
@@ -30,20 +31,25 @@ const WHAT_THE_VALUES_DO: &str = "`true` (the default) settles the job's data-la
      transaction per attempt, so a failed attempt leaves nothing for the retry to repeat; `false` \
      runs it on the pool, for a job that brackets long work that is not the database's";
 
-/// Read a `transactional = …` value off the expression the key was given.
+/// Read a `transactional = …` value written at `#[attr]` off the expression the
+/// key was given.
 ///
-/// The sentence names what each value *does* rather than the type it wanted: a
-/// developer reaching for this key is choosing between two behaviours, not
-/// fixing a typo, and the choice is the thing worth stating at the point of
-/// refusal.
-pub fn transactional_value(expr: &Expr) -> syn::Result<bool> {
+/// The sentence names the decorator, as every value refusal does
+/// ([`crate::args::site`]), and then what each value *does* rather than the type
+/// it wanted: a developer reaching for this key is choosing between two
+/// behaviours, not fixing a typo, and the choice is the thing worth stating at
+/// the point of refusal.
+pub fn transactional_value(attr: &str, expr: &Expr) -> syn::Result<bool> {
     match ungrouped_expr(expr) {
         Expr::Lit(ExprLit {
             lit: Lit::Bool(b), ..
         }) => Ok(b.value()),
         other => Err(syn::Error::new_spanned(
             other,
-            format!("`{TRANSACTIONAL}` takes `true` or `false` — {WHAT_THE_VALUES_DO}"),
+            format!(
+                "{} — {WHAT_THE_VALUES_DO}",
+                takes_one_of(attr, TRANSACTIONAL, &["true", "false"])
+            ),
         )),
     }
 }
@@ -58,8 +64,9 @@ pub fn transactional_value(expr: &Expr) -> syn::Result<bool> {
 /// `Punctuated` whose failure is reported at the enclosing `#[scheduled]`.
 fn transactional_needs_a_value(attr: &str) -> String {
     format!(
-        "#[{attr}] `{TRANSACTIONAL}` needs a value — write `{TRANSACTIONAL} = true` or \
-         `{TRANSACTIONAL} = false`. {WHAT_THE_VALUES_DO}"
+        "{} needs a value — write `{TRANSACTIONAL} = true` or `{TRANSACTIONAL} = false`. \
+         {WHAT_THE_VALUES_DO}",
+        site(attr, Some(TRANSACTIONAL)),
     )
 }
 

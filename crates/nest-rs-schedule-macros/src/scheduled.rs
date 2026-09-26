@@ -364,7 +364,7 @@ fn parse_trailing_keys(
             ));
         }
         if name == TRANSACTIONAL {
-            keys.transactional = Some(transactional_value(&meta.value)?);
+            keys.transactional = Some(transactional_value(key, &meta.value)?);
         } else if name == REPLICAS {
             keys.replicas = Some(replicas_value(
                 key,

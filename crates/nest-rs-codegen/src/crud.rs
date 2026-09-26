@@ -143,9 +143,9 @@ fn resolve_write_op<'a>(
         return Err(syn::Error::new(
             span,
             format!(
-                "#[crud] `ops` lists `{key}` but no `{key} = <InputType>` was given — a resource \
-                 generates `{key}` only when it provides the input type and implements \
-                 `{trait_name}`"
+                "{} lists `{key}` but no `{key} = <InputType>` was given — a resource generates \
+                 `{key}` only when it provides the input type and implements `{trait_name}`",
+                crate::args::site("crud", Some("ops")),
             ),
         ));
     }
@@ -277,8 +277,11 @@ impl Parse for CrudDeclaration {
                         // opt-out, never the silent default".
                         return Err(syn::Error::new(
                             ops_span,
-                            "#[crud] `ops = []` declares nothing — drop the argument to \
-                             generate the default set, or list the operations you want",
+                            format!(
+                                "{} declares nothing — drop the argument to generate the \
+                                 default set, or list the operations you want",
+                                crate::args::site("crud", Some("ops = []")),
+                            ),
                         ));
                     }
                     ops = OpsSelection::Explicit(selected, ops_span);

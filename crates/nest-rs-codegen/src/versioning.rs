@@ -78,7 +78,10 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
     if literals.is_empty() {
         return Err(syn::Error::new_spanned(
             value,
-            format!("{decorator} `version = []` declares nothing — drop the argument instead"),
+            format!(
+                "{} declares nothing — drop the argument instead",
+                crate::args::site(attr, Some("version = []"))
+            ),
         ));
     }
     for (index, literal) in literals.iter().enumerate() {
@@ -87,9 +90,10 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
             return Err(syn::Error::new_spanned(
                 literal,
                 format!(
-                    "{decorator} version {version:?} is not a path segment — a version is \
-                     alphanumerics, `.` and `-` (`1`, `2`, `2024-08-11`), at most {max} \
-                     characters, because it is mounted as `/v{version}`",
+                    "{}: {version:?} is not a path segment — a version is alphanumerics, `.` \
+                     and `-` (`1`, `2`, `2024-08-11`), at most {max} characters, because it is \
+                     mounted as `/v{version}`",
+                    crate::args::site(attr, Some("version")),
                     max = MAX_VERSION_LEN,
                 ),
             ));
@@ -97,7 +101,10 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
         if literals[..index].iter().any(|seen| seen.value() == version) {
             return Err(syn::Error::new_spanned(
                 literal,
-                format!("{decorator} declares version {version:?} twice"),
+                format!(
+                    "{}: {version:?} is listed twice",
+                    crate::args::site(attr, Some("version"))
+                ),
             ));
         }
     }

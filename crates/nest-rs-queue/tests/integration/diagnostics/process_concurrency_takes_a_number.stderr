@@ -1,4 +1,4 @@
-error: `concurrency` takes a whole number of at least 1 — how many jobs of this method one worker replica runs at once
+error: #[process] `concurrency` takes a whole number of at least 1 — how many jobs of this method one worker replica runs at once
   --> tests/integration/diagnostics/process_concurrency_takes_a_number.rs:21:48
    |
 21 |     #[process(queue = DemoQueue, concurrency = "4")]

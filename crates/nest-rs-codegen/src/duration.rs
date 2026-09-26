@@ -16,19 +16,19 @@
 
 use syn::{Expr, ExprLit, Lit};
 
+use crate::args::takes_value;
 use crate::ungrouped::ungrouped_expr;
 
 /// The refusal of anything outside the grammar, naming where it was written:
 /// `key` is the position's name (`throttle(window)`), `None` for the one
-/// positional argument of a trigger.
+/// positional argument of a trigger. The shared value sentence,
+/// [`crate::args::takes_value`], with the grammar as what the position takes.
 fn outside_the_grammar(attr: &str, key: Option<&str>) -> String {
-    let site = match key {
-        Some(key) => format!("#[{attr}] `{key}`"),
-        None => format!("#[{attr}]"),
-    };
-    format!(
-        "{site} takes a duration literal: a whole number above zero with an `ms`, `s`, `m` or \
-         `h` suffix, at most `u64::MAX` milliseconds (e.g. \"500ms\", \"30s\", \"5m\", \"1h\")"
+    takes_value(
+        attr,
+        key,
+        "a duration literal: a whole number above zero with an `ms`, `s`, `m` or `h` suffix, at \
+         most `u64::MAX` milliseconds (e.g. \"500ms\", \"30s\", \"5m\", \"1h\")",
     )
 }
 

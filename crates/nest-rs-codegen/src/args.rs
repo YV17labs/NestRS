@@ -17,8 +17,8 @@ use syn::{Expr, ExprLit, Lit, LitStr, Meta};
 /// so `#[controller(version = 1)]` answered with no decorator named inside a
 /// function whose whole design is that the sentence names one.
 ///
-/// On a non-string value it errors (spanned at the value) with a message naming
-/// the decorator and key — ``#[{attr}] `{key}` must be a string literal, e.g.
+/// On a non-string value it errors (spanned at the value) through
+/// [`takes_value`] — ``#[{attr}] `{key}` takes a string literal, e.g.
 /// `{key} = "{example}"` `` — where `example` is the placeholder value shown in
 /// the hint (`"seaorm"`, `"..."`).
 pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> syn::Result<LitStr> {
@@ -30,9 +30,56 @@ pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> sy
     } else {
         Err(syn::Error::new_spanned(
             value,
-            format!("#[{attr}] `{key}` must be a string literal, e.g. `{key} = \"{example}\"`"),
+            takes_value(
+                attr,
+                Some(key),
+                &format!("a string literal, e.g. `{key} = \"{example}\"`"),
+            ),
         ))
     }
+}
+
+/// Where a value refusal points: the decorator, then the key in backticks —
+/// ``#[process] `retries` `` — or the decorator alone for the one positional
+/// argument a trigger takes (`#[every("30s")]`).
+///
+/// **Every value refusal this crate words opens with it**, and it is worded
+/// here so that stays one fact rather than a convention. Two of them did not:
+/// `transactional_value` and `replicas_value` refused a value of the wrong kind
+/// with ``` `transactional` takes … ```, naming the key and not the decorator,
+/// beside `unknown_value` and the duration grammar, which named both. Read
+/// without its source frame — a problems list, a CI summary — such a sentence
+/// said which key and not whose, and `transactional` is a key of four
+/// decorators.
+pub(crate) fn site(attr: &str, key: Option<&str>) -> String {
+    match key {
+        Some(key) => format!("#[{attr}] `{key}`"),
+        None => format!("#[{attr}]"),
+    }
+}
+
+/// The sentence a decorator prints for a **value of the wrong kind** — a number
+/// where a string goes, a string where `true` or `false` does, a path where a
+/// literal does: ``#[process] `retries` takes a whole number``.
+///
+/// The sixth refusal a declaration grammar owes, beside [`duplicate_argument`],
+/// [`unknown_argument`], [`needs_a_value`], [`unknown_value`] and
+/// [`missing_argument`], and worded here for their reason: `#[process]`'s
+/// `retries`, `concurrency` and `throttle` values, the shared `transactional`
+/// and `replicas` values, the duration grammar and [`require_str_lit`] each
+/// wrote it — in two verbs, and five of the eight without the decorator.
+/// `what` is what the key takes, as a phrase; a site with more to say — what
+/// each value *does* — appends it after ` — `.
+///
+/// `key` is `None` for a positional argument, which has no key to name.
+pub fn takes_value(attr: &str, key: Option<&str>, what: &str) -> String {
+    format!("{} takes {what}", site(attr, key))
+}
+
+/// [`takes_value`] for a key whose values are a closed set, listed the way
+/// every refusal here lists alternatives.
+pub(crate) fn takes_one_of(attr: &str, key: &str, values: &[&str]) -> String {
+    takes_value(attr, Some(key), &expected_list(values, "no value"))
 }
 
 /// The sentence a decorator prints when one of its arguments is written twice.
@@ -92,7 +139,8 @@ pub fn reject_duplicate_argument<T: ToTokens>(
 /// shared, so its remedy is too.
 pub fn needs_a_value(attr: &str, name: &str) -> String {
     format!(
-        "#[{attr}] `{name}` needs a value — write `{}`",
+        "{} needs a value — write `{}`",
+        site(attr, Some(name)),
         with_a_value(name, "..."),
     )
 }
@@ -352,6 +400,120 @@ mod tests {
         one_role_per_method("probe", &method.attrs, accepted, "")
             .expect_err("more than one role")
             .to_string()
+    }
+
+    /// Every value refusal this crate words opens with its site — the decorator,
+    /// then the key — which is the one fact [`site`] exists to keep. Listed by
+    /// hand, as the members of a unit test are; the list is every function here
+    /// that refuses a value, and a new one joins it the day it is written.
+    #[test]
+    fn every_value_refusal_opens_with_the_decorator_and_the_key() {
+        use quote::quote;
+        use syn::parse_quote;
+
+        let err = |result: syn::Result<()>| result.expect_err("a refused value").to_string();
+        let refusals = [
+            (
+                err(require_str_lit(&parse_quote!(42), "probe", "path", "/x").map(drop)),
+                "path",
+            ),
+            (needs_a_value("probe", "path"), "path"),
+            (
+                err(crate::job::transactional_value("probe", &parse_quote!("no")).map(drop)),
+                "transactional",
+            ),
+            (
+                crate::job::job_argument_needs_a_value("probe", "transactional"),
+                "transactional",
+            ),
+            (
+                err(
+                    crate::replicas::replicas_value("probe", &parse_quote!(one), &quote!(::x))
+                        .map(drop),
+                ),
+                "replicas",
+            ),
+            (
+                err(
+                    crate::duration::duration_millis("probe", Some("window"), &parse_quote!(60))
+                        .map(drop),
+                ),
+                "window",
+            ),
+            (
+                crate::queue_name::invalid_queue_name("probe", "name", "queue name", "a b"),
+                "name",
+            ),
+            (
+                err(crate::mount::reject_path(
+                    "probe",
+                    &parse_quote!("no leading slash"),
+                )),
+                "path",
+            ),
+            (
+                err(
+                    crate::versioning::parse_version_list(&parse_quote!("a b"), "#[probe]")
+                        .map(drop),
+                ),
+                "version",
+            ),
+            (
+                err(
+                    crate::versioning::parse_version_list(&parse_quote!(["1", "1"]), "#[probe]")
+                        .map(drop),
+                ),
+                "version",
+            ),
+            (
+                err(crate::versioning::parse_version_list(&parse_quote!([]), "#[probe]").map(drop)),
+                "version = []",
+            ),
+        ];
+        for (refusal, key) in refusals {
+            assert!(
+                refusal.starts_with(&format!("#[probe] `{key}`")),
+                "{refusal}"
+            );
+        }
+
+        // The positional grammar has no key, and names the decorator alone.
+        let positional =
+            err(crate::duration::duration_millis("probe", None, &parse_quote!(60)).map(drop));
+        assert!(positional.starts_with("#[probe] takes "), "{positional}");
+
+        // `#[crud]` words its own two, at its own name.
+        for (args, key) in [
+            (
+                quote!(service = svc, entity = E, output = O, ops = []),
+                "ops = []",
+            ),
+            (
+                quote!(service = svc, entity = E, output = O, ops = [create]),
+                "ops",
+            ),
+        ] {
+            let refusal = crate::crud::parse_crud_args(args)
+                .and_then(|declaration| declaration.generated_ops().map(drop))
+                .expect_err("a refused value")
+                .to_string();
+            assert!(
+                refusal.starts_with(&format!("#[crud] `{key}`")),
+                "{refusal}"
+            );
+        }
+
+        // A value outside a closed set keeps the `unknown` shape, which names
+        // both as well.
+        let unknown =
+            err(
+                crate::replicas::replicas_value("probe", &parse_quote!("all"), &quote!(::x))
+                    .map(drop),
+            );
+        assert!(
+            unknown.starts_with("unknown #[probe] replicas `all`"),
+            "{unknown}"
+        );
     }
 
     #[test]

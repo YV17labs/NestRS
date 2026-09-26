@@ -115,7 +115,10 @@ pub fn reject_path(attr: &str, path: &LitStr) -> syn::Result<()> {
     match violation(&path.value()) {
         Some(why) => Err(syn::Error::new_spanned(
             path,
-            format!("#[{attr}] `path` is not a mount path: {why}"),
+            format!(
+                "{} is not a mount path: {why}",
+                crate::args::site(attr, Some("path"))
+            ),
         )),
         None => Ok(()),
     }

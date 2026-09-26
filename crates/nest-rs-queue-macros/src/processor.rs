@@ -17,8 +17,8 @@ use nest_rs_codegen::{
     DecoratorPair, Edge, PipeWrapper, TRANSACTIONAL, await_if_async, cfg_attrs, duplicate_argument,
     duration_millis, generic_args, impl_self_ident, job_argument_needs_a_value,
     job_argument_refused, job_returns_a_result, job_transaction, missing_argument,
-    payload_arg_type, pipe_wrapper, returns_unit, snake_case, transactional_value, ungrouped_expr,
-    unknown_argument,
+    payload_arg_type, pipe_wrapper, returns_unit, snake_case, takes_value, transactional_value,
+    ungrouped_expr, unknown_argument,
 };
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -562,8 +562,10 @@ impl Parse for ProcessArgs {
                 if !input.peek(syn::token::Paren) {
                     return Err(syn::Error::new(
                         key.span(),
-                        "#[process] `throttle` takes a list — write \
-                         `throttle(limit = 10, window = \"1m\")`",
+                        format!(
+                            "{} — write `throttle(limit = 10, window = \"1m\")`",
+                            takes_value("process", Some("throttle"), "a list"),
+                        ),
                     ));
                 }
                 let content;
@@ -584,18 +586,24 @@ impl Parse for ProcessArgs {
                     "retries" => {
                         retries = Some(whole_number(
                             &input.parse()?,
-                            "`retries` takes a whole number — the re-runs a failed attempt gets \
-                             before the job dead-letters",
+                            &format!(
+                                "{} — the re-runs a failed attempt gets before the job \
+                                 dead-letters",
+                                takes_value("process", Some("retries"), "a whole number"),
+                            ),
                         )?);
                     }
                     "concurrency" => {
                         concurrency = Some(at_least_one(
                             &input.parse()?,
-                            "`concurrency` takes a whole number of at least 1 — how many jobs of \
-                             this method one worker replica runs at once",
+                            &format!(
+                                "{} — how many jobs of this method one worker replica runs at \
+                                 once",
+                                takes_value("process", Some("concurrency"), AT_LEAST_ONE),
+                            ),
                         )?);
                     }
-                    _ => transactional = Some(transactional_value(&input.parse()?)?),
+                    _ => transactional = Some(transactional_value("process", &input.parse()?)?),
                 }
             }
             if !input.is_empty() {
@@ -648,8 +656,10 @@ fn parse_throttle(content: ParseStream, at: Span) -> syn::Result<ThrottleArgs> {
         if name == "limit" {
             limit = Some(at_least_one(
                 &content.parse()?,
-                "`throttle(limit)` takes a whole number of at least 1 — how many jobs may start \
-                 in one window",
+                &format!(
+                    "{} — how many jobs may start in one window",
+                    takes_value("process", Some("throttle(limit)"), AT_LEAST_ONE),
+                ),
             )?);
         } else {
             window_ms = Some(duration_millis(
@@ -683,6 +693,9 @@ fn whole_number(expr: &Expr, refusal: &str) -> syn::Result<u32> {
         other => Err(syn::Error::new_spanned(other, refusal)),
     }
 }
+
+/// What a count key takes, in the words both of them refuse with.
+const AT_LEAST_ONE: &str = "a whole number of at least 1";
 
 /// A whole-number literal of at least one — zero is refused naming why.
 fn at_least_one(expr: &Expr, refusal: &str) -> syn::Result<u32> {

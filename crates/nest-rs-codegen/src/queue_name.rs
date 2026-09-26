@@ -25,10 +25,10 @@ pub fn is_valid_queue_name(value: &str) -> bool {
 /// in front.
 pub fn invalid_queue_name(attr: &str, key: &str, what: &str, value: &str) -> String {
     format!(
-        "#[{attr}] `{key}`: {value:?} is not a valid {what}: it takes 1 to {MAX_LEN} ASCII \
-         letters, digits, `_`, `.` or `-` — `:` and `#` are the separators a backend's keys and a \
-         dynamic queue's instances are built with, and whitespace would reach a log field or a \
-         metric label"
+        "{}: {value:?} is not a valid {what}: it takes 1 to {MAX_LEN} ASCII letters, digits, \
+         `_`, `.` or `-` — `:` and `#` are the separators a backend's keys and a dynamic queue's \
+         instances are built with, and whitespace would reach a log field or a metric label",
+        crate::args::site(attr, Some(key)),
     )
 }
 

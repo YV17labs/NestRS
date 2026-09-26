@@ -1239,11 +1239,11 @@ fn namespace_is_the_stem() {
 /// **No verdict here depends on where the checkout sits.**
 ///
 /// A join judges the tree, and the directories above the repository root are not
-/// part of it. Four of the joins above once read `path.components()` of the
-/// absolute path, so a clone under `~/src/` put every folder inside a `src/`
-/// tree, and a clone under a folder named like an edge put every file with no
-/// edge folder of its own in that edge's folder. Each now reads
-/// `sources::segments`, below the root.
+/// part of it. Three of the joins above, and the dispatch vocabulary one of them
+/// reads, once took `path.components()` of the absolute path, so a clone under
+/// `~/src/` put every folder inside a `src/` tree, and a clone under a folder
+/// named like an edge put every file with no edge folder of its own in that
+/// edge's folder. Each now reads `sources::segments`, below the root.
 ///
 /// Proved on the joins' own code rather than on the helper alone: one small tree
 /// is planted twice — under a plain root and under one spelling both words,

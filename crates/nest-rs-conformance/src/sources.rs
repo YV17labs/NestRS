@@ -80,9 +80,9 @@ fn collect(dir: &Path, keep: &dyn Fn(&Path) -> bool, out: &mut Vec<PathBuf>) {
 /// and the two are indistinguishable once they are one list: cloned under
 /// `~/src/`, every folder in the tree reads as being inside a `src/` tree, and
 /// cloned under a folder named like an edge (`…/schedule/nestrs`), every file
-/// with no edge folder of its own reads as that edge's adapter. Both shipped —
-/// the edge-folder join answered a different question on a machine whose
-/// checkout path held one of seven words. `base` is the repository root for a
+/// with no edge folder of its own reads as that edge's adapter. Both shipped:
+/// the edge-folder join gave another verdict on a machine whose checkout path
+/// held `src` or one of the seven edge words. `base` is the repository root for a
 /// repo-relative reading, or a crate's `src/` for a module-relative one; either
 /// way the answer depends on the tree and nothing above it.
 ///

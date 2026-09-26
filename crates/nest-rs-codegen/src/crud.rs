@@ -158,6 +158,22 @@ const KEYS: [&str; 7] = [
     "service", "entity", "output", "create", "update", "ops", "paginate",
 ];
 
+/// The two values `paginate` takes — the list both of its refusals give.
+const PAGINATE: [&str; 2] = ["cursor", "none"];
+
+/// What `ops` takes, for the refusal of a value that is not a list of names.
+const OPS_LIST: &str = "a list of operations, e.g. `ops = [list, get]`";
+
+/// Parse a key's value, refusing one of the wrong kind with the shared value
+/// sentence — `#[crud] `entity` takes …` — rather than syn's `expected
+/// identifier`, which names neither the decorator nor the key. Spanned where
+/// syn's error was, so the caret still lands on what was written.
+fn value_of<T: Parse>(input: ParseStream, key: &str, what: &str) -> syn::Result<T> {
+    input
+        .parse()
+        .map_err(|error| syn::Error::new(error.span(), crate::takes_value("crud", Some(key), what)))
+}
+
 /// Refuse a bare key. `expected `=`` is syn's, and it names the grammar rather
 /// than the key the developer wrote — the third of the three refusals a
 /// `key = value` grammar owes, worded once in `nest_rs_codegen::args`.
@@ -193,7 +209,11 @@ impl Parse for CrudDeclaration {
                         &key.to_string(),
                     )?;
                     value_for(input, &key)?;
-                    service = Some(input.parse()?);
+                    service = Some(value_of(
+                        input,
+                        "service",
+                        "the name of the injected `CrudService` field, e.g. `service = svc`",
+                    )?);
                 }
                 "entity" => {
                     crate::reject_duplicate_argument(
@@ -203,7 +223,11 @@ impl Parse for CrudDeclaration {
                         &key.to_string(),
                     )?;
                     value_for(input, &key)?;
-                    entity = Some(input.parse()?);
+                    entity = Some(value_of(
+                        input,
+                        "entity",
+                        "the entity's path, e.g. `entity = users::Entity`",
+                    )?);
                 }
                 "output" => {
                     crate::reject_duplicate_argument(
@@ -213,7 +237,11 @@ impl Parse for CrudDeclaration {
                         &key.to_string(),
                     )?;
                     value_for(input, &key)?;
-                    output = Some(input.parse()?);
+                    output = Some(value_of(
+                        input,
+                        "output",
+                        "the response type's path, e.g. `output = User`",
+                    )?);
                 }
                 "create" => {
                     crate::reject_duplicate_argument(
@@ -223,7 +251,11 @@ impl Parse for CrudDeclaration {
                         &key.to_string(),
                     )?;
                     value_for(input, &key)?;
-                    create = Some(input.parse()?);
+                    create = Some(value_of(
+                        input,
+                        "create",
+                        "the input type's path, e.g. `create = CreateUser`",
+                    )?);
                 }
                 "update" => {
                     crate::reject_duplicate_argument(
@@ -233,7 +265,11 @@ impl Parse for CrudDeclaration {
                         &key.to_string(),
                     )?;
                     value_for(input, &key)?;
-                    update = Some(input.parse()?);
+                    update = Some(value_of(
+                        input,
+                        "update",
+                        "the input type's path, e.g. `update = UpdateUser`",
+                    )?);
                 }
                 "ops" => {
                     if !matches!(ops, OpsSelection::Default) {
@@ -244,9 +280,18 @@ impl Parse for CrudDeclaration {
                     }
                     let ops_span = key.span();
                     value_for(input, &key)?;
+                    if !input.peek(syn::token::Bracket) {
+                        return Err(syn::Error::new(
+                            input.span(),
+                            crate::takes_value("crud", Some("ops"), OPS_LIST),
+                        ));
+                    }
                     let content;
                     syn::bracketed!(content in input);
-                    let idents = content.parse_terminated(Ident::parse, Token![,])?;
+                    let idents = content.parse_terminated(
+                        |element: ParseStream| value_of::<Ident>(element, "ops", OPS_LIST),
+                        Token![,],
+                    )?;
                     let mut selected = Vec::new();
                     for id in idents {
                         let op = match id.to_string().as_str() {
@@ -299,19 +344,19 @@ impl Parse for CrudDeclaration {
                     }
                     paginate_declared = true;
                     value_for(input, &key)?;
-                    let mode: Ident = input.parse()?;
+                    let mode: Ident = input.parse().map_err(|error| {
+                        syn::Error::new(
+                            error.span(),
+                            crate::args::takes_one_of("crud", "paginate", &PAGINATE),
+                        )
+                    })?;
                     paginate = match mode.to_string().as_str() {
                         "cursor" => Paginate::Cursor,
                         "none" => Paginate::None,
                         other => {
                             return Err(syn::Error::new(
                                 mode.span(),
-                                crate::unknown_value(
-                                    "crud",
-                                    "paginate",
-                                    other,
-                                    &["cursor", "none"],
-                                ),
+                                crate::unknown_value("crud", "paginate", other, &PAGINATE),
                             ));
                         }
                     };

@@ -482,7 +482,9 @@ mod tests {
             err(crate::duration::duration_millis("probe", None, &parse_quote!(60)).map(drop));
         assert!(positional.starts_with("#[probe] takes "), "{positional}");
 
-        // `#[crud]` words its own two, at its own name.
+        // `#[crud]` words its own, at its own name — a value of the wrong kind
+        // included, which its parser used to leave to syn's `expected
+        // identifier`.
         for (args, key) in [
             (
                 quote!(service = svc, entity = E, output = O, ops = []),
@@ -491,6 +493,29 @@ mod tests {
             (
                 quote!(service = svc, entity = E, output = O, ops = [create]),
                 "ops",
+            ),
+            (quote!(service = "svc", entity = E, output = O), "service"),
+            (quote!(service = svc, entity = 42, output = O), "entity"),
+            (quote!(service = svc, entity = E, output = 42), "output"),
+            (
+                quote!(service = svc, entity = E, output = O, create = "C"),
+                "create",
+            ),
+            (
+                quote!(service = svc, entity = E, output = O, update = "U"),
+                "update",
+            ),
+            (
+                quote!(service = svc, entity = E, output = O, ops = list),
+                "ops",
+            ),
+            (
+                quote!(service = svc, entity = E, output = O, ops = ["list"]),
+                "ops",
+            ),
+            (
+                quote!(service = svc, entity = E, output = O, paginate = "cursor"),
+                "paginate",
             ),
         ] {
             let refusal = crate::crud::parse_crud_args(args)

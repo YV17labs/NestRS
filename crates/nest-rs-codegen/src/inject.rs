@@ -220,7 +220,11 @@ fn parse_inject_key(attr: &syn::Attribute) -> syn::Result<Option<syn::LitStr>> {
             if !meta.input.peek(syn::Token![=]) {
                 return Err(meta.error(crate::needs_a_value("inject", "key")));
             }
-            key = Some(meta.value()?.parse()?);
+            // Read as any expression, so a value of the wrong kind earns the
+            // shared sentence naming the decorator and the key rather than
+            // syn's `expected string literal`, which names neither.
+            let value: syn::Expr = meta.value()?.parse()?;
+            key = Some(crate::require_str_lit(&value, "inject", "key", "github")?);
             Ok(())
         } else {
             Err(meta.error(crate::unknown_argument(

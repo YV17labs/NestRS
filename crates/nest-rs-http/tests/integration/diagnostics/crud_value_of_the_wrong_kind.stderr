@@ -1,0 +1,23 @@
+error: #[crud] `service` takes the name of the injected `CrudService` field, e.g. `service = svc`
+  --> tests/integration/diagnostics/crud_value_of_the_wrong_kind.rs:11:18
+   |
+11 | #[crud(service = "svc", entity = OrgEntity, output = Org)]
+   |                  ^^^^^
+
+error: #[crud] `ops` takes a list of operations, e.g. `ops = [list, get]`
+  --> tests/integration/diagnostics/crud_value_of_the_wrong_kind.rs:17:63
+   |
+17 | #[crud(service = svc, entity = OrgEntity, output = Org, ops = list)]
+   |                                                               ^^^^
+
+error: #[crud] `ops` takes a list of operations, e.g. `ops = [list, get]`
+  --> tests/integration/diagnostics/crud_value_of_the_wrong_kind.rs:23:64
+   |
+23 | #[crud(service = svc, entity = OrgEntity, output = Org, ops = ["list"])]
+   |                                                                ^^^^^^
+
+error: #[crud] `paginate` takes `cursor` or `none`
+  --> tests/integration/diagnostics/crud_value_of_the_wrong_kind.rs:29:68
+   |
+29 | #[crud(service = svc, entity = OrgEntity, output = Org, paginate = "cursor")]
+   |                                                                    ^^^^^^^^

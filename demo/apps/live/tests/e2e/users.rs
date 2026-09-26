@@ -1,6 +1,7 @@
 use features::Role;
 use nest_rs::http::poem::http::StatusCode;
 use nest_rs::ws::CloseCode;
+use sea_orm::ConnectionTrait;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -8,36 +9,25 @@ use super::harness::*;
 
 #[tokio::test]
 async fn users_list_over_ws_is_org_scoped_and_email_masked() {
-    use sea_orm::{ConnectionTrait, Database};
-
-    nest_rs::testing::load_project_env();
-    let url = nest_rs::config::ConfigService::for_namespace("seaorm")
-        .get("URL")
-        .expect("a readable database URL")
-        .expect("the database URL must point at a reachable Postgres for this test");
-    let db = Database::connect(&url).await.expect("connect to Postgres");
+    let (db, app) = serve().await;
 
     let org_a = Uuid::now_v7();
     let org_b = Uuid::now_v7();
     let (alice, bob, carol) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
-    db.execute_unprepared(&format!(
-        "INSERT INTO org (id, name) VALUES ('{org_a}', 'WS A {org_a}'), ('{org_b}', 'WS B {org_b}')"
+    let conn = db.connection();
+    conn.execute_unprepared(&format!(
+        "INSERT INTO org (id, name) VALUES ('{org_a}', 'WS A'), ('{org_b}', 'WS B')"
     ))
     .await
     .expect("seed orgs");
-    db.execute_unprepared(&format!(
+    conn.execute_unprepared(&format!(
         "INSERT INTO \"user\" (id, org_id, name, email, role) VALUES \
-         ('{alice}', '{org_a}', 'Alice', 'alice-{alice}@a.test', 'user'), \
-         ('{bob}', '{org_a}', 'Bob', 'bob-{bob}@a.test', 'user'), \
-         ('{carol}', '{org_b}', 'Carol', 'carol-{carol}@b.test', 'user')"
+         ('{alice}', '{org_a}', 'Alice', 'alice@a.test', 'user'), \
+         ('{bob}', '{org_a}', 'Bob', 'bob@a.test', 'user'), \
+         ('{carol}', '{org_b}', 'Carol', 'carol@b.test', 'user')"
     ))
     .await
     .expect("seed users");
-
-    let app = boot_builder()
-        .build_ws()
-        .await
-        .expect("LiveModule serves on a real port");
 
     let token = token_for_org(org_a, Role::User).await;
     let mut socket = app.socket("/users").bearer(&token).connect().await;
@@ -58,22 +48,11 @@ async fn users_list_over_ws_is_org_scoped_and_email_masked() {
 
     socket.close(CloseCode::Normal, "done").await;
     app.shutdown().await.expect("transport shuts down");
-
-    db.execute_unprepared(&format!(
-        "DELETE FROM \"user\" WHERE org_id IN ('{org_a}', '{org_b}')"
-    ))
-    .await
-    .ok();
-    db.execute_unprepared(&format!(
-        "DELETE FROM org WHERE id IN ('{org_a}', '{org_b}')"
-    ))
-    .await
-    .ok();
 }
 
 #[tokio::test]
 async fn users_gateway_refuses_an_unauthenticated_upgrade() {
-    let app = boot_builder().build().await.expect("LiveModule boots");
+    let (_db, app) = boot().await;
     app.http()
         .get("/users")
         .send()

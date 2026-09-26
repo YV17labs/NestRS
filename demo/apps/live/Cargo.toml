@@ -16,6 +16,7 @@ tracing.workspace = true
 nest-rs.workspace = true
 # Enables `features::testing` (dev keypair, org id, token minting) for e2e.
 features = { workspace = true, features = ["test-support"] }
+migrations.workspace = true
 uuid.workspace = true
 sea-orm.workspace = true
 serde_json.workspace = true

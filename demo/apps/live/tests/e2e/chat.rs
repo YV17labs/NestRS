@@ -8,7 +8,7 @@ const QUIET: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[tokio::test]
 async fn gateway_endpoint_is_mounted() {
-    let app = boot_builder().build().await.expect("LiveModule boots");
+    let (_db, app) = boot().await;
 
     let resp = app.http().get("/ws").send().await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
@@ -16,7 +16,7 @@ async fn gateway_endpoint_is_mounted() {
 
 #[tokio::test]
 async fn gateway_echoes_messages_over_a_real_socket() {
-    let app = serve().await;
+    let (_db, app) = serve().await;
     let mut socket = open(&app, "/ws").await;
 
     socket
@@ -48,7 +48,7 @@ async fn gateway_echoes_messages_over_a_real_socket() {
 
 #[tokio::test]
 async fn a_request_scoped_provider_is_reachable_per_message_over_ws() {
-    let app = serve().await;
+    let (_db, app) = serve().await;
     let mut socket = open(&app, "/ws").await;
 
     socket.send("seq", Value::Null).await;
@@ -71,7 +71,7 @@ async fn a_request_scoped_provider_is_reachable_per_message_over_ws() {
 
 #[tokio::test]
 async fn a_message_is_broadcast_to_every_connected_client() {
-    let app = serve().await;
+    let (_db, app) = serve().await;
     let mut alice = open(&app, "/ws").await;
     let mut bob = open(&app, "/ws").await;
 
@@ -94,7 +94,7 @@ async fn a_message_is_broadcast_to_every_connected_client() {
 
 #[tokio::test]
 async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned_author() {
-    let app = serve().await;
+    let (_db, app) = serve().await;
     let mut alice = open(&app, "/ws").await;
     wait_for_presence(&mut alice, 1).await;
     let mut bob = open(&app, "/ws").await;
@@ -120,7 +120,7 @@ async fn lifecycle_hooks_track_presence_and_a_per_message_guard_rejects_a_banned
 
 #[tokio::test]
 async fn namespaced_gateways_isolate_their_broadcasts() {
-    let app = serve().await;
+    let (_db, app) = serve().await;
     let mut chat = open(&app, "/ws").await;
     let mut notify = open(&app, "/notify").await;
 
@@ -140,7 +140,7 @@ async fn namespaced_gateways_isolate_their_broadcasts() {
 
 #[tokio::test]
 async fn an_oversized_message_is_rejected_and_closes_the_socket() {
-    let app = serve().await;
+    let (_db, app) = serve().await;
     let mut socket = open(&app, "/ws").await;
 
     let oversized = "x".repeat(128 * 1024);
@@ -160,7 +160,8 @@ async fn an_oversized_message_is_rejected_and_closes_the_socket() {
 
 #[tokio::test]
 async fn the_socket_lifetime_ceiling_closes_the_socket() {
-    let app = boot_builder()
+    let (_db, builder) = boot_builder().await;
+    let app = builder
         .provide(
             nest_rs::ws::WsConfig::default().with_max_connection(std::time::Duration::from_secs(1)),
         )

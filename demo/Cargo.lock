@@ -2498,6 +2498,7 @@ version = "7.0.0"
 dependencies = [
  "anyhow",
  "features",
+ "migrations",
  "nest-rs",
  "sea-orm",
  "serde",

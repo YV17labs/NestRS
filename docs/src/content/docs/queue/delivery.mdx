@@ -63,10 +63,11 @@ Nothing sits at the root of the keyspace, so a Redis user whose ACL reaches
 
 Delivery is **at least once**. Two replicas never fetch the same job from
 `active`: the fetch claims ids in one atomic script. A job can still reach a
-second delivery three ways — a replica **starting** sweeps every peer's in-flight
-jobs back onto the queue (apalis sweeps with a cutoff of *now*, which matches the
-living too), a replica whose heartbeat falls behind the orphan threshold has its
-jobs swept by a peer, and an acknowledgement can be lost on its way to Redis.
+second delivery three ways — a replica **starting** sweeps up to ten of its
+peers' in-flight jobs back onto the queue (apalis sweeps with a cutoff of *now*,
+which matches the living too), a replica whose heartbeat falls behind the orphan
+threshold has its jobs swept by a peer, and an acknowledgement can be lost on its
+way to Redis.
 
 So each delivery takes the job's **lease** before the attempt runs, and renews
 it every third of its length while the attempt runs. When the job reaches its
@@ -93,10 +94,11 @@ leave the process — an email, a charge — keeps its own idempotency key.
 
 ## Replicas, heartbeats and crashes
 
-Each method of each replica consumes under an id of its own — the host name,
-then a UUID v7 — so no two replicas share an in-flight set. A replica proves it
-is alive every tenth of the orphan threshold, and a peer sweeps its jobs only
-once it has missed ten proofs in a row.
+Each method of each replica consumes under an id of its own — the host name
+when the platform sets one, then a UUID v7 — so no two replicas share an
+in-flight set. A replica proves it is alive every tenth of the orphan threshold,
+at least once a second, and a peer sweeps its jobs only once it has been silent
+for the whole threshold — ten missed proofs at the default.
 
 A replica that crashes mid-attempt leaves its job in flight. The next replica
 to start sweeps it back onto the queue at once and runs it once the dead
@@ -117,7 +119,7 @@ call fails:
 | The call that failed | What happens to the job | The line, on `nest_rs::queue` |
 |---|---|---|
 | taking the lease | handed back for a second later; never run unguarded | `job lease not asked for; …`, `warn` |
-| handing a job back | stays in flight, and is delivered again from its stored attempt once swept | `job not handed back; …`, `error` |
+| handing a job back | delivered again from its stored attempt — at once when apalis's acknowledgement lands, once swept when it does not; see the limit on a job's fifth delivery | `job not handed back; …`, `error` |
 | renewing the lease | the attempt runs on, and the renewal is tried again | `job lease not renewed; retrying`, `warn` |
 | writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
 | the acknowledgement | delivered again once swept, and answered by its settled mark without running | `job acknowledgement lost; …`, `error` |
@@ -245,6 +247,14 @@ that kept it.
   see [Concurrency and scaling](/queue/scaling/#one-fetch-per-poll).
 - **`failed` only grows.** apalis records there every job it reschedules — a
   retry, a hand-back — and nothing trims it.
+- **A refused hand-back can dead-letter a job by apalis's count.** apalis 0.7
+  keeps an attempt count of its own on every record, raised by each delivery
+  and capped at five, and the one answer that asks apalis to deliver a job again
+  — a hand-back Redis refused — is dead-lettered by that cap from the job's fifth
+  delivery on, with none of the port's dead-letter events. A timeout does not do
+  it, since the timed-out filing still lands and the job runs again; a refusal
+  Redis answers, followed by an acknowledgement it accepts — across a failover —
+  does.
 - **A settle Redis refuses closes nothing.** The step that marks a job settled
   also lets go of its unique key and closes its open record; when Redis refuses
   it, the worker says so at `warn`, and until the job's records lapse a push under

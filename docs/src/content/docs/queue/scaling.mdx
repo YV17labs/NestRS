@@ -128,9 +128,10 @@ $ kubectl scale deploy/worker --replicas=6
 ```
 
 Every replica consumes under an id of its own, and no two of them receive the
-same job from the queue. A replica starting puts its peers' in-flight jobs back
-on the queue — apalis does so on every start — and the delivery guard keeps each
-of them from running twice; see [Delivery on Redis](/queue/delivery/).
+same job from the queue. A replica starting puts up to ten of its peers'
+in-flight jobs back on the queue — apalis does so on every start — and the
+delivery guard keeps each of them from running twice; see
+[Delivery on Redis](/queue/delivery/).
 
 ### On queue depth, with KEDA
 

@@ -16,7 +16,7 @@ service names the queue; the transport adapter doesn't.
 
 ## The payload
 
-A job is any `Serialize + DeserializeOwned + Clone + Send + Sync + 'static`
+A job is any `Serialize + DeserializeOwned + Clone + Send + Sync + Unpin + 'static`
 type — the marker `nest_rs::queue::Job` is auto-implemented for every
 type that satisfies those bounds. No derive, no trait to write. The
 convention is to keep payloads small: a reference to the work, not the

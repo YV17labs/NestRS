@@ -106,11 +106,12 @@ either `job_id` or `worker`:
 | `job not handed back; …`, `job acknowledgement lost; …` | `error` | A job stays in flight and is delivered again once swept. |
 | `queue workers did not stop within the shutdown window; …` | `error` | An attempt outlived the drain and its reserve. |
 
-A producer says three things of its own on the same target: `jobs wait under
-the 6.x key layout; …` once per queue at `warn` — see
+A producer files lines of its own on the same target, among them
+`jobs wait under the 6.x key layout; …` once per queue at `warn` — see
 [Upgrading queues from 6.x](/queue/upgrading/) — `job push unanswered; …` at
-`warn` when a push under a unique key never heard back, and `queued job
-cancelled` at `info` when a cancel answered `true`.
+`warn` when a push under a unique key never heard back, `due delayed jobs not
+moved onto the queue; retrying` at `warn`, and `queued job cancelled` at `info`
+when a cancel answered `true`.
 
 ## What boot looks like
 

@@ -63,7 +63,12 @@ nothing pushed under `nestrs:queue:<queue>` yet.
 
 <Steps>
 
-1. **Stop the queue's workers and pause its producers.**
+1. **Stop the queue's workers and pause its producers**, then check that
+   nothing is under the namespace yet — this prints nothing:
+
+   ```bash
+   redis-cli --scan --pattern 'nestrs:queue:audio:*'
+   ```
 
 2. **Rename every structure of the queue under its namespace**, the in-flight
    set among them, then register that set as a consumer, so the first sweep of a
@@ -78,12 +83,12 @@ nothing pushed under `nestrs:queue:<queue>` yet.
 
    `RENAMENX` answers `1` for each structure it moved, and
    `ERR no such key` for one the queue never had. It is the form of `RENAME`
-   that refuses to overwrite: a structure 7.0 already wrote answers `0` and stays
-   where it was, and the boot keeps refusing until you drain it.
+   that refuses to overwrite, so a structure 7.0 already wrote answers `0`
+   rather than losing what it holds.
 
-3. **Start one 7.0 worker, then the producers.** Its sweep puts the jobs the
-   6.x worker held back on the queue, and a job held back for later runs when it
-   is due:
+3. **Start one 7.0 worker, then the producers.** Its sweeps put the jobs the
+   6.x worker was running back on the queue, and a job held back for later runs
+   when it is due:
 
    ```text frame="terminal"
     INFO nest_rs::queue: queue worker started queue="audio" worker="01a0deaa-c93b-74dd-b345-7b4cf2a53f3c"
@@ -122,10 +127,11 @@ The `None` is a `PushOptions`: a delay, a unique key — see
 
 - **A 7.0 worker started beside 6.x jobs** refuses to start, as above. Nothing
   is lost; finish either way out first.
-- **A Move after 7.0 pushed under the namespace** leaves the structures 7.0
-  already wrote at the root, since `RENAMENX` does not overwrite them, and the
-  boot keeps refusing. Finish with a Drain: a 6.x worker empties what stayed at
-  the root while the 7.0 producers go on pushing under the namespace.
+- **A Move after 7.0 pushed under the namespace** is what the scan in the first
+  step exists to stop. `RENAMENX` would refuse the structures 7.0 already wrote
+  and move the others, which can leave job ids in one place and their records in
+  another. When the scan prints anything, drain instead: a 6.x worker empties the
+  root while the 7.0 producers go on pushing under the namespace.
 - **Scaling out before the moved jobs ran** can run one of them twice — see the
   caution above.
 - **A Redis user confined to `nestrs:*`** cannot read the root, so the check

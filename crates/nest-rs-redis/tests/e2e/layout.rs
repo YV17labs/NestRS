@@ -335,6 +335,16 @@ async fn a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once() {
         .await
         .expect("a 6.x job held back");
 
+    // The page's first step: nothing under the namespace yet, or no move at all.
+    let under_the_namespace: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("{}:*", crate::namespace(MOVED_QUEUE)))
+        .query_async(&mut admin)
+        .await
+        .expect("KEYS");
+    assert!(
+        under_the_namespace.is_empty(),
+        "the move starts from an empty namespace: {under_the_namespace:?}"
+    );
     move_out_of_the_6x_layout(&mut admin, MOVED_QUEUE).await;
     let stale = left_at_the_root(&mut admin, MOVED_QUEUE).await;
     assert!(stale.is_empty(), "nothing is left at the root: {stale:?}");

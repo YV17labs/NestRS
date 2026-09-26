@@ -298,7 +298,8 @@ impl DynamicModule for YourSetup {
 
 /// The producer binding — bare. Runs *after* the connection's factory, so
 /// `imports` order stays a readability choice, and **declares** the portable
-/// name: two queue backends imported together fail the boot naming both.
+/// name: a second queue backend imported beside it fails the boot, naming the
+/// port and `BACKEND_REMEDY`.
 pub struct YourQueueModule;
 
 impl Module for YourQueueModule {

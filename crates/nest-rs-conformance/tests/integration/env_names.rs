@@ -145,28 +145,13 @@ fn spelled_names(root: &std::path::Path) -> (BTreeSet<String>, usize) {
 #[derive(Default)]
 struct Spelled(Vec<String>);
 
-impl Spelled {
-    /// Every string literal in a token stream, at any group depth.
-    fn tokens(&mut self, tokens: proc_macro2::TokenStream) {
-        for tree in tokens {
-            match tree {
-                proc_macro2::TokenTree::Group(group) => self.tokens(group.stream()),
-                proc_macro2::TokenTree::Literal(literal) => {
-                    if let Ok(lit) = syn::parse_str::<syn::LitStr>(&literal.to_string()) {
-                        self.0.push(lit.value());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 impl<'ast> syn::visit::Visit<'ast> for Spelled {
     fn visit_attribute(&mut self, _node: &'ast syn::Attribute) {}
 
     fn visit_macro(&mut self, node: &'ast syn::Macro) {
-        self.tokens(node.tokens.clone());
+        self.0.extend(nest_rs_conformance::sources::string_literals(
+            node.tokens.clone(),
+        ));
     }
 
     fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {

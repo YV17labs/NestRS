@@ -10,6 +10,46 @@ use nest_rs_throttler::{Throttle, ThrottlerStore};
 
 use crate::{connect, unique_key};
 
+/// Where the store counts `subject`'s window: `nestrs:throttler:buckets:<subject>`
+/// — the throttler's concern, then the structure the port calls a bucket.
+/// Spelled here rather than read from the crate, so the layout an operator
+/// scans for is pinned by a test instead of trusted.
+fn bucket(subject: &str) -> String {
+    format!("nestrs:throttler:buckets:{subject}")
+}
+
+/// A hit counts in the bucket named for its subject, under the rate limiter's
+/// concern and its structure level, and the window is the bucket's expiry — so
+/// a `SCAN nestrs:throttler:buckets:*` finds every live window and nothing else.
+#[tokio::test]
+async fn a_hit_counts_in_the_bucket_named_for_its_subject() {
+    let limit = Throttle::new(5, Duration::from_secs(30));
+    let conn = connect().await;
+    let store = RedisThrottler::new(conn.clone());
+    let subject = unique_key("layout");
+
+    for _ in 0..2 {
+        assert!(store.hit(&subject, limit).await.allowed);
+    }
+
+    let mut reading = conn.clone();
+    let count: i64 = redis::cmd("GET")
+        .arg(bucket(&subject))
+        .query_async(&mut reading)
+        .await
+        .expect("the bucket holds the window's count");
+    assert_eq!(count, 2, "both hits counted in the subject's bucket");
+    let ttl_ms: i64 = redis::cmd("PTTL")
+        .arg(bucket(&subject))
+        .query_async(&mut reading)
+        .await
+        .expect("PTTL the bucket");
+    assert!(
+        ttl_ms > 0 && ttl_ms <= 30_000,
+        "the window is the bucket's expiry, got {ttl_ms}ms",
+    );
+}
+
 /// The window script counts hits up to `limit`, then denies with the real
 /// remaining TTL as `Retry-After`.
 #[tokio::test]
@@ -195,16 +235,16 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
     let key = unique_key("unavailable");
 
     // Make the window key a hash, so the fixed-window script's `INCR` fails.
-    // The namespace is the store's own — spelled here rather than read from it,
-    // so a change to the prefix shows up as this test failing instead of
-    // passing against a key nothing uses.
-    let namespaced = format!("nestrs:throttle:{key}");
-    let mut manager = conn.clone();
+    // The key is the store's own — spelled here rather than read from it, so a
+    // change to the layout shows up as this test failing instead of passing
+    // against a key nothing uses.
+    let namespaced = bucket(&key);
+    let mut seeding = conn.clone();
     redis::cmd("HSET")
         .arg(&namespaced)
         .arg("field")
         .arg("value")
-        .query_async::<()>(&mut manager)
+        .query_async::<()>(&mut seeding)
         .await
         .expect("seed a key the window script cannot count");
     // With an expiry, because the window script never reaches its `PEXPIRE` on
@@ -214,7 +254,7 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
     redis::cmd("EXPIRE")
         .arg(&namespaced)
         .arg(300)
-        .query_async::<()>(&mut manager)
+        .query_async::<()>(&mut seeding)
         .await
         .expect("bound the probe key's lifetime");
 

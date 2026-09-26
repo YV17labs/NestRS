@@ -25,6 +25,6 @@ mod throttle;
 
 pub use config::ThrottlerConfig;
 pub use guard::ThrottlerGuard;
-pub use module::{BACKEND_REMEDY, ThrottlerModule, ThrottlerSetup};
-pub use store::{Decision, InMemoryThrottler, ThrottlerStore};
+pub use module::{ThrottlerModule, ThrottlerSetup};
+pub use store::{BACKEND_REMEDY, Decision, InMemoryThrottler, ThrottlerStore};
 pub use throttle::{DEFAULT_THROTTLE, Throttle};

@@ -23,6 +23,32 @@ use redis::Script;
 
 use crate::RedisConnection;
 
+/// Every key this binding writes: `nestrs:throttler:buckets:<subject>`, one per
+/// throttled subject, counting its current window.
+///
+/// `nestrs:<concern>:<structure>[:<member>]`, like every key the framework
+/// writes. The concern is the tail of [`nest_rs_throttler::TARGET`] — the crate
+/// that **owns** the concern, never `redis`, because an operator looking at
+/// Redis is looking for the rate limiter's keys — so a key names the port that
+/// owns it, and the port derives the key. `buckets` is the structure level, read
+/// off the port: `InMemoryThrottler` holds one **bucket** per key, and a window is
+/// the span a bucket counts in rather than the thing the key holds. Without it
+/// the concern had exactly one pattern — itself — so an operator sweeping the
+/// rate limiter could scope a `SCAN` no narrower than the concern.
+///
+/// The prefix is fixed, not the deployment's: `NESTRS_ENV_PREFIX` renames the
+/// developer's variables, while a key is the framework's own machinery, and two
+/// deployments sharing one Redis are separated by the logical database in the
+/// connection URL.
+const BUCKETS: &str = "nestrs:throttler:buckets";
+
+/// The key `subject`'s window is counted in. The subject is the port's —
+/// `nest_rs_throttler` joins its parts with U+001F, so a route pattern's `:`
+/// never reads as a level here.
+fn bucket(subject: &str) -> String {
+    format!("{BUCKETS}:{subject}")
+}
+
 /// Atomic fixed-window step. Returns `{count, ttl_ms}` in one round-trip:
 ///
 /// - `INCR` opens or advances the window counter.
@@ -65,12 +91,9 @@ impl RedisThrottler {
     /// the [`ThrottlerStore`] seam is async, so no runtime worker is blocked
     /// and a current-thread runtime works too.
     async fn run(&self, key: &str, window_ms: u64) -> Result<(i64, i64), redis::RedisError> {
-        // A namespace prefix keeps throttle counters from colliding with queue
-        // keys on a shared Redis, and makes them greppable in `redis-cli`.
-        let namespaced = format!("nestrs:throttle:{key}");
         let mut conn = self.conn.clone();
         self.script
-            .key(namespaced)
+            .key(bucket(key))
             .arg(window_ms)
             .invoke_async::<(i64, i64)>(&mut conn)
             .await
@@ -114,5 +137,25 @@ impl ThrottlerStore for RedisThrottler {
                 Decision::denied(limit.window)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The concern is read off the owning crate's span target rather than
+    /// chosen, so renaming the target moves the key — or fails here.
+    #[test]
+    fn the_rate_limiters_keys_name_the_concern_its_crate_emits_on() {
+        let concern = nest_rs_throttler::TARGET
+            .strip_prefix("nest_rs::")
+            .expect("a framework target");
+        assert_eq!(
+            BUCKETS.split(':').collect::<Vec<_>>(),
+            ["nestrs", concern, "buckets"],
+        );
+        let subject = "http\u{1f}/users/:id\u{1f}203.0.113.7";
+        assert_eq!(bucket(subject), format!("{BUCKETS}:{subject}"));
     }
 }

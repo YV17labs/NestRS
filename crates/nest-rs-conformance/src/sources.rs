@@ -36,11 +36,27 @@ pub fn rust_files(dir: &Path) -> Vec<PathBuf> {
 /// copy leaves out.
 pub fn files_with_extension(dir: &Path, extension: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    collect(dir, extension, &mut out);
+    collect(
+        dir,
+        &|path| path.extension().is_some_and(|e| e == extension),
+        &mut out,
+    );
     out
 }
 
-fn collect(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
+/// The same walk by whole file name, for the files an operator reads that carry
+/// no extension — a `Justfile`, a `Dockerfile`.
+pub fn files_with_name(dir: &Path, name: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    collect(
+        dir,
+        &|path| path.file_name().is_some_and(|n| n == name),
+        &mut out,
+    );
+    out
+}
+
+fn collect(dir: &Path, keep: &dyn Fn(&Path) -> bool, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -50,8 +66,8 @@ fn collect(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
             if path.file_name().is_some_and(|n| n == "target") {
                 continue;
             }
-            collect(&path, extension, out);
-        } else if path.extension().is_some_and(|e| e == extension) {
+            collect(&path, keep, out);
+        } else if keep(&path) {
             out.push(path);
         }
     }
@@ -875,6 +891,22 @@ pub fn idents(tokens: TokenStream) -> BTreeSet<String> {
             TokenTree::Ident(ident) => Some(ident.to_string()),
             _ => None,
         })
+        .collect()
+}
+
+/// The value of every string literal `tokens` spell, at any depth — what a join
+/// reads inside a macro body, where `syn` leaves `format!("…")`'s literal as a
+/// token rather than a `LitStr`. Parsed as a literal, so an escape and a raw
+/// string read as the value the compiler sees.
+pub fn string_literals(tokens: TokenStream) -> Vec<String> {
+    let mut flat = Vec::new();
+    flatten(tokens, &mut flat);
+    flat.iter()
+        .filter_map(|tree| match tree {
+            TokenTree::Literal(lit) => syn::parse_str::<syn::LitStr>(&lit.to_string()).ok(),
+            _ => None,
+        })
+        .map(|lit| lit.value())
         .collect()
 }
 

@@ -82,15 +82,6 @@ impl DynamicModule for ThrottlerSetup {
     }
 }
 
-/// What the boot tells you when two vendor bindings both bound the store.
-/// Shared with every store adapter (`nest-rs-redis` today, a third party's
-/// tomorrow — it is part of the store contract) so the two halves of the rule
-/// cannot drift.
-pub const BACKEND_REMEDY: &str = "Import exactly one throttler store binding beside \
-                                  `ThrottlerModule::for_root`: `nest_rs::redis::RedisThrottlerModule` \
-                                  shares the counters across instances; with none, they stay \
-                                  in this process.";
-
 /// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] the guard applies
 /// to routes that pin none.
 fn resolve(config: &ThrottlerConfig) -> Throttle {

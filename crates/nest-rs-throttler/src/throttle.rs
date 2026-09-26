@@ -9,7 +9,8 @@ use std::time::Duration;
 pub struct Throttle {
     /// Maximum requests permitted per `window`, per client.
     pub limit: u32,
-    /// The rolling window the `limit` applies over.
+    /// The window the `limit` applies over — fixed, opened by the first request
+    /// counted in it, in every store this crate and `nest-rs-redis` ship.
     pub window: Duration,
 }
 

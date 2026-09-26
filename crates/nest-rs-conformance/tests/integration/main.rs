@@ -14,6 +14,7 @@ mod events;
 mod filters;
 mod grammars;
 mod guards;
+mod keys;
 mod naming;
 mod panics;
 mod seams;

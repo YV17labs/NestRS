@@ -259,6 +259,16 @@ impl ThrottlerStore for InMemoryThrottler {
     }
 }
 
+/// What the boot tells you when two vendor bindings both bound the store.
+/// Shared with every store adapter (`nest-rs-redis` today, a third party's
+/// tomorrow — it is part of the store contract) so the two halves of the rule
+/// cannot drift. It sits beside [`ThrottlerStore`] because that contract is
+/// what an adapter reads to write one, and the module only passes it on.
+pub const BACKEND_REMEDY: &str = "Import exactly one throttler store binding beside \
+                                  `ThrottlerModule::for_root`: `nest_rs::redis::RedisThrottlerModule` \
+                                  shares the counters across instances; with none, they stay \
+                                  in this process.";
+
 #[cfg(test)]
 mod tests {
     use super::*;

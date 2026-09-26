@@ -114,7 +114,7 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
     report.env_prefix_source = EnvPrefixSource::detect();
 
     // One cascade read for all four, rather than up to four files per variable.
-    let cascade = cascade_text(&start, report.env_prefix());
+    let cascade = cascade_text(&start, report.env_prefix(), process_env);
     report.env_vars = CHECKED
         .iter()
         .map(|&(namespace, key, always_reported)| {
@@ -231,7 +231,14 @@ fn status_line(label: &str, ok: bool, detail: &str) {
 /// nest-rs-cli` stays independent of the version a project pins. Only presence
 /// is answered, so this stays a scan for the key, not a second value parser.
 fn env_present(cascade: &str, name: &str) -> bool {
-    present(|var| std::env::var_os(var), cascade, name)
+    present(process_env, cascade, name)
+}
+
+/// The process environment, as [`present`] and [`cascade_text`] read it — the
+/// one place doctor consults the shell it runs in, so every helper below takes
+/// its environment as an argument and a test hands it one.
+fn process_env(var: &str) -> Option<OsString> {
+    std::env::var_os(var)
 }
 
 /// [`env_present`] over a supplied process environment, answered as the loader
@@ -254,10 +261,13 @@ fn present(real: impl Fn(&str) -> Option<OsString>, cascade: &str, name: &str) -
 /// `nest_rs_config::dotenv`'s file set — including skipping `.env.local` under
 /// `<PREFIX>_ENV=test`, so doctor answers what an app would actually resolve.
 /// Most specific first, as the loader merges them: the first assignment of a key wins.
-fn cascade_text(dir: &Path, env_prefix: &str) -> String {
-    let env =
-        std::env::var(format!("{env_prefix}_ENV")).unwrap_or_else(|_| "development".to_owned());
-    let env = env.trim().to_owned();
+///
+/// `real` is the process environment the selector is read from: a parameter so
+/// the answer is a function of what it is handed, and a test never inherits the
+/// `<PREFIX>_ENV` of the shell that runs it.
+fn cascade_text(dir: &Path, env_prefix: &str, real: impl Fn(&str) -> Option<OsString>) -> String {
+    let declared = real(&format!("{env_prefix}_ENV")).and_then(|value| value.into_string().ok());
+    let env = cascade_environment(declared.as_deref());
     let mut files = vec![format!(".env.{env}.local")];
     if env != "test" {
         files.push(".env.local".to_owned());
@@ -269,6 +279,21 @@ fn cascade_text(dir: &Path, env_prefix: &str) -> String {
         .filter_map(|file| std::fs::read_to_string(dir.join(file)).ok())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The environment whose files the loader reads for a `<PREFIX>_ENV` value —
+/// `nest_rs_config::Environment`'s classification, mirrored because the CLI
+/// links no framework crate. Its aliases and its fallback are the loader's:
+/// `prod` reads `.env.production`, and empty, unset or unrecognised read the
+/// development files. Taking the raw value as a file name instead sent doctor
+/// to `.env.prod` and `.env.` — files no app ever reads.
+fn cascade_environment(declared: Option<&str>) -> &'static str {
+    match declared.map(str::trim) {
+        Some("production" | "prod") => "production",
+        Some("staging" | "stage") => "staging",
+        Some("test") => "test",
+        _ => "development",
+    }
 }
 
 /// The cascade's answer, split out so the line grammar (`export` prefix,
@@ -460,15 +485,57 @@ mod tests {
         ));
     }
 
+    /// Hermetic: the process environment is handed in empty, so a shell that
+    /// exports `NESTRS_REDIS__URL` — the one a developer running this suite is
+    /// most likely to have — cannot answer for the cascade.
     #[test]
     fn the_cascade_is_consulted_from_the_starting_directory() {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         std::fs::write(dir.join(".env"), "NESTRS_SEAORM__URL=postgres://x\n").expect("write");
-        let cascade = cascade_text(&dir, "NESTRS");
-        assert!(env_present(&cascade, "NESTRS_SEAORM__URL"));
-        assert!(!env_present(&cascade, "NESTRS_REDIS__URL"));
+        let cascade = cascade_text(&dir, "NESTRS", real(&[]));
+        assert!(present(real(&[]), &cascade, "NESTRS_SEAORM__URL"));
+        assert!(!present(real(&[]), &cascade, "NESTRS_REDIS__URL"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The selector is the handed environment's, classified as the loader
+    /// classifies it: an alias reads the canonical files, and `test` skips
+    /// `.env.local`.
+    #[test]
+    fn the_cascade_files_follow_the_declared_environment() {
+        let dir = std::env::temp_dir().join(format!("nestrs-doctor-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join(".env.production"), "NESTRS_REDIS__URL=redis://x\n")
+            .expect("write");
+        std::fs::write(dir.join(".env.local"), "NESTRS_SEAORM__URL=postgres://x\n").expect("write");
+
+        let prod = cascade_text(&dir, "NESTRS", real(&[("NESTRS_ENV", "prod")]));
+        assert!(
+            present(real(&[]), &prod, "NESTRS_REDIS__URL"),
+            "prod reads .env.production"
+        );
+        let test = cascade_text(&dir, "NESTRS", real(&[("NESTRS_ENV", "test")]));
+        assert!(
+            !present(real(&[]), &test, "NESTRS_SEAORM__URL"),
+            "test skips .env.local"
+        );
+        let unset = cascade_text(&dir, "NESTRS", real(&[]));
+        assert!(present(real(&[]), &unset, "NESTRS_SEAORM__URL"));
+        assert!(!present(real(&[]), &unset, "NESTRS_REDIS__URL"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_environment_is_classified_as_the_loader_classifies_it() {
+        assert_eq!(cascade_environment(Some("prod")), "production");
+        assert_eq!(cascade_environment(Some(" production ")), "production");
+        assert_eq!(cascade_environment(Some("stage")), "staging");
+        assert_eq!(cascade_environment(Some("test")), "test");
+        assert_eq!(cascade_environment(Some("dev")), "development");
+        assert_eq!(cascade_environment(Some("")), "development");
+        assert_eq!(cascade_environment(Some("producton")), "development");
+        assert_eq!(cascade_environment(None), "development");
     }
 
     /// A variable given as a file is set: the loader reads `<NAME>_FILE` as the
@@ -476,7 +543,7 @@ mod tests {
     #[test]
     fn a_variable_given_as_a_file_is_reported_set() {
         let cascade = "NESTRS_REDIS__URL_FILE=/run/secrets/redis-url\n";
-        assert!(env_present(cascade, "NESTRS_REDIS__URL"));
+        assert!(present(real(&[]), cascade, "NESTRS_REDIS__URL"));
     }
 
     /// A process environment holding `vars`, for [`present`].
@@ -545,15 +612,19 @@ mod tests {
     /// A project that renamed its variables must be answered in its own names.
     /// Reporting `NESTRS_SEAORM__URL: not set` there is worse than silence:
     /// it sends the reader to add a key the app will never read.
+    ///
+    /// Hermetic for the same reason as the cascade test above: the default name
+    /// is asserted *absent*, which a developer's own `NESTRS_SEAORM__URL` would
+    /// otherwise contradict from outside the test.
     #[test]
     fn a_custom_prefix_project_is_answered_in_its_own_variable_names() {
         let dir = std::env::temp_dir().join(format!("nestrs-doctor-acme-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         std::fs::write(dir.join(".env"), "ACME_SEAORM__URL=postgres://x\n").expect("write");
-        let cascade = cascade_text(&dir, "ACME");
-        assert!(env_present(&cascade, "ACME_SEAORM__URL"));
+        let cascade = cascade_text(&dir, "ACME", real(&[]));
+        assert!(present(real(&[]), &cascade, "ACME_SEAORM__URL"));
         assert!(
-            !env_present(&cascade, "NESTRS_SEAORM__URL"),
+            !present(real(&[]), &cascade, "NESTRS_SEAORM__URL"),
             "the default name must not answer for a renamed project",
         );
         std::fs::remove_dir_all(&dir).ok();

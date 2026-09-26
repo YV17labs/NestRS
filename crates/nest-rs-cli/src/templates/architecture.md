@@ -107,14 +107,17 @@ the contract and its semantics and **no module** when it has nothing to register
 more.
 
 **Swapping or adding a backend edits the composition root and nothing else.**
-Two adapters binding one port are a boot error naming both
-(`provide_declared_factory`, one shared remedy sentence); a port's default
-implementation is an *ordinary* factory, so a vendor binding supersedes it
-wherever it sits in `imports`, and a binding that reads another factory's output
-declares it (`provide_*_factory_after`), so `imports` order stays a readability
-choice. `nest-rs-storage` is the recorded exception to this whole section — a
-capability name pinned to S3 — and is fixed by giving it the shape above, not by
-documenting it.
+Two adapters binding one port are a boot error (`provide_declared_factory`, one
+shared remedy sentence); a port's default implementation is an *ordinary*
+factory, so a vendor binding supersedes it wherever it sits in `imports`, and a
+binding that reads another factory's output declares it
+(`provide_*_factory_after`), so `imports` order stays a readability choice. The
+error, `ContestedDeclarationError`, names the contested port and the remedy — not
+the two bindings that contest it. **Whether it should name them too is an open
+question for the owner**: these rules promised both names, and the error prints
+the port alone. `nest-rs-storage` is the recorded exception to this whole
+section — a capability name pinned to S3 — and is fixed by giving it the shape
+above, not by documenting it.
 
 **The crate counts only when it is a subject.** Every `nest-rs-*` is named for
 what it holds, so it prefixes. A product library like `features` is a container
@@ -122,14 +125,23 @@ what it holds, so it prefixes. A product library like `features` is a container
 `FeaturesAudioHttpModule`.
 
 **Every type in a `module.rs` shares the stem**, not just the module:
-`RedisThrottlerModule`, `RedisThrottlerSetup`, `RedisThrottlerHost`. A rename
-that leaves a sibling behind is half a rename, and the half left behind is the
-one a reader trips on. The same reading gives the adapter's own types —
-`posts/http/controller.rs` is `PostsController`, `users/ws/gateway.rs` is
-`UsersGateway`. An edge folder directly under a framework crate's `src/` adapts
-the crate itself, so its adapter takes the crate's subject:
-`nest-rs-x/src/http/controller.rs` is `XController`, beside the `XHttpModule` its
-`module.rs` already takes — `src` names a layout level, never a module.
+`nest-rs-oauth-resource/src/module.rs` declares `OAuthResourceModule`, the
+`OAuthResourceSetup` its `for_root` returns, and the private `OAuthResourceHost`
+that carries the `#[module]`. A rename that leaves a sibling behind is half a
+rename, and the half left behind is the one a reader trips on. The same reading
+gives the adapter's own types — `posts/http/controller.rs` is `PostsController`,
+`users/ws/gateway.rs` is `UsersGateway`. An edge folder directly under a
+framework crate's `src/` adapts the crate itself, so its adapter takes the
+crate's subject: `nest-rs-x/src/http/controller.rs` is `XController`, beside the
+`XHttpModule` its `module.rs` already takes — `src` names a layout level, never a
+module — and the suite mirror of that folder, `tests/<suite>/http/`, reads the
+same way. **In a product crate the same folder is refused**, under an app's
+`src/` and a library's alike, because no name it could take is allowed: the
+app's name stops at `<App>Module`, so `apps/api/src/http/controller.rs` cannot
+hold an `ApiController`, and a library like `features` is a container, never a
+subject. A product's edge adapter belongs to a module folder
+(`<module>/<edge>/`), and the naming join refuses the other with that sentence
+rather than inventing a name for it.
 
 Enforced, not merely written: `naming.rs` in `nest-rs-conformance` derives every
 `module.rs` and every edge adapter in both workspaces and fails on a name that
@@ -463,7 +475,7 @@ already in the framework you import — so each one below is a path you can open
   `EventBus`, `worker/src/context.rs` is `JobContext`.
 - **The folder names the kind**, and the file names the subject —
   `pipes/src/pipes/validation.rs` is `ValidationPipe`,
-  `oauth/strategies/oauth.rs` is `OAuthStrategy`.
+  `authn/src/strategies/jwt.rs` is `JwtStrategy`.
 
 **One shape is refused, and only one: a stem that appears nowhere in what the
 file declares.** No example of it is given above, and that is the point — the

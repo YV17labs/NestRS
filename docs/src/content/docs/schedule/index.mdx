@@ -271,10 +271,11 @@ impl NotificationsTasks {
 }
 ```
 
-The worker is the app the demo's chart scales on queue depth, up to ten
-replicas. Declared with the default, the purge would run ten times an hour, each
-run racing the others over the same rows; declared `"one"`, one replica deletes
-and the others wait for the next hour.
+The worker is the app the demo's chart scales on queue depth, to as many as ten
+replicas once KEDA is on. Left at the default, every replica would run the purge
+each hour — ten purges for one hour's expired rows, contending for the same rows
+whenever two run close together. Declared `"one"`, each hour's occurrence runs
+once, on whichever replica claims it.
 
 The replicas agree through Redis. Enable `redis-schedule` (see
 [Install](#install)), then import the binding beside `ScheduleModule` in every
@@ -414,10 +415,12 @@ pub async fn purge_expired(&self) -> Result<u64, ServiceError> {
 }
 ```
 
-On the tick, `scoped(Action::Delete)` selects every expired row, because a job
-has no principal to scope to; called from a request that carries no ability,
-the same method selects nothing, and each `Repo::delete` is filtered again. The
-deletes share the tick's transaction, so a batch lands whole or not at all.
+On the tick, `scoped(Action::Delete)` adds no filter of its own, because a job
+has no principal to scope to, so the query takes the first thousand expired
+rows; called from a request that carries no ability, the same method selects
+nothing, and each `Repo::delete` is filtered again. The deletes share the tick's
+transaction, so a batch lands whole or not at all, and what a batch leaves waits
+for the next hour.
 Just importing `SeaOrmDatabaseModule` is enough — no manual connection plumbing.
 
 ## Reference

@@ -231,10 +231,13 @@ outside `docs/`.
   `Bind<Read, PostEntity>`, and the proof it returns is `Authorized<Read, PostEntity>`. The
   reversed spelling reads plausibly and does not compile, so a page that repeats it teaches the
   wrong rule; ~10 pages shipped it reversed in 1.1.1. Gated rather than trusted.
-- **`queue-name`** — a queue is named by its `QueueName` **type** on both sides. The consumer's
-  `#[process(queue = "audio")]` is a compile error the macro raises by name, and the producer's
-  string-taking `push(name, job)` is the runtime-name hatch, not the default — `push_to::<Q>` is.
-  Both spellings shipped in 1.1.1 across ~10 places, on pages that predated `QueueName`.
+- **`queue-name`** — a queue is named by its `Queue` **type** on both sides. The consumer's
+  `#[process(queue = "audio")]` is a compile error the macro raises by name, and the producer
+  pushes with `push(AudioQueue, job, None)`: `push` takes the `#[queue]` marker, so a name
+  constant handed to it does not compile, and the string-taking `push_json(name, value, None)`
+  is the hatch for a queue this binary does not declare, never the default. The string
+  spellings shipped in 1.1.1 across ~10 places, on pages that predated the typed queue; 6.x's
+  `push_to::<Q>(job)` is gone, and is named only where a page shows what an upgrade changes.
 - **`architecture-drift`** — `architecture.mdx` restates a file the CLI embeds
   (`nest-rs-cli/src/templates/architecture.md`, symlinked into `.claude/rules/`), so the page is
   diffed against it: the role/file table and the reserved-vocabulary list must name the same

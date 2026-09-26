@@ -463,18 +463,25 @@ const UNMAPPED_CRUD_READ = /\.(?:list\(\)|page\(|access\()[^;]*?\.await\s*\?/;
 const BIND_ORDER =
   /\b(?:[Bb]ind(?:_required)?(?:::)?<\s*(?:S|[A-Z]\w*Service)|Authorized<\s*(?:E|[A-Z]\w*Entity))\b/g;
 
-/// A queue is named by its `QueueName` **type**, never a string — the macro
+/// A queue is named by its `Queue` **type**, never a string — the macro
 /// refuses both string spellings by name, so the regex catches both:
 /// `#[process(queue = "audio")]` shipped in 1.1.1 across ~10 places on pages
-/// that predated `QueueName`, and the *positional* `#[process("posts.publish")]`
-/// survived that fix on a page outside the queue section. A reader following
-/// either wrote a consumer that would not compile. Gated rather than trusted.
+/// that predated the typed queue, and the *positional*
+/// `#[process("posts.publish")]` survived that fix on a page outside the queue
+/// section. A reader following either wrote a consumer that would not compile.
+/// Gated rather than trusted.
 const QUEUE_STRING_FORM = /#\[process\(\s*(?:queue\s*=\s*)?"/g;
 
-/// The producer half of the same rule: `push(name, job)` and `of::<…>(…)` are
-/// the runtime-name escape hatch, not the default — a page teaching them as
-/// *the* way to enqueue opts the reader out of the very check the type exists
-/// to provide, and does it silently.
+/// The producer half of the same rule. `push(Q, job, options)` takes the
+/// queue's `#[queue]` marker, which carries its name and its payload type, so a
+/// `push` handed an ALL_CAPS name constant does not compile, and `of::<…>(…)`
+/// names a surface that no longer exists: a page teaching either hands the
+/// reader a push that fails to build. The one push that takes a name is
+/// `push_json(name, value, options)`, the hatch for a queue this binary does not
+/// declare, and the pattern leaves it alone — `.push(` never starts `push_json(`.
+/// A string literal handed to `push` is not matched either: it does not compile
+/// in 7.0 any more than a constant does, but it is 6.x's `push(name, job)`, and
+/// the upgrade pages spell that in their before column on purpose.
 const QUEUE_UNTYPED_PUSH = /\.(?:of::<[^>]*>\(|push\(\s*[A-Z_]{3,}\b)/g;
 
 /// A test target is a **directory** — `tests/<suite>/main.rs`. Cargo compiles a
@@ -1338,12 +1345,14 @@ export function lintFile(absPath, src = readFileSync(absPath, 'utf8')) {
     add(RULES.bindOrder, `${m[0]}… — the action marker comes first`);
   }
 
-  // 9. A queue is named by its `QueueName` type on both sides.
+  // 9. A queue is named by its `Queue` type on both sides.
   for (const m of src.matchAll(QUEUE_STRING_FORM)) {
-    add(RULES.queueName, `${m[0]}…" — name the queue by its QueueName type`);
+    add(RULES.queueName, `${m[0]}…" — name the queue by its Queue type`);
   }
   for (const m of src.matchAll(QUEUE_UNTYPED_PUSH)) {
-    add(RULES.queueName, `${m[0]}… — enqueue with push_to::<Q>, not an untyped name`);
+    add(RULES.queueName, `${m[0]}… — push takes the queue's marker, as in `
+      + 'push(AudioQueue, job, None); a queue this binary does not declare goes through '
+      + 'push_json(name, value, options)');
   }
 
   for (const block of blocks) {

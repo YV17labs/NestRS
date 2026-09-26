@@ -154,7 +154,7 @@ pub struct AppHealth {
     #[inject]
     db: Arc<DatabaseConnection>,
     #[inject]
-    redis: Arc<RedisPool>,
+    redis: Arc<RedisConnection>,
 }
 
 #[indicators]
@@ -165,8 +165,10 @@ impl AppHealth {
     }
 
     #[readiness]
-    async fn redis(&self) -> anyhow::Result<()> {
-        self.redis.ping().await
+    async fn redis(&self) -> redis::RedisResult<()> {
+        redis::cmd("PING")
+            .query_async(&mut RedisConnection::clone(&self.redis))
+            .await
     }
 
     #[startup]
@@ -176,6 +178,13 @@ impl AppHealth {
     }
 }
 ```
+
+`RedisConnection` is the one connection every Redis binding shares, so a
+command sent on a clone of it answers or fails within
+`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, like the framework's own. Sending one
+names the `redis` crate in your source, so your manifest carries it — on the
+line `nest-rs-redis` builds against, 0.32, whose `ConnectionLike` the connection
+implements.
 
 A worker app or an MCP app that imports the feature's data layer
 without its `HealthModule` ships no probe surface for that feature —

@@ -101,8 +101,8 @@ re-exports it, so import it from the one the file already uses
 | Decorator | Goes on | Summary | Read more |
 |---|---|---|---|
 | `#[scheduled]` | impl block | Orchestrates scheduled methods on a provider | [Schedule](/schedule/) |
-| `#[every]` | method | Fires the method on a fixed interval, optional `transactional` | [Schedule](/schedule/) |
-| `#[cron]` | method | Fires the method on a cron expression, optional `tz` and `transactional` | [Schedule](/schedule/) |
+| `#[every]` | method | Fires the method on a fixed interval, optional `transactional` and `replicas` | [Schedule](/schedule/) |
+| `#[cron]` | method | Fires the method on a cron expression, optional `tz`, `transactional` and `replicas` | [Schedule](/schedule/) |
 | `#[after]` | method | Fires the method once after a delay from boot, optional `transactional` | [Schedule](/schedule/) |
 
 ## Events

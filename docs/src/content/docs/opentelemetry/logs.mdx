@@ -28,7 +28,7 @@ request.
 | WebSocket events | `nest_rs::ws` | `info` |
 | GraphQL execution and subscriptions | `nest_rs::graphql` | `info` |
 | Queue / Schedule | `nest_rs::queue` / `nest_rs::schedule` | `info` |
-| Redis connection (the one handle the queue, worker and rate-limit store share) | `nest_rs::redis` | `warn` per connect attempt while the boot budget runs |
+| Redis connection (the one `RedisConnection` the queue, the worker, the rate-limit store and the schedule's lock share) | `nest_rs::redis` | `warn` per connect attempt while the boot budget runs |
 | Module lifecycle | `nest_rs::module` | `info` |
 | Application spans | `<crate>::<feature>` (e.g. `features::users`) | `info` |
 
@@ -140,8 +140,8 @@ is a separate line, one per unit of work, on the shared target `nest_rs::operati
 | WS message | `ws.message` | event, `conn_id` |
 | WS socket open | `ws.connect` | `conn_id` |
 | WS socket close | `ws.disconnect` | `conn_id` |
-| Scheduled tick | `schedule.tick` | provider, method |
-| Queue job | `queue.job` | queue, processor, `job_id`, attempt |
+| Scheduled tick | `schedule.tick` | provider, method, `replicas`, and the `occurrence` a job firing once claimed |
+| Queue job | `queue.job` | queue, processor, `job_id`, `backend_id`, attempt |
 | MCP operation | `mcp.operation` | the JSON-RPC method |
 | GraphQL operation | `graphql.operation` | role, operation |
 | GraphQL subscription | `graphql.subscription` | the connection is the unit |
@@ -167,7 +167,7 @@ do", and "what failed" is `outcome != ok` or `status >= 400`.
 
 ```text frame="terminal"
 INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=127 duration_ms=0.103 client_ip=127.0.0.1 forwarded=false user_agent="curl/8.14.1" trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b
-INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
+INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
 ```
 
 **The target is the toggle.** `NESTRS_LOG=info,nest_rs::operation=off` silences the
@@ -190,14 +190,14 @@ fails the day one prefixes another.
 ### Following one operation across two processes
 
 A scheduled tick in the `api` binary enqueues a job; the `worker` binary picks it
-up ninety seconds later. One `trace_id`, two `span_id`s — the job is a child of
-the tick, across a process boundary:
+up a moment later. One `trace_id`, two `span_id`s — the job is a child of the
+tick, across a process boundary:
 
 ```text frame="terminal"
-DEBUG features::audio: enqueued transcode job file="track-1787069801760.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
- INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
-DEBUG features::audio: transcoded file="track-1787069801760.mp3" derived_key="transcoded/track-1787069801760.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
- INFO nest_rs::operation: queue.job queue="audio" processor="AudioProcessor::transcode" attempt=1 outcome="ok" duration_ms=33.733 trace_id=01a015a9252076e399f736a97ae90784 span_id=7bbcfc44c1f0c676
+DEBUG features::audio: enqueued transcode job file="track-1790450417644.mp3" trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=24b6cae9a236614d
+ INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="each" outcome="ok" duration_ms=1.807 trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=24b6cae9a236614d
+DEBUG features::audio: transcoded file="track-1790450417644.mp3" derived_key="transcoded/track-1790450417644.mp3" trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=0cd80bc02ff04789
+ INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0df29-3fec-7382-82f1-a2a474f32e73 backend_id="01M3FJJFZDWYGNMB9TN8Y4NDFG" attempt=1 outcome="ok" duration_ms=0.059 trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=0cd80bc02ff04789
 ```
 
 The first two lines are the `api`'s, the last two the `worker`'s. Nothing was

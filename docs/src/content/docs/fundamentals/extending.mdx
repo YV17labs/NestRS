@@ -51,8 +51,8 @@ a different object store, you do not write a NestRS driver: you point
 
 **Owned.** Nothing abstracts the concern, so NestRS defines the trait, the
 registration seam and the arbitration sentence itself — `ThrottlerStore`,
-`JobProducer`, `SocialProvider`, `Strategy`. A library may still carry one
-adapter's transport without owning the concern: `nest-rs-redis` fetches and
+`JobProducer`, `OccurrenceLock`, `SocialProvider`, `Strategy`. A library may still
+carry one adapter's transport without owning the concern: `nest-rs-redis` fetches and
 acknowledges jobs through apalis, while what a job attempt *is* — its id, its
 retries and their backoff, its trace, the capabilities a backend declares — is
 `nest-rs-queue`'s, so a second queue backend implements the port rather than
@@ -68,8 +68,8 @@ imports beside the port's module. Consumers inject `dyn Port` and never name the
 backend, so swapping it is a composition-root edit rather than a change to your
 handlers. The port's own default is an *ordinary* factory, so a vendor binding
 supersedes it wherever it sits in `imports`; two vendor bindings contest, and
-the boot fails naming both — where the binding declares itself; see the caveat
-below.
+the boot fails naming the port and the remedy — where the binding declares
+itself; see the caveat below.
 
 ```rust title="apps/api/src/module.rs"
 ThrottlerModule::for_root(None),   // the port: policy, guard, counters in this process
@@ -89,8 +89,10 @@ The same shape carries `AbilityGuard<F: AbilityFactory>` and the GraphQL and MCP
 bridges. This is the mode NestRS uses most.
 
 :::caution[One by-import port does not yet arbitrate]
-`ThrottlerStore` and `dyn JobProducer` (queue) declare their binding, so
-importing two backends of either fails the boot naming both. `dyn JobContext`
+`ThrottlerStore`, `dyn JobProducer` (queue) and `dyn OccurrenceLock` (schedule)
+declare their binding, so importing two backends of any of them fails the boot:
+`contested declaration`, naming the port and the one sentence that says what to
+import instead. `dyn JobContext`
 (database) binds through a container call that records no duplicate, so **two
 database drivers would resolve to whichever module was imported last,
 silently**. Until that is closed, link exactly one database driver and do not
@@ -173,6 +175,7 @@ the crate's module docs — so start from the page rather than from docs.rs:
 | Port | Contract |
 |---|---|
 | `JobProducer` | [queue / writing a driver](/queue/writing-a-driver/) |
+| `OccurrenceLock` | [schedule / firing once across replicas](/schedule/#firing-once-across-replicas), including the arbitration sentence `BACKEND_REMEDY` |
 | `Repo` / the database binding | [database / writing a driver](/database/writing-a-driver/) |
 | `ThrottlerStore` | [rate limiting](/rate-limiting/), including the arbitration sentence `BACKEND_REMEDY` |
 | `Strategy` | [security / authentication](/security/authentication/) |

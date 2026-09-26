@@ -599,9 +599,10 @@ the port crate that owns it, and from that crate derives the key:
 | env namespace | `<PREFIX>_<CONCERN>__*` | `<PREFIX>_THROTTLER__*` |
 | datastore key | `nestrs:<concern>:<structure>` | `nestrs:throttler:buckets` |
 
-Three obligations, each for a mechanical reason, all executed by the `keys` join
-in `nest-rs-conformance` over both workspaces and the docs, whose baselines are
-empty and only shrink:
+Three obligations, each for a mechanical reason. The `keys` join in
+`nest-rs-conformance` executes as much of them as a literal can show — every
+literal opening with `nestrs:`, macro bodies included, over both workspaces and
+the docs — and its baselines are empty and only shrink:
 
 - **Every fixed part is a `const` whose literal opens with `nestrs:`**, declared
   by the crate that writes the key, and a key that varies is built from exactly

@@ -26,7 +26,7 @@ const DEFAULT_LEASE_SECS: u64 = 30;
 /// How many heartbeats fit in the orphan threshold.
 const HEARTBEATS_PER_THRESHOLD: u32 = 10;
 
-/// The slowest a replica beats, whatever the threshold: apalis records a
+/// The fastest a replica beats, whatever the threshold: apalis records a
 /// heartbeat to the second, so a faster one would record nothing new.
 const MIN_HEARTBEAT: Duration = Duration::from_secs(1);
 
@@ -44,10 +44,10 @@ pub struct RedisWorkerConfig {
     pub shutdown_timeout: Duration,
     /// How long a replica may go without proving it is alive before the others
     /// take the jobs it was running and run them again. A replica proves it
-    /// every tenth of this (at least once a second), so a live one is never
-    /// taken for dead by a slow answer or two. Shorter recovers a crashed
-    /// replica's jobs sooner; the delivery lease keeps a job a live replica still
-    /// runs from running twice either way. Read from
+    /// every tenth of this (never more often than once a second), so a live one
+    /// is never taken for dead by a slow answer or two. Shorter recovers a
+    /// crashed replica's jobs sooner; the delivery lease keeps a job a live
+    /// replica still runs from running twice either way. Read from
     /// `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS`, at least 5; defaults to 300s.
     pub orphan_after: Duration,
     /// How long a running attempt's claim on its job outlives its last renewal.

@@ -97,7 +97,8 @@ leave the process — an email, a charge — keeps its own idempotency key.
 Each method of each replica consumes under an id of its own — the host name
 when the platform sets one, then a UUID v7 — so no two replicas share an
 in-flight set. A replica proves it is alive every tenth of the orphan threshold,
-at least once a second, and a peer sweeps its jobs only once it has been silent
+and never more often than once a second, and a peer sweeps its jobs only once it
+has been silent
 for the whole threshold — ten missed proofs at the default.
 
 A replica that crashes mid-attempt leaves its job in flight. The next replica
@@ -247,14 +248,15 @@ that kept it.
   see [Concurrency and scaling](/queue/scaling/#one-fetch-per-poll).
 - **`failed` only grows.** apalis records there every job it reschedules — a
   retry, a hand-back — and nothing trims it.
-- **A refused hand-back can dead-letter a job by apalis's count.** apalis 0.7
-  keeps an attempt count of its own on every record, raised by each delivery
-  and capped at five, and the one answer that asks apalis to deliver a job again
-  — a hand-back Redis refused — is dead-lettered by that cap from the job's fifth
-  delivery on, with none of the port's dead-letter events. A timeout does not do
-  it, since the timed-out filing still lands and the job runs again; a refusal
-  Redis answers, followed by an acknowledgement it accepts — across a failover —
-  does.
+- **A hand-back that never lands can dead-letter a job by apalis's count.**
+  apalis 0.7 keeps an attempt count of its own on every record, raised by each
+  delivery and capped at five. A hand-back that fails is answered to apalis as a
+  failure, which asks it to deliver the job again — and from the job's fifth
+  delivery on, apalis dead-letters it instead, with none of the port's
+  dead-letter events. The job is lost only when the filing never took effect
+  and the acknowledgement after it did: a refusal Redis answered, or a filing
+  lost with its connection, then Redis reachable again — as across a failover.
+  A filing that merely timed out still lands, and the job runs again.
 - **A settle Redis refuses closes nothing.** The step that marks a job settled
   also lets go of its unique key and closes its open record; when Redis refuses
   it, the worker says so at `warn`, and until the job's records lapse a push under

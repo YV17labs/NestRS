@@ -290,7 +290,8 @@ pub struct WorkerModule;
 the connection `RedisModule::for_root` opens — an app that also queues or rate
 limits shares that one `RedisConnection`. The boot holds you to it both ways: a
 reachable job declaring `replicas = "one"` with no lock bound fails the boot
-naming the job, and a second lock binding beside this one fails it naming both.
+naming the job, and a second lock binding beside this one fails it too, naming
+the contested lock and the same remedy.
 `#[after]` refuses the key — a one-shot fires on the replica that booted, and
 there is no shared occurrence to claim.
 
@@ -345,8 +346,9 @@ nestrs:schedule:claims:<provider>:<method>:<instant_ms>
 
 One key per occurrence claimed, the instant in milliseconds since the Unix
 epoch — `nestrs:schedule:claims:BillingTasks:close_hourly_invoices:1789002000000`.
-Its value names the replica that claimed it (`HOSTNAME:pid`), for an operator
-reading it during an incident; the lock decides on the key's existence alone.
+Its value names the replica that claimed it — its `HOSTNAME` and process id —
+for an operator reading it during an incident; the lock decides on the key's
+existence alone.
 `SCAN 0 MATCH nestrs:schedule:claims:BillingTasks:*` lists one provider's claims
 still held. The prefix is fixed rather than the deployment's: two deployments
 sharing a Redis are separated by the logical database in `NESTRS_REDIS__URL`.

@@ -1,0 +1,11 @@
+error: #[subscribe_message] takes the event's name as a string literal, e.g. `#[subscribe_message("chat")]`
+  --> tests/integration/diagnostics/subscribe_message_event_is_not_a_string.rs:12:25
+   |
+12 |     #[subscribe_message(ping)]
+   |                         ^^^^
+
+error: #[subscribe_message] takes the event's name as a string literal, e.g. `#[subscribe_message("chat")]`
+  --> tests/integration/diagnostics/subscribe_message_event_is_not_a_string.rs:22:5
+   |
+22 |     #[subscribe_message]
+   |     ^^^^^^^^^^^^^^^^^^^^

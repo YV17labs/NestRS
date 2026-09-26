@@ -37,6 +37,31 @@ const POSTURE: PostureRules = PostureRules {
                                the subject in the body with the service's `access`",
 };
 
+/// `#[subscribe_message("chat")]`'s one argument, the event name, read as a
+/// string literal — or the shared value sentence at what was written, never
+/// syn's `expected string literal`, which names neither the attribute nor what
+/// it takes.
+fn event_name(attr: &syn::Attribute) -> syn::Result<LitStr> {
+    let refused = |at: &dyn quote::ToTokens| {
+        syn::Error::new_spanned(
+            at,
+            nest_rs_codegen::takes_value(
+                "subscribe_message",
+                None,
+                "the event's name as a string literal, e.g. `#[subscribe_message(\"chat\")]`",
+            ),
+        )
+    };
+    let written: syn::Expr = attr.parse_args().map_err(|_| refused(attr))?;
+    match nest_rs_codegen::ungrouped_expr(&written) {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(event),
+            ..
+        }) => Ok(event.clone()),
+        other => Err(refused(other)),
+    }
+}
+
 /// Split a `#[subscribe_message]` payload argument into (type to deserialize
 /// from the wire, pipe info). `Some((Some(pipe), inner))` for `Piped<P, T>`,
 /// `Some((None, inner))` for `Valid<T>`, `None` for a plain payload deserialized
@@ -152,7 +177,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let role_span = role_attr.path().span();
         let (kind, identity, key) = match hook {
             Some(hook) => ("hook", hook.to_owned(), format!("#[{hook}]")),
-            None => match method.attrs[index].parse_args::<LitStr>() {
+            None => match event_name(&method.attrs[index]) {
                 Ok(event) => (
                     "event",
                     event.value(),
@@ -192,8 +217,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         let attr = method.attrs.remove(index);
-        let event: LitStr = match attr.parse_args() {
-            Ok(e) => e,
+        let event = match event_name(&attr) {
+            Ok(event) => event,
             Err(err) => return err.to_compile_error().into(),
         };
         mounted_logs.push(quote! {

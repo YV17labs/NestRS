@@ -283,9 +283,13 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
                 if declared.len() > 1 {
                     return Err(syn::Error::new_spanned(
                         &nv.value,
-                        "#[gateway] serves one version: a gateway owns its mount outright, so \
-                         there is no second path for a second version to answer at — declare one \
-                         gateway per version",
+                        nest_rs_codegen::takes_value(
+                            "gateway",
+                            Some("version"),
+                            "one version: a gateway owns its mount outright, so there is no \
+                             second path for a second version to answer at — declare one \
+                             gateway per version",
+                        ),
                     ));
                 }
                 version = declared.into_iter().next();
@@ -326,12 +330,19 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
     })
 }
 
+/// `namespace = ChatNs`'s value: the marker type naming the `WsServer<N>` the
+/// gateway fans out on — read through the invisible group a `macro_rules!`
+/// forwards it in, and refused at itself in the shared sentence otherwise.
 fn expr_path(expr: &syn::Expr) -> syn::Result<Path> {
-    match expr {
+    match nest_rs_codegen::ungrouped_expr(expr) {
         syn::Expr::Path(p) => Ok(p.path.clone()),
         other => Err(syn::Error::new_spanned(
             other,
-            "`namespace` expects a marker type path, e.g. `namespace = ChatNs`",
+            nest_rs_codegen::takes_value(
+                "gateway",
+                Some("namespace"),
+                "a marker type path, e.g. `namespace = ChatNs`",
+            ),
         )),
     }
 }

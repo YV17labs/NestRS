@@ -209,9 +209,13 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   **A read is a touch**: a job that only reads still pays a `BEGIN`/`COMMIT`
   and holds the connection for the attempt, which is the honest price of not
   having a verb to classify on. `transactional =
-  false` runs on the pool instead, and it is for one shape only: a job
+  false` runs on the pool instead, and it is for two shapes only: a job
   bracketing long work that is not the database's, which the default would pin
-  a connection across. Such a job owns its idempotency. The key is one word on
+  a connection across, and a job keeping a `Checkpoint<_>` — the queue backend
+  stores a save at once, while a failed transactional attempt rolls its database
+  work back, so the retry would resume past work that was undone; the decorator
+  refuses a `Checkpoint` parameter on a transactional method. Such a job owns its
+  idempotency. The key is one word on
   all four job decorators, worded once in `nest_rs_codegen::job`.
 
   **An abandoned attempt holds its locks until its statement drains, and that

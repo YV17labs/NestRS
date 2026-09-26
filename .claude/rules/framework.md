@@ -638,7 +638,7 @@ symmetry and nothing else.
 through apalis's public API, never with a command or a script of its own, and
 files its own records beside them, one structure per fact, under words apalis
 does not use. An apalis behaviour the framework cannot live with is worked around
-in keys of its own and reported upstream — never forked, vendored or patched.
+in keys of its own and reported upstream.
 
 | concern | key | holds |
 |---|---|---|
@@ -1272,9 +1272,16 @@ name order; init failure aborts boot, shutdown is best-effort.
 
   **`RedisConnection` is the connection**, not a pool or a factory of them: one
   multiplexed `ConnectionManager`, handed to apalis as the connection its storage
-  runs on and used as it is by the rate limiter and the schedule lock. Every
-  command a caller waits on answers or fails within the connect budget, end to
-  end — the wait for a reopened connection included — so an outage fails a
+  runs on and used as it is by the rate limiter and the schedule lock. **The boot
+  proves it with a `PING`** — a Redis that accepts the dial and answers nothing
+  would otherwise boot cleanly and fail on the first job — and **what fails the
+  same way every time fails at once**: a URL the client cannot parse, TLS
+  settings it will not use, refused credentials, an ACL denying the proof, a
+  database index out of range. What may clear — a refused or reset TCP
+  connection, a server still loading — is retried within `connect_timeout`, then
+  fails naming the endpoint, never the URL, which may carry a password. Every
+  command a caller waits on afterwards answers or fails within that budget, end
+  to end — the wait for a reopened connection included — so an outage fails a
   command instead of holding every loop. **Certificate verification is never an
   option**: `rediss://…#insecure` fails the boot and `redis` is built without
   `tls-rustls-insecure`, because a private authority is trusted by configuring

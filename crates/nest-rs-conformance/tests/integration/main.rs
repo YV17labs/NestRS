@@ -17,6 +17,7 @@ mod guards;
 mod keys;
 mod naming;
 mod panics;
+mod queue_capabilities;
 mod seams;
 mod shapes;
 mod snapshots;

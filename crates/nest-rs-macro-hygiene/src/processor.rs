@@ -9,7 +9,7 @@
 use nest_rs::core::injectable;
 use nest_rs::http::input;
 use nest_rs::pipes::Valid;
-use nest_rs::queue::{processor, queue};
+use nest_rs::queue::{Checkpoint, processor, queue};
 
 /// The wire payload, validated by a per-argument pipe below.
 #[input]
@@ -22,6 +22,18 @@ pub struct HygieneCommand {
 /// The port both sides agree on: one queue name, one job type.
 #[queue(name = "hygiene", job = HygieneCommand)]
 pub struct HygieneQueue;
+
+/// A dynamic queue: one instance per runtime key, each drained on its own.
+#[queue(prefix = "hygiene-tenant", job = HygieneCommand)]
+pub struct HygieneTenantQueue;
+
+/// The queue a resumable method drains.
+#[queue(name = "hygiene-import", job = HygieneCommand)]
+pub struct HygieneImportQueue;
+
+/// The queue a synchronous method drains.
+#[queue(name = "hygiene-sync", job = HygieneCommand)]
+pub struct HygieneSyncQueue;
 
 /// Minimal processor host.
 #[injectable]
@@ -40,5 +52,43 @@ impl HygieneProcessor {
     async fn transcode(&self, job: Valid<HygieneCommand>) -> nest_rs::core::anyhow::Result<()> {
         let _ = job.into_inner().file;
         Ok(())
+    }
+
+    /// Every tuning key on a dynamic queue: the expansion builds the method's
+    /// options, its queue kind and its throttle through `nest-rs-queue` alone.
+    #[process(
+        queue = HygieneTenantQueue,
+        concurrency = 4,
+        throttle(limit = 10, window = "1m"),
+    )]
+    async fn sync(&self, job: HygieneCommand) -> nest_rs::core::anyhow::Result<()> {
+        let _ = job.file;
+        Ok(())
+    }
+
+    /// A `Checkpoint<S>` parameter, which the expansion opens through the port
+    /// before the body runs.
+    #[process(queue = HygieneImportQueue, transactional = false)]
+    async fn import(
+        &self,
+        job: HygieneCommand,
+        progress: Checkpoint<u32>,
+    ) -> nest_rs::core::anyhow::Result<()> {
+        let _ = (job.file, progress.get());
+        Ok(())
+    }
+
+    /// A synchronous job is called without an `.await`.
+    #[process(queue = HygieneSyncQueue)]
+    fn audit(&self, job: HygieneCommand) -> nest_rs::core::anyhow::Result<()> {
+        let _ = job.file;
+        Ok(())
+    }
+
+    /// A job compiled out takes its handler and its registry entry with it.
+    #[cfg(any())]
+    #[process(queue = crate::does_not_exist::Queue)]
+    async fn compiled_out(&self, job: crate::does_not_exist::Job) -> crate::does_not_exist::Answer {
+        crate::does_not_exist::run(job)
     }
 }

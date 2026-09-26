@@ -24,7 +24,15 @@ mod config;
 /// impl ::nest_rs_config::Namespaced for SeaOrmConfig {
 ///     const NAMESPACE: &'static str = "seaorm";
 /// }
+///
+/// ::nest_rs_config::inventory::submit! {
+///     ::nest_rs_config::ConfigNamespace::new("seaorm")
+/// }
 /// ```
+///
+/// The submission files the namespace with the link-time registry the
+/// unclaimed-variable report reads (`nest_rs_config::unclaimed`), so a variable
+/// spelling this namespace with other separators is reported at boot.
 ///
 /// Must sit **above** the derives so it sees them intact. `namespace` must be
 /// a non-empty lowercase string.

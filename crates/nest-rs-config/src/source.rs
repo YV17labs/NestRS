@@ -26,6 +26,11 @@ use crate::dotenv::dotenv_values;
 /// in-crate map and never written back, so this is side-effect-free and safe to
 /// call from any thread — nothing here mutates the process environment.
 pub fn env_var(name: &str) -> Option<String> {
+    // A name read here is one the unclaimed-variable report must not call
+    // unread: this is the spelling a borrow of another namespace's variable
+    // takes, and the one the kernel-adjacent readers use before any
+    // `ConfigService` exists.
+    crate::unclaimed::witness(name);
     env_var_from(name, dotenv_values())
 }
 

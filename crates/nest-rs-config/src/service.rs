@@ -262,12 +262,20 @@ pub struct ConfigService {
     namespace: String,
     source: Arc<dyn ConfigSource>,
     precedence: Precedence,
+    /// Whether this reader answers from the deployment's environment — the
+    /// one kind whose reads say anything about the variables a deployment
+    /// exported, and so the one kind that triggers the unclaimed-variable
+    /// report ([`crate::unclaimed`]).
+    environment: bool,
 }
 
 impl ConfigService {
     /// A reader scoped to `namespace`, backed by the process/`.env` environment.
     pub fn for_namespace(namespace: &str) -> Self {
-        Self::with_source(namespace, Arc::new(EnvSource))
+        Self {
+            environment: true,
+            ..Self::with_source(namespace, Arc::new(EnvSource))
+        }
     }
 
     /// Build a reader backed by a custom [`ConfigSource`]. The `.env` cascade
@@ -281,6 +289,7 @@ impl ConfigService {
             namespace: namespace.to_owned(),
             source,
             precedence: Precedence::OverDefaults,
+            environment: false,
         }
     }
 
@@ -336,6 +345,16 @@ impl ConfigService {
     /// — for error messages and docs that must cite the exact variable.
     pub fn var_name(&self, key: &str) -> String {
         var_name(&self.namespace, key)
+    }
+
+    /// The namespace this reader resolves keys in, as it was given.
+    pub(crate) fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    /// Whether this reader answers from the deployment's environment.
+    pub(crate) fn reads_environment(&self) -> bool {
+        self.environment
     }
 
     /// Both spellings of `key` in this namespace — see the free [`spellings`].
@@ -469,13 +488,15 @@ impl ConfigService {
         })
     }
 
-    /// Record `var` as read by the config whose `from_env` is in flight.
+    /// Record `var` as read by the config whose `from_env` is in flight, and as
+    /// known to the unclaimed-variable report whether or not one is.
     ///
     /// The one funnel: every public reader reaches the environment through
     /// [`spelled`](Self::spelled), which records both spellings of a key.
     /// `var_name` deliberately does not record — it *cites* a variable in a
     /// message (sometimes a glob, `TLS_*`), which is not a claim on one.
     fn record(&self, var: &str) {
+        crate::unclaimed::witness(var);
         READING.with(|cell| {
             if let Some(read) = cell.borrow_mut().as_mut() {
                 read.insert(var.to_owned());

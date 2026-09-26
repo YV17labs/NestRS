@@ -9,6 +9,10 @@
 //! `<PREFIX>` is `NESTRS` out of the box. A deployment that wants its own brand
 //! on its variables sets `NESTRS_ENV_PREFIX=ACME` on the process, and every name
 //! here follows, `ACME_SEAORM__URL` through `ACME_ENV`.
+//!
+//! A variable set under the prefix that no config reads is reported rather than
+//! ignored — a misspelled key, or a namespace spelled with other separators than
+//! the one the binary links ([`unclaimed`]).
 
 #![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]
@@ -28,9 +32,11 @@ mod environment;
 mod error;
 mod material;
 mod module;
+mod namespace;
 mod service;
 mod setting;
 mod source;
+pub mod unclaimed;
 
 pub use config::{Config, Namespaced, read};
 pub use dotenv::load_cascade;
@@ -38,6 +44,8 @@ pub use environment::Environment;
 pub use error::{ConfigError, Result};
 pub use material::{Material, read_material};
 pub use module::{ConfigFeatureSetup, ConfigModule, ConfigRootSetup, ConfigSetup};
+#[doc(hidden)]
+pub use namespace::ConfigNamespace;
 pub use service::{ConfigService, spellings, var_name};
 pub use setting::Setting;
 pub use source::{ConfigSource, EnvSource, MapSource, env_var};
@@ -51,3 +59,8 @@ pub use nest_rs_config_macros::config;
 // `#[config]` struct needs no `validator` line and no version to align.
 #[doc(hidden)]
 pub use validator;
+
+// `#[config]` files its namespace with the link-time registry through this
+// path, so a `#[config]` struct needs no `inventory` line either.
+#[doc(hidden)]
+pub use nest_rs_core::inventory;

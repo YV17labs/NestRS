@@ -38,8 +38,17 @@ pub trait Namespaced {
 /// default the checked party could replace. It stays `pub` — `nest-rs-social`'s
 /// registry is the third caller — because what had to go is the *override*, not
 /// the reachability: a free function cannot be replaced by the type it checks.
+///
+/// It is also where the environment is checked for variables no config claims
+/// ([`crate::unclaimed`]): the read just finished is the one moment this
+/// namespace's keys are known, so the report runs here, before either error
+/// below can end the boot — a renamed variable is named ahead of the failure
+/// its absence causes.
 pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
     let (value, claim) = crate::service::claiming::<C, _>(|| C::from_env(env, base));
+    if env.reads_environment() {
+        crate::unclaimed::after_read(env.namespace(), value.is_ok());
+    }
     let value = value?;
     claim?;
     Ok(value)

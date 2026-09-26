@@ -33,8 +33,7 @@
 //! apalis's `Abort` rather than a plain error, which apalis would re-queue under
 //! a count of its own, invisible to the method's. The one place a delivery
 //! answers with a plain error is a hand-back Redis refused, where apalis filing
-//! the record back as it was fetched — and so the job running again — is the
-//! point. apalis would kill instead once its own count of the record's
+//! the stored record back — and so the job running again — is the point. apalis would kill instead once its own count of the record's
 //! deliveries reached its cap, so every record this crate files lifts the cap
 //! past any count (`uncapped_context`): hand-backs, deferrals and retries
 //! never add up to an ending the port did not decide.
@@ -489,14 +488,16 @@ fn wait_until(at: i64) -> Duration {
 /// which way it went.
 ///
 /// A task Redis would not schedule is failed rather than acknowledged: it is
-/// still in flight under the record it was stored with, and apalis's answer to a
-/// plain failure files that record back on the schedule, due at once — the job
-/// runs again at the attempt it was fetched at, or, should that answer be lost
-/// too, once a sweep takes it. The record's context lifts apalis's attempt cap,
-/// so no count of earlier deliveries turns the failure into a kill.
-/// Acknowledging it would drop the job, and dead-lettering it would bury a job
-/// over a failure that was never its own. A task scheduled and still in flight
-/// is acknowledged: when the
+/// still in flight, and apalis's answer to a plain failure files its stored
+/// record back on the schedule, due at once — or, should that answer be lost
+/// too, a sweep does. The stored record is the one it was fetched with when
+/// Redis refused the filing, and the one filed when a filing that timed out
+/// landed all the same: the job runs again at the attempt it was fetched at,
+/// or at its next one, sooner than its backoff. The record's context lifts
+/// apalis's attempt cap, so no count of earlier deliveries turns the failure
+/// into a kill. Acknowledging it would drop the job, and dead-lettering it
+/// would bury a job over a failure that was never its own. A task scheduled and
+/// still in flight is acknowledged: when the
 /// acknowledgement lands it takes the task out of flight, and when it does not,
 /// the job is delivered twice — which the line says — and the lease and the
 /// settled mark keep the second delivery from running it twice.
@@ -557,8 +558,8 @@ where
                 job_id = %job,
                 reason = why.as_str(),
                 error = %nest_rs_core::error_message(&error),
-                "job not handed back; apalis files it again as it was fetched, due at once, and it \
-                 runs again at that attempt",
+                "job not handed back; apalis files its stored record again, due at once, and it runs \
+                 again",
             );
             Err(Box::new(error))
         }
@@ -709,8 +710,8 @@ mod tests {
 
         let event = logs.expect_one(
             nest_rs_queue::TARGET,
-            "job not handed back; apalis files it again as it was fetched, due at once, and it \
-             runs again at that attempt",
+            "job not handed back; apalis files its stored record again, due at once, and it runs \
+             again",
         );
         assert_eq!(event.level, "error");
         assert_eq!(event.field("job_id"), Some(delivery.id().to_string()));

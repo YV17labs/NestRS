@@ -120,7 +120,7 @@ call fails:
 | The call that failed | What happens to the job | The line, on `nest_rs::queue` |
 |---|---|---|
 | taking the lease | handed back for a second later; never run unguarded | `job lease not asked for; …`, `warn` |
-| handing a job back | filed again by apalis as it was fetched, due at once, and run again at that attempt — or once swept, when Redis refuses apalis too | `job not handed back; …`, `error` |
+| handing a job back | apalis files its stored record again, due at once — the attempt it was fetched at, or its next one when the filing landed after all — or a sweep does, when Redis refuses apalis too | `job not handed back; …`, `error` |
 | renewing the lease | the attempt runs on, and the renewal is tried again | `job lease not renewed; retrying`, `warn` |
 | writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
 | the acknowledgement | delivered again once swept, and answered by its settled mark without running | `job acknowledgement lost; …`, `error` |
@@ -140,7 +140,8 @@ the `Err` the retry budget decides on.
 
 A shutdown stops fetching at once. Running attempts get the shutdown window,
 less a reserve of five seconds (half the window when that is shorter), to
-finish where they run. What still runs when the window closes is interrupted
+finish where they run, and jobs the replica fetched but had not started still
+start as permits free inside it. What still runs when the window closes is interrupted
 and its job handed back to the queue inside the reserve, so the orchestrator's
 `SIGKILL` never lands on a job the worker still holds — give the pod a grace
 period above the window. A retry's next attempt is already on the schedule, so
@@ -234,9 +235,9 @@ that kept it.
 | `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `30` | The drain window, hand-backs included |
 | `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS` | `300` | How long a silent replica keeps its jobs; at least `5` |
 | `NESTRS_REDIS__WORKER__LEASE_SECS` | `30` | How long a claim outlives its last renewal; at least `1` |
-| `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` | `100` | How often a method asks for jobs while a permit is free — its ceiling, and its idle cost; at least `10` |
+| `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` | `100` | How often a method asks for jobs while a permit is free — its ceiling, and its idle cost; at least `10`, and at most the orphan threshold, since the sweep of silent replicas runs on it |
 
-A value below its floor fails the boot, whether the environment set it or
+A value out of its bounds fails the boot, whether the environment set it or
 `for_root` pinned it, naming the variable.
 
 ## Limits
@@ -265,8 +266,8 @@ A value below its floor fails the boot, whether the environment set it or
   five by default — with none of the port's events. A hand-back Redis refuses is
   answered that way, so the job is delivered again. Every record 7.0 files — a
   push, a delayed push, a retry, a hand-back — lifts the cap past any count, so
-  apalis never ends a job the port has not; a record a 6.x producer filed keeps
-  the cap of five until a retry or a hand-back files it again.
+  apalis's count never ends a job; a record a 6.x producer filed keeps the cap
+  of five until a retry or a hand-back files it again.
 - **A settle Redis refuses closes nothing.** The step that marks a job settled
   also lets go of its unique key and closes its open record; when Redis refuses
   it, the worker says so at `warn`, and until the job's records lapse a push under

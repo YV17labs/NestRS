@@ -15,8 +15,8 @@
 //! A push holding the job back files it on the queue's schedule instead of its
 //! list, due on the second its delay ends, and the producer's [`Promoter`]
 //! moves it onto the list once due. Either way the record carries a context
-//! whose apalis attempt cap no count of deliveries reaches, so apalis never ends
-//! a job the port has not (see `uncapped_context`).
+//! whose apalis attempt cap no count of deliveries reaches, so apalis's count
+//! never ends the job (see `uncapped_context`).
 //!
 //! **Before a job is filed, its records are opened** — its `open` mark, and the
 //! claim on the unique key it was pushed under (see [`crate::layout`]) — so a

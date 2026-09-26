@@ -96,7 +96,8 @@ pub struct RedisWorkerConfig {
     /// a method whose jobs are short starts at most `concurrency` of them per
     /// interval on one replica: a shorter interval raises that ceiling, and costs
     /// Redis a fetch and a sweep of silent peers every interval per method per
-    /// replica, busy or idle. Read from
+    /// replica, busy or idle. The sweep is what hands a crashed replica's jobs
+    /// to the others, so the poll is at most the orphan threshold. Read from
     /// `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS`, at least 10; defaults to 100 ms.
     pub poll_interval: Duration,
 }
@@ -122,7 +123,7 @@ impl Default for RedisWorkerConfig {
 
 impl Config for RedisWorkerConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
+        let config = Self {
             shutdown_timeout: env
                 .parse::<u64>("SHUTDOWN_TIMEOUT_SECS")?
                 .map(Duration::from_secs)
@@ -130,7 +131,25 @@ impl Config for RedisWorkerConfig {
             orphan_after: ORPHAN_AFTER_FLOOR.read(env, base.orphan_after)?,
             lease: LEASE_FLOOR.read(env, base.lease)?,
             poll_interval: POLL_INTERVAL_FLOOR.read(env, base.poll_interval)?,
-        })
+        };
+        // apalis sweeps silent peers' jobs back onto the queue on the poll, not
+        // on a clock of its own: a poll past the orphan threshold would leave a
+        // crashed replica's jobs waiting past it — and one of hours, a typo
+        // away, would never fetch at all while the worker says it started.
+        if config.poll_interval > config.orphan_after {
+            return Err(ConfigError::parse(
+                env.var_name(POLL_INTERVAL_FLOOR.key),
+                format!(
+                    "the poll is {:?}, longer than the orphan threshold of {:?} ({}) — apalis \
+                     sweeps a silent replica's jobs back onto the queue on the poll, so a longer \
+                     one leaves them waiting past the threshold",
+                    config.poll_interval,
+                    config.orphan_after,
+                    env.var_name(ORPHAN_AFTER_FLOOR.key),
+                ),
+            ));
+        }
+        Ok(config)
     }
 }
 
@@ -288,6 +307,53 @@ mod tests {
             );
             assert!(refused.contains("must be at least"), "{refused}");
         }
+    }
+
+    /// A poll longer than the orphan threshold — the sweep that hands a crashed
+    /// replica's jobs over runs on it — is refused naming both variables,
+    /// pinned or from the environment; one equal to it is accepted.
+    #[test]
+    fn a_poll_longer_than_the_orphan_threshold_is_refused_naming_both() {
+        let from_env = RedisWorkerConfig::from_env(
+            &ConfigService::with_vars(
+                "redis__worker",
+                [("ORPHAN_AFTER_SECS", "60"), ("POLL_INTERVAL_MS", "60001")],
+            ),
+            Default::default(),
+        )
+        .expect_err("refused")
+        .to_string();
+        let pinned = RedisWorkerConfig::from_env(
+            &ConfigService::with_vars("redis__worker", Vec::<(&str, &str)>::new()),
+            RedisWorkerConfig {
+                poll_interval: Duration::from_secs(301),
+                ..Default::default()
+            },
+        )
+        .expect_err("refused")
+        .to_string();
+        for refused in [from_env, pinned] {
+            for key in ["POLL_INTERVAL_MS", "ORPHAN_AFTER_SECS"] {
+                assert!(
+                    refused.contains(&nest_rs_config::var_name("redis__worker", key)),
+                    "{refused}"
+                );
+            }
+            assert!(
+                refused.contains("longer than the orphan threshold"),
+                "{refused}"
+            );
+        }
+
+        let equal = RedisWorkerConfig::from_env(
+            &ConfigService::with_vars(
+                "redis__worker",
+                [("ORPHAN_AFTER_SECS", "60"), ("POLL_INTERVAL_MS", "60000")],
+            ),
+            Default::default(),
+        )
+        .expect("a poll as long as the threshold is accepted");
+        assert_eq!(equal.poll_interval, equal.orphan_after);
     }
 
     /// A floor holds for a value pinned in code as it does for the

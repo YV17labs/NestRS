@@ -76,7 +76,8 @@ while one of its permits is free. One ask claims up to the method's
 `concurrency` in a single script — 799 at the most, see
 [Limits](/queue/delivery/#limits) — so a poll can fill every permit at once. The
 poll is `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` — 100 ms by default, 10 at
-the least — or `poll_interval` pinned through `RedisWorkerModule::for_root`.
+the least and the orphan threshold at the most — or `poll_interval` pinned
+through `RedisWorkerModule::for_root`.
 
 **The ceiling is one fetch per poll, per replica.** A method whose
 jobs end within a poll runs at most `concurrency` of them per interval — about

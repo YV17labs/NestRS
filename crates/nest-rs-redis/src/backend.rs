@@ -66,15 +66,16 @@ const FETCHED_BY: &str = "lock_by";
 /// cap lifted past any count a job can reach, and, for a record a worker files
 /// back, the worker it was fetched by.
 ///
-/// **apalis never ends a job on its own.** apalis-redis 0.7 counts every
+/// **apalis's count never ends a job.** apalis-redis 0.7 counts every
 /// delivery of a record — a retry, a throttle's deferral, a hand-back alike —
 /// and a record answered with a plain error once that count has reached the
 /// context's cap, five by default, is killed onto apalis's dead set, with none
 /// of the port's events and no line of the framework's. A plain error is what a
 /// hand-back Redis refused answers, precisely so the job is delivered again, so
 /// the cap would bury the jobs the guard delays most. The port's budget is the
-/// only one a job has: it ends when the port dead-letters it, as apalis's
-/// `Abort`, whatever apalis counted.
+/// only count a job has: apalis then kills a record on an `Abort` alone — the
+/// port's dead letter, or the worker's panic backstop for a panic outside any
+/// attempt.
 ///
 /// Fails only when apalis's serde form no longer names these fields — which the
 /// test below pins, so an apalis upgrade that renames them fails the build's

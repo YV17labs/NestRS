@@ -131,7 +131,7 @@ from.
 | `SHUTDOWN_TIMEOUT_SECS` | the drain window after a shutdown signal: running attempts finish inside it, and one still running as it closes is interrupted and its job handed back to the queue before it ends; defaults to `30` |
 | `ORPHAN_AFTER_SECS` | how long a replica may go without proving it is alive before its peers take the jobs it was running; it proves it every tenth of this, and never more often than once a second. Defaults to `300`, and below `5` is rejected |
 | `LEASE_SECS` | how long a running attempt's claim on its job outlives its last renewal — a second delivery of the job waits it out rather than running beside it, and a crashed replica's job runs again once it lapses. Defaults to `30`, and `0` is rejected |
-| `POLL_INTERVAL_MS` | how often each method of a replica asks Redis for jobs while one of its permits is free, taking up to its `concurrency` each time — so a method's short jobs run at most `concurrency` per poll per replica, and every poll costs Redis a fetch and a sweep, jobs or none. Defaults to `100`, and below `10` is rejected |
+| `POLL_INTERVAL_MS` | how often each method of a replica asks Redis for jobs while one of its permits is free, taking up to its `concurrency` each time — so a method's short jobs run at most `concurrency` per poll per replica, and every poll costs Redis a fetch and a sweep, jobs or none. Defaults to `100`; below `10`, or longer than `ORPHAN_AFTER_SECS`, is rejected |
 
 ## `storage` — `NESTRS_STORAGE__*`
 

@@ -103,7 +103,7 @@ either `job_id` or `worker`:
 | `job lease not asked for; …`, `job lease not renewed; retrying`, `job settled mark not written; …` | `warn` | Redis refused a guard call — see [Delivery on Redis](/queue/delivery/#when-redis-is-slow-or-gone). |
 | `queue fetch failed; …`, `queue worker heartbeat failed; …`, `scheduled jobs not moved onto the queue; …` | `warn` | Redis refused one of apalis's own calls, which it makes again. |
 | `job lease lost while its attempt runs; another delivery may run it too` | `error` | The attempt's lease lapsed under it. |
-| `job not handed back; …` | `error` | Redis refused a hand-back: apalis files the job again as it was fetched, and it runs again at that attempt. |
+| `job not handed back; …` | `error` | Redis refused a hand-back: apalis files the job's stored record again, due at once, and it runs again. |
 | `job acknowledgement lost; …` | `error` | A job stays in flight and is delivered again once swept. |
 | `queue workers did not stop within the shutdown window; …` | `error` | An attempt outlived the drain and its reserve. |
 

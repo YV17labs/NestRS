@@ -17,7 +17,7 @@
 //! - a connection Redis drops while an attempt runs costs the job nothing — it
 //!   completes once, and a replica starting afterwards does not run it again.
 //!
-//! **apalis never ends a job on its own.** apalis counts every delivery of a
+//! **apalis's count never ends a job.** apalis counts every delivery of a
 //! record, hand-backs included, and kills a record answered with a plain error
 //! once that count reaches its cap — five by default — with no event of the
 //! port's. Two tests take a job past the cap on hand-backs alone, by holding
@@ -384,7 +384,7 @@ async fn a_connection_dropped_under_a_running_attempt_costs_the_job_nothing() {
     assert_eq!(RESET.finished(run), 1, "and completed once");
 }
 
-// --- apalis never ends a job on its own ------------------------------------------
+// --- apalis's count never ends a job --------------------------------------------
 
 /// How many hand-backs a job is taken through before the step under test — past
 /// apalis's cap of five deliveries.
@@ -595,8 +595,8 @@ async fn a_job_handed_back_past_apalis_cap_still_runs_when_a_hand_back_fails() {
             admin.clone(),
             apalis_redis::Config::default().set_namespace(&crate::namespace(CAPPED_QUEUE)),
         );
-    let refused = "job not handed back; apalis files it again as it was fetched, due at once, \
-                   and it runs again at that attempt";
+    let refused = "job not handed back; apalis files its stored record again, due at once, and \
+                   it runs again";
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline
         && !logs

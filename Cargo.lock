@@ -3172,6 +3172,7 @@ dependencies = [
  "nest-rs-pipes",
  "nest-rs-queue",
  "nest-rs-redis",
+ "nest-rs-schedule",
  "nest-rs-testing",
  "nest-rs-throttler",
  "nest-rs-worker",

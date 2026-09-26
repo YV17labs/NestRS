@@ -4,16 +4,17 @@
 //! store, [`concurrency`] and [`replicas`] for the worker's fetch guarantees,
 //! [`retries`] for the port's retry budget and backoff as the worker honours
 //! them, [`correlation`] for the trace context that crosses the
-//! producer/consumer process boundary, and [`portable_producer`] for the two
-//! names `RedisQueueModule` binds.
+//! producer/consumer process boundary, [`portable_producer`] for the two
+//! names `RedisQueueModule` binds, and [`schedule`] for the occurrence lock a
+//! job firing once across replicas claims through.
 //!
 //! Needs a reachable Redis — gated out of `unit` by the nextest `binary(e2e)`
-//! filter, and behind the `throttler` feature (off by default, so producer /
-//! consumer apps that never rate-limit pull neither `redis` nor
-//! `nest-rs-throttler`). Run it explicitly:
+//! filter, and behind the `throttler` and `schedule` features (off by default,
+//! so producer / consumer apps that never rate-limit or schedule once pull
+//! neither `nest-rs-throttler` nor `nest-rs-schedule`). Run it explicitly:
 //!
 //! ```bash
-//! cargo nextest run -p nest-rs-redis --features throttler -E 'binary(e2e)'
+//! cargo nextest run -p nest-rs-redis --features throttler,schedule -E 'binary(e2e)'
 //! ```
 //!
 //! The URL comes from `NESTRS_REDIS__URL` (the dev container wires
@@ -27,6 +28,7 @@ mod correlation;
 mod portable_producer;
 mod replicas;
 mod retries;
+mod schedule;
 mod throttler;
 mod tls;
 
@@ -69,6 +71,9 @@ fn redis_config() -> RedisConfig {
 const DB_CONNECTION_DROP: u8 = 11;
 const DB_TLS_FLUSH: u8 = 12;
 const DB_TLS_REFUSED_REOPEN: u8 = 13;
+/// Claims only: every scheduler the `schedule` tests boot claims here, so the
+/// key layout is asserted over the whole database.
+const DB_SCHEDULE: u8 = 14;
 
 /// The dev container Redis's URL on database `db`, for a test whose keys must
 /// not meet another test's — a connection drop aimed at its clients, or a

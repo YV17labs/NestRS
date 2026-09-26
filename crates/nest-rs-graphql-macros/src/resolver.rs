@@ -285,13 +285,23 @@ enum AuthorizeArg {
 
 impl syn::parse::Parse for AuthorizeArg {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        // Each value refused at the token syn stopped on, in a sentence naming
+        // the decorator and the key — or, for a positional, in the attribute's
+        // own shape sentence, which is what the other three edges answer it with.
         if input.peek(Ident) && input.peek2(Token![=]) {
             let name: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
             if name == "bind" {
-                Ok(AuthorizeArg::Bind(input.parse()?))
+                input.parse().map(AuthorizeArg::Bind).map_err(refused(
+                    "bind",
+                    "the path of the service that loads the subject, e.g. \
+                     `bind = FilesService`",
+                ))
             } else if name == "id_arg" {
-                Ok(AuthorizeArg::IdArg(input.parse()?))
+                input.parse().map(AuthorizeArg::IdArg).map_err(refused(
+                    "id_arg",
+                    "the id argument's name as a snake_case identifier, e.g. `id_arg = file_id`",
+                ))
             } else {
                 let spelled = name.to_string();
                 Err(syn::Error::new_spanned(
@@ -300,10 +310,33 @@ impl syn::parse::Parse for AuthorizeArg {
                 ))
             }
         } else {
-            Ok(AuthorizeArg::Positional(input.parse()?))
+            input
+                .parse()
+                .map(AuthorizeArg::Positional)
+                .map_err(|stopped| syn::Error::new(stopped.span(), AUTHORIZE_SHAPE))
         }
     }
 }
+
+/// A keyed `#[authorize]` value of the wrong kind, re-worded at the token syn
+/// stopped on: the shared value sentence, naming the decorator and the key.
+fn refused(key: &'static str, takes: &'static str) -> impl Fn(syn::Error) -> syn::Error {
+    move |stopped| {
+        syn::Error::new(
+            stopped.span(),
+            nest_rs_codegen::takes_value("authorize", Some(key), takes),
+        )
+    }
+}
+
+/// The shape of `#[authorize(...)]` on an operation, quoted whenever what was
+/// written is not it — a wrong number of positionals, or a positional that is
+/// not a path.
+const AUTHORIZE_SHAPE: &str = "expected `#[authorize(Action, Entity)]` — e.g. \
+     `#[authorize(Read, users::Entity)]`; append `unmasked` to keep the class gate but mask the \
+     response yourself. `bind = Service` (optionally `id_arg = ident`) binds the subject from an \
+     id argument, and lets the entity be omitted (derived from `Service::Entity`): \
+     `#[authorize(Update, bind = ArtworksService)]`";
 
 /// Extract and remove a `#[authorize(...)]` attribute. At most one per method.
 fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
@@ -321,16 +354,7 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
         .parse_args_with(Punctuated::<AuthorizeArg, Token![,]>::parse_terminated)?
         .into_iter()
         .collect();
-    let shape_err = || {
-        syn::Error::new_spanned(
-            &attr,
-            "expected `#[authorize(Action, Entity)]` — e.g. `#[authorize(Read, users::Entity)]`; \
-             append `unmasked` to keep the class gate but mask the response yourself. \
-             `bind = Service` (optionally `id_arg = ident`) binds the subject from an id \
-             argument, and lets the entity be omitted (derived from `Service::Entity`): \
-             `#[authorize(Update, bind = ArtworksService)]`",
-        )
-    };
+    let shape_err = || syn::Error::new_spanned(&attr, AUTHORIZE_SHAPE);
     let mut positional: Vec<Path> = Vec::new();
     let mut bind: Option<Path> = None;
     let mut id_arg: Option<Ident> = None;

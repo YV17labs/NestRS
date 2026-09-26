@@ -1,0 +1,17 @@
+error: #[module] `providers` takes a list of provider types, e.g. `providers = [UsersService]`, or `Store as dyn Cache` to register one under a trait object
+  --> tests/integration/diagnostics/module_value_of_the_wrong_kind.rs:11:22
+   |
+11 | #[module(providers = UsersService)]
+   |                      ^^^^^^^^^^^^
+
+error: #[module] `imports` takes a list of modules, e.g. `imports = [UsersModule, HttpModule::for_root(None)]`
+  --> tests/integration/diagnostics/module_value_of_the_wrong_kind.rs:14:20
+   |
+14 | #[module(imports = UsersModule)]
+   |                    ^^^^^^^^^^^
+
+error: #[module] `providers` takes a list of provider types, e.g. `providers = [UsersService]`, or `Store as dyn Cache` to register one under a trait object
+  --> tests/integration/diagnostics/module_value_of_the_wrong_kind.rs:17:23
+   |
+17 | #[module(providers = ["UsersService"])]
+   |                       ^^^^^^^^^^^^^^

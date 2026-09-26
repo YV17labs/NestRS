@@ -325,6 +325,14 @@ struct ModuleArgs {
     providers: Vec<ProviderBinding>,
 }
 
+/// What `imports` takes, in the sentence a value of another kind is refused with.
+const IMPORTS_TAKE: &str =
+    "a list of modules, e.g. `imports = [UsersModule, HttpModule::for_root(None)]`";
+
+/// What `providers` takes — including the one spelling beside a bare type.
+const PROVIDERS_TAKE: &str = "a list of provider types, e.g. `providers = [UsersService]`, or \
+     `Store as dyn Cache` to register one under a trait object";
+
 /// `MyService` or `MyService as dyn MyTrait` (trait-object binding registered
 /// under the trait's `TypeId`).
 enum ProviderBinding {
@@ -389,6 +397,20 @@ impl Parse for ModuleArgs {
                     nest_rs_codegen::needs_a_value("module", &name),
                 ));
             }
+            // Both keys take a list, and a value that is not one is refused as
+            // a value — at the value, naming the decorator and the key — where
+            // `bracketed!` answered syn's `expected square brackets`.
+            let takes = if name == "imports" {
+                IMPORTS_TAKE
+            } else {
+                PROVIDERS_TAKE
+            };
+            if !input.peek(syn::token::Bracket) {
+                return Err(syn::Error::new(
+                    input.span(),
+                    nest_rs_codegen::takes_value("module", Some(&name), takes),
+                ));
+            }
             let content;
             bracketed!(content in input);
 
@@ -399,8 +421,15 @@ impl Parse for ModuleArgs {
                     args.imports.extend(exprs);
                 }
                 "providers" => {
+                    // An entry that is not a type path is the same mistake one
+                    // level in, and syn's `expected identifier` named nothing.
                     let bindings: Punctuated<ProviderBinding, Token![,]> =
-                        Punctuated::parse_terminated(&content)?;
+                        Punctuated::parse_terminated(&content).map_err(|stopped| {
+                            syn::Error::new(
+                                stopped.span(),
+                                nest_rs_codegen::takes_value("module", Some(&name), takes),
+                            )
+                        })?;
                     args.providers.extend(bindings);
                 }
                 // Unreachable: the key was judged above, before anything read

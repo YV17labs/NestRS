@@ -104,7 +104,7 @@ async fn jobs_left_under_the_6x_layout_refuse_the_worker_and_warn_the_producer_o
         waiting.as_str(),
         "6.x key layout",
         "run a 6.x worker until those keys are gone",
-        "RENAME",
+        "RENAMENX",
         &crate::namespace(LEGACY_QUEUE),
     ] {
         assert!(refused.contains(expected), "{expected:?} in {refused}");

@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{App, module};
-use nest_rs_queue::JobProducer;
+use nest_rs_queue::{JobProducer, JobProducerExt};
 use nest_rs_redis::{RedisModule, RedisQueueModule, RedisQueueProducer};
 
 use crate::redis_config;
@@ -37,11 +37,13 @@ async fn the_queue_binding_resolves_both_the_concrete_and_the_portable_producer_
     );
 
     // A live producer, not an empty registration.
-    producer
+    let receipt = producer
         .push_json(
             "nest-rs-redis-e2e-portable",
             serde_json::json!({ "probe": true }),
+            None,
         )
         .await
         .expect("the portable handle pushes onto the same connection");
+    assert_eq!(receipt.queue().as_str(), "nest-rs-redis-e2e-portable");
 }

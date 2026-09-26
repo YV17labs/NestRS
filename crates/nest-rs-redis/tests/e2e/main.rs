@@ -31,9 +31,10 @@ mod tls;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nest_rs_redis::{RedisConfig, RedisConnection};
+use nest_rs_redis::{RedisConfig, RedisConnection, RedisQueueProducer, RedisWorker};
+use nest_rs_testing::{TestApp, TransportHandle};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
@@ -186,5 +187,46 @@ impl DarkeningProxy {
 
     fn dials_while_dark(&self) -> usize {
         self.dials_while_dark.load(Ordering::SeqCst)
+    }
+}
+
+/// One worker replica: its running transport, and the producer its app bound.
+struct Replica {
+    worker: TransportHandle,
+    producer: RedisQueueProducer,
+}
+
+/// Boot the worker app `M` and start its worker — one replica. The app is
+/// leaked: the transport borrows the container it owns, the way a process would
+/// hold it.
+async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
+    let app = TestApp::builder()
+        .module::<M>()
+        .build_headless()
+        .await
+        .expect("the worker app boots against the dev container Redis");
+    app.init().await.expect("init phases");
+    let producer = RedisQueueProducer::clone(
+        &app.container()
+            .get::<RedisQueueProducer>()
+            .expect("RedisQueueModule binds the producer"),
+    );
+    let worker = app
+        .spawn_transport(RedisWorker::default())
+        .await
+        .expect("the queue worker transport starts");
+    Box::leak(Box::new(app));
+    Replica { worker, producer }
+}
+
+/// Poll `ready` until it holds or `within` elapses — the wait a live worker's
+/// asynchronous progress needs, bounded so a regression fails rather than hangs.
+async fn wait_until(within: Duration, ready: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + within;
+    while tokio::time::Instant::now() < deadline {
+        if ready() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

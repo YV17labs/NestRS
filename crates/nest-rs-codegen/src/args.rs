@@ -83,8 +83,36 @@ pub fn reject_duplicate_argument<T: ToTokens>(
 ///
 /// A key that has more to say about *which* values it takes wraps this — see
 /// `job::transactional_needs_a_value`.
+///
+/// **A nested key's remedy goes inside its parentheses**, because that is where
+/// the value it is missing is written. A caller names such a key the way the
+/// other two refusals do — `throttle(limit)` — and spelling the remedy as
+/// `throttle(limit) = ...` prescribes an edit that does not parse. Handled here
+/// rather than at the call site so every nested grammar gets it: the sentence is
+/// shared, so its remedy is too.
 pub fn needs_a_value(attr: &str, name: &str) -> String {
-    format!("#[{attr}] `{name}` needs a value — write `{name} = ...`")
+    format!(
+        "#[{attr}] `{name}` needs a value — write `{}`",
+        with_a_value(name, "..."),
+    )
+}
+
+/// `name`, with ` = {value}` written where its value belongs: after the key, or
+/// inside the innermost parentheses when the key is nested.
+///
+/// **The innermost, not the first** — `split_once('(')` reads `a(b(c))` as
+/// `a` + `b(c))` and renders `a(b(c) = ...)`, which is unbalanced and does not
+/// parse. No two-level grammar exists in the repo today, so that was latent
+/// rather than live; it is written correctly here because the next one inherits
+/// it, and because the whole point of this sentence is that a reader can paste
+/// the remedy.
+fn with_a_value(name: &str, value: &str) -> String {
+    let core = name.trim_end_matches(')');
+    let closes = &name[core.len()..];
+    match core.rsplit_once('(') {
+        Some((parent, key)) => format!("{parent}({key} = {value}{closes}"),
+        None => format!("{name} = {value}"),
+    }
 }
 
 /// The sentence a decorator prints for an argument it does not know, listing the
@@ -144,7 +172,10 @@ pub fn unknown_value(attr: &str, what: &str, name: &str, expected: &[&str]) -> S
 /// a reader which key and not what to write there; every sibling in this module
 /// carries one for the same reason.
 pub fn missing_argument(attr: &str, key: &str, example: &str) -> String {
-    format!("#[{attr}] requires `{key}` — write `{key} = {example}`")
+    format!(
+        "#[{attr}] requires `{key}` — write `{}`",
+        with_a_value(key, example),
+    )
 }
 
 /// The one role attribute a decorated method carries — its index in `attrs`,
@@ -321,6 +352,34 @@ mod tests {
         one_role_per_method("probe", &method.attrs, accepted, "")
             .expect_err("more than one role")
             .to_string()
+    }
+
+    #[test]
+    fn a_nested_keys_remedy_is_written_inside_its_parentheses() {
+        assert_eq!(
+            needs_a_value("process", "throttle(limit)"),
+            "#[process] `throttle(limit)` needs a value — write `throttle(limit = ...)`",
+        );
+        assert_eq!(
+            needs_a_value("process", "retries"),
+            "#[process] `retries` needs a value — write `retries = ...`",
+        );
+    }
+
+    #[test]
+    fn a_nested_remedy_holds_at_any_depth() {
+        assert_eq!(
+            needs_a_value("process", "a(b(c))"),
+            "#[process] `a(b(c))` needs a value — write `a(b(c = ...))`",
+        );
+        assert_eq!(
+            missing_argument("process", "throttle(window)", "\"1m\""),
+            "#[process] requires `throttle(window)` — write `throttle(window = \"1m\")`",
+        );
+        assert_eq!(
+            missing_argument("controller", "path", "\"/users\""),
+            "#[controller] requires `path` — write `path = \"/users\"`",
+        );
     }
 
     #[test]

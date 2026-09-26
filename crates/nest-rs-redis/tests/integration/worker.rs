@@ -1,155 +1,188 @@
-//! `RedisWorker` configure fail-fast and `JobContext` wrapping; no Redis.
+//! `RedisWorker`'s boot, in process and without Redis: what `configure` refuses
+//! before the queue storage is ever opened — methods with no connection, two
+//! methods on one queue, a declaration this backend does not honour — and the
+//! idle serve of an app with nothing to drain.
 //!
-//! Also covers the wire-format envelope: the `#[processor]` macro emits a
-//! handler that unwraps `{ "v": <n>, "payload": <…> }` (current version),
-//! accepts unversioned legacy payloads with a warning, and rejects unknown
-//! versions with an `Err` (not a panic).
+//! What an attempt at a job *is* — the envelope, the budget, the outcome classes
+//! — belongs to the port and is proved by its own suite; what only a live worker
+//! shows is in `e2e`.
 
+use std::any::TypeId;
 use std::future::Future;
+use std::num::NonZeroU32;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::Duration;
 
-use nest_rs_core::{Container, Transport, injectable};
-use nest_rs_queue::{ProcessMethod, Processor, WIRE_FORMAT_VERSION, processor, queue};
+use nest_rs_core::{Container, ReachableProviders, Transport};
+use nest_rs_queue::{HandlerContext, JobError, ProcessMethod, ProcessOptions, QueueKind, Throttle};
 use nest_rs_redis::RedisWorker;
-use nest_rs_worker::{JobContext, JobSettlement, JobTransaction};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-type ProbeFuture = Pin<Box<dyn Future<Output = Result<(), nest_rs_queue::JobError>> + Send>>;
+type Handled = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
 
-// A link-time `ProcessMethod` so `RedisWorker::configure` sees at least one
-// processor in this test binary and exercises the missing-connection branch.
-fn probe_handler(_payload: serde_json::Value, _container: Container) -> ProbeFuture {
+fn never_runs(_payload: serde_json::Value, _context: HandlerContext) -> Handled {
     Box::pin(async { Ok(()) })
 }
 
+struct ProbeHost;
+struct FirstClaimant;
+struct SecondClaimant;
+struct ThrottledHost;
+struct CheckpointHost;
+struct DynamicHost;
+
 nest_rs_core::inventory::submit! {
-    ProcessMethod {
-        origin: module_path!(),
-        name: "probe::process",
-        queue: "test-queue",
-        retries: 0,
-        provider_type_id: || std::any::TypeId::of::<ProbeMarker>(),
-        handler: probe_handler,
-    }
+    ProcessMethod::new(
+        module_path!(), "ProbeHost::run", "probe", QueueKind::Static,
+        ProcessOptions::DEFAULT,
+        TypeId::of::<ProbeHost>, never_runs,
+    )
 }
 
-struct ProbeMarker;
+// Two entries draining one queue — the shape a backend used to accept, building
+// one apalis worker per entry so both polled the same stream.
+nest_rs_core::inventory::submit! {
+    ProcessMethod::new(
+        module_path!(), "FirstClaimant::drain", "contested", QueueKind::Static,
+        ProcessOptions::DEFAULT.with_retries(1),
+        TypeId::of::<FirstClaimant>, never_runs,
+    )
+}
+
+nest_rs_core::inventory::submit! {
+    ProcessMethod::new(
+        module_path!(), "SecondClaimant::drain", "contested", QueueKind::Static,
+        ProcessOptions::DEFAULT.with_retries(9),
+        TypeId::of::<SecondClaimant>, never_runs,
+    )
+}
+
+nest_rs_core::inventory::submit! {
+    ProcessMethod::new(
+        module_path!(), "ThrottledHost::run", "throttled", QueueKind::Static,
+        ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_secs(60))),
+        TypeId::of::<ThrottledHost>, never_runs,
+    )
+}
+
+nest_rs_core::inventory::submit! {
+    ProcessMethod::new(
+        module_path!(), "CheckpointHost::run", "resumable", QueueKind::Static,
+        ProcessOptions::DEFAULT.with_checkpoint(true),
+        TypeId::of::<CheckpointHost>, never_runs,
+    )
+}
+
+nest_rs_core::inventory::submit! {
+    ProcessMethod::new(
+        module_path!(), "DynamicHost::run", "tenant", QueueKind::Dynamic,
+        ProcessOptions::DEFAULT,
+        TypeId::of::<DynamicHost>, never_runs,
+    )
+}
+
+/// A container reaching exactly `providers` — the access graph's filter, which
+/// decides which of the `ProcessMethod`s linked into this binary a worker sees.
+fn reaching(providers: &[TypeId]) -> Container {
+    Container::builder()
+        .provide(ReachableProviders(providers.iter().copied().collect()))
+        .build()
+}
+
+/// What `configure` answers for an app reaching exactly what `container` seeds.
+async fn configure(container: &Container) -> anyhow::Result<()> {
+    RedisWorker::new().configure(container).await
+}
 
 #[tokio::test]
 async fn configure_fails_when_processors_exist_without_a_connection() {
     // Name the reachable provider rather than leaving the set unseeded: with no
     // gating, every `ProcessMethod` linked into this binary is visible, so a
-    // later test adding one could route this boot into a different branch.
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(
-            [std::any::TypeId::of::<ProbeMarker>()]
-                .into_iter()
-                .collect(),
-        ))
-        .build();
-
-    let err = RedisWorker::new()
-        .configure(&container)
+    // later entry could route this boot into a different refusal.
+    let refusal = configure(&reaching(&[TypeId::of::<ProbeHost>()]))
         .await
-        .expect_err("processors without RedisConnection abort configure");
+        .expect_err("processors without RedisConnection abort configure")
+        .to_string();
     assert!(
-        err.to_string().contains("RedisConnection"),
-        "the error names the missing connection: {err}",
+        refusal.contains("RedisConnection"),
+        "the error names the missing connection: {refusal}",
     );
-}
-
-// Two more link-time entries draining one queue — the shape a backend used to
-// accept, building one apalis worker per entry so both polled the same stream.
-struct FirstClaimant;
-struct SecondClaimant;
-
-nest_rs_core::inventory::submit! {
-    ProcessMethod {
-        origin: module_path!(),
-        name: "FirstClaimant::drain",
-        queue: "contested-queue",
-        retries: 1,
-        provider_type_id: || std::any::TypeId::of::<FirstClaimant>(),
-        handler: probe_handler,
-    }
-}
-
-nest_rs_core::inventory::submit! {
-    ProcessMethod {
-        origin: module_path!(),
-        name: "SecondClaimant::drain",
-        queue: "contested-queue",
-        retries: 9,
-        provider_type_id: || std::any::TypeId::of::<SecondClaimant>(),
-        handler: probe_handler,
-    }
 }
 
 #[tokio::test]
 async fn two_processors_claiming_one_queue_fail_configure() {
-    // Only the two claimants are reachable: the probe entry above would
-    // otherwise trip the missing-connection branch first and hide this one.
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(
-            [
-                std::any::TypeId::of::<FirstClaimant>(),
-                std::any::TypeId::of::<SecondClaimant>(),
-            ]
-            .into_iter()
-            .collect(),
-        ))
-        .build();
-
-    let err = RedisWorker::new()
-        .configure(&container)
-        .await
-        .expect_err("two claimants on one queue abort configure");
-    let msg = err.to_string();
-    assert!(msg.contains("contested-queue"), "names the queue: {msg}");
-    assert!(
-        msg.contains("FirstClaimant::drain") && msg.contains("SecondClaimant::drain"),
-        "names both claimants: {msg}",
-    );
+    let refusal = configure(&reaching(&[
+        TypeId::of::<FirstClaimant>(),
+        TypeId::of::<SecondClaimant>(),
+    ]))
+    .await
+    .expect_err("two claimants on one queue abort configure")
+    .to_string();
+    for part in ["contested", "FirstClaimant::drain", "SecondClaimant::drain"] {
+        assert!(
+            refusal.contains(part),
+            "the refusal names {part}: {refusal}"
+        );
+    }
 }
 
 #[tokio::test]
 async fn a_processor_another_app_owns_does_not_contest_this_queue() {
-    // The check runs *after* module-gating, so a second claimant linked into
+    // Discovery refuses *after* module-gating, so a second claimant linked into
     // the binary but outside this app's module tree is not this app's problem —
     // the whole point of per-app subsets.
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(
-            [std::any::TypeId::of::<FirstClaimant>()]
-                .into_iter()
-                .collect(),
-        ))
-        .build();
-
-    let err = RedisWorker::new()
-        .configure(&container)
+    let refusal = configure(&reaching(&[TypeId::of::<FirstClaimant>()]))
         .await
-        .expect_err("one claimant still needs a connection");
+        .expect_err("one claimant still needs a connection")
+        .to_string();
     assert!(
-        err.to_string().contains("RedisConnection"),
-        "it got past the duplicate check to the connection check: {err}",
+        refusal.contains("RedisConnection"),
+        "it got past the duplicate check to the connection check: {refusal}",
     );
+}
+
+/// This backend declares no optional capability, so a method declaring one is
+/// refused at boot, naming the method, what it needs and this backend — never
+/// served while the declaration is dropped.
+#[tokio::test]
+async fn a_declaration_redis_does_not_honour_fails_configure_naming_the_backend() {
+    for (host, method, needs) in [
+        (
+            TypeId::of::<ThrottledHost>(),
+            "ThrottledHost::run",
+            "throttling",
+        ),
+        (
+            TypeId::of::<CheckpointHost>(),
+            "CheckpointHost::run",
+            "checkpoints",
+        ),
+        (
+            TypeId::of::<DynamicHost>(),
+            "DynamicHost::run",
+            "dynamic queues",
+        ),
+    ] {
+        let refusal = configure(&reaching(&[host]))
+            .await
+            .expect_err("a declaration the backend does not honour is refused")
+            .to_string();
+        for part in [method, needs, "`redis` queue backend"] {
+            assert!(
+                refusal.contains(part),
+                "the refusal names {part}: {refusal}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
 async fn configure_succeeds_with_no_processors_and_serve_idles_until_cancel() {
-    // Mark our link-time probe entry unreachable so configure() sees zero
-    // methods in this test (the access graph is the same filter the real
-    // worker uses at boot).
-    let container = Container::builder()
-        .provide(nest_rs_core::ReachableProviders(Default::default()))
-        .build();
+    // Nothing reachable, so configure() sees zero methods — the access graph is
+    // the same filter the real worker uses at boot.
     let mut worker = RedisWorker::new();
     worker
-        .configure(&container)
+        .configure(&reaching(&[]))
         .await
         .expect("an empty worker configures");
 
@@ -162,461 +195,16 @@ async fn configure_succeeds_with_no_processors_and_serve_idles_until_cancel() {
         .expect("serve returns Ok");
 }
 
-tokio::task_local! {
-    static MARKER: u8;
-}
-
-static OBSERVED_MARKER: AtomicBool = AtomicBool::new(false);
-
-struct MarkerContext;
-
-impl JobContext for MarkerContext {
-    fn scope<'a>(
-        &'a self,
-        _transaction: JobTransaction,
-        inner: Pin<Box<dyn Future<Output = bool> + Send + 'a>>,
-    ) -> Pin<Box<dyn Future<Output = JobSettlement> + Send + 'a>> {
-        Box::pin(async move {
-            MARKER.scope(7, inner).await;
-            JobSettlement::Settled
-        })
-    }
-}
-
-struct ProbeProcessor;
-
-#[async_trait::async_trait]
-impl nest_rs_queue::Processor for ProbeProcessor {
-    type Job = u8;
-
-    async fn process(&self, _job: Self::Job) -> anyhow::Result<()> {
-        if MARKER.try_with(|m| *m) == Ok(7) {
-            OBSERVED_MARKER.store(true, Ordering::SeqCst);
-        }
-        Ok(())
-    }
-}
-
-#[tokio::test]
-async fn processors_run_inside_the_bound_job_context() {
-    let container = Container::builder()
-        .provide_dyn::<dyn JobContext>(Arc::new(MarkerContext))
-        .build();
-
-    let job_context = container
-        .get_dyn::<dyn JobContext>()
-        .expect("JobContext bound");
-    nest_rs_worker::run_in_job_context(
-        Some(&job_context),
-        JobTransaction::PerAttempt,
-        async {
-            ProbeProcessor.process(1).await.expect("job succeeds");
-        },
-        |()| true,
-        |_| (),
-    )
-    .await;
-
-    assert!(
-        OBSERVED_MARKER.load(Ordering::SeqCst),
-        "the processor ran inside the bound JobContext",
-    );
-}
-
-// ---- Wire-format envelope (Bug 4) ------------------------------------------
-
-const ENVELOPE_QUEUE: &str = "envelope-test";
-
-static ENVELOPE_LAST_N: AtomicU32 = AtomicU32::new(0);
-
-#[derive(Clone, Serialize, Deserialize)]
-struct EnvelopeCommand {
-    n: u32,
-}
-
-// The queue's identity — wire name and payload type in one artifact, named by
-// both sides.
-#[queue(name = "envelope-test", job = EnvelopeCommand)]
-struct EnvelopeTestQueue;
-
-#[injectable]
-#[derive(Default)]
-struct EnvelopeProc;
-
-#[processor]
-impl EnvelopeProc {
-    #[process(queue = EnvelopeTestQueue, retries = 0)]
-    async fn handle(&self, job: EnvelopeCommand) -> anyhow::Result<()> {
-        ENVELOPE_LAST_N.store(job.n, Ordering::SeqCst);
-        Ok(())
-    }
-}
-
-fn envelope_handler() -> nest_rs_queue::JobHandler {
-    nest_rs_core::inventory::iter::<ProcessMethod>()
-        .find(|m| m.queue == ENVELOPE_QUEUE)
-        .expect("the #[processor] above submits a ProcessMethod for envelope-test")
-        .handler
-}
-
-fn envelope_container() -> Container {
-    Container::builder().provide(EnvelopeProc).build()
-}
-
-#[tokio::test]
-async fn v1_envelope_is_unwrapped_and_processed() {
-    ENVELOPE_LAST_N.store(0, Ordering::SeqCst);
-    let payload = json!({
-        "v": WIRE_FORMAT_VERSION,
-        "payload": { "n": 42 },
-    });
-    envelope_handler()(payload, envelope_container())
-        .await
-        .expect("v=1 envelope drives the user method to Ok(())");
-    assert_eq!(
-        ENVELOPE_LAST_N.load(Ordering::SeqCst),
-        42,
-        "the user method saw the unwrapped payload",
-    );
-}
-
-#[tokio::test]
-async fn unversioned_legacy_payload_is_still_processed() {
-    ENVELOPE_LAST_N.store(0, Ordering::SeqCst);
-    // A raw payload — no `v` / `payload` wrapper — left in Redis from a prior
-    // deploy must drain successfully (with a warn log) so a rolling deploy
-    // doesn't drop jobs.
-    let legacy = json!({ "n": 7 });
-    let logs = nest_rs_testing::LogCapture::install();
-    envelope_handler()(legacy, envelope_container())
-        .await
-        .expect("legacy unversioned payload is decoded directly");
-    assert_eq!(
-        ENVELOPE_LAST_N.load(Ordering::SeqCst),
-        7,
-        "the user method saw the raw legacy payload",
-    );
-
-    // The warn is the whole point of accepting the payload: it runs *and* tells
-    // the operator there is a pre-envelope queue left to drain. Running quietly
-    // is the same defect as dropping the job, one incident later — and the
-    // observability page documents the message and both fields verbatim.
-    let event = logs.expect_one(
-        nest_rs_queue::TARGET,
-        "processed an unversioned job payload",
-    );
-    assert_eq!(event.level, "warn");
-    assert_eq!(
-        event.field("queue").as_deref(),
-        Some(ENVELOPE_QUEUE),
-        "the warn names the queue to drain",
-    );
-    assert!(
-        event.field("hint").is_some(),
-        "a bare warn is the defect — the hint says what to do about it",
-    );
-}
-
-#[tokio::test]
-async fn newer_wire_version_returns_err_pointing_at_the_producer() {
-    ENVELOPE_LAST_N.store(0, Ordering::SeqCst);
-    let from_the_future = json!({
-        "v": (WIRE_FORMAT_VERSION as u64) + 99,
-        "payload": { "n": 1 },
-    });
-    let err = envelope_handler()(from_the_future, envelope_container())
-        .await
-        .expect_err("an unknown wire-format version must surface as Err, not a panic");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("unsupported job wire-format version"),
-        "the error names the regression: {msg}",
-    );
-    // Direction-specific guidance — a newer producer means roll back the
-    // consumer or wait for the producer to drain (not "drain the queue").
-    assert!(
-        msg.contains("newer release"),
-        "newer-version error explains the producer is ahead: {msg}",
-    );
-    assert!(
-        msg.contains("roll back this consumer") || msg.contains("wait for the producer"),
-        "newer-version error tells the operator what to do: {msg}",
-    );
-    // QUEUE-I4: a wrong wire version is deterministic — retrying re-fails
-    // identically, so it must be classified NON-retryable (abort + dead-letter),
-    // not retried through the budget.
-    assert!(
-        !err.retryable,
-        "a deterministic wire-version failure must be non-retryable",
-    );
-    assert_eq!(
-        ENVELOPE_LAST_N.load(Ordering::SeqCst),
-        0,
-        "the user method never ran",
-    );
-}
-
-#[tokio::test]
-async fn older_wire_version_returns_err_pointing_at_the_drain_path() {
-    // A pinned-version producer (v=0) talking to a v=1 consumer must surface
-    // the *opposite* guidance from the newer-version branch — drain the
-    // queue or pin the consumer back. Bug 2C: pre-fix, the message said
-    // "the producer is from a newer release" regardless of direction.
-    ENVELOPE_LAST_N.store(0, Ordering::SeqCst);
-    let from_the_past = json!({
-        "v": 0u64,
-        "payload": { "n": 1 },
-    });
-    let err = envelope_handler()(from_the_past, envelope_container())
-        .await
-        .expect_err("an older wire-format version must surface as Err, not a panic");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("unsupported job wire-format version"),
-        "the error names the regression: {msg}",
-    );
-    assert!(
-        msg.contains("older release"),
-        "older-version error names the producer direction: {msg}",
-    );
-    assert!(
-        msg.contains("drain the queue") || msg.contains("pin the consumer"),
-        "older-version error tells the operator what to do: {msg}",
-    );
-    assert_eq!(
-        ENVELOPE_LAST_N.load(Ordering::SeqCst),
-        0,
-        "the user method never ran",
-    );
-}
-
-#[tokio::test]
-async fn missing_provider_returns_err_without_panicking() {
-    // Bug 3: the macro used to `.expect()` a missing provider and crash the
-    // apalis worker process. It must now surface an `Err` so apalis records
-    // the failure, retries per budget, and the worker keeps draining other
-    // queues.
-    let container = Container::builder().build();
-    let payload = json!({
-        "v": WIRE_FORMAT_VERSION,
-        "payload": { "n": 1 },
-    });
-    let err = envelope_handler()(payload, container)
-        .await
-        .expect_err("a missing provider must surface as Err, not a panic");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("not registered"),
-        "the error names the wiring defect: {msg}",
-    );
-}
-
-#[tokio::test]
-async fn payload_schema_drift_returns_err_without_panicking() {
-    // Bug 3 sibling: a v=1 envelope whose payload doesn't match `EnvelopeCommand`
-    // must surface as Err so apalis applies the retry budget — not crash the
-    // worker process via a panic.
-    let payload = json!({
-        "v": WIRE_FORMAT_VERSION,
-        "payload": { "wrong_field": "nope" },
-    });
-    let err = envelope_handler()(payload, envelope_container())
-        .await
-        .expect_err("a schema drift must surface as Err, not a panic");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("failed to deserialize job"),
-        "the error names the decode failure: {msg}",
-    );
-}
-
-// ---- Per-argument pipe on a #[process] job argument ------------------------
-
-const PIPE_QUEUE: &str = "pipe-arg-test";
-
-static PIPE_SEEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-// The pipe carrier is the *handler* type; the queue's `job` is the wire payload
-// the pipe runs on.
-#[queue(name = "pipe-arg-test", job = String)]
-struct PipeArgTestQueue;
-
-#[injectable]
-#[derive(Default)]
-struct PipeProc;
-
-#[processor]
-impl PipeProc {
-    // `Piped<Trim, String>`: the wire payload is a `String`; the handler body
-    // receives it already trimmed — the queue analog of the HTTP / GraphQL form.
-    #[process(queue = PipeArgTestQueue, retries = 0)]
-    async fn handle(
-        &self,
-        name: nest_rs_pipes::Piped<nest_rs_pipes::Trim, String>,
-    ) -> anyhow::Result<()> {
-        *PIPE_SEEN.lock().unwrap() = Some(name.into_inner());
-        Ok(())
-    }
-}
-
-fn pipe_handler() -> nest_rs_queue::JobHandler {
-    nest_rs_core::inventory::iter::<ProcessMethod>()
-        .find(|m| m.queue == PIPE_QUEUE)
-        .expect("the #[processor] above submits a ProcessMethod for pipe-arg-test")
-        .handler
-}
-
-#[tokio::test]
-async fn a_piped_job_argument_runs_the_pipe_before_the_handler() {
-    *PIPE_SEEN.lock().unwrap() = None;
-    let payload = json!({ "v": WIRE_FORMAT_VERSION, "payload": "  hi  " });
-    pipe_handler()(payload, Container::builder().provide(PipeProc).build())
-        .await
-        .expect("the piped job processes");
-    assert_eq!(
-        PIPE_SEEN.lock().unwrap().as_deref(),
-        Some("hi"),
-        "the handler saw the trimmed value, not the raw payload",
-    );
-}
-
-// ---- Strict envelope detection (Bug X1 + X2) -------------------------------
+// ---- Panic backstop ----------------------------------------------------------
 //
-// The envelope is `{ v: <int>, payload: <…> }` — exactly two keys, `v` a
-// non-negative integer (a JSON Number, optionally float-valued like `1.0`).
-// Anything else (extra keys, string `v`, negative `v`) is a *user job* that
-// happens to share the field names — fall through to the legacy raw-decode
-// path so the user method gets its data and no false-positive envelope error
-// triggers.
-
-const STRICT_QUEUE: &str = "strict-envelope-test";
-
-static STRICT_LAST_V: AtomicU32 = AtomicU32::new(0);
-static STRICT_LAST_PAYLOAD: AtomicU32 = AtomicU32::new(0);
-
-#[derive(Clone, Serialize, Deserialize)]
-struct StrictCommand {
-    // Same two field names as the wire envelope — this is the bug:
-    // detection that only looks at "has v + has payload" mis-classifies
-    // this user job as an envelope.
-    v: u32,
-    payload: u32,
-    // A third field distinguishes a real user job from the wire envelope.
-    id: u32,
-}
-
-#[queue(name = "strict-envelope-test", job = StrictCommand)]
-struct StrictEnvelopeTestQueue;
-
-#[injectable]
-#[derive(Default)]
-struct StrictProc;
-
-#[processor]
-impl StrictProc {
-    #[process(queue = StrictEnvelopeTestQueue, retries = 0)]
-    async fn handle(&self, job: StrictCommand) -> anyhow::Result<()> {
-        STRICT_LAST_V.store(job.v, Ordering::SeqCst);
-        STRICT_LAST_PAYLOAD.store(job.payload, Ordering::SeqCst);
-        Ok(())
-    }
-}
-
-fn strict_handler() -> nest_rs_queue::JobHandler {
-    nest_rs_core::inventory::iter::<ProcessMethod>()
-        .find(|m| m.queue == STRICT_QUEUE)
-        .expect("the #[processor] above submits a ProcessMethod for strict-envelope-test")
-        .handler
-}
-
-fn strict_container() -> Container {
-    Container::builder().provide(StrictProc).build()
-}
+// The port catches a handler's panic inside the attempt, so this layer sees none
+// of those. It stays for a panic outside that call — apalis's own fetch and
+// decode path, the closure prologue — and it has to turn one into apalis's
+// `Abort`, which dead-letters, rather than let it unwind the worker. This drives
+// the layer the worker wires, over a service that panics.
 
 #[tokio::test]
-async fn user_job_with_v_and_payload_keys_plus_a_third_is_not_an_envelope() {
-    STRICT_LAST_V.store(0, Ordering::SeqCst);
-    STRICT_LAST_PAYLOAD.store(0, Ordering::SeqCst);
-    // Three keys (v, payload, id) — the third key disqualifies the object
-    // from being an envelope. The legacy raw-decode path must drive the
-    // user method, not the envelope branch.
-    let user_job = json!({
-        "v": 9,
-        "payload": 100,
-        "id": 42,
-    });
-    strict_handler()(user_job, strict_container())
-        .await
-        .expect("a user job with v+payload+id keys decodes as the user job");
-    assert_eq!(STRICT_LAST_V.load(Ordering::SeqCst), 9);
-    assert_eq!(STRICT_LAST_PAYLOAD.load(Ordering::SeqCst), 100);
-}
-
-#[tokio::test]
-async fn float_valued_v_is_accepted_as_envelope_version() {
-    ENVELOPE_LAST_N.store(0, Ordering::SeqCst);
-    // A non-Rust producer may serialize `v` as `1.0` rather than `1` — the
-    // envelope detection accepts an integer-valued float (current
-    // WIRE_FORMAT_VERSION as f64). The user method then runs normally.
-    let payload = json!({
-        "v": WIRE_FORMAT_VERSION as f64,
-        "payload": { "n": 21 },
-    });
-    envelope_handler()(payload, envelope_container())
-        .await
-        .expect("v=1.0 (float) envelope is unwrapped like v=1");
-    assert_eq!(ENVELOPE_LAST_N.load(Ordering::SeqCst), 21);
-}
-
-#[tokio::test]
-async fn string_v_falls_through_to_legacy_path() {
-    // `"v": "1"` is not a JSON Number — outside the contract. Detection
-    // must reject it as an envelope and fall through to legacy decode.
-    // The legacy decode then fails for EnvelopeCommand (because the top-level
-    // shape is `{v, payload}` instead of `{n}`), surfacing as Err — not a
-    // hard envelope-format error and not a panic.
-    let payload = json!({
-        "v": "1",
-        "payload": { "n": 1 },
-    });
-    let err = envelope_handler()(payload, envelope_container())
-        .await
-        .expect_err("string `v` is not an envelope; legacy decode then fails for the wrong shape");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("failed to deserialize job"),
-        "string-v falls through to legacy decode, which then surfaces a schema-drift error: {msg}",
-    );
-}
-
-#[tokio::test]
-async fn negative_v_falls_through_to_legacy_path() {
-    // `"v": -1` is a JSON Number but not non-negative — outside the
-    // contract. Detection must reject and fall through.
-    let payload = json!({
-        "v": -1,
-        "payload": { "n": 1 },
-    });
-    let err = envelope_handler()(payload, envelope_container())
-        .await
-        .expect_err("negative `v` is not an envelope; legacy decode fails for the wrong shape");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("failed to deserialize job"),
-        "negative-v falls through to legacy decode: {msg}",
-    );
-}
-
-// ---- Panic survival (Bug X3) -----------------------------------------------
-//
-// A panic inside a `#[process]` method must surface as `Err` (caught by
-// `CatchPanicLayer`) — never as an aborted worker. This test asserts the
-// layer chain is wired by exercising the layered service directly: the
-// chain converts the panic to `Error::Abort` so apalis treats it as a
-// failed job and the worker keeps draining the queue.
-
-#[tokio::test]
-async fn catch_panic_layer_converts_a_panicking_handler_into_err() {
+async fn the_panic_backstop_turns_a_panic_into_an_apalis_abort() {
     use apalis::layers::catch_panic::CatchPanicLayer;
     use std::task::{Context, Poll};
     use tower::{Layer, Service};
@@ -637,25 +225,25 @@ async fn catch_panic_layer_converts_a_panicking_handler_into_err() {
 
         fn call(&mut self, _req: apalis::prelude::Request<u8, ()>) -> Self::Future {
             Box::pin(async {
-                // Simulate a user handler panicking (e.g. an `unwrap` on a
-                // None value inside `#[process]`).
-                panic!("simulated user-handler panic");
+                panic!("simulated panic outside the attempt");
             })
         }
     }
 
-    let layer = CatchPanicLayer::new();
-    let mut service = layer.layer(PanickingService);
-    let request = apalis::prelude::Request::new(0u8);
-    let response = service.call(request).await;
+    let mut service = CatchPanicLayer::new().layer(PanickingService);
+    let response = service.call(apalis::prelude::Request::new(0u8)).await;
 
+    let Err(error) = response else {
+        panic!("the layer must convert the panic into an apalis error");
+    };
     assert!(
-        response.is_err(),
-        "CatchPanicLayer must convert the panic into an apalis Error",
+        matches!(error, apalis::prelude::Error::Abort(_)),
+        "an Abort, which apalis's acknowledgement kills rather than re-queues: {error}",
     );
-    let err_msg = response.unwrap_err().to_string();
     assert!(
-        err_msg.contains("PanicError") && err_msg.contains("simulated user-handler panic"),
-        "the error surfaces the panic message: {err_msg}",
+        error
+            .to_string()
+            .contains("simulated panic outside the attempt"),
+        "the error carries the panic message: {error}",
     );
 }

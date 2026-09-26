@@ -7,16 +7,18 @@
 //!
 //! - **queue** — [`RedisQueueModule`] binds the portable `dyn JobProducer`
 //!   over it: inject `Arc<dyn JobProducer>` and call
-//!   `.push_to::<Q>(job).await?`.
+//!   `.push(AudioQueue, job, None).await?`.
 //! - **worker** — [`RedisWorkerModule`] attaches the [`RedisWorker`] transport,
 //!   which drains the `ProcessMethod` inventory the `#[processor]` macro feeds
-//!   and runs one apalis worker per method. Producer-only apps skip it.
+//!   and runs one apalis worker per method, at the concurrency the method
+//!   declares. Producer-only apps skip it.
 //! - **throttler** (feature) — [`RedisThrottlerModule`] binds the
 //!   cross-process `dyn ThrottlerStore` the `nest-rs-throttler` guard injects.
 //!
 //! The queue contract lives in [`nest-rs-queue`](::nest_rs_queue) (the
-//! [`Job`] marker, the [`Processor`] trait, the [`ProcessMethod`] inventory);
-//! this crate is Redis's binding of it, built on apalis-redis. The user-facing
+//! [`Job`] marker, the [`ProcessMethod`] inventory, the [`JobProducer`] seam and
+//! the capabilities a backend declares); this crate is Redis's binding of it,
+//! built on apalis-redis. The user-facing
 //! storage is **Redis**; apalis is an implementation detail this crate hides,
 //! which is why the crate, its namespace and its span target all carry the
 //! storage's word. Swapping storage means writing a different
@@ -24,8 +26,8 @@
 //! application code stay unchanged.
 //!
 //! [`Job`]: ::nest_rs_queue::Job
-//! [`Processor`]: ::nest_rs_queue::Processor
 //! [`ProcessMethod`]: ::nest_rs_queue::ProcessMethod
+//! [`JobProducer`]: ::nest_rs_queue::JobProducer
 
 #![warn(missing_docs)]
 
@@ -36,6 +38,7 @@
 /// say where an event came from, and connecting to Redis is neither port's.
 pub const TARGET: &str = "nest_rs::redis";
 
+mod backend;
 mod config;
 mod connection;
 mod error;

@@ -1,0 +1,8 @@
+error: #[queue] applies to a unit struct, and this is a struct with fields — a queue's identity is a type carrying no data, the marker a push and a `#[process]` both name (e.g. `#[queue(name = "audio", job = TranscodeCommand)] pub struct AudioQueue;`)
+  --> tests/integration/diagnostics/queue_on_a_struct_with_fields.rs:13:18
+   |
+13 |   struct DemoQueue {
+   |  __________________^
+14 | |     name: String,
+15 | | }
+   | |_^

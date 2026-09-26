@@ -1,0 +1,5 @@
+error: #[process] takes at most one `throttle(limit)`
+  --> tests/integration/diagnostics/process_throttle_key_repeated.rs:21:55
+   |
+21 |     #[process(queue = DemoQueue, throttle(limit = 10, limit = 20, window = "1m"))]
+   |                                                       ^^^^^

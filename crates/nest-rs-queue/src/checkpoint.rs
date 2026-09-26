@@ -1,0 +1,248 @@
+//! [`Checkpoint`] — progress a job keeps across its retries and redeliveries —
+//! and [`CheckpointStore`], what a backend implements to keep it.
+//!
+//! **The latest save, whatever the backend's own snapshot.** A backend reads a
+//! job's state when the delivery starts; this crate remembers every save made
+//! through the delivery, so an attempt run again inside one delivery reads what
+//! the attempt before it saved, on every backend alike.
+//!
+//! **Never inside the attempt's transaction.** A checkpoint is written to the
+//! queue backend at once, while a transactional attempt rolls its database work
+//! back when it fails — its retry would resume past work that was undone. So the
+//! decorator refuses a `Checkpoint<_>` parameter unless the method declares
+//! `transactional = false`.
+//!
+//! **Gone with the job.** The port clears a job's checkpoint when the job
+//! reaches its terminal outcome — it completed, or it dead-lettered — and a
+//! backend clears it when it cancels the job; a retry, on this delivery or a
+//! later one, keeps it.
+
+use std::sync::{Arc, Mutex, PoisonError};
+
+use async_trait::async_trait;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+
+use crate::{JobError, QueueError};
+
+/// Where a backend keeps one job's checkpoint — keyed by the job's
+/// [`JobId`](crate::JobId), so every delivery of the job reads the same one.
+#[async_trait]
+pub trait CheckpointStore: Send + Sync + 'static {
+    /// The state saved for the job before this delivery started, if any.
+    async fn load(&self) -> Result<Option<Value>, QueueError>;
+
+    /// Replace the job's saved state. It lasts through the job's retries and a
+    /// redelivery after a crash, and goes when the job does.
+    async fn save(&self, state: Value) -> Result<(), QueueError>;
+
+    /// Remove the job's saved state. Called by the port once the job reached
+    /// its terminal outcome, so no delivery of it can read the state again.
+    async fn clear(&self) -> Result<(), QueueError>;
+}
+
+/// One delivery's checkpoint: the backend's store, and the latest state read or
+/// saved through it. Internal ABI between a delivery and the decorator-emitted
+/// handler.
+#[doc(hidden)]
+pub struct CheckpointCell {
+    store: Arc<dyn CheckpointStore>,
+    /// `None` until the store was read; then the latest state, saved or loaded.
+    latest: Mutex<Option<Option<Value>>>,
+}
+
+impl CheckpointCell {
+    pub(crate) fn new(store: Arc<dyn CheckpointStore>) -> Self {
+        Self {
+            store,
+            latest: Mutex::new(None),
+        }
+    }
+
+    async fn load(&self) -> Result<Option<Value>, QueueError> {
+        let cached = self
+            .latest
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(latest) = cached {
+            return Ok(latest);
+        }
+        let loaded = self.store.load().await?;
+        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(loaded.clone());
+        Ok(loaded)
+    }
+
+    async fn save(&self, state: Value) -> Result<(), QueueError> {
+        self.store.save(state.clone()).await?;
+        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(Some(state));
+        Ok(())
+    }
+
+    pub(crate) async fn clear(&self) -> Result<(), QueueError> {
+        self.store.clear().await?;
+        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
+        Ok(())
+    }
+}
+
+/// A job's progress: what earlier attempts saved, and a save for this one.
+///
+/// A `#[process]` parameter, recognised by its type:
+///
+/// ```text
+/// #[process(queue = ImportQueue, transactional = false)]
+/// async fn import(&self, job: ImportCommand, mut checkpoint: Checkpoint<ImportProgress>) -> Result<()> {
+///     let start = checkpoint.get().map_or(0, |progress| progress.row);
+///     // … import rows from `start`, saving every batch:
+///     checkpoint.save(ImportProgress { row }).await?;
+/// }
+/// ```
+///
+/// It lasts through the job's retries and through a redelivery after the
+/// replica holding the job died, and is cleared when the job completes,
+/// dead-letters or is cancelled. The method must declare
+/// `transactional = false` — a checkpoint is saved to the queue backend at once,
+/// while a transactional attempt rolls its database work back when it fails, so
+/// the retry would resume past work that was undone.
+pub struct Checkpoint<S> {
+    cell: Arc<CheckpointCell>,
+    state: Option<S>,
+}
+
+impl<S> Checkpoint<S>
+where
+    S: Serialize + DeserializeOwned + Send + Sync + 'static,
+{
+    /// Read the delivery's latest checkpoint for the handler — emitted by the
+    /// decorator, which runs it before the method.
+    ///
+    /// A backend that could not be read is retryable, like any transient fault;
+    /// a saved state that no longer decodes as `S` is not, since every attempt
+    /// would read the same bytes.
+    #[doc(hidden)]
+    pub async fn open(cell: Option<&Arc<CheckpointCell>>, queue: &str) -> Result<Self, JobError> {
+        let Some(cell) = cell else {
+            return Err(JobError::abort(format!(
+                "a job from queue `{queue}` reached a method taking a `Checkpoint`, and its \
+                 delivery carries no checkpoint store"
+            )));
+        };
+        let state = match cell.load().await {
+            Ok(Some(saved)) => Some(serde_json::from_value(saved).map_err(|error| {
+                JobError::abort(format!(
+                    "the checkpoint saved for a job from queue `{queue}` does not decode: {error}"
+                ))
+            })?),
+            Ok(None) => None,
+            Err(error) => return Err(JobError::retry(error)),
+        };
+        Ok(Self {
+            cell: Arc::clone(cell),
+            state,
+        })
+    }
+
+    /// The latest state saved for this job — by this attempt, an earlier one,
+    /// or a replica that died holding it.
+    pub fn get(&self) -> Option<&S> {
+        self.state.as_ref()
+    }
+
+    /// Save `state` for this job, at once and outside any transaction. A later
+    /// [`get`](Self::get) returns it, and so does the job's next attempt.
+    pub async fn save(&mut self, state: S) -> Result<(), QueueError> {
+        let value = serde_json::to_value(&state)?;
+        self.cell.save(value).await?;
+        self.state = Some(state);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use serde::Deserialize;
+    use serde_json::json;
+
+    use super::*;
+
+    /// A store answering from memory, counting how often it is read.
+    #[derive(Default)]
+    struct MemoryStore {
+        saved: Mutex<Option<Value>>,
+        loads: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CheckpointStore for MemoryStore {
+        async fn load(&self) -> Result<Option<Value>, QueueError> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+            Ok(self.saved.lock().expect("lock").clone())
+        }
+
+        async fn save(&self, state: Value) -> Result<(), QueueError> {
+            *self.saved.lock().expect("lock") = Some(state);
+            Ok(())
+        }
+
+        async fn clear(&self) -> Result<(), QueueError> {
+            *self.saved.lock().expect("lock") = None;
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct Progress {
+        row: u32,
+    }
+
+    /// A backend's store answers with its snapshot from the start of the
+    /// delivery; an attempt run again inside that delivery must still read the
+    /// save the attempt before it made.
+    #[tokio::test]
+    async fn a_second_attempt_in_one_delivery_reads_the_first_attempts_save() {
+        let store = Arc::new(MemoryStore::default());
+        *store.saved.lock().expect("lock") = Some(json!({ "row": 1 }));
+        let cell = Arc::new(CheckpointCell::new(store.clone()));
+
+        let mut first = Checkpoint::<Progress>::open(Some(&cell), "imports")
+            .await
+            .expect("opens");
+        assert_eq!(first.get(), Some(&Progress { row: 1 }));
+        first.save(Progress { row: 7 }).await.expect("saves");
+
+        let second = Checkpoint::<Progress>::open(Some(&cell), "imports")
+            .await
+            .expect("opens");
+        assert_eq!(second.get(), Some(&Progress { row: 7 }));
+        assert_eq!(
+            store.loads.load(Ordering::SeqCst),
+            1,
+            "the store is read once per delivery"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_saved_state_that_no_longer_decodes_aborts_rather_than_retries() {
+        let store = Arc::new(MemoryStore::default());
+        *store.saved.lock().expect("lock") = Some(json!("not a progress"));
+        let cell = Arc::new(CheckpointCell::new(store));
+
+        let Err(error) = Checkpoint::<Progress>::open(Some(&cell), "imports").await else {
+            panic!("a state that does not decode must not open");
+        };
+        assert!(!error.retryable, "every attempt would read the same bytes");
+    }
+
+    #[tokio::test]
+    async fn a_method_taking_a_checkpoint_without_a_store_is_refused_by_name() {
+        let Err(error) = Checkpoint::<Progress>::open(None, "imports").await else {
+            panic!("no store, no checkpoint");
+        };
+        assert!(!error.retryable);
+        assert!(error.to_string().contains("imports"), "{error}");
+    }
+}

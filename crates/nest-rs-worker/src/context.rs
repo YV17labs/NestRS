@@ -81,10 +81,10 @@ pub trait JobContext: Send + Sync + 'static {
     /// back. [`run_in_job_context`] cannot synthesize one for an arbitrary
     /// output type, so it treats a broken impl as a failure of **that single
     /// job** — it logs an error on `nest_rs::worker` and unwinds. The unwind is
-    /// isolated by the transport's per-job boundary (the queue worker's
-    /// `CatchPanicLayer`, which turns it into a job abort; the scheduler's
-    /// per-job task), so one bad impl fails its own job while the worker keeps
-    /// consuming. A correct impl always awaits `inner`.
+    /// isolated by the transport's per-job boundary — the queue port's
+    /// `catch_unwind` around the job future, which dead-letters the attempt; the
+    /// scheduler's per-job task — so one bad impl fails its own job while the
+    /// worker keeps consuming. A correct impl always awaits `inner`.
     fn scope<'a>(
         &'a self,
         transaction: JobTransaction,
@@ -141,9 +141,10 @@ pub async fn run_in_job_context<T: Send>(
                 // is no `T` to return (a job's output cannot be synthesized for
                 // an arbitrary type). Fail *this* job, not the worker: record
                 // the contract violation, then unwind — the transport's per-job
-                // boundary (the queue worker's `CatchPanicLayer`, → job abort;
-                // the scheduler's per-job task) catches it, so the consumer
-                // loop keeps running instead of the whole worker going down.
+                // boundary (the queue port's `catch_unwind` around the job
+                // future, → dead letter; the scheduler's per-job task) catches
+                // it, so the consumer loop keeps running instead of the whole
+                // worker going down.
                 None => {
                     // `nest_rs::worker`, not `nest_rs::queue`: this seam is
                     // shared by the queue worker AND the scheduler — a broken

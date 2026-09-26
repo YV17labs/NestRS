@@ -3,3 +3,9 @@ error: #[process] `transactional` needs a value — write `transactional = true`
    |
 25 |     #[process(queue = Q, transactional)]
    |                          ^^^^^^^^^^^^^
+
+error[E0404]: expected trait, found struct `QueueName`
+  --> tests/integration/diagnostics/transactional_needs_a_value.rs:14:6
+   |
+14 | impl QueueName for Q {
+   |      ^^^^^^^^^ not a trait

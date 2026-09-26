@@ -1,0 +1,5 @@
+error: a `Checkpoint<_>` parameter needs `transactional = false` on its #[process]: a checkpoint is saved to the queue backend at once, while a transactional attempt rolls its database work back when it fails — the retry would resume past work that was undone
+  --> tests/integration/diagnostics/process_checkpoint_needs_the_pool.rs:25:60
+   |
+25 |     async fn import(&self, _job: ImportCommand, _progress: nest_rs_queue::Checkpoint<u32>) -> anyhow::Result<()> {
+   |                                                            ^^^^^^^^^^^^^

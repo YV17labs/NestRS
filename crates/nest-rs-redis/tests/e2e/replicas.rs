@@ -157,7 +157,7 @@ async fn the_fetch_never_hands_one_job_to_two_replicas() {
             .expect("connect"),
     );
     for seq in 0..JOBS {
-        conn.push_to::<FetchQueue>(SlowCommand { seq })
+        conn.push(FetchQueue, SlowCommand { seq }, None)
             .await
             .expect("enqueue");
     }
@@ -203,7 +203,7 @@ async fn a_replica_starting_mid_flight_re_runs_the_in_flight_job() {
             .await
             .expect("connect"),
     );
-    conn.push_to::<ScaleUpQueue>(SlowCommand { seq: 0 })
+    conn.push(ScaleUpQueue, SlowCommand { seq: 0 }, None)
         .await
         .expect("enqueue");
 

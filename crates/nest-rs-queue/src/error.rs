@@ -1,34 +1,108 @@
-//! Typed errors for the queue port: [`QueueError`], what a producer gets back,
-//! and [`JobError`], what a job attempt reports to its backend.
+//! Typed errors for the queue port: [`QueueError`], what a caller of the port
+//! gets back — a push, a cancel, a checkpoint save — and [`JobError`], what a
+//! job attempt reports to its backend.
 //!
-//! Framework crates surface `thiserror` enums, not `anyhow`. An enqueue can
-//! fail two ways: serializing the job to its JSON wire form, or inside the
-//! backend's push. The backend failure is kept behind a boxed `source` so this
-//! contract names no concrete backend — a Redis backend wraps its apalis/Redis
-//! error, an SQS backend its SDK error, without this crate depending on either.
+//! Framework crates surface `thiserror` enums, not `anyhow`. A backend failure
+//! is kept behind a boxed `source`, so this contract names no backend — a Redis
+//! backend wraps its storage error, an SQS backend its SDK error, without this
+//! crate depending on either.
 
 use thiserror::Error;
 
-/// A failure enqueuing a job through a [`JobProducer`](crate::JobProducer) (or
-/// the [`push`](crate::JobProducerExt::push) convenience over it).
+use crate::capability::unsupported;
+use crate::{Capability, JobId, PushOptions, QueueName};
+
+/// A failure of a queue operation: a push, a cancel, or a checkpoint save.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum QueueError {
-    /// The job could not be serialized to its JSON wire form.
-    #[error("failed to serialize job payload")]
+    /// A job, or a checkpoint's state, could not be converted to or from JSON.
+    #[error("failed to convert the queue value to or from JSON")]
     Serialize(#[from] serde_json::Error),
-    /// The backend rejected or failed the enqueue. The concrete backend
-    /// failure is the `source`, kept opaque so the producer contract stays
-    /// backend-agnostic.
-    #[error("queue backend failed to enqueue job")]
+    /// The backend rejected or failed the operation. Its own failure is the
+    /// `source`, kept opaque so the port names no backend.
+    #[error("the queue backend failed")]
     Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The operation needs a capability its backend does not declare, and was
+    /// refused before the backend saw it.
+    #[error("{}", unsupported(*capability, backend, None))]
+    Unsupported {
+        /// What the operation needs.
+        capability: Capability,
+        /// The backend that does not provide it.
+        backend: &'static str,
+    },
+    /// A queue name, a dynamic queue's prefix or its key outside the rule
+    /// [`QueueName`] states.
+    #[error(
+        "{name:?} is not a valid {what}: it takes 1 to {max} ASCII letters, digits, `_`, `.` or \
+         `-` — `:` and `#` are the separators a backend's keys and a dynamic queue's instances are \
+         built with, and whitespace would reach a log field or a metric label",
+        max = QueueName::MAX_LEN,
+    )]
+    InvalidQueueName {
+        /// The value refused, truncated to [`QueueName::MAX_LEN`] characters.
+        name: String,
+        /// What it was meant to be.
+        what: &'static str,
+    },
+    /// A unique key no backend could enqueue.
+    #[error(
+        "invalid unique key: {reason} — a unique key is 1 to {max} bytes with no control character",
+        max = PushOptions::MAX_UNIQUE_KEY_LEN,
+    )]
+    InvalidUniqueKey {
+        /// Which part of the rule it broke.
+        reason: &'static str,
+    },
+    /// A job id no push could have minted — see [`JobId::parse`].
+    #[error("{id:?} is not a job id: a job id is a UUID v7, as a push mints it")]
+    InvalidJobId {
+        /// The value refused, truncated to [`QueueError::SHOWN_ID_LEN`]
+        /// characters.
+        id: String,
+    },
+    /// A push under a unique key another job on the same queue still holds.
+    ///
+    /// The push filed nothing. The key is held while its job is pending or
+    /// running, and is free again once that job completes, dead-letters or is
+    /// cancelled — [`cancel_unique`](crate::JobProducerExt::cancel_unique)
+    /// frees it while the job waits.
+    #[error(
+        "unique key {key:?} on queue `{queue}` is held by job `{holder}`, which is still pending \
+         or running — the push was refused and filed nothing"
+    )]
+    UniqueKeyHeld {
+        /// The queue the push named.
+        queue: QueueName,
+        /// The key the push declared.
+        key: String,
+        /// The job holding it.
+        holder: JobId,
+    },
+    /// Options no push could honour: together, or at all on this backend.
+    ///
+    /// Both readings are here on purpose. The port refuses the combinations
+    /// nothing could honour — a unique key on `push_many` — and a backend
+    /// refuses a single value its own storage cannot represent, naming that
+    /// fact (`the delay ends past what the clock can represent`). A caller
+    /// matching on this variant is told the options were refused and given the
+    /// reason; which of the two it was is the `reason`, never the variant.
+    #[error("invalid push options: {reason}")]
+    InvalidOptions {
+        /// Why they were refused.
+        reason: &'static str,
+    },
 }
 
 impl QueueError {
-    /// Wrap a backend-specific enqueue failure as [`QueueError::Backend`]. A
-    /// backend calls this to surface its concrete error (an apalis/Redis error,
-    /// an SQS SDK error, …) without this crate naming the type — e.g.
-    /// `storage.push(job).await.map_err(QueueError::backend)?`.
+    /// How much of a refused job id an error shows: a UUID's hyphenated form
+    /// and then some, so a near-miss is recognisable and a pasted blob is not
+    /// carried into every log line that renders the error.
+    pub const SHOWN_ID_LEN: usize = 64;
+
+    /// Wrap a backend's own failure as [`QueueError::Backend`], without this
+    /// crate naming its type — `storage.push(job).await.map_err(QueueError::backend)?`.
     pub fn backend<E>(source: E) -> Self
     where
         E: std::error::Error + Send + Sync + 'static,
@@ -37,19 +111,18 @@ impl QueueError {
     }
 }
 
-/// A job failure classified for the backend's retry policy (QUEUE-I4).
+/// A job failure classified for the retry budget.
 ///
 /// A **retryable** failure ([`retry`](JobError::retry)) is a transient fault —
-/// the user `#[process]` method returning `Err` — that a re-attempt might clear.
-/// A **non-retryable** failure ([`abort`](JobError::abort)) is *deterministic*
-/// (an unsupported wire-format version, an undeserializable payload, a missing
-/// provider): retrying it burns the retry budget re-failing identically before
-/// the job dead-letters. A backend must abort a non-retryable failure at once
-/// and surface it (an `error!` at dead-letter) instead of silently retrying.
+/// the `#[process]` method returning `Err` — that another attempt might clear.
+/// A **non-retryable** failure ([`abort`](JobError::abort)) is *deterministic* —
+/// an unsupported wire-format version, an undeserializable payload, a missing
+/// provider — and another attempt would fail identically, so the attempt
+/// dead-letters at once instead of spending the budget on it.
 pub struct JobError {
-    /// Whether the backend's retry layer should re-attempt this job.
+    /// Whether another attempt could clear the failure.
     pub retryable: bool,
-    /// The underlying error, for logging and the backend's dead-letter record.
+    /// The underlying error, for the log and the backend's dead-letter record.
     pub source: Box<dyn std::error::Error + Send + Sync>,
     /// Structured detail the failure carried, when it had any — the per-field
     /// errors of a `Valid<T>` job-argument rejection.
@@ -57,13 +130,13 @@ pub struct JobError {
     /// A dead-lettered job is read from a log, days later, by someone who cannot
     /// re-run it: `error=validation failed` alone does not say which field of
     /// which payload was wrong, and the information existed at the moment of
-    /// failure. A backend surfaces this beside the error on the dead-letter
-    /// event, under the same `errors` name HTTP and WebSockets use.
+    /// failure. It rides the dead-letter event beside the error, under the same
+    /// `errors` name HTTP and WebSockets use.
     pub details: Option<serde_json::Value>,
 }
 
 impl JobError {
-    /// A **retryable** failure (a transient fault worth re-attempting).
+    /// A **retryable** failure: a transient fault worth another attempt.
     pub fn retry(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
         Self {
             retryable: true,
@@ -72,8 +145,8 @@ impl JobError {
         }
     }
 
-    /// A **non-retryable** failure (deterministic — retrying it re-fails
-    /// identically): abort and dead-letter immediately.
+    /// A **non-retryable** failure: deterministic, so another attempt would fail
+    /// identically — the attempt dead-letters at once.
     pub fn abort(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
         Self {
             retryable: false,
@@ -128,4 +201,16 @@ impl std::error::Error for JobError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&*self.source)
     }
+}
+
+/// A backend declaring job cancellation without implementing the removal it
+/// needs — a driver defect, reported as one.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "the `{backend}` queue backend declares job cancellation and does not implement \
+     `JobProducer::{method}` — a backend implements what each capability it declares needs"
+)]
+pub(crate) struct Unimplemented {
+    pub(crate) backend: &'static str,
+    pub(crate) method: &'static str,
 }

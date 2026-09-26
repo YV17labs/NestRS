@@ -1,0 +1,5 @@
+error: a `#[queue]` marker takes no generic parameter: its identity is its type, so every instantiation would share one wire name and one `#[process]` claim
+  --> tests/integration/diagnostics/queue_on_a_generic_struct.rs:13:18
+   |
+13 | struct DemoQueue<const N: usize>;
+   |                  ^^^^^

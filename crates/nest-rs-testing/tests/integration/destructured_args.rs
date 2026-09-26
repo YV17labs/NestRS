@@ -23,7 +23,8 @@ use nest_rs_graphql::{GraphqlModule, operations, resolver};
 // extractor, the value-form one wraps the wire value. Both are exercised here.
 use nest_rs_http::{HttpModule, Valid as HttpValid, controller, routes};
 use nest_rs_pipes::{Pipe, PipeError, Piped, Valid};
-use nest_rs_queue::{ProcessMethod, processor, queue};
+use nest_rs_queue::consume::{self, AttemptOutcome, Delivery};
+use nest_rs_queue::{Capabilities, ProcessMethod, QueueBackend, QueueName, processor, queue};
 use nest_rs_testing::TestApp;
 use nest_rs_ws::{Gateway, WsClient, WsModule, WsReply, gateway, messages};
 use poem::http::StatusCode;
@@ -247,19 +248,26 @@ async fn ws_dispatches_to_a_destructured_payload_argument() {
 
 // --- Queue ------------------------------------------------------------------
 
+/// The attempt runs in process, so the backend it names only labels the span.
+static IN_PROCESS: QueueBackend = QueueBackend::new("in-process", Capabilities::NONE);
+
 #[tokio::test]
 async fn a_process_method_dispatches_to_a_destructured_job_argument() {
     let method = nest_rs_core::inventory::iter::<ProcessMethod>()
-        .find(|m| m.name == "NotesProcessor::record")
+        .find(|m| m.name() == "NotesProcessor::record")
         .expect("the #[process] method is discovered");
 
     let container = Container::builder().provide(NotesProcessor).build();
-    (method.handler)(
+    let mut delivery = Delivery::new(
+        &IN_PROCESS,
+        QueueName::new(method.queue()).expect("the decorator checked the name"),
         serde_json::json!({ "v": nest_rs_queue::WIRE_FORMAT_VERSION, "payload": { "text": "queued" } }),
-        container,
-    )
-    .await
-    .expect("the job runs");
+    );
+    let outcome = consume::attempt(method, &mut delivery, container).await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Ok),
+        "the job runs: {outcome:?}"
+    );
 
     assert_eq!(
         SEEN.lock().expect("lock").as_deref(),

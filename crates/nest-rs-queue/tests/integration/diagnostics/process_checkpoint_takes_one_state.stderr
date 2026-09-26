@@ -1,0 +1,19 @@
+error: `Checkpoint` takes one type — the state it saves, `Checkpoint<ImportProgress>`
+  --> tests/integration/diagnostics/process_checkpoint_takes_one_state.rs:25:20
+   |
+25 |         _progress: Checkpoint<u32, u32>,
+   |                    ^^^^^^^^^^^^^^^^^^^^
+
+error[E0107]: struct takes 1 generic argument but 2 generic arguments were supplied
+  --> tests/integration/diagnostics/process_checkpoint_takes_one_state.rs:25:20
+   |
+25 |         _progress: Checkpoint<u32, u32>,
+   |                    ^^^^^^^^^^    ----- help: remove the unnecessary generic argument
+   |                    |
+   |                    expected 1 generic argument
+   |
+note: struct defined here, with 1 generic parameter: `S`
+  --> src/checkpoint.rs
+   |
+   | pub struct Checkpoint<S> {
+   |            ^^^^^^^^^^ -

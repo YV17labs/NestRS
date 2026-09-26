@@ -3134,7 +3134,9 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures-util",
+ "nest-rs-codegen",
  "nest-rs-core",
+ "nest-rs-pipes",
  "nest-rs-queue-macros",
  "nest-rs-testing",
  "nest-rs-worker",
@@ -3144,6 +3146,7 @@ dependencies = [
  "tokio",
  "tracing",
  "trybuild",
+ "uuid",
 ]
 
 [[package]]

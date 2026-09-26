@@ -1,0 +1,5 @@
+error: #[process] takes its keys in a list — write `#[process(queue = AudioQueue)]`
+  --> tests/integration/diagnostics/process_takes_its_keys_in_a_list.rs:22:5
+   |
+22 |     #[process = DemoQueue]
+   |     ^^^^^^^^^^^^^^^^^^^^^^

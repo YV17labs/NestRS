@@ -157,7 +157,7 @@ impl JobContext for BrokenContext {
 #[should_panic(expected = "JobContext::scope contract violation")]
 async fn broken_context_that_skips_the_job_fails_that_job() {
     // The broken impl fails *this* job — surfaced as a panic the transport's
-    // per-job boundary (CatchPanicLayer / per-job task) isolates, so the worker
+    // per-job boundary (the port's `catch_unwind` / a per-job task) isolates, so the worker
     // keeps consuming rather than the failure taking down the consumer loop.
     let ctx: Arc<dyn JobContext> = Arc::new(BrokenContext);
     let _ = run_in_job_context(

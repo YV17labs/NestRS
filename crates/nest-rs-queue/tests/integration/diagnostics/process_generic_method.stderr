@@ -1,0 +1,5 @@
+error: a `#[process]` method takes no type or const parameters, and `handle` declares type parameter `T`: the expansion calls it with only what its transport carries, so nothing supplies a type for it — name a concrete one, or call a generic function from the body
+  --> tests/integration/diagnostics/process_generic_method.rs:24:21
+   |
+24 |     async fn handle<T: Default>(&self, _job: DemoCommand) -> anyhow::Result<()> {
+   |                     ^^^^^^^^^^

@@ -27,8 +27,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# Re-exported for the `#[processor]` macro emission so the call site doesn't
-# need a direct `tracing` dependency for the unversioned-payload warning.
+# The job span, the attempt's events and the operation line `consume` files.
 tracing.workspace = true
 # Re-exported for the same reason: `#[process]` runs each handler inside the
 # ambient `JobContext`, so the expansion names the worker seam. Routing it
@@ -40,6 +39,8 @@ nest-rs-worker.workspace = true
 # future), so the event lands inside the per-job span instead of unwinding past
 # it into a backend's panic layer.
 futures-util.workspace = true
+# The `JobId` a push mints: a UUID v7, so ids sort in push order.
+uuid.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
@@ -54,6 +55,11 @@ trybuild.workspace = true
 nest-rs-core = { path = "../nest-rs-core" }
 # `anyhow::Result<()>` is the `#[process]` method's return type.
 anyhow.workspace = true
+# Pins the decorator's compile-time copy of the queue name rule against
+# `QueueName`'s (tests/integration/queue_name.rs).
+nest-rs-codegen = { path = "../nest-rs-codegen" }
+# A `Piped<P, T>` job argument, run by an attempt (tests/integration/consume.rs).
+nest-rs-pipes = { path = "../nest-rs-pipes" }
 
 [lints]
 workspace = true

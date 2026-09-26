@@ -1,0 +1,5 @@
+error: a `#[process]` method returns a `Result`: `Ok(())` completes the job and an `Err` fails the attempt, which the retry budget decides on — write `-> anyhow::Result<()>`
+  --> tests/integration/diagnostics/process_returns_a_result.rs:24:5
+   |
+24 |     async fn handle(&self, _job: DemoCommand) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

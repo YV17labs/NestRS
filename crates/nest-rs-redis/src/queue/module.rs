@@ -26,21 +26,33 @@ impl Module for RedisQueueModule {
         if !builder.mark_collected(TypeId::of::<Self>()) {
             return builder;
         }
-        // Bound as both names: `Arc<RedisQueueProducer>` for the concrete
-        // backend and `Arc<dyn JobProducer>` for the portable form the queue
-        // docs prescribe — the contract `/queue/writing-a-driver/` asks a driver
-        // to honour. A factory output so a producing feature injects it as
-        // global infrastructure without importing this module; queued *after*
-        // the connection's factory so `imports` order stays a readability
-        // choice.
-        builder.provide_factory_dyn_after::<RedisQueueProducer, dyn JobProducer, RedisConnection, _, _>(
-            |container| async move {
-                let conn = container
-                    .get::<RedisConnection>()
-                    .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
-                Ok(RedisQueueProducer::new((*conn).clone()))
-            },
-            |producer| Arc::new(producer) as Arc<dyn JobProducer>,
-        )
+        // The concrete backend type is a factory output, so a feature injects it
+        // as global infrastructure without importing this module; queued after
+        // the connection's factory so `imports` order stays a readability choice.
+        //
+        // The portable name is the same instance, **declared**: a feature
+        // injecting `Arc<dyn JobProducer>` never names the backend, so a second
+        // queue backend imported beside this one fails the boot naming both
+        // (`BACKEND_REMEDY`) rather than whichever `imports` listed last serving
+        // every push in silence — the contract `/queue/writing-a-driver/` asks a
+        // driver to honour.
+        builder
+            .provide_factory_after::<RedisQueueProducer, RedisConnection, _, _>(
+                |container| async move {
+                    let conn = container
+                        .get::<RedisConnection>()
+                        .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
+                    Ok(RedisQueueProducer::new((*conn).clone()))
+                },
+            )
+            .provide_declared_factory_after::<Arc<dyn JobProducer>, RedisQueueProducer, _, _>(
+                nest_rs_queue::BACKEND_REMEDY,
+                |container| async move {
+                    let producer = container
+                        .get::<RedisQueueProducer>()
+                        .ok_or_else(|| anyhow::anyhow!("RedisQueueModule: {CONNECTION_REMEDY}"))?;
+                    Ok(producer as Arc<dyn JobProducer>)
+                },
+            )
     }
 }

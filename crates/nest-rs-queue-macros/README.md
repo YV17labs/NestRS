@@ -1,6 +1,6 @@
 # nest-rs-queue-macros
 
-Macro crate for the NestRS framework — the #[processor] decorator macro for nest-rs-queue; re-exported by backend integrations (nest-rs-redis, …): depend on that crate, not this one.
+Macro crate for the NestRS framework — the #[queue] and #[processor] decorator macros for nest-rs-queue, which re-exports them.
 
 A `proc-macro` companion crate — never added directly. Its decorators are re-exported by the surface crate, reached through the [`nest-rs`](https://crates.io/crates/nest-rs) umbrella.
 

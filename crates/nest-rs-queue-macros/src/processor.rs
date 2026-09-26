@@ -1,36 +1,60 @@
 //! `#[processor]` — orchestrator on a provider's `impl` block. Walks the
-//! methods; for each one tagged with `#[process(queue = …, retries)]`
-//! emits a type-erased handler `fn` and a `ProcessMethod` inventory submission
-//! the active queue backend (e.g. Redis via `nest-rs-redis`) drains at boot.
+//! methods; for each one tagged `#[process(queue = …, …)]` emits a type-erased
+//! handler and a `ProcessMethod` inventory submission a queue backend drains at
+//! boot through `nest_rs_queue::consume::discover`.
 //!
-//! Like `#[scheduled]`, this does NOT emit `Discoverable` for the host
-//! struct — the user's own `#[injectable]` owns it. Inventory is the seam.
+//! Like `#[scheduled]`, this does NOT emit `Discoverable` for the host struct —
+//! the user's own `#[injectable]` owns it. Inventory is the seam.
 //!
-//! The handler is emitted as a `nest_rs_queue::JobHandler` — a fn pointer
-//! that takes the raw JSON payload + a `Container`, deserializes to the
-//! method's job type, resolves the provider, and dispatches. Every reference
-//! is to `::nest_rs_queue::*` (the abstractions crate, which also re-exports
-//! this macro and `serde_json`), so the call site reaches the macro and the
-//! emission targets through the same import root regardless of which
-//! backend integration (nest-rs-redis, …) is wired in.
+//! The handler receives the job's payload — the port already opened the
+//! envelope — and the attempt's `HandlerContext`. It deserializes the payload to
+//! the method's job type, runs a per-argument pipe, resolves the provider, opens
+//! the checkpoint when the method takes one, and dispatches inside the ambient
+//! `JobContext`. Every path is rooted at `::nest_rs_queue::*`, re-rooted to the
+//! umbrella, so the call site declares nothing but `nest-rs`.
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, PipeWrapper, TRANSACTIONAL, duplicate_argument, impl_self_ident,
-    job_argument_needs_a_value, job_transaction, payload_arg_type, pipe_wrapper, snake_case,
-    transactional_value, unknown_argument,
+    DecoratorPair, Edge, PipeWrapper, TRANSACTIONAL, await_if_async, cfg_attrs, duplicate_argument,
+    duration_millis, generic_args, impl_self_ident, job_argument_needs_a_value,
+    job_argument_refused, job_returns_a_result, job_transaction, missing_argument,
+    payload_arg_type, pipe_wrapper, returns_unit, snake_case, transactional_value, ungrouped_expr,
+    unknown_argument,
 };
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, ImplItem, LitInt, LitStr, Token, Type};
+use syn::spanned::Spanned;
+use syn::{Expr, ExprLit, FnArg, Ident, ImplItem, Lit, LitStr, Token, Type};
 
 /// A queue processor has no edge struct decorator — the host keeps its own
 /// `#[injectable]` — but reaching for `#[processor]` on the struct still deserves
 /// a sentence naming what to write instead of syn's `expected impl`.
 const PROCESSOR_PAIR: DecoratorPair = DecoratorPair::on_provider("#[processor]", "#[process]");
 
+/// Every key `#[process]` takes, in the order its unknown-key refusal lists them.
+const KEYS: [&str; 5] = ["queue", "retries", "concurrency", "throttle", TRANSACTIONAL];
+
+/// The two keys `throttle(..)` takes.
+const THROTTLE_KEYS: [&str; 2] = ["limit", "window"];
+
+/// Why a checkpoint cannot share the attempt's transaction — the refusal of a
+/// `Checkpoint<_>` parameter on a transactional method.
+const CHECKPOINT_NEEDS_THE_POOL: &str = "a `Checkpoint<_>` parameter needs `transactional = false` \
+     on its #[process]: a checkpoint is saved to the queue backend at once, while a transactional \
+     attempt rolls its database work back when it fails — the retry would resume past work that \
+     was undone";
+
 pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
+    let written = TokenStream2::from(input.clone());
+    let expansion = expand(args, input).into();
+    PROCESSOR_PAIR
+        .keep_item_on_refusal(written, expansion, &["process"], |_| TokenStream2::new())
+        .into()
+}
+
+fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     if let Err(err) = reject_args(args) {
         return err.to_compile_error().into();
     }
@@ -45,260 +69,73 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
     };
-    let provider_name = provider_ident.to_string();
 
     let mut emissions: Vec<TokenStream2> = Vec::new();
+    let mut refusals: Option<syn::Error> = None;
 
     for impl_item in item.items.iter_mut() {
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
 
-        let attr_idx = method
-            .attrs
-            .iter()
-            .position(|attr| attr.path().is_ident("process"));
-        let Some(idx) = attr_idx else { continue };
-        let attr = method.attrs.remove(idx);
+        let index =
+            match nest_rs_codegen::one_role_per_method("queue", &method.attrs, &["process"], "") {
+                Ok(Some(index)) => index,
+                Ok(None) => continue,
+                Err(err) => return err.to_compile_error().into(),
+            };
+        let attr = method.attrs.remove(index);
+        if let Err(err) = nest_rs_codegen::concrete_signature(method, "#[process]") {
+            return err.to_compile_error().into();
+        }
 
+        // A bare `#[process]` has no list to read a key from, and what it lacks
+        // is the one key a method cannot do without — so that is the sentence,
+        // not syn's `expected attribute arguments in parentheses`. One written
+        // `#[process = …]` named something, and is told the form it takes.
+        match &attr.meta {
+            syn::Meta::List(_) => {}
+            syn::Meta::Path(_) => {
+                return syn::Error::new_spanned(&attr, missing_queue())
+                    .to_compile_error()
+                    .into();
+            }
+            syn::Meta::NameValue(_) => {
+                return syn::Error::new_spanned(
+                    &attr,
+                    "#[process] takes its keys in a list — write `#[process(queue = AudioQueue)]`",
+                )
+                .to_compile_error()
+                .into();
+            }
+        }
+
+        // Every method's keys are read before the first refusal is returned, so
+        // a host with several wrong declarations learns about all of them at once.
         let args = match attr.parse_args::<ProcessArgs>() {
             Ok(a) => a,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        let ProcessArgs {
-            queue,
-            retries,
-            transactional,
-        } = args;
-
-        let job_ty = match payload_arg_type(method, "#[process]", "job", &provider_ident) {
-            Ok(ty) => ty,
-            Err(err) => return err.to_compile_error().into(),
-        };
-        // A `Piped<P, T>` / `Valid<T>` job argument is a per-argument pipe: the
-        // wire payload is `T`, the pipe runs after deserialization, and the
-        // handler receives the carrier. Matches the HTTP / GraphQL forms.
-        let (deser_ty, job_wrap) = pipe_binding(&job_ty);
-
-        // The queue is named by its `QueueName` type
-        // (`#[process(queue = AudioQueue)]`), which yields
-        // `<Q as QueueName>::NAME` — a `&'static str` const — and additionally
-        // asserts, at compile time, that the method's wire payload is exactly
-        // `<Q as QueueName>::Job`. A mismatch is an error naming both types.
-        let queue_str: TokenStream2 = match &queue {
-            QueueId::Type(ty) => {
-                let ty: &Type = ty;
-                quote!(<#ty as ::nest_rs_queue::QueueName>::NAME)
-            }
-        };
-        let queue_assert: TokenStream2 = match &queue {
-            QueueId::Type(ty) => {
-                let ty: &Type = ty;
-                quote! {
-                const _: () = {
-                    // Requires `<#ty as QueueName>::Job == #deser_ty`; a
-                    // mismatch fails here naming both the queue's `Job` and the
-                    // handler's argument type.
-                    fn __nestrs_assert_queue_job<__Q>()
-                    where
-                        __Q: ::nest_rs_queue::QueueName<Job = #deser_ty>,
-                    {
-                    }
-                    let _ = __nestrs_assert_queue_job::<#ty>;
-                };
+            Err(err) => {
+                match &mut refusals {
+                    Some(refusals) => refusals.combine(err),
+                    None => refusals = Some(err),
                 }
+                continue;
             }
         };
 
-        let method_ident = method.sig.ident.clone();
-        let method_name = method_ident.to_string();
-        let qualified_name = format!("{provider_name}::{method_name}");
+        if let Err(err) = check_shape(method) {
+            return err.to_compile_error().into();
+        }
 
-        let provider_snake = snake_case(&provider_name);
-        let method_snake = snake_case(&method_name);
-        let handler_ident = format_ident!(
-            "__nestrs_process_handler_{}_{}",
-            provider_snake,
-            method_snake
-        );
-
-        let retries_lit = LitInt::new(&retries.to_string(), proc_macro2::Span::call_site());
-        let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue));
-
-        emissions.push(quote! {
-            #queue_assert
-
-            #[doc(hidden)]
-            #[allow(non_snake_case)]
-            fn #handler_ident(
-                __payload: ::nest_rs_queue::serde_json::Value,
-                __container: ::nest_rs_core::Container,
-            ) -> ::std::pin::Pin<
-                ::std::boxed::Box<
-                    dyn ::std::future::Future<
-                        Output = ::std::result::Result<(), ::nest_rs_queue::JobError>,
-                    > + ::std::marker::Send,
-                >,
-            > {
-                ::std::boxed::Box::pin(async move {
-                    // Unwrap the wire envelope `{ "v": <n>, "payload": <…> }`.
-                    // Detection is strict to avoid mis-classifying a user `Job`
-                    // struct that happens to have `v`+`payload` fields plus
-                    // anything else:
-                    //   - the object MUST have exactly two top-level keys, and
-                    //     they MUST be `v` and `payload`;
-                    //   - `v` MUST be a JSON Number with a non-negative integer
-                    //     value (accepting both `1` and `1.0` — a hand-rolled
-                    //     producer may serialize as a float).
-                    // Anything else falls through to the legacy raw-decode path
-                    // (with a warning), so jobs left in Redis from a prior
-                    // deploy still drain.
-                    let __is_envelope = match &__payload {
-                        ::nest_rs_queue::serde_json::Value::Object(__obj) => {
-                            __obj.len() == 2
-                                && __obj.contains_key("v")
-                                && __obj.contains_key("payload")
-                                && match __obj.get("v") {
-                                    ::std::option::Option::Some(
-                                        ::nest_rs_queue::serde_json::Value::Number(__n),
-                                    ) => {
-                                        __n.as_u64().is_some()
-                                            || __n.as_f64().is_some_and(|__f| {
-                                                __f.is_finite()
-                                                    && __f >= 0.0
-                                                    && __f.fract() == 0.0
-                                            })
-                                    }
-                                    _ => false,
-                                }
-                        }
-                        _ => false,
-                    };
-                    let __raw: ::nest_rs_queue::serde_json::Value = if __is_envelope {
-                        let ::nest_rs_queue::serde_json::Value::Object(mut __obj) = __payload else {
-                            ::std::unreachable!("__is_envelope guarantees an Object");
-                        };
-                        let __v_value = __obj.remove("v").unwrap_or(
-                            ::nest_rs_queue::serde_json::Value::Null,
-                        );
-                        let __v = match &__v_value {
-                            ::nest_rs_queue::serde_json::Value::Number(__n) => __n
-                                .as_u64()
-                                .or_else(|| __n.as_f64().map(|__f| __f as u64))
-                                .unwrap_or(u64::MAX),
-                            _ => u64::MAX,
-                        };
-                        if __v != ::nest_rs_queue::WIRE_FORMAT_VERSION as u64 {
-                            let __msg = if __v > ::nest_rs_queue::WIRE_FORMAT_VERSION as u64 {
-                                ::std::format!(
-                                    "unsupported job wire-format version {} on queue `{}`; \
-                                     the producer is from a newer release; either roll back \
-                                     this consumer or wait for the producer to drain",
-                                    __v,
-                                    #queue_str,
-                                )
-                            } else {
-                                ::std::format!(
-                                    "unsupported job wire-format version {0} on queue `{1}`; \
-                                     the producer is from an older release; either drain \
-                                     the queue or pin the consumer at version {0}",
-                                    __v,
-                                    #queue_str,
-                                )
-                            };
-                            // Deterministic: a wrong wire version never succeeds
-                            // on retry — abort and dead-letter (QUEUE-I4).
-                            return ::std::result::Result::Err(
-                                ::nest_rs_queue::JobError::abort(__msg),
-                            );
-                        }
-                        __obj.remove("payload").unwrap_or(
-                            ::nest_rs_queue::serde_json::Value::Null,
-                        )
-                    } else {
-                        ::nest_rs_queue::tracing::warn!(
-                            target: ::nest_rs_queue::TARGET,
-                            queue = #queue_str,
-                            hint = "producer predates the wire envelope; drain the queue to clear legacy jobs",
-                            "processed an unversioned job payload",
-                        );
-                        __payload
-                    };
-                    let __deser: #deser_ty = match ::nest_rs_queue::serde_json::from_value(__raw) {
-                        ::std::result::Result::Ok(j) => j,
-                        ::std::result::Result::Err(e) => {
-                            // Deterministic: the same bytes never deserialize on
-                            // retry — abort and dead-letter (QUEUE-I4).
-                            return ::std::result::Result::Err(
-                                ::nest_rs_queue::JobError::abort(::std::format!(
-                                    "failed to deserialize job for queue `{}`: {e}",
-                                    #queue_str,
-                                )),
-                            );
-                        }
-                    };
-                    // Identity when the argument is a plain job type; runs the
-                    // pipe (surfacing a `PipeError` as the boxed job error) for a
-                    // `Piped<P, T>` / `Valid<T>` argument.
-                    let __job = #job_wrap;
-                    let __provider = match ::nest_rs_core::Container::get::<#self_ty>(&__container) {
-                        ::std::option::Option::Some(p) => p,
-                        ::std::option::Option::None => {
-                            // Deterministic: a missing provider stays missing on
-                            // retry — abort and dead-letter (QUEUE-I4).
-                            return ::std::result::Result::Err(
-                                ::nest_rs_queue::JobError::abort(::std::format!(
-                                    "queue processor provider `{}` not registered in the running \
-                                     container — add it to a reachable module's `providers = [...]`",
-                                    ::std::any::type_name::<#self_ty>(),
-                                )),
-                            );
-                        }
-                    };
-                    let __job_context = ::nest_rs_core::Container::get_dyn::<
-                        dyn ::nest_rs_queue::nest_rs_worker::JobContext,
-                    >(&__container);
-                    // The user `#[process]` method's `Err` is a transient fault —
-                    // retryable (the backend's retry budget applies). Mapped
-                    // *inside* the context so the settling seam reads one error
-                    // type and can report a commit it could not honour in it.
-                    ::nest_rs_queue::nest_rs_worker::run_in_job_context(
-                        __job_context.as_ref(),
-                        #transaction_tokens,
-                        async move {
-                            <#self_ty>::#method_ident(&__provider, __job)
-                                .await
-                                .map_err(|__e| ::nest_rs_queue::JobError::retry(__e))
-                        },
-                        ::std::result::Result::is_ok,
-                        // A job that ran fine but whose transaction could not be
-                        // settled has written nothing, so the attempt fails
-                        // rather than reporting a success that lost its writes.
-                        // Whether it is *retried* is the context's call: a
-                        // deterministic failure re-fails identically, having
-                        // replayed every side effect the body performs outside
-                        // the transaction.
-                        |__why| ::std::result::Result::Err(
-                            ::nest_rs_queue::JobError::unhonoured(__why),
-                        ),
-                    )
-                    .await
-                })
-            }
-
-            ::nest_rs_core::inventory::submit! {
-                ::nest_rs_queue::ProcessMethod {
-                    origin: ::core::module_path!(),
-                    name: #qualified_name,
-                    queue: #queue_str,
-                    retries: #retries_lit,
-                    provider_type_id: || ::std::any::TypeId::of::<#self_ty>(),
-                    handler: #handler_ident,
-                }
-            }
-        });
+        match emit_method(&self_ty, &provider_ident, method, args) {
+            Ok(emitted) => emissions.push(emitted),
+            Err(err) => return err.to_compile_error().into(),
+        }
     }
 
+    if let Some(refusals) = refusals {
+        return refusals.to_compile_error().into();
+    }
     let out = quote! {
         #item
 
@@ -308,32 +145,302 @@ pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     out.into()
 }
 
+/// The shape every `#[process]` method has, refused with the rule rather than
+/// with what rustc says of the code the expansion writes around it: its answer is
+/// a `Result` the attempt reads — `Ok(())` completes the job, `Err` fails the
+/// attempt. The receiver is read with the job argument, by `payload_arg_type`.
+fn check_shape(method: &syn::ImplItemFn) -> syn::Result<()> {
+    if returns_unit(&method.sig.output) {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            job_returns_a_result("process"),
+        ));
+    }
+    Ok(())
+}
+
+/// The handler and the inventory entry for one `#[process]` method.
+fn emit_method(
+    self_ty: &Type,
+    provider: &Ident,
+    method: &syn::ImplItemFn,
+    args: ProcessArgs,
+) -> syn::Result<TokenStream2> {
+    let provider_name = provider.unraw().to_string();
+    let ProcessArgs {
+        queue,
+        retries,
+        concurrency,
+        throttle,
+        transactional,
+    } = args;
+
+    // The checkpoint parameter, when the method takes one: recognised by its
+    // type and set aside, so the one job argument left is read by the shared
+    // payload rule `#[on_event]` uses too.
+    let checkpoint = checkpoint_parameter(method)?;
+    if let Some(checkpoint) = &checkpoint
+        && transactional != Some(false)
+    {
+        return Err(syn::Error::new(checkpoint.span, CHECKPOINT_NEEDS_THE_POOL));
+    }
+    let job_ty = {
+        let mut signature = method.clone();
+        if let Some(checkpoint) = &checkpoint {
+            signature.sig.inputs = signature
+                .sig
+                .inputs
+                .into_iter()
+                .enumerate()
+                .filter(|(index, _)| *index != checkpoint.index)
+                .map(|(_, input)| input)
+                .collect();
+        }
+        payload_arg_type(&signature, "#[process]", "job", provider)?
+    };
+    // A `Piped<P, T>` / `Valid<T>` job argument is a per-argument pipe: the
+    // payload is `T`, the pipe runs after deserialization, and the handler
+    // receives the carrier. Matches the HTTP / GraphQL forms.
+    let (deser_ty, job_wrap) = pipe_binding(&job_ty);
+
+    // The queue is named by its `Queue` type, which yields the name and the kind
+    // as constants and additionally asserts, at compile time, that the method's
+    // payload is exactly the queue's `Job` — a mismatch is an error naming both
+    // types.
+    let QueueId::Type(queue_ty) = &queue;
+    let queue_str = quote!(<#queue_ty as ::nest_rs_queue::Queue>::NAME);
+    let queue_kind = quote!(<#queue_ty as ::nest_rs_queue::Queue>::KIND);
+    let queue_assert = quote! {
+        const _: () = {
+            // Requires `<#queue_ty as Queue>::Job == #deser_ty`; a mismatch
+            // fails here naming both the queue's `Job` and the handler's
+            // argument type.
+            fn __nestrs_assert_queue_job<__Q>()
+            where
+                __Q: ::nest_rs_queue::Queue<Job = #deser_ty>,
+            {
+            }
+            let _ = __nestrs_assert_queue_job::<#queue_ty>;
+        };
+    };
+
+    let method_ident = method.sig.ident.clone();
+    // Un-raw: a label is read, and a generated identifier cannot hold `r#`.
+    let method_name = method_ident.unraw().to_string();
+    let qualified_name = format!("{provider_name}::{method_name}");
+    let cfgs = cfg_attrs(&method.attrs);
+    let handler_ident = format_ident!(
+        "__nestrs_process_handler_{}_{}",
+        snake_case(&provider_name),
+        snake_case(&method_name)
+    );
+
+    let mut options = quote!(::nest_rs_queue::ProcessOptions::DEFAULT);
+    if let Some(retries) = retries {
+        options = quote!(#options.with_retries(#retries));
+    }
+    if let Some(concurrency) = concurrency {
+        let above_one = concurrency - 1;
+        options = quote! {
+            #options.with_concurrency(::core::num::NonZeroU32::MIN.saturating_add(#above_one))
+        };
+    }
+    if let Some(ThrottleArgs { limit, window_ms }) = throttle {
+        let above_one = limit - 1;
+        options = quote! {
+            #options.with_throttle(::nest_rs_queue::Throttle::new(
+                ::core::num::NonZeroU32::MIN.saturating_add(#above_one),
+                ::std::time::Duration::from_millis(#window_ms),
+            ))
+        };
+    }
+    if checkpoint.is_some() {
+        options = quote!(#options.with_checkpoint(true));
+    }
+
+    let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_queue));
+    let checkpoint_open = checkpoint.as_ref().map(|checkpoint| {
+        let state = &checkpoint.state;
+        quote! {
+            let __checkpoint = ::nest_rs_queue::Checkpoint::<#state>::open(
+                __context.checkpoints.as_ref(),
+                #queue_str,
+            )
+            .await?;
+        }
+    });
+    // The method's arguments in the order it declares them.
+    let call_args: Vec<TokenStream2> = method
+        .sig
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, input)| matches!(input, FnArg::Typed(_)))
+        .map(|(index, _)| match &checkpoint {
+            Some(checkpoint) if checkpoint.index == index => quote!(__checkpoint),
+            _ => quote!(__job),
+        })
+        .collect();
+    let call = await_if_async(
+        &method.sig,
+        quote!(<#self_ty>::#method_ident(&__provider, #(#call_args),*)),
+    );
+
+    Ok(quote! {
+        #(#cfgs)*
+        #queue_assert
+
+        #(#cfgs)*
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        fn #handler_ident(
+            __payload: ::nest_rs_queue::serde_json::Value,
+            __context: ::nest_rs_queue::HandlerContext,
+        ) -> ::std::pin::Pin<
+            ::std::boxed::Box<
+                dyn ::std::future::Future<
+                    Output = ::std::result::Result<(), ::nest_rs_queue::JobError>,
+                > + ::std::marker::Send,
+            >,
+        > {
+            ::std::boxed::Box::pin(async move {
+                let __deser: #deser_ty = match ::nest_rs_queue::serde_json::from_value(__payload) {
+                    ::std::result::Result::Ok(j) => j,
+                    ::std::result::Result::Err(e) => {
+                        // Deterministic: the same bytes never deserialize on
+                        // retry — abort and dead-letter.
+                        return ::std::result::Result::Err(
+                            ::nest_rs_queue::JobError::abort(::std::format!(
+                                "failed to deserialize job for queue `{}`: {e}",
+                                #queue_str,
+                            )),
+                        );
+                    }
+                };
+                // Identity when the argument is a plain job type; runs the
+                // pipe (surfacing a `PipeError` as the boxed job error) for a
+                // `Piped<P, T>` / `Valid<T>` argument.
+                let __job = #job_wrap;
+                let __provider = match ::nest_rs_core::Container::get::<#self_ty>(&__context.container) {
+                    ::std::option::Option::Some(p) => p,
+                    ::std::option::Option::None => {
+                        // Deterministic: a missing provider stays missing on
+                        // retry — abort and dead-letter.
+                        return ::std::result::Result::Err(
+                            ::nest_rs_queue::JobError::abort(::std::format!(
+                                "queue processor provider `{}` not registered in the running \
+                                 container — add it to a reachable module's `providers = [...]`",
+                                ::std::any::type_name::<#self_ty>(),
+                            )),
+                        );
+                    }
+                };
+                #checkpoint_open
+                let __job_context = ::nest_rs_core::Container::get_dyn::<
+                    dyn ::nest_rs_queue::nest_rs_worker::JobContext,
+                >(&__context.container);
+                // The user `#[process]` method's `Err` is a transient fault —
+                // retryable within the budget. Mapped *inside* the context so the
+                // settling seam reads one error type and can report a commit it
+                // could not honour in it.
+                ::nest_rs_queue::nest_rs_worker::run_in_job_context(
+                    __job_context.as_ref(),
+                    #transaction_tokens,
+                    async move {
+                        #call.map_err(|__e| ::nest_rs_queue::JobError::retry(__e))
+                    },
+                    ::std::result::Result::is_ok,
+                    // A job that ran fine but whose transaction could not be
+                    // settled has written nothing, so the attempt fails rather
+                    // than reporting a success that lost its writes. Whether it is
+                    // *retried* is the context's call.
+                    |__why| ::std::result::Result::Err(
+                        ::nest_rs_queue::JobError::unhonoured(__why),
+                    ),
+                )
+                .await
+            })
+        }
+
+        #(#cfgs)*
+        ::nest_rs_core::inventory::submit! {
+            ::nest_rs_queue::ProcessMethod::new(
+                ::core::module_path!(),
+                #qualified_name,
+                #queue_str,
+                #queue_kind,
+                #options,
+                || ::std::any::TypeId::of::<#self_ty>(),
+                #handler_ident,
+            )
+        }
+    })
+}
+
+/// A `Checkpoint<S>` parameter: where it sits among the method's inputs, the
+/// state it saves, and where to point a refusal.
+struct CheckpointParam {
+    index: usize,
+    state: Type,
+    span: Span,
+}
+
+/// The method's `Checkpoint<S>` parameter, if it takes one — recognised by the
+/// last segment of its type, so a qualified path works as a bare one does.
+fn checkpoint_parameter(method: &syn::ImplItemFn) -> syn::Result<Option<CheckpointParam>> {
+    let mut found: Option<CheckpointParam> = None;
+    for (index, input) in method.sig.inputs.iter().enumerate() {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+        let Some((ident, types)) = generic_args(&typed.ty) else {
+            continue;
+        };
+        if ident != "Checkpoint" {
+            continue;
+        }
+        let [state] = types.as_slice() else {
+            return Err(syn::Error::new_spanned(
+                &typed.ty,
+                "`Checkpoint` takes one type — the state it saves, `Checkpoint<ImportProgress>`",
+            ));
+        };
+        if found.is_some() {
+            return Err(syn::Error::new_spanned(
+                &typed.ty,
+                "a #[process] method takes at most one `Checkpoint<_>` parameter — a job keeps one \
+                 checkpoint",
+            ));
+        }
+        found = Some(CheckpointParam {
+            index,
+            state: (*state).clone(),
+            span: typed.ty.span(),
+        });
+    }
+    Ok(found)
+}
+
 /// `#[processor]` takes no arguments — the queues are named by the `#[process]`
-/// methods it collects. It used to *ignore* whatever it was handed, so anything
-/// written here bound nothing and said nothing; `version` is called out first
-/// because it is the one key a developer arrives with from
-/// `#[controller(version = "1")]`, and "takes no arguments" answers a question
-/// they did not ask.
+/// methods it collects. `version` is called out first because it is the one key
+/// a developer arrives with from `#[controller(version = "1")]`.
 fn reject_args(args: TokenStream) -> syn::Result<()> {
     let args = TokenStream2::from(args);
     Edge::Queue.reject_version(&args)?;
     PROCESSOR_PAIR.reject_args(&args, "the provider's scope is declared by")
 }
 
-/// Split a job argument into (type to deserialize from the wire, expression that
-/// yields the value the handler receives). For a plain type both are trivial:
-/// deserialize `T`, hand over `__deser`. For a per-argument pipe `Piped<P, T>` /
-/// `Valid<T>` the wire type is `T`, and the expression runs the pipe over
-/// `__deser`, surfacing a `PipeError` as the queue's boxed error.
+/// Split a job argument into (type to deserialize, expression yielding what the
+/// handler receives). For a per-argument pipe `Piped<P, T>` / `Valid<T>` the wire
+/// type is `T`, and the expression runs the pipe over `__deser`, surfacing a
+/// `PipeError` as the queue's boxed error.
 fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
     // A pipe rejection is deterministic (the same payload fails the pipe again),
-    // so it aborts rather than retries (QUEUE-I4).
+    // so it aborts rather than retries.
     let box_err = quote! {
         |__e: ::nest_rs_pipes::PipeError| {
             // The message *and* the per-field detail: a dead-lettered job is
-            // read from a log by someone who cannot re-run it, so
-            // `error=validation failed` on its own throws away what the
-            // rejection knew.
+            // read from a log by someone who cannot re-run it.
             let __msg = __e.message().to_string();
             ::nest_rs_queue::JobError::abort(__msg).with_details(__e.into_details())
         }
@@ -355,18 +462,15 @@ fn pipe_binding(job_ty: &Type) -> (Type, TokenStream2) {
     }
 }
 
-/// How a `#[process]` names its queue: a `QueueName` type path
-/// (`#[process(queue = AudioQueue)]`) that links the wire name and the payload
-/// type to the shared handle declared at the feature port.
+/// How a `#[process]` names its queue: the `Queue` type its `#[queue]` marker
+/// implements (`#[process(queue = AudioQueue)]`), which links the name, the kind
+/// and the payload type to the one declaration at the feature port.
 ///
-/// A bare string used to be accepted too. It is gone: it named the queue
-/// without naming its payload, so a consumer could deserialize a type the
-/// producer never sends and the job would simply never drain — the typed form
-/// turns exactly that into a compile error, which makes the string form a
-/// strictly worse second way to say the same thing.
+/// A bare string used to be accepted too. It is gone: it named the queue without
+/// naming its payload, so a consumer could deserialize a type the producer never
+/// sends and the job would simply never drain.
 enum QueueId {
-    // Boxed: `syn::Type` is a large enum, so an unboxed variant would bloat
-    // every `QueueId` to its size (clippy::large_enum_variant).
+    // Boxed: `syn::Type` is a large enum (clippy::large_enum_variant).
     Type(Box<Type>),
 }
 
@@ -377,7 +481,7 @@ impl Parse for QueueId {
             Err(syn::Error::new_spanned(
                 &lit,
                 format!(
-                    "name the queue by its `QueueName` type, not a string: declare \
+                    "name the queue by its `Queue` type, not a string: declare \
                      `#[queue(name = {:?}, job = <Payload>)] struct <Name>Queue;` at the \
                      feature port and write `#[process(queue = <Name>Queue)]` — the type \
                      form also checks this method's payload against the queue's",
@@ -390,9 +494,26 @@ impl Parse for QueueId {
     }
 }
 
+/// The refusal of a `#[process]` naming no queue — worded once for the empty
+/// list and for the attribute written with no list at all.
+fn missing_queue() -> String {
+    format!(
+        "{} (the `#[queue]` marker type the method drains)",
+        missing_argument("process", "queue", "AudioQueue"),
+    )
+}
+
+/// `throttle(limit = N, window = "…")`, read.
+struct ThrottleArgs {
+    limit: u32,
+    window_ms: u64,
+}
+
 struct ProcessArgs {
     queue: QueueId,
-    retries: usize,
+    retries: Option<u32>,
+    concurrency: Option<u32>,
+    throttle: Option<ThrottleArgs>,
     /// The shared `transactional` key, `None` when unwritten — see
     /// `nest_rs_codegen::job`, which words it for every job decorator at once.
     transactional: Option<bool>,
@@ -401,32 +522,35 @@ struct ProcessArgs {
 impl Parse for ProcessArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut queue: Option<QueueId> = None;
-        let mut retries: Option<usize> = None;
+        let mut retries: Option<u32> = None;
+        let mut concurrency: Option<u32> = None;
+        let mut throttle: Option<ThrottleArgs> = None;
         let mut transactional: Option<bool> = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             let name = key.to_string();
-            // The `=` is checked before it is consumed so a bare key earns a
-            // sentence naming the key rather than syn's `expected `=``, which
-            // names the grammar. Same refusal as the triggers', worded once.
-            if !input.peek(Token![=]) {
+            // A key another member of the job family takes is not misspelled
+            // here, it is meaningless, and the family's sentence says why.
+            if let Some(refusal) = job_argument_refused("process", &name) {
+                return Err(syn::Error::new(key.span(), refusal));
+            }
+            if !KEYS.contains(&name.as_str()) {
                 return Err(syn::Error::new(
                     key.span(),
-                    job_argument_needs_a_value("process", &name),
+                    // Built from the constant and through the shared sentence, so
+                    // the four job decorators word an unknown key one way.
+                    unknown_argument("process", &name, &KEYS),
                 ));
             }
-            input.parse::<Token![=]>()?;
             // A repeated key is refused, not last-write-wins — the same reading
             // `#[every]`/`#[cron]`/`#[after]` take, through the same sentence.
-            // Which of two declarations gets dropped would be source order, and
-            // one of the two it can drop is `transactional = true`: the default
-            // this decorator exists to let a developer state.
             let taken = match name.as_str() {
                 "queue" => queue.is_some(),
                 "retries" => retries.is_some(),
-                TRANSACTIONAL => transactional.is_some(),
-                _ => false,
+                "concurrency" => concurrency.is_some(),
+                "throttle" => throttle.is_some(),
+                _ => transactional.is_some(),
             };
             if taken {
                 return Err(syn::Error::new(
@@ -434,31 +558,44 @@ impl Parse for ProcessArgs {
                     duplicate_argument("process", &name),
                 ));
             }
-            match name.as_str() {
-                "queue" => queue = Some(input.parse()?),
-                "retries" => retries = Some(input.parse::<LitInt>()?.base10_parse()?),
-                TRANSACTIONAL => transactional = Some(transactional_value(&input.parse()?)?),
-                // `concurrency` was a real key. It is gone rather than
-                // deprecated, so say what replaced it instead of listing the
-                // survivors: the removal is a behaviour change, and a bare
-                // "unknown key" would read as a typo.
-                "concurrency" => {
+            if name == "throttle" {
+                if !input.peek(syn::token::Paren) {
                     return Err(syn::Error::new(
                         key.span(),
-                        "`concurrency` is gone from #[process]: a process method runs one job \
-                         at a time, and throughput scales by running more worker replicas — \
-                         the unit the container platform already schedules. Drop the argument",
+                        "#[process] `throttle` takes a list — write \
+                         `throttle(limit = 10, window = \"1m\")`",
                     ));
                 }
-                other => {
+                let content;
+                syn::parenthesized!(content in input);
+                throttle = Some(parse_throttle(&content, key.span())?);
+            } else {
+                // The `=` is checked before it is consumed, so a bare key earns a
+                // sentence naming the key rather than syn's `expected `=``.
+                if !input.peek(Token![=]) {
                     return Err(syn::Error::new(
                         key.span(),
-                        // Built from the constant and through the shared
-                        // sentence, so the four job decorators word an unknown
-                        // key one way — and so a rename of the key cannot leave
-                        // a literal behind in the file that already imports it.
-                        unknown_argument("process", other, &["queue", "retries", TRANSACTIONAL]),
+                        job_argument_needs_a_value("process", &name),
                     ));
+                }
+                input.parse::<Token![=]>()?;
+                match name.as_str() {
+                    "queue" => queue = Some(input.parse()?),
+                    "retries" => {
+                        retries = Some(whole_number(
+                            &input.parse()?,
+                            "`retries` takes a whole number — the re-runs a failed attempt gets \
+                             before the job dead-letters",
+                        )?);
+                    }
+                    "concurrency" => {
+                        concurrency = Some(at_least_one(
+                            &input.parse()?,
+                            "`concurrency` takes a whole number of at least 1 — how many jobs of \
+                             this method one worker replica runs at once",
+                        )?);
+                    }
+                    _ => transactional = Some(transactional_value(&input.parse()?)?),
                 }
             }
             if !input.is_empty() {
@@ -466,20 +603,95 @@ impl Parse for ProcessArgs {
             }
         }
 
-        let queue = queue.ok_or_else(|| {
-            syn::Error::new(
-                input.span(),
-                format!(
-                    "{} (or a `QueueName` type)",
-                    nest_rs_codegen::missing_argument("process", "queue", "\"emails\""),
-                ),
-            )
-        })?;
+        let queue = queue.ok_or_else(|| syn::Error::new(input.span(), missing_queue()))?;
 
         Ok(Self {
             queue,
-            retries: retries.unwrap_or(0),
+            retries,
+            concurrency,
+            throttle,
             transactional,
         })
     }
+}
+
+/// The keys inside `throttle(..)`: both required, each once.
+fn parse_throttle(content: ParseStream, at: Span) -> syn::Result<ThrottleArgs> {
+    let mut limit: Option<u32> = None;
+    let mut window_ms: Option<u64> = None;
+    while !content.is_empty() {
+        let key: Ident = content.parse()?;
+        let name = key.to_string();
+        if !THROTTLE_KEYS.contains(&name.as_str()) {
+            return Err(syn::Error::new(
+                key.span(),
+                unknown_argument("process", &format!("throttle({name})"), &THROTTLE_KEYS),
+            ));
+        }
+        let taken = match name.as_str() {
+            "limit" => limit.is_some(),
+            _ => window_ms.is_some(),
+        };
+        if taken {
+            return Err(syn::Error::new(
+                key.span(),
+                duplicate_argument("process", &format!("throttle({name})")),
+            ));
+        }
+        if !content.peek(Token![=]) {
+            return Err(syn::Error::new(
+                key.span(),
+                job_argument_needs_a_value("process", &format!("throttle({name})")),
+            ));
+        }
+        content.parse::<Token![=]>()?;
+        if name == "limit" {
+            limit = Some(at_least_one(
+                &content.parse()?,
+                "`throttle(limit)` takes a whole number of at least 1 — how many jobs may start \
+                 in one window",
+            )?);
+        } else {
+            window_ms = Some(duration_millis(
+                "process",
+                Some("throttle(window)"),
+                &content.parse()?,
+            )?);
+        }
+        if !content.is_empty() {
+            content.parse::<Token![,]>()?;
+        }
+    }
+    match (limit, window_ms) {
+        (Some(limit), Some(window_ms)) => Ok(ThrottleArgs { limit, window_ms }),
+        _ => Err(syn::Error::new(
+            at,
+            "#[process] `throttle` needs both `limit` and `window` — write \
+             `throttle(limit = 10, window = \"1m\")`",
+        )),
+    }
+}
+
+/// A whole-number literal, or `refusal` spanned at what was written instead.
+fn whole_number(expr: &Expr, refusal: &str) -> syn::Result<u32> {
+    match ungrouped_expr(expr) {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(int), ..
+        }) => int
+            .base10_parse::<u32>()
+            .map_err(|_| syn::Error::new_spanned(int, refusal)),
+        other => Err(syn::Error::new_spanned(other, refusal)),
+    }
+}
+
+/// A whole-number literal of at least one — zero is refused naming why.
+fn at_least_one(expr: &Expr, refusal: &str) -> syn::Result<u32> {
+    let value = whole_number(expr, refusal)?;
+    if value == 0 {
+        return Err(syn::Error::new_spanned(
+            ungrouped_expr(expr),
+            format!("{refusal}; 0 would never run a job"),
+        ));
+    }
+    Ok(value)
 }

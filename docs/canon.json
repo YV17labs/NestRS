@@ -90,6 +90,11 @@
     "AppBuilderPipesExt": [
       "use_pipes_global"
     ],
+    "CheckpointStore": [
+      "clear",
+      "load",
+      "save"
+    ],
     "Config": [
       "defaults",
       "from_env",
@@ -128,6 +133,9 @@
     "Deletable": [
       "delete"
     ],
+    "Destination": [
+      "queue_name"
+    ],
     "Discoverable": [
       "also_provides",
       "dependencies",
@@ -142,6 +150,7 @@
       "collect",
       "register"
     ],
+    "DynamicQueue": [],
     "ErrorReportChain": [
       "into_frame"
     ],
@@ -228,11 +237,17 @@
       "scope"
     ],
     "JobProducer": [
-      "push_json"
+      "backend",
+      "enqueue",
+      "remove",
+      "remove_unique"
     ],
     "JobProducerExt": [
+      "cancel",
+      "cancel_unique",
       "push",
-      "push_to"
+      "push_json",
+      "push_many"
     ],
     "Layer": [
       "name",
@@ -270,11 +285,8 @@
       "actor_id",
       "scopes"
     ],
-    "Processor": [
-      "process"
-    ],
     "ProviderResidency": [],
-    "QueueName": [],
+    "Queue": [],
     "Registry": [
       "broadcast_value",
       "emit_to_value",
@@ -340,14 +352,17 @@
       "type_key"
     ]
   },
-  "test_count": 2270,
+  "test_count": 2311,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [
     "actor_id",
+    "attempt",
+    "id",
     "payload",
     "traceparent",
     "tracestate",
+    "unique_key",
     "v"
   ],
   "configs": {
@@ -499,8 +514,7 @@
       "source": "crates/nest-rs-redis/src/config.rs",
       "fields": [
         "url",
-        "connect_timeout",
-        "tls"
+        "connect_timeout"
       ],
       "profile_split": false
     },

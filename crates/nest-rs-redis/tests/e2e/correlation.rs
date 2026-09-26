@@ -117,7 +117,7 @@ async fn a_job_runs_in_the_trace_that_enqueued_it_as_a_child_of_the_enqueue() {
         // Exactly what an authenticated HTTP handler's guard did before it
         // reached the service that enqueues.
         nest_rs_core::set_actor_id("alice-42");
-        conn.push_to::<CorrelationQueue>(TraceCommand { seq })
+        conn.push(CorrelationQueue, TraceCommand { seq }, None)
             .await
             .expect("enqueue");
     })

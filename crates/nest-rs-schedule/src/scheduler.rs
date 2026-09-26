@@ -747,6 +747,10 @@ type Bounded<T> = Option<std::thread::Result<T>>;
 
 /// Await `call` — a claim, or a question about a claim — for `budget` and no
 /// longer, containing a panic the way every call into a lock is contained.
+///
+/// A caller hands in the lock's call wrapped in an `async` block, so the call is
+/// made inside the catch: a lock that panics before it hands back its future is
+/// contained the same way as one that panics while it runs.
 async fn bounded<T>(budget: Duration, call: impl std::future::Future<Output = T>) -> Bounded<T> {
     tokio::time::timeout(budget, AssertUnwindSafe(call).catch_unwind())
         .await
@@ -859,38 +863,40 @@ impl Runner {
         let occurrence = id.occurrence(instant_ms);
         let budget = left_until(stale_at(instant_ms, hold));
         let claimed = match &self.lock {
-            Some(lock) => match bounded(budget, lock.claim(&occurrence, hold)).await {
-                Some(Ok(claimed)) => claimed,
-                // Not answered while an answer could still be acted on: the call
-                // is dropped, the occurrence skipped, and the loop goes on to the
-                // next one rather than waiting on a lock that may never answer.
-                None => {
-                    tracing::warn!(
-                        target: crate::TARGET,
-                        provider = id.provider,
-                        method = id.method,
-                        occurrence = instant_ms,
-                        waited_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
-                        hold_ms,
-                        "occurrence skipped: its lock did not answer the claim before the \
-                         occurrence went stale",
-                    );
-                    return;
+            Some(lock) => {
+                match bounded(budget, async { lock.claim(&occurrence, hold).await }).await {
+                    Some(Ok(claimed)) => claimed,
+                    // Not answered while an answer could still be acted on: the call
+                    // is dropped, the occurrence skipped, and the loop goes on to the
+                    // next one rather than waiting on a lock that may never answer.
+                    None => {
+                        tracing::warn!(
+                            target: crate::TARGET,
+                            provider = id.provider,
+                            method = id.method,
+                            occurrence = instant_ms,
+                            waited_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
+                            hold_ms,
+                            "occurrence skipped: its lock did not answer the claim before the \
+                             occurrence went stale",
+                        );
+                        return;
+                    }
+                    // A lock that panics answers nothing: the occurrence is skipped,
+                    // the panic named, and the schedule goes on.
+                    Some(Err(payload)) => {
+                        tracing::error!(
+                            target: crate::TARGET,
+                            provider = id.provider,
+                            method = id.method,
+                            occurrence = instant_ms,
+                            panic = panic_message(&*payload),
+                            "occurrence skipped: its lock panicked while claiming it",
+                        );
+                        return;
+                    }
                 }
-                // A lock that panics answers nothing: the occurrence is skipped,
-                // the panic named, and the schedule goes on.
-                Some(Err(payload)) => {
-                    tracing::error!(
-                        target: crate::TARGET,
-                        provider = id.provider,
-                        method = id.method,
-                        occurrence = instant_ms,
-                        panic = panic_message(&*payload),
-                        "occurrence skipped: its lock panicked while claiming it",
-                    );
-                    return;
-                }
-            },
+            }
             None => Err(crate::OccurrenceLockError::new(
                 "no occurrence lock is bound",
             )),
@@ -965,7 +971,7 @@ impl Runner {
         let budget = left_until(stale_at_ms);
         let answers = futures_util::future::join_all(overrun.first.iter().map(|instant| {
             let occurrence = id.occurrence(*instant);
-            async move { bounded(budget, lock.claimed(&occurrence)).await }
+            async move { bounded(budget, async { lock.claimed(&occurrence).await }).await }
         }))
         .await;
         // A question the lock left unanswered past the threshold counts as

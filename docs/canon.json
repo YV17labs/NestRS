@@ -256,10 +256,6 @@
       "register"
     ],
     "Namespaced": [],
-    "OccurrenceLock": [
-      "claim",
-      "claimed"
-    ],
     "Opaque": [
       "opaque"
     ],
@@ -344,7 +340,7 @@
       "type_key"
     ]
   },
-  "test_count": 2269,
+  "test_count": 2263,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [

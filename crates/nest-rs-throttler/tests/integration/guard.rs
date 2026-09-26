@@ -17,12 +17,23 @@
 //! from anywhere but the route's own declaration — and the unmetered control
 //! route proves the pinned default really is that generous rather than the
 //! deployment's.
+//!
+//! The guard's other half is its bound on the store, `HIT_TIMEOUT`: every edge
+//! the guard serves is driven below over a store that never answers, on paused
+//! time, so the twenty seconds it waits cost the suite nothing.
 
-use nest_rs_core::module;
+use std::any::TypeId;
+use std::sync::Arc;
+use std::time::Duration;
+
+use nest_rs_core::{ContainerBuilder, Module, module};
 use nest_rs_guards::guard;
-use nest_rs_http::{controller, routes};
-use nest_rs_testing::TestApp;
-use nest_rs_throttler::{Throttle, ThrottlerConfig, ThrottlerGuard, ThrottlerModule};
+use nest_rs_http::{HttpConfig, HttpModule, async_trait, controller, routes};
+use nest_rs_testing::{LogCapture, TestApp};
+use nest_rs_throttler::{
+    BACKEND_REMEDY, Decision, HIT_TIMEOUT, Throttle, ThrottlerConfig, ThrottlerGuard,
+    ThrottlerModule, ThrottlerStore,
+};
 use poem::http::StatusCode;
 
 #[controller(path = "/rated")]
@@ -134,6 +145,213 @@ async fn a_route_with_no_metadata_falls_back_to_the_module_default() {
     }
 }
 
+// --- a store that never answers ---------------------------------------------
+//
+// A store that cannot answer denies, and a store that never answers could not
+// even do that: it held the unit of work for as long, and on the three edges no
+// request timeout covers — a GraphQL subscription, an MCP operation, a socket's
+// messages — for good. The guard waits `HIT_TIMEOUT` and no longer, then refuses
+// the caller as a store that cannot answer does, on every edge it serves.
+
+/// A store that never answers — a backend holding every command, a network
+/// dropping them without a reset.
+#[derive(Default)]
+struct StalledStore;
+
+#[async_trait]
+impl ThrottlerStore for StalledStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Decision {
+        std::future::pending().await
+    }
+}
+
+/// A store that answers, and slowly: just inside the guard's bound, as a store
+/// running out its own budget does. It stands for the Redis store at the end of
+/// a reconnect, whose connection budget sits well inside the bound.
+#[derive(Default)]
+struct SlowStore;
+
+#[async_trait]
+impl ThrottlerStore for SlowStore {
+    async fn hit(&self, _key: &str, _limit: Throttle) -> Decision {
+        tokio::time::sleep(HIT_TIMEOUT - Duration::from_millis(1)).await;
+        Decision::allowed()
+    }
+}
+
+/// Binds `S` the way a store's own module does: a declared factory carrying the
+/// port's remedy, so it supersedes the in-process default wherever it sits in
+/// `imports` — the documented wiring of a custom store.
+struct StoreModule<S>(std::marker::PhantomData<S>);
+
+impl<S: ThrottlerStore + Default> Module for StoreModule<S> {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+    }
+
+    fn collect(mut builder: ContainerBuilder) -> ContainerBuilder {
+        if !builder.mark_collected(TypeId::of::<Self>()) {
+            return builder;
+        }
+        builder
+            .provide_declared_factory::<Arc<dyn ThrottlerStore>, _, _>(BACKEND_REMEDY, |_| async {
+                Ok(Arc::new(S::default()) as Arc<dyn ThrottlerStore>)
+            })
+    }
+}
+
+type StalledStoreModule = StoreModule<StalledStore>;
+type SlowStoreModule = StoreModule<SlowStore>;
+
+/// The refusal alone reads like any other: a `429`, a `Retry-After`. What says
+/// the store never answered — and which store it was — is this line, naming the
+/// edge, the store and how long it was waited on.
+fn assert_the_store_was_waited_out(logs: &LogCapture, transport: &str) {
+    let cause = logs.expect_one(
+        nest_rs_throttler::TARGET,
+        "throttler store did not answer within the guard's timeout; denying (fail-closed)",
+    );
+    assert_eq!(cause.level, "warn");
+    assert_eq!(cause.field("transport").as_deref(), Some(transport));
+    assert_eq!(
+        cause.field("store").as_deref(),
+        Some(std::any::type_name::<StalledStore>()),
+        "the line names the store behind the trait object, got {:?}",
+        cause.fields,
+    );
+    assert_eq!(
+        cause.field("waited_ms").as_deref(),
+        Some(HIT_TIMEOUT.as_millis().to_string().as_str()),
+    );
+}
+
+/// The window the stalled-store apps pin, and so the `Retry-After` a refusal for
+/// a store that cannot answer carries.
+const WINDOW_SECS: u64 = 60;
+
+/// The HTTP edge the stalled-store apps mount, with its request timeout at the
+/// default — the budget the guard's bound has to answer inside.
+fn edge() -> HttpConfig {
+    HttpConfig {
+        port: 0,
+        ..Default::default()
+    }
+}
+
+/// Await `unit` on the paused clock for twice the bound and no longer, so a
+/// guard that stopped bounding its store fails here, naming the bound, rather
+/// than holding the suite for good the way it held the unit of work.
+async fn within_twice_the_bound<T>(unit: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(HIT_TIMEOUT * 2, unit)
+        .await
+        .unwrap_or_else(|_| panic!("no answer within twice HIT_TIMEOUT ({HIT_TIMEOUT:?})"))
+}
+
+#[controller(path = "/stalled")]
+#[use_guards(ThrottlerGuard)]
+struct StalledController;
+
+#[routes]
+impl StalledController {
+    #[get("/ping")]
+    async fn ping(&self) -> &'static str {
+        "pong"
+    }
+}
+
+#[module(
+    imports = [
+        HttpModule::for_root(edge()),
+        ThrottlerModule::for_root(ThrottlerConfig {
+            limit: Some(60),
+            window_secs: Some(WINDOW_SECS),
+        }),
+        StalledStoreModule,
+    ],
+    providers = [StalledController],
+)]
+struct StalledHttpModule;
+
+#[module(
+    imports = [
+        HttpModule::for_root(edge()),
+        ThrottlerModule::for_root(ThrottlerConfig {
+            limit: Some(60),
+            window_secs: Some(WINDOW_SECS),
+        }),
+        SlowStoreModule,
+    ],
+    providers = [StalledController],
+)]
+struct SlowHttpModule;
+
+/// Fail closed at the bound: the request a stalled store held for good is
+/// refused once `HIT_TIMEOUT` passes — as a store that cannot answer refuses it,
+/// a `429` for the whole window — and before the HTTP edge's own request
+/// timeout, so the caller reads the guard's refusal and the operator the guard's
+/// line naming the store, rather than a `503` naming nothing.
+#[tokio::test(start_paused = true)]
+async fn a_store_that_never_answers_is_refused_at_the_bound_over_http() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<StalledHttpModule>()
+        .await
+        .expect("a custom store bound the documented way boots");
+
+    let sent = tokio::time::Instant::now();
+    let refused = within_twice_the_bound(app.http().get("/stalled/ping").send()).await;
+    let waited = sent.elapsed();
+
+    // A `503` here is the edge's request timeout answering first: the guard's
+    // bound would then be past it, and a hung store would read one way on HTTP
+    // and another on every edge no request timeout covers.
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    refused.assert_header("retry-after", WINDOW_SECS.to_string());
+    assert!(
+        waited >= HIT_TIMEOUT,
+        "refused at the bound, not before: {waited:?}"
+    );
+    let timeout = edge()
+        .request_timeout
+        .expect("the HTTP edge bounds a request by default");
+    assert!(
+        waited < timeout,
+        "…and before the edge's own request timeout: {waited:?}"
+    );
+    assert_the_store_was_waited_out(&logs, "http");
+}
+
+/// The other side of the bound: a store that answers inside it is waited for,
+/// however slowly, and its answer is the one the caller gets. The bound is a
+/// net under a store that never answers, never a budget cutting short one that
+/// does — the Redis store's own budget answers well inside it.
+#[tokio::test(start_paused = true)]
+async fn a_store_answering_inside_the_bound_is_waited_for() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<SlowHttpModule>()
+        .await
+        .expect("a custom store bound the documented way boots");
+
+    within_twice_the_bound(app.http().get("/stalled/ping").send())
+        .await
+        .assert_status_is_ok();
+    logs.expect_none(
+        nest_rs_throttler::TARGET,
+        "throttler store did not answer within the guard's timeout; denying (fail-closed)",
+    );
+}
+
+/// The two budgets either side of the bound, read from the constants that set
+/// them rather than retyped: the HTTP edge's request timeout must stay above
+/// it, or a stalled store reads as a `503` on HTTP and as the guard's refusal
+/// everywhere else.
+#[test]
+fn the_bound_answers_before_the_http_edge_times_a_request_out() {
+    let timeout = HttpConfig::default()
+        .request_timeout
+        .expect("the HTTP edge bounds a request by default");
+    assert!(HIT_TIMEOUT < timeout, "{HIT_TIMEOUT:?} vs {timeout:?}");
+}
+
 // --- the three edges an HTTP-only guard left unmetered -----------------------
 //
 // `/graphql` and `/mcp` are `EdgePosture::Exempt` and a WS message runs after
@@ -167,7 +385,10 @@ mod graphql {
     use nest_rs_testing::TestApp;
     use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
 
-    use super::one_per_minute;
+    use super::{
+        StalledStoreModule, assert_the_store_was_waited_out, edge, one_per_minute,
+        within_twice_the_bound,
+    };
 
     #[resolver]
     #[use_guards(ThrottlerGuard)]
@@ -190,6 +411,17 @@ mod graphql {
         providers = [RatedResolver],
     )]
     struct RatedGraphqlModule;
+
+    #[module(
+        imports = [
+            nest_rs_http::HttpModule::for_root(edge()),
+            GraphqlModule::for_root(None),
+            ThrottlerModule::for_root(one_per_minute()),
+            StalledStoreModule,
+        ],
+        providers = [RatedResolver],
+    )]
+    struct StalledGraphqlModule;
 
     async fn app() -> TestApp {
         TestApp::for_module::<RatedGraphqlModule>()
@@ -269,6 +501,30 @@ mod graphql {
             Some("graphql_anonymous_operation_shares_a_bucket"),
         );
     }
+
+    /// A field is refused at the bound when its store never answers, and its
+    /// resolver never runs. Here a query's, which the HTTP edge would otherwise
+    /// have answered with a `503` at its own timeout; a subscription's fields,
+    /// carried by a socket, have no such timeout at all.
+    #[tokio::test(start_paused = true)]
+    async fn a_store_that_never_answers_refuses_the_field_at_the_bound() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<StalledGraphqlModule>()
+            .await
+            .expect("a resolver over a custom store boots");
+
+        let refused = within_twice_the_bound(tick(&app)).await;
+
+        assert!(
+            refused.contains("Too Many Requests"),
+            "a store that cannot answer refuses the field: {refused}",
+        );
+        assert!(
+            !refused.contains("\"tick\":\"ok\""),
+            "…and the resolver body never ran: {refused}",
+        );
+        assert_the_store_was_waited_out(&logs, "graphql");
+    }
 }
 
 #[cfg(feature = "mcp")]
@@ -279,7 +535,10 @@ mod mcp {
     use nest_rs_testing::mcp::call_tool;
     use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
 
-    use super::one_per_minute;
+    use super::{
+        StalledStoreModule, assert_the_store_was_waited_out, edge, one_per_minute,
+        within_twice_the_bound,
+    };
 
     const PATH: &str = "/mcp/rated";
 
@@ -306,6 +565,24 @@ mod mcp {
         providers = [RatedTool, AllowAllMcpGuard as dyn McpOperationGuard],
     )]
     struct RatedMcpModule;
+
+    // The stream's keep-alive is off: `sse-stream` re-arms it from the real
+    // clock, which a paused one leaves behind at every jump, so it fired over and
+    // over — five real seconds for these twenty paused ones — and pings are not
+    // what this test is about.
+    #[module(
+        imports = [
+            nest_rs_http::HttpModule::for_root(edge()),
+            nest_rs_mcp::McpModule::for_root(nest_rs_mcp::McpConfig {
+                sse_keep_alive: None,
+                ..Default::default()
+            }),
+            ThrottlerModule::for_root(one_per_minute()),
+            StalledStoreModule,
+        ],
+        providers = [RatedTool, AllowAllMcpGuard as dyn McpOperationGuard],
+    )]
+    struct StalledMcpModule;
 
     #[tokio::test]
     async fn a_second_tool_call_inside_the_window_is_refused() {
@@ -354,6 +631,26 @@ mod mcp {
             Some("mcp_anonymous_operation_shares_a_bucket"),
         );
     }
+
+    /// A tool call is refused at the bound when its store never answers. The
+    /// call answers over a stream, which runs after the handler the HTTP edge's
+    /// request timeout covers has returned, so the guard's bound is the only one
+    /// the operation has — the edge is mounted here, and does not end it.
+    #[tokio::test(start_paused = true)]
+    async fn a_store_that_never_answers_refuses_the_tool_call_at_the_bound() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<StalledMcpModule>()
+            .await
+            .expect("an #[mcp] host over a custom store boots");
+
+        let refused = within_twice_the_bound(call_tool(app.http(), PATH, "tick", None)).await;
+
+        assert!(
+            refused.contains("Too Many Requests"),
+            "a store that cannot answer refuses the call: {refused}",
+        );
+        assert_the_store_was_waited_out(&logs, "mcp");
+    }
 }
 
 #[cfg(feature = "ws")]
@@ -364,7 +661,9 @@ mod ws {
     use nest_rs_throttler::{ThrottlerGuard, ThrottlerModule};
     use nest_rs_ws::{WsClient, WsModule, gateway, messages};
 
-    use super::one_per_minute;
+    use super::{
+        StalledStoreModule, assert_the_store_was_waited_out, one_per_minute, within_twice_the_bound,
+    };
 
     /// The binding a developer writes, and the compile witness for `WsGuard`:
     /// `#[messages]` bounds every per-message guard on it, so this file would
@@ -387,6 +686,16 @@ mod ws {
         providers = [RatedGateway],
     )]
     struct RatedWsModule;
+
+    #[module(
+        imports = [
+            WsModule,
+            ThrottlerModule::for_root(one_per_minute()),
+            StalledStoreModule,
+        ],
+        providers = [RatedGateway],
+    )]
+    struct StalledWsModule;
 
     /// The message chain is frozen at mount, behind a real socket the harness
     /// has no driver for — `TestApp` drives HTTP, GraphQL and MCP, and a WS
@@ -444,5 +753,37 @@ mod ws {
             event.fields,
         );
         assert!(event.field("retry_after").is_some());
+    }
+
+    /// A message is refused at the bound when its store never answers. No
+    /// request timeout reaches a socket's messages at all, so before the bound a
+    /// stalled store held this connection's traffic for good.
+    #[tokio::test(start_paused = true)]
+    async fn a_store_that_never_answers_refuses_the_message_at_the_bound() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let app = TestApp::for_module::<StalledWsModule>()
+            .await
+            .expect("a #[subscribe_message] over a custom store boots");
+        let guard = app
+            .container()
+            .get::<ThrottlerGuard>()
+            .expect("ThrottlerModule registers the guard as global infrastructure");
+
+        let sent = tokio::time::Instant::now();
+        let refused = within_twice_the_bound(guard.check_ws_message(
+            &WsClient::for_test(),
+            "tick",
+            &serde_json::Value::Null,
+        ))
+        .await
+        .expect_err("a store that cannot answer refuses the message");
+
+        assert!(sent.elapsed() >= nest_rs_throttler::HIT_TIMEOUT);
+        assert_eq!(
+            refused.http_status(),
+            429,
+            "refused as a rate limit, the one refusal a store that cannot answer gives",
+        );
+        assert_the_store_was_waited_out(&logs, "ws");
     }
 }

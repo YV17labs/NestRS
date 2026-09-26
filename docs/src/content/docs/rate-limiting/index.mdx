@@ -228,7 +228,10 @@ The counter is one Lua script — `INCR`, read the TTL, set it on the first hit 
 so it is atomic across replicas with no check-then-act race. It is sent as
 `EVALSHA`, with a `SCRIPT LOAD` the first time Redis has not cached it, so a Redis
 ACL has to allow both. A backend failure
-**denies**: a rate limiter that fails open is not a rate limiter.
+**denies**: a rate limiter that fails open is not a rate limiter. Each command is
+bounded by the connection's budget (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by
+default), well inside the guard's own bound below, so an outage reaches the caller
+as Redis's own error, with its cause.
 
 ### Writing your own
 
@@ -256,6 +259,20 @@ so it supersedes the in-process default and contests a second vendor's by name.
 The trait is **async**, so a networked implementor awaits its round-trip
 directly — no `block_in_place` bridge occupying a runtime worker per check, and
 no panic on a current-thread runtime.
+
+**The guard waits `HIT_TIMEOUT` — 20 seconds — for `hit`, and no longer.** A
+store still silent then is treated as one that cannot answer: the caller is
+refused for the whole window, fail closed, on every edge, and the guard logs
+`throttler store did not answer within the guard's timeout; denying
+(fail-closed)` at `warn` with the `transport`, the `store` (your type's name,
+from `ThrottlerStore::name`) and `waited_ms`. Without it a store that never
+answered held the request, the GraphQL field, the MCP operation or the socket's
+message for as long — and nothing times out a socket's messages. It is a net,
+not your budget: bound each round-trip yourself, as the Redis store does, so an
+outage reaches the caller as your store's own error. The value sits above the
+Redis store's default budget and below the HTTP edge's request timeout (30 s),
+so a hung store reads as the same `429` on HTTP as on the edges no request
+timeout covers.
 
 There is no `trusted_proxies` on the trait, and that is deliberate: a store
 counts hits, while **who** a hit belongs to is the transport's answer

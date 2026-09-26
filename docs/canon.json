@@ -330,7 +330,8 @@
     ],
     "Subject": [],
     "ThrottlerStore": [
-      "hit"
+      "hit",
+      "name"
     ],
     "Transport": [
       "configure",
@@ -356,7 +357,7 @@
       "type_key"
     ]
   },
-  "test_count": 2484,
+  "test_count": 2488,
   "version_req": "6.1",
   "otel_binding": "_otel",
   "envelope_keys": [

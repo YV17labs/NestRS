@@ -81,6 +81,40 @@ impl Decision {
     }
 }
 
+/// How long [`ThrottlerGuard`](crate::ThrottlerGuard) waits on
+/// [`ThrottlerStore::hit`] before it treats the store as one that cannot
+/// answer: **20 seconds**.
+///
+/// **A net under the store, never the store's budget.** A store that cannot
+/// answer denies — fail closed, since a rate limiter that fails open under a
+/// backend problem is an authentication bypass — and a store that *never*
+/// answers could not even do that: it held the request, the GraphQL field, the
+/// MCP operation or the socket's message for as long, and on the three edges no
+/// request timeout covers, for good. Past this bound the guard gives the answer
+/// every store that cannot answer gives, a denial for the whole window, and says
+/// so at `warn`.
+///
+/// The value sits between the two bounds either side of it, with room on both:
+///
+/// - **Above the store the framework ships over a network.** `RedisThrottler`
+///   bounds every command at its connection's budget
+///   (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by default): a healthy Redis
+///   answers in milliseconds, one reopening a dropped connection within that
+///   budget, and one that cannot fails at it with its own sentence — the cause,
+///   and the variable to change. The guard must not pre-empt any of the three,
+///   or it would cut short an answer still coming and replace a named cause
+///   with a bare timeout; twice the default budget leaves room for a
+///   deployment that raised it.
+/// - **Below the HTTP edge's own request timeout** (`NESTRS_HTTP__REQUEST_TIMEOUT_SECS`,
+///   30 s by default), which answers `503` with a line naming no store. A hung
+///   store then reads the same on every edge — the guard's denial, and the
+///   guard's line naming the store — rather than one way on HTTP and another on
+///   the edges that have no request timeout.
+///
+/// A constant rather than a setting: no store that answers at all needs longer,
+/// and one that needs a different net has a budget of its own to set instead.
+pub const HIT_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Contract a rate-limit backend fulfils so a [`crate::ThrottlerGuard`]-style
 /// guard can interrogate it. The in-process [`InMemoryThrottler`] is the
 /// default impl; a shared-store implementor (Redis) swaps in via its own
@@ -91,11 +125,28 @@ impl Decision {
 /// `block_in_place` bridge occupying a runtime worker per rate-limit check,
 /// and no panic on a current-thread runtime. The in-memory default resolves
 /// immediately.
+///
+/// **`hit` answers within [`HIT_TIMEOUT`], or is treated as unable to.** The
+/// guard waits no longer, then denies. That is the guard's net, not a store's
+/// budget: a networked store bounds each command it sends, as the connection
+/// `RedisThrottler` counts over does, so an outage reaches the caller as the
+/// store's own failure, with its cause, and promptly. And since a call is
+/// dropped where it stands when the bound passes, a store keeps no state a
+/// dropped call would have had to undo — a hit counted by a command whose answer
+/// nobody heard is one more hit counted, which errs toward the limit.
 #[async_trait]
 pub trait ThrottlerStore: Send + Sync + 'static {
     /// Count one hit for `key` under `limit`. Returns whether the request is
     /// allowed and, when denied, the `Retry-After` duration.
     async fn hit(&self, key: &str, limit: Throttle) -> Decision;
+
+    /// The name the guard reports this store under when it does not answer —
+    /// which backend an operator goes to look at. Defaults to the implementor's
+    /// type name, resolved per implementation through the vtable, so it names
+    /// the store behind an `Arc<dyn ThrottlerStore>` rather than the trait.
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
 }
 
 struct Window {

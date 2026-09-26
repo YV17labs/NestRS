@@ -1,9 +1,12 @@
 //! [`ThrottlerGuard`] — rate-limiting guard.
 
 use std::fmt::{self, Write as _};
+use std::future::{Future as _, poll_fn};
 use std::net::IpAddr;
+use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Poll;
 use std::time::Duration;
 
 use nest_rs_core::{Layer, injectable};
@@ -19,7 +22,7 @@ use nest_rs_mcp::McpOperationContext;
 #[cfg(feature = "ws")]
 use nest_rs_ws::WsClient;
 
-use crate::store::ThrottlerStore;
+use crate::store::{Decision, HIT_TIMEOUT, ThrottlerStore};
 use crate::throttle::Throttle;
 
 /// The edge a bucket belongs to — the leading segment of every key, and the
@@ -145,6 +148,40 @@ impl ThrottlerGuard {
             default: Arc::new(default),
         }
     }
+
+    /// Count one hit for `key` under `limit` on the edge `transport` names,
+    /// waiting on the store no longer than [`HIT_TIMEOUT`].
+    ///
+    /// A store silent past the bound is a store that cannot answer, and gets the
+    /// answer every such store gives: a denial for the whole window, fail
+    /// closed, which the edge then refuses the caller with as it would any other.
+    /// The line says what the refusal alone cannot — that the store never
+    /// answered, and which store it was.
+    ///
+    /// The store's call is polled once bare before the bound is armed, as the
+    /// HTTP edge arms its request timeout: the in-process store answers on that
+    /// first poll, so the default path pays neither the clock read nor the timer
+    /// entry a bound costs.
+    async fn count(&self, transport: &'static str, key: &str, limit: Throttle) -> Decision {
+        let mut hit = pin!(self.throttler.hit(key, limit));
+        if let Poll::Ready(decision) = poll_fn(|cx| Poll::Ready(hit.as_mut().poll(cx))).await {
+            return decision;
+        }
+        match tokio::time::timeout(HIT_TIMEOUT, hit).await {
+            Ok(decision) => decision,
+            Err(_) => {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    transport,
+                    store = ThrottlerStore::name(&*self.throttler),
+                    waited_ms = u64::try_from(HIT_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                    "throttler store did not answer within the guard's timeout; denying \
+                     (fail-closed)",
+                );
+                Decision::denied(limit.window)
+            }
+        }
+    }
 }
 
 impl Layer for ThrottlerGuard {}
@@ -173,7 +210,7 @@ impl Guard for ThrottlerGuard {
             .unwrap_or_else(|| req.uri().path());
         let key = bucket_key(&[&transport::HTTP, &route, &ip]);
 
-        let decision = self.throttler.hit(&key, limit).await;
+        let decision = self.count(transport::HTTP, &key, limit).await;
         if decision.allowed {
             return Ok(());
         }
@@ -226,7 +263,7 @@ impl Guard for ThrottlerGuard {
         );
         let key = bucket_key(&[&transport::GRAPHQL, &field, &caller]);
 
-        let decision = self.throttler.hit(&key, *self.default).await;
+        let decision = self.count(transport::GRAPHQL, &key, *self.default).await;
         if decision.allowed {
             return Ok(());
         }
@@ -264,7 +301,7 @@ impl Guard for ThrottlerGuard {
         );
         let key = bucket_key(&[&transport::MCP, &kind, &name, &caller]);
 
-        let decision = self.throttler.hit(&key, *self.default).await;
+        let decision = self.count(transport::MCP, &key, *self.default).await;
         if decision.allowed {
             return Ok(());
         }
@@ -299,7 +336,7 @@ impl Guard for ThrottlerGuard {
         let connection = client.id();
         let key = bucket_key(&[&transport::WS, &event, &connection]);
 
-        let decision = self.throttler.hit(&key, *self.default).await;
+        let decision = self.count(transport::WS, &key, *self.default).await;
         if decision.allowed {
             return Ok(());
         }

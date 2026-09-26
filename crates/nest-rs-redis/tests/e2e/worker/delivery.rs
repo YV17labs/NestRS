@@ -17,16 +17,27 @@
 //! - a connection Redis drops while an attempt runs costs the job nothing — it
 //!   completes once, and a replica starting afterwards does not run it again.
 //!
+//! **apalis never ends a job on its own.** apalis counts every delivery of a
+//! record, hand-backs included, and kills a record answered with a plain error
+//! once that count reaches its cap — five by default — with no event of the
+//! port's. Two tests take a job past the cap on hand-backs alone, by holding
+//! its lease the way a running delivery would: a hand-back Redis then refuses
+//! answers apalis with the plain error, and the job still runs; and a job whose
+//! budget is spent is dead-lettered by the port, once.
+//!
 //! Every assertion follows the job by the id its push returned, and every
 //! handler counts by a marker this run chose.
 
 use std::time::{Duration, Instant};
 
 use nest_rs_core::{injectable, module, operation_log};
-use nest_rs_queue::{JobProducerExt, PushReceipt, processor, queue, unit};
-use nest_rs_redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
+use nest_rs_queue::{JobId, JobProducerExt, PushOptions, PushReceipt, processor, queue, unit};
+use nest_rs_redis::{
+    RedisConfig, RedisConnection, RedisModule, RedisQueueModule, RedisWorkerModule,
+};
 use nest_rs_testing::LogCapture;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use crate::{DB_CONNECTION_RESET_MID_ATTEMPT, Runs};
 
@@ -371,4 +382,360 @@ async fn a_connection_dropped_under_a_running_attempt_costs_the_job_nothing() {
 
     assert_eq!(RESET.of(run).len(), 1, "the job ran once");
     assert_eq!(RESET.finished(run), 1, "and completed once");
+}
+
+// --- apalis never ends a job on its own ------------------------------------------
+
+/// How many hand-backs a job is taken through before the step under test — past
+/// apalis's cap of five deliveries.
+const PAST_THE_CAP: usize = 6;
+
+/// A lease held on `job` the way a running delivery holds one, renewed every
+/// tenth of a second: every delivery of the job meanwhile finds it held, and
+/// hands the job back.
+struct HeldLease {
+    stop: CancellationToken,
+    holding: tokio::task::JoinHandle<()>,
+}
+
+impl HeldLease {
+    fn hold(queue: &str, job: &JobId) -> Self {
+        let key = crate::key_of(queue, "leases", &job.to_string());
+        let stop = CancellationToken::new();
+        let until = stop.clone();
+        let holding = tokio::spawn(async move {
+            let mut conn = crate::connect().await;
+            while !until.is_cancelled() {
+                let _: () = redis::cmd("SET")
+                    .arg(&key)
+                    .arg("a-peer/still-running")
+                    .arg("PX")
+                    .arg(400)
+                    .query_async(&mut conn)
+                    .await
+                    .expect("SET the lease");
+                tokio::select! {
+                    () = until.cancelled() => {}
+                    () = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+            }
+            let _: i64 = redis::cmd("DEL")
+                .arg(&key)
+                .query_async(&mut conn)
+                .await
+                .expect("DEL the lease");
+        });
+        Self { stop, holding }
+    }
+
+    /// Let go, and wait until the lease is gone.
+    async fn release(self) {
+        self.stop.cancel();
+        self.holding.await.expect("the lease holder ends");
+    }
+}
+
+/// How many times the job `id` was handed back because its lease was held.
+fn handed_back(logs: &LogCapture, id: &JobId) -> usize {
+    logs.find(
+        nest_rs_queue::TARGET,
+        "job delivered while another delivery runs it; handing it back",
+    )
+    .iter()
+    .filter(|event| crate::names(event, id))
+    .count()
+}
+
+/// How many records apalis killed onto `queue`'s dead set.
+async fn dead(queue: &str) -> i64 {
+    redis::cmd("ZCARD")
+        .arg(format!("{}:dead", crate::namespace(queue)))
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("ZCARD")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CappedCommand {
+    run: u64,
+}
+
+// A hand-back Redis refuses, past apalis's cap.
+
+const CAPPED_QUEUE: &str = "nestrs-e2e-delivery-capped";
+
+static CAPPED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-delivery-capped", job = CappedCommand)]
+struct CappedQueue;
+
+#[injectable]
+#[derive(Default)]
+struct CappedProcessor;
+
+#[processor]
+impl CappedProcessor {
+    #[process(queue = CappedQueue, retries = 0)]
+    async fn run(&self, job: CappedCommand) -> anyhow::Result<()> {
+        CAPPED.start(job.run);
+        CAPPED.finish(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(None), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [CappedProcessor],
+)]
+struct CappedModule;
+
+/// The ACL user the capped test's replicas reach Redis as, and its password — a
+/// test fixture, never a secret.
+const CAPPED_USER: &str = "nestrs-e2e-capped";
+const CAPPED_PASSWORD: &str = "past-the-cap";
+
+fn capped_config() -> RedisConfig {
+    RedisConfig {
+        url: crate::redis_url_on(0).replacen(
+            "://",
+            &format!("://{CAPPED_USER}:{CAPPED_PASSWORD}@"),
+            1,
+        ),
+        ..Default::default()
+    }
+}
+
+/// Give the capped user the queue's keys: every one of them, or every one but
+/// the schedule — so a hand-back's filing is refused, while the fetch, the
+/// guard and apalis's acknowledgement still reach Redis.
+async fn grant(admin: &mut RedisConnection, schedule: bool) {
+    let namespace = crate::namespace(CAPPED_QUEUE);
+    let mut acl = redis::cmd("ACL");
+    acl.arg("SETUSER").arg(CAPPED_USER).arg("resetkeys");
+    if schedule {
+        acl.arg(format!("~{namespace}:*"));
+    } else {
+        for structure in [
+            "active",
+            "consumers",
+            "inflight:*",
+            "data",
+            "data::result",
+            "signal",
+            "dead",
+            "done",
+            "failed",
+            "open:*",
+            "leases:*",
+            "settled:*",
+            "cancelled:*",
+            "checkpoints:*",
+            "unique:*",
+            "throttle",
+        ] {
+            acl.arg(format!("~{namespace}:{structure}"));
+        }
+    }
+    let _: () = acl.query_async(admin).await.expect("ACL SETUSER");
+}
+
+/// A job handed back past apalis's cap, whose next hand-back Redis refuses, is
+/// answered to apalis with a plain error — which apalis, counting the job's
+/// sixth delivery, would have killed onto its dead set. The job's record lifts
+/// the cap, so apalis files it back instead, and it runs.
+///
+/// The refusal is an ACL that denies the queue's schedule: the hand-back's
+/// filing fails there, and so does apalis's own re-filing after it, which
+/// leaves the job in flight until the next replica's startup sweep — while a
+/// kill would have reached the dead set, which the ACL leaves open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_handed_back_past_apalis_cap_still_runs_when_a_hand_back_fails() {
+    let logs = LogCapture::install_global();
+    let mut admin = crate::connect().await;
+    let _: () = redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg(CAPPED_USER)
+        .arg("reset")
+        .arg("on")
+        .arg(format!(">{CAPPED_PASSWORD}"))
+        .arg("+@all")
+        .arg("-@dangerous")
+        .query_async(&mut admin)
+        .await
+        .expect("ACL SETUSER");
+    grant(&mut admin, true).await;
+
+    let run = crate::this_run();
+    let first = crate::replica_on::<CappedModule>(capped_config()).await;
+    // Held back a second, so the lease is held before the first delivery.
+    let receipt = first
+        .producer
+        .push(
+            CappedQueue,
+            CappedCommand { run },
+            PushOptions::default().with_delay(Duration::from_secs(1)),
+        )
+        .await
+        .expect("a delayed push");
+    let lease = HeldLease::hold(CAPPED_QUEUE, receipt.id());
+    crate::wait_until(Duration::from_secs(60), || {
+        handed_back(&logs, receipt.id()) >= PAST_THE_CAP
+    })
+    .await;
+    assert!(
+        handed_back(&logs, receipt.id()) >= PAST_THE_CAP,
+        "the job was handed back past apalis's cap"
+    );
+
+    // The schedule is closed to the worker, so the job's next hand-back is
+    // refused; the test moves it onto the queue itself, through apalis.
+    grant(&mut admin, false).await;
+    let mut promoter: apalis_redis::RedisStorage<serde_json::Value, RedisConnection> =
+        apalis_redis::RedisStorage::new_with_config(
+            admin.clone(),
+            apalis_redis::Config::default().set_namespace(&crate::namespace(CAPPED_QUEUE)),
+        );
+    let refused = "job not handed back; apalis files it again as it was fetched, due at once, \
+                   and it runs again at that attempt";
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline
+        && !logs
+            .find(nest_rs_queue::TARGET, refused)
+            .iter()
+            .any(|event| crate::names(event, receipt.id()))
+    {
+        promoter
+            .enqueue_scheduled(10)
+            .await
+            .expect("the admin moves due jobs onto the queue");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let failed = logs.find(nest_rs_queue::TARGET, refused);
+    let failed = failed
+        .iter()
+        .find(|event| crate::names(event, receipt.id()))
+        .unwrap_or_else(|| panic!("a hand-back of the job was refused: {failed:#?}"));
+    assert_eq!(failed.level, "error");
+    assert_eq!(failed.field("reason").as_deref(), Some("leased elsewhere"));
+    // apalis answers the plain error on its heartbeat: a kill would land now.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    grant(&mut admin, true).await;
+    lease.release().await;
+    let second = crate::replica_on::<CappedModule>(capped_config()).await;
+    crate::wait_until(Duration::from_secs(20), || CAPPED.finished(run) == 1).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    first.worker.shutdown().await.expect("clean shutdown");
+    second.worker.shutdown().await.expect("clean shutdown");
+    let killed = dead(CAPPED_QUEUE).await;
+    let _: () = redis::cmd("ACL")
+        .arg("DELUSER")
+        .arg(CAPPED_USER)
+        .query_async(&mut admin)
+        .await
+        .expect("ACL DELUSER");
+    crate::forget(CAPPED_QUEUE).await;
+
+    assert_eq!(
+        killed, 0,
+        "apalis killed nothing onto the dead set: the job's record lifts its cap"
+    );
+    assert_eq!(CAPPED.of(run).len(), 1, "the job ran, once");
+    assert_eq!(CAPPED.finished(run), 1, "and completed");
+}
+
+// The port's budget, spent past apalis's cap.
+
+const SPENT_QUEUE: &str = "nestrs-e2e-delivery-cap-spent";
+
+static SPENT: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-delivery-cap-spent", job = CappedCommand)]
+struct SpentQueue;
+
+#[injectable]
+#[derive(Default)]
+struct SpentProcessor;
+
+#[processor]
+impl SpentProcessor {
+    #[process(queue = SpentQueue, retries = 1)]
+    async fn run(&self, job: CappedCommand) -> anyhow::Result<()> {
+        SPENT.start(job.run);
+        anyhow::bail!("the upstream is gone")
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [SpentProcessor],
+)]
+struct SpentModule;
+
+/// A job handed back past apalis's cap still has its whole budget: `retries =
+/// 1` is two attempts, and the second failure dead-letters the job once — the
+/// port's event, and one record on apalis's dead set — whatever apalis counted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_ports_budget_dead_letters_a_job_once_past_apalis_cap() {
+    let logs = LogCapture::install_global();
+    let run = crate::this_run();
+    let replica = crate::replica::<SpentModule>().await;
+    let receipt = replica
+        .producer
+        .push(
+            SpentQueue,
+            CappedCommand { run },
+            PushOptions::default().with_delay(Duration::from_secs(1)),
+        )
+        .await
+        .expect("a delayed push");
+    let lease = HeldLease::hold(SPENT_QUEUE, receipt.id());
+    crate::wait_until(Duration::from_secs(60), || {
+        handed_back(&logs, receipt.id()) >= PAST_THE_CAP
+    })
+    .await;
+    lease.release().await;
+    assert!(
+        handed_back(&logs, receipt.id()) >= PAST_THE_CAP,
+        "the job was handed back past apalis's cap"
+    );
+
+    crate::wait_until(Duration::from_secs(20), || {
+        lines_of(&logs, &receipt).len() == 2
+    })
+    .await;
+    // Long enough for apalis to have filed the job again had it answered the
+    // dead letter with a retry of its own.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    replica
+        .worker
+        .shutdown()
+        .await
+        .expect("clean worker shutdown");
+    let killed = dead(SPENT_QUEUE).await;
+    crate::forget(SPENT_QUEUE).await;
+
+    assert_eq!(
+        lines_of(&logs, &receipt),
+        [line(1, operation_log::ERROR), line(2, operation_log::ERROR)],
+        "the whole budget ran — two attempts — however many hand-backs came first",
+    );
+    assert_eq!(
+        SPENT.of(run).len(),
+        2,
+        "and nothing ran the job a third time"
+    );
+    // The event names its job on the attempt's span, and this process runs this
+    // test alone: every dead letter it saw is this job's.
+    let spent = logs.find(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: retry budget spent",
+    );
+    assert_eq!(
+        spent.len(),
+        1,
+        "the port dead-lettered the job once: {spent:#?}"
+    );
+    assert_eq!(spent[0].field("attempts").as_deref(), Some("2"));
+    assert_eq!(killed, 1, "one record on apalis's dead set");
 }

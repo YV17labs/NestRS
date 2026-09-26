@@ -39,6 +39,34 @@ silently. Every decorator that builds a provider now writes the fact, `true` or
 has spoken. Testable form: a trybuild snapshot per refused shape *plus* one that
 tries the escape.
 
+**A value refusal opens with its site.** Every refusal of a value a decorator
+reads opens with the decorator and the key — ``#[process] `retries` takes a whole
+number`` — or the decorator alone for a positional argument (`#[every("30s")]`),
+worded once in `nest_rs_codegen`'s `args::site`. The site is the part a problems
+list or a CI summary shows without the source frame, and `transactional` is a key
+of four decorators. Three shapes follow it, one per mistake: a value of the wrong
+kind reads ``… takes <what>`` (`takes_value`, `require_str_lit`); a value that
+breaks a grammar names itself and the rule (``#[controller] `version`: "1/2" is
+not a path segment — …``); and a value outside a closed set keeps
+`unknown_value`'s ``unknown #[attr] <what> `x`; expected …``, which names the
+decorator as well. No decorator hands a value to `syn`'s own sentence, which names
+neither the decorator nor the key, and every value reader reads through the
+invisible group a `macro_rules!` forwards a value in (`ungrouped_expr`). A
+`*-macros` crate words its value refusals through `takes_value` like
+`nest_rs_codegen` does, with a trybuild snapshot per refusal.
+
+**A rule both a decorator and the runtime check is written twice and pinned
+once.** A `proc-macro` crate exports only macros and a surface crate cannot depend
+on its own macros' crate, so a queue name checked on a `#[queue]` literal at
+compile time and on a runtime name at the push is two functions —
+`nest_rs_codegen::is_valid_queue_name` and `QueueName::is_valid` — and that is the
+one duplication allowed. It owes three things: **one** test in the surface crate
+running both over one corpus, its bounds read from the runtime's constants
+(`QueueName::MAX_LEN`) rather than retyped; **one fact** in both sentences — the
+compile error is the runtime's with the site in front, so the two give the same
+reason; and a `pub mod` in `nest_rs_codegen` only when the runtime needs a *name*
+from it, as `versioning` does — a function the test calls is re-exported flat.
+
 **A `warn` may name causes; it may not prescribe an edit the framework cannot
 verify.** The same hint offered "list it in `providers` under its own type as
 well" — and `providers = [Foo, Foo as dyn Trait]` runs the constructor twice,
@@ -229,6 +257,26 @@ moves between them inside one feature: `#[routes]`, `#[messages]`,
   `cfg_attr`, and nothing else does: a method compiled out is compiled out of its
   wrapper, its registration and its inventory entry.
 
+**A key one member of a decorator family takes is answered at every member.** The
+worker-job family — `#[process]`, `#[every]`, `#[cron]`, `#[after]` — is the
+worked case, and its table is closed: every family key is built at a member, or
+refused there by `nest_rs_codegen::job_argument_refused` with the fact that makes
+it meaningless (``#[every] takes no `retries`: a tick's retry is the next
+occurrence``); a key no member takes keeps the unknown-key sentence. **The table
+is declared once, in `nest_rs_codegen::job`** — the keys each member accepts, and
+the fact each refused cell states — and the four parsers and the refusal read it,
+never a hand-listed copy. So a key added to one member fails the table's closure
+test until each of the other three builds it or refuses it by name; it never
+reaches them as an unknown word. `transactional` is the one key every member
+builds. Each refused cell has its trybuild snapshot (`*_refused_keys`), and each
+built one a use site in `nest-rs-macro-hygiene`.
+
+Two of the schedule's refusals are decisions rather than impossibilities, and they
+are this framework's recorded contract, not a gap: a tick has no retry — its retry
+is the next occurrence — and never overlaps itself — an occurrence falling inside a
+run is skipped and counted. A tick whose work must not be lost pushes a queue job,
+which is delivered at least once and retried there.
+
 ### When (not) to write a decorator
 
 **Write one when all three hold:** the pattern appears in ≥ 3 places;
@@ -417,6 +465,26 @@ one — and checked **in the one constructor every path reaches**, a config-driv
 boot and a value built in code alike, so the check has one site and its sentence
 names the settings the caller actually wrote. Ranking the tiers of related
 variables inside the loader was tried and removed.
+
+**A variable no config claims is reported, never ignored.** A deployment that
+misspells a variable, or keeps a name a release renamed, gets the default — and
+without a report, no signal, since nothing ever asks for the value. So the loader
+reports two shapes at `warn` on `nest_rs::config`, once per variable, **by name and
+never by value**: a key under a namespace this binary read that no config read
+(`UNREAD_CONFIG_VARIABLE`, the nearest key that was read as `suggestion`), and a
+namespace equal to a linked one once separators are set aside
+(`MISSPELLED_CONFIG_NAMESPACE` — `OAUTH_RESOURCE` for 7.0's `oauth__resource`,
+`SEAORM_URL` for `SEAORM__URL`). **Everything else is silent, by design**: one
+`.env` serves several binaries, so a namespace this binary does not link is
+another binary's, never a mistake. The key half runs inside `read`, the one funnel
+into every `from_env`, once a `from_env` has returned — a config's keys are
+knowable only where its hand-written reader runs (`HttpCors` reads five of its six
+keys only when `CORS_ORIGINS` is set), so a process-wide dry run of every config
+would report a correct deployment, and a diagnostic that fires on correct
+configuration teaches operators to filter its target out. **`nestrs doctor` does
+not run it**: doctor links no framework crate, so it cannot know which namespaces
+and keys the app's binary links, and any list it carried would be a second
+authority on the framework's variables.
 
 **One recorded exception: `OpenTelemetry::init_with(config)`.** The global
 tracer and meter must exist *before* any module registers (the module panics

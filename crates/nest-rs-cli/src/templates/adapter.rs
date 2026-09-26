@@ -256,7 +256,8 @@ pub struct {{command}} {
 /// and the processor both import, so a typo or a mismatched payload is a compile
 /// error rather than a job that silently never drains. Push with
 /// `queue.push({{queue}}, job, None).await?` from a provider injecting
-/// `queue: Arc<dyn JobProducer>`; it answers the job's `PushReceipt`.
+/// `queue: Arc<dyn JobProducer>`, with `JobProducerExt` in scope; it answers the
+/// job's `PushReceipt`.
 #[queue(name = "{{kebab}}", job = {{command}})]
 pub struct {{queue}};
 "#;

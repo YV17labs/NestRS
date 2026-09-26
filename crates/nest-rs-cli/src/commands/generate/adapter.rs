@@ -325,9 +325,9 @@ fn print_next_steps(
     // binding, and the marker this run wrote at the port is what it pushes to.
     if matches!(transport, Transport::Queue) {
         println!(
-            "  Push from a provider injecting Arc<dyn JobProducer>: \
-             `queue.push({}, job, None)`. The app that pushes imports \
-             nest_rs::redis::RedisQueueModule beside RedisModule.",
+            "  Push from a provider injecting Arc<dyn JobProducer>, with \
+             JobProducerExt in scope: `queue.push({}, job, None)`. The app that \
+             pushes imports nest_rs::redis::RedisQueueModule beside RedisModule.",
             names.queue()
         );
     }

@@ -1,30 +1,34 @@
-//! The port's retry budget and its backoff, against a live worker.
+//! One delivery of a job, against a live worker: the port's retry budget and its
+//! backoff as the worker honours them, and a delivery that loses its connection
+//! halfway.
 //!
 //! The port counts the budget and times the wait; the worker only honours what
-//! it is told. This backend declares no delayed delivery, so the wait before a
-//! job's next attempt passes in process, inside the delivery that fetched it —
+//! it is told. This backend declares delayed delivery, so the wait before a
+//! job's next attempt is not spent in process: the next attempt is filed on the
+//! queue's schedule, due once the backoff has passed, and the delivery ends —
 //! and apalis never retries on its own, since a second count kept where the
-//! method's is not would run a job more times than it declared. Three things
+//! method's is not would run a job more times than it declared. Four things
 //! only a live worker shows, one test each:
 //!
 //! - a retryable failure runs again after the backoff, as the same job;
 //! - a spent budget dead-letters the job once, and nothing runs it again;
-//! - a shutdown during the wait gives up the wait and never the job: the next
-//!   attempt runs on whichever replica takes it, still the same job.
+//! - a replica shutting down while a retry waits holds nothing: the next attempt
+//!   is already on the schedule, and the replica that starts next runs it;
+//! - a connection Redis drops while an attempt runs costs the job nothing — it
+//!   completes once, and a replica starting afterwards does not run it again.
 //!
 //! Every assertion follows the job by the id its push returned, and every
-//! handler counts by a marker this run chose: queue names are compile-time
-//! literals, so a run killed mid-job leaves work behind for the next one, and a
-//! count that read it would be measuring an earlier run.
+//! handler counts by a marker this run chose.
 
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use nest_rs_core::{injectable, module, operation_log};
-use nest_rs_queue::{JobId, JobProducerExt, PushReceipt, processor, queue, unit};
+use nest_rs_queue::{JobProducerExt, PushReceipt, processor, queue, unit};
 use nest_rs_redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
 use nest_rs_testing::LogCapture;
 use serde::{Deserialize, Serialize};
+
+use crate::{DB_CONNECTION_RESET_MID_ATTEMPT, Runs};
 
 /// The shortest wait the port's backoff allows after a first failed attempt:
 /// one second, jittered down by at most a fifth.
@@ -33,41 +37,6 @@ const FIRST_WAIT_FLOOR: Duration = Duration::from_millis(800);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RetryCommand {
     run: u64,
-}
-
-/// A marker no earlier run of this suite chose.
-fn this_run() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_nanos() as u64)
-        .unwrap_or_default()
-        ^ u64::from(std::process::id())
-}
-
-/// When each attempt at this run's job started, one list per test.
-struct Attempts(Mutex<Vec<(u64, Instant)>>);
-
-impl Attempts {
-    const fn new() -> Self {
-        Self(Mutex::new(Vec::new()))
-    }
-
-    /// Record an attempt at `run`'s job, answering which attempt it is from 1.
-    fn record(&self, run: u64) -> usize {
-        let mut seen = self.0.lock().expect("attempts lock");
-        seen.push((run, Instant::now()));
-        seen.iter().filter(|(of, _)| *of == run).count()
-    }
-
-    fn of(&self, run: u64) -> Vec<Instant> {
-        self.0
-            .lock()
-            .expect("attempts lock")
-            .iter()
-            .filter(|(of, _)| *of == run)
-            .map(|(_, at)| *at)
-            .collect()
-    }
 }
 
 /// The operation lines the attempts at the job `receipt` names filed, in the
@@ -90,14 +59,9 @@ fn line(attempt: u32, outcome: &str) -> (String, String) {
     (attempt.to_string(), outcome.to_owned())
 }
 
-/// The job id an event names, when it names one.
-fn names(event: &nest_rs_testing::CapturedEvent, id: &JobId) -> bool {
-    event.field("job_id").as_deref() == Some(id.to_string().as_str())
-}
-
 // --- a retryable failure runs again after the backoff ---------------------------
 
-static FLAKY: Attempts = Attempts::new();
+static FLAKY: Runs = Runs::new();
 
 #[queue(name = "nestrs-e2e-retries-flaky", job = RetryCommand)]
 struct FlakyQueue;
@@ -110,7 +74,7 @@ struct FlakyProcessor;
 impl FlakyProcessor {
     #[process(queue = FlakyQueue, retries = 2)]
     async fn run(&self, job: RetryCommand) -> anyhow::Result<()> {
-        if FLAKY.record(job.run) == 1 {
+        if FLAKY.start(job.run) == 1 {
             anyhow::bail!("the upstream timed out");
         }
         Ok(())
@@ -126,7 +90,7 @@ struct FlakyModule;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_retryable_failure_runs_again_after_the_backoff_as_the_same_job() {
     let logs = LogCapture::install_global();
-    let run = this_run();
+    let run = crate::this_run();
     let replica = crate::replica::<FlakyModule>().await;
     let receipt = replica
         .producer
@@ -160,7 +124,7 @@ async fn a_retryable_failure_runs_again_after_the_backoff_as_the_same_job() {
 
 // --- a spent budget dead-letters once ------------------------------------------
 
-static DOOMED: Attempts = Attempts::new();
+static DOOMED: Runs = Runs::new();
 
 #[queue(name = "nestrs-e2e-retries-spent", job = RetryCommand)]
 struct DoomedQueue;
@@ -173,7 +137,7 @@ struct DoomedProcessor;
 impl DoomedProcessor {
     #[process(queue = DoomedQueue, retries = 1)]
     async fn run(&self, job: RetryCommand) -> anyhow::Result<()> {
-        DOOMED.record(job.run);
+        DOOMED.start(job.run);
         anyhow::bail!("the upstream is gone")
     }
 }
@@ -187,7 +151,7 @@ struct DoomedModule;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_spent_budget_dead_letters_the_job_once_and_apalis_never_runs_it_again() {
     let logs = LogCapture::install_global();
-    let run = this_run();
+    let run = crate::this_run();
     let replica = crate::replica::<DoomedModule>().await;
     let receipt = replica
         .producer
@@ -233,22 +197,22 @@ async fn a_spent_budget_dead_letters_the_job_once_and_apalis_never_runs_it_again
     );
 }
 
-// --- a shutdown during the wait hands the job back ------------------------------
+// --- a retry waiting on the schedule outlives its replica -----------------------
 
-static HANDED: Attempts = Attempts::new();
+static FILED: Runs = Runs::new();
 
 #[queue(name = "nestrs-e2e-retries-hand-back", job = RetryCommand)]
-struct HandBackQueue;
+struct FiledQueue;
 
 #[injectable]
 #[derive(Default)]
-struct HandBackProcessor;
+struct FiledProcessor;
 
 #[processor]
-impl HandBackProcessor {
-    #[process(queue = HandBackQueue, retries = 3)]
+impl FiledProcessor {
+    #[process(queue = FiledQueue, retries = 3)]
     async fn run(&self, job: RetryCommand) -> anyhow::Result<()> {
-        if HANDED.record(job.run) == 1 {
+        if FILED.start(job.run) == 1 {
             anyhow::bail!("the upstream timed out");
         }
         Ok(())
@@ -257,47 +221,49 @@ impl HandBackProcessor {
 
 #[module(
     imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
-    providers = [HandBackProcessor],
+    providers = [FiledProcessor],
 )]
-struct HandBackModule;
+struct FiledModule;
 
+/// The next attempt is filed the moment the first one fails, so the replica
+/// holds nothing while the backoff runs: it shuts down at once, and whichever
+/// replica starts next runs the next attempt, of the same job.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_shutdown_during_the_wait_hands_the_job_back_for_its_next_attempt() {
+async fn a_retry_filed_before_a_shutdown_runs_on_the_replica_that_starts_next() {
     let logs = LogCapture::install_global();
-    let run = this_run();
-    let first = crate::replica::<HandBackModule>().await;
+    let run = crate::this_run();
+    let first = crate::replica::<FiledModule>().await;
     let receipt = first
         .producer
-        .push(HandBackQueue, RetryCommand { run }, None)
+        .push(FiledQueue, RetryCommand { run }, None)
         .await
         .expect("enqueue");
 
-    // The first attempt failed, and its replica is waiting out the backoff.
+    // The first attempt failed, and its next one is on the schedule.
     crate::wait_until(Duration::from_secs(15), || {
         !lines_of(&logs, &receipt).is_empty()
     })
     .await;
+    let stopping = Instant::now();
     first
         .worker
         .shutdown()
         .await
-        .expect("the wait gives way to the shutdown");
-
-    let handed_back = logs.find(
-        nest_rs_queue::TARGET,
-        "job handed back at shutdown for its next attempt",
+        .expect("nothing holds the shutdown");
+    assert!(
+        stopping.elapsed() < Duration::from_secs(1),
+        "no wait in process held the shutdown: {:?}",
+        stopping.elapsed(),
     );
-    let handed_back = handed_back
-        .iter()
-        .find(|event| names(event, receipt.id()))
-        .unwrap_or_else(|| panic!("the job was handed back, not dropped: {handed_back:#?}"));
-    assert_eq!(
-        handed_back.field("attempt").as_deref(),
-        Some("2"),
-        "it is handed back as the attempt it was waiting for",
+    assert!(
+        logs.find(nest_rs_queue::TARGET, "job filed for its next attempt")
+            .iter()
+            .any(|event| crate::names(event, receipt.id())
+                && event.field("attempt").as_deref() == Some("2")),
+        "the next attempt was filed as attempt 2",
     );
 
-    let second = crate::replica::<HandBackModule>().await;
+    let second = crate::replica::<FiledModule>().await;
     crate::wait_until(Duration::from_secs(15), || {
         lines_of(&logs, &receipt).len() == 2
     })
@@ -311,7 +277,98 @@ async fn a_shutdown_during_the_wait_hands_the_job_back_for_its_next_attempt() {
     assert_eq!(
         lines_of(&logs, &receipt),
         [line(1, operation_log::ERROR), line(2, operation_log::OK)],
-        "the replica that took it over ran the next attempt of the same job",
+        "the replica that started next ran the next attempt of the same job",
     );
-    assert_eq!(HANDED.of(run).len(), 2, "and nothing ran it a third time");
+    assert_eq!(FILED.of(run).len(), 2, "and nothing ran it a third time");
+}
+
+// --- a connection dropped under a running attempt --------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ResetCommand {
+    run: u64,
+}
+
+static RESET: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-delivery-reset", job = ResetCommand)]
+struct ResetQueue;
+
+#[injectable]
+#[derive(Default)]
+struct ResetProcessor;
+
+#[processor]
+impl ResetProcessor {
+    #[process(queue = ResetQueue, retries = 2)]
+    async fn run(&self, job: ResetCommand) -> anyhow::Result<()> {
+        RESET.start(job.run);
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        RESET.finish(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(None), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [ResetProcessor],
+)]
+struct ResetModule;
+
+/// Redis closes every connection the worker holds while an attempt runs — what
+/// a failover or a restart does. The attempt is the handler's and runs on; the
+/// lease, the settled mark and the acknowledgement reconnect behind it. The job
+/// completes once, carries its settled mark, and a replica starting afterwards —
+/// whose startup sweep would find it again had its acknowledgement been lost —
+/// does not run it a second time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_dropped_under_a_running_attempt_costs_the_job_nothing() {
+    let run = crate::this_run();
+    let first =
+        crate::replica_on::<ResetModule>(crate::redis_config_on(DB_CONNECTION_RESET_MID_ATTEMPT))
+            .await;
+    let receipt = first
+        .producer
+        .push(ResetQueue, ResetCommand { run }, None)
+        .await
+        .expect("enqueue");
+    crate::wait_until(Duration::from_secs(10), || !RESET.of(run).is_empty()).await;
+
+    let dropped = crate::drop_every_connection_on(DB_CONNECTION_RESET_MID_ATTEMPT).await;
+    assert!(dropped > 0, "the worker's connections were there to drop");
+
+    crate::wait_until(Duration::from_secs(10), || RESET.finished(run) == 1).await;
+    let settled = format!(
+        "{}:settled:{}",
+        crate::namespace("nestrs-e2e-delivery-reset"),
+        receipt.id()
+    );
+    let mut admin = nest_rs_redis::RedisConnection::connect(&crate::redis_config_on(
+        DB_CONNECTION_RESET_MID_ATTEMPT,
+    ))
+    .await
+    .expect("connect");
+    let mut marked = false;
+    for _ in 0..50 {
+        marked = redis::cmd("EXISTS")
+            .arg(&settled)
+            .query_async::<bool>(&mut admin)
+            .await
+            .unwrap_or(false);
+        if marked {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(marked, "the job carries its settled mark");
+
+    let second =
+        crate::replica_on::<ResetModule>(crate::redis_config_on(DB_CONNECTION_RESET_MID_ATTEMPT))
+            .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    first.worker.shutdown().await.expect("clean shutdown");
+    second.worker.shutdown().await.expect("clean shutdown");
+
+    assert_eq!(RESET.of(run).len(), 1, "the job ran once");
+    assert_eq!(RESET.finished(run), 1, "and completed once");
 }

@@ -1,12 +1,15 @@
 //! Live-Redis e2e for `nest-rs-redis`. One module per concern in `src/`:
 //! [`connection`] for the shared connection's boot, bound and recovery,
 //! [`tls`] for `rediss://`, [`throttler`] for the cross-process rate-limit
-//! store, [`concurrency`] and [`replicas`] for the worker's fetch guarantees,
-//! [`retries`] for the port's retry budget and backoff as the worker honours
-//! them, [`correlation`] for the trace context that crosses the
-//! producer/consumer process boundary, [`portable_producer`] for the two
-//! names `RedisQueueModule` binds, and [`schedule`] for the occurrence lock a
-//! job firing once across replicas claims through.
+//! store, [`layout`] for where a queue lives — its namespace, the 6.x layout a
+//! worker refuses to start beside, and a user confined to the framework's keys —
+//! [`queue`] for the producer binding, a delayed push and its promotion, and
+//! [`worker`] for the consumer: its fetch and concurrency, each delivery's
+//! retries and hand-backs, and the lease that keeps a job from running twice.
+//! [`correlation`] covers the trace context that crosses the producer/consumer
+//! process boundary, which is both halves' concern.
+//! [`schedule`] covers the occurrence lock a job firing once across replicas
+//! claims through.
 //!
 //! Needs a reachable Redis — gated out of `unit` by the nextest `binary(e2e)`
 //! filter, and behind the `throttler` and `schedule` features (off by default,
@@ -22,25 +25,28 @@
 //! the suite's shared fixtures and nothing else — every test lives in the
 //! module named for the concern it covers.
 
-mod concurrency;
 mod connection;
 mod correlation;
-mod portable_producer;
-mod replicas;
-mod retries;
+mod layout;
+mod queue;
 mod schedule;
 mod throttler;
 mod tls;
+mod worker;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nest_rs_redis::{RedisConfig, RedisConnection, RedisQueueProducer, RedisWorker};
-use nest_rs_testing::{TestApp, TransportHandle};
+use nest_rs_core::Transport;
+use nest_rs_redis::{
+    RedisConfig, RedisConnection, RedisQueueProducer, RedisWorker, RedisWorkerConfig,
+};
+use nest_rs_testing::{CapturedEvent, TestApp, TransportHandle};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 fn redis_url() -> String {
     std::env::var(nest_rs_config::var_name("redis", "URL"))
@@ -69,6 +75,8 @@ fn redis_config() -> RedisConfig {
 /// not meet another test's — one per test, all declared here so that no two
 /// collide. Every other test shares database 0.
 const DB_CONNECTION_DROP: u8 = 11;
+const DB_CONNECTION_RESET_MID_ATTEMPT: u8 = 10;
+const DB_CONFINED_TO_THE_PREFIX: u8 = 9;
 const DB_TLS_FLUSH: u8 = 12;
 const DB_TLS_REFUSED_REOPEN: u8 = 13;
 /// Claims only: every scheduler the `schedule` tests boot claims here, so the
@@ -86,6 +94,14 @@ fn redis_url_on(db: u8) -> String {
         _ => url,
     };
     format!("{base}/{db}")
+}
+
+/// [`redis_config`] on database `db`.
+fn redis_config_on(db: u8) -> RedisConfig {
+    RedisConfig {
+        url: redis_url_on(db),
+        ..Default::default()
+    }
 }
 
 /// A key unique to this process, call site and wall-clock instant, so a rerun
@@ -207,7 +223,21 @@ struct Replica {
 /// leaked: the transport borrows the container it owns, the way a process would
 /// hold it.
 async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
-    let app = TestApp::builder()
+    replica_of::<M>(TestApp::builder()).await
+}
+
+/// [`replica`], reaching Redis as `redis` says whatever the environment says:
+/// the config is seeded, which freezes it against the deployment's variables —
+/// the hermetic-test hatch, for a suite that needs a database or a user of its
+/// own while `NESTRS_REDIS__URL` points every other one at the shared Redis.
+async fn replica_on<M: nest_rs_core::Module + 'static>(redis: RedisConfig) -> Replica {
+    replica_of::<M>(TestApp::builder().provide(redis)).await
+}
+
+async fn replica_of<M: nest_rs_core::Module + 'static>(
+    builder: nest_rs_testing::TestAppBuilder,
+) -> Replica {
+    let app = builder
         .module::<M>()
         .build_headless()
         .await
@@ -226,6 +256,57 @@ async fn replica<M: nest_rs_core::Module + 'static>() -> Replica {
     Replica { worker, producer }
 }
 
+/// A replica whose transport can die without a shutdown: aborting `serve`
+/// drops the worker where it stands — its deliveries, their leases' renewals,
+/// its heartbeat — the way a killed process does.
+struct Mortal {
+    serving: tokio::task::JoinHandle<anyhow::Result<()>>,
+    producer: RedisQueueProducer,
+}
+
+impl Mortal {
+    /// Kill the replica, and wait until nothing of it runs any more.
+    async fn kill(self) {
+        self.serving.abort();
+        let _ = self.serving.await;
+    }
+}
+
+/// Boot the worker app `M` like [`replica`], and run its worker on a task a
+/// test can abort.
+async fn mortal_replica<M: nest_rs_core::Module + 'static>() -> Mortal {
+    let app = TestApp::builder()
+        .module::<M>()
+        .build_headless()
+        .await
+        .expect("the worker app boots against the dev container Redis");
+    app.init().await.expect("init phases");
+    let producer = RedisQueueProducer::clone(
+        &app.container()
+            .get::<RedisQueueProducer>()
+            .expect("RedisQueueModule binds the producer"),
+    );
+    let mut worker = RedisWorker::default();
+    worker
+        .configure(app.container())
+        .await
+        .expect("the queue worker configures");
+    let serving = tokio::spawn(Box::new(worker).serve(CancellationToken::new()));
+    Box::leak(Box::new(app));
+    Mortal { serving, producer }
+}
+
+/// The worker settings the guard's suites run under: a lease of two seconds, so
+/// a job a dead replica held is free again within a test, and the shortest
+/// orphan threshold accepted.
+fn brisk() -> RedisWorkerConfig {
+    RedisWorkerConfig {
+        shutdown_timeout: Duration::from_secs(2),
+        orphan_after: Duration::from_secs(5),
+        lease: Duration::from_secs(2),
+    }
+}
+
 /// Poll `ready` until it holds or `within` elapses — the wait a live worker's
 /// asynchronous progress needs, bounded so a regression fails rather than hangs.
 async fn wait_until(within: Duration, ready: impl Fn() -> bool) {
@@ -236,4 +317,88 @@ async fn wait_until(within: Duration, ready: impl Fn() -> bool) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// A marker no earlier run of this suite chose. Queue names are compile-time
+/// literals, so a run killed mid-job leaves work behind for the next one, and a
+/// count that read it would be measuring an earlier run.
+fn this_run() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_nanos() as u64)
+        .unwrap_or_default()
+        ^ u64::from(std::process::id())
+}
+
+/// When each attempt at a run's job started — and, for the suites that care,
+/// when one finished — one list per test.
+struct Runs {
+    started: Mutex<Vec<(u64, Instant)>>,
+    finished: Mutex<Vec<u64>>,
+}
+
+impl Runs {
+    const fn new() -> Self {
+        Self {
+            started: Mutex::new(Vec::new()),
+            finished: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Record an attempt at `run`'s job starting, answering which one it is
+    /// from 1.
+    fn start(&self, run: u64) -> usize {
+        let mut seen = self.started.lock().expect("runs lock");
+        seen.push((run, Instant::now()));
+        seen.iter().filter(|(of, _)| *of == run).count()
+    }
+
+    /// Record an attempt at `run`'s job running to its end.
+    fn finish(&self, run: u64) {
+        self.finished.lock().expect("runs lock").push(run);
+    }
+
+    /// When each attempt at `run`'s job started.
+    fn of(&self, run: u64) -> Vec<Instant> {
+        self.started
+            .lock()
+            .expect("runs lock")
+            .iter()
+            .filter(|(of, _)| *of == run)
+            .map(|(_, at)| *at)
+            .collect()
+    }
+
+    /// How many attempts at `run`'s job ran to their end.
+    fn finished(&self, run: u64) -> usize {
+        self.finished
+            .lock()
+            .expect("runs lock")
+            .iter()
+            .filter(|of| **of == run)
+            .count()
+    }
+}
+
+/// Whether `event` names the job `id`.
+fn names(event: &CapturedEvent, id: &nest_rs_queue::JobId) -> bool {
+    event.field("job_id").as_deref() == Some(id.to_string().as_str())
+}
+
+/// The namespace the queue named `queue` lives under — spelled here rather than
+/// reached, since the crate keeps its layout private: a test that read the
+/// constant could not notice it moving.
+fn namespace(queue: &str) -> String {
+    format!("nestrs:queue:{queue}")
+}
+
+/// The length of the list a worker fetches `queue`'s jobs from — the one an
+/// autoscaler reads.
+async fn waiting(queue: &str) -> i64 {
+    let mut admin = connect().await;
+    redis::cmd("LLEN")
+        .arg(format!("{}:active", namespace(queue)))
+        .query_async(&mut admin)
+        .await
+        .expect("LLEN")
 }

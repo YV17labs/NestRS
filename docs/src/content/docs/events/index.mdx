@@ -30,7 +30,7 @@ method as a listener for the event type read from its parameter. Here the
 `notifications` slice reacts to a fact the `posts` slice publishes:
 
 ```rust title="crates/features/src/notifications/events/listener.rs (from the demo, abridged)"
-use nest_rs::core::injectable;
+use nest_rs::core::{error_message, injectable};
 use nest_rs::events::listeners;
 
 use crate::posts::PostPublishedEvent;

@@ -84,22 +84,22 @@ pub const MISSPELLED_CONFIG_NAMESPACE: &str = "config variable under a misspelle
 
 /// A variable set under the framework's prefix that no config claims, and why.
 #[derive(Debug, PartialEq, Eq)]
-enum Unclaimed<'a> {
+enum Unclaimed {
     /// Under a namespace this binary read, naming a key nothing read.
     Key {
         variable: String,
-        namespace: &'a str,
+        namespace: String,
         suggestion: Option<String>,
     },
     /// Under a spelling of a linked namespace that differs in its separators.
     Namespace {
         variable: String,
-        namespace: &'a str,
+        namespace: String,
         suggestion: String,
     },
 }
 
-impl Unclaimed<'_> {
+impl Unclaimed {
     fn variable(&self) -> &str {
         match self {
             Self::Key { variable, .. } | Self::Namespace { variable, .. } => variable,
@@ -116,7 +116,7 @@ impl Unclaimed<'_> {
             } => tracing::warn!(
                 target: crate::TARGET,
                 variable = variable.as_str(),
-                namespace = *namespace,
+                namespace = namespace.as_str(),
                 suggestion = suggestion.as_deref(),
                 "{UNREAD_CONFIG_VARIABLE}",
             ),
@@ -127,7 +127,7 @@ impl Unclaimed<'_> {
             } => tracing::warn!(
                 target: crate::TARGET,
                 variable = variable.as_str(),
-                namespace = *namespace,
+                namespace = namespace.as_str(),
                 suggestion = suggestion.as_str(),
                 "{MISSPELLED_CONFIG_NAMESPACE}",
             ),
@@ -141,18 +141,63 @@ struct Ledger {
     known: BTreeSet<String>,
     /// Namespaces whose misspellings were looked for.
     spellings_checked: BTreeSet<String>,
-    /// Namespaces whose unread keys were looked for.
+    /// Namespaces whose unread keys were looked for — every namespace a config
+    /// has been read in, which is also why they own the variables under them.
     keys_checked: BTreeSet<String>,
     /// Variables already reported — the once-per-variable guarantee.
     reported: BTreeSet<String>,
 }
 
-static LEDGER: Mutex<Ledger> = Mutex::new(Ledger {
-    known: BTreeSet::new(),
-    spellings_checked: BTreeSet::new(),
-    keys_checked: BTreeSet::new(),
-    reported: BTreeSet::new(),
-});
+impl Ledger {
+    const fn new() -> Self {
+        Self {
+            known: BTreeSet::new(),
+            spellings_checked: BTreeSet::new(),
+            keys_checked: BTreeSet::new(),
+            reported: BTreeSet::new(),
+        }
+    }
+
+    /// What `names` holds that no config claims, now that `namespace` was read
+    /// (`complete` when its `from_env` returned) in a binary linking `linked`.
+    ///
+    /// Each namespace's spellings are checked once and its keys once; a variable
+    /// two of those checks can both see — a namespace read before a longer one
+    /// the binary links only by a hand-written `Namespaced` — is still reported
+    /// once.
+    fn check(
+        &mut self,
+        namespace: &str,
+        complete: bool,
+        names: &BTreeSet<String>,
+        linked: &[&str],
+    ) -> Vec<Unclaimed> {
+        let mut owners: BTreeSet<&str> = linked.iter().copied().collect();
+        owners.extend(self.keys_checked.iter().map(String::as_str));
+        owners.insert(namespace);
+        let owners: Vec<&str> = owners.into_iter().collect();
+        let unchecked: Vec<&str> = owners
+            .iter()
+            .copied()
+            .filter(|ns| !self.spellings_checked.contains(*ns))
+            .collect();
+
+        let mut out = misspelled_namespaces(names, &self.known, &owners, &unchecked);
+        if complete && !self.keys_checked.contains(namespace) {
+            out.extend(unread_keys(namespace, names, &self.known, &owners));
+        }
+
+        let newly_checked: Vec<String> = unchecked.iter().map(|ns| (*ns).to_owned()).collect();
+        self.spellings_checked.extend(newly_checked);
+        if complete {
+            self.keys_checked.insert(namespace.to_owned());
+        }
+        out.retain(|found| self.reported.insert(found.variable().to_owned()));
+        out
+    }
+}
+
+static LEDGER: Mutex<Ledger> = Mutex::new(Ledger::new());
 
 /// Record that a framework reader asked for `name`.
 ///
@@ -173,28 +218,13 @@ pub(crate) fn witness(name: &str) {
 /// a partial read knows only part of its keys, so it reports misspelled
 /// namespaces and leaves its keys for a read that finishes.
 pub(crate) fn after_read(namespace: &str, complete: bool) {
-    // Listed before the ledger is locked: the cascade parse behind it is the
-    // one step here that touches the filesystem.
+    // Gathered before the ledger is locked: the cascade parse behind the names
+    // is the one step here that touches the filesystem.
     let names = environment_names();
-    let reports = {
-        let Ok(mut ledger) = LEDGER.lock() else {
-            return;
-        };
-        let mut linked: Vec<&str> = crate::namespace::linked();
-        if !linked.contains(&namespace) {
-            linked.push(namespace);
-        }
-        let unchecked: Vec<&str> = linked
-            .iter()
-            .copied()
-            .filter(|ns| ledger.spellings_checked.insert((*ns).to_owned()))
-            .collect();
-        let mut out = misspelled_namespaces(&names, &ledger.known, &linked, &unchecked);
-        if complete && ledger.keys_checked.insert(namespace.to_owned()) {
-            out.extend(unread_keys(namespace, &names, &ledger.known, &linked));
-        }
-        out.retain(|found| ledger.reported.insert(found.variable().to_owned()));
-        out
+    let linked = crate::namespace::linked();
+    let reports = match LEDGER.lock() {
+        Ok(mut ledger) => ledger.check(namespace, complete, &names, &linked),
+        Err(_) => return,
     };
     // Emitted with the ledger released: a subscriber is foreign code, and one
     // that reads a config would otherwise wait on a lock its own thread holds.
@@ -226,12 +256,12 @@ fn environment_names() -> BTreeSet<String> {
 /// A variable a longer linked namespace owns (`redis__worker` under `redis`) is
 /// that namespace's to judge. A key holding `__` is a sub-namespace this binary
 /// does not link — another binary's — and is reported only as a near miss.
-fn unread_keys<'a>(
-    namespace: &'a str,
+fn unread_keys(
+    namespace: &str,
     names: &BTreeSet<String>,
     known: &BTreeSet<String>,
     linked: &[&str],
-) -> Vec<Unclaimed<'a>> {
+) -> Vec<Unclaimed> {
     let head = var_name(namespace, "");
     let deeper: Vec<String> = linked
         .iter()
@@ -255,7 +285,7 @@ fn unread_keys<'a>(
             }
             Some(Unclaimed::Key {
                 variable: name.clone(),
-                namespace,
+                namespace: namespace.to_owned(),
                 suggestion,
             })
         })
@@ -268,12 +298,12 @@ fn unread_keys<'a>(
 /// Splits are tried at each `__`, outermost first, and the first one that
 /// names a linked namespace *exactly* ends the search: that variable is
 /// correctly spelled, and whatever follows is its key.
-fn misspelled_namespaces<'a>(
+fn misspelled_namespaces(
     names: &BTreeSet<String>,
     known: &BTreeSet<String>,
     linked: &[&str],
-    unchecked: &[&'a str],
-) -> Vec<Unclaimed<'a>> {
+    unchecked: &[&str],
+) -> Vec<Unclaimed> {
     let root = EnvPrefix::var("");
     let mut out = Vec::new();
     for name in names.iter().filter(|name| !known.contains(*name)) {
@@ -289,7 +319,7 @@ fn misspelled_namespaces<'a>(
             if let Some(namespace) = unchecked.iter().copied().find(|ns| squash(ns) == squashed) {
                 out.push(Unclaimed::Namespace {
                     variable: name.clone(),
-                    namespace,
+                    namespace: namespace.to_owned(),
                     suggestion: var_name(namespace, key),
                 });
                 break;
@@ -383,8 +413,16 @@ mod tests {
         let host = var_name("fixture", "HOST");
         let read = [("PORT", port.as_str()), ("HOST", host.as_str())];
         assert_eq!(closest("PROT", &read), Some(port.as_str()));
-        assert_eq!(closest("port", &read), Some(port.as_str()), "case is folded");
-        assert_eq!(closest("P_O_R_T", &read), Some(port.as_str()), "separators too");
+        assert_eq!(
+            closest("port", &read),
+            Some(port.as_str()),
+            "case is folded"
+        );
+        assert_eq!(
+            closest("P_O_R_T", &read),
+            Some(port.as_str()),
+            "separators too"
+        );
         assert_eq!(closest("TIMEOUT", &read), None);
     }
 
@@ -397,7 +435,10 @@ mod tests {
 
     #[test]
     fn a_key_nothing_read_is_reported_with_its_nearest_neighbour() {
-        let known = set(&[var_name("fixture", "PORT"), var_name("fixture", "PORT_FILE")]);
+        let known = set(&[
+            var_name("fixture", "PORT"),
+            var_name("fixture", "PORT_FILE"),
+        ]);
         let names = set(&[
             var_name("fixture", "PROT"),
             var_name("fixture", "BANNER"),
@@ -409,12 +450,12 @@ mod tests {
             [
                 Unclaimed::Key {
                     variable: var_name("fixture", "BANNER"),
-                    namespace: "fixture",
+                    namespace: "fixture".to_owned(),
                     suggestion: None,
                 },
                 Unclaimed::Key {
                     variable: var_name("fixture", "PROT"),
-                    namespace: "fixture",
+                    namespace: "fixture".to_owned(),
                     suggestion: Some(var_name("fixture", "PORT")),
                 },
             ],
@@ -444,7 +485,7 @@ mod tests {
             found,
             [Unclaimed::Key {
                 variable: var_name("fixture", "CLIENT__ID"),
-                namespace: "fixture",
+                namespace: "fixture".to_owned(),
                 suggestion: Some(var_name("fixture", "CLIENT_ID")),
             }],
             "only the near miss is reported",
@@ -467,12 +508,12 @@ mod tests {
             [
                 Unclaimed::Namespace {
                     variable: var_name("fixturemember", "URL_FILE"),
-                    namespace: "fixture__member",
+                    namespace: "fixture__member".to_owned(),
                     suggestion: var_name("fixture__member", "URL_FILE"),
                 },
                 Unclaimed::Namespace {
                     variable: var_name("fixture_member", "URL"),
-                    namespace: "fixture__member",
+                    namespace: "fixture__member".to_owned(),
                     suggestion: var_name("fixture__member", "URL"),
                 },
             ],
@@ -499,6 +540,43 @@ mod tests {
         assert!(
             found.is_empty(),
             "`FIXTURE` is linked, so `MEMBER__URL` is its key, not a namespace: {found:?}",
+        );
+    }
+
+    /// A namespace read before a longer one this binary links only by a
+    /// hand-written `Namespaced` sees that one's variable as a near miss of its
+    /// own key; the longer one's own read sees it as unread. One line, not two.
+    #[test]
+    fn a_variable_two_checks_can_see_is_reported_once() {
+        let mut ledger = Ledger::new();
+        ledger.known.insert(var_name("fixture", "MEMBER_URL"));
+        let names = set(&[var_name("fixture__member", "URL")]);
+
+        let first = ledger.check("fixture", true, &names, &[]);
+        let second = ledger.check("fixture__member", true, &names, &[]);
+
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert!(second.is_empty(), "{second:?}");
+    }
+
+    /// A read cut short by an early `?` knows only part of its keys: it reports
+    /// no key, and leaves the namespace for a read that finishes.
+    #[test]
+    fn a_partial_read_leaves_its_keys_for_a_complete_one() {
+        let mut ledger = Ledger::new();
+        let names = set(&[var_name("fixture", "PROT")]);
+
+        assert!(ledger.check("fixture", false, &names, &[]).is_empty());
+        ledger.known.insert(var_name("fixture", "PORT"));
+        let found = ledger.check("fixture", true, &names, &[]);
+
+        assert_eq!(
+            found,
+            [Unclaimed::Key {
+                variable: var_name("fixture", "PROT"),
+                namespace: "fixture".to_owned(),
+                suggestion: Some(var_name("fixture", "PORT")),
+            }],
         );
     }
 }

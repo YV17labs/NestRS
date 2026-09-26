@@ -1298,7 +1298,7 @@ name order; init failure aborts boot, shutdown is best-effort.
   `nest_rs_queue::consume::discover`, and a push option the backend lacks is
   refused by the port before the backend sees it. A second adapter therefore
   copies nothing — and an adapter that opens a `queue.job` span of its own, or
-  counts attempts, has taken semantics it does not own.
+  keeps a retry budget of its own, has taken semantics it does not own.
 
   **A job is named by the port.** The push mints a `JobId` — a UUID v7 — and
   seals it in the envelope, and that id keys everything kept about the job: its

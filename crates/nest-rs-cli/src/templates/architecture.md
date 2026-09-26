@@ -57,8 +57,9 @@ The framework is Ports & Adapters as it is practised now: explicit in the
 composition root, thin where a library has already done the work, verified by
 tests rather than trusted to discipline. A **port** is a crate that defines a
 contract *and the semantics that travel with it* — `nest-rs-queue` owns what a
-job attempt *is* (the envelope, the trace, the span, the outcome classes, the
-events); an **adapter** is a crate named for a vendor that carries *only the
+job attempt *is* (the job's id, the envelope, the trace, the span, the outcome
+classes, the retry budget and the wait before a retry, the events); an
+**adapter** is a crate named for a vendor that carries *only the
 transport* — how to connect, fetch, acknowledge, count. A library that is
 already multi-backend (sea-orm, object_store) is **wrapped, never abstracted**:
 the wrapper is the adapter, the library is the port, and its URL scheme picks
@@ -91,7 +92,7 @@ it is a dependency declaration, and the module reads its variables all the same
 `src/config.rs`, `src/connection.rs`, `src/module.rs` (the one case a driver's
 `src/module.rs` is right: it is a module *of the crate's own subject*, never one
 binding wearing the crate's name) — and **one folder per port it binds**:
-`queue/`, `worker/`, `throttler/` under `nest-rs-redis`; `database/` and
+`queue/`, `worker/`, `schedule/`, `throttler/` under `nest-rs-redis`; `database/` and
 `health/` under `nest-rs-seaorm`, whose `worker/` holds the job-context bridge
 the database binding installs rather than a binding of its own. A binding
 folder holds the adapter types (`queue/producer.rs`, `throttler/store.rs`) and
@@ -125,7 +126,10 @@ what it holds, so it prefixes. A product library like `features` is a container
 that leaves a sibling behind is half a rename, and the half left behind is the
 one a reader trips on. The same reading gives the adapter's own types —
 `posts/http/controller.rs` is `PostsController`, `users/ws/gateway.rs` is
-`UsersGateway`.
+`UsersGateway`. An edge folder directly under a framework crate's `src/` adapts
+the crate itself, so its adapter takes the crate's subject:
+`nest-rs-x/src/http/controller.rs` is `XController`, beside the `XHttpModule` its
+`module.rs` already takes — `src` names a layout level, never a module.
 
 Enforced, not merely written: `naming.rs` in `nest-rs-conformance` derives every
 `module.rs` and every edge adapter in both workspaces and fails on a name that

@@ -23,7 +23,8 @@
 
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::ToTokens;
-use syn::{Expr, LitStr};
+use syn::punctuated::Punctuated;
+use syn::{Expr, ExprLit, Lit, LitStr, Token};
 
 /// The longest version token the framework accepts, declared or stated.
 ///
@@ -84,6 +85,60 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
             ),
         ));
     }
+    check_versions(&literals, attr, Some("version"))?;
+    Ok(literals)
+}
+
+/// The route's own spelling, `#[version("1", "2")]` — the same grammar as
+/// [`parse_version_list`], read off the attribute's positional arguments.
+///
+/// **Its site is the attribute alone** (``#[version]: "a b" is not a path
+/// segment``). It came through [`parse_version_list`] as a synthesized array,
+/// so its refusals named a key — ``#[version] `version` `` — that the attribute
+/// has none of, and a value that was not a string never reached the grammar at
+/// all: the list was read as string literals first, and syn's
+/// `expected string literal` named neither.
+pub fn parse_version_args(attr: &syn::Attribute) -> syn::Result<Vec<LitStr>> {
+    const ROUTE: &str = "version";
+    let refused = |at: &dyn ToTokens| {
+        syn::Error::new_spanned(
+            at,
+            crate::args::takes_value(
+                ROUTE,
+                None,
+                "the route's versions as string literals, e.g. `#[version(\"1\", \"2\")]`",
+            ),
+        )
+    };
+    let listed = attr
+        .parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)
+        .map_err(|_| refused(attr))?;
+    let literals = listed
+        .iter()
+        .map(|elem| match crate::ungrouped::ungrouped_expr(elem) {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(literal),
+                ..
+            }) => Ok(literal.clone()),
+            other => Err(refused(other)),
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    if literals.is_empty() {
+        return Err(syn::Error::new_spanned(
+            attr,
+            format!(
+                "{} declares nothing — drop the attribute instead",
+                crate::args::site(ROUTE, None)
+            ),
+        ));
+    }
+    check_versions(&literals, ROUTE, None)?;
+    Ok(literals)
+}
+
+/// The grammar and the duplicate check, over versions already read as literals
+/// and refused at `#[attr]`'s `key` — `None` for the positional spelling.
+fn check_versions(literals: &[LitStr], attr: &str, key: Option<&str>) -> syn::Result<()> {
     for (index, literal) in literals.iter().enumerate() {
         let version = literal.value();
         if !is_valid_version(&version) {
@@ -93,7 +148,7 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
                     "{}: {version:?} is not a path segment — a version is alphanumerics, `.` \
                      and `-` (`1`, `2`, `2024-08-11`), at most {max} characters, because it is \
                      mounted as `/v{version}`",
-                    crate::args::site(attr, Some("version")),
+                    crate::args::site(attr, key),
                     max = MAX_VERSION_LEN,
                 ),
             ));
@@ -103,12 +158,12 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
                 literal,
                 format!(
                     "{}: {version:?} is listed twice",
-                    crate::args::site(attr, Some("version"))
+                    crate::args::site(attr, key)
                 ),
             ));
         }
     }
-    Ok(literals)
+    Ok(())
 }
 
 /// An edge whose mount is not an address a client selects, and which therefore

@@ -243,8 +243,24 @@ pub fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<bo
 /// everywhere"). `"entry"` was a placeholder for a noun rather than a noun, and
 /// it was passed at eleven HTTP sites and three WS ones for elements that
 /// demonstrably were guards, filters and pipes.
+///
+/// **An entry that is not a type path is refused as a value**, in the shared
+/// sentence (``#[use_guards] takes a list of guard types, e.g. …``) at the
+/// token syn stopped on — never syn's own `expected identifier`, which names
+/// neither the attribute nor what it lists.
 pub fn take_path_list(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Vec<Path>> {
-    let noun = &listed_noun(ident);
+    let noun = listed_noun(ident);
+    let spoken = noun.replace('_', " ");
+    let cased: String = noun
+        .split('_')
+        .map(|word| {
+            let mut letters = word.chars();
+            letters
+                .next()
+                .map(|first| first.to_uppercase().chain(letters).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect();
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
         return Ok(Vec::new());
     };
@@ -252,18 +268,29 @@ pub fn take_path_list(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Ve
     if attrs.iter().any(|a| a.path().is_ident(ident)) {
         return Err(syn::Error::new_spanned(
             &attr,
-            format!("at most one `#[{ident}(...)]` is allowed; list every {noun} in it"),
+            format!("at most one `#[{ident}(...)]` is allowed; list every {spoken} in it"),
         ));
     }
-    Ok(attr
-        .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?
-        .into_iter()
-        .collect())
+    let listed = attr
+        .parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
+        .map_err(|stopped| {
+            syn::Error::new(
+                stopped.span(),
+                crate::args::takes_value(
+                    ident,
+                    None,
+                    &format!("a list of {spoken} types, e.g. `#[{ident}(My{cased})]`"),
+                ),
+            )
+        })?;
+    Ok(listed.into_iter().collect())
 }
 
 /// What `#[use_guards]` and its siblings list, one word, derived from the
 /// attribute's own name: `use_guards` / `force_guards` ⇒ `guard`,
-/// `use_filters` ⇒ `filter`, `use_interceptors` ⇒ `interceptor`.
+/// `use_filters` ⇒ `filter`, `use_interceptors` ⇒ `interceptor`,
+/// `use_exception_filters` ⇒ `exception_filter` — spoken with a space in a
+/// sentence, cased as `ExceptionFilter` in an example.
 ///
 /// A fallback of `entry` for a name that fits no pattern, which is what every
 /// call site used to pass by hand — it stays as the *default* rather than the

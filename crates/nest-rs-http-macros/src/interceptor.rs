@@ -56,18 +56,54 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
             nest_rs_codegen::unknown_argument("interceptor", &name, &["priority"]),
         ));
     }
-    let syn::Expr::Lit(syn::ExprLit {
-        lit: syn::Lit::Int(lit),
-        ..
-    }) = nv.value
-    else {
-        return Err(syn::Error::new(
-            nv.value.span(),
-            "priority must be an integer",
-        ));
-    };
-    let priority: i32 = lit.base10_parse()?;
+    let priority = priority_value(&nv.value)?;
     Ok(quote! { #priority })
+}
+
+/// A `priority = …` value: an integer literal in `i32`'s range, negative ones
+/// included (`priority = -10` sits inside every band the framework declares).
+/// syn hands a lone `-10` over as a negative literal and one followed by another
+/// argument as a negation, so both shapes are read.
+///
+/// One sentence for whatever else was written: the old one, "priority must be
+/// an integer", named neither the decorator nor the key, and a literal too large
+/// for an `i32` got syn's own "number too large to fit in target type".
+fn priority_value(written: &syn::Expr) -> syn::Result<i32> {
+    use syn::{Expr, ExprLit, ExprUnary, Lit, UnOp};
+
+    let written = nest_rs_codegen::ungrouped_expr(written);
+    let refused = || {
+        syn::Error::new_spanned(
+            written,
+            nest_rs_codegen::takes_value(
+                "interceptor",
+                Some("priority"),
+                "an integer literal in `i32`'s range, e.g. `priority = 10` — a lower priority \
+                 wraps closer to the handler",
+            ),
+        )
+    };
+    let (negated, literal) = match written {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(literal),
+            ..
+        }) => (false, literal),
+        Expr::Unary(ExprUnary {
+            op: UnOp::Neg(_),
+            expr,
+            ..
+        }) => match nest_rs_codegen::ungrouped_expr(expr) {
+            Expr::Lit(ExprLit {
+                lit: Lit::Int(literal),
+                ..
+            }) => (true, literal),
+            _ => return Err(refused()),
+        },
+        _ => return Err(refused()),
+    };
+    let magnitude: i64 = literal.base10_parse().map_err(|_| refused())?;
+    let value = if negated { -magnitude } else { magnitude };
+    i32::try_from(value).map_err(|_| refused())
 }
 
 pub(crate) fn interceptor(args: TokenStream, input: TokenStream) -> TokenStream {

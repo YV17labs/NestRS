@@ -1,0 +1,11 @@
+error: #[interceptor] `priority` takes an integer literal in `i32`'s range, e.g. `priority = 10` — a lower priority wraps closer to the handler
+ --> tests/integration/diagnostics/interceptor_priority_is_not_an_integer.rs:8:26
+  |
+8 | #[interceptor(priority = "high")]
+  |                          ^^^^^^
+
+error: #[interceptor] `priority` takes an integer literal in `i32`'s range, e.g. `priority = 10` — a lower priority wraps closer to the handler
+  --> tests/integration/diagnostics/interceptor_priority_is_not_an_integer.rs:12:26
+   |
+12 | #[interceptor(priority = 3000000000)]
+   |                          ^^^^^^^^^^

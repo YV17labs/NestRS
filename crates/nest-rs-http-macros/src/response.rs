@@ -7,11 +7,12 @@
 //! generated handler wrapper (see [`take_response_shapers`] and
 //! [`apply_response_shapers`]).
 
-use nest_rs_codegen::mixed_site_ident;
+use nest_rs_codegen::{mixed_site_ident, site, takes_value, ungrouped_expr};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
-use syn::{Attribute, Block, Expr, ExprLit, Lit, LitInt, LitStr};
+use quote::{ToTokens, quote};
+use syn::punctuated::Punctuated;
+use syn::{Attribute, Block, Expr, ExprLit, Lit, LitInt, LitStr, Token};
 
 /// Header names that legitimately appear multiple times in a single response
 /// (per RFC 7230 §3.2.2). The shaper emits `.append()` for these so an
@@ -99,17 +100,7 @@ pub(crate) fn take_response_shapers(
             ));
         }
         let attr = attrs.remove(idx);
-        let lit = attr.parse_args::<LitInt>()?;
-        let n: u16 = lit.base10_parse().map_err(|e| {
-            syn::Error::new_spanned(&lit, format!("`#[http_code]` expects a u16: {e}"))
-        })?;
-        if !(100..=999).contains(&n) {
-            return Err(syn::Error::new_spanned(
-                &lit,
-                "`#[http_code]` expects a status in 100..=999",
-            ));
-        }
-        out.http_code = Some(lit);
+        out.http_code = Some(http_code_value(&attr)?);
     }
 
     while let Some(idx) = attrs
@@ -183,30 +174,83 @@ pub(crate) fn take_response_shapers(
     Ok(out)
 }
 
+/// `#[http_code(201)]`'s one argument: a status code, refused in one sentence
+/// whatever was written instead — a string, a number outside the three-digit
+/// range, a literal too large for a `u16`, or nothing at all.
+///
+/// Re-emitted unsuffixed: `201u8` is the right number and the wrong type for
+/// `StatusCode::from_u16`, and the value checked is the value sent.
+fn http_code_value(attr: &Attribute) -> syn::Result<LitInt> {
+    let refused = |at: &dyn ToTokens| {
+        syn::Error::new_spanned(
+            at,
+            takes_value(
+                "http_code",
+                None,
+                "a status code from 100 to 999, e.g. `#[http_code(201)]`",
+            ),
+        )
+    };
+    let written: Expr = attr.parse_args().map_err(|_| refused(attr))?;
+    let Expr::Lit(ExprLit {
+        lit: Lit::Int(lit), ..
+    }) = ungrouped_expr(&written)
+    else {
+        return Err(refused(ungrouped_expr(&written)));
+    };
+    match lit.base10_parse::<u16>() {
+        Ok(code) if (100..=999).contains(&code) => Ok(LitInt::new(&code.to_string(), lit.span())),
+        _ => Err(refused(lit)),
+    }
+}
+
+/// What `#[response_header]`'s `name` takes — the lowercase subset of the
+/// header-name token grammar that `HeaderName::from_static` accepts.
+const HEADER_NAME_TAKES: &str = "a lowercase header name of `a`-`z`, `0`-`9`, `-` and `_`, e.g. \
+     \"cache-control\" — the form `HeaderName::from_static` accepts";
+
+/// What `#[response_header]`'s `value` takes.
+const HEADER_VALUE_TAKES: &str = "printable ASCII or a tab, e.g. \"no-store\" — a CR, an LF or \
+     another control byte would split or corrupt the header";
+
 fn parse_header_args(attr: &Attribute) -> syn::Result<(LitStr, LitStr)> {
-    use syn::Token;
-    use syn::punctuated::Punctuated;
-    let list: Punctuated<LitStr, Token![,]> = attr.parse_args_with(Punctuated::parse_terminated)?;
-    let mut iter = list.into_iter();
-    let name = iter.next().ok_or_else(|| {
+    let two = || {
         syn::Error::new_spanned(
             attr,
             "`#[response_header]` expects two string literals: `name, value`",
         )
-    })?;
-    let value = iter.next().ok_or_else(|| {
-        syn::Error::new_spanned(
-            attr,
-            "`#[response_header]` expects two string literals: `name, value`",
-        )
-    })?;
+    };
+    let list: Punctuated<Expr, Token![,]> = attr
+        .parse_args_with(Punctuated::parse_terminated)
+        .map_err(|_| two())?;
+    let mut iter = list.iter();
+    let (Some(name), Some(value)) = (iter.next(), iter.next()) else {
+        return Err(two());
+    };
     if iter.next().is_some() {
         return Err(syn::Error::new_spanned(
             attr,
             "`#[response_header]` accepts exactly two arguments: `name, value`",
         ));
     }
-    Ok((name, value))
+    Ok((
+        header_literal(name, "name", HEADER_NAME_TAKES)?,
+        header_literal(value, "value", HEADER_VALUE_TAKES)?,
+    ))
+}
+
+/// One of `#[response_header]`'s two positions, read as a string literal.
+fn header_literal(written: &Expr, position: &str, what: &str) -> syn::Result<LitStr> {
+    match ungrouped_expr(written) {
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(literal),
+            ..
+        }) => Ok(literal.clone()),
+        other => Err(syn::Error::new_spanned(
+            other,
+            takes_value("response_header", Some(position), what),
+        )),
+    }
 }
 
 /// HTTP/1.1 header-name token grammar (RFC 7230 §3.2.6) restricted to the
@@ -214,23 +258,12 @@ fn parse_header_args(attr: &Attribute) -> syn::Result<(LitStr, LitStr)> {
 /// cannot panic at boot. Empty names rejected.
 fn validate_header_name(lit: &LitStr) -> syn::Result<()> {
     let s = lit.value();
-    if s.is_empty() {
+    let accepted = |c: u8| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_');
+    if s.is_empty() || !s.bytes().all(accepted) {
         return Err(syn::Error::new_spanned(
             lit,
-            "`#[response_header]` header name cannot be empty",
+            takes_value("response_header", Some("name"), HEADER_NAME_TAKES),
         ));
-    }
-    for c in s.bytes() {
-        let ok = matches!(c,
-            b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'
-        );
-        if !ok {
-            return Err(syn::Error::new_spanned(
-                lit,
-                "`#[response_header]` header name must be lowercase ASCII \
-                 (a-z, 0-9, `-`, `_`)",
-            ));
-        }
     }
     Ok(())
 }
@@ -245,8 +278,9 @@ fn validate_redirect_url(lit: &LitStr) -> syn::Result<()> {
             return Err(syn::Error::new_spanned(
                 lit,
                 format!(
-                    "`#[redirect]` URL contains a non-printable-ASCII byte \
-                     0x{b:02x}; percent-encode it or use ASCII (RFC 3986)"
+                    "{}: byte 0x{b:02x} is not printable ASCII — the URL is sent as the \
+                     `Location` header, so percent-encode it (RFC 3986)",
+                    site("redirect", Some("url")),
                 ),
             ));
         }
@@ -262,36 +296,38 @@ fn validate_header_value(lit: &LitStr) -> syn::Result<()> {
         if !ok {
             return Err(syn::Error::new_spanned(
                 lit,
-                "`#[response_header]` header value must be printable ASCII \
-                 (no CR/LF, no control bytes)",
+                takes_value("response_header", Some("value"), HEADER_VALUE_TAKES),
             ));
         }
     }
     Ok(())
 }
 
+/// `#[redirect(url[, status])]`: each position refused in its own sentence, at
+/// what was written there — the URL when it is missing or not a string, the
+/// status when it is not a redirect status.
 fn parse_redirect_args(attr: &Attribute) -> syn::Result<RedirectSpec> {
-    use syn::Token;
-    use syn::punctuated::Punctuated;
-    let list: Punctuated<Expr, Token![,]> = attr.parse_args_with(Punctuated::parse_terminated)?;
-    let mut iter = list.into_iter();
-    let url_expr = iter.next().ok_or_else(|| {
+    let url_refused = |at: &dyn ToTokens| {
         syn::Error::new_spanned(
-            attr,
-            "`#[redirect]` expects a URL literal: `#[redirect(\"…\")]` \
-             or `#[redirect(\"…\", 301)]`",
+            at,
+            takes_value(
+                "redirect",
+                Some("url"),
+                "the target as a string literal, e.g. `#[redirect(\"/login\")]` or \
+                 `#[redirect(\"/login\", 301)]`",
+            ),
         )
-    })?;
-    let url = match url_expr {
-        Expr::Lit(ExprLit {
+    };
+    let list: Punctuated<Expr, Token![,]> = attr
+        .parse_args_with(Punctuated::parse_terminated)
+        .map_err(|_| url_refused(attr))?;
+    let mut iter = list.iter();
+    let url = match iter.next().map(ungrouped_expr) {
+        Some(Expr::Lit(ExprLit {
             lit: Lit::Str(s), ..
-        }) => s,
-        other => {
-            return Err(syn::Error::new_spanned(
-                other,
-                "`#[redirect]` URL must be a string literal",
-            ));
-        }
+        })) => s.clone(),
+        Some(other) => return Err(url_refused(other)),
+        None => return Err(url_refused(attr)),
     };
     // The URL ends up in the `Location` header; `HeaderValue::from_static`
     // will panic on any non-printable-ASCII byte. Validate at compile time so
@@ -301,29 +337,7 @@ fn parse_redirect_args(attr: &Attribute) -> syn::Result<RedirectSpec> {
 
     let code = match iter.next() {
         None => None,
-        Some(expr) => {
-            let lit = match expr {
-                Expr::Lit(ExprLit {
-                    lit: Lit::Int(i), ..
-                }) => i,
-                other => {
-                    return Err(syn::Error::new_spanned(
-                        other,
-                        "`#[redirect]` status code must be an integer literal",
-                    ));
-                }
-            };
-            let n: u16 = lit.base10_parse().map_err(|e| {
-                syn::Error::new_spanned(&lit, format!("`#[redirect]` status not a u16: {e}"))
-            })?;
-            if !(300..=399).contains(&n) {
-                return Err(syn::Error::new_spanned(
-                    &lit,
-                    "`#[redirect]` status must be in 300..=399",
-                ));
-            }
-            Some(lit)
-        }
+        Some(written) => Some(redirect_status(written)?),
     };
 
     if iter.next().is_some() {
@@ -338,6 +352,32 @@ fn parse_redirect_args(attr: &Attribute) -> syn::Result<RedirectSpec> {
         code,
         attr: attr.clone(),
     })
+}
+
+/// `#[redirect]`'s optional status: a `3xx` code, one sentence for anything
+/// else, re-emitted unsuffixed for the reason [`http_code_value`] gives.
+fn redirect_status(written: &Expr) -> syn::Result<LitInt> {
+    let written = ungrouped_expr(written);
+    let refused = || {
+        syn::Error::new_spanned(
+            written,
+            takes_value(
+                "redirect",
+                Some("status"),
+                "a redirect status from 300 to 399, e.g. `#[redirect(\"/login\", 301)]`",
+            ),
+        )
+    };
+    let Expr::Lit(ExprLit {
+        lit: Lit::Int(lit), ..
+    }) = written
+    else {
+        return Err(refused());
+    };
+    match lit.base10_parse::<u16>() {
+        Ok(code) if (300..=399).contains(&code) => Ok(LitInt::new(&code.to_string(), lit.span())),
+        _ => Err(refused()),
+    }
 }
 
 /// Expand a handler's response transformation. `call_expr` is the tokens that

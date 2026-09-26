@@ -210,8 +210,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             declared_verb.clone()
         };
 
-        let written_path: LitStr = match attr.parse_args() {
-            Ok(p) => p,
+        let written_path = match route_path(&attr, &declared_verb) {
+            Ok(path) => path,
             Err(err) => return err.to_compile_error().into(),
         };
         // Read with poem's grammar here, where the literal is: the address is
@@ -223,7 +223,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 return syn::Error::new_spanned(
                     &written_path,
                     format!(
-                        "`{}` is not a path poem can mount: {why}",
+                        "{}: {:?} is not a path poem can mount: {why}",
+                        nest_rs_codegen::site(&declared_verb.to_string(), None),
                         written_path.value()
                     ),
                 )
@@ -1126,13 +1127,7 @@ fn take_version_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<LitStr>> {
             "a route declares its versions in one `#[version(...)]`, listing them together",
         ));
     }
-    let listed = attr.parse_args_with(Punctuated::<LitStr, Token![,]>::parse_terminated)?;
-    let elems: Punctuated<Expr, Token![,]> = listed
-        .into_iter()
-        .map(|lit| -> Expr { parse_quote!(#lit) })
-        .collect();
-    let array: Expr = parse_quote!([#elems]);
-    nest_rs_codegen::versioning::parse_version_list(&array, "#[version]")
+    nest_rs_codegen::versioning::parse_version_args(&attr)
 }
 
 /// Take `#[authorize(Action, Entity)]` off a route method.
@@ -1464,6 +1459,31 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
     expr
 }
 
+/// A verb's one argument, the route's path, read as a string literal — or the
+/// shared value sentence at the verb as written (`#[get]`, `#[sse]`), never
+/// syn's `expected string literal`, which names neither.
+fn route_path(attr: &Attribute, verb: &syn::Ident) -> syn::Result<LitStr> {
+    let verb = verb.to_string();
+    let refused = |at: &dyn ToTokens| {
+        syn::Error::new_spanned(
+            at,
+            nest_rs_codegen::takes_value(
+                &verb,
+                None,
+                &format!("the route's path as a string literal, e.g. `#[{verb}(\"/:id\")]`"),
+            ),
+        )
+    };
+    let written: Expr = attr.parse_args().map_err(|_| refused(attr))?;
+    match nest_rs_codegen::ungrouped_expr(&written) {
+        Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(path),
+            ..
+        }) => Ok(path.clone()),
+        other => Err(refused(other)),
+    }
+}
+
 /// Whether a guard path names the framework's `ThrottlerGuard` — the signal
 /// that a route is rate-limited and can answer `429`. Matched on the last path
 /// segment's ident so `nest_rs_throttler::ThrottlerGuard`, a `use`-imported
@@ -1564,7 +1584,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                         "response",
                     )?;
                     input.parse::<Token![=]>()?;
-                    out.response = Some(input.parse()?);
+                    out.response = Some(api_type(input, "response", "Vec<Post>")?);
                 }
                 "multipart" => {
                     nest_rs_codegen::reject_duplicate_argument(
@@ -1574,7 +1594,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                         "multipart",
                     )?;
                     input.parse::<Token![=]>()?;
-                    out.multipart = Some(input.parse()?);
+                    out.multipart = Some(api_type(input, "multipart", "UploadForm")?);
                 }
                 "response_content_type" => {
                     nest_rs_codegen::reject_duplicate_argument(
@@ -1600,11 +1620,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                         "api",
                         "tags",
                     )?;
-                    let content;
-                    syn::parenthesized!(content in input);
-                    out.tags = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?
-                        .into_iter()
-                        .collect();
+                    out.tags = api_tags(input, &key)?;
                 }
                 other => {
                     return Err(syn::Error::new_spanned(
@@ -1619,6 +1635,52 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
         }
         Ok(out)
     })
+}
+
+/// A type-valued `#[api]` key's value — `response = Vec<Post>` — or the shared
+/// value sentence at the token syn stopped on, rather than its list of the
+/// fifteen tokens a type may start with.
+fn api_type(input: syn::parse::ParseStream<'_>, key: &str, example: &str) -> syn::Result<Type> {
+    input.parse::<Type>().map_err(|stopped| {
+        syn::Error::new(
+            stopped.span(),
+            nest_rs_codegen::takes_value(
+                "api",
+                Some(key),
+                &format!("a type, e.g. `{key} = {example}`"),
+            ),
+        )
+    })
+}
+
+/// `tags("a", "b")` — a list of string literals, each refused at itself when it
+/// is anything else, and the key refused at itself when no list follows it.
+fn api_tags(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Result<Vec<LitStr>> {
+    let refused = |at: &dyn ToTokens| {
+        syn::Error::new_spanned(
+            at,
+            nest_rs_codegen::takes_value(
+                "api",
+                Some("tags"),
+                "a list of string literals, e.g. `tags(\"users\", \"admin\")`",
+            ),
+        )
+    };
+    if !input.peek(syn::token::Paren) {
+        return Err(refused(key));
+    }
+    let content;
+    syn::parenthesized!(content in input);
+    Punctuated::<Expr, Token![,]>::parse_terminated(&content)?
+        .iter()
+        .map(|tag| match nest_rs_codegen::ungrouped_expr(tag) {
+            Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(tag),
+                ..
+            }) => Ok(tag.clone()),
+            other => Err(refused(other)),
+        })
+        .collect()
 }
 
 /// The payload type behind an extractor named `name`: `Name<T>`,
@@ -1723,9 +1785,9 @@ fn check_media_type(lit: &LitStr) -> syn::Result<()> {
         return Err(syn::Error::new_spanned(
             lit,
             format!(
-                "`response_content_type` takes a media type spelled `type/subtype` \
-                 — e.g. \"application/octet-stream\", \"text/event-stream\" or \
-                 \"audio/mpeg\". `{value}` is not one",
+                "{}: {value:?} is not a media type — spell it `type/subtype`, e.g. \
+                 \"application/octet-stream\", \"text/event-stream\" or \"audio/mpeg\"",
+                nest_rs_codegen::site("api", Some("response_content_type")),
             ),
         ));
     }

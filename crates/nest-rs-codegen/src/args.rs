@@ -47,18 +47,21 @@ pub fn require_str_lit(value: &Expr, attr: &str, key: &str, example: &str) -> sy
 }
 
 /// Where a value refusal points: the decorator, then the key in backticks —
-/// ``#[process] `retries` `` — or the decorator alone for the one positional
-/// argument a trigger takes (`#[every("30s")]`).
+/// ``#[process] `retries` `` — or the decorator alone for a decorator's one
+/// positional argument (`#[every("30s")]`, `#[get("/users")]`). A decorator
+/// whose positional arguments are several names each by the word its grammar
+/// gives it — `#[redirect(url, status)]` points at ``#[redirect] `status` ``.
 ///
-/// **Every value refusal this crate words opens with it**, and it is worded
-/// here so that stays one fact rather than a convention. Two of them did not:
-/// `transactional_value` and `replicas_value` refused a value of the wrong kind
-/// with ``` `transactional` takes … ```, naming the key and not the decorator,
-/// beside `unknown_value` and the duration grammar, which named both. Read
-/// without its source frame — a problems list, a CI summary — such a sentence
-/// said which key and not whose, and `transactional` is a key of four
-/// decorators.
-pub(crate) fn site(attr: &str, key: Option<&str>) -> String {
+/// **Every value refusal a decorator prints opens with it**, and it is worded
+/// here so that stays one fact rather than a convention: a value of the wrong
+/// kind through [`takes_value`], a value that breaks a rule as
+/// `{site}: {value} is not …`. Public because the macro crates word the second
+/// form themselves — what a value is *not* belongs to the decorator that reads
+/// it — and the opening is the part that must not vary. Read without its source
+/// frame — a problems list, a CI summary — a sentence naming the key and not
+/// the decorator said which key and not whose, and `transactional` is a key of
+/// four decorators.
+pub fn site(attr: &str, key: Option<&str>) -> String {
     match key {
         Some(key) => format!("#[{attr}] `{key}`"),
         None => format!("#[{attr}]"),
@@ -509,10 +512,38 @@ mod tests {
             );
         }
 
-        // The positional grammar has no key, and names the decorator alone.
+        // The positional grammar has no key, and names the decorator alone —
+        // the route's `#[version(...)]` and every `#[use_*]` layer list too.
         let positional =
             err(crate::duration::duration_millis("probe", None, &parse_quote!(60)).map(drop));
         assert!(positional.starts_with("#[probe] takes "), "{positional}");
+        for (refusal, site) in [
+            (
+                err(crate::versioning::parse_version_args(&parse_quote!(#[version(2)])).map(drop)),
+                "#[version] takes ",
+            ),
+            (
+                err(
+                    crate::versioning::parse_version_args(&parse_quote!(#[version("a b")]))
+                        .map(drop),
+                ),
+                "#[version]: ",
+            ),
+            (
+                err(crate::versioning::parse_version_args(&parse_quote!(#[version()])).map(drop)),
+                "#[version] declares ",
+            ),
+            (
+                err(crate::attrs::take_path_list(
+                    &mut vec![parse_quote!(#[use_guards("SessionGuard")])],
+                    "use_guards",
+                )
+                .map(drop)),
+                "#[use_guards] takes ",
+            ),
+        ] {
+            assert!(refusal.starts_with(site), "{refusal}");
+        }
 
         // `#[crud]` words its own, at its own name — a value of the wrong kind
         // included, which its parser used to leave to syn's `expected

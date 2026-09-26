@@ -1,0 +1,23 @@
+error: #[http_code] takes a status code from 100 to 999, e.g. `#[http_code(201)]`
+  --> tests/integration/diagnostics/http_code_is_not_a_status.rs:15:17
+   |
+15 |     #[http_code("201")]
+   |                 ^^^^^
+
+error: #[http_code] takes a status code from 100 to 999, e.g. `#[http_code(201)]`
+  --> tests/integration/diagnostics/http_code_is_not_a_status.rs:28:17
+   |
+28 |     #[http_code(42)]
+   |                 ^^
+
+error: #[http_code] takes a status code from 100 to 999, e.g. `#[http_code(201)]`
+  --> tests/integration/diagnostics/http_code_is_not_a_status.rs:41:17
+   |
+41 |     #[http_code(70000)]
+   |                 ^^^^^
+
+error: #[http_code] takes a status code from 100 to 999, e.g. `#[http_code(201)]`
+  --> tests/integration/diagnostics/http_code_is_not_a_status.rs:54:5
+   |
+54 |     #[http_code]
+   |     ^^^^^^^^^^^^

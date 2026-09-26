@@ -1,0 +1,11 @@
+error: #[use_guards] takes a list of guard types, e.g. `#[use_guards(MyGuard)]`
+ --> tests/integration/diagnostics/use_guards_entry_is_not_a_type.rs:9:14
+  |
+9 | #[use_guards("SessionGuard")]
+  |              ^^^^^^^^^^^^^^
+
+error: #[use_exception_filters] takes a list of exception filter types, e.g. `#[use_exception_filters(MyExceptionFilter)]`
+  --> tests/integration/diagnostics/use_guards_entry_is_not_a_type.rs:22:25
+   |
+22 | #[use_exception_filters(42)]
+   |                         ^^

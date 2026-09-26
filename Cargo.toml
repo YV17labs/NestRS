@@ -288,6 +288,7 @@ nest-rs-ws-macros = { version = "7.0", path = "crates/nest-rs-ws-macros" }
 #                        which a `[lints]` forbid would cover and can't override.
 [workspace.lints.rust]
 unsafe_code = "forbid"
+unreachable_pub = "warn"
 
 # Config literals always close with `..Default::default()` so an import site
 # stays forward-compatible as the options struct gains fields.

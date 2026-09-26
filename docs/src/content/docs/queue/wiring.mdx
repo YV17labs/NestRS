@@ -51,10 +51,10 @@ adapter. That's it — `AudioQueueModule` pulls in the `AudioModule` port itself
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule, RedisWorkerModule};
 
 use features::audio::AudioQueueModule;
-use features::notifications::NotificationsQueueModule;
+use features::notifications::{NotificationsQueueModule, NotificationsScheduleModule};
 
 #[module(
     imports = [
@@ -70,8 +70,8 @@ pub struct WorkerModule;
 ```
 
 The demo's worker also opens the database — the notifications job writes a
-row — and serves its health probes over HTTP; the excerpt keeps the queue's
-lines.
+row — runs the notifications purge on a schedule, and serves its health probes
+over HTTP; the excerpt keeps the queue's lines.
 
 At boot:
 

@@ -99,7 +99,7 @@ pub struct AudioProcessor {
 
 #[processor]
 impl AudioProcessor {
-    #[process(queue = AudioQueue, retries = 3)]
+    #[process(queue = AudioQueue, retries = 3, concurrency = 4)]
     async fn transcode(&self, job: TranscodeCommand) -> Result<()> {
         self.svc.transcode(&job.file).await?;
         Ok(())
@@ -267,7 +267,7 @@ Three modules, three roles:
 ```rust title="apps/worker/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorkerModule};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule, RedisWorkerModule};
 
 use features::audio::AudioQueueModule;
 
@@ -284,7 +284,8 @@ pub struct WorkerModule;
 ```
 
 The demo's worker also opens the database — its notifications job writes a
-row — and serves health probes on HTTP. `AudioQueueModule` imports the
+row — runs the notifications purge on a schedule, and serves health probes on
+HTTP. `AudioQueueModule` imports the
 `AudioModule` port itself, so the app lists only the adapter — registration is
 idempotent.
 

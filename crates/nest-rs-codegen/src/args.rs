@@ -440,21 +440,6 @@ mod tests {
             ),
             (needs_a_value("probe", "path"), "path"),
             (
-                err(crate::job::transactional_value("probe", &parse_quote!("no")).map(drop)),
-                "transactional",
-            ),
-            (
-                crate::job::job_argument_needs_a_value("probe", "transactional"),
-                "transactional",
-            ),
-            (
-                err(
-                    crate::replicas::replicas_value("probe", &parse_quote!(one), &quote!(::x))
-                        .map(drop),
-                ),
-                "replicas",
-            ),
-            (
                 err(
                     crate::duration::duration_millis("probe", Some("window"), &parse_quote!(60))
                         .map(drop),
@@ -494,6 +479,32 @@ mod tests {
         for (refusal, key) in refusals {
             assert!(
                 refusal.starts_with(&format!("#[probe] `{key}`")),
+                "{refusal}"
+            );
+        }
+
+        // The job family's value readers take a member of the family rather
+        // than any name, and open with it the same way.
+        let every = crate::job::JobDecorator::Every;
+        for (refusal, key) in [
+            (
+                err(crate::job::transactional_value(every, &parse_quote!("no")).map(drop)),
+                "transactional",
+            ),
+            (
+                crate::job::job_argument_needs_a_value(every, "transactional"),
+                "transactional",
+            ),
+            (
+                err(
+                    crate::replicas::replicas_value(every, &parse_quote!(one), &quote!(::x))
+                        .map(drop),
+                ),
+                "replicas",
+            ),
+        ] {
+            assert!(
+                refusal.starts_with(&format!("#[every] `{key}`")),
                 "{refusal}"
             );
         }
@@ -553,11 +564,11 @@ mod tests {
         // both as well.
         let unknown =
             err(
-                crate::replicas::replicas_value("probe", &parse_quote!("all"), &quote!(::x))
+                crate::replicas::replicas_value(every, &parse_quote!("all"), &quote!(::x))
                     .map(drop),
             );
         assert!(
-            unknown.starts_with("unknown #[probe] replicas `all`"),
+            unknown.starts_with("unknown #[every] replicas `all`"),
             "{unknown}"
         );
     }

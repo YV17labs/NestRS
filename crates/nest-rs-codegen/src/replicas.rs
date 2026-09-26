@@ -3,13 +3,14 @@
 //!
 //! `#[every]` and `#[cron]` take it after their trigger, beside `transactional`.
 //! `#[after]` and `#[process]` refuse it, each naming why, through the family's
-//! one refusal — `job::job_argument_refused`.
+//! one table — `job::job_key`.
 
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, ExprLit, Lit};
 
 use crate::args::{takes_one_of, unknown_value};
+use crate::job::JobDecorator;
 use crate::ungrouped::ungrouped_expr;
 
 /// The key, spelled once.
@@ -24,13 +25,19 @@ const WHAT_THE_VALUES_DO: &str = "`\"each\"` (the default) fires every occurrenc
      of the app; `\"one\"` fires each occurrence on exactly one replica, the one that claims it \
      through the occurrence lock the app imports";
 
-/// The `Replicas` variant a `replicas = …` value selects, rooted at the surface
-/// crate the calling macro emits through (`::nest_rs_schedule`).
+/// The `Replicas` variant a `replicas = …` value written at `#[member]` selects,
+/// rooted at the surface crate the calling macro emits through
+/// (`::nest_rs_schedule`).
 ///
 /// Both refusals name the decorator: a value of the wrong kind through
 /// [`crate::args::takes_value`], listing [`VALUES`] as the string literals the
 /// key takes, and a string outside them through [`unknown_value`].
-pub fn replicas_value(attr: &str, expr: &Expr, surface: &TokenStream) -> syn::Result<TokenStream> {
+pub fn replicas_value(
+    member: JobDecorator,
+    expr: &Expr,
+    surface: &TokenStream,
+) -> syn::Result<TokenStream> {
+    let attr = member.name();
     let unwrapped = ungrouped_expr(expr);
     let Expr::Lit(ExprLit {
         lit: Lit::Str(value),

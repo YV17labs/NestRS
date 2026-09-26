@@ -63,8 +63,8 @@ pub use inject::{
     mixed_site_ident, normalize_forwarded_args, optional_dependencies_method,
 };
 pub use job::{
-    TRANSACTIONAL, job_argument_needs_a_value, job_argument_refused, job_returns_a_result,
-    job_transaction, transactional_value,
+    JobDecorator, JobKey, TRANSACTIONAL, job_argument_needs_a_value, job_key, job_keys,
+    job_returns_a_result, job_transaction, transactional_value, unread_job_key,
 };
 pub use mount::reject_path;
 pub use pair::{DecoratorPair, parse_provider_host, provider_residency};

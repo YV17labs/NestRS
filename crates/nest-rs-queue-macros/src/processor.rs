@@ -14,11 +14,11 @@
 //! umbrella, so the call site declares nothing but `nest-rs`.
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, PipeWrapper, TRANSACTIONAL, await_if_async, cfg_attrs, duplicate_argument,
-    duration_millis, generic_args, impl_self_ident, job_argument_needs_a_value,
-    job_argument_refused, job_returns_a_result, job_transaction, missing_argument,
-    payload_arg_type, pipe_wrapper, returns_unit, snake_case, takes_value, transactional_value,
-    ungrouped_expr, unknown_argument,
+    DecoratorPair, Edge, JobDecorator, JobKey, PipeWrapper, await_if_async, cfg_attrs,
+    duplicate_argument, duration_millis, generic_args, impl_self_ident, job_argument_needs_a_value,
+    job_key, job_returns_a_result, job_transaction, missing_argument, payload_arg_type,
+    pipe_wrapper, reject_duplicate_argument, returns_unit, snake_case, takes_value,
+    transactional_value, ungrouped_expr, unknown_argument, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -33,8 +33,9 @@ use syn::{Expr, ExprLit, FnArg, Ident, ImplItem, Lit, LitStr, Token, Type};
 /// a sentence naming what to write instead of syn's `expected impl`.
 const PROCESSOR_PAIR: DecoratorPair = DecoratorPair::on_provider("#[processor]", "#[process]");
 
-/// Every key `#[process]` takes, in the order its unknown-key refusal lists them.
-const KEYS: [&str; 5] = ["queue", "retries", "concurrency", "throttle", TRANSACTIONAL];
+/// The member of the job family this decorator is — the column of
+/// `nest_rs_codegen`'s job-key table its keys are read against.
+const PROCESS: JobDecorator = JobDecorator::Process;
 
 /// The two keys `throttle(..)` takes.
 const THROTTLE_KEYS: [&str; 2] = ["limit", "window"];
@@ -103,7 +104,10 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             syn::Meta::NameValue(_) => {
                 return syn::Error::new_spanned(
                     &attr,
-                    "#[process] takes its keys in a list — write `#[process(queue = AudioQueue)]`",
+                    format!(
+                        "#[process] takes its keys in a list — write `#[process({})]`",
+                        JobKey::Queue.example(),
+                    ),
                 )
                 .to_compile_error()
                 .into();
@@ -153,7 +157,7 @@ fn check_shape(method: &syn::ImplItemFn) -> syn::Result<()> {
     if returns_unit(&method.sig.output) {
         return Err(syn::Error::new_spanned(
             &method.sig,
-            job_returns_a_result("process"),
+            job_returns_a_result(PROCESS),
         ));
     }
     Ok(())
@@ -528,80 +532,62 @@ impl Parse for ProcessArgs {
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             let name = key.to_string();
-            // A key another member of the job family takes is not misspelled
-            // here, it is meaningless, and the family's sentence says why.
-            if let Some(refusal) = job_argument_refused("process", &name) {
-                return Err(syn::Error::new(key.span(), refusal));
-            }
-            if !KEYS.contains(&name.as_str()) {
-                return Err(syn::Error::new(
-                    key.span(),
-                    // Built from the constant and through the shared sentence, so
-                    // the four job decorators word an unknown key one way.
-                    unknown_argument("process", &name, &KEYS),
-                ));
-            }
-            // A repeated key is refused, not last-write-wins — the same reading
-            // `#[every]`/`#[cron]`/`#[after]` take, through the same sentence.
-            let taken = match name.as_str() {
-                "queue" => queue.is_some(),
-                "retries" => retries.is_some(),
-                "concurrency" => concurrency.is_some(),
-                "throttle" => throttle.is_some(),
-                _ => transactional.is_some(),
-            };
-            if taken {
-                return Err(syn::Error::new(
-                    key.span(),
-                    duplicate_argument("process", &name),
-                ));
-            }
-            if name == "throttle" {
-                if !input.peek(syn::token::Paren) {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        format!(
-                            "{} — write `throttle(limit = 10, window = \"1m\")`",
-                            takes_value("process", Some("throttle"), "a list"),
+            // The family's table answers first: a key another member takes is
+            // not misspelled here but meaningless, and is refused naming why; a
+            // key no member takes is unknown. Every arm below is one this
+            // decorator's column holds, and a key the table gains is a variant
+            // this match must place before it compiles.
+            match job_key(PROCESS, &name, &key)? {
+                JobKey::Queue => {
+                    reject_duplicate_argument(queue.is_some(), &key, "process", &name)?;
+                    equals(input, &key, &name)?;
+                    queue = Some(input.parse()?);
+                }
+                JobKey::Retries => {
+                    reject_duplicate_argument(retries.is_some(), &key, "process", &name)?;
+                    equals(input, &key, &name)?;
+                    retries = Some(whole_number(
+                        &input.parse()?,
+                        &format!(
+                            "{} — the re-runs a failed attempt gets before the job dead-letters",
+                            takes_value("process", Some(&name), "a whole number"),
                         ),
-                    ));
+                    )?);
                 }
-                let content;
-                syn::parenthesized!(content in input);
-                throttle = Some(parse_throttle(&content, key.span())?);
-            } else {
-                // The `=` is checked before it is consumed, so a bare key earns a
-                // sentence naming the key rather than syn's `expected `=``.
-                if !input.peek(Token![=]) {
-                    return Err(syn::Error::new(
-                        key.span(),
-                        job_argument_needs_a_value("process", &name),
-                    ));
+                JobKey::Concurrency => {
+                    reject_duplicate_argument(concurrency.is_some(), &key, "process", &name)?;
+                    equals(input, &key, &name)?;
+                    concurrency = Some(at_least_one(
+                        &input.parse()?,
+                        &format!(
+                            "{} — how many jobs of this method one worker replica runs at once",
+                            takes_value("process", Some(&name), AT_LEAST_ONE),
+                        ),
+                    )?);
                 }
-                input.parse::<Token![=]>()?;
-                match name.as_str() {
-                    "queue" => queue = Some(input.parse()?),
-                    "retries" => {
-                        retries = Some(whole_number(
-                            &input.parse()?,
-                            &format!(
-                                "{} — the re-runs a failed attempt gets before the job \
-                                 dead-letters",
-                                takes_value("process", Some("retries"), "a whole number"),
+                JobKey::Throttle => {
+                    reject_duplicate_argument(throttle.is_some(), &key, "process", &name)?;
+                    if !input.peek(syn::token::Paren) {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            format!(
+                                "{} — write `{}`",
+                                takes_value("process", Some(&name), "a list"),
+                                JobKey::Throttle.example(),
                             ),
-                        )?);
+                        ));
                     }
-                    "concurrency" => {
-                        concurrency = Some(at_least_one(
-                            &input.parse()?,
-                            &format!(
-                                "{} — how many jobs of this method one worker replica runs at \
-                                 once",
-                                takes_value("process", Some("concurrency"), AT_LEAST_ONE),
-                            ),
-                        )?);
-                    }
-                    _ => transactional = Some(transactional_value("process", &input.parse()?)?),
+                    let content;
+                    syn::parenthesized!(content in input);
+                    throttle = Some(parse_throttle(&content, key.span())?);
+                }
+                JobKey::Transactional => {
+                    reject_duplicate_argument(transactional.is_some(), &key, "process", &name)?;
+                    equals(input, &key, &name)?;
+                    transactional = Some(transactional_value(PROCESS, &input.parse()?)?);
+                }
+                unread @ (JobKey::Tz | JobKey::Replicas) => {
+                    return Err(unread_job_key(PROCESS, unread, &key));
                 }
             }
             if !input.is_empty() {
@@ -619,6 +605,19 @@ impl Parse for ProcessArgs {
             transactional,
         })
     }
+}
+
+/// The `=` after a key, checked before it is consumed, so a bare key earns a
+/// sentence naming the key rather than syn's `expected `=``.
+fn equals(input: ParseStream, key: &Ident, name: &str) -> syn::Result<()> {
+    if !input.peek(Token![=]) {
+        return Err(syn::Error::new(
+            key.span(),
+            job_argument_needs_a_value(PROCESS, name),
+        ));
+    }
+    input.parse::<Token![=]>()?;
+    Ok(())
 }
 
 /// The keys inside `throttle(..)`: both required, each once.
@@ -647,7 +646,7 @@ fn parse_throttle(content: ParseStream, at: Span) -> syn::Result<ThrottleArgs> {
         if !content.peek(Token![=]) {
             return Err(syn::Error::new(
                 key.span(),
-                job_argument_needs_a_value("process", &format!("throttle({name})")),
+                job_argument_needs_a_value(PROCESS, &format!("throttle({name})")),
             ));
         }
         content.parse::<Token![=]>()?;
@@ -674,8 +673,10 @@ fn parse_throttle(content: ParseStream, at: Span) -> syn::Result<ThrottleArgs> {
         (Some(limit), Some(window_ms)) => Ok(ThrottleArgs { limit, window_ms }),
         _ => Err(syn::Error::new(
             at,
-            "#[process] `throttle` needs both `limit` and `window` — write \
-             `throttle(limit = 10, window = \"1m\")`",
+            format!(
+                "#[process] `throttle` needs both `limit` and `window` — write `{}`",
+                JobKey::Throttle.example(),
+            ),
         )),
     }
 }
@@ -705,4 +706,29 @@ fn at_least_one(expr: &Expr, refusal: &str) -> syn::Result<u32> {
         ));
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every key the job-key table gives `#[process]` is read by this parser,
+    /// written as the table's own example — which is also what the sentences
+    /// offer a developer to paste, so each offered spelling is proved to parse.
+    #[test]
+    fn every_key_of_the_column_is_read() {
+        for key in nest_rs_codegen::job_keys(PROCESS) {
+            let written: TokenStream2 = key.example().parse().expect("an example is tokens");
+            let args = match key {
+                JobKey::Queue => written,
+                _ => {
+                    let queue: TokenStream2 = JobKey::Queue.example().parse().expect("tokens");
+                    quote!(#queue, #written)
+                }
+            };
+            if let Err(refusal) = syn::parse2::<ProcessArgs>(args) {
+                panic!("#[process] does not read `{}`: {refusal}", key.name());
+            }
+        }
+    }
 }

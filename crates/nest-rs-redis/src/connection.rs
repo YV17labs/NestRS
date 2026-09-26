@@ -49,7 +49,10 @@ pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered â€
 /// Redis through it, never a second one.
 ///
 /// A command answers or fails within the connect budget; when the budget is
-/// what ends it, the error is a timeout (`redis::RedisError::is_timeout`).
+/// what ends it, the error is a timeout (`redis::RedisError::is_timeout`). A
+/// timeout says the answer did not arrive in time, never that the command did
+/// not run: a command Redis was holding still runs once Redis answers again,
+/// and its late reply goes to nobody while the next command gets its own.
 ///
 /// Every holder multiplexes over one socket and one session â€” apalis and the
 /// rate limiter included. Redis answers one connection's commands in order, so a

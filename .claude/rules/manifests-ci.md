@@ -15,10 +15,14 @@ paths:
 ## Workspace manifests (root = framework)
 
 - **Lints are workspace policy.** `[workspace.lints]` forbids
-  `unsafe_code`; every crate opts in with `[lints] workspace = true`.
-  A new crate MUST carry that block. The few crates keeping
-  source-level unsafe attrs are documented in the root manifest
-  comment — don't add to them.
+  `unsafe_code` and warns on `unreachable_pub` — the mechanical half of
+  `architecture.md`'s *`pub` means exported*: an item no re-export in
+  `lib.rs` reaches is `pub(crate)` or private, so a crate's public
+  surface is its export list and nothing beside it. Every crate opts in
+  with `[lints] workspace = true`; a new crate MUST carry that block.
+  The few crates keeping source-level unsafe attrs are documented in the
+  root manifest comment, and restate every other workspace lint in a
+  `[lints]` block of their own — don't add to them.
 - **Third-party versions live in `[workspace.dependencies]` only**;
   member crates say `dep = { workspace = true }`. Some pins are
   **exact** (`=`) with a bump procedure documented in the root

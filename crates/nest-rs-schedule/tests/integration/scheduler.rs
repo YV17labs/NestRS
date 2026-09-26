@@ -834,6 +834,41 @@ async fn a_zero_interval_fails_the_boot() {
     assert!(err.to_string().contains("ZeroHost::spin"), "{err}");
 }
 
+/// The floor under an interval is the duration grammar's millisecond, whatever
+/// the job's `replicas`: finer than that the timer does not resolve, and the
+/// refusal says one sentence for both, which it could only say truthfully once
+/// both were held to it.
+#[tokio::test]
+async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
+    struct SubMillisecondHost;
+
+    for replicas in [Replicas::Each, Replicas::One] {
+        let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
+        let container = crate::hermetic()
+            .provide_dyn::<dyn OccurrenceLock>(lock)
+            .attach_meta::<SubMillisecondHost, CronJobMeta>(CronJobMeta {
+                provider: "SubMillisecondHost",
+                method: "spin",
+                trigger: Trigger::Interval(Duration::from_micros(500)),
+                run: tick_once,
+                transaction: JobTransaction::Pool,
+                replicas,
+            })
+            .build();
+
+        let err = Scheduler::new()
+            .configure(&container)
+            .await
+            .expect_err("an interval under a millisecond is refused")
+            .to_string();
+        assert!(
+            err.contains("SubMillisecondHost::spin")
+                && err.contains("an interval is at least one millisecond"),
+            "{replicas:?}: {err}"
+        );
+    }
+}
+
 /// A failure with a cause beneath it — the shape a real lock's has, where the
 /// wrapper names the operation and only the cause names what refused. A bare
 /// string here would pass whether or not the scheduler renders the chain, which

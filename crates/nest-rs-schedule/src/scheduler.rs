@@ -173,11 +173,13 @@ impl Scheduler {
         };
         Ok(match meta.trigger {
             Trigger::Interval(period) => {
-                // The decorators refuse both at compile time; a job registered by
-                // hand reaches here. A zero period has no next tick — the interval
-                // timer panics on it — and a claimed tick is keyed by its
-                // millisecond, so one period must hold at least one.
-                if period.is_zero() || (meta.replicas == Replicas::One && period.as_millis() == 0) {
+                // The duration grammar refuses this at compile time; a job
+                // registered by hand reaches here, and is held to the same floor
+                // whatever its `replicas`. A zero period has no next tick — the
+                // interval timer panics on it — a shorter one than a millisecond is
+                // finer than that timer resolves, and a claimed tick is keyed by
+                // its millisecond, so one period must hold at least one.
+                if period.as_millis() == 0 {
                     anyhow::bail!(
                         "scheduled job `{id}` has an interval of {period:?} — an interval is at \
                          least one millisecond"

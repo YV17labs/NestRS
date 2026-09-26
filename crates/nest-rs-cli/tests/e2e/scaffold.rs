@@ -381,32 +381,78 @@ fn a_custom_env_prefix_reaches_every_artifact_that_names_a_variable() {
     );
 }
 
+/// Every edge the CLI generates an adapter for, by its folder — the closed
+/// vocabulary `Transport` carries. Listed rather than read from the enum, which
+/// is crate-private; `naming`'s unit suite joins the two, so an edge the CLI
+/// gains and this list does not fails the crate's own tests instead of shipping
+/// a generator no compiler has read.
+const EDGES: [&str; 7] = [
+    "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
+];
+
+/// `nestrs g <edge> <feature>` for every edge in [`EDGES`] but `skip`, each run
+/// **from inside the scaffolded app** (`-p apps/hello`). That is where a
+/// developer stands, and it is what makes a generator write its edits into the
+/// app's `module.rs` and manifest as well as the feature's — two more files the
+/// compiler has to agree with, and ones no run from the workspace root touches.
+fn every_edge<'a>(feature: &'a str, skip: &[&str]) -> Vec<Vec<&'a str>> {
+    EDGES
+        .iter()
+        .filter(|edge| !skip.contains(edge))
+        .map(|&edge| vec!["g", edge, feature, "-p", "apps/hello"])
+        .collect()
+}
+
+/// `generate`, borrowed in the shape [`scaffold_and_check`] takes.
+fn check_all(generate: &[Vec<&str>], what: &str) {
+    let generate: Vec<&[&str]> = generate.iter().map(Vec::as_slice).collect();
+    scaffold_and_check(&generate, what);
+}
+
 #[test]
-fn the_generated_events_adapter_compiles() {
-    scaffold_and_check(
-        &[&["g", "feature", "post"], &["g", "events", "post"]],
-        "the generated events listener and its port event",
+fn every_adapter_over_a_plain_port_compiles() {
+    // The guarantee the CLI page makes — a freshly generated port plus **any**
+    // adapter compiles — held over this port for one edge of seven: the suite
+    // compiled `events` here and nothing else, so the HTTP, GraphQL, WS, queue,
+    // schedule and MCP skeletons were proved by the `integration` suite's text
+    // assertions alone, which read a wrong import as readily as a right one.
+    let mut generate = vec![vec!["g", "feature", "blog"]];
+    generate.extend(every_edge("blog", &[]));
+    // The other path out of `nestrs new`: an app added to a workspace that has
+    // one, with its own `hello` feature and app crate beside the first.
+    generate.push(vec!["new", "admin"]);
+    check_all(
+        &generate,
+        "every adapter over a plain port, and a second app",
     );
 }
 
 #[test]
-fn the_generated_ws_and_mcp_authz_bridges_compile() {
+fn every_adapter_over_a_resource_port_compiles() {
     // F4: `g ws` and `g mcp` named `AuthzWsModule` / `features::authz::mcp` in
     // their own output while writing neither. They write both now — and a
     // bridge module is exactly the shape the `integration` suite cannot judge:
     // it asserts on the *text* a generator produced, so a `#[module]` naming a
     // provider behind a feature the manifest never enabled reads as correct
-    // there and fails on the user's first `cargo check`.
+    // there and fails on the user's first `cargo check`. The bridges share the
+    // `authz/` tree, so this also pins that they land side by side without
+    // clobbering each other's index lines.
     //
-    // One workspace, both adapters: the `authz/` tree is shared, so this also
-    // pins that two bridges land side by side without clobbering each other's
-    // index lines.
-    scaffold_and_check(
-        &[
-            &["g", "resource", "post"],
-            &["g", "ws", "post"],
-            &["g", "mcp", "post"],
-        ],
-        "the generated WS and MCP authz bridges",
+    // The resolver is the case that made this every edge rather than two: over a
+    // resource, `g graphql` bound `#[use_guards(AuthnGuard, AuthzGuard)]` on a
+    // `#[resolver]`, which the guard-capability check refuses — `/graphql`
+    // authenticates through its bridge, and `AuthnGuard` has no `check_graphql`.
+    // It shipped in 6.0 and 6.1, because this test compiled `ws` and `mcp` over a
+    // resource and never `graphql`.
+    //
+    // `http` is skipped because `g resource` writes it — the guarded `#[crud]`
+    // controller — and refuses a second. The migration is the resource's table,
+    // the pair the scaffolded README generates together.
+    let mut generate = vec![vec!["g", "resource", "post", "-p", "apps/hello"]];
+    generate.extend(every_edge("post", &["http"]));
+    generate.push(vec!["g", "migration", "create_post"]);
+    check_all(
+        &generate,
+        "every adapter over a resource port, and its migration",
     );
 }

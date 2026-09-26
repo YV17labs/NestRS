@@ -321,6 +321,16 @@ fn print_next_steps(
             host_module(transport)
         );
     }
+    // The worker binding above serves the processor; pushing is the other
+    // binding, and the marker this run wrote at the port is what it pushes to.
+    if matches!(transport, Transport::Queue) {
+        println!(
+            "  Push from a provider injecting Arc<dyn JobProducer>: \
+             `queue.push({}, job, None)`. The app that pushes imports \
+             nest_rs::redis::RedisQueueModule beside RedisModule.",
+            names.queue()
+        );
+    }
     if matches!(transport, Transport::Mcp) && bridge.is_none() {
         println!(
             "  Security: the MCP endpoint denies all requests until you bind an \

@@ -624,6 +624,31 @@ mod tests {
         assert_eq!(migration_subject("widgets").singular, "Widget");
     }
 
+    /// The e2e suite compiles every adapter generator from its own `EDGES` list,
+    /// because an integration target cannot reach this crate-private enum. This
+    /// join is what keeps that list the whole family: an edge added here and not
+    /// there would ship a generator no compiler has read — which is how `g
+    /// graphql` over a resource shipped a resolver that did not compile, while
+    /// the suite compiled two edges of seven over that port.
+    #[test]
+    fn the_e2e_suite_compiles_every_edge() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/scaffold.rs");
+        let src = std::fs::read_to_string(&path).expect("the e2e suite is readable");
+        // From the `=`: the type, `[&str; N]`, carries a `;` of its own.
+        let list = src
+            .split_once("const EDGES")
+            .and_then(|(_, rest)| rest.split_once('='))
+            .and_then(|(_, rest)| rest.split_once(';'))
+            .map(|(list, _)| list)
+            .expect("the e2e suite declares `const EDGES = [..];`");
+        let listed: BTreeSet<&str> = list.split('"').skip(1).step_by(2).collect();
+        let edges: BTreeSet<&str> = Transport::ALL.iter().map(|t| t.folder()).collect();
+        assert_eq!(
+            listed, edges,
+            "tests/e2e/scaffold.rs `EDGES` must name every adapter the CLI generates",
+        );
+    }
+
     #[test]
     fn command_file_layout_mirrors_the_dto_rule() {
         // A lone imperative payload lives directly in `command.rs`.

@@ -88,10 +88,12 @@ pub struct {{resolver}} {
 impl {{resolver}} {
     // SECURITY: scaffolded as #[public] because this port holds no entity.
     // Before serving real rows, declare #[authorize(Action, Entity)] instead
-    // (class gate + automatic response masking), bind
-    // #[use_guards(AuthnGuard, AuthzGuard)] on the struct, and import
-    // AuthzGraphqlModule in this adapter's module.rs — `nestrs g auth` writes
-    // all three, and `nestrs g graphql` on a `g resource` port emits them.
+    // (class gate + automatic response masking), bind #[use_guards(AuthzGuard)]
+    // on the struct, and import AuthzGraphqlModule in this adapter's module.rs.
+    // `/graphql` has no guard at the HTTP edge: that module's bridge is what
+    // authenticates each operation, so AuthnGuard is not bound here — it has
+    // no GraphQL check, and binding it is a compile error. `nestrs g graphql`
+    // on a `g resource` port emits all three.
     #[query]
     #[public]
     async fn {{snake}}_count(&self) -> Result<usize> {
@@ -101,18 +103,30 @@ impl {{resolver}} {
 "#;
 
 /// The GraphQL adapter for a **resource** port: the `#[crud]` resolver behind
-/// the app's guards, the exact twin of `resource::HTTP_CONTROLLER` — same
-/// service, same ability, same rows, one transport over.
+/// the app's guards, the twin of `resource::HTTP_CONTROLLER` — same service,
+/// same ability, same rows, one transport over.
+///
+/// **One guard on the struct, not two**, and the difference from the HTTP
+/// controller is the transport's, not a shortcut: `/graphql` authenticates in
+/// band, per operation, through the bridge `AuthzGraphqlModule` registers, and
+/// `AuthnGuard` implements no `check_graphql` — so `#[resolver]` refuses it at
+/// compile time rather than let it pass every operation. The demo's resolvers
+/// bind `AuthzGuard` alone for the same reason. The two-guard form this
+/// template carried failed that check from 6.0 on, unseen, because no e2e
+/// compiled `g graphql` over a resource.
 pub(crate) const GRAPHQL_RESOLVER_CRUD: &str = r#"use std::sync::Arc;
 
 use nest_rs::graphql::{crud, resolver};
 
-use crate::authn::AuthnGuard;
 use crate::authz::AuthzGuard;
 use crate::{{snake}}::{{{create_op}}, Entity as {{entity}}Entity, {{entity}}, {{service}}, {{update_op}}};
 
+// `/graphql` has no guard at the HTTP edge: the bridge AuthzGraphqlModule
+// registers authenticates each operation in band, so the resolver binds the
+// ability guard alone — AuthnGuard has no GraphQL check, and binding it here is
+// a compile error.
 #[resolver]
-#[use_guards(AuthnGuard, AuthzGuard)]
+#[use_guards(AuthzGuard)]
 pub struct {{resolver}} {
     #[inject]
     svc: Arc<{{service}}>,
@@ -199,6 +213,9 @@ pub struct {{processor}};
 
 #[processor]
 impl {{processor}} {
+    // One attempt at a time per replica, the default: `concurrency = N` runs N
+    // side by side in each replica, and more replicas scale the rest. `retries`
+    // is the budget the port counts, backing off between attempts.
     #[process(queue = {{queue}}, retries = 3)]
     async fn handle(&self, job: {{command}}) -> Result<()> {
         let _ = job;
@@ -238,7 +255,8 @@ pub struct {{command}} {
 /// The queue's identity — wire name + payload type in one artifact the producer
 /// and the processor both import, so a typo or a mismatched payload is a compile
 /// error rather than a job that silently never drains. Push with
-/// `queue.push({{queue}}, …, None)`.
+/// `queue.push({{queue}}, job, None).await?` from a provider injecting
+/// `queue: Arc<dyn JobProducer>`; it answers the job's `PushReceipt`.
 #[queue(name = "{{kebab}}", job = {{command}})]
 pub struct {{queue}};
 "#;
@@ -259,6 +277,10 @@ pub struct {{tasks}} {
 
 #[scheduled]
 impl {{tasks}} {
+    // Fires on every replica (`replicas = "each"`, the default), which suits
+    // per-process work. Work that is the deployment's declares
+    // `replicas = "one"`, and the app imports `RedisScheduleModule` beside
+    // `ScheduleModule` (feature `redis-schedule`) so one replica claims each tick.
     #[every("60s")]
     async fn tick(&self) -> Result<()> {
 {{op_body}}

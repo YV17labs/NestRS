@@ -255,7 +255,9 @@ crates/features/src/<feature>/
   graphql/  module.rs resolver.rs
   ws/       module.rs gateway.rs
   queue/    module.rs processor.rs
+  schedule/ module.rs tasks.rs
   mcp/      module.rs tool.rs
+  events/   module.rs listener.rs
 ```
 
 `nestrs g feature|resource|http|graphql|ws|queue|schedule|mcp|events` writes that
@@ -369,12 +371,22 @@ picks between them — not the caller:
 filters every read by the caller's ambient `Ability`; with none installed a read
 denies every row rather than returning them unscoped. So a scaffolded adapter is
 not "open" — it answers nothing until it is wired, which is the fail-secure half
-of the design. Before an operation serves real rows: swap `#[public]` for
-`#[authorize]`, bind `#[use_guards(AuthnGuard, AuthzGuard)]` on the struct, and
-import the edge's authz module in that adapter's `module.rs` —
-`AuthzModule`, `AuthzGraphqlModule`, `AuthzWsModule`, `AuthzMcpModule`.
-`nestrs g auth` writes all of them, and `nestrs g <edge>` on a `g resource` port
-emits the wiring already done.
+of the design. Before an operation serves real rows, swap `#[public]` for
+`#[authorize]` and wire its edge — the guards on the struct, and the edge's authz
+module imported in that adapter's `module.rs`:
+
+| Edge | `#[use_guards(…)]` on the struct | Imported in `module.rs` |
+|---|---|---|
+| HTTP controller | `AuthnGuard, AuthzGuard` | `AuthzModule` |
+| WS gateway | `AuthnGuard, AuthzGuard` — they run on the upgrade, an HTTP `GET` | `AuthzWsModule` |
+| GraphQL resolver | `AuthzGuard` — the module's bridge authenticates each operation | `AuthzGraphqlModule` |
+| MCP tool | none — the module's bridge gates every call at the endpoint | `AuthzMcpModule` |
+
+A guard bound where its check never runs is a compile error naming the edge it
+does check: `AuthnGuard` checks HTTP requests only, so a resolver refuses it.
+`nestrs g auth` writes the guards and `AuthzModule`, `nestrs g graphql|ws|mcp`
+writes that edge's module once auth exists, and `g http` / `g graphql` on a
+`g resource` port emit the wiring already done.
 
 Two edges answer differently, by design. A **scheduled** tick is system work:
 `SeaOrmDatabaseModule`'s job context installs the executor with no ability, so `Repo`
@@ -416,7 +428,8 @@ pinned in code. A field that only exists in one of the two is incomplete.
 check, not in a test. `{{env_prefix_var}}` is set on the process and
 renames every framework variable at once, so a name typed by hand points at
 nothing the day it changes, and the compiler never notices. Build it
-(`nest_rs_config::var_name`, `EnvPrefix::var`) or name the setting in words.
+(`nest_rs::config::var_name`, `nest_rs::core::EnvPrefix::var`) or name the
+setting in words.
 
 ## Dependencies
 
@@ -451,8 +464,9 @@ through `TestApp`, never the app root: the root grows every transport and
 connection the app serves, and the moment it imports `SeaOrmDatabaseModule` a suite
 defined as infrastructure-free waits 30 s for a pool. Assert on the composed app
 in `tests/e2e/main.rs` instead — scaffolded empty, and where a test boots against
-a throwaway database with `nest_rs::testing`'s `EphemeralDatabase` (feature
-`orm`) before driving it through `TestApp` the same way.
+a throwaway database with `nest_rs::testing`'s `EphemeralDatabase` (the
+`testing` and `seaorm` features of `nest-rs`, both on since `nestrs new`) before
+driving it through `TestApp` the same way.
 
 ## Commands
 

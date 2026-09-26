@@ -501,8 +501,18 @@ fn generate_graphql_over_a_resource_emits_the_crud_form_and_its_bridge() {
         "a CrudService has no `count()`: {resolver}"
     );
     assert!(
-        resolver.contains("#[use_guards(AuthnGuard, AuthzGuard)]"),
+        resolver.contains("#[use_guards(AuthzGuard)]"),
         "DB-backed rows are only reachable behind the ability guard: {resolver}"
+    );
+    // `/graphql` authenticates in band, through the bridge the module imports:
+    // `AuthnGuard` has no `check_graphql`, so `#[resolver]` refuses it — the
+    // two-guard form this template carried did not compile from 6.0 on.
+    assert!(
+        !resolver
+            .lines()
+            .any(|line| line.contains("use_guards(") && line.contains("AuthnGuard"))
+            && !resolver.contains("use crate::authn::AuthnGuard"),
+        "a resolver binds no guard without a GraphQL check: {resolver}"
     );
     assert!(
         resolver.contains("#[crud(") && resolver.contains("entity = PostEntity"),

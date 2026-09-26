@@ -1,0 +1,5 @@
+error: #[process] `queue` takes the `#[queue]` marker type the method drains, e.g. `queue = AudioQueue`
+  --> tests/integration/diagnostics/process_queue_is_not_a_type.rs:14:23
+   |
+14 |     #[process(queue = 42)]
+   |                       ^^

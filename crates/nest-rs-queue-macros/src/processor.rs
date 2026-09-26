@@ -482,16 +482,33 @@ impl Parse for QueueId {
             let lit: LitStr = input.parse()?;
             Err(syn::Error::new_spanned(
                 &lit,
-                format!(
-                    "name the queue by its `Queue` type, not a string: declare \
-                     `#[queue(name = {:?}, job = <Payload>)] struct <Name>Queue;` at the \
-                     feature port and write `#[process(queue = <Name>Queue)]` — the type \
-                     form also checks this method's payload against the queue's",
-                    lit.value(),
+                takes_value(
+                    "process",
+                    Some("queue"),
+                    &format!(
+                        "the queue's `#[queue]` marker type, not a string: declare \
+                         `#[queue(name = {:?}, job = <Payload>)] struct <Name>Queue;` at the \
+                         feature port and write `#[process(queue = <Name>Queue)]` — the type \
+                         form also checks this method's payload against the queue's",
+                        lit.value(),
+                    ),
                 ),
             ))
         } else {
-            Ok(QueueId::Type(Box::new(input.parse()?)))
+            input
+                .parse::<Type>()
+                .map(|marker| QueueId::Type(Box::new(marker)))
+                .map_err(|stopped| {
+                    syn::Error::new(
+                        stopped.span(),
+                        takes_value(
+                            "process",
+                            Some("queue"),
+                            "the `#[queue]` marker type the method drains, e.g. \
+                             `queue = AudioQueue`",
+                        ),
+                    )
+                })
         }
     }
 }

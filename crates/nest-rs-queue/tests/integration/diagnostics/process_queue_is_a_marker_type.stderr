@@ -1,4 +1,4 @@
-error: name the queue by its `Queue` type, not a string: declare `#[queue(name = "demo", job = <Payload>)] struct <Name>Queue;` at the feature port and write `#[process(queue = <Name>Queue)]` — the type form also checks this method's payload against the queue's
+error: #[process] `queue` takes the queue's `#[queue]` marker type, not a string: declare `#[queue(name = "demo", job = <Payload>)] struct <Name>Queue;` at the feature port and write `#[process(queue = <Name>Queue)]` — the type form also checks this method's payload against the queue's
   --> tests/integration/diagnostics/process_queue_is_a_marker_type.rs:22:23
    |
 22 |     #[process(queue = "demo")]

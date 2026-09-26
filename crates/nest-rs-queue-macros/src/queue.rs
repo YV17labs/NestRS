@@ -5,13 +5,13 @@
 
 use nest_rs_codegen::{
     invalid_queue_name, is_valid_queue_name, missing_argument, needs_a_value,
-    reject_duplicate_argument, unknown_argument,
+    reject_duplicate_argument, require_str_lit, takes_value, unknown_argument,
 };
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Ident, Item, LitStr, Token, Type, parse_macro_input};
+use syn::{Expr, Ident, Item, LitStr, Token, Type, parse_macro_input};
 
 /// Every key `#[queue]` takes, in the order its unknown-key refusal lists them.
 const KEYS: [&str; 2] = ["name", "job"];
@@ -139,10 +139,19 @@ impl Parse for QueueArgs {
             input.parse::<Token![=]>()?;
             if spelled == "job" {
                 reject_duplicate_argument(job.is_some(), &key, "queue", &spelled)?;
-                job = Some(input.parse()?);
+                job = Some(input.parse::<Type>().map_err(|stopped| {
+                    syn::Error::new(
+                        stopped.span(),
+                        takes_value(
+                            "queue",
+                            Some("job"),
+                            "the type this queue's jobs carry, e.g. `job = TranscodeCommand`",
+                        ),
+                    )
+                })?);
             } else {
                 reject_duplicate_argument(name.is_some(), &key, "queue", &spelled)?;
-                let literal: LitStr = input.parse()?;
+                let literal = require_str_lit(&input.parse::<Expr>()?, "queue", "name", "emails")?;
                 // The rule `QueueName` states, refused at the literal.
                 if !is_valid_queue_name(&literal.value()) {
                     return Err(syn::Error::new(

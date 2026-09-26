@@ -53,12 +53,12 @@ half the pair behind. Anything in `config` still wins.
 **Queue depth is the right signal, and KEDA is how you read it.** Two facts
 from the framework's own source decide this:
 
-1. A `#[process]` method runs one job at a time unless it declares
-   `concurrency`, the demo's declare none — throughput comes from replicas —
-   and they are pure I/O (an S3 round-trip, one INSERT). A pod draining a
-   backlog of thousands sits near 0% CPU, so a CPU-driven HPA never fires.
-   `autoscaling` is there for a processor that is genuinely CPU-bound; on these
-   jobs it is inert.
+1. A `#[process]` method runs as many jobs at once as its `concurrency`
+   declares, in each replica — four transcodes, one notification write — and
+   throughput past that comes from replicas. Both jobs are pure I/O (an S3
+   round-trip, one INSERT), so a pod draining a backlog of thousands sits near
+   0% CPU and a CPU-driven HPA never fires. `autoscaling` is there for a
+   processor that is genuinely CPU-bound; on these jobs it is inert.
 2. Kubernetes has no native queue-depth trigger. HPA reads CPU, memory, or an
    external metric that something else must publish — and `HPAScaleToZero` was
    alpha from 1.16 to 1.36. [KEDA](https://keda.sh) is the one moving part that
@@ -76,7 +76,9 @@ apps:
 
 The triggers ship pre-wired to the demo's two queues. Each names the list a
 worker fetches from, `nestrs:queue:<queue>:active`, where `<queue>` is the name
-the `#[queue]` declaration gives it.
+the `#[queue]` declaration gives it. Its `listLength` is the backlog one replica
+is sized for, so it moves with the method's `concurrency`: the audio trigger
+asks for a replica per 20 waiting because each one runs four transcodes at once.
 
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
 its own, and two of them would scale the same Deployment against each other.

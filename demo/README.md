@@ -148,6 +148,7 @@ the RFC 9728 resource identifier and the MCP `Host` allowlist are each some
 app's public origin, and the chart derives them from the hostnames.
 
 The queue worker scales on queue depth through [KEDA](https://keda.sh), shipped
-disabled — its processors are I/O-bound and it runs one job at a time per
-`#[process]` method, so CPU stays flat however deep the backlog gets. The
-chart's [README](charts/demo/README.md) carries that trade-off and the rest.
+disabled — its processors are I/O-bound and each `#[process]` method runs at
+most its `concurrency` jobs at once per replica, so CPU stays flat however deep
+the backlog gets. The chart's [README](charts/demo/README.md) carries that
+trade-off and the rest.

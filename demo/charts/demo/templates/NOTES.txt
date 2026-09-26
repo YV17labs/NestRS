@@ -36,7 +36,8 @@ The queue worker scales on Redis list length. Two facts to keep in view:
     minReplicaCount defaults to 1
 {{- else if $worker.autoscaling.enabled }}
 
-The queue worker scales on CPU. The demo's #[process] methods run one job at a
-time, so a backlog of I/O-bound jobs leaves CPU flat and this HPA idle — queue
-depth, through KEDA, is the signal that moves with the work (`apps.worker.keda`).
+The queue worker scales on CPU. The demo's #[process] methods wait on I/O — four
+transcodes and one notification write at a time per replica — so a backlog
+leaves CPU flat and this HPA idle; queue depth, through KEDA, is the signal that
+moves with the work (`apps.worker.keda`).
 {{- end }}

@@ -213,12 +213,12 @@ apps:
     terminationGracePeriodSeconds: 45
     # Two facts about this worker, both from the framework's own source:
     #
-    # 1. A `#[process]` method runs one job at a time unless it declares
-    #    `concurrency`, and the demo's declare none — throughput comes from
-    #    replicas. Both demo jobs are pure I/O (S3 round-trip, one INSERT), so a
-    #    pod draining a huge backlog sits near 0% CPU and a CPU-driven HPA never
-    #    fires. Turn `autoscaling` on only if your own processor is genuinely
-    #    CPU-bound.
+    # 1. A `#[process]` method runs as many jobs at once as its `concurrency`
+    #    declares, in each replica — four transcodes, one notification write —
+    #    and throughput past that comes from replicas. Both demo jobs are pure
+    #    I/O (an S3 round-trip, one INSERT), so a pod draining a huge backlog
+    #    sits near 0% CPU and a CPU-driven HPA never fires. Turn `autoscaling`
+    #    on only if your own processor is genuinely CPU-bound.
     # 2. apalis re-enqueues orphaned jobs on every worker start, with a cutoff
     #    that matches all registered consumers — a scale-up puts its peers'
     #    in-flight jobs back on the queue. Each job's lease and settled mark keep
@@ -229,6 +229,10 @@ apps:
       enabled: false
     # Queue depth, the signal that actually reflects a backlog. Needs KEDA in
     # the cluster. `minReplicaCount: 1` on purpose — see `keda.redis` below.
+    # A trigger's `listLength` is the backlog one replica is sized for, so it
+    # moves with the method's `concurrency`: a replica runs four transcodes at
+    # once, and 20 waiting is the same five per running transcode that 5 was
+    # when it ran one.
     keda:
       enabled: false
       minReplicaCount: 1
@@ -239,7 +243,7 @@ apps:
         - type: redis
           metadata:
             listName: nestrs:queue:audio:active
-            listLength: "5"
+            listLength: "20"
         - type: redis
           metadata:
             listName: nestrs:queue:notifications:active

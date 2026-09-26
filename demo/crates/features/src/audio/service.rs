@@ -57,16 +57,19 @@ impl AudioService {
     }
 
     pub async fn transcode(&self, file: &str) -> Result<String, AudioError> {
-        let source = self.storage.get_bytes(file).await?;
         let derived = Self::derived_key(file);
+        let source = self
+            .storage
+            .get_stream(file)
+            .await?
+            .map(|chunk| chunk.map_err(std::io::Error::other));
         self.storage
-            .put_bytes(&derived, source.to_vec(), AUDIO_CONTENT_TYPE)
+            .put_stream(&derived, AUDIO_CONTENT_TYPE, source)
             .await?;
         tracing::debug!(
             target: "features::audio",
             file,
             derived_key = derived,
-            byte_size = source.len(),
             "transcoded",
         );
         Ok(derived)

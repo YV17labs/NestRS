@@ -2,10 +2,11 @@
 Queue depth, through KEDA. Optional: the chart installs and runs without KEDA in
 the cluster, and every app leaves this off by default.
 
-Why this exists at all when `autoscaling` above is simpler: the worker runs one
-job at a time per `#[process]` method and both demo processors are I/O-bound, so
-CPU utilisation stays flat however deep the backlog gets. List length is the
-only signal that moves with the work.
+Why this exists at all when `autoscaling` above is simpler: a replica runs at
+most each `#[process]` method's `concurrency` attempts at once, and both demo
+processors spend them waiting on storage or the database, so CPU utilisation
+stays flat however deep the backlog gets. List length is the only signal that
+moves with the work.
 */}}
 {{- range $app, $_ := .Values.apps }}
 {{- $cfg := fromYaml (include "demo.appConfig" (dict "ctx" $ "app" $app)) }}

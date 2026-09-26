@@ -1,4 +1,4 @@
-error: expected string literal
+error: #[sea_orm] `from` takes a string literal, e.g. `from = "org_id"`
   --> tests/integration/diagnostics/malformed_sea_orm_relation_attr.rs:18:34
    |
 18 |     #[sea_orm(belongs_to, from = org_id, to = "Column::Id")]

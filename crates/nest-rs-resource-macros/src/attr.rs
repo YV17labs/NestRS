@@ -1,8 +1,9 @@
 //! Parse `#[expose(...)]` into a [`ResourceModel`] and strip the per-field
 //! annotations so the ORM macros see a clean entity.
 
+use nest_rs_codegen::ungrouped_expr;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::parse::Parse;
 use syn::{
     Expr, Fields, GenericArgument, Ident, ItemStruct, LitStr, Path, PathArguments, Token, Type,
@@ -150,7 +151,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             if !meta.input.peek(syn::Token![=]) {
                 return Err(meta.error(nest_rs_codegen::needs_a_value("expose", "name")));
             }
-            name = Some(meta.value()?.parse::<LitStr>()?.value());
+            let written: Expr = meta.value()?.parse()?;
+            name = Some(type_name(&written)?);
             Ok(())
         } else if meta.path.is_ident("service") {
             nest_rs_codegen::reject_duplicate_argument(
@@ -162,7 +164,16 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             if !meta.input.peek(syn::Token![=]) {
                 return Err(meta.error(nest_rs_codegen::needs_a_value("expose", "service")));
             }
-            service = Some(meta.value()?.parse::<Path>()?);
+            service = Some(meta.value()?.parse::<Path>().map_err(|stopped| {
+                syn::Error::new(
+                    stopped.span(),
+                    nest_rs_codegen::takes_value(
+                        "expose",
+                        Some("service"),
+                        "the path of the entity's service, e.g. `service = UsersService`",
+                    ),
+                )
+            })?);
             Ok(())
         } else if meta.path.is_ident("complex") {
             nest_rs_codegen::reject_duplicate_argument(complex, &meta.path, "expose", "complex")?;
@@ -265,7 +276,8 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                         let _: syn::Expr = m.value()?.parse()?;
                     }
                 } else if m.path.is_ident("from") {
-                    from_col = Some(m.value()?.parse::<LitStr>()?.value());
+                    let written: Expr = m.value()?.parse()?;
+                    from_col = Some(foreign_key(&written)?);
                 } else if m.input.peek(Token![=]) {
                     // Any other key-value pair — consume so the meta parser
                     // can advance past it without erroring.
@@ -289,27 +301,36 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             }
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("input") {
-                    let content;
-                    syn::parenthesized!(content in m.input);
-                    let kinds = content.parse_terminated(Ident::parse, Token![,])?;
-                    for k in kinds {
-                        if k == "create" {
-                            in_create = true;
-                        } else if k == "update" {
-                            in_update = true;
-                        } else {
-                            return Err(syn::Error::new(
-                                k.span(),
-                                nest_rs_codegen::unknown_value(
-                                    "expose",
-                                    "input",
-                                    &k.to_string(),
-                                    &["create", "update"],
-                                ),
-                            ));
+                    for kind in listed(
+                        &m,
+                        "input",
+                        "a list of `create` and `update`, e.g. \
+                         `input(create, update)`",
+                    )? {
+                        match ungrouped_expr(&kind) {
+                            Expr::Path(p) if p.path.is_ident("create") => in_create = true,
+                            Expr::Path(p) if p.path.is_ident("update") => in_update = true,
+                            other => {
+                                return Err(syn::Error::new_spanned(
+                                    other,
+                                    nest_rs_codegen::unknown_value(
+                                        "expose",
+                                        "input",
+                                        &other.to_token_stream().to_string(),
+                                        &["create", "update"],
+                                    ),
+                                ));
+                            }
                         }
                     }
                 } else if m.path.is_ident("validate") {
+                    if !m.input.peek(syn::token::Paren) {
+                        return Err(m.error(nest_rs_codegen::takes_value(
+                            "expose",
+                            Some("validate"),
+                            "a list of `validator` rules, e.g. `validate(length(min = 1))`",
+                        )));
+                    }
                     let content;
                     syn::parenthesized!(content in m.input);
                     validate.push(content.parse()?);
@@ -321,16 +342,25 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     // `HasMany` resolver takes `first`/`after`, so the
                     // expression may name them; every other field has no
                     // arguments to name.
+                    equals(&m, "complexity")?;
                     complexity = Some(m.value()?.parse::<Expr>()?);
                 } else if m.path.is_ident("via") {
                     // Which of the child's foreign keys a `HasMany` follows.
                     // A column name, not a path: the marker type the parent
                     // resolves it to is the framework's business.
-                    let lit = m.value()?.parse::<LitStr>()?;
+                    equals(&m, "via")?;
+                    let written: Expr = m.value()?.parse()?;
+                    let lit =
+                        nest_rs_codegen::require_str_lit(&written, "expose", "via", "author_id")?;
                     if syn::parse_str::<Ident>(&lit.value()).is_err() {
                         return Err(syn::Error::new_spanned(
                             &lit,
-                            "`via` takes a snake_case column name on the child entity (e.g. `via = \"author_id\"`)",
+                            format!(
+                                "{}: {:?} is not a column name — it takes a snake_case column \
+                                 of the child entity, e.g. `via = \"author_id\"`",
+                                nest_rs_codegen::site("expose", Some("via")),
+                                lit.value(),
+                            ),
                         ));
                     }
                     via = Some(lit);
@@ -507,6 +537,82 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         soft_delete,
         timestamps,
     })
+}
+
+/// `#[expose(name = "User")]`'s value: the type the wire DTO is declared as,
+/// and the stem of its `Create…` / `Update…` inputs and OpenAPI schema.
+///
+/// **An identifier or a refusal, never a panic.** It went straight into
+/// `format_ident!`, which panics on a name that is not one — `"my user"`, a
+/// keyword — so the developer read "proc macro panicked" and the name of
+/// nothing they wrote.
+fn type_name(written: &Expr) -> syn::Result<String> {
+    let lit = nest_rs_codegen::require_str_lit(written, "expose", "name", "User")?;
+    let name = lit.value();
+    if syn::parse_str::<Ident>(&name).is_err() {
+        return Err(syn::Error::new_spanned(
+            &lit,
+            format!(
+                "{}: {name:?} is not a Rust identifier — the wire DTO is declared under it, and \
+                 its `Create`/`Update` inputs and OpenAPI schema are named from it",
+                nest_rs_codegen::site("expose", Some("name")),
+            ),
+        ));
+    }
+    Ok(name)
+}
+
+/// The entity's own `#[sea_orm(from = "org_id")]`, which `#[expose]` reads to
+/// find the field holding a `HasOne` relation's foreign key.
+///
+/// SeaORM's attribute and SeaORM's key, so the refusal opens with that site —
+/// it is where the value is written. What `#[expose]` adds is only what it needs
+/// of the value: a string, naming a field, since it becomes one of this
+/// struct's identifiers (a name that is not one used to panic in
+/// `format_ident!`).
+fn foreign_key(written: &Expr) -> syn::Result<String> {
+    let lit = nest_rs_codegen::require_str_lit(written, "sea_orm", "from", "org_id")?;
+    let column = lit.value();
+    if syn::parse_str::<Ident>(&column).is_err() {
+        return Err(syn::Error::new_spanned(
+            &lit,
+            format!(
+                "{}: {column:?} is not a column name — `#[expose]` reads it as the field holding \
+                 this relation's foreign key, e.g. `from = \"org_id\"`",
+                nest_rs_codegen::site("sea_orm", Some("from")),
+            ),
+        ));
+    }
+    Ok(column)
+}
+
+/// A field key's list value — `input(create, update)` — each element read as
+/// written, or the key refused naming what its list takes when no list follows.
+fn listed(m: &syn::meta::ParseNestedMeta<'_>, key: &str, takes: &str) -> syn::Result<Vec<Expr>> {
+    if !m.input.peek(syn::token::Paren) {
+        return Err(m.error(nest_rs_codegen::takes_value("expose", Some(key), takes)));
+    }
+    let content;
+    syn::parenthesized!(content in m.input);
+    let listed = content
+        .parse_terminated(Expr::parse, Token![,])
+        .map_err(|stopped| {
+            syn::Error::new(
+                stopped.span(),
+                nest_rs_codegen::takes_value("expose", Some(key), takes),
+            )
+        })?;
+    Ok(listed.into_iter().collect())
+}
+
+/// The `=` a valued field key needs, checked before `value()` reads it, so a
+/// bare key is refused naming itself rather than with syn's `` expected `=` ``.
+fn equals(m: &syn::meta::ParseNestedMeta<'_>, key: &str) -> syn::Result<()> {
+    if m.input.peek(Token![=]) {
+        Ok(())
+    } else {
+        Err(m.error(nest_rs_codegen::needs_a_value("expose", key)))
+    }
 }
 
 /// Match `HasOne<T>` / `HasMany<T>` on the last path segment. Returns the

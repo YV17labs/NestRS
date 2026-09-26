@@ -1,0 +1,11 @@
+error: #[expose] `via` needs a value — write `via = ...`
+  --> tests/integration/diagnostics/expose_field_key_without_a_value.rs:10:18
+   |
+10 |         #[expose(via)]
+   |                  ^^^
+
+error: #[expose] `complexity` needs a value — write `complexity = ...`
+  --> tests/integration/diagnostics/expose_field_key_without_a_value.rs:20:18
+   |
+20 |         #[expose(complexity)]
+   |                  ^^^^^^^^^^

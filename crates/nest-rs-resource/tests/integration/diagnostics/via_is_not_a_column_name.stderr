@@ -1,4 +1,4 @@
-error: `via` takes a snake_case column name on the child entity (e.g. `via = "author_id"`)
+error: #[expose] `via`: "author id" is not a column name — it takes a snake_case column of the child entity, e.g. `via = "author_id"`
   --> tests/integration/diagnostics/via_is_not_a_column_name.rs:16:20
    |
 16 |     #[expose(via = "author id")]

@@ -1,0 +1,5 @@
+error: #[expose] `name`: "Blog Post" is not a Rust identifier — the wire DTO is declared under it, and its `Create`/`Update` inputs and OpenAPI schema are named from it
+ --> tests/integration/diagnostics/expose_name_is_not_an_identifier.rs:8:17
+  |
+8 | #[expose(name = "Blog Post")]
+  |                 ^^^^^^^^^^^

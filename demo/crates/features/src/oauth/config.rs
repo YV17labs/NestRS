@@ -37,7 +37,7 @@ impl Validate for IssuerConfig {
 
 impl Config for IssuerConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
-        let clients = match env.get("CLIENTS") {
+        let clients = match env.get("CLIENTS")? {
             Some(raw) => serde_json::from_str(&raw)
                 .map_err(|e| ConfigError::parse(env.var_name("CLIENTS"), e.to_string()))?,
             None => base.clients,

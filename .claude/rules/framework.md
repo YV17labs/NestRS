@@ -563,6 +563,118 @@ module owns — so a metadata-discovered surface (`HttpEndpointMeta`,
 inert-entry `warn` to emit. Pick the mechanism, then take its gate; never
 bolt a `ReachableProviders` filter onto metadata to look symmetric.
 
+### A key a datastore holds is the span target, written for that store
+
+Anything the framework writes into a shared datastore — a Redis key today — is a
+**name an operator types**: in a chart's KEDA trigger, in a `SCAN` during an
+incident, in an ACL. So it obeys the naming law like any other name, and it is
+derived rather than chosen:
+
+```
+nestrs:<concern>:<structure>[:<member>]
+```
+
+- **`<concern>` is the tail of the span target of the crate that owns the
+  concern** — `nest_rs::queue` → `queue`, `nest_rs::schedule` → `schedule`,
+  `nest_rs::throttler` → `throttler`. *Owning*, not writing: `nest-rs-redis`
+  writes every one of these keys and `redis` names none of them, because an
+  operator looking at Redis is looking for the queue's keys, not "the Redis
+  crate's".
+- **`<structure>` is what the key is within the concern** — `buckets`, `claims`,
+  `leases` — one word, never the concern's own word said again, plural when it
+  holds one member per thing.
+- **`<member>` is what varies** — a queue, a job's id, an occurrence, a client's
+  bucket. A queue name holds no `:`, so a queue is one level.
+
+**It is the fourth column of a table that had three.** The crate's subject, its
+span target and its `#[config]` namespace are one derivation, and a datastore key
+is the same derivation reaching one more surface — so from a key a reader names
+the port crate that owns it, and from that crate derives the key:
+
+| surface | derivation | example |
+|---|---|---|
+| crate | the subject | `nest-rs-throttler` |
+| span target | `nest_rs::<concern>` | `nest_rs::throttler` |
+| env namespace | `<PREFIX>_<CONCERN>__*` | `<PREFIX>_THROTTLER__*` |
+| datastore key | `nestrs:<concern>:<structure>` | `nestrs:throttler:buckets` |
+
+Three obligations, each for a mechanical reason, all executed by the `keys` join
+in `nest-rs-conformance` over both workspaces and the docs, whose baselines are
+empty and only shrink:
+
+- **Every fixed part is a `const` whose literal opens with `nestrs:`**, declared
+  by the crate that writes the key, and a key that varies is built from exactly
+  one such constant — a template whose slots are filled (`nestrs:queue:{queue}`)
+  or `format!("{CONST}:{member}")`. A fixed segment inside a format string is a
+  key nothing checks.
+- **No key prefixes another without a visible level.** `SCAN` and `KEYS` match by
+  glob, so `<ns>:queue` beside `<ns>:queue_configs` means the pattern an operator
+  types — `<ns>:queue*` — returns both: the hazard `EnvFilter`'s `starts_with`
+  makes of span targets, one surface over. A qualifier goes one level down, never
+  alongside.
+- **A key spelled outside Rust is built from one the code declares.** A KEDA
+  trigger, a `NOTES.txt` `LLEN` or a docs page's `SCAN` never moves when a
+  constant does, and a trigger polling a list nobody fills reads zero forever,
+  without a word. A declared name's `{}` level stands for any one member
+  (`nestrs:queue:audio:active` is built on `nestrs:queue:{}`), and an apalis
+  structure at the root of the keyspace (`audio:active`) is refused — in Rust
+  unless a placeholder opens it, which is how the 6.x check builds its names from
+  the queue, and outside Rust even then. So a page describing the 6.x layout
+  builds those names from a shell variable rather than writing one.
+
+**The leading segment is `nestrs`, hard-coded, and that is settled.**
+`NESTRS_ENV_PREFIX` renames every environment variable because those are the
+developer's surface, sitting in their charts and secret stores. A key is the
+framework's own machinery: two deployments sharing one Redis are separated by the
+logical database in the connection URL (`redis://host:6379/2`), which
+`RedisConfig` already parses — that is the isolation, and a prefix knob would buy
+symmetry and nothing else.
+
+**apalis's structures are apalis's.** A queue hands apalis the namespace
+`nestrs:queue:<queue>`, and apalis derives its own structures from it —
+`…:active`, `…:inflight:<worker>`, `…:scheduled`, `…:data`, `…:dead`, `…:done`,
+`…:failed`, `…:signal`, `…:consumers`. The framework reads and writes those only
+through apalis's public API, never with a command or a script of its own, and
+files its own records beside them, one structure per fact, under words apalis
+does not use. An apalis behaviour the framework cannot live with is worked around
+in keys of its own and reported upstream — never forked, vendored or patched.
+
+| concern | key | holds |
+|---|---|---|
+| queue | `nestrs:queue:<queue>` | the namespace apalis derives its structures from |
+| | `…:open:<job_id>` | a job pushed and not yet settled, with its unique key — how a cancel tells a waiting job from one long finished, since apalis keeps a finished job's record until something vacuums it |
+| | `…:leases:<job_id>` | the delivery running the job |
+| | `…:settled:<job_id>` | how the job ended, so a later delivery is answered as the first was |
+| | `…:cancelled:<job_id>` | a cancel's promise that the job never starts |
+| | `…:checkpoints:<job_id>` | the progress the job saved |
+| | `…:unique:<key>` | the job holding a unique key |
+| | `…:throttle` | the attempts started in the current window — one per queue, since one method drains a queue |
+| throttler | `nestrs:throttler:buckets:<subject>` | one client's current window |
+| schedule | `nestrs:schedule:claims:<occurrence>` | an occurrence's claim — the port's token (`<provider>:<method>:<instant_ms>`) verbatim; the key's existence is the claim, and its value names the claimer for operators only |
+
+**Nothing is kept forever, and nothing that is still owed lapses early.** Every
+record of a job still waiting lives a week past the instant the job is due
+(`KEPT_PAST_DUE`), renewed by every delivery that touches it — the bound on a
+unique key whose job vanished — and the week is a constant: a knob would need the
+queue binding's first `#[config]` and its `for_root`, an owner question rather than
+a default. A settled mark lives past the latest a sweep could hand the job to a
+second delivery, `max(1 h, 2 × orphan_after + lease)`, and a week when the job
+settled during a drain; at about 120 bytes a job that is a documented cost, not a
+setting.
+
+**The 6.x layout is refused, never read.** 6.x handed apalis the queue's bare
+name, so its jobs sit at the root of the keyspace, where a 7.0 worker never looks,
+and jobs left there would wait forever without a word. So the worker **refuses to
+start** while one holds a job, naming the keys and both ways out — drain with 6.x
+workers, or move with `RENAMENX` (never `RENAME`, which would overwrite what 7.0
+already filed) — and the producer **warns** once per queue instead, because
+refusing there would block the drain-first rollout, which upgrades producers
+first. The check is `EXISTS` on three exact names — never a `SCAN`, which costs
+the whole keyspace and which an ACL confined to `nestrs:*` refuses — and a
+`NOPERM` answer is said, never taken for an empty layout. The move the docs print
+is the one `layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once`
+runs.
+
 ### A swappable concern ships an extension contract
 
 Anything a third party could plug a different implementation into owes a
@@ -589,7 +701,7 @@ Two questions determine the shape, and they are **independent** — answer both.
   abstraction, and the nestrs crate is a thin adapter over it that does not let
   the vendor's types leak. `object_store` (S3, GCS, Azure, local filesystem,
   in-memory) under `nest-rs-storage`; `sea-orm` (postgres/mysql/sqlite) under
-  `nest-rs-seaorm`; `apalis` (redis, sql) under `nest-rs-redis`. The port then
+  `nest-rs-seaorm`. The port then
   exists for exactly one move — swapping the **vendor** — so its contract is
   thin **and declares no config**, because nothing is asked of the integrator's
   settings. A thin port here is the correct outcome, not an unfinished one:
@@ -597,7 +709,11 @@ Two questions determine the shape, and they are **independent** — answer both.
   this paragraph exists to stop, and it was made three times in one session.
 - **Owned.** Nothing abstracts the concern, so nestrs defines the trait, the
   registration seam and the arbitration sentence itself — `ThrottlerStore`,
-  `SocialProvider`, `Strategy`.
+  `OccurrenceLock`, `JobProducer`, `SocialProvider`, `Strategy`. `JobProducer` is
+  the one that moved, in 7.0: apalis serves several stores, but what a job *is* —
+  its id, its envelope, its attempt and retry budget, the capabilities a backend
+  declares — is `nest-rs-queue`'s, and apalis is the Redis job runtime one binding
+  drives. A second backend implements the port; it never configures apalis.
 
 **Q2 — what selects the active implementation? Three modes, and the third is
 the one this framework uses most.**
@@ -606,7 +722,13 @@ the one this framework uses most.**
   imports; the consumer injects `dyn Port` and never names the backend. Two
   imported is a **boot error naming both**, worded once and shared by every
   backend so the halves cannot drift — `nest_rs_throttler::BACKEND_REMEDY` is
-  that shape already built.
+  that shape already built. Every such port declares its `BACKEND_REMEDY` **in
+  the file holding what a backend supplies** — `nest_rs_queue::backend`,
+  `nest_rs_schedule::occurrence`, `nest_rs_throttler::store` — never in a
+  `module.rs`, because the contract is what a backend author opens and the module
+  only passes the sentence on. The sentence may name the first-party binding as
+  the remedy: it is advice a reader acts on, and *a port's dependencies name no
+  vendor crate* binds the manifest, not the prose.
 - **By type parameter.** The app names the implementation in an alias and the
   generic host is instantiated with it — `AuthnGuard<S: Strategy>`,
   `AbilityGuard<F: AbilityFactory>`, `GraphqlAbilityBridge<A, G>`. **No
@@ -630,11 +752,35 @@ declares it.** A port crate depending on nothing is the normal case —
 | port | declared by | bound by | Q1 (of the binding) | Q2 | contract written |
 |---|---|---|---|---|---|
 | `Executor` | `nest-rs-database` | `nest-rs-seaorm` | delegated (`sea-orm`) | by import | **yes** — `## Extension contract`, but no arbitration sentence |
-| `JobProducer` / `Processor` | `nest-rs-queue` | `nest-rs-redis` | delegated (`apalis`) | by import | **yes** — `docs/queue/writing-a-driver.mdx` |
+| `JobProducer` / `CheckpointStore` | `nest-rs-queue` | `nest-rs-redis` | owned — apalis is the Redis job runtime the binding drives, not the port | by import | **yes** — the crate's `# Extension contract`, `docs/queue/writing-a-driver.mdx`, and `BACKEND_REMEDY` |
+| `OccurrenceLock` | `nest-rs-schedule` | `nest-rs-redis` | owned | by import | **yes** — the port's `//!` in `occurrence.rs`, `BACKEND_REMEDY` its arbitration sentence |
 | `SocialProvider` | `nest-rs-social` | itself + third parties | owned | by configuration | **yes** — open provider contract |
 | `ThrottlerStore` | `nest-rs-throttler` | itself + `nest-rs-redis` | owned | by import | no |
 | `Strategy` | `nest-rs-authn` | the app's alias | owned | by type parameter | no |
 | object storage | — | `nest-rs-storage` | delegated (`object_store`) | **nothing selects** — see below | no port exists |
+
+**A port promises only what every backend it ships holds.** A guarantee one
+backend keeps more loosely is either refused by that backend — its
+`QueueBackend` does not declare the capability — or worded in the port loosely
+enough that every backend keeps it, and the backend's own bound is written on the
+backend: `nest-rs-redis`'s `backend.rs` states its throttle window, the port says
+only *starts per window, across the deployment*. A port sentence describing one
+backend's behaviour has taken that backend's semantics for its contract.
+
+**A port call the framework awaits is bounded by the framework.** A backend is
+trusted to answer, never to answer in time: past its bound a call is treated as a
+backend that cannot answer, and never waited on in silence, because a hung
+backend is a job that stops or a request that stalls with nothing to say why.
+The scheduler abandons an `OccurrenceLock` call once its occurrence goes stale —
+its hold less `MAX_SKEW` — and skips the occurrence at `warn`, and abandons an
+in-flight claim when its loop is cancelled, so a shutdown stays bounded;
+`ThrottlerGuard` bounds `ThrottlerStore::hit` by a constant and, past it, denies
+the request — fail closed, at `warn` with fields — as `RedisThrottler` itself does
+when Redis cannot answer. The bound is the framework's net, not the backend's
+budget: a backend still bounds each command it sends, as `RedisConnection`'s
+connect budget does, so an outage arrives promptly as the backend's own error
+rather than at the net. Any other port call the framework awaits is presumed to
+owe the same until it is checked.
 
 **The namespace falls out of the contract — it is never arbitrated.** A port
 owns a config namespace **if and only if its contract requires the integrator to
@@ -1088,30 +1234,185 @@ name order; init failure aborts boot, shutdown is best-effort.
   keys are refused at the line that wrote them rather than one of them at the
   boot. `CronExpression` presets are paths, so they are the one thing that still
   resolves at boot. `Scheduler` is a `Transport` via `TransportContribution`.
+
+  **Where a recurring job fires is declared, never inferred.** `#[every]` and
+  `#[cron]` take `replicas = "each"` (the default: every replica fires) or
+  `"one"` (each occurrence fires on at most one replica); `#[after]` refuses the
+  key, since a one-shot fires on the replica that booted. `"one"` claims each
+  occurrence through the `OccurrenceLock` port, selected by import —
+  `nest_rs::redis::RedisScheduleModule` (feature `redis-schedule`) binds it as a
+  declared factory carrying `nest_rs_schedule::BACKEND_REMEDY` — so a reachable
+  `"one"` job with no binding fails the boot naming the job, and two bindings
+  contest. **At most once, never at least once**: a claim that errors, one still
+  unanswered when its occurrence goes stale, and an occurrence reached that late
+  are all skipped at `warn`, and a replica that stops after claiming loses the
+  occurrence. Work that must not be lost is a queue job the tick pushes. The
+  lock's backends: Redis, built; an in-process one, refused — a lock no other
+  replica can see decides nothing across replicas, which is why `BACKEND_REMEDY`
+  answers with `replicas = "each"`; a database one (an expiring claims table, or
+  an advisory lock) is possible and unbuilt — an owner question.
 - **`nest-rs-queue` + `nest-rs-redis`** — backend-agnostic queue contract
-  (`Job`/`Processor`/`ProcessMethod` + `#[processor]` + inventory seam)
-  with Redis first-class (on `apalis`). The adapter crate is named for the
-  **storage** (Redis), because that is the surface a caller touches; apalis is
-  hidden — **no apalis types leak**. Queues identified by name (a `#[queue]`
-  marker type, or a string through the raw hatch). Producer/consumer decoupled.
-  One connection, opened by `RedisModule::for_root` (`NESTRS_REDIS__*`) and
-  shared by every Redis binding; the producer binds through `RedisQueueModule`
-  (bare), the consumer activates via `RedisWorkerModule::for_root`
-  (`NESTRS_REDIS__WORKER__*`; producer-only apps skip it), and each binding
-  factory that reads the connection declares it runs *after* the connection's,
-  so `imports` order stays a readability choice.
+  (`Job`/`ProcessMethod` + `#[processor]` + inventory seam, the `JobProducer` and
+  `CheckpointStore` seams, and the capabilities a `QueueBackend` declares) with
+  Redis first-class, on apalis-redis 0.7.4 — kept past the freshness bar at its
+  pin (`manifests-ci.md`). The adapter crate is named for the **storage** (Redis),
+  because that is the surface a caller touches; apalis is hidden — **no apalis
+  types leak**. Queues identified by name (a `#[queue]` marker type, or a string
+  through the raw hatch). Producer/consumer decoupled. One connection, opened by
+  `RedisModule::for_root` (`NESTRS_REDIS__*`) and shared by every Redis binding;
+  the producer binds through `RedisQueueModule` (bare), the consumer activates
+  via `RedisWorkerModule::for_root` (`NESTRS_REDIS__WORKER__*`; producer-only
+  apps skip it), and each binding factory that reads the connection declares it
+  runs *after* the connection's, so `imports` order stays a readability choice.
+  `throttler` and `schedule` are the crate's features (`redis-throttler`,
+  `redis-schedule` on the umbrella) because each pulls a port crate that an app
+  which never rate-limits, or never fires a job once across replicas, has no
+  other reason to compile; the queue and worker bindings are what `redis` is for.
+
+  **`RedisConnection` is the connection**, not a pool or a factory of them: one
+  multiplexed `ConnectionManager`, handed to apalis as the connection its storage
+  runs on and used as it is by the rate limiter and the schedule lock. Every
+  command a caller waits on answers or fails within the connect budget, end to
+  end — the wait for a reopened connection included — so an outage fails a
+  command instead of holding every loop. **Certificate verification is never an
+  option**: `rediss://…#insecure` fails the boot and `redis` is built without
+  `tls-rustls-insecure`, because a private authority is trusted by configuring
+  its certificate, not by skipping the check; TLS material beside a plaintext URL
+  fails the boot too, since it would go silently unused. **Redis Cluster is
+  unsupported** — apalis 0.7's scripts touch keys across hash slots — and the
+  queue pages say so. The oldest Redis the docs claim is the oldest the Redis e2e
+  suite passed on at the release (6.2.20 for 7.0, beside 7.0.15 and 8.6.3), never
+  a version the suite has not run.
 
   **The port owns the attempt; the adapter owns the transport.** What a job
   attempt *is* — opening the envelope, continuing or minting the trace, the
   `queue.job` span and the ambient scope, catching a panic, classifying the
-  outcome into ok / retry / dead-letter, the three events and the
+  outcome into ok / retry / dead-letter within the method's retry budget and
+  timing the wait before a retry, the events saying why an attempt failed and the
   `nest_rs::operation` line — is `nest_rs_queue::consume::attempt`, written once
-  and tested once in the port. An adapter's consumer is a fetch loop that calls
-  it and translates the `Attempt` into its backend's vocabulary (apalis `Abort`
-  / `Failed`; a NATS consumer's `ack` / `nak` / `term`); discovery of the
-  `#[process]` methods, module-gated, is `nest_rs_queue::consume::discover`. A
-  second adapter therefore copies nothing — and an adapter that opens a
-  `queue.job` span of its own has taken semantics it does not own.
+  and tested once in the port. An adapter's consumer is a fetch loop that builds a
+  `Delivery` per job, calls it, and translates the `AttemptOutcome` into its
+  backend's vocabulary (apalis's `Abort`, or a re-filing; a NATS consumer's `ack`
+  / `nak` / `term`); discovery of the `#[process]` methods, module-gated and
+  refusing every declaration the backend's `QueueBackend` does not declare, is
+  `nest_rs_queue::consume::discover`, and a push option the backend lacks is
+  refused by the port before the backend sees it. A second adapter therefore
+  copies nothing — and an adapter that opens a `queue.job` span of its own, or
+  counts attempts, has taken semantics it does not own.
+
+  **A job is named by the port.** The push mints a `JobId` — a UUID v7 — and
+  seals it in the envelope, and that id keys everything kept about the job: its
+  receipt, its span's `messaging.message.id`, a cancel, a unique claim, a
+  checkpoint, the delivery guard. A backend's own id for the record reaches a
+  job's lines only as `backend_id`. The retry budget (`retries = N`) and the wait
+  before each retry are the port's too: exponential from one second to five
+  minutes, jittered by a hash of the job's id and the attempt rather than a random
+  draw, so every wait is reproducible — in a test, and by an operator reading a
+  job's lines.
+
+  **`#[process(concurrency = N)]` is per method, per replica — the vertical bound
+  — and replicas are the horizontal one.** A method runs at most `N` attempts at
+  once on one replica (default 1), from a permit pool of its own, so another
+  method's jobs never wait on it; throughput beyond that comes from replicas,
+  which a queue-depth autoscaler adds — KEDA's `redis` list trigger on
+  `nestrs:queue:<queue>:active`, the list apalis fetches from, rather than CPU,
+  which an I/O-bound worker leaves flat whatever its backlog. Not a capability: any
+  backend bounds in-process parallelism, so every backend owes it. **This
+  reverses the 1.2.0 decision of `6f787ce5`**, which removed the key because it
+  capped nothing — it only sized apalis's read buffer — and left scale to replicas
+  alone. The key now bounds what its name says, and the reason for the removal
+  went with the defect.
+
+  **The fetch is apalis's, and its ceiling is stated rather than hidden.**
+  apalis-redis 0.7.4 fetches up to `buffer_size` records once per
+  `poll_interval`, only while the worker has a free permit, and keeps
+  `fetch_next` private, so those two settings are the only levers short of a
+  fork. The worker sets `buffer_size = concurrency` — a buffer of one held every
+  method to one job per poll whatever it declared, 9.3 jobs a second at
+  concurrency 1 and 4 alike — and reads `poll_interval` from `RedisWorkerConfig`
+  (`NESTRS_REDIS__WORKER__POLL_INTERVAL_MS`, pinned or from the environment,
+  default 100, refused below 10 naming the variable). Three consequences are
+  documented where the queue's scaling is: a method's ceiling per replica is
+  `concurrency / poll_interval` for short jobs; a saturated worker holds at most
+  `concurrency` fetched records beyond the ones it runs, which no other replica
+  can take meanwhile; and every poll costs Redis a fetch and an orphan sweep per
+  method per replica whether or not a job waits — the idle price a shorter
+  interval multiplies. A higher ceiling is apalis 1.0's question for the owner,
+  never a fork.
+
+  **Delivery is at least once, and a redelivery runs once.** apalis delivers a
+  job twice in ways no setting of its public API removes — its startup sweep
+  reclaims every registered consumer's in-flight jobs, a live peer's included; a
+  replica that misses its heartbeats is swept; an acknowledgement is lost in a
+  drain — so the worker guards every delivery in keys of its own (*A key a
+  datastore holds*, above). An attempt runs only under the job's lease (`SET NX
+  PX`, renewed every third of the lease while it runs); its terminal outcome
+  writes the settled mark and drops the lease in one script; a delivery arriving
+  while the lease is held is **handed back, never acknowledged**, for when that
+  lease would lapse; and one arriving after the job settled is acknowledged
+  without running, answered as the first was. **The guard may delay a job, never
+  lose one**, and each of its steps is one Lua script or one command. Each replica
+  consumes under an apalis worker id of its own — the host, then a UUID v7 — and
+  the periodic sweep waits out ten of a peer's heartbeats (`orphan_after`) before
+  taking its jobs: only apalis's startup sweep uses *now*, and the guard is what
+  makes that one harmless.
+
+  **apalis never retries, and never ends a job, on its own.** A dead letter is
+  apalis's `Abort`; a `Retry { after }` re-files the same apalis task, carrying
+  the next attempt and due once `after` has passed, then takes it out of flight —
+  schedule first, out of flight second, so no failure between the two loses the
+  job — and a held lease, a throttle window and a shutdown hand a job back the
+  same way. A retry is therefore a filing on the schedule, never a wait holding a
+  permit or a shutdown, which is why the backend declares `DelayedPush`. apalis
+  also counts every delivery, and kills a record answered with a plain error once
+  that count reaches its context's private `max_attempts`, 5 by default: the
+  adapter answers so only where a hand-back failed, but retries, throttle
+  deferrals and lease hand-backs all count toward it, and no port event fires. So
+  every record the adapter files — push, delayed push, re-filing, hand-back —
+  carries a context whose `max_attempts` is `usize::MAX`, built through
+  `RedisContext`'s public `Deserialize`, and a unit test pins apalis's serde field
+  names, so a bump that renames them fails the tests, not a deployment.
+
+  **A shutdown stays inside `shutdown_timeout`.** The worker stops fetching at
+  once, lets running attempts finish for the window less a reserve (five seconds,
+  or half the window), then interrupts what still runs and hands each job back,
+  due at once for another replica, within the reserve; anything still running
+  past the whole window is said at `error` and left to its lease. The drain is the
+  worker's own rather than apalis's, because apalis-redis 0.7.4 drops the
+  acknowledgement of a task that ends while its worker drains: a hand-back takes
+  the task out of flight itself, and a job settled during a drain keeps its
+  settled mark for a week, since whichever replica starts next delivers it again.
+  What an interrupted attempt's transaction holds is `data-layer.md`'s, under *An
+  abandoned attempt*.
+
+  **The Redis backend declares all five capabilities**, each kept in keys of its
+  own and proved by its own e2e, and a capability joins the declaration one at a
+  time — never as `Capabilities::ALL`, so one the port names later is not claimed
+  before it is honoured. The decisions each carries: a delayed record is promoted
+  by the producer that filed it, on a one-second tick while it has delayed
+  records outstanding, so a due job reaches `…:active` — the list KEDA reads —
+  with no worker running, and a deployment with no producer process running keeps
+  `minReplicaCount: 1`; a unique key is claimed atomically before the job is filed
+  and released at the job's terminal outcome — **at most once over pushes, never
+  a lock**; a cancel writes its tombstone only while no attempt holds the lease,
+  so `Ok(true)` means the job never starts, and apalis's structures are never
+  touched; a throttle is a fixed window per queue, opened by its first start and
+  closed by its key's expiry — the HTTP limiter's algorithm, so no two replicas
+  have to agree on a clock — and starts either side of a window's end can reach
+  twice the limit in a short span, which the page says; a checkpoint is one key
+  per job, cleared at its terminal outcome.
+
+  **One queue per runtime key is refused on this backend, not deferred.**
+  `#[queue(prefix = …)]` is a compile error naming why: apalis 0.7 binds one
+  storage to one namespace and one worker to one storage, an idle worker still
+  polls Redis on every interval — about 58 commands a second each at the default
+  interval, measured, so a thousand tenants would cost Redis some 58 000 a second
+  before any job existed — and KEDA's `redis` trigger reads one list, while every
+  instance would fill its own. The key rides in the job. A backend whose consumer
+  reads many keys through one fetch, with one aggregate signal for an autoscaler
+  — Redis streams with consumer groups, a later apalis — could offer it: an owner
+  question, which is why the sentence names the Redis backend's facts rather than
+  an impossibility.
 
   **`#[input]` stays re-exported at the queue edge and stays off the queue
   scaffolds — both on purpose.** Unknown-key rejection is the right default

@@ -182,10 +182,12 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   and a ceiling, held for a value pinned through `RedisWorkerModule::for_root` as
   for the environment, and the boot fails naming the variable (and the field, when
   it was pinned): `ORPHAN_AFTER_SECS` from 5 seconds to a day, `LEASE_SECS` from 1
-  second to half the orphan threshold, `POLL_INTERVAL_MS` from 10 milliseconds to
-  the orphan threshold — the sweep that recovers a crashed replica's jobs runs on
-  the poll — and `SHUTDOWN_TIMEOUT_SECS` up to an hour. A value the boot accepts
-  never makes apalis panic.
+  second to half the orphan threshold — a pair breaking that names both variables
+  — `POLL_INTERVAL_MS` from 10 milliseconds to the orphan threshold, since the
+  sweep that recovers a crashed replica's jobs runs on the poll, and
+  `SHUTDOWN_TIMEOUT_SECS` from 1 second to an hour. A value the boot accepts never
+  makes apalis panic: a threshold of thirteen digits used to boot a worker whose
+  first sweep panicked.
 - **`Capability::DelayedPush`.** A delayed push, and a retry's next attempt, wait
   on the queue's schedule; the producer that filed them moves them onto the queue
   when due, so they reach the list an autoscaler reads with no worker running.
@@ -388,22 +390,36 @@ have. Each such wait now carries a bound of its own: a net above the budget of t
 adapter beneath it, so a healthy backend is never cut short, and a wait past it is
 abandoned with a `warn` naming what it was waiting on.
 
-- **HTTP drains within `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`**, handed to poem's
-  graceful shutdown: 25 seconds by default — under the kubelet's default 30-second
-  grace period — at least 1 and at most 3600, pinned through `HttpConfig`'s
-  `shutdown_timeout` or read from the environment alike. A connection still open at
-  the bound, such as an SSE or MCP stream, is closed, and one `warn` says how many
-  were. 6.1 waited for every connection to close. **Breaking** for an `HttpConfig`
-  struct literal without `..Default::default()`.
+- **HTTP waits for open connections no longer than
+  `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`**, handed to poem's graceful shutdown: 25
+  seconds by default — under the 30 a pod gets by default between `SIGTERM` and
+  `SIGKILL` — from 1 to 3600, pinned through `HttpConfig`'s `shutdown_timeout` or
+  read from the environment alike; `0` is refused rather than read as an off
+  switch. At the bound a request still running is dropped unanswered and a stream
+  is cut, and one `warn` on `nest_rs::http` — `connections still open as the
+  shutdown window closes are cut; …` — carries `cut`, `upgraded_open` and
+  `shutdown_timeout_ms`. A WebSocket leaves poem's count at its upgrade, so the
+  window neither waits for nor closes one: it ends with its handler or with the
+  process. 6.1 handed poem no window, so an `#[sse]` or MCP stream held a stopping
+  replica until its own four-hour ceiling or the kubelet's `SIGKILL`, which left
+  the shutdown hooks unrun. **Breaking** for an `HttpConfig` struct literal without
+  `..Default::default()`.
 - **Every shutdown lifecycle hook runs under a bound** — `OnModuleDestroy`,
   `BeforeApplicationShutdown`, `OnApplicationShutdown` — and a hook past it is
   abandoned with a `warn` naming its module and the hook.
 - **OpenTelemetry's provider shutdown is bounded**, by the SDK's own export
   timeouts or by the framework's, so a collector that stopped answering never holds
   the exit.
-- **`AuthGuard` bounds `Strategy::authenticate`** under a net above any shipped
-  strategy's budget: a strategy calling a backend — introspection, an API-key
-  lookup — that does not answer in time is denied, fail closed, at `warn`.
+- **`AuthnGuard` waits `nest_rs::authn::AUTHENTICATE_TIMEOUT` — 20 seconds — for
+  `Strategy::authenticate`**, on every edge that reaches it: a route, the GraphQL
+  and MCP fallbacks, a gateway's upgrade. Past it the credential was never
+  evaluated, which is where an unreachable identity store leaves it, so the answer
+  is the same — `500 authentication unavailable`, `#[public]` routes included,
+  never anonymous — and the cause goes on its own `warn`, `strategy did not answer
+  within the guard's timeout; denying (fail-closed)`, with `strategy`, `transport`
+  and `waited_ms`. The shipped JWT strategy answers on its first poll; a strategy
+  calling introspection or an API-key store used to hold its request until the
+  edge's request timeout, and for good where that was switched off.
 - **`OAuthClient`'s HTTP client has a connect and a total timeout**, argued against
   the identity-provider calls it makes: the code exchange and the userinfo fetch,
   which `nest-rs-social`'s GitHub and Google providers go through too. It had none,
@@ -892,9 +908,10 @@ future handlebars that restores the default flips it back.
   `CLIENTS` is read and refused through its `Setting` — so a mistyped value is never
   quoted, a client secret included — and the e2e suites read their database and
   Redis URLs through `ConfigService`, so a `_FILE` spelling reaches them.
-- The live app's users e2e seeds an ephemeral database like every other suite
-  touching one, rather than the database `NESTRS_SEAORM__URL` names, and
-  `cargo check --locked` works in `demo/` again.
+- The live app's e2e suite boots on a throwaway database, as every other suite
+  over SeaORM does, and never opens the one `NESTRS_SEAORM__URL` names — one of its
+  tests seeded that database directly, failed on an unmigrated one and could leave
+  rows behind. `cargo check --locked` works in `demo/` again.
 
 ### Also
 

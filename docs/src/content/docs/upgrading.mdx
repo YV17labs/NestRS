@@ -164,12 +164,13 @@ rolls out (step 7).
      `NESTRS_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and
      `TLS_KEY` a client certificate, each with its `_FILE` form, and `#insecure`
      fails the boot — see the [Redis variables](/configuration/env-reference/#redis--nestrs_redis__).
-   - **Shutdown** now ends within bounds you can read. HTTP closes what is still
-     open — a stream, a slow upload — once `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`
-     runs out, 25 seconds by default, where 6.x waited for every connection; the
-     worker hands back what still runs before
-     `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes, 30 by default. Give the
-     pod a grace period above the drain its process runs — see
+   - **Shutdown** now ends within bounds you can read. HTTP stops waiting for
+     open connections once `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 25
+     seconds by default, where 6.x waited for every one: a request still running
+     is dropped unanswered and a stream is cut, while an upgraded WebSocket ends
+     with its handler or the process. The worker hands back what still runs
+     before `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes, 30 by default.
+     Give the pod a grace period above the drain its process runs — see
      [Shutdown](/queue/delivery/#shutdown). A shutdown hook such as
      `OnApplicationShutdown` runs under a bound too, and is abandoned past it with
      a `warn` naming the hook.
@@ -182,9 +183,10 @@ rolls out (step 7).
      environment or is pinned in code, and a value outside it fails the boot
      naming the variable: the worker's `ORPHAN_AFTER_SECS` from 5 seconds to a
      day, `LEASE_SECS` from 1 second to half of it, `POLL_INTERVAL_MS` from 10
-     milliseconds to the orphan threshold and `SHUTDOWN_TIMEOUT_SECS` up to an
-     hour, and HTTP's `SHUTDOWN_TIMEOUT_SECS` from 1 to 3600. A drain window 6.x
-     accepted above an hour has to come down — see the
+     milliseconds to the orphan threshold and `SHUTDOWN_TIMEOUT_SECS` from 1
+     second to an hour, and HTTP's `SHUTDOWN_TIMEOUT_SECS` from 1 to 3600. A
+     worker drain window of `0`, or above an hour, which 6.x accepted, has to move
+     — see the
      [worker's variables](/configuration/env-reference/#redis__worker--nestrs_redis__worker__).
    - **Redis 6.2 or later, and no Cluster** — the limits of apalis 0.7 the
      [delivery page](/queue/delivery/#limits) states.

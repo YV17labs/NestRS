@@ -243,7 +243,10 @@ pub trait JobProducerExt: JobProducer {
     /// runs to its own outcome — already finished, or is unknown to the backend.
     ///
     /// Fails with [`QueueError::Unsupported`] on a backend without
-    /// [`Capability::Cancellation`], before the backend sees the call.
+    /// [`Capability::Cancellation`], before the backend sees the call, and with
+    /// [`QueueError::Unanswered`] when the backend does not answer within
+    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) — the cancel may then still
+    /// land.
     async fn cancel(&self, receipt: &PushReceipt) -> Result<bool, QueueError> {
         let queue = receipt.queue();
         self.backend()
@@ -273,7 +276,8 @@ pub trait JobProducerExt: JobProducer {
     ///
     /// Fails with [`QueueError::InvalidUniqueKey`] for a key no push could file,
     /// and with [`QueueError::Unsupported`] on a backend without unique jobs or
-    /// without cancellation, before the backend sees the call.
+    /// without cancellation, before the backend sees the call — and with
+    /// [`QueueError::Unanswered`] as [`cancel`](Self::cancel) does.
     async fn cancel_unique<D>(&self, destination: D, key: &str) -> Result<bool, QueueError>
     where
         D: Destination + Send,

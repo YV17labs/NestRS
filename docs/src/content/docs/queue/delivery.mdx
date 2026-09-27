@@ -125,10 +125,10 @@ call fails:
 | writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
 | the acknowledgement | delivered again once swept, and answered by its settled mark without running | `job acknowledgement lost; …`, `error` |
 
-A fetch, a heartbeat or a scan of the schedule that fails is retried by apalis
-on its next tick, and said at `warn`. A heartbeat that keeps failing past the
-orphan threshold lets a peer take the replica's jobs — the case the lease
-exists for.
+A fetch or a heartbeat that fails is retried by apalis on its next tick, and a
+scan of the schedule after a backoff doubling up to thirty seconds; each is said
+at `warn`. A heartbeat that keeps failing past the orphan threshold lets a peer
+take the replica's jobs — the case the lease exists for.
 
 A push, a cancel and a checkpoint's read or save fail within one budget of Redis
 going silent too: none sends a second command after one that got no answer, so

@@ -111,16 +111,19 @@ second and moves up to a hundred due jobs per scan — its `concurrency` when th
 is more, 799 at the most — so a burst of due retries or hand-backs reaches
 `active`, and a trigger reading it, within seconds; the producer that filed
 delayed jobs moves up to a hundred a second too, while it has some ahead. The
-scan is one script a second per method per replica — what apalis's own scan
-cost when it ran each second; that scan, which moves one fetch's worth, now
-runs at apalis's default of half a minute, as a backstop. A scan costs Redis in
-proportion to what it moves — one read of the schedule, one push of the ids,
-one trim — so a burst of 150 due jobs is two scripts, where one fetch's worth a
-second made it 150 at the default `concurrency`.
+scan is one script a second per method per replica, which replaced apalis's own
+scan at that rate; apalis's, which moves one fetch's worth, now runs at its
+default of half a minute, as a backstop. So an idle method costs what it did:
+59.9 commands a second at the 100 ms default, measured on one Redis before the
+change and after it. A scan costs Redis in proportion to what it moves — one
+read of the schedule, one push of the ids, one trim — so a burst of 150 due jobs
+is two scripts, where one fetch's worth a second made it 150 at the default
+`concurrency`.
 
 **An idle method still costs Redis every poll**: a fetch and a sweep of silent
-peers, plus the worker's scan of the schedule each second and a heartbeat. Measured with
-`INFO commandstats` over ten seconds, one idle method on one replica sent about
+peers, plus the worker's scan of the schedule each second and a heartbeat.
+Measured with `INFO commandstats` over ten seconds, one idle method on one
+replica sent about
 20 scripts a second at the 100 ms default — 58 commands, counting the ones the
 scripts run — and 140 scripts, 420 commands, at the 10 ms floor. Multiply by
 methods and replicas before you shorten the poll.

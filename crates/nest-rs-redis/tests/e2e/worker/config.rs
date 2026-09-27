@@ -24,6 +24,8 @@ struct ProbeCommand {
 
 static RAN: Runs = Runs::new();
 
+const CEILINGS_QUEUE: &str = "nestrs-e2e-config-ceilings";
+
 #[queue(name = "nestrs-e2e-config-ceilings", job = ProbeCommand)]
 struct CeilingsQueue;
 
@@ -81,6 +83,10 @@ async fn a_worker_at_every_ceiling_runs_its_jobs_and_stops() {
         .shutdown()
         .await
         .expect("a worker at its ceilings stops cleanly");
+
+    // The settled marks of a job settled under a day-long threshold outlive
+    // the test by two and a half days.
+    crate::forget(CEILINGS_QUEUE).await;
 
     assert_eq!(
         RAN.of(run).len(),

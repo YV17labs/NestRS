@@ -131,6 +131,23 @@ A custom strategy binds exactly like the shipped one:
 `AuthnGuard<ApiKeyStrategy>` behind a type alias, listed in `providers`,
 bound with `#[use_guards(...)]`.
 
+The guard waits for `authenticate` for at most
+`nest_rs::authn::AUTHENTICATE_TIMEOUT` — 20 seconds — and then denies the
+request. That is a net, not a budget: a strategy that calls a backend bounds
+each call itself, the way the [OAuth2 client](/security/authentication/oauth2/)
+does, so an outage reaches the caller as your strategy's own failure, with its
+cause, long before the net. The net sits above every login the framework ships
+(a social login spends at most 15 s on its provider) and below the HTTP edge's
+30-second request timeout, so a strategy that hangs is refused by the guard, on
+every edge — a route, the GraphQL POST, the MCP POST, the WebSocket upgrade —
+with the 500 an unreachable identity store gets, `#[public]` routes included.
+The guard logs `strategy did not answer within the guard's timeout; denying
+(fail-closed)` at `warn` with the `strategy` (your type's name), the
+`transport` and `waited_ms`.
+
+The call is dropped where it stands when the net fires, so keep no state in a
+strategy that a half-finished call would have had to undo.
+
 You declare `actor_id` once, here. Reading it back is
 `nest_rs::core::current_actor_id()`, anywhere the framework carries work — a
 service, the data layer, a queue job in another process — and it answers `None`
@@ -173,7 +190,9 @@ An unreachable identity store means the credential was never evaluated,
 so the request fails closed with a 500 rather than being served as
 anonymous — otherwise an outage would silently downgrade every
 authenticated caller to a visitor, and a `#[public]` route's visitor
-rules would decide what they see.
+rules would decide what they see. A strategy that does not answer within
+`AUTHENTICATE_TIMEOUT` never evaluated the credential either, and gets
+the same 500 on every route.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[get("/health")]
@@ -220,7 +239,10 @@ was unreachable, so the credential was never evaluated. That is an
 infrastructure failure, not a credential signal — reporting it as a 401
 would tell a caller with a perfectly good token to go get another one,
 and would let an outage read as a wave of authentication failures. It is
-logged at `error` and rendered as a 500.
+logged at `error` and rendered as a 500. The guard answers a strategy
+that outlived `AUTHENTICATE_TIMEOUT` with the same 500 and the same
+`"authentication unavailable"`, and files its own `warn` saying the
+strategy never answered.
 
 A rejected credential also names *why* on the challenge, per RFC 6750
 §3.1:

@@ -206,6 +206,43 @@ in your DB, creating one if absent, issuing your app's JWT) is the
 `Strategy`'s job — `OAuthClient` deliberately never sees your
 principal type.
 
+## Every provider call has a bound
+
+A provider that stops answering does not hold your callback. Every call
+the client makes — the code exchange, `userinfo`, and any `fetch` —
+carries two bounds, constants on the client:
+
+| Constant | Value | Covers |
+|---|---|---|
+| `OAuthClient::CONNECT_TIMEOUT` | 3 s | reaching the provider: the name lookup, the TCP and TLS handshakes |
+| `OAuthClient::CALL_TIMEOUT` | 5 s | the whole call, from connecting to the last byte of the answer |
+
+An identity provider answers each of these in well under a second, so a
+call past its bound is a provider that is not answering. It fails the
+way every provider problem does — `AuthError::Failed`, which the
+callback's guard answers with a `401` and a `warn` — and its sentence
+names the endpoint and the bound that ended it:
+
+```text
+authentication failed: the OAuth provider's token endpoint
+(https://github.com/login/oauth/access_token) did not answer within 5s
+```
+
+A refused connection, or a read answered with anything but a `2xx`,
+names the endpoint the same way. The endpoint appears as its origin and
+path only: a query string or credentials in the URL never reach the
+sentence, and neither does anything the call carried — the client
+secret, the code, the PKCE verifier, the access token.
+
+The bounds sit under the two nets above them. A callback makes at most
+three calls through the client (GitHub: the exchange, `/user`,
+`/user/emails`), so a login spends at most 15 s on its provider — inside
+the guard's own bound on a strategy,
+[`AUTHENTICATE_TIMEOUT`](/security/authentication/#advanced-write-your-own-strategy)
+(20 s), and the HTTP edge's request timeout (30 s by default). A
+provider that stops answering is reported by the client, naming the
+endpoint, before either of those speaks for it.
+
 ## `AuthorizationRedirect` — the redirect leg's return value
 
 ```rust title="nest_rs::oauth::client::AuthorizationRedirect"

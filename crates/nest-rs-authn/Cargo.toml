@@ -47,14 +47,27 @@ anyhow.workspace = true
 # `AuthnGuard` logs the authentication outcome — a failure at `warn` so it is
 # visible in production, the audit point every strategy shares.
 tracing.workspace = true
+# The guard's bound on a strategy's answer (`AUTHENTICATE_TIMEOUT`): a strategy
+# that never answers is denied at it rather than holding the request for good.
+tokio.workspace = true
 
 [dev-dependencies]
 # Booting the `AuthnModule::for_root` seam and reading the resolved service back.
 nest-rs-testing = { path = "../nest-rs-testing" }
-tokio = { workspace = true }
+# `test-util` (not part of tokio's `full`) pauses time, so a strategy that never
+# answers is denied at `AUTHENTICATE_TIMEOUT` without the suite waiting it out.
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
+# The guard's bound is witnessed on every edge it authenticates for — a route,
+# the GraphQL POST, the MCP POST, the WS upgrade — each booted as an app binds
+# it. The guards' edge features are what seed the GraphQL and MCP fallbacks from
+# the global pool.
+nest-rs-guards = { path = "../nest-rs-guards", features = ["graphql", "mcp", "ws"] }
+nest-rs-graphql = { path = "../nest-rs-graphql" }
+nest-rs-mcp = { path = "../nest-rs-mcp" }
+nest-rs-ws = { path = "../nest-rs-ws" }
 
 [lints]
 workspace = true

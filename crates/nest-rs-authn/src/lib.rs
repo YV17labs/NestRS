@@ -60,7 +60,7 @@ pub use password::{burn_verify, hash_password, verify_password};
 pub use principal::PrincipalIdentity;
 pub use service::{JwtKey, JwtOptions, JwtService};
 pub use strategies::JwtStrategy;
-pub use strategy::Strategy;
+pub use strategy::{AUTHENTICATE_TIMEOUT, Strategy};
 
 /// Re-exported so apps configure [`JwtOptions`] without a direct `jsonwebtoken` dependency.
 pub use jsonwebtoken::Algorithm;

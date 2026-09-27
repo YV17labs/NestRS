@@ -1,6 +1,9 @@
 //! Per-route guard that runs a [`Strategy`](crate::Strategy) and attaches the principal.
 
+use std::future::{Future as _, poll_fn};
+use std::pin::pin;
 use std::sync::Arc;
+use std::task::Poll;
 
 use nest_rs_core::trace_context::field;
 use nest_rs_core::{Layer, injectable};
@@ -9,13 +12,25 @@ use nest_rs_http::HandlerMetadata;
 use nest_rs_http::{Reflector, RejectedCredential, async_trait};
 use poem::Request;
 
-use crate::Strategy;
-use crate::error::AuthError;
+use crate::error::{AuthError, UNAVAILABLE};
+use crate::strategy::{AUTHENTICATE_TIMEOUT, Strategy};
+
+/// The edge this guard authenticates on, as the `transport` field its lines
+/// share with every other guard's names it.
+///
+/// It is `http` whichever edge the request is for: a route, the GraphQL POST,
+/// the MCP POST and the WebSocket upgrade are all HTTP requests, and
+/// `check_http` is the one entry that sees any of them. The line's trace
+/// context joins it to that request's operation line, which carries the route.
+const TRANSPORT: &str = "http";
 
 /// The authentication guard: runs a [`Strategy`] on the request, attaches the
 /// resulting principal, and records `actor_id` on the span. Generic over the
 /// strategy `S`. Bind it via `#[use_guards]` / `use_guards_global`; on a
 /// `#[public]` route it authenticates opportunistically but never rejects.
+///
+/// It waits for the strategy no longer than [`AUTHENTICATE_TIMEOUT`]: a
+/// strategy silent past it is denied on every route, `#[public]` included.
 #[injectable]
 pub struct AuthnGuard<S: Strategy> {
     #[inject]
@@ -26,6 +41,40 @@ impl<S: Strategy> AuthnGuard<S> {
     /// Construct with an already-resolved strategy (container or tests).
     pub fn new(strategy: Arc<S>) -> Self {
         Self { strategy }
+    }
+
+    /// Run the strategy on `req`, waiting no longer than
+    /// [`AUTHENTICATE_TIMEOUT`] for its answer. `None` is a strategy that did
+    /// not answer in time, already said here at `warn`.
+    ///
+    /// The strategy's call is polled once bare before the bound is armed, as
+    /// the HTTP edge arms its request timeout: the JWT strategy verifies locally
+    /// and answers on that first poll, so the common path pays neither the clock
+    /// read nor the timer entry a bound costs.
+    async fn authenticate(
+        &self,
+        strategy: &'static str,
+        req: &mut Request,
+    ) -> Option<Result<S::Principal, AuthError>> {
+        let mut authenticate = pin!(self.strategy.authenticate(req));
+        if let Poll::Ready(outcome) =
+            poll_fn(|cx| Poll::Ready(authenticate.as_mut().poll(cx))).await
+        {
+            return Some(outcome);
+        }
+        match tokio::time::timeout(AUTHENTICATE_TIMEOUT, authenticate).await {
+            Ok(outcome) => Some(outcome),
+            Err(_) => {
+                tracing::warn!(
+                    target: crate::TARGET,
+                    strategy,
+                    transport = TRANSPORT,
+                    waited_ms = u64::try_from(AUTHENTICATE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                    "strategy did not answer within the guard's timeout; denying (fail-closed)",
+                );
+                None
+            }
+        }
     }
 }
 
@@ -45,13 +94,22 @@ impl<S: Strategy> Layer for AuthnGuard<S> {}
 /// layer, not in `AuthnGuard`. The one failure `#[public]` does **not** absorb
 /// is [`AuthError::Unavailable`]: an unreachable identity store means the
 /// credential was never evaluated, so the request fails closed with a 500
-/// rather than being served as anonymous.
+/// rather than being served as anonymous. A strategy that does not answer
+/// within [`AUTHENTICATE_TIMEOUT`] left it unevaluated too, and gets the same
+/// answer.
 #[async_trait]
 impl<S: Strategy> Guard for AuthnGuard<S> {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
         let strategy = std::any::type_name::<S>();
         let is_public = Reflector::new(req).is_public();
-        match self.strategy.authenticate(req).await {
+        // Nothing was decided about the credential, so neither "authenticated"
+        // nor "anonymous" is a true answer — the same position as the
+        // unreachable store below, and the same denial on every route. The line
+        // naming the strategy was filed where the bound passed.
+        let Some(outcome) = self.authenticate(strategy, req).await else {
+            return Err(Denial::internal(UNAVAILABLE));
+        };
+        match outcome {
             Ok(principal) => {
                 // Record the audit identity on the request span so every
                 // downstream event — denials included — inherits who is
@@ -150,6 +208,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
 
 /// HTTP is the only edge this guard checks, and it is enough for all of them:
 /// the GraphQL POST, the `/mcp` request and the WS upgrade are HTTP requests
-/// `check_http` covers at the connection edge. The marker is what lets a
-/// `#[controller]` or a `#[gateway]` struct bind it.
+/// `check_http` covers at the connection edge — and so is its one bound,
+/// [`AUTHENTICATE_TIMEOUT`], which every edge therefore shares. The marker is
+/// what lets a `#[controller]` or a `#[gateway]` struct bind it.
 impl<S: Strategy> nest_rs_guards::HttpGuard for AuthnGuard<S> {}

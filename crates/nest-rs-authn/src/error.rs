@@ -29,6 +29,14 @@ pub enum PasswordError {
     InvalidHash,
 }
 
+/// What a caller is told when its credential could not be evaluated: the
+/// identity store was unreachable ([`AuthError::Unavailable`]), or the strategy
+/// asking it did not answer within
+/// [`AUTHENTICATE_TIMEOUT`](crate::AUTHENTICATE_TIMEOUT). One sentence for both,
+/// since the caller's remedy is the same — try again later — and which of the
+/// two it was is the log's to say.
+pub(crate) const UNAVAILABLE: &str = "authentication unavailable";
+
 /// Opaque "wrong credentials" failure for any password-login path.
 ///
 /// Returned by services that verify a password against a stored hash: missing
@@ -131,7 +139,7 @@ impl AuthError {
         match self {
             Self::Failed(_) => "authentication failed",
             Self::MissingCredentials => "missing credentials",
-            Self::Unavailable(_) => "authentication unavailable",
+            Self::Unavailable(_) => UNAVAILABLE,
             _ => "invalid token",
         }
     }

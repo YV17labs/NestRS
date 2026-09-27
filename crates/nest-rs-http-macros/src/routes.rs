@@ -1519,11 +1519,54 @@ struct ApiMeta {
     response_content_type: Option<LitStr>,
 }
 
-/// What `#[api]` accepts, in the error every rejection quotes. One `const` so
-/// the list cannot be worded two ways.
-const API_KEYS: &str = "#[api] accepts `summary = \"...\"`, `description = \"...\"`, \
-                        `tags(\"a\", \"b\")`, `response = Type`, `multipart = Type`, \
-                        and `response_content_type = \"type/subtype\"`";
+/// Every key `#[api]` takes, in the order it declares them, beside the way each
+/// is written — the one list both refusals below read, so the keys an unknown
+/// one is told about and the keys the shape sentence offers cannot differ.
+///
+/// The match in [`parse_api_attr`] is the other half, and a key listed here
+/// that the match does not read would be refused as unknown while the sentence
+/// lists it; `every_api_key_is_read_as_the_table_writes_it` reads every row.
+const API_KEYS: [(&str, &str); 6] = [
+    ("summary", "summary = \"...\""),
+    ("description", "description = \"...\""),
+    ("tags", "tags(\"a\", \"b\")"),
+    ("response", "response = Type"),
+    ("multipart", "multipart = Type"),
+    (
+        "response_content_type",
+        "response_content_type = \"type/subtype\"",
+    ),
+];
+
+/// The keys alone, for the family's unknown-key sentence.
+fn api_key_names() -> Vec<&'static str> {
+    API_KEYS.iter().map(|(key, _)| *key).collect()
+}
+
+/// The refusal of an argument that is not a key at all — `#[api("List
+/// users")]` — which has no name for the unknown-key sentence to quote, so it
+/// is told the whole grammar instead, each key the way it is written.
+fn api_takes_keys() -> String {
+    let written: Vec<String> = API_KEYS
+        .iter()
+        .map(|(_, written)| format!("`{written}`"))
+        .collect();
+    format!("#[api] takes named arguments: {}", written.join(", "))
+}
+
+/// The `=` after a `key = value` key, checked before it is consumed, so a bare
+/// key earns the family's sentence naming the key rather than syn's
+/// `` expected `=` ``, which names the grammar and not the key.
+fn api_equals(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Result<()> {
+    if !input.peek(Token![=]) {
+        return Err(syn::Error::new(
+            key.span(),
+            nest_rs_codegen::needs_a_value("api", &key.to_string()),
+        ));
+    }
+    input.parse::<Token![=]>()?;
+    Ok(())
+}
 
 /// Parse `#[api(...)]` straight into [`ApiMeta`].
 ///
@@ -1532,6 +1575,13 @@ const API_KEYS: &str = "#[api] accepts `summary = \"...\"`, `description = \"...
 /// of* a doc comment — "Prose the framework compiles into behaviour is declared
 /// as an argument, never as a doc comment" — so a dropped `description` is
 /// published prose silently replaced by source order.
+///
+/// **The key is judged before its value**, so an unknown key reads as unknown
+/// whatever follows it, and a known one written bare reads as missing its value
+/// — the family's two sentences (`nest_rs_codegen::{unknown_argument,
+/// needs_a_value}`), which every other `key = value` decorator prints.
+/// `tags` is the one key written with a list rather than `=`, and a bare `tags`
+/// is told the list it takes, as `#[process]` tells a bare `throttle`.
 ///
 /// Hand-rolled rather than routed through `syn::Meta`: a `Meta::NameValue` holds
 /// an **expression**, and `response = Vec<Post>` is a *type* — read as an
@@ -1544,7 +1594,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
         while !input.is_empty() {
             let key: syn::Ident = input
                 .parse()
-                .map_err(|_| syn::Error::new(input.span(), API_KEYS))?;
+                .map_err(|_| syn::Error::new(input.span(), api_takes_keys()))?;
             match key.to_string().as_str() {
                 "summary" => {
                     nest_rs_codegen::reject_duplicate_argument(
@@ -1553,7 +1603,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                         "api",
                         "summary",
                     )?;
-                    input.parse::<Token![=]>()?;
+                    api_equals(input, &key)?;
                     out.summary = Some(require_str_lit(
                         &input.parse::<Expr>()?,
                         "api",
@@ -1568,7 +1618,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                         "api",
                         "description",
                     )?;
-                    input.parse::<Token![=]>()?;
+                    api_equals(input, &key)?;
                     out.description = Some(require_str_lit(
                         &input.parse::<Expr>()?,
                         "api",
@@ -1583,7 +1633,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                         "api",
                         "response",
                     )?;
-                    input.parse::<Token![=]>()?;
+                    api_equals(input, &key)?;
                     out.response = Some(api_type(input, "response", "Vec<Post>")?);
                 }
                 "multipart" => {
@@ -1593,7 +1643,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                         "api",
                         "multipart",
                     )?;
-                    input.parse::<Token![=]>()?;
+                    api_equals(input, &key)?;
                     out.multipart = Some(api_type(input, "multipart", "UploadForm")?);
                 }
                 "response_content_type" => {
@@ -1603,7 +1653,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                         "api",
                         "response_content_type",
                     )?;
-                    input.parse::<Token![=]>()?;
+                    api_equals(input, &key)?;
                     let lit = require_str_lit(
                         &input.parse::<Expr>()?,
                         "api",
@@ -1625,7 +1675,7 @@ fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
                 other => {
                     return Err(syn::Error::new_spanned(
                         &key,
-                        format!("`{other}` is not an #[api] argument — {API_KEYS}"),
+                        nest_rs_codegen::unknown_argument("api", other, &api_key_names()),
                     ));
                 }
             }
@@ -1966,14 +2016,64 @@ mod tests {
         assert!(!takes_multipart(&[parse_quote!(body: Json<Post>)]));
     }
 
+    fn api_refusal(tokens: TokenStream2) -> String {
+        match api_attr(tokens) {
+            Ok(_) => panic!("the argument list must be refused"),
+            Err(err) => err.to_string(),
+        }
+    }
+
+    /// The family's sentence, naming the key as written and every key the table
+    /// lists — bare or with a value, since the key is judged before either.
     #[test]
     fn an_unknown_api_argument_names_itself_and_the_accepted_set() {
-        let msg = match api_attr(quote! { returns = Post }) {
-            Ok(_) => panic!("an unknown key must be rejected"),
-            Err(err) => err.to_string(),
-        };
-        assert!(msg.contains("returns"), "{msg}");
-        assert!(msg.contains("response = Type"), "{msg}");
+        let expected = "unknown #[api] argument `returns`; expected `summary`, `description`, \
+                        `tags`, `response`, `multipart` or `response_content_type`";
+        assert_eq!(api_refusal(quote! { returns = Post }), expected);
+        assert_eq!(api_refusal(quote! { returns }), expected);
+    }
+
+    /// Every `key = value` key written bare is told it needs a value, never
+    /// syn's `expected =`; `tags` is told the list it takes.
+    #[test]
+    fn a_bare_api_key_is_told_what_it_is_missing() {
+        for (key, written) in API_KEYS {
+            let bare: TokenStream2 = key.parse().expect("a key is an identifier");
+            let refusal = api_refusal(bare);
+            if written.starts_with(&format!("{key} =")) {
+                assert_eq!(
+                    refusal,
+                    format!("#[api] `{key}` needs a value — write `{key} = ...`"),
+                );
+            } else {
+                assert!(
+                    refusal.starts_with(&format!("#[api] `{key}` takes a list")),
+                    "{refusal}"
+                );
+            }
+        }
+    }
+
+    /// The table's written form of each key is what the parser reads — so a row
+    /// the match does not handle fails here rather than being refused as
+    /// unknown by a sentence that lists it.
+    #[test]
+    fn every_api_key_is_read_as_the_table_writes_it() {
+        for (_, written) in API_KEYS {
+            let tokens: TokenStream2 = written.parse().expect("the written form tokenizes");
+            if let Err(err) = api_attr(tokens) {
+                panic!("`{written}` must parse: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_argument_that_is_not_a_key_is_told_the_grammar() {
+        let refusal = api_refusal(quote! { "List users" });
+        assert!(
+            refusal.starts_with("#[api] takes named arguments: `summary = \"...\"`"),
+            "{refusal}"
+        );
     }
 }
 

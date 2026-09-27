@@ -1,0 +1,5 @@
+error: #[api] `summary` needs a value — write `summary = ...`
+  --> tests/integration/diagnostics/api_bare_key_needs_a_value.rs:13:11
+   |
+13 |     #[api(summary)]
+   |           ^^^^^^^

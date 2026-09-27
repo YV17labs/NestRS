@@ -59,6 +59,9 @@ trybuild.workspace = true
 # into it, so "is this line parseable" is the one property that matters and the
 # only proof of it is a parser. Dev-only: no consumer build sees this line.
 serde_json.workspace = true
+# `test-util` (not part of tokio's `full`) pauses time, so a shutdown hook that
+# never returns is abandoned at its bound without the suite waiting it out.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

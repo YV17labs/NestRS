@@ -116,7 +116,7 @@ pub use error_message::error_message;
 pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
-pub use lifecycle::{LifecycleHook, LifecyclePhase};
+pub use lifecycle::{LifecycleHook, LifecyclePhase, SHUTDOWN_HOOK_TIMEOUT};
 pub use module::{DynamicModule, Module};
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
 pub use panic::panic_message;

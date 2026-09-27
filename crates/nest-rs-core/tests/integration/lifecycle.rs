@@ -12,8 +12,9 @@
 
 use nest_rs_core::target;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
-use nest_rs_core::{App, hooks, injectable, module};
+use nest_rs_core::{App, SHUTDOWN_HOOK_TIMEOUT, hooks, injectable, module};
 use nest_rs_testing::LogCapture;
 
 trait Bridge: Send + Sync {}
@@ -256,4 +257,98 @@ async fn a_hook_runs_where_a_trait_on_arc_shares_its_name() {
     let app = App::new::<WarmModule>().expect("the module boots");
     app.init().await.expect("the init phases drain");
     assert_eq!(WARMED.load(Ordering::SeqCst), 1);
+}
+
+/// Every shutdown hook that ran after the stuck one.
+static TIDIED: AtomicUsize = AtomicUsize::new(0);
+
+/// A cleanup that never returns — a flush waiting on a peer that went away.
+#[injectable]
+#[derive(Default)]
+struct StuckOnDestroy;
+
+#[hooks]
+impl StuckOnDestroy {
+    #[on_module_destroy]
+    async fn flush(&self) {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Sorts after `StuckOnDestroy` in their shared phase, and has a hook in each
+/// phase after it.
+#[injectable]
+#[derive(Default)]
+struct TidyOnDestroy;
+
+#[hooks]
+impl TidyOnDestroy {
+    #[on_module_destroy]
+    async fn release(&self) {
+        TIDIED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[before_application_shutdown]
+    async fn announce(&self) {
+        TIDIED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[on_application_shutdown]
+    async fn close(&self) {
+        TIDIED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[module(providers = [StuckOnDestroy, TidyOnDestroy])]
+struct StuckOnDestroyModule;
+
+/// A shutdown hook that never returns used to hold the process until the
+/// orchestrator killed it — skipping every hook after it and the telemetry
+/// flush. It is abandoned at its bound, named at `warn`, and the rest still run.
+#[tokio::test(start_paused = true)]
+async fn a_shutdown_hook_that_never_returns_is_abandoned_at_its_bound_and_the_rest_still_run() {
+    let logs = LogCapture::install();
+    let started = tokio::time::Instant::now();
+    App::new::<StuckOnDestroyModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("an abandoned cleanup is not an error: shutdown is best-effort");
+    let took = started.elapsed();
+
+    assert!(
+        took >= SHUTDOWN_HOOK_TIMEOUT && took < SHUTDOWN_HOOK_TIMEOUT + Duration::from_secs(1),
+        "shutdown waited on the stuck hook for its bound and no longer, took {took:?}",
+    );
+    assert_eq!(
+        TIDIED.load(Ordering::SeqCst),
+        3,
+        "the hook after it in its phase, and one in each later phase, all ran",
+    );
+    let event = logs.expect_one(
+        target::LIFECYCLE,
+        "shutdown hook abandoned: it did not return within the bound, and the hooks after it \
+         still run",
+    );
+    assert_eq!(event.level, "warn");
+    assert!(
+        event
+            .field("provider")
+            .is_some_and(|p| p.contains("StuckOnDestroy")),
+        "{:?}",
+        event.fields,
+    );
+    assert_eq!(event.field("method").as_deref(), Some("flush"));
+    assert_eq!(event.field("phase").as_deref(), Some("OnModuleDestroy"));
+    assert!(
+        event
+            .field("origin")
+            .is_some_and(|origin| origin.ends_with("::lifecycle")),
+        "the line names the module the hook lives in, got {:?}",
+        event.fields,
+    );
+    assert_eq!(
+        event.field("waited_ms"),
+        Some(SHUTDOWN_HOOK_TIMEOUT.as_millis().to_string()),
+    );
 }

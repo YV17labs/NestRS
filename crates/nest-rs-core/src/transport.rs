@@ -24,7 +24,11 @@ pub trait Transport: Send + Sync + 'static {
     /// Scan the container for the surfaces this transport serves and wire them
     /// up, before any request is accepted. Runs at boot in registration order.
     async fn configure(&mut self, container: &Container) -> Result<()>;
-    /// Accept requests until `cancel` fires, then shut down gracefully. Spawned
+    /// Accept requests until `cancel` fires, then shut down gracefully — and
+    /// return within a bound of the transport's own, since
+    /// [`App::run`](crate::App::run) awaits every `serve` before the shutdown
+    /// hooks run and holds none of its own: a transport that waits on work that
+    /// never ends holds the process until the orchestrator kills it. Spawned
     /// after every transport has been configured.
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()>;
 }

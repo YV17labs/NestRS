@@ -12,8 +12,29 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
 use crate::container::Container;
+
+/// How long one shutdown hook may run before it is abandoned and the next one
+/// starts.
+///
+/// Five seconds, argued against the budget it is spent from. Kubernetes gives a
+/// pod 30 seconds between `SIGTERM` and `SIGKILL` by default, and the HTTP
+/// transport's shutdown window (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 25 s by
+/// default) spends 25 of them whenever a connection is still open at its end —
+/// an `#[sse]` stream is enough. The hooks run once every transport has
+/// stopped, so the margin they are left is those five: one hook that hangs
+/// spends the margin and no more, and the process still ends inside the default
+/// grace rather than to a kill that skips every later hook and the telemetry
+/// flush. It is also the OpenTelemetry SDK's own bound on shutting one provider
+/// down, so the two waits that follow the transports agree.
+///
+/// A constant rather than a setting: a cleanup that needs longer is draining
+/// work, and draining belongs in a transport's own window, which a deployment
+/// does configure. The bound covers a hook that waits — an `async fn` pending on
+/// I/O, a lock, a channel; one that blocks its thread is past any timer's reach.
+pub const SHUTDOWN_HOOK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Lifecycle phase at which a hook runs. Init phases run after the container
 /// is built and transports configured, before serving; shutdown phases run
@@ -123,22 +144,37 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
 }
 
 /// Shutdown-phase runner: best-effort, logs failures and continues so one
-/// provider's cleanup error does not skip another's.
+/// provider's cleanup error does not skip another's — and bounded by
+/// [`SHUTDOWN_HOOK_TIMEOUT`], so neither does one provider's cleanup that never
+/// returns. An abandoned hook's future is dropped where it waits, as any
+/// cancelled task is: what it held is released, and what it had not yet done
+/// stays undone, which is why the line naming it is a `warn`.
 pub(crate) async fn run_phase_lenient(container: &Container, phase: LifecyclePhase) {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
             report_inert_hook(hook, phase);
             continue;
         }
-        if let Err(err) = (hook.run)(container).await {
-            tracing::error!(
+        match tokio::time::timeout(SHUTDOWN_HOOK_TIMEOUT, (hook.run)(container)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::error!(
                 target: crate::target::LIFECYCLE,
                 ?phase,
                 provider = hook.provider,
                 method = hook.method,
                 error = %crate::error_message(&*err),
                 "lifecycle hook failed",
-            );
+            ),
+            Err(_) => tracing::warn!(
+                target: crate::target::LIFECYCLE,
+                ?phase,
+                provider = hook.provider,
+                method = hook.method,
+                origin = hook.origin,
+                waited_ms = u64::try_from(SHUTDOWN_HOOK_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                "shutdown hook abandoned: it did not return within the bound, and the hooks after \
+                 it still run",
+            ),
         }
     }
 }

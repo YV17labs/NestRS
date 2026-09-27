@@ -150,7 +150,10 @@ impl App {
     /// Configure each transport against the container, run the init lifecycle
     /// hooks, then run all transports concurrently. SIGINT / SIGTERM cancels the
     /// shared token; the first transport that errors also cancels the others.
-    /// Once the transports have stopped, the shutdown lifecycle hooks run.
+    /// Once the transports have stopped, the shutdown lifecycle hooks run, each
+    /// abandoned past [`SHUTDOWN_HOOK_TIMEOUT`](crate::SHUTDOWN_HOOK_TIMEOUT).
+    /// The transports are awaited without a bound of this method's own: each
+    /// owes its own, per [`Transport::serve`].
     ///
     /// Every transport is contributed by an imported module via
     /// [`TransportContribution`] — `HttpModule` brings `HttpTransport`,

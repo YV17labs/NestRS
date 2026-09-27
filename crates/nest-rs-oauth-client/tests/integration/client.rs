@@ -192,3 +192,255 @@ async fn an_expired_transaction_cookie_is_reported_the_same_way() {
     assert_eq!(event.level, "warn");
     assert_eq!(event.field("token_reason").as_deref(), Some("expired"));
 }
+
+// --- the client's bounds -------------------------------------------------------
+//
+// Every call the client makes to a provider is bounded — `CONNECT_TIMEOUT` to
+// reach it, `CALL_TIMEOUT` for the whole call — and a call that ends without a
+// usable answer is the failure every provider problem is, `AuthError::Failed`,
+// in a sentence naming the endpoint. The providers below are local listeners;
+// none of them answers the way a provider would. The connect bound is driven in
+// the unit suite (`src/client.rs`), on the backend `new` builds with a resolver
+// that never answers: no local listener can leave a handshake hanging.
+
+/// Secrets a failed call must never repeat. The client secret and the code
+/// travel in the exchange's body, the access token in a read's header, and the
+/// query in the configured URL, where a deployment may keep an API key.
+const CLIENT_SECRET: &str = "client-secret-never-quoted";
+const CODE: &str = "authorization-code-never-quoted";
+const ACCESS_TOKEN: &str = "access-token-never-quoted";
+const QUERY_SECRET: &str = "query-key-never-quoted";
+
+/// A client whose every endpoint is on `addr`, each URL carrying
+/// [`QUERY_SECRET`] in its query.
+fn client_for(addr: std::net::SocketAddr) -> OAuthClient {
+    OAuthClient::new(nest_rs_oauth_client::OAuthClientConfig {
+        client_secret: CLIENT_SECRET.into(),
+        token_url: format!("http://{addr}/token?key={QUERY_SECRET}"),
+        userinfo_url: format!("http://{addr}/userinfo?key={QUERY_SECRET}"),
+        ..valid_config()
+    })
+    .expect("client builds")
+}
+
+/// The sentence a failed call is reported under, and a check that it quotes
+/// none of the call's secrets — `extra` names the ones only this call carried.
+fn sentence_of(error: &AuthError, extra: &[&str]) -> String {
+    let AuthError::Failed(sentence) = error else {
+        panic!("a provider that gave no usable answer is a failed authentication, got {error:?}");
+    };
+    for secret in [CLIENT_SECRET, CODE, ACCESS_TOKEN, QUERY_SECRET]
+        .iter()
+        .chain(extra)
+    {
+        assert!(
+            !sentence.contains(secret),
+            "the sentence must not quote {secret:?}: {sentence}"
+        );
+    }
+    sentence.clone()
+}
+
+/// A provider that accepts every connection and never answers — a process
+/// wedged behind a healthy socket.
+///
+/// The clock stops the moment the first connection is accepted. The handshake
+/// is complete then, on both sides, so what is left to wait is exactly the part
+/// `CALL_TIMEOUT` governs — and on a stopped clock that wait costs the suite
+/// nothing, while the connection itself was made in real time. It stays stopped,
+/// so a test drives one call: a second connection made on a stopped clock races
+/// the clock's jump to its connect bound.
+async fn silent_provider() -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a local listener");
+    let addr = listener.local_addr().expect("a bound address");
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            let (socket, _) = listener.accept().await.expect("accept");
+            if held.is_empty() {
+                tokio::time::pause();
+            }
+            held.push(socket);
+        }
+    });
+    addr
+}
+
+/// Await `call` for twice `bound` and no longer, so a client that stopped
+/// bounding its calls fails here, naming the bound, instead of holding the
+/// suite the way it held the callback.
+async fn within_twice<T>(
+    bound: std::time::Duration,
+    call: impl std::future::Future<Output = T>,
+) -> T {
+    tokio::time::timeout(bound * 2, call)
+        .await
+        .unwrap_or_else(|_| panic!("no answer within twice the bound ({bound:?})"))
+}
+
+/// The exchange is the call a login cannot do without: a provider that accepts
+/// it and never answers fails it at `CALL_TIMEOUT`, in a sentence naming the
+/// token endpoint and the bound — and nothing the exchange carried.
+#[tokio::test]
+async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
+    let addr = silent_provider().await;
+    let client = client_for(addr);
+    let jwt = crate::jwt();
+    let auth = client.authorize(&jwt, "acme").expect("authorize");
+    let tx: Transaction = jwt
+        .verify_handshake("oauth-tx", &auth.transaction)
+        .expect("the transaction verifies");
+
+    let sent = tokio::time::Instant::now();
+    let Err(error) = within_twice(
+        OAuthClient::CALL_TIMEOUT,
+        client.exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE),
+    )
+    .await
+    else {
+        panic!("a provider that never answers cannot complete the exchange");
+    };
+    let waited = sent.elapsed();
+
+    assert!(
+        waited >= OAuthClient::CALL_TIMEOUT,
+        "failed at the bound, not before: {waited:?}"
+    );
+    assert_eq!(
+        sentence_of(&error, &[&tx.pkce]),
+        format!(
+            "the OAuth provider's token endpoint (http://{addr}/token) did not answer within {:?}",
+            OAuthClient::CALL_TIMEOUT
+        ),
+    );
+}
+
+/// The read after the exchange — the userinfo endpoint — is bounded the same
+/// way, and names itself.
+#[tokio::test]
+async fn a_userinfo_read_the_provider_never_answers_fails_at_the_call_timeout() {
+    let addr = silent_provider().await;
+    let client = client_for(addr);
+
+    let sent = tokio::time::Instant::now();
+    let error = within_twice(
+        OAuthClient::CALL_TIMEOUT,
+        client.userinfo::<serde_json::Value>(ACCESS_TOKEN),
+    )
+    .await
+    .expect_err("a provider that never answers returns no profile");
+
+    assert!(sent.elapsed() >= OAuthClient::CALL_TIMEOUT);
+    assert_eq!(
+        sentence_of(&error, &[]),
+        format!(
+            "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) did not answer within {:?}",
+            OAuthClient::CALL_TIMEOUT
+        ),
+    );
+}
+
+/// …and so is a provider's own second read through `fetch`, GitHub's verified
+/// emails being the one shipped, which no standard names.
+#[tokio::test]
+async fn a_fetch_the_provider_never_answers_fails_at_the_call_timeout() {
+    let addr = silent_provider().await;
+    let client = client_for(addr);
+
+    let sent = tokio::time::Instant::now();
+    let error = within_twice(
+        OAuthClient::CALL_TIMEOUT,
+        client.fetch::<serde_json::Value>(
+            &format!("http://{addr}/user/emails?key={QUERY_SECRET}"),
+            ACCESS_TOKEN,
+        ),
+    )
+    .await
+    .expect_err("a provider that never answers returns nothing");
+
+    assert!(sent.elapsed() >= OAuthClient::CALL_TIMEOUT);
+    assert_eq!(
+        sentence_of(&error, &[]),
+        format!(
+            "the OAuth provider's endpoint (http://{addr}/user/emails) did not answer within {:?}",
+            OAuthClient::CALL_TIMEOUT
+        ),
+    );
+}
+
+/// The family the bounds belong to: every call that gets no usable answer names
+/// its endpoint the same way. A refused connection says why, without the URL
+/// reqwest would have quoted whole.
+#[tokio::test]
+async fn a_refused_connection_names_the_endpoint_and_the_cause() {
+    let addr = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.local_addr().expect("a bound address")
+    };
+    let client = client_for(addr);
+
+    let error = client
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect_err("nothing listens there");
+    let sentence = sentence_of(&error, &[]);
+    assert!(
+        sentence.starts_with(&format!(
+            "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) could not be called: "
+        )),
+        "{sentence}"
+    );
+    assert!(
+        !sentence.contains("for url"),
+        "reqwest's own URL is taken out: {sentence}"
+    );
+}
+
+/// A provider that answers, and refuses: the status is the cause, after the
+/// endpoint that gave it.
+#[tokio::test]
+async fn a_read_answered_with_an_error_status_names_the_endpoint_and_the_status() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a local listener");
+    let addr = listener.local_addr().expect("a bound address");
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let mut request = [0_u8; 4096];
+        let _ = socket.read(&mut request).await;
+        socket
+            .write_all(
+                b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await
+            .expect("answer");
+    });
+    let client = client_for(addr);
+
+    let error = client
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect_err("a refused read returns no profile");
+    assert_eq!(
+        sentence_of(&error, &[]),
+        format!(
+            "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) answered 401 Unauthorized"
+        ),
+    );
+}
+
+/// The bounds against each other: the connection has to fit inside the call,
+/// or a slow handshake would be reported as a call that did not answer.
+#[test]
+fn the_connection_is_bounded_inside_the_call() {
+    assert!(
+        OAuthClient::CONNECT_TIMEOUT < OAuthClient::CALL_TIMEOUT,
+        "{:?} vs {:?}",
+        OAuthClient::CONNECT_TIMEOUT,
+        OAuthClient::CALL_TIMEOUT,
+    );
+}

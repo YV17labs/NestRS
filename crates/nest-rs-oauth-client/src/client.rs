@@ -4,10 +4,15 @@
 //! CSRF `state` and the PKCE verifier ride in a short-lived JWT cookie so the
 //! round-trip needs no server-side session storage.
 
-use oauth2::basic::BasicClient;
+use std::fmt;
+use std::time::Duration;
+
+use oauth2::basic::{BasicClient, BasicErrorResponse};
+use oauth2::url::Url;
 use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpClientError,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope, TokenResponse,
+    TokenUrl,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -97,27 +102,148 @@ const REASON_CSRF_STATE_MISMATCH: &str = "csrf_state_mismatch";
 /// once and reads `reason` to tell the three apart.
 const CALLBACK_REJECTED: &str = "OAuth callback rejected";
 
+/// RFC 6749 §3.2's name for where the code is traded for a token.
+const TOKEN_ENDPOINT: &str = "token endpoint";
+/// OpenID Connect Core §5.3's name for where the caller's profile is read.
+const USERINFO_ENDPOINT: &str = "userinfo endpoint";
+/// Any other endpoint a provider reads through [`OAuthClient::fetch`] — GitHub's
+/// verified emails, say — which no standard names.
+const PROVIDER_ENDPOINT: &str = "endpoint";
+
+/// A provider endpoint as the sentence of a failed call names it: which endpoint,
+/// and where.
+///
+/// The address is the URL's origin and path and nothing else. A query and a
+/// userinfo part are where a deployment would put an API key, and this sentence
+/// reaches every line that reports the failure. The call's own secrets — the
+/// client secret and the code of an exchange, the access token of a read — travel
+/// in its body and headers, so an address cannot quote them either.
+struct Endpoint<'a> {
+    role: &'static str,
+    url: &'a str,
+}
+
+impl fmt::Display for Endpoint<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the OAuth provider's {} (", self.role)?;
+        match Url::parse(self.url) {
+            Ok(url) => write!(f, "{}{}", url.origin().ascii_serialization(), url.path())?,
+            Err(_) => f.write_str("an address that does not parse")?,
+        }
+        f.write_str(")")
+    }
+}
+
+/// What a call to `endpoint` that got no usable answer is reported as: a
+/// [`AuthError::Failed`], the failure every provider problem is, whose sentence
+/// names the endpoint and — when one of this client's bounds ended the call —
+/// which bound.
+///
+/// The rest of the cause is reqwest's own chain with the URL taken out, since
+/// reqwest quotes the URL whole, query included.
+fn call_failed(endpoint: &Endpoint<'_>, error: oauth2::reqwest::Error) -> AuthError {
+    let sentence = if error.is_timeout() && error.is_connect() {
+        format!(
+            "{endpoint} could not be connected to within {:?}",
+            OAuthClient::CONNECT_TIMEOUT
+        )
+    } else if error.is_timeout() {
+        format!(
+            "{endpoint} did not answer within {:?}",
+            OAuthClient::CALL_TIMEOUT
+        )
+    } else {
+        format!(
+            "{endpoint} could not be called: {}",
+            nest_rs_core::error_message(&error.without_url())
+        )
+    };
+    AuthError::Failed(sentence)
+}
+
+/// A code exchange that failed: [`call_failed`] when the provider was never
+/// heard from, and otherwise the provider's own answer — RFC 6749 §5.2's error,
+/// or why its body did not parse — after the endpoint that gave it.
+fn exchange_failed(
+    endpoint: &Endpoint<'_>,
+    error: RequestTokenError<HttpClientError<oauth2::reqwest::Error>, BasicErrorResponse>,
+) -> AuthError {
+    match error {
+        RequestTokenError::Request(HttpClientError::Reqwest(error)) => {
+            call_failed(endpoint, *error)
+        }
+        other => AuthError::Failed(format!("{endpoint}: {other}")),
+    }
+}
+
+/// The HTTP backend every call to a provider goes through, as
+/// [`OAuthClient::new`] builds it: no redirect followed, one user-agent, and
+/// both bounds.
+fn backend() -> oauth2::reqwest::ClientBuilder {
+    oauth2::reqwest::ClientBuilder::new()
+        .redirect(oauth2::reqwest::redirect::Policy::none())
+        // A client-wide UA so every outbound request carries it uniformly —
+        // some provider APIs (GitHub) reject requests without one, and the
+        // token exchange uses this same client.
+        .user_agent("nestrs")
+        .connect_timeout(OAuthClient::CONNECT_TIMEOUT)
+        .timeout(OAuthClient::CALL_TIMEOUT)
+}
+
 /// A transient Authorization-Code (PKCE) client built per flow from an
-/// [`OAuthClientConfig`]. Its HTTP backend refuses redirects (anti-SSRF) and carries
-/// a fixed user-agent; see [`new`](Self::new).
+/// [`OAuthClientConfig`]. Its HTTP backend refuses redirects (anti-SSRF), carries
+/// a fixed user-agent, and bounds every call it makes; see [`new`](Self::new).
 pub struct OAuthClient {
     config: OAuthClientConfig,
     http: oauth2::reqwest::Client,
 }
 
 impl OAuthClient {
+    /// How long reaching a provider may take — resolving its name, the TCP
+    /// handshake and the TLS one — before a call gives up, naming the endpoint.
+    ///
+    /// A provider's endpoints are public APIs a healthy network reaches in tens
+    /// of milliseconds, and in about a second when a lost SYN has to be sent
+    /// again. Three seconds covers that retransmission and the handshakes after
+    /// it; a connection that needs longer is a network that is not delivering,
+    /// and saying so then keeps the rest of [`CALL_TIMEOUT`](Self::CALL_TIMEOUT)
+    /// from being spent on it.
+    pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+    /// How long one call to a provider may take in all — connecting, sending,
+    /// and reading the whole answer — before it fails with a sentence naming the
+    /// endpoint and this bound.
+    ///
+    /// The calls are the code exchange at the token endpoint and the reads that
+    /// follow it: the userinfo endpoint, and any second read a provider makes
+    /// through [`fetch`](Self::fetch), as GitHub's verified emails are. An
+    /// identity provider answers each of them in well under a second; five
+    /// seconds is several times a slow answer, and past it the person waiting on
+    /// the callback is better served by a failure they can retry than by a page
+    /// that hangs.
+    ///
+    /// **Below the nets above it, for a whole login.** A callback makes these
+    /// calls one after another — three for GitHub, the most any provider
+    /// `nest-rs-social` ships makes — so a login spends at most three times this
+    /// bound on its provider, 15 s. That stays under the
+    /// [`AuthnGuard`](nest_rs_authn::AuthnGuard)'s
+    /// [`AUTHENTICATE_TIMEOUT`](nest_rs_authn::AUTHENTICATE_TIMEOUT) (20 s) and
+    /// the HTTP edge's request timeout (`NESTRS_HTTP__REQUEST_TIMEOUT_SECS`,
+    /// 30 s by default), which must stay the larger: a provider that stops
+    /// answering is then reported here, naming its endpoint, before either net
+    /// replaces that with a sentence naming nothing but a strategy or a route.
+    pub const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+
     /// The HTTP backend refuses redirects — following them during a token
-    /// exchange is an SSRF risk (per the `oauth2` crate's own guidance).
+    /// exchange is an SSRF risk (per the `oauth2` crate's own guidance) — and
+    /// bounds every call at [`CONNECT_TIMEOUT`](Self::CONNECT_TIMEOUT) and
+    /// [`CALL_TIMEOUT`](Self::CALL_TIMEOUT), so a provider that never answers
+    /// fails the call instead of holding it.
     pub fn new(config: OAuthClientConfig) -> Result<Self, AuthError> {
         config
             .validate()
             .map_err(|err| AuthError::Failed(format!("invalid OAuth2 config: {err}")))?;
-        let http = oauth2::reqwest::ClientBuilder::new()
-            .redirect(oauth2::reqwest::redirect::Policy::none())
-            // A client-wide UA so every outbound request carries it uniformly —
-            // some provider APIs (GitHub) reject requests without one, and the
-            // token exchange uses this same client.
-            .user_agent("nestrs")
+        let http = backend()
             .build()
             .map_err(|e| AuthError::Failed(e.to_string()))?;
         Ok(Self { config, http })
@@ -249,12 +375,16 @@ impl OAuthClient {
             );
             return Err(AuthError::Failed("OAuth state mismatch".into()));
         }
+        let endpoint = Endpoint {
+            role: TOKEN_ENDPOINT,
+            url: &self.config.token_url,
+        };
         let token = Self::basic_client(&self.config)?
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(PkceCodeVerifier::new(tx.pkce))
             .request_async(&self.http)
             .await
-            .map_err(|e| AuthError::Failed(e.to_string()))?;
+            .map_err(|error| exchange_failed(&endpoint, error))?;
         Ok(TokenSet {
             access_token: token.access_token().secret().clone(),
             id_token: None,
@@ -266,32 +396,59 @@ impl OAuthClient {
     /// into `T`. The generalization of [`userinfo`](Self::userinfo): a provider
     /// whose profile needs a second call (GitHub's verified-emails endpoint)
     /// reuses this so it inherits the redirect-refusing, anti-SSRF HTTP client
-    /// built in [`new`](Self::new) instead of standing up its own reqwest.
+    /// built in [`new`](Self::new), and its bounds, instead of standing up its
+    /// own reqwest.
     pub async fn fetch<T: DeserializeOwned>(
         &self,
         url: &str,
         access_token: &str,
     ) -> Result<T, AuthError> {
-        let body = self
-            .http
-            .get(url)
-            .bearer_auth(access_token)
-            .send()
-            .await
-            .map_err(|e| AuthError::Failed(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| AuthError::Failed(e.to_string()))?
-            .text()
-            .await
-            .map_err(|e| AuthError::Failed(e.to_string()))?;
-        serde_json::from_str(&body).map_err(|e| AuthError::Failed(e.to_string()))
+        let endpoint = Endpoint {
+            role: PROVIDER_ENDPOINT,
+            url,
+        };
+        self.read(&endpoint, access_token).await
     }
 
     /// Fetch the caller's profile from the configured `userinfo_url`,
     /// deserialized into the app's provider-specific shape; mapping it to the
     /// app's principal is the Passport strategy's job.
     pub async fn userinfo<T: DeserializeOwned>(&self, access_token: &str) -> Result<T, AuthError> {
-        self.fetch(&self.config.userinfo_url, access_token).await
+        let endpoint = Endpoint {
+            role: USERINFO_ENDPOINT,
+            url: &self.config.userinfo_url,
+        };
+        self.read(&endpoint, access_token).await
+    }
+
+    /// The authenticated `GET` both reads make. Anything but a `2xx` is a
+    /// failure — a `3xx` included, since the client follows no redirect — and
+    /// every failure names the endpoint rather than quoting its URL.
+    async fn read<T: DeserializeOwned>(
+        &self,
+        endpoint: &Endpoint<'_>,
+        access_token: &str,
+    ) -> Result<T, AuthError> {
+        let response = self
+            .http
+            .get(endpoint.url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|error| call_failed(endpoint, error))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AuthError::Failed(format!("{endpoint} answered {status}")));
+        }
+        let body = response
+            .text()
+            .await
+            .map_err(|error| call_failed(endpoint, error))?;
+        serde_json::from_str(&body).map_err(|error| {
+            AuthError::Failed(format!(
+                "{endpoint} answered a body that does not parse: {error}"
+            ))
+        })
     }
 }
 
@@ -473,5 +630,58 @@ mod tests {
         };
         assert!(matches!(err, AuthError::Failed(_)));
         assert!(err.to_string().contains("state mismatch"));
+    }
+
+    /// A name lookup that never answers — the first thing a call waits on, and
+    /// inside the connect bound, like the handshakes after it.
+    struct NeverResolves;
+
+    impl oauth2::reqwest::dns::Resolve for NeverResolves {
+        fn resolve(&self, _name: oauth2::reqwest::dns::Name) -> oauth2::reqwest::dns::Resolving {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// A provider that cannot be reached is told apart from one that does not
+    /// answer: the call fails at `CONNECT_TIMEOUT`, sooner than the whole call's
+    /// bound, and says which bound it was. Driven on the backend `new` builds,
+    /// with only its resolver swapped for one that never answers — a connection
+    /// no local listener can be made to leave hanging, since the kernel
+    /// completes a handshake to any listening socket and resets one it cannot
+    /// queue.
+    #[tokio::test(start_paused = true)]
+    async fn a_provider_that_cannot_be_reached_fails_at_the_connect_timeout() {
+        let client = OAuthClient {
+            config: OAuthClientConfig {
+                userinfo_url: "https://provider.example/userinfo?key=never-quoted".into(),
+                ..valid_config()
+            },
+            http: backend()
+                .dns_resolver(std::sync::Arc::new(NeverResolves))
+                .build()
+                .expect("the backend builds"),
+        };
+
+        // Twice the bound and no longer: a backend that stopped bounding its
+        // connections would otherwise wait on this resolver for good.
+        let sent = tokio::time::Instant::now();
+        let Err(AuthError::Failed(sentence)) = tokio::time::timeout(
+            OAuthClient::CONNECT_TIMEOUT * 2,
+            client.userinfo::<serde_json::Value>("never-quoted"),
+        )
+        .await
+        .expect("no answer within twice CONNECT_TIMEOUT") else {
+            panic!("a provider nobody can reach returns no profile");
+        };
+
+        assert_eq!(sent.elapsed(), OAuthClient::CONNECT_TIMEOUT);
+        assert_eq!(
+            sentence,
+            format!(
+                "the OAuth provider's userinfo endpoint (https://provider.example/userinfo) \
+                 could not be connected to within {:?}",
+                OAuthClient::CONNECT_TIMEOUT
+            ),
+        );
     }
 }

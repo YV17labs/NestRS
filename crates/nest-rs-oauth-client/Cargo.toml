@@ -46,7 +46,9 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # crate hides `jsonwebtoken` from consumers; only the test that has to mint a
 # malformed token names it.
 jsonwebtoken = { workspace = true }
-tokio = { workspace = true }
+# `test-util` stops the clock once a silent provider has taken the connection, so
+# the bounds are waited out without the suite waiting them.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

@@ -2,23 +2,38 @@
 //! `redis__worker`, read off the path like every other config's: the crate's
 //! word, then the binding folder's, so `NESTRS_REDIS__WORKER__*` names the type
 //! and the file that parse it.
+//!
+//! **Every duration has a floor and a ceiling**, and a value outside them fails
+//! the boot naming the variable — whichever side set it, since a value out of
+//! bounds breaks the worker the same way from code as from the environment. Two
+//! ceilings are another setting's: the lease is at most half the orphan
+//! threshold and the poll at most the whole of it, and a pair that breaks one is
+//! refused naming both variables.
+//!
+//! **No value accepted reaches apalis in a form it panics on.** apalis-redis
+//! 0.7.4 turns the orphan threshold into a `chrono` duration with
+//! `from_std(..).unwrap()` on every poll and subtracts it from the current
+//! instant, which panics too once the result falls outside `chrono`'s range —
+//! from a threshold of about 262,000 years, thirteen digits of seconds that
+//! nothing refused before it had a ceiling. A day is nowhere near it, and every
+//! other duration apalis reads — the poll, the heartbeat, its scan of the
+//! schedule — arms a `futures-timer` delay, which saturates rather than panics.
+//! Pinned by the tests below.
 
 use std::time::Duration;
 
 use nest_rs_config::{Config, ConfigError, ConfigService, Result, config};
 
-/// Default drain window on shutdown: 30s — comfortably under a typical
-/// Kubernetes `terminationGracePeriodSeconds` (30s) so the worker drains
-/// cleanly before SIGKILL rather than being force-killed mid-job.
+/// Default drain window on shutdown: 30s, Kubernetes' default
+/// `terminationGracePeriodSeconds`. Attempts run for all but its last five
+/// seconds, and what still runs then is handed back in those, which takes
+/// milliseconds; the queue documentation still asks for a grace period above
+/// the window, so SIGKILL never cuts the reserve short.
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 
 /// Default orphan threshold: five minutes, apalis's own — ten of the heartbeats a
 /// replica proves it is alive with.
 const DEFAULT_ORPHAN_AFTER_SECS: u64 = 300;
-
-/// The shortest orphan threshold accepted: five of the one-second heartbeats a
-/// replica beats at least, so one slow answer never reads as a death.
-const MIN_ORPHAN_AFTER_SECS: u64 = 5;
 
 /// Default lease: thirty seconds, renewed every ten while the attempt runs.
 const DEFAULT_LEASE_SECS: u64 = 30;
@@ -33,35 +48,69 @@ const HEARTBEATS_PER_THRESHOLD: u32 = 10;
 /// heartbeat to the second, so a faster one would record nothing new.
 const MIN_HEARTBEAT: Duration = Duration::from_secs(1);
 
-/// The shortest orphan threshold accepted, the variable that sets it, and why.
-const ORPHAN_AFTER_FLOOR: Floor = Floor {
+/// The drain window's bounds, the variable that sets it, and why.
+const SHUTDOWN_TIMEOUT: Bounds = Bounds {
+    key: "SHUTDOWN_TIMEOUT_SECS",
+    field: "shutdown_timeout",
+    unit: Unit::Seconds,
+    least: Limit {
+        count: 1,
+        why: "the drain keeps half its window, up to five seconds, to hand interrupted jobs \
+              back, and with none a job running at shutdown stays in flight until a peer's sweep \
+              takes it, the orphan threshold later",
+    },
+    most: Some(Limit {
+        count: 60 * 60,
+        why: "a stopping replica holds its rollout for as long as it drains, and a job still \
+              running an hour into a shutdown is one to hand back and resume from its \
+              checkpoint, not to wait out",
+    }),
+};
+
+/// The orphan threshold's bounds, the variable that sets it, and why.
+const ORPHAN_AFTER: Bounds = Bounds {
     key: "ORPHAN_AFTER_SECS",
     field: "orphan_after",
     unit: Unit::Seconds,
-    least: MIN_ORPHAN_AFTER_SECS,
-    why: "five heartbeats of one second each — anything shorter reads a slow answer as a death",
+    least: Limit {
+        count: 5,
+        why: "five heartbeats of one second each — anything shorter reads a slow answer as a death",
+    },
+    most: Some(Limit {
+        count: 24 * 60 * 60,
+        why: "the threshold is how long a crashed replica's jobs wait for a peer to take them, \
+              and past a day that wait is a typo rather than a choice",
+    }),
 };
 
-/// The shortest lease accepted, the variable that sets it, and why.
-const LEASE_FLOOR: Floor = Floor {
+/// The lease's floor, the variable that sets it, and why. Its ceiling is half
+/// the orphan threshold, checked once both are read.
+const LEASE: Bounds = Bounds {
     key: "LEASE_SECS",
     field: "lease",
     unit: Unit::Seconds,
-    least: 1,
-    why: "a lease renewed every third of it needs at least a second to renew in",
+    least: Limit {
+        count: 1,
+        why: "a lease renewed every third of it needs at least a second to renew in",
+    },
+    most: None,
 };
 
-/// The shortest poll accepted, the variable that sets it, and why: every poll
-/// costs Redis a fetch and a sweep of silent peers per method per replica, jobs
-/// or none, so ten milliseconds already spends up to two hundred scripts a
-/// second on a method with nothing to do.
-const POLL_INTERVAL_FLOOR: Floor = Floor {
+/// The poll's floor, the variable that sets it, and why: every poll costs Redis
+/// a fetch and a sweep of silent peers per method per replica, jobs or none, so
+/// ten milliseconds already spends up to two hundred scripts a second on a
+/// method with nothing to do. Its ceiling is the orphan threshold, checked once
+/// both are read.
+const POLL_INTERVAL: Bounds = Bounds {
     key: "POLL_INTERVAL_MS",
     field: "poll_interval",
     unit: Unit::Millis,
-    least: 10,
-    why: "every poll costs Redis a fetch and a sweep per method per replica, jobs or none — up \
-          to two hundred scripts a second at the floor",
+    least: Limit {
+        count: 10,
+        why: "every poll costs Redis a fetch and a sweep per method per replica, jobs or none — \
+              up to two hundred scripts a second at the floor",
+    },
+    most: None,
 };
 
 /// Consumer settings, settable via `NESTRS_REDIS__WORKER__*` or pinned through
@@ -73,8 +122,8 @@ pub struct RedisWorkerConfig {
     /// An attempt still running when the window closes is interrupted and its
     /// job handed back to the queue for another replica, inside the window — so
     /// SIGTERM never blocks past it, and the orchestrator's SIGKILL never takes a
-    /// job with it. Read from `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`;
-    /// defaults to 30s.
+    /// job with it. Read from `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, at
+    /// least 1 and at most 3600 (an hour); defaults to 30s.
     pub shutdown_timeout: Duration,
     /// How long a replica may go without proving it is alive before the others
     /// take the jobs it was running and run them again. A replica proves it
@@ -82,14 +131,16 @@ pub struct RedisWorkerConfig {
     /// is never taken for dead by a slow answer or two. Shorter recovers a
     /// crashed replica's jobs sooner; the delivery lease keeps a job a live
     /// replica still runs from running twice either way. Read from
-    /// `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS`, at least 5; defaults to 300s.
+    /// `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS`, at least 5 and at most 86400
+    /// (a day); defaults to 300s.
     pub orphan_after: Duration,
     /// How long a running attempt's claim on its job outlives its last renewal.
     /// The claim is renewed every third of this while the attempt runs, and a
     /// second delivery of the same job waits it out rather than running beside
     /// it. After a crash the job runs again once the claim lapses, so this is also
     /// the longest a crashed replica's job waits for a restarted one. Read from
-    /// `NESTRS_REDIS__WORKER__LEASE_SECS`, at least 1; defaults to 30s.
+    /// `NESTRS_REDIS__WORKER__LEASE_SECS`, at least 1 and at most half the orphan
+    /// threshold; defaults to 30s.
     pub lease: Duration,
     /// How often each method of a replica asks Redis for jobs while one of its
     /// permits is free. Each ask takes up to the method's `concurrency` jobs, so
@@ -123,33 +174,43 @@ impl Default for RedisWorkerConfig {
 
 impl Config for RedisWorkerConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        let config = Self {
-            shutdown_timeout: env
-                .parse::<u64>("SHUTDOWN_TIMEOUT_SECS")?
-                .map(Duration::from_secs)
-                .unwrap_or(base.shutdown_timeout),
-            orphan_after: ORPHAN_AFTER_FLOOR.read(env, base.orphan_after)?,
-            lease: LEASE_FLOOR.read(env, base.lease)?,
-            poll_interval: POLL_INTERVAL_FLOOR.read(env, base.poll_interval)?,
-        };
+        let shutdown_timeout = SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?;
+        let orphan_after = ORPHAN_AFTER.read(env, base.orphan_after)?;
+        let lease = LEASE.read(env, base.lease)?;
+        let poll_interval = POLL_INTERVAL.read(env, base.poll_interval)?;
+        let threshold = env.var_name(ORPHAN_AFTER.key);
+        // A peer takes a crashed replica's jobs once it has missed its
+        // heartbeats for the threshold — at least four fifths of it after the
+        // crash, a heartbeat being at most a fifth — and the delivery that
+        // meets a lease still held hands the job back until it lapses. At half
+        // the threshold, a lease renewed until the crash has lapsed first.
+        if lease.value > orphan_after.value / 2 {
+            return Err(lease.refuse(format!(
+                "the lease is {:?}, more than half the orphan threshold of {:?} ({threshold}) — a \
+                 peer takes a crashed replica's jobs once the threshold has passed, and a lease \
+                 still held then hands each back until it lapses; at half the threshold it has \
+                 always lapsed first",
+                lease.value, orphan_after.value,
+            )));
+        }
         // apalis sweeps silent peers' jobs back onto the queue on the poll, not
         // on a clock of its own: a poll past the orphan threshold would leave a
         // crashed replica's jobs waiting past it — and one of hours, a typo
         // away, would never fetch at all while the worker says it started.
-        if config.poll_interval > config.orphan_after {
-            return Err(ConfigError::parse(
-                env.var_name(POLL_INTERVAL_FLOOR.key),
-                format!(
-                    "the poll is {:?}, longer than the orphan threshold of {:?} ({}) — apalis \
-                     sweeps a silent replica's jobs back onto the queue on the poll, so a longer \
-                     one leaves them waiting past the threshold",
-                    config.poll_interval,
-                    config.orphan_after,
-                    env.var_name(ORPHAN_AFTER_FLOOR.key),
-                ),
-            ));
+        if poll_interval.value > orphan_after.value {
+            return Err(poll_interval.refuse(format!(
+                "the poll is {:?}, longer than the orphan threshold of {:?} ({threshold}) — apalis \
+                 sweeps a silent replica's jobs back onto the queue on the poll, so a longer one \
+                 leaves them waiting past the threshold",
+                poll_interval.value, orphan_after.value,
+            )));
         }
-        Ok(config)
+        Ok(Self {
+            shutdown_timeout: shutdown_timeout.value,
+            orphan_after: orphan_after.value,
+            lease: lease.value,
+            poll_interval: poll_interval.value,
+        })
     }
 }
 
@@ -169,49 +230,101 @@ impl Unit {
     }
 }
 
-/// The shortest value a duration setting accepts, and what refuses a shorter
-/// one — the same whichever side set it, since a value below it breaks the
-/// worker the same way from code as from the environment.
-struct Floor {
+/// One end of a duration setting's range, in its variable's unit, and why
+/// nothing past it holds.
+struct Limit {
+    count: u64,
+    why: &'static str,
+}
+
+/// The range a duration setting accepts, and what refuses a value outside it —
+/// the same whichever side set it, since a value out of bounds breaks the worker
+/// the same way from code as from the environment.
+struct Bounds {
     /// The variable's key in the namespace.
     key: &'static str,
     /// The field the value is pinned through in code.
     field: &'static str,
     unit: Unit,
-    /// The floor, in `unit`s.
-    least: u64,
-    /// Why nothing shorter holds.
-    why: &'static str,
+    least: Limit,
+    /// `None` when the ceiling is another setting's, checked once both are
+    /// read.
+    most: Option<Limit>,
 }
 
-impl Floor {
+impl Bounds {
     /// The setting's value — the variable's when it is set, `base` when it is
-    /// not — refused below the floor, never clamped in silence: under the
+    /// not — refused outside its bounds, never clamped in silence: under the
     /// spelling that supplied it, so a value given as a file is refused under
     /// `_FILE`, or, for a value pinned in code, under the variable that would
     /// override it, naming the field.
-    fn read(&self, env: &ConfigService, base: Duration) -> Result<Duration> {
-        let least = self.unit.duration(self.least);
-        match env.setting(self.key)? {
-            Some(setting) => {
-                let value = self.unit.duration(setting.parse::<u64>()?);
-                if value < least {
-                    return Err(
-                        setting.refuse(format!("must be at least {} — {}", self.least, self.why))
-                    );
-                }
-                Ok(value)
-            }
-            None if base < least => Err(ConfigError::parse(
-                env.var_name(self.key),
-                format!(
-                    "is not set, and `RedisWorkerConfig::{}` pinned in code is {base:?}, below the \
-                     {least:?} it must be at least — {}",
-                    self.field, self.why
-                ),
-            )),
-            None => Ok(base),
+    fn read(&self, env: &ConfigService, base: Duration) -> Result<Given> {
+        let Some(setting) = env.setting(self.key)? else {
+            return self.pinned(env, base);
+        };
+        let count = setting.parse::<u64>()?;
+        if count < self.least.count {
+            return Err(setting.refuse(format!(
+                "must be at least {} — {}",
+                self.least.count, self.least.why
+            )));
         }
+        if let Some(most) = &self.most
+            && count > most.count
+        {
+            return Err(setting.refuse(format!("must be at most {} — {}", most.count, most.why)));
+        }
+        Ok(Given {
+            value: self.unit.duration(count),
+            var: setting.var().to_owned(),
+        })
+    }
+
+    /// `base`, the value pinned in code (or the default), held to the same
+    /// bounds as the variable that would override it.
+    fn pinned(&self, env: &ConfigService, base: Duration) -> Result<Given> {
+        let var = env.var_name(self.key);
+        let refuse = |reason: String| {
+            ConfigError::parse(
+                var.clone(),
+                format!(
+                    "is not set, and `RedisWorkerConfig::{}` pinned in code is {base:?}, {reason}",
+                    self.field
+                ),
+            )
+        };
+        let least = self.unit.duration(self.least.count);
+        if base < least {
+            return Err(refuse(format!(
+                "below the {least:?} it must be at least — {}",
+                self.least.why
+            )));
+        }
+        if let Some(most) = &self.most {
+            let most_value = self.unit.duration(most.count);
+            if base > most_value {
+                return Err(refuse(format!(
+                    "above the {most_value:?} it must be at most — {}",
+                    most.why
+                )));
+            }
+        }
+        Ok(Given { value: base, var })
+    }
+}
+
+/// A duration setting as read, and the variable a refusal names it by: the
+/// spelling that supplied it, or the one that would override the value pinned
+/// in code.
+struct Given {
+    value: Duration,
+    var: String,
+}
+
+impl Given {
+    /// The boot error refusing this value against another setting's.
+    fn refuse(&self, reason: String) -> ConfigError {
+        ConfigError::parse(self.var.clone(), reason)
     }
 }
 
@@ -219,6 +332,30 @@ impl Floor {
 mod tests {
     use super::*;
     use nest_rs_config::Namespaced;
+
+    /// The config read from `vars` over `base`, as the boot reads it.
+    fn read(vars: &[(&str, &str)], base: RedisWorkerConfig) -> Result<RedisWorkerConfig> {
+        RedisWorkerConfig::from_env(
+            &ConfigService::with_vars("redis__worker", vars.iter().copied()),
+            base,
+        )
+    }
+
+    /// The refusal of `vars` over the defaults, as its sentence.
+    fn refused(vars: &[(&str, &str)]) -> String {
+        read(vars, RedisWorkerConfig::default())
+            .expect_err("refused")
+            .to_string()
+    }
+
+    /// The refusal of `pinned`, with no variable set, as its sentence.
+    fn refused_pinned(pinned: RedisWorkerConfig) -> String {
+        read(&[], pinned).expect_err("refused").to_string()
+    }
+
+    fn var(key: &str) -> String {
+        nest_rs_config::var_name("redis__worker", key)
+    }
 
     #[test]
     fn the_namespace_is_the_crate_word_then_the_binding_word() {
@@ -233,11 +370,7 @@ mod tests {
             RedisWorkerConfig::default().shutdown_timeout,
             Duration::from_secs(30)
         );
-        let cfg = RedisWorkerConfig::from_env(
-            &ConfigService::with_vars("redis__worker", [("SHUTDOWN_TIMEOUT_SECS", "5")]),
-            Default::default(),
-        )
-        .expect("ok");
+        let cfg = read(&[("SHUTDOWN_TIMEOUT_SECS", "5")], Default::default()).expect("ok");
         assert_eq!(cfg.shutdown_timeout, Duration::from_secs(5));
     }
 
@@ -245,11 +378,8 @@ mod tests {
     /// several beats inside the threshold at any value accepted.
     #[test]
     fn the_orphan_threshold_and_the_lease_read_the_env_and_the_heartbeat_follows() {
-        let cfg = RedisWorkerConfig::from_env(
-            &ConfigService::with_vars(
-                "redis__worker",
-                [("ORPHAN_AFTER_SECS", "60"), ("LEASE_SECS", "4")],
-            ),
+        let cfg = read(
+            &[("ORPHAN_AFTER_SECS", "60"), ("LEASE_SECS", "4")],
             Default::default(),
         )
         .expect("ok");
@@ -258,7 +388,8 @@ mod tests {
         assert_eq!(cfg.heartbeat(), Duration::from_secs(6));
 
         let floor = RedisWorkerConfig {
-            orphan_after: Duration::from_secs(MIN_ORPHAN_AFTER_SECS),
+            orphan_after: Duration::from_secs(ORPHAN_AFTER.least.count),
+            lease: Duration::from_secs(1),
             ..Default::default()
         };
         assert_eq!(floor.heartbeat(), MIN_HEARTBEAT);
@@ -277,36 +408,78 @@ mod tests {
             RedisWorkerConfig::default().poll_interval,
             Duration::from_millis(100)
         );
-        let cfg = RedisWorkerConfig::from_env(
-            &ConfigService::with_vars("redis__worker", [("POLL_INTERVAL_MS", "25")]),
-            Default::default(),
-        )
-        .expect("ok");
+        let cfg = read(&[("POLL_INTERVAL_MS", "25")], Default::default()).expect("ok");
         assert_eq!(cfg.poll_interval, Duration::from_millis(25));
     }
 
-    /// A threshold that would read one slow answer as a death, a lease with no
-    /// time to renew in, and a poll that would spend Redis on nothing, are
-    /// refused naming the variable — never clamped in silence.
+    /// A drain with no window, a threshold that would read one slow answer as a
+    /// death, a lease with no time to renew in, and a poll that would spend
+    /// Redis on nothing, are refused naming the variable — never clamped in
+    /// silence.
     #[test]
-    fn a_threshold_a_lease_or_a_poll_too_short_to_hold_is_refused_naming_the_variable() {
+    fn a_value_below_its_floor_is_refused_naming_the_variable() {
         for (key, value) in [
+            ("SHUTDOWN_TIMEOUT_SECS", "0"),
             ("ORPHAN_AFTER_SECS", "4"),
             ("LEASE_SECS", "0"),
             ("POLL_INTERVAL_MS", "9"),
         ] {
-            let refused = RedisWorkerConfig::from_env(
-                &ConfigService::with_vars("redis__worker", [(key, value)]),
-                Default::default(),
-            )
-            .expect_err("refused")
-            .to_string();
-            assert!(
-                refused.contains(&nest_rs_config::var_name("redis__worker", key)),
-                "{refused}"
-            );
+            let refused = refused(&[(key, value)]);
+            assert!(refused.contains(&var(key)), "{refused}");
             assert!(refused.contains("must be at least"), "{refused}");
         }
+    }
+
+    /// A drain past an hour and a threshold past a day are refused naming the
+    /// variable, and the ceiling itself is accepted.
+    #[test]
+    fn a_value_above_its_ceiling_is_refused_naming_the_variable() {
+        for (key, value) in [
+            ("SHUTDOWN_TIMEOUT_SECS", "3601"),
+            ("ORPHAN_AFTER_SECS", "86401"),
+        ] {
+            let refused = refused(&[(key, value)]);
+            assert!(refused.contains(&var(key)), "{refused}");
+            assert!(refused.contains("must be at most"), "{refused}");
+        }
+        let ceiling = read(
+            &[
+                ("SHUTDOWN_TIMEOUT_SECS", "3600"),
+                ("ORPHAN_AFTER_SECS", "86400"),
+            ],
+            Default::default(),
+        )
+        .expect("the ceilings themselves are accepted");
+        assert_eq!(ceiling.shutdown_timeout, Duration::from_secs(60 * 60));
+        assert_eq!(ceiling.orphan_after, Duration::from_secs(24 * 60 * 60));
+    }
+
+    /// A lease longer than half the orphan threshold is refused naming both
+    /// variables, whichever of the two moved: a lease set too long, and a
+    /// threshold set too short for the default lease. Half the threshold is
+    /// accepted.
+    #[test]
+    fn a_lease_longer_than_half_the_orphan_threshold_is_refused_naming_both() {
+        for refused in [
+            refused(&[("LEASE_SECS", "151")]),
+            refused(&[("ORPHAN_AFTER_SECS", "59")]),
+            refused_pinned(RedisWorkerConfig {
+                lease: Duration::from_millis(150_001),
+                ..Default::default()
+            }),
+        ] {
+            for key in ["LEASE_SECS", "ORPHAN_AFTER_SECS"] {
+                assert!(refused.contains(&var(key)), "{refused}");
+            }
+            assert!(
+                refused.contains("more than half the orphan threshold"),
+                "{refused}"
+            );
+        }
+
+        let half = read(&[("LEASE_SECS", "150")], Default::default())
+            .expect("a lease of half the threshold is accepted");
+        assert_eq!(half.lease * 2, half.orphan_after);
     }
 
     /// A poll longer than the orphan threshold — the sweep that hands a crashed
@@ -314,30 +487,15 @@ mod tests {
     /// pinned or from the environment; one equal to it is accepted.
     #[test]
     fn a_poll_longer_than_the_orphan_threshold_is_refused_naming_both() {
-        let from_env = RedisWorkerConfig::from_env(
-            &ConfigService::with_vars(
-                "redis__worker",
-                [("ORPHAN_AFTER_SECS", "60"), ("POLL_INTERVAL_MS", "60001")],
-            ),
-            Default::default(),
-        )
-        .expect_err("refused")
-        .to_string();
-        let pinned = RedisWorkerConfig::from_env(
-            &ConfigService::with_vars("redis__worker", Vec::<(&str, &str)>::new()),
-            RedisWorkerConfig {
+        for refused in [
+            refused(&[("ORPHAN_AFTER_SECS", "60"), ("POLL_INTERVAL_MS", "60001")]),
+            refused_pinned(RedisWorkerConfig {
                 poll_interval: Duration::from_secs(301),
                 ..Default::default()
-            },
-        )
-        .expect_err("refused")
-        .to_string();
-        for refused in [from_env, pinned] {
+            }),
+        ] {
             for key in ["POLL_INTERVAL_MS", "ORPHAN_AFTER_SECS"] {
-                assert!(
-                    refused.contains(&nest_rs_config::var_name("redis__worker", key)),
-                    "{refused}"
-                );
+                assert!(refused.contains(&var(key)), "{refused}");
             }
             assert!(
                 refused.contains("longer than the orphan threshold"),
@@ -345,23 +503,36 @@ mod tests {
             );
         }
 
-        let equal = RedisWorkerConfig::from_env(
-            &ConfigService::with_vars(
-                "redis__worker",
-                [("ORPHAN_AFTER_SECS", "60"), ("POLL_INTERVAL_MS", "60000")],
-            ),
+        let equal = read(
+            &[("ORPHAN_AFTER_SECS", "60"), ("POLL_INTERVAL_MS", "60000")],
             Default::default(),
         )
         .expect("a poll as long as the threshold is accepted");
         assert_eq!(equal.poll_interval, equal.orphan_after);
     }
 
-    /// A floor holds for a value pinned in code as it does for the
+    /// A bound holds for a value pinned in code as it does for the
     /// environment's: the refusal names the field and the variable that would
-    /// override it, and the floor itself is accepted.
+    /// override it, and the bound itself is accepted.
     #[test]
-    fn a_value_pinned_below_its_floor_is_refused_naming_the_field_and_the_variable() {
+    fn a_value_pinned_outside_its_bounds_is_refused_naming_the_field_and_the_variable() {
         for (pinned, field, key) in [
+            (
+                RedisWorkerConfig {
+                    shutdown_timeout: Duration::from_millis(999),
+                    ..Default::default()
+                },
+                "shutdown_timeout",
+                "SHUTDOWN_TIMEOUT_SECS",
+            ),
+            (
+                RedisWorkerConfig {
+                    shutdown_timeout: Duration::from_secs(60 * 60) + Duration::from_nanos(1),
+                    ..Default::default()
+                },
+                "shutdown_timeout",
+                "SHUTDOWN_TIMEOUT_SECS",
+            ),
             (
                 RedisWorkerConfig {
                     poll_interval: Duration::from_millis(9),
@@ -373,6 +544,16 @@ mod tests {
             (
                 RedisWorkerConfig {
                     orphan_after: Duration::from_secs(4),
+                    lease: Duration::from_secs(1),
+                    poll_interval: Duration::from_millis(10),
+                    ..Default::default()
+                },
+                "orphan_after",
+                "ORPHAN_AFTER_SECS",
+            ),
+            (
+                RedisWorkerConfig {
+                    orphan_after: Duration::from_secs(24 * 60 * 60 + 1),
                     ..Default::default()
                 },
                 "orphan_after",
@@ -387,33 +568,68 @@ mod tests {
                 "LEASE_SECS",
             ),
         ] {
-            let refused = RedisWorkerConfig::from_env(
-                &ConfigService::with_vars("redis__worker", Vec::<(&str, &str)>::new()),
-                pinned,
-            )
-            .expect_err("refused")
-            .to_string();
+            let refused = refused_pinned(pinned);
             assert!(
                 refused.contains(&format!("`RedisWorkerConfig::{field}` pinned in code")),
                 "{refused}"
             );
-            assert!(
-                refused.contains(&nest_rs_config::var_name("redis__worker", key)),
-                "{refused}"
-            );
+            assert!(refused.contains(&var(key)), "{refused}");
         }
 
-        let floor = RedisWorkerConfig {
-            poll_interval: Duration::from_millis(10),
-            orphan_after: Duration::from_secs(MIN_ORPHAN_AFTER_SECS),
-            lease: Duration::from_secs(1),
-            ..Default::default()
-        };
-        let accepted = RedisWorkerConfig::from_env(
-            &ConfigService::with_vars("redis__worker", Vec::<(&str, &str)>::new()),
-            floor.clone(),
+        for accepted in [
+            RedisWorkerConfig {
+                shutdown_timeout: Duration::from_secs(1),
+                poll_interval: Duration::from_millis(10),
+                orphan_after: Duration::from_secs(5),
+                lease: Duration::from_secs(1),
+            },
+            RedisWorkerConfig {
+                shutdown_timeout: Duration::from_secs(60 * 60),
+                poll_interval: Duration::from_secs(24 * 60 * 60),
+                orphan_after: Duration::from_secs(24 * 60 * 60),
+                lease: Duration::from_secs(12 * 60 * 60),
+            },
+        ] {
+            let read = read(&[], accepted.clone()).expect("the bounds themselves are accepted");
+            assert_eq!(read.shutdown_timeout, accepted.shutdown_timeout);
+            assert_eq!(read.orphan_after, accepted.orphan_after);
+            assert_eq!(read.lease, accepted.lease);
+            assert_eq!(read.poll_interval, accepted.poll_interval);
+        }
+    }
+
+    /// The one path from this config into apalis that can panic is the orphan
+    /// threshold: on every poll apalis-redis 0.7.4 evaluates
+    /// `Utc::now() - chrono::Duration::from_std(reenqueue_orphaned_after).unwrap()`,
+    /// where the conversion unwraps and the subtraction is
+    /// `checked_sub_signed(..).expect(..)`. Evaluated here without either
+    /// panic, with the longest threshold accepted both answer — while a
+    /// threshold of thirteen digits, which nothing refused before the ceiling,
+    /// fails the subtraction apalis would have panicked on.
+    #[test]
+    fn apalis_sweeps_under_the_longest_orphan_threshold_accepted_without_a_panic() {
+        let longest = ORPHAN_AFTER.most.as_ref().expect("a ceiling").count;
+        let accepted = read(
+            &[("ORPHAN_AFTER_SECS", &longest.to_string())],
+            Default::default(),
         )
-        .expect("the floor itself is accepted");
-        assert_eq!(accepted.poll_interval, floor.poll_interval);
+        .expect("the longest threshold is accepted");
+        let swept = |threshold: Duration| {
+            chrono::Duration::from_std(threshold)
+                .ok()
+                .and_then(|threshold| chrono::Utc::now().checked_sub_signed(threshold))
+        };
+        assert!(
+            swept(accepted.orphan_after).is_some(),
+            "apalis's sweep answers under the longest threshold accepted"
+        );
+
+        let thirteen_digits = 1_000_000_000_000_u64 * 10;
+        assert!(
+            swept(Duration::from_secs(thirteen_digits)).is_none(),
+            "a threshold of about 317,000 years panics apalis's sweep"
+        );
+        let refused = refused(&[("ORPHAN_AFTER_SECS", &thirteen_digits.to_string())]);
+        assert!(refused.contains("must be at most"), "{refused}");
     }
 }

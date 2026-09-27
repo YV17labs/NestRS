@@ -232,13 +232,17 @@ that kept it.
 
 | Variable | Default | What it bounds |
 |---|---|---|
-| `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `30` | The drain window, hand-backs included |
-| `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS` | `300` | How long a silent replica keeps its jobs; at least `5` |
-| `NESTRS_REDIS__WORKER__LEASE_SECS` | `30` | How long a claim outlives its last renewal; at least `1` |
+| `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `30` | The drain window, hand-backs included; at least `1`, at most `3600` |
+| `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS` | `300` | How long a silent replica keeps its jobs; at least `5`, at most `86400` — a day |
+| `NESTRS_REDIS__WORKER__LEASE_SECS` | `30` | How long a claim outlives its last renewal; at least `1`, and at most half the orphan threshold, so a crashed replica's lease has lapsed by the time a peer takes its jobs |
 | `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` | `100` | How often a method asks for jobs while a permit is free — its ceiling, and its idle cost; at least `10`, and at most the orphan threshold, since the sweep of silent replicas runs on it |
 
 A value out of its bounds fails the boot, whether the environment set it or
-`for_root` pinned it, naming the variable.
+`for_root` pinned it, naming the variable — and a lease or a poll too long for
+the orphan threshold names both. Every value accepted is one apalis handles:
+its sweep converts the orphan threshold with an `unwrap`, which a threshold of
+about 262,000 years would panic, and the ceiling of a day keeps it far from
+that.
 
 ## Limits
 

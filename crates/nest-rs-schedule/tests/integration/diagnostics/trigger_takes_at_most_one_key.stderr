@@ -1,5 +1,17 @@
 error: #[cron] takes at most one `tz`
-  --> tests/integration/diagnostics/trigger_takes_at_most_one_key.rs:15:48
+  --> tests/integration/diagnostics/trigger_takes_at_most_one_key.rs:17:48
    |
-15 |     #[cron("0 0 * * * *", tz = "Europe/Paris", tz = "UTC")]
+17 |     #[cron("0 0 * * * *", tz = "Europe/Paris", tz = "UTC")]
    |                                                ^^
+
+error: #[every] takes at most one `replicas`
+  --> tests/integration/diagnostics/trigger_takes_at_most_one_key.rs:22:38
+   |
+22 |     #[every("30s", replicas = "one", replicas = "each")]
+   |                                      ^^^^^^^^
+
+error: #[after] takes at most one `transactional`
+  --> tests/integration/diagnostics/trigger_takes_at_most_one_key.rs:27:42
+   |
+27 |     #[after("1s", transactional = false, transactional = true)]
+   |                                          ^^^^^^^^^^^^^

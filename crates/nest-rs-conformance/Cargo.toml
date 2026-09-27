@@ -38,6 +38,11 @@ toml_edit = { workspace = true }
 # deliberately: a second implementation of the rule is the cost on the other
 # side, and it is paid in silence.
 nest-rs-cli = { path = "../nest-rs-cli" }
+# The grammars join enrols a family of decorators through the table the parsers
+# themselves read — `JobDecorator::ALL` — rather than through a copy of its
+# names, which would be the second list the table exists to replace. Syn,
+# quote and proc-macro2 already sit in this graph, so the edge adds one crate.
+nest-rs-codegen = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

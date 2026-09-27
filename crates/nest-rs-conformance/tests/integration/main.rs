@@ -46,3 +46,18 @@ mod units;
 pub(crate) const EDGES: [&str; 7] = [
     "http", "graphql", "ws", "queue", "schedule", "mcp", "events",
 ];
+
+/// Write each `(path, text)` of `tree` below `root`, creating its folders — the
+/// planted trees a join's own verdict is taken over, so a join is proved on a
+/// tree whose answer is written beside it rather than only on the real one,
+/// where a reading that is wrong the same way twice passes.
+///
+/// Here because two joins plant — `naming` and `grammars`.
+pub(crate) fn plant(root: &std::path::Path, tree: &[(&str, &str)]) {
+    for (file, text) in tree {
+        let path = root.join(file);
+        let folder = path.parent().expect("a planted file sits in a folder");
+        std::fs::create_dir_all(folder).expect("the scratch tree is writable");
+        std::fs::write(&path, text).expect("the scratch tree is writable");
+    }
+}

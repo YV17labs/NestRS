@@ -319,17 +319,6 @@ fn module_word<'a>(above: &'a [std::borrow::Cow<'a, str>]) -> Option<&'a str> {
     }
 }
 
-/// Write each `(path, text)` of `tree` below `root`, creating its folders — the
-/// planted trees the joins' own verdicts are taken over.
-fn plant(root: &Path, tree: &[(&str, &str)]) {
-    for (file, text) in tree {
-        let path = root.join(file);
-        let folder = path.parent().expect("a planted file sits in a folder");
-        std::fs::create_dir_all(folder).expect("the scratch tree is writable");
-        std::fs::write(&path, text).expect("the scratch tree is writable");
-    }
-}
-
 /// [`module_word`], on a planted tree: every level an edge folder can sit under,
 /// with a name that passes and a decoy that the old reading — the folder above
 /// the edge, whatever it named — judged the other way.
@@ -382,7 +371,7 @@ fn an_edge_folder_directly_under_src_adapts_the_crate() {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("naming-edge-under-src-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    plant(&root, &TREE);
+    crate::plant(&root, &TREE);
     let verdict = misnamed_adapters(&root);
     let _ = std::fs::remove_dir_all(&root);
 
@@ -1464,7 +1453,7 @@ fn no_verdict_depends_on_where_the_checkout_sits() {
     let plain = scratch.join("plain/nestrs");
     let hostile = scratch.join("src/schedule/nestrs");
     for root in [&plain, &hostile] {
-        plant(root, &TREE);
+        crate::plant(root, &TREE);
     }
     let (from_plain, from_hostile) = (verdicts(&plain), verdicts(&hostile));
     let _ = std::fs::remove_dir_all(&scratch);

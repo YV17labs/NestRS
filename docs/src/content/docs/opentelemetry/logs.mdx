@@ -156,7 +156,7 @@ OTLP exporter reports as `event.name`), and by the message a console prints. The
 `nest_rs_core::operation_log`'s; the names are not, for the same reason a span
 target is not — a unit name says which edge did the work, and the kernel does
 not know the edges exist. There used to be
-two vocabularies for these eight things — the spans said `http.request` while
+two vocabularies for these units — the spans said `http.request` while
 the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.
 

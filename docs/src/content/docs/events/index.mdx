@@ -29,27 +29,46 @@ A regular `#[injectable]` provider with one decorated method. The
 method as a listener for the event type read from its parameter. Here the
 `notifications` slice reacts to a fact the `posts` slice publishes:
 
-```rust title="crates/features/src/notifications/events/listener.rs (from the demo, abridged)"
+```rust title="crates/features/src/notifications/events/listener.rs (from the demo)"
+use std::sync::Arc;
+
 use nest_rs::core::{error_message, injectable};
 use nest_rs::events::listeners;
+use nest_rs::queue::{JobProducer, JobProducerExt};
 
+use crate::notifications::{NotifyCommand, NotifyQueue};
 use crate::posts::PostPublishedEvent;
 
 #[injectable]
-#[derive(Default)]
-pub struct NotificationsListener;
+pub struct NotificationsListener {
+    #[inject]
+    queue: Arc<dyn JobProducer>,
+}
 
 #[listeners]
 impl NotificationsListener {
     #[on_event]
     async fn on_post_published(&self, event: PostPublishedEvent) {
-        tracing::info!(
-            target: "features::notifications",
-            post_id = %event.post_id,
-            org_id = %event.org_id,
-            title = %event.title,
-            "notifying subscribers of a published post",
-        );
+        let command = NotifyCommand {
+            org_id: event.org_id,
+            message: format!("Post \"{}\" was published", event.post.title),
+        };
+        match self.queue.push(NotifyQueue, command, None).await {
+            Ok(receipt) => tracing::debug!(
+                target: "features::notifications",
+                post_id = %event.post_id,
+                org_id = %event.org_id,
+                job_id = %receipt.id(),
+                "enqueued a publish notification for the worker",
+            ),
+            Err(error) => tracing::error!(
+                target: "features::notifications",
+                error = %error_message(&error),
+                post_id = %event.post_id,
+                org_id = %event.org_id,
+                "failed to enqueue a publish notification",
+            ),
+        }
     }
 }
 ```
@@ -62,6 +81,11 @@ impl NotificationsListener {
 - **`#[on_event]`** takes no arguments — the event type is read from the
   method's first parameter after `&self`. The bus enforces
   `Clone + Send + 'static` on it through the call site.
+
+The reaction itself is a [queue](/queue/) push. Storing the notification is
+work that has to survive a crash and retry, which the bus does not buy, so the
+listener hands it to the worker as a `NotifyCommand` and logs a push that
+fails at `error` rather than dropping it.
 
 ## Several listeners on the same provider
 
@@ -106,14 +130,16 @@ provider in the same block — same convention as `#[routes]`,
 The payload is a plain `Clone` struct at the producer's port
 (`event.rs`) — the same feature that emits it owns its definition:
 
-```rust title="crates/features/src/posts/event.rs (from the demo, abridged)"
+```rust title="crates/features/src/posts/event.rs (from the demo)"
 use uuid::Uuid;
+
+use super::entities::post::Post;
 
 #[derive(Clone)]
 pub struct PostPublishedEvent {
     pub post_id: Uuid,
     pub org_id: Uuid,
-    pub title: String,
+    pub post: Post,
 }
 ```
 
@@ -126,7 +152,7 @@ parameter is `PostPublishedEvent` subscribes to it.
 The emitter injects `Arc<EventBus>` like any other dep and calls `emit`
 once the work is done:
 
-```rust title="crates/features/src/posts/service.rs"
+```rust title="crates/features/src/posts/service.rs (from the demo, abridged)"
 #[injectable]
 pub struct PostsService {
     #[inject]
@@ -134,16 +160,17 @@ pub struct PostsService {
 }
 
 impl PostsService {
-    pub async fn create_in_org(&self, input: CreatePost) -> Result<Post, ServiceError> {
-        let model = self.insert_through_repo(input).await?;
+    pub async fn publish(&self, model: Model, actor_id: Uuid) -> Result<Post, PostError> {
+        // …
+        let post = Post::from(&published);
         self.bus
             .emit(PostPublishedEvent {
-                post_id: model.id,
-                org_id: model.org_id,
-                title: model.title.clone(),
+                post_id,
+                org_id,
+                post: post.clone(),
             })
             .await;
-        Ok(Post::from(&model))
+        Ok(post)
     }
 }
 ```
@@ -178,13 +205,19 @@ transitively through both (registration is idempotent):
 ```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
 
-use features::notifications::NotificationsEventsModule;
-use features::posts::PostsHttpModule;
+use features::notifications::{NotificationsEventsModule, NotificationsHttpModule};
+use features::posts::{PostsGraphqlModule, PostsHttpModule};
 
-#[module(imports = [
-    PostsHttpModule,
-    NotificationsEventsModule,
-])]
+#[module(
+    imports = [
+        // …
+        PostsHttpModule,
+        PostsGraphqlModule,
+        NotificationsEventsModule,
+        NotificationsHttpModule,
+        // …
+    ],
+)]
 pub struct ApiModule;
 ```
 
@@ -197,10 +230,12 @@ At bootstrap each wired listener logs one line at `debug`, target
 DEBUG nest_rs::events: wired event listener listener="NotificationsListener::on_post_published"
 ```
 
-Dispatch is inline — `emit` awaits each listener in turn — so a listener is not
-a unit of work of its own: its logs file under the span of whatever emitted the
-event, with that request's `trace_id` and `actor_id`. See
-[Correlation](/fundamentals/correlation/).
+Dispatch is inline — `emit` awaits each listener in turn — and each listener
+call is still a unit of work of its own, `events.dispatch`: a **child** of
+whatever emitted the event, so its lines carry that request's `trace_id` and
+`actor_id` under a `span_id` of their own, and it files one
+[operation line](/opentelemetry/logs/#every-unit-of-work-files-one-line) naming
+the event and the listener. See [Correlation](/fundamentals/correlation/).
 
 <Aside type="caution">
 Without `EventsModule` anywhere in the tree, the `EventBus` is absent —

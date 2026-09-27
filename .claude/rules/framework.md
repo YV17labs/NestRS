@@ -40,20 +40,25 @@ has spoken. Testable form: a trybuild snapshot per refused shape *plus* one that
 tries the escape.
 
 **A value refusal opens with its site.** Every refusal of a value a decorator
-reads opens with the decorator and the key — ``#[process] `retries` takes a whole
-number`` — or the decorator alone for a positional argument (`#[every("30s")]`),
-worded once in `nest_rs_codegen`'s `args::site`. The site is the part a problems
-list or a CI summary shows without the source frame, and `transactional` is a key
-of four decorators. Three shapes follow it, one per mistake: a value of the wrong
-kind reads ``… takes <what>`` (`takes_value`, `require_str_lit`); a value that
-breaks a grammar names itself and the rule (``#[controller] `version`: "1/2" is
-not a path segment — …``); and a value outside a closed set keeps
-`unknown_value`'s ``unknown #[attr] <what> `x`; expected …``, which names the
-decorator as well. No decorator hands a value to `syn`'s own sentence, which names
-neither the decorator nor the key, and every value reader reads through the
-invisible group a `macro_rules!` forwards a value in (`ungrouped_expr`). A
-`*-macros` crate words its value refusals through `takes_value` like
-`nest_rs_codegen` does, with a trybuild snapshot per refusal.
+reads — a key's value, a positional argument, an element of a list — opens with
+the decorator and the position, worded once in `nest_rs_codegen::site`: the key
+(``#[process] `retries` takes a whole number``), the word the grammar names a
+positional by (``#[redirect] `status` ``), or the decorator alone for its one
+positional (`#[every("30s")]`, `#[get]`). The site is the part a problems list or
+a CI summary shows without the source frame, and `transactional` is a key of four
+decorators. Three shapes follow it, one per mistake: a value of the wrong kind
+reads ``… takes <what>`` (`takes_value`, `require_str_lit`), one sentence per
+position whatever was written instead; a value that breaks a grammar names itself
+and the rule (``#[controller] `version`: "1/2" is not a path segment — …``); and a
+value outside a closed set keeps `unknown_value`'s ``unknown #[attr] <what> `x`;
+expected …``, which names the decorator as well. No decorator hands a value to
+`syn`'s own sentence, which names neither the decorator nor the key, nor to
+`format_ident!`, which panics: a parse failure is re-worded at the token `syn`
+stopped on. A value read out of another crate's attribute opens with the site
+where it is written (``#[sea_orm] `from` ``, as `#[expose]` reads it), and every
+value reader reads through the invisible group a `macro_rules!` forwards a value
+in (`ungrouped_expr`). A `*-macros` crate words its value refusals through
+`takes_value` like `nest_rs_codegen` does, with a trybuild snapshot per refusal.
 
 **A rule both a decorator and the runtime check is written twice and pinned
 once.** A `proc-macro` crate exports only macros and a surface crate cannot depend
@@ -260,15 +265,21 @@ moves between them inside one feature: `#[routes]`, `#[messages]`,
 **A key one member of a decorator family takes is answered at every member.** The
 worker-job family — `#[process]`, `#[every]`, `#[cron]`, `#[after]` — is the
 worked case, and its table is closed: every family key is built at a member, or
-refused there by `nest_rs_codegen::job_argument_refused` with the fact that makes
-it meaningless (``#[every] takes no `retries`: a tick's retry is the next
-occurrence``); a key no member takes keeps the unknown-key sentence. **The table
-is declared once, in `nest_rs_codegen::job`** — the keys each member accepts, and
-the fact each refused cell states — and the four parsers and the refusal read it,
-never a hand-listed copy. So a key added to one member fails the table's closure
-test until each of the other three builds it or refuses it by name; it never
-reaches them as an unknown word. `transactional` is the one key every member
-builds. Every refused cell is pinned by its decorator's `*_refused_keys` trybuild
+refused there with the fact that makes it meaningless (``#[every] takes no
+`retries`: a tick's retry is the next occurrence``); a key no member takes keeps
+the unknown-key sentence, listing that member's column. **The table is declared
+once, in `nest_rs_codegen::job`** — the members (`JobDecorator`), the keys
+(`JobKey`), and `cell(key, member)` placing every key at every member — and it is
+a `match` with no wildcard arm, so a key or a member added without a cell at every
+crossing does not compile, and a cell written twice is an unreachable pattern. A
+new key therefore never reaches the other members as an unknown word. Every member
+reads its keys through `job_key`, which answers taken, refused or unknown from
+that one table; each parser matches on `JobKey`, so a key cannot reach a parser
+without joining the table; and each member's own test reads every key of its
+column in the spelling the table offers (`JobKey::example`), so a key the table
+gives a member and its parser does not read fails a test — `unread_job_key` is
+that sentence, never a panic. `transactional` is the one key every member builds.
+Every refused cell is pinned by its decorator's `*_refused_keys` trybuild
 snapshot, and every built one compiled by a use site in `nest-rs-macro-hygiene`.
 
 Two of the schedule's refusals are decisions rather than impossibilities, and they
@@ -722,9 +733,11 @@ the one this framework uses most.**
 
 - **By import.** Exactly one, chosen at compile time by which module the app
   imports; the consumer injects `dyn Port` and never names the backend. Two
-  imported is a **boot error naming both**, worded once and shared by every
-  backend so the halves cannot drift — `nest_rs_throttler::BACKEND_REMEDY` is
-  that shape already built. A port carrying a `BACKEND_REMEDY` declares it **in
+  imported is a **boot error** naming the port and the remedy, worded once and
+  shared by every backend so the halves cannot drift —
+  `nest_rs_throttler::BACKEND_REMEDY` is that shape already built. It does not
+  name the two bindings; whether it should is the owner question *Swapping or
+  adding a backend* records in `architecture.md`. A port carrying a `BACKEND_REMEDY` declares it **in
   the file holding what a backend supplies** — `nest_rs_queue::backend`,
   `nest_rs_schedule::occurrence`, `nest_rs_throttler::store` — never in a
   `module.rs`, because the contract is what a backend author opens and the module
@@ -757,8 +770,8 @@ declares it.** A port crate depending on nothing is the normal case —
 | `JobProducer` / `CheckpointStore` | `nest-rs-queue` | `nest-rs-redis` | owned — apalis is the Redis job runtime the binding drives, not the port | by import | **yes** — the crate's `# Extension contract`, `docs/queue/writing-a-driver.mdx`, and `BACKEND_REMEDY` |
 | `OccurrenceLock` | `nest-rs-schedule` | `nest-rs-redis` | owned | by import | **yes** — the port's `//!` in `occurrence.rs`, `BACKEND_REMEDY` its arbitration sentence |
 | `SocialProvider` | `nest-rs-social` | itself + third parties | owned | by configuration | **yes** — open provider contract |
-| `ThrottlerStore` | `nest-rs-throttler` | itself + `nest-rs-redis` | owned | by import | no |
-| `Strategy` | `nest-rs-authn` | the app's alias | owned | by type parameter | no |
+| `ThrottlerStore` | `nest-rs-throttler` | itself + `nest-rs-redis` | owned | by import | **yes** — the trait's doc (what `hit` owes within `HIT_TIMEOUT`), `BACKEND_REMEDY` beside it, and the declared binding under *Writing your own* on `/rate-limiting/` |
+| `Strategy` | `nest-rs-authn` | the app's alias | owned | by type parameter | **yes** — *Advanced: write your own strategy* on `/security/authentication/`: the trait, and the alias that selects it; no arbitration is owed |
 | object storage | — | `nest-rs-storage` | delegated (`object_store`) | **nothing selects** — see below | no port exists |
 
 **A port promises only what every backend it ships holds.** A guarantee one
@@ -1336,18 +1349,28 @@ name order; init failure aborts boot, shutdown is best-effort.
   apalis-redis 0.7.4 fetches up to `buffer_size` records once per
   `poll_interval`, only while the worker has a free permit, and keeps
   `fetch_next` private, so those two settings are the only levers short of a
-  fork. The worker sets `buffer_size = concurrency` — a buffer of one held every
-  method to one job per poll whatever it declared, 9.3 jobs a second at
-  concurrency 1 and 4 alike — and reads `poll_interval` from `RedisWorkerConfig`
-  (`NESTRS_REDIS__WORKER__POLL_INTERVAL_MS`, pinned or from the environment,
-  default 100, refused below 10 naming the variable). Three consequences are
-  documented where the queue's scaling is: a method's ceiling per replica is
-  `concurrency / poll_interval` for short jobs; a saturated worker holds at most
-  `concurrency` fetched records beyond the ones it runs, which no other replica
-  can take meanwhile; and every poll costs Redis a fetch and an orphan sweep per
-  method per replica whether or not a job waits — the idle price a shorter
-  interval multiplies. A higher ceiling is apalis 1.0's question for the owner,
-  never a fork.
+  fork. The worker sets `buffer_size` to the method's `concurrency` — a buffer of
+  one held every method to one job per poll whatever it declared, 9.3 jobs a
+  second at concurrency 1 and 4 alike — **and 799 at the most**, a cap derived
+  rather than chosen: apalis's scripts hand a fetch's ids to Redis in one Lua
+  `unpack`, which stops at 7,999 values, and its sweep of a silent peer moves ten
+  fetches' worth in one script, so with a larger buffer a sweep can pop more of a
+  dead replica's jobs than it can file back, and lose them (`MOST_PER_FETCH`; the
+  limit is pinned by an e2e test on every Redis the matrix runs). `poll_interval` comes from
+  `RedisWorkerConfig` (`NESTRS_REDIS__WORKER__POLL_INTERVAL_MS`, pinned or from
+  the environment, default 100): at least 10 ms, and at most the orphan threshold,
+  because apalis sweeps silent peers on the poll and a longer one leaves a crashed
+  replica's jobs waiting past it — each refused naming the variable. Three
+  consequences are documented where the queue's scaling is: a method's ceiling
+  per replica is `concurrency / poll_interval` for short jobs; a saturated worker
+  holds at most `concurrency` fetched records beyond the ones it runs, which no
+  other replica can take meanwhile; and every poll costs Redis a fetch and an
+  orphan sweep per method per replica whether or not a job waits — the idle price
+  a shorter interval multiplies. A higher ceiling is apalis 1.0's question for the
+  owner, never a fork, and so is **a fetch sized per method** — a `prefetch` key,
+  or fetching only the permits that are free — since a replica running long jobs
+  holds fetched jobs an idle peer cannot take and KEDA does not count: possible,
+  unbuilt, and an owner question until it is decided.
 
   **Delivery is at least once, and a redelivery runs once.** apalis delivers a
   job twice in ways no setting of its public API removes — its startup sweep

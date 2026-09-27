@@ -28,7 +28,8 @@ harness.
   mocking the database in e2e is a hard no.
 - **`HeadlessApp` / `TransportHandle`** — boot with no transport, for
   lifecycle, DI and discovery assertions.
-- **`EphemeralDatabase`** (behind the `orm` feature) — a per-test
+- **`EphemeralDatabase`** (`nest-rs-testing`'s `orm` feature, which the
+  umbrella's `testing` and `seaorm` switch on together) — a per-test
   database, dropped with the value.
 - **`load_project_env`** — loads the `.env` cascade so e2e picks up
   the devcontainer hostnames (`postgres`, `redis`, `rustfs`).

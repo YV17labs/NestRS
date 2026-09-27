@@ -140,8 +140,11 @@ impl OAuthController {
 
 Both legs run through the shared authorization-code flow — the same
 PKCE and stateless-CSRF machinery documented in
-[OAuth2](/security/authentication/oauth2/). A provider only supplies
-the piece that is genuinely provider-specific: how to read the profile.
+[OAuth2](/security/authentication/oauth2/), and the same bounds on every
+call to the provider: a provider that stops answering fails the callback
+within seconds, naming the endpoint, rather than holding it. A provider
+only supplies the piece that is genuinely provider-specific: how to read
+the profile.
 
 <Aside type="note">
 Identity is keyed on the provider's stable `(provider, subject)` pair,

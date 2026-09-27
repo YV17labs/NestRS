@@ -182,6 +182,13 @@ impl Drop for OpenTelemetry {
     fn drop(&mut self) {
         #[cfg(feature = "otlp")]
         {
+            // Bounded by the SDK rather than here: each provider's `shutdown()`
+            // waits at most five seconds for its final export (opentelemetry_sdk
+            // 0.32 — `shutdown_with_timeout(5 s)` for traces and logs, a fixed
+            // five in the metrics `PeriodicReader`), so a collector that stopped
+            // answering delays the exit by fifteen seconds at most and never
+            // holds it. `otlp::tests` pins the tracer's.
+            //
             // A failed final flush loses telemetry. `Drop` can't return, and
             // tracing may itself be mid-teardown, so report to stderr directly.
             if let Some(p) = self.tracer_provider.take()

@@ -282,6 +282,46 @@ mod tests {
         }
     }
 
+    /// `OpenTelemetry`'s `Drop` trusts each provider's `shutdown()` to stop
+    /// waiting on its final export — five seconds in opentelemetry_sdk 0.32 —
+    /// rather than bounding the flush itself. Pinned against a collector that
+    /// takes the connection and never answers, so an SDK bump that stretches or
+    /// drops that bound fails here instead of holding every stopping replica.
+    #[test]
+    fn a_collector_that_never_answers_holds_the_final_flush_no_longer_than_the_sdk_bound() {
+        use opentelemetry::trace::Tracer as _;
+
+        // Bound and never accepted: the kernel completes the handshake, so the
+        // export's request goes out and its answer never comes.
+        let collector = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+        let exporter = SpanExporter::builder()
+            .with_http()
+            .with_endpoint(format!(
+                "http://{}/v1/traces",
+                collector.local_addr().expect("its address")
+            ))
+            .with_protocol(Protocol::HttpBinary)
+            .build()
+            .expect("the exporter builds");
+        let provider = SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .build();
+        provider.tracer("pin").in_span("queued", |_| {});
+
+        let started = std::time::Instant::now();
+        let flushed = provider.shutdown();
+        let took = started.elapsed();
+
+        assert!(
+            flushed.is_err(),
+            "the final export never answered, so the flush cannot have succeeded",
+        );
+        assert!(
+            took >= std::time::Duration::from_secs(5) && took < std::time::Duration::from_secs(8),
+            "shutdown gave the export its five seconds and no more, took {took:?}",
+        );
+    }
+
     #[test]
     fn build_propagates_sample_ratio_through_resource() {
         // The sampler itself has no public accessor; what we can pin is that

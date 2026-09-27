@@ -1290,9 +1290,10 @@ own bound:
    - **HTTP** hands poem a graceful-shutdown timeout, `HttpConfig::shutdown_timeout`
      (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, pinned or from the environment: 25 s by
      default, under the kubelet's 30 s; 1 s to an hour). A connection still open
-     at the bound — an SSE stream, an MCP session, a WebSocket — is closed, with
-     one `warn` saying how many were. The request timeout bounds a handler, never a
-     streaming body, which is why this bound is the transport's own.
+     at the bound — a streaming body such as an SSE stream or an MCP session — is
+     closed, with one `warn` saying how many were. The request timeout bounds a
+     handler, never a streaming body, which is why this bound is the transport's
+     own.
    - **The Redis worker** stops fetching and drains within
      `RedisWorkerConfig::shutdown_timeout` (*A shutdown stays inside
      `shutdown_timeout`*, in the queue's entry below).

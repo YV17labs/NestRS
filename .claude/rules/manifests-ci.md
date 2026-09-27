@@ -62,6 +62,16 @@ taken**.
 `async-graphql-poem` carry `=7.2.1` because `nest-rs-graphql` reads that
 crate's public-but-internal registry API. Nothing else carries a patch.
 
+**The framework's own crates require each other in the same two components**
+(`"7.0"`), which at a lockstep release is the range `"7.0.0"` names. **Whether a
+surface crate should require its `*-macros` crate with `=` is an owner
+question.** In a patch release a macros crate may start emitting a path its
+surface crate gained in that same patch, and a partial `cargo update -p` can then
+pair macros 7.0.x with runtime 7.0.0 — which no two-component floor prevents. The
+usual answer is the `serde` / `serde_derive` pair's: the runtime requires its
+macros crate at `=` its own version. Possible and unbuilt; it would be a second
+documented exception to the form above.
+
 `versions_are_major_minor`
 (`crates/nest-rs-cli/src/commands/generate/cargo.rs`) walks the repo's
 manifests **and the ones the CLI generates** — the templates' raw-string

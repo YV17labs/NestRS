@@ -568,6 +568,19 @@ its `inventory` against it. Linked but unreachable ⇒ inert, with a boot
 `tracing::warn` so leftover code doesn't vanish silently. This is what
 makes per-app subsets work.
 
+**In a workspace of several apps that `warn` misreads one case, and which way
+to settle it is an owner question.** Two binaries linking one feature library
+each import the hosts they serve, so each warns about every host its sibling
+imports — the demo's api about the worker's `NotificationsTasks`, the worker
+about the api's `AudioTasks`, the assistant about two listeners — with
+`INERT_HOST_HINT`'s "import it, or delete the methods", which is wrong advice
+when another binary hosts them. The config report settled the same shape the
+other way: a namespace this binary does not link is another binary's, never a
+mistake. Possible and unbuilt: a host from a library crate the binary links but
+never imports the module of reported at `debug`, with `warn` kept for the
+binary's own crate — or, on the product's side, every host of one edge kept in
+one app.
+
 **The gate is always the entry's owner** — what differs is who the owner
 *is*, and that follows from what the entry is:
 

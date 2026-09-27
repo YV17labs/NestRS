@@ -57,6 +57,14 @@ Every other read uses `scoped`/`all`/`find_by_id`, which apply the
 ambient ability `WHERE`. Auditing the escapes is one grep per method
 name.
 
+**`Repo` has no scoped bulk delete, and whether it should is an owner
+question.** A retention purge therefore selects through
+`Repo::scoped(Action::Delete)` and deletes row by row through `Repo::delete`,
+bounded per run — the demo's notifications purge is that shape, a thousand rows
+an hour. A `Repo::delete_where(condition)`, one `DELETE … WHERE <ability scope>
+AND <condition>`, is possible and unbuilt; it would make such a purge one
+statement without leaving `Repo`.
+
 ## Two request-scoped `task_local!`s
 
 Singletons have no other way to read per-request state:
@@ -227,7 +235,9 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   for the rest of that statement and the connection stays out of the pool. Before
   one transaction per attempt, each statement auto-committed and an abandoned
   `pg_sleep` held nothing. Cancelling a statement server-side is not in sea-orm's
-  contract, so what the framework owes is the **event**: a `warn` on
+  contract — a statement timeout would be, and `SeaOrmConfig` exposes none, which
+  `framework.md` raises under *A port call the framework awaits is bounded* — so
+  what the framework owes is the **event**: a `warn` on
   `nest_rs::orm` (`outcome = "abandoned"`, the transport), from **two** guards
   rather than one. `LazyTransaction`'s own `Drop` covers a boundary abandoned
   before it settles; `AbandonedDuringSettle` covers the window settling itself

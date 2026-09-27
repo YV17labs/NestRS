@@ -288,8 +288,10 @@ What the window does depends on what the connection is doing:
 - **Idle** — a kept-alive connection with nothing in flight is closed at the
   signal; the window is not spent on it.
 - **A request still running** — is answered, and its connection closed after
-  the answer. If the window closes first, the connection is dropped: the
-  handler is cancelled where it waits, and the client gets no answer.
+  the answer. If the window closes first, the connection is dropped and the
+  client gets no answer: over HTTP/1.1 the handler is cancelled where it
+  waits; over HTTP/2, where hyper runs each stream as a task of its own, it
+  runs on until it finishes or the process ends.
 - **A stream** — an [`#[sse]` stream](/http/streaming/) or an MCP stream never
   finishes on its own, so it holds the window to its end and is cut there; the
   client's `EventSource` reconnects, to another replica once this one has left

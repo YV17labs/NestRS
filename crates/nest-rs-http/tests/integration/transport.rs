@@ -6,6 +6,7 @@
 //! is proved at its full length without the suite waiting it out.
 
 use std::net::TcpListener as StdTcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -35,6 +36,21 @@ const PATIENCE: Duration = Duration::from_secs(5);
 /// Told when the slow route has started, so shutdown is asked for while it runs.
 static STARTED: Notify = Notify::const_new();
 
+/// Told when the stuck route has started.
+static STUCK: Notify = Notify::const_new();
+
+/// Set when the stuck route's future is dropped — which is what cancelling it
+/// is.
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+struct SetOnDrop;
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        CANCELLED.store(true, Ordering::SeqCst);
+    }
+}
+
 #[controller(path = "/shutdown")]
 struct ShutdownController;
 
@@ -59,6 +75,17 @@ impl ShutdownController {
     #[public]
     async fn quick(&self) -> &'static str {
         "quick"
+    }
+
+    /// Waits on something that never comes, past the request timeout's reach:
+    /// the window closes first.
+    #[get("/stuck")]
+    #[public]
+    async fn stuck(&self) -> &'static str {
+        let _cancelled = SetOnDrop;
+        STUCK.notify_one();
+        std::future::pending::<()>().await;
+        "never"
     }
 }
 
@@ -273,6 +300,37 @@ async fn a_request_in_flight_when_shutdown_starts_is_answered_inside_the_window(
     assert!(head.starts_with("HTTP/1.1 200"), "answered: {head}");
     assert_eq!(read_to_end(&mut client).await, "answered");
     logs.expect_none(nest_rs_http::target::HTTP, CUT);
+}
+
+/// A request still running when the window closes is cut: its client gets no
+/// answer, its handler is dropped where it waits — over HTTP/1.1, hyper polls
+/// the handler inside the connection poem drops — and the line counts it.
+#[tokio::test]
+async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
+    let logs = LogCapture::install();
+    let serving = serve().await;
+    let mut client = request(serving.port, "/shutdown/stuck").await;
+    STUCK.notified().await;
+
+    let took = serving.stop().await;
+
+    let window = HttpConfig::default().shutdown_timeout;
+    assert!(
+        took >= window && took < window + Duration::from_secs(1),
+        "shutdown waited on the running request until the window closed, took {took:?}",
+    );
+    assert_eq!(
+        read_to_end(&mut client).await,
+        "",
+        "the client got no answer, not a byte of one",
+    );
+    assert!(
+        CANCELLED.load(Ordering::SeqCst),
+        "the handler was dropped where it waited",
+    );
+    let cut = logs.expect_one(nest_rs_http::target::HTTP, CUT);
+    assert_eq!(cut.field("cut").as_deref(), Some("1"));
+    assert_eq!(cut.field("upgraded_open").as_deref(), Some("0"));
 }
 
 /// An idle kept-alive connection has nothing in flight, so it is closed at the

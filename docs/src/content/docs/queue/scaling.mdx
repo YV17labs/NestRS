@@ -233,9 +233,9 @@ wake the deployment.
 
 ## What fails if you get it wrong
 
-- `concurrency = 0` does not compile: `` `concurrency` takes a whole number of at
-  least 1 — how many jobs of this method one worker replica runs at once; 0 would
-  never run a job ``.
+- `concurrency = 0` does not compile: `` #[process] `concurrency` takes a whole
+  number of at least 1 — how many jobs of this method one worker replica runs at
+  once; 0 would never run a job ``.
 - `throttle(limit = 10)` with no window does not compile:
   `` #[process] `throttle` needs both `limit` and `window` — write `throttle(limit = 10, window = "1m")` ``.
 - `window = "60"` does not compile: the window takes a duration literal, and a

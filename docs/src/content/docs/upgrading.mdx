@@ -103,8 +103,8 @@ rolls out (step 7).
    now say so with `replicas = "one"`, beside `RedisScheduleModule` — see
    [Firing once across replicas](/schedule/#firing-once-across-replicas).
 
-5. **Follow the renamed types and signatures.** Each row is a compile error
-   naming the old spelling, so the compiler finds every site:
+5. **Follow the renamed types and signatures.** Each row is a compile error, so
+   the compiler finds every site:
 
    | 6.x | 7.0 |
    |---|---|
@@ -116,6 +116,7 @@ rolls out (step 7).
    | `conn.manager()` | the connection itself — it is `ConnectionLike` and `Clone` |
    | `OpenTelemetryConfig::from_env(name)` | `OpenTelemetryConfig::from_env(name)?` |
    | `method.retries`, `method.queue` on a `ProcessMethod` | `method.options().retries()`, `method.queue()` |
+   | an `HttpConfig { … }` or `RedisWorkerConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout`, `RedisWorkerConfig` gains `orphan_after`, `lease` and `poll_interval` |
 
    `.opaque()` now takes an error that converts into `Box<dyn Error + Send +
    Sync>`, so it logs the whole cause chain; an error type that was only
@@ -128,16 +129,17 @@ rolls out (step 7).
    tracing::warn!(target: "features::chat", error = %error_message(&e), "broadcast failed");
    ```
 
-6. **If you write decorators on `nest_rs_codegen`**, one signature changed, one
-   helper left and one type was renamed. `transactional_value` names the
-   decorator, so its refusal opens with the site as every value refusal now does;
-   `must_be_async` is gone with the rule it worded — a method may be synchronous,
-   and `await_if_async` emits the call either way; `CrudConfig` is
-   `CrudDeclaration`.
+6. **If you write decorators on `nest_rs_codegen`**, two signatures changed, one
+   helper left and one type was renamed. `transactional_value` and
+   `job_argument_needs_a_value` take the `JobDecorator` they word for, so a
+   refusal opens with the site as every value refusal now does, and `job_key`
+   reads a key against the job family's one table; `must_be_async` is gone with
+   the rule it worded — a method may be synchronous, and `await_if_async` emits
+   the call either way; `CrudConfig` is `CrudDeclaration`.
 
    ```rust title="nest_rs_codegen::transactional_value" del={1} ins={2}
    let transactional = nest_rs_codegen::transactional_value(&meta.value)?;
-   let transactional = nest_rs_codegen::transactional_value("every", &meta.value)?;
+   let transactional = nest_rs_codegen::transactional_value(JobDecorator::Every, &meta.value)?;
    ```
 
 7. **Move each Redis queue's jobs out of the 6.x layout.** 6.x kept a queue's
@@ -147,7 +149,7 @@ rolls out (step 7).
    [Upgrading queues from 6.x](/queue/upgrading/) is the procedure for both, and
    the 7.0 worker's boot refuses to start while 6.x jobs wait.
 
-8. **Update the deployment around Redis.**
+8. **Update the deployment around Redis and shutdown.**
 
    - **KEDA** reads `nestrs:queue:<queue>:active`: a trigger naming the 6.x list
      reads zero forever. Keep `minReplicaCount: 1` on a queue that takes delayed
@@ -162,9 +164,28 @@ rolls out (step 7).
      `NESTRS_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and
      `TLS_KEY` a client certificate, each with its `_FILE` form, and `#insecure`
      fails the boot — see the [Redis variables](/configuration/env-reference/#redis--nestrs_redis__).
-   - **Shutdown**: the worker hands back what still runs before
-     `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes, so give the pod a grace
-     period above it — see [Shutdown](/queue/delivery/#shutdown).
+   - **Shutdown** now ends within bounds you can read. HTTP closes what is still
+     open — a stream, a slow upload — once `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`
+     runs out, 25 seconds by default, where 6.x waited for every connection; the
+     worker hands back what still runs before
+     `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes, 30 by default. Give the
+     pod a grace period above the drain its process runs — see
+     [Shutdown](/queue/delivery/#shutdown). A shutdown hook such as
+     `OnApplicationShutdown` runs under a bound too, and is abandoned past it with
+     a `warn` naming the hook.
+   - **The worker fetches up to a method's `concurrency` per poll**, every
+     `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` (100 by default), so a busy replica
+     can hold that many jobs it has not started, out of a trigger's sight — size a
+     KEDA `listLength` per running slot; see
+     [Fetching on Redis](/queue/scaling/#fetching-on-redis).
+   - **Every duration has a range**, checked at boot whether it comes from the
+     environment or is pinned in code, and a value outside it fails the boot
+     naming the variable: the worker's `ORPHAN_AFTER_SECS` from 5 seconds to a
+     day, `LEASE_SECS` from 1 second to half of it, `POLL_INTERVAL_MS` from 10
+     milliseconds to the orphan threshold and `SHUTDOWN_TIMEOUT_SECS` up to an
+     hour, and HTTP's `SHUTDOWN_TIMEOUT_SECS` from 1 to 3600. A drain window 6.x
+     accepted above an hour has to come down — see the
+     [worker's variables](/configuration/env-reference/#redis__worker--nestrs_redis__worker__).
    - **Redis 6.2 or later, and no Cluster** — the limits of apalis 0.7 the
      [delivery page](/queue/delivery/#limits) states.
 
@@ -195,6 +216,11 @@ rolls out (step 7).
 - **A 7.0 worker started beside 6.x jobs** refuses to start, naming the keys that
   still hold them and both ways out; nothing is lost. Finish step 7 — the refusal
   is quoted on [Upgrading queues from 6.x](/queue/upgrading/).
+- **A duration outside its range** — a poll under 10 ms, a drain window above an
+  hour — fails the boot naming the variable and why the bound is there, whether
+  the value came from the environment or was pinned in code; the poll's refusal
+  is quoted under
+  [Concurrency and scaling](/queue/scaling/#what-fails-if-you-get-it-wrong).
 - **A queue per runtime key** — `#[queue(prefix = ..)]` — does not compile: 7.0
   offers none, since each queue is a list every worker replica polls. Declare one
   queue and carry the key in the job.
@@ -220,7 +246,7 @@ rolls out (step 7).
   the receipt; `crates/nest-rs-queue/tests/integration/diagnostics/` — each
   `#[queue]` and `#[process]` refusal, pinned.
 - `crates/nest-rs-schedule-macros/src/scheduled.rs` — `transactional_value`
-  called with the decorator's name, as step 6 writes it.
+  called with the `JobDecorator` it words for, as step 6 writes it.
 - `crates/nest-rs-redis/src/error.rs` — the boot's refusals: a 6.x layout, an
   `#insecure` URL, TLS that cannot work.
 

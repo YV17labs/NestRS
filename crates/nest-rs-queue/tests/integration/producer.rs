@@ -3,17 +3,24 @@
 //! sees a job, and each push-time declaration a backend without its capability
 //! cannot honour is refused at the push — as a cancel is refused before the
 //! backend sees it, and says what it removed.
+//!
+//! **And the net under every call.** A backend that never answers holds a push
+//! or a cancel for `BACKEND_TIMEOUT` and no longer, the error naming the queue
+//! and the call; one answering inside it is waited for; and a push of many
+//! reaches the backend `ENQUEUE_BATCH` jobs at a time, so the net bounds a call
+//! of known size — proved on a paused clock, so the suite never waits it out.
 
 use std::sync::Mutex;
 use std::time::Duration;
 
 use nest_rs_queue::{
-    Capabilities, Capability, Envelope, JobId, JobProducer, JobProducerExt, PushOptions,
-    PushReceipt, QueueBackend, QueueError, QueueName, WIRE_FORMAT_VERSION, async_trait,
+    BACKEND_TIMEOUT, Capabilities, Capability, ENQUEUE_BATCH, Envelope, JobId, JobProducer,
+    JobProducerExt, PushOptions, PushReceipt, QueueBackend, QueueError, QueueName,
+    WIRE_FORMAT_VERSION, async_trait,
 };
 use serde_json::{Value, json};
 
-use crate::{BARE, FULL, TranscodeCommand, TranscodeQueue};
+use crate::{BARE, FULL, TranscodeCommand, TranscodeQueue, within_twice_the_net};
 
 /// One call the port made to the backend: the queue, the envelopes as stored,
 /// the options.
@@ -616,4 +623,202 @@ async fn cancellation_declared_and_not_implemented_is_named_a_driver_defect() {
             "{cause}"
         );
     }
+}
+
+/// A push of more jobs than one call carries reaches the backend a batch at a
+/// time, in order, and still answers one receipt per job in input order — so
+/// the net bounds a call of known size, whatever the size of the push.
+#[tokio::test]
+async fn a_push_of_more_than_a_batch_reaches_the_backend_a_batch_at_a_time_in_order() {
+    let producer = RecordingProducer::on(&BARE);
+    let jobs = ENQUEUE_BATCH * 2 + 1;
+    let receipts = producer
+        .push_many(
+            TranscodeQueue,
+            (0..jobs).map(|n| TranscodeCommand {
+                file: format!("{n}.wav"),
+            }),
+            None,
+        )
+        .await
+        .expect("a bulk push needs no capability");
+
+    let filed = producer.filed();
+    assert_eq!(
+        filed
+            .iter()
+            .map(|(_, envelopes, _)| envelopes.len())
+            .collect::<Vec<_>>(),
+        [ENQUEUE_BATCH, ENQUEUE_BATCH, 1],
+        "full batches first, the remainder last",
+    );
+    let sealed: Vec<Value> = filed
+        .iter()
+        .flat_map(|(_, envelopes, _)| envelopes.iter().map(|envelope| envelope["id"].clone()))
+        .collect();
+    let receipted: Vec<Value> = receipts
+        .iter()
+        .map(|receipt| json!(receipt.id().to_string()))
+        .collect();
+    assert_eq!(
+        sealed, receipted,
+        "the batches keep the input order, and so do the receipts"
+    );
+    assert_eq!(
+        filed[2].1[0]["payload"],
+        json!({ "file": format!("{}.wav", jobs - 1) }),
+    );
+}
+
+// --- the net ------------------------------------------------------------------
+
+/// A backend that answers its first `answered` calls to `enqueue` after `delay`,
+/// then no call at all — a store gone silent behind a network that still takes
+/// the dial. Its cancels never answer.
+struct SilentProducer {
+    answered: usize,
+    delay: Duration,
+    /// How many envelopes each call to `enqueue` carried, in order.
+    calls: Mutex<Vec<usize>>,
+}
+
+impl SilentProducer {
+    fn answering(answered: usize, delay: Duration) -> Self {
+        Self {
+            answered,
+            delay,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> Vec<usize> {
+        self.calls.lock().expect("lock").clone()
+    }
+}
+
+#[async_trait]
+impl JobProducer for SilentProducer {
+    fn backend(&self) -> &'static QueueBackend {
+        &FULL
+    }
+
+    async fn enqueue(
+        &self,
+        _queue: &QueueName,
+        envelopes: Vec<Envelope>,
+        _options: &PushOptions,
+    ) -> Result<(), QueueError> {
+        let call = {
+            let mut calls = self.calls.lock().expect("lock");
+            calls.push(envelopes.len());
+            calls.len()
+        };
+        if call > self.answered {
+            std::future::pending::<()>().await;
+        }
+        tokio::time::sleep(self.delay).await;
+        Ok(())
+    }
+
+    async fn remove(&self, _queue: &QueueName, _id: &JobId) -> Result<bool, QueueError> {
+        std::future::pending().await
+    }
+
+    async fn remove_unique(&self, _queue: &QueueName, _key: &str) -> Result<bool, QueueError> {
+        std::future::pending().await
+    }
+}
+
+/// Whether `error` is the net's answer to `call` on the queue named `queue`,
+/// and says so naming the queue.
+fn unanswered(error: &QueueError, queue: &str, call: &str) -> bool {
+    matches!(
+        error,
+        QueueError::Unanswered { queue: named, call: said } if named.as_str() == queue && *said == call
+    ) && error.to_string().contains(&format!("on queue `{queue}`"))
+}
+
+/// A push the backend never answers holds its caller for the net and no
+/// longer, and fails naming the queue and the call.
+#[tokio::test(start_paused = true)]
+async fn a_push_the_backend_never_answers_fails_at_the_net_naming_the_queue() {
+    let producer = SilentProducer::answering(0, Duration::ZERO);
+    let started = tokio::time::Instant::now();
+    let refused = within_twice_the_net(producer.push(TranscodeQueue, song(), None))
+        .await
+        .expect_err("the backend never answered");
+    let waited = started.elapsed();
+
+    assert!(
+        unanswered(&refused, "transcode", "JobProducer::enqueue"),
+        "{refused:?}"
+    );
+    assert!(
+        waited >= BACKEND_TIMEOUT && waited < BACKEND_TIMEOUT + Duration::from_secs(1),
+        "the push waited the net and no longer, not {waited:?}",
+    );
+}
+
+/// A cancel the backend never answers fails at the net the same way — by
+/// receipt, and by unique key.
+#[tokio::test(start_paused = true)]
+async fn a_cancel_the_backend_never_answers_fails_at_the_net_naming_the_queue() {
+    let producer = SilentProducer::answering(1, Duration::ZERO);
+    let receipt = producer
+        .push(TranscodeQueue, song(), None)
+        .await
+        .expect("the push is answered");
+
+    let refused = within_twice_the_net(producer.cancel(&receipt))
+        .await
+        .expect_err("the backend never answered the cancel");
+    assert!(
+        unanswered(&refused, "transcode", "JobProducer::remove"),
+        "{refused:?}"
+    );
+    let refused = within_twice_the_net(producer.cancel_unique(TranscodeQueue, HELD_KEY))
+        .await
+        .expect_err("the backend never answered the cancel");
+    assert!(
+        unanswered(&refused, "transcode", "JobProducer::remove_unique"),
+        "{refused:?}"
+    );
+}
+
+/// The net is a net, never a budget: a backend answering just inside it is
+/// waited for, and its answer is the push's.
+#[tokio::test(start_paused = true)]
+async fn a_backend_answering_inside_the_net_is_waited_for() {
+    let producer = SilentProducer::answering(1, BACKEND_TIMEOUT - Duration::from_millis(1));
+    producer
+        .push(TranscodeQueue, song(), None)
+        .await
+        .expect("answered inside the net");
+}
+
+/// A push of many the net cuts short fails naming the call, and nothing is
+/// handed to the backend after it: the batch answered before it is queued, as
+/// the push's contract says a prefix may be.
+#[tokio::test(start_paused = true)]
+async fn a_push_of_many_the_net_cuts_short_stops_at_the_batch_never_answered() {
+    let producer = SilentProducer::answering(1, Duration::ZERO);
+    let refused = within_twice_the_net(producer.push_many(
+        TranscodeQueue,
+        (0..=ENQUEUE_BATCH).map(|n| TranscodeCommand {
+            file: format!("{n}.wav"),
+        }),
+        None,
+    ))
+    .await
+    .expect_err("the second batch is never answered");
+
+    assert!(
+        unanswered(&refused, "transcode", "JobProducer::enqueue"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        producer.calls(),
+        [ENQUEUE_BATCH, 1],
+        "the first batch was answered, the second never was, and nothing followed it",
+    );
 }

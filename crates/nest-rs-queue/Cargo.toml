@@ -41,9 +41,15 @@ nest-rs-worker.workspace = true
 futures-util.workspace = true
 # The `JobId` a push mints: a UUID v7, so ids sort in push order.
 uuid.workspace = true
+# The net on every backend call (`BACKEND_TIMEOUT`): a backend that never
+# answers fails the push, the cancel or the checkpoint at it, rather than holding
+# its caller for as long as it stays silent.
+tokio.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
+# `test-util` (not part of tokio's `full`) pauses time, so a backend that never
+# answers meets the net without the suite waiting its twenty seconds out.
+tokio = { workspace = true, features = ["test-util"] }
 # `consume`'s tests assert the events a job attempt files, not only its outcome.
 nest-rs-testing = { path = "../nest-rs-testing" }
 serde.workspace = true

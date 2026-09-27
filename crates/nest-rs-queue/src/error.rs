@@ -10,7 +10,7 @@
 use thiserror::Error;
 
 use crate::capability::unsupported;
-use crate::{Capability, JobId, PushOptions, QueueName};
+use crate::{BACKEND_TIMEOUT, Capability, JobId, PushOptions, QueueName};
 
 /// A failure of a queue operation: a push, a cancel, or a checkpoint save.
 #[derive(Debug, Error)]
@@ -23,6 +23,26 @@ pub enum QueueError {
     /// `source`, kept opaque so the port names no backend.
     #[error("the queue backend failed")]
     Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The backend did not answer a call within [`BACKEND_TIMEOUT`], and the
+    /// port stopped waiting.
+    ///
+    /// Not answering is not refusing: the backend may still carry the call out
+    /// once it answers again — a push then files its jobs, which run; a cancel
+    /// then cancels. So a caller that pushes again after this error enqueues
+    /// the job twice, unless the push carries a unique key — the same as after
+    /// any failure to answer.
+    #[error(
+        "the queue backend did not answer `{call}` on queue `{queue}` within {timeout:?}, and the \
+         port stopped waiting — the backend may still carry the call out once it answers",
+        timeout = BACKEND_TIMEOUT,
+    )]
+    Unanswered {
+        /// The queue the call was made for.
+        queue: QueueName,
+        /// The backend method that did not answer, named by its trait —
+        /// `JobProducer::enqueue`, `CheckpointStore::save`.
+        call: &'static str,
+    },
     /// The operation needs a capability its backend does not declare, and was
     /// refused before the backend saw it.
     #[error("{}", unsupported(*capability, backend, None))]

@@ -16,6 +16,10 @@
 //!
 //! Every test pushing where no worker drains files under a name of its own, or
 //! under a key of its own, and forgets what it filed.
+//!
+//! And a push through a Redis gone silent fails within one connection budget,
+//! with the connection's own cause — the first push to a queue included, whose
+//! 6.x check runs beside its filing — so the port's net never answers first.
 
 use std::time::{Duration, Instant};
 
@@ -24,7 +28,8 @@ use nest_rs_queue::{
     JobId, JobProducerExt, PushOptions, PushReceipt, QueueError, QueueName, processor, queue,
 };
 use nest_rs_redis::{
-    RedisConfig, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorkerModule,
+    RedisConfig, RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer,
+    RedisWorkerModule,
 };
 use nest_rs_testing::TestApp;
 use serde::{Deserialize, Serialize};
@@ -422,4 +427,65 @@ async fn cancellation_answers_true_once_for_a_waiting_job_and_false_for_one_neve
         "a job the backend never knew is not cancelled",
     );
     crate::forget(&queue).await;
+}
+
+/// A push through a Redis gone silent fails at the connection's budget as the
+/// connection's own failure, naming the variable that sets it — within one
+/// budget, although it is this process's first push to the queue and so runs
+/// the 6.x check too: the check runs beside the filing, where in front of it
+/// the push would wait out two budgets, and the port's net could answer first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_through_a_silent_redis_fails_within_one_budget_naming_it() {
+    let proxy = crate::DarkeningProxy::start().await;
+    let budget = Duration::from_secs(1);
+    let mut conn = RedisConnection::connect(&RedisConfig {
+        url: proxy.url(),
+        connect_timeout: budget,
+        ..RedisConfig::default()
+    })
+    .await
+    .expect("connect through the proxy");
+    let producer = RedisQueueProducer::new(conn.clone());
+
+    proxy.go_dark();
+    // The first command to fail is where the client starts reopening the
+    // connection; from there, every command waits on one nothing answers.
+    let mut saw_the_drop = false;
+    for _ in 0..50 {
+        if redis::cmd("PING")
+            .query_async::<()>(&mut conn)
+            .await
+            .is_err()
+        {
+            saw_the_drop = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        saw_the_drop,
+        "the proxy going dark must drop the connection"
+    );
+
+    let queue = format!("nestrs-e2e-silent-{}", crate::this_run());
+    let started = Instant::now();
+    let refused = producer
+        .push_json(&queue, json!({ "probe": true }), None)
+        .await
+        .expect_err("nothing answers once the proxy is dark");
+    let took = started.elapsed();
+
+    assert!(
+        matches!(refused, QueueError::Backend(_)),
+        "the connection's own failure, not the port's net: {refused:?}"
+    );
+    let cause = nest_rs_core::error_message(&refused);
+    assert!(
+        cause.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+        "{cause}"
+    );
+    assert!(
+        took < budget * 3 / 2,
+        "one budget, not the check's and the filing's in a row: took {took:?}"
+    );
 }

@@ -130,6 +130,12 @@ on its next tick, and said at `warn`. A heartbeat that keeps failing past the
 orphan threshold lets a peer take the replica's jobs — the case the lease
 exists for.
 
+A push, a cancel and a checkpoint's read or save fail within one budget of Redis
+going silent too: none sends a second command after one that got no answer, so
+the caller reads the connection's cause before the queue port's own net, twenty
+seconds, gives up on the call — see
+[When a push fails](/queue/producing-jobs/#when-a-push-fails).
+
 **An attempt has no timeout of its own.** A handler that never returns holds its
 permit and keeps its lease renewed, so its job is neither lost nor run elsewhere,
 and its method runs one attempt fewer at a time until a shutdown interrupts it.

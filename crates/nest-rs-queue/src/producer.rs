@@ -18,16 +18,32 @@
 //! capability implements [`remove`](JobProducer::remove) and
 //! [`remove_unique`](JobProducer::remove_unique); one declaring it and
 //! implementing neither is told so, as the driver defect it is.
+//!
+//! **Every call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at most.** A backend that
+//! does not answer by then is dropped where it stands, and the caller gets
+//! [`QueueError::Unanswered`], naming the queue — a push or a cancel never
+//! holds its caller for as long as a backend stays silent. A push of many jobs
+//! reaches the backend [`ENQUEUE_BATCH`] at a time, so the net bounds a call a
+//! healthy backend always answers in time, whatever the push's size.
 
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::backend::bounded;
 use crate::error::Unimplemented;
 use crate::push_options::check_unique_key;
 use crate::{
     Capabilities, Capability, Destination, Envelope, JobId, PushOptions, PushReceipt, QueueBackend,
     QueueError, QueueName, TARGET, envelope,
 };
+
+/// The most jobs the port hands a backend's [`JobProducer::enqueue`] in one
+/// call. A push of more is filed in calls of this many, in order, each under
+/// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT): the net then bounds a call of known size, which a
+/// healthy backend answers well inside it — a hundred jobs are a hundred round
+/// trips on the Redis adapter, well under a second on a healthy Redis — rather
+/// than a call as long as the push, which a healthy backend could not.
+pub const ENQUEUE_BATCH: usize = 100;
 
 /// What a queue backend implements to enqueue jobs. Inject it as
 /// `Arc<dyn JobProducer>` and push through [`JobProducerExt`].
@@ -45,6 +61,14 @@ pub trait JobProducer: Send + Sync + 'static {
     /// job by ([`Envelope::id`]) and never replaces with one of its own. Not
     /// atomic across envelopes: when it fails, some prefix of them may already be
     /// enqueued, and the error does not say how many.
+    ///
+    /// `envelopes` holds [`ENQUEUE_BATCH`] at most, and the port waits
+    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) for the answer: past it the call is dropped where it
+    /// stands and the caller told [`QueueError::Unanswered`]. So bound each round
+    /// trip well inside the net — a net is the last resort, never a budget — and
+    /// leave nothing a dropped call would have had to undo: what an enqueue
+    /// opened and never filed lapses on its own, as it does after any failure to
+    /// answer.
     ///
     /// A backend declaring [`Capability::UniquePush`] refuses an envelope whose
     /// key another job on `queue` still holds with [`QueueError::UniqueKeyHeld`],
@@ -65,8 +89,9 @@ pub trait JobProducer: Send + Sync + 'static {
     /// started is left to run to its outcome. Cancelling a job is its terminal
     /// outcome, so the backend releases what the job held: its unique key, and
     /// its checkpoint. Called by the port only, on a backend declaring
-    /// [`Capability::Cancellation`]; such a backend overrides this body, which
-    /// answers the driver defect when it does not.
+    /// [`Capability::Cancellation`], and waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at
+    /// most; such a backend overrides this body, which answers the driver defect
+    /// when it does not.
     async fn remove(&self, queue: &QueueName, id: &JobId) -> Result<bool, QueueError> {
         let _ = (queue, id);
         Err(unimplemented(self.backend(), "remove"))
@@ -78,8 +103,9 @@ pub trait JobProducer: Send + Sync + 'static {
     /// finished, or no job holds the key.
     ///
     /// Called by the port only, after it checked `key`, on a backend declaring
-    /// [`Capability::UniquePush`] and [`Capability::Cancellation`]; such a backend
-    /// overrides this body, which answers the driver defect when it does not.
+    /// [`Capability::UniquePush`] and [`Capability::Cancellation`], and waited on
+    /// for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at most; such a backend overrides this body, which
+    /// answers the driver defect when it does not.
     async fn remove_unique(&self, queue: &QueueName, key: &str) -> Result<bool, QueueError> {
         let _ = (queue, key);
         Err(unimplemented(self.backend(), "remove_unique"))
@@ -116,8 +142,9 @@ pub trait JobProducerExt: JobProducer {
     /// declare, [`QueueError::InvalidQueueName`] or
     /// [`QueueError::InvalidUniqueKey`] for a value no backend could file,
     /// [`QueueError::Serialize`] for a payload that does not serialize,
-    /// [`QueueError::UniqueKeyHeld`] for a unique key another job still holds, and
-    /// with whatever the backend returns otherwise.
+    /// [`QueueError::UniqueKeyHeld`] for a unique key another job still holds,
+    /// [`QueueError::Unanswered`], naming the queue, for a backend silent past
+    /// [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT), and with whatever the backend returns otherwise.
     ///
     /// A backend's failure is a failure to *answer*: the write may have reached
     /// the backend and its reply not come back, in which case the job is enqueued
@@ -140,14 +167,17 @@ pub trait JobProducerExt: JobProducer {
         push_value(self, &queue, payload, &options).await
     }
 
-    /// Push every job of `jobs` onto `destination`, in one call to the backend,
-    /// returning one receipt per job in input order.
+    /// Push every job of `jobs` onto `destination`, in calls to the backend of
+    /// [`ENQUEUE_BATCH`] jobs at most, in order, returning one receipt per job in
+    /// input order.
     ///
-    /// Not atomic: when it fails, some prefix of the jobs may already be queued,
-    /// and the error does not say how many, so a caller retrying the whole batch
-    /// can queue a job twice. A delay applies to every job; a unique key names
-    /// one job and is refused here with [`QueueError::InvalidOptions`] — push jobs
-    /// that each need one with [`push`](Self::push).
+    /// Not atomic: when it fails, the jobs of the calls before the failing one
+    /// are queued and some prefix of its own may be, and the error does not say
+    /// how many, so a caller retrying the whole batch can queue a job twice. Each
+    /// call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at most. A delay applies to
+    /// every job; a unique key names one job and is refused here with
+    /// [`QueueError::InvalidOptions`] — push jobs that each need one with
+    /// [`push`](Self::push).
     async fn push_many<D, I, O>(
         &self,
         destination: D,
@@ -218,7 +248,12 @@ pub trait JobProducerExt: JobProducer {
         let queue = receipt.queue();
         self.backend()
             .check(Capabilities::NONE.with(Capability::Cancellation))?;
-        let removed = self.remove(queue, receipt.id()).await?;
+        let removed = bounded(
+            queue,
+            "JobProducer::remove",
+            self.remove(queue, receipt.id()),
+        )
+        .await?;
         if removed {
             tracing::info!(
                 target: TARGET,
@@ -250,7 +285,12 @@ pub trait JobProducerExt: JobProducer {
                 .with(Capability::UniquePush)
                 .with(Capability::Cancellation),
         )?;
-        let removed = self.remove_unique(&queue, key).await?;
+        let removed = bounded(
+            &queue,
+            "JobProducer::remove_unique",
+            self.remove_unique(&queue, key),
+        )
+        .await?;
         if removed {
             tracing::info!(
                 target: TARGET,
@@ -289,8 +329,14 @@ async fn push_values<P: JobProducer + ?Sized>(
         .iter()
         .map(|envelope| PushReceipt::new(queue.clone(), envelope.id().clone()))
         .collect();
-    producer.enqueue(queue, envelopes, options).await?;
-    Ok(receipts)
+    let mut envelopes = envelopes.into_iter();
+    loop {
+        let batch: Vec<Envelope> = envelopes.by_ref().take(ENQUEUE_BATCH).collect();
+        if batch.is_empty() {
+            return Ok(receipts);
+        }
+        enqueue(producer, queue, batch, options).await?;
+    }
 }
 
 /// [`push_values`] for one job, answering its one receipt.
@@ -303,8 +349,23 @@ async fn push_value<P: JobProducer + ?Sized>(
     refuse_what_no_push_may_carry(producer.backend(), options)?;
     let envelope = envelope::seal(payload, JobId::mint(), options.unique_key());
     let receipt = PushReceipt::new(queue.clone(), envelope.id().clone());
-    producer.enqueue(queue, vec![envelope], options).await?;
+    enqueue(producer, queue, vec![envelope], options).await?;
     Ok(receipt)
+}
+
+/// One call to the backend's [`JobProducer::enqueue`], under the net.
+async fn enqueue<P: JobProducer + ?Sized>(
+    producer: &P,
+    queue: &QueueName,
+    envelopes: Vec<Envelope>,
+    options: &PushOptions,
+) -> Result<(), QueueError> {
+    bounded(
+        queue,
+        "JobProducer::enqueue",
+        producer.enqueue(queue, envelopes, options),
+    )
+    .await
 }
 
 /// Refuse options no backend could honour, and those `backend` does not

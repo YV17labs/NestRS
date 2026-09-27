@@ -84,6 +84,15 @@ impl TranscodeProcessor {
     }
 }
 
+/// `answer`, or a panic once twice the port's net has passed — so a net lost
+/// fails its test instead of hanging it.
+async fn within_twice_the_net<T>(answer: impl std::future::Future<Output = T>) -> T {
+    let deadline = nest_rs_queue::BACKEND_TIMEOUT * 2;
+    tokio::time::timeout(deadline, answer)
+        .await
+        .unwrap_or_else(|_| panic!("no answer within twice the port's net ({deadline:?})"))
+}
+
 /// The inventory entry `#[processor]` submitted for `name`.
 fn method(name: &str) -> &'static ProcessMethod {
     nest_rs_core::inventory::iter::<ProcessMethod>()

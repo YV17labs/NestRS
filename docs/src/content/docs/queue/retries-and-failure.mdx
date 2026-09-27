@@ -113,6 +113,12 @@ would resume past rows that were undone. A checkpoint needs a backend declaring
 long as the job's other records — see
 [Delivery on Redis](/queue/delivery/#what-a-job-keeps-and-for-how-long).
 
+A store that does not answer within the port's net — `BACKEND_TIMEOUT`, twenty
+seconds — fails the attempt, retryably: the read before your method runs does
+so on its own, and a save does when you return its error with `?`. The clear at
+the job's end comes after the attempt, so a store that does not answer it is
+said at `warn` and the outcome stands.
+
 ## Where failed jobs go
 
 A dead-lettered job's id lands in the queue's `dead` set, and the reason in

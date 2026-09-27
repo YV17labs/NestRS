@@ -249,7 +249,7 @@ impl Delivery {
     /// Keep this job's checkpoint in `store` — for a method whose options
     /// declare a checkpoint. The store is the job's: keyed by [`id`](Self::id).
     pub fn with_checkpoint(mut self, store: Arc<dyn CheckpointStore>) -> Self {
-        self.checkpoints = Some(Arc::new(CheckpointCell::new(store)));
+        self.checkpoints = Some(Arc::new(CheckpointCell::new(store, self.queue.clone())));
         self
     }
 

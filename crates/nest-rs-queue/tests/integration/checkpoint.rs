@@ -1,6 +1,11 @@
 //! A `Checkpoint<S>` parameter through an attempt: what one attempt saves, the
 //! next attempt at the same job reads, and the job's end clears it — the port's
 //! promise, on every backend.
+//!
+//! A store that never answers meets the port's net: a read or a save fails the
+//! attempt, retryably, naming the queue and the call, and a clear at the job's
+//! end is said while the outcome stands — on a paused clock, so the suite never
+//! waits the net out.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,7 +19,7 @@ use nest_rs_queue::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{FULL, method};
+use crate::{FULL, method, within_twice_the_net};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImportCommand {
@@ -191,5 +196,119 @@ async fn a_checkpoint_the_store_cannot_clear_is_said_and_the_outcome_stands() {
         left.field("error")
             .is_some_and(|error| error.contains("the store went away")),
         "{left:#?}"
+    );
+}
+
+/// A store answering from memory, but for `silent`, the one call it never
+/// answers — a store gone quiet behind a network that still takes the dial.
+struct SilentStore {
+    silent: &'static str,
+    saved: Mutex<Option<Value>>,
+}
+
+impl SilentStore {
+    fn silent_on(silent: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            silent,
+            saved: Mutex::new(None),
+        })
+    }
+
+    async fn answer(&self, call: &str) {
+        if self.silent == call {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[async_trait]
+impl CheckpointStore for SilentStore {
+    async fn load(&self) -> Result<Option<Value>, QueueError> {
+        self.answer("load").await;
+        Ok(self.saved.lock().expect("lock").clone())
+    }
+
+    async fn save(&self, state: Value) -> Result<(), QueueError> {
+        self.answer("save").await;
+        *self.saved.lock().expect("lock") = Some(state);
+        Ok(())
+    }
+
+    async fn clear(&self) -> Result<(), QueueError> {
+        self.answer("clear").await;
+        *self.saved.lock().expect("lock") = None;
+        Ok(())
+    }
+}
+
+fn silent_delivery(queue: &str, store: &Arc<SilentStore>) -> Delivery {
+    Delivery::new(
+        &FULL,
+        QueueName::new(queue.to_owned()).expect("a valid name"),
+        json!({ "v": WIRE_FORMAT_VERSION, "payload": { "rows": 10 } }),
+    )
+    .with_checkpoint(store.clone())
+}
+
+/// A store that never answers the read, or the save, fails the attempt at the
+/// net, retryably, and the retry's line names the call and the queue.
+#[tokio::test(start_paused = true)]
+async fn a_checkpoint_the_store_never_reads_or_saves_fails_the_attempt_retryably() {
+    for call in ["load", "save"] {
+        let logs = nest_rs_testing::LogCapture::install();
+        let store = SilentStore::silent_on(call);
+        let container = Container::builder().provide(ImportProcessor).build();
+        let mut delivery = silent_delivery("imports", &store);
+
+        let outcome = within_twice_the_net(consume::attempt(
+            method("ImportProcessor::import"),
+            &mut delivery,
+            container,
+        ))
+        .await;
+        assert!(
+            matches!(outcome, AttemptOutcome::Retry { .. }),
+            "{call}: {outcome:?}"
+        );
+        let retried = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "job failed; will retry within the budget",
+        );
+        let error = retried.field("error").unwrap_or_default();
+        assert!(
+            error.contains(&format!("`CheckpointStore::{call}` on queue `imports`")),
+            "{call}: {error}"
+        );
+    }
+}
+
+/// A store that never answers the clear at the job's end is said at `warn`,
+/// naming the call and the queue, and the outcome stands.
+#[tokio::test(start_paused = true)]
+async fn a_checkpoint_the_store_never_clears_is_said_and_the_outcome_stands() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let store = SilentStore::silent_on("clear");
+    let container = Container::builder().provide(ImportProcessor).build();
+    let mut delivery = silent_delivery("one-shot-imports", &store);
+
+    let outcome = within_twice_the_net(consume::attempt(
+        method("ImportProcessor::import_once"),
+        &mut delivery,
+        container,
+    ))
+    .await;
+    assert!(
+        matches!(outcome, AttemptOutcome::DeadLetter(_)),
+        "the outcome was decided before the clear: {outcome:?}"
+    );
+    let left = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job checkpoint not cleared at its terminal outcome",
+    );
+    assert_eq!(left.level, "warn");
+    let error = left.field("error").unwrap_or_default();
+    assert!(
+        error.contains("`CheckpointStore::clear` on queue `one-shot-imports`"),
+        "{error}"
     );
 }

@@ -31,7 +31,12 @@
 //!    it. The port has already refused every option the backend does not declare,
 //!    and answers the caller with the [`PushReceipt`]s itself. A backend declaring
 //!    [`Capability::Cancellation`] implements `remove` too, and `remove_unique`
-//!    beside [`Capability::UniquePush`].
+//!    beside [`Capability::UniquePush`]. The port hands `enqueue`
+//!    [`ENQUEUE_BATCH`] envelopes at most, and waits [`BACKEND_TIMEOUT`] for the
+//!    answer to every call it makes — these three and a [`CheckpointStore`]'s —
+//!    before dropping it and answering [`QueueError::Unanswered`]: bound your own
+//!    round trips well inside that net, so an outage reaches the caller as your
+//!    failure, with its cause.
 //!    Bind it as `Arc<dyn JobProducer>` with
 //!    `ContainerBuilder::provide_declared_factory_after`, carrying
 //!    [`BACKEND_REMEDY`]: **two backends imported is a boot error naming both**.
@@ -90,7 +95,7 @@ pub mod consume;
 // are a procedure and a constant, read as `consume::attempt` and `unit::JOB`.
 mod envelope;
 
-pub use backend::{BACKEND_REMEDY, QueueBackend};
+pub use backend::{BACKEND_REMEDY, BACKEND_TIMEOUT, QueueBackend};
 pub use capability::{Capabilities, Capability};
 pub use checkpoint::{Checkpoint, CheckpointStore};
 // `CheckpointCell` is the type of a `pub` field on the exported `HandlerContext`,
@@ -107,7 +112,7 @@ pub use inventory::{HandlerContext, JobHandler};
 pub use job::Job;
 pub use job_id::JobId;
 pub use process_options::{ProcessOptions, Throttle};
-pub use producer::{JobProducer, JobProducerExt};
+pub use producer::{ENQUEUE_BATCH, JobProducer, JobProducerExt};
 pub use push_options::{Delay, PushOptions};
 pub use push_receipt::PushReceipt;
 pub use queue::Queue;

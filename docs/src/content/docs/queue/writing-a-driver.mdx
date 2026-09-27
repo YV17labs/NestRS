@@ -152,6 +152,16 @@ declaring `Cancellation` also overrides `remove` (and `remove_unique` beside
 `UniquePush`); one that declares it and does not is told so, as the driver
 defect it is.
 
+**The port waits twenty seconds for any answer.** It hands `enqueue` a hundred
+envelopes at most (`ENQUEUE_BATCH`), and waits `BACKEND_TIMEOUT` for the answer
+to every call it makes — `enqueue`, `remove`, `remove_unique`, and a
+`CheckpointStore`'s `load`, `save` and `clear` — then drops the call where it
+stands and answers the caller `QueueError::Unanswered`, naming the queue. That
+is a net, not your budget: bound each round trip well inside it, so an outage
+reaches the caller as your failure with its cause — the Redis adapter's
+connection fails a command at ten seconds by default — and keep nothing a
+dropped call would have had to undo.
+
 ## Step 2 — The worker (Transport)
 
 The worker is a `nest_rs::core::Transport`: the framework calls `configure`

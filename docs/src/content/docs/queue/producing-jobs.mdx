@@ -127,10 +127,23 @@ A push is refused before anything is filed when its options cannot be honoured
 `QueueError::InvalidUniqueKey` for a key no backend could file — or when a
 unique key is held. Past those, an error from the backend is a failure to
 *answer*: the job may be queued and its reply lost, so a caller that retries such
-a push can queue it twice unless it carries a unique key. On Redis each command
-a push sends waits at most `NESTRS_REDIS__CONNECT_TIMEOUT_SECS` for its answer,
-and one that times out fails the push. `push_many` is not atomic: when it fails,
-some of its jobs may already be queued.
+a push can queue it twice unless it carries a unique key.
+
+**No backend holds a push past twenty seconds.** The port waits
+`BACKEND_TIMEOUT` for the backend's answer to a push or a cancel, then gives up
+on the call and fails it with `QueueError::Unanswered`, naming the queue and the
+call — which, like any failure to answer, may still have filed the job. It is a
+net under the backend, never its budget: on Redis each command a push sends
+waits at most `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so a
+Redis that stopped answering fails the push at that budget, with its own cause,
+well before the net. Twenty seconds stays under the HTTP edge's request timeout,
+so a push made inside a request fails with an error naming its queue while the
+request can still answer.
+
+`push_many` hands the backend its jobs a hundred at a time (`ENQUEUE_BATCH`),
+each call under the net, so the net holds a push of any size. It is not atomic:
+when it fails, the calls before the failing one are queued, and some of its own
+jobs may be.
 
 ## Holding a job back
 

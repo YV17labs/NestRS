@@ -33,6 +33,16 @@
 //! lease, so it answers `true` only while no attempt runs — and closes what the
 //! job held; the delivery that meets the tombstone acknowledges the job without
 //! running it.
+//!
+//! **A call fails within one connection budget of Redis going silent.** Each
+//! command is bounded by the connection, and no call sends a second one after a
+//! command that got no answer: the 6.x check runs beside the filing rather than
+//! in front of it, and a filing that timed out leaves what it opened to lapse.
+//! So a silent Redis reaches the caller as the connection's own failure, with
+//! its cause, before the port's net (`nest_rs_queue::BACKEND_TIMEOUT`) gives up
+//! on the call — and when the net is what ends one, the call is dropped where it
+//! stands, which leaves nothing its failure would not: marks that lapse, and
+//! records already filed, already watched by the promoter.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -160,6 +170,88 @@ impl RedisQueueProducer {
             return;
         }
         report_legacy_check(queue, layout::legacy_jobs(&self.conn, queue).await);
+    }
+
+    /// File `envelopes` on `queue` as `options` say: open their records, then
+    /// file each on the queue's list, or on its schedule when held back.
+    async fn file(
+        &self,
+        queue: &QueueName,
+        envelopes: Vec<Envelope>,
+        options: &PushOptions,
+    ) -> Result<(), QueueError> {
+        // apalis's own attempt cap, lifted on every record filed here — see
+        // `uncapped_context`. Built before anything is opened, so a refusal
+        // leaves nothing behind.
+        let context = uncapped_context(None).map_err(QueueError::backend)?;
+        let now = SystemTime::now();
+        let due = match options.delay() {
+            None => None,
+            Some(delay) => match delay.deadline(now) {
+                // An instant already past is an immediate push.
+                Some(at) if at <= now => None,
+                Some(at) => Some(at),
+                None => {
+                    return Err(QueueError::InvalidOptions {
+                        reason: "the delay ends past the last instant the clock can represent",
+                    });
+                }
+            },
+        };
+        let until_due = due
+            .and_then(|at| at.duration_since(now).ok())
+            .unwrap_or_default();
+        let opened = self
+            .open(queue, &envelopes, until_due.saturating_add(KEPT_PAST_DUE))
+            .await?;
+
+        // `push` takes `&mut self`; storage is a cheap clone of the connection
+        // handle, so build one per call rather than force callers to hold it mut.
+        let mut storage = self.storage(queue);
+        let second = due.map(due_second);
+        for (at, envelope) in envelopes.into_iter().enumerate() {
+            let record = Request::new_with_ctx(envelope.into_json(), context.clone());
+            let filed = match second {
+                None => storage.push_request(record).await.map(drop),
+                Some(second) => storage.schedule_request(record, second).await.map(drop),
+            };
+            let error = match filed {
+                Ok(()) => {
+                    // Watched from the first record filed, so a push cut short
+                    // after it — by a failure below, or by the port's net
+                    // dropping the call — still has what it filed promoted.
+                    if at == 0
+                        && let Some(second) = second
+                    {
+                        self.promoter.watch(&self.conn, queue, second);
+                    }
+                    continue;
+                }
+                Err(error) => error,
+            };
+            // What was never filed is closed; the job whose filing failed is
+            // closed only when Redis answered, since otherwise it may be queued.
+            // A filing Redis did not answer within the budget closes nothing
+            // more: a close would spend a second budget on a Redis that just
+            // went silent, and the marks lapse on their own — none holds a
+            // unique key, which only a push of one job carries.
+            let failed = &opened[at];
+            let unfiled = if answered(&error) {
+                &opened[at..]
+            } else {
+                if let Some(key) = &failed.unique {
+                    report_unanswered(queue, &failed.id, key, &error);
+                }
+                if error.is_timeout() {
+                    &[]
+                } else {
+                    &opened[at + 1..]
+                }
+            };
+            self.close_quietly(queue, unfiled).await;
+            return Err(QueueError::backend(error));
+        }
+        Ok(())
     }
 
     /// Open the records of every job in `envelopes` before any is filed, each
@@ -380,68 +472,14 @@ impl JobProducer for RedisQueueProducer {
         envelopes: Vec<Envelope>,
         options: &PushOptions,
     ) -> Result<(), QueueError> {
-        self.look_for_legacy_jobs(queue).await;
-        // apalis's own attempt cap, lifted on every record filed here — see
-        // `uncapped_context`. Built before anything is opened, so a refusal
-        // leaves nothing behind.
-        let context = uncapped_context(None).map_err(QueueError::backend)?;
-        let now = SystemTime::now();
-        let due = match options.delay() {
-            None => None,
-            Some(delay) => match delay.deadline(now) {
-                // An instant already past is an immediate push.
-                Some(at) if at <= now => None,
-                Some(at) => Some(at),
-                None => {
-                    return Err(QueueError::InvalidOptions {
-                        reason: "the delay ends past the last instant the clock can represent",
-                    });
-                }
-            },
-        };
-        let until_due = due
-            .and_then(|at| at.duration_since(now).ok())
-            .unwrap_or_default();
-        let opened = self
-            .open(queue, &envelopes, until_due.saturating_add(KEPT_PAST_DUE))
-            .await?;
-
-        // `push` takes `&mut self`; storage is a cheap clone of the connection
-        // handle, so build one per call rather than force callers to hold it mut.
-        let mut storage = self.storage(queue);
-        let second = due.map(due_second);
-        for (at, envelope) in envelopes.into_iter().enumerate() {
-            let record = Request::new_with_ctx(envelope.into_json(), context.clone());
-            let filed = match second {
-                None => storage.push_request(record).await.map(drop),
-                Some(second) => storage.schedule_request(record, second).await.map(drop),
-            };
-            let Err(error) = filed else {
-                continue;
-            };
-            // What was never filed is closed; the job whose filing failed is
-            // closed only when Redis answered, since otherwise it may be queued.
-            let failed = &opened[at];
-            let unfiled = if answered(&error) {
-                &opened[at..]
-            } else {
-                if let Some(key) = &failed.unique {
-                    report_unanswered(queue, &failed.id, key, &error);
-                }
-                &opened[at + 1..]
-            };
-            self.close_quietly(queue, unfiled).await;
-            if at > 0
-                && let Some(second) = second
-            {
-                self.promoter.watch(&self.conn, queue, second);
-            }
-            return Err(QueueError::backend(error));
-        }
-        if let Some(second) = second {
-            self.promoter.watch(&self.conn, queue, second);
-        }
-        Ok(())
+        // Beside the filing, not in front of it: the check only ever warns, and
+        // ahead of the filing it would spend a second budget on a Redis that
+        // stopped answering — the first push to each queue then waiting two.
+        let (_, filed) = tokio::join!(
+            self.look_for_legacy_jobs(queue),
+            self.file(queue, envelopes, options),
+        );
+        filed
     }
 
     async fn remove(&self, queue: &QueueName, id: &JobId) -> Result<bool, QueueError> {

@@ -16,6 +16,12 @@
 //! reaches its terminal outcome — it completed, or it dead-lettered — and a
 //! backend clears it when it cancels the job; a retry, on this delivery or a
 //! later one, keeps it.
+//!
+//! **Never waited on past [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT).** A
+//! store silent past the net fails the call with
+//! [`QueueError::Unanswered`], naming the job's queue: a read fails the
+//! attempt, retryably, and so does a save the method returns with `?`; a clear
+//! at the job's end is said at `warn`, since the outcome is already decided.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -24,10 +30,16 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::{JobError, QueueError};
+use crate::backend::bounded;
+use crate::{JobError, QueueError, QueueName};
 
 /// Where a backend keeps one job's checkpoint — keyed by the job's
 /// [`JobId`](crate::JobId), so every delivery of the job reads the same one.
+///
+/// The port waits [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) for each call's
+/// answer, then drops the call where it stands: bound each round trip well
+/// inside it, as the Redis adapter's connection does, so a store that cannot
+/// answer says why before the net gives up on it.
 #[async_trait]
 pub trait CheckpointStore: Send + Sync + 'static {
     /// The state saved for the job before this delivery started, if any.
@@ -48,14 +60,17 @@ pub trait CheckpointStore: Send + Sync + 'static {
 #[doc(hidden)]
 pub struct CheckpointCell {
     store: Arc<dyn CheckpointStore>,
+    /// The job's queue, which a store silent past the net is reported on.
+    queue: QueueName,
     /// `None` until the store was read; then the latest state, saved or loaded.
     latest: Mutex<Option<Option<Value>>>,
 }
 
 impl CheckpointCell {
-    pub(crate) fn new(store: Arc<dyn CheckpointStore>) -> Self {
+    pub(crate) fn new(store: Arc<dyn CheckpointStore>, queue: QueueName) -> Self {
         Self {
             store,
+            queue,
             latest: Mutex::new(None),
         }
     }
@@ -69,19 +84,24 @@ impl CheckpointCell {
         if let Some(latest) = cached {
             return Ok(latest);
         }
-        let loaded = self.store.load().await?;
+        let loaded = bounded(&self.queue, "CheckpointStore::load", self.store.load()).await?;
         *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(loaded.clone());
         Ok(loaded)
     }
 
     async fn save(&self, state: Value) -> Result<(), QueueError> {
-        self.store.save(state.clone()).await?;
+        bounded(
+            &self.queue,
+            "CheckpointStore::save",
+            self.store.save(state.clone()),
+        )
+        .await?;
         *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(Some(state));
         Ok(())
     }
 
     pub(crate) async fn clear(&self) -> Result<(), QueueError> {
-        self.store.clear().await?;
+        bounded(&self.queue, "CheckpointStore::clear", self.store.clear()).await?;
         *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
         Ok(())
     }
@@ -152,6 +172,10 @@ where
 
     /// Save `state` for this job, at once and outside any transaction. A later
     /// [`get`](Self::get) returns it, and so does the job's next attempt.
+    ///
+    /// Fails with [`QueueError::Unanswered`] when the store does not answer
+    /// within [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT); returned with `?`,
+    /// that fails the attempt, retryably, like any error the method returns.
     pub async fn save(&mut self, state: S) -> Result<(), QueueError> {
         let value = serde_json::to_value(&state)?;
         self.cell.save(value).await?;
@@ -199,6 +223,10 @@ mod tests {
         row: u32,
     }
 
+    fn imports() -> QueueName {
+        QueueName::new("imports").expect("a valid name")
+    }
+
     /// A backend's store answers with its snapshot from the start of the
     /// delivery; an attempt run again inside that delivery must still read the
     /// save the attempt before it made.
@@ -206,7 +234,7 @@ mod tests {
     async fn a_second_attempt_in_one_delivery_reads_the_first_attempts_save() {
         let store = Arc::new(MemoryStore::default());
         *store.saved.lock().expect("lock") = Some(json!({ "row": 1 }));
-        let cell = Arc::new(CheckpointCell::new(store.clone()));
+        let cell = Arc::new(CheckpointCell::new(store.clone(), imports()));
 
         let mut first = Checkpoint::<Progress>::open(Some(&cell), "imports")
             .await
@@ -229,7 +257,7 @@ mod tests {
     async fn a_saved_state_that_no_longer_decodes_aborts_rather_than_retries() {
         let store = Arc::new(MemoryStore::default());
         *store.saved.lock().expect("lock") = Some(json!("not a progress"));
-        let cell = Arc::new(CheckpointCell::new(store));
+        let cell = Arc::new(CheckpointCell::new(store, imports()));
 
         let Err(error) = Checkpoint::<Progress>::open(Some(&cell), "imports").await else {
             panic!("a state that does not decode must not open");

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -12,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
 use crate::controller::HttpControllerMeta;
+use crate::drain::Drain;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::interceptor::HttpEndpointWrap;
 use crate::tls::HttpTls;
@@ -114,7 +117,8 @@ pub struct HttpTransport {
     server_header: Option<&'static str>,
     global_prefix: Option<String>,
     max_body_bytes: Option<usize>,
-    request_timeout: Option<std::time::Duration>,
+    request_timeout: Option<Duration>,
+    shutdown_timeout: Duration,
     fail_secure_strict: bool,
     security_headers: crate::HttpSecurityHeaders,
     compression: bool,
@@ -208,6 +212,7 @@ impl HttpTransport {
             global_prefix: None,
             max_body_bytes: None,
             request_timeout: None,
+            shutdown_timeout: crate::config::DEFAULT_SHUTDOWN_TIMEOUT,
             // Fail-secure by default: when global guards are active, an
             // endpoint the transport cannot shape fails boot instead of
             // mounting unguarded. Opt out via `fail_secure_strict(false)` /
@@ -253,6 +258,7 @@ impl HttpTransport {
         if let Some(timeout) = cfg.request_timeout {
             http = http.request_timeout(timeout);
         }
+        http = http.shutdown_timeout(cfg.shutdown_timeout);
         http = http.fail_secure_strict(cfg.fail_secure_strict);
         http = http.security_headers(cfg.security_headers.clone());
         http = http.compression(cfg.compression);
@@ -321,8 +327,19 @@ impl HttpTransport {
     /// with `503 Service Unavailable` and a `Retry-After`. Bounds connection
     /// hold time against slow or stuck handlers. Without this call no timeout is
     /// enforced.
-    pub fn request_timeout(mut self, timeout: std::time::Duration) -> Self {
+    pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = Some(timeout);
+        self
+    }
+
+    /// How long [`serve`](Transport::serve) lets open connections finish once
+    /// shutdown is asked for. The listener closes at once; a connection still
+    /// open when the window closes is closed — a request still running gets no
+    /// answer, a stream is cut — and one `warn` names how many. Defaults to 25
+    /// seconds; [`HttpModule`](crate::HttpModule) passes
+    /// `HttpConfig.shutdown_timeout`, whose range the boot enforces.
+    pub fn shutdown_timeout(mut self, window: Duration) -> Self {
+        self.shutdown_timeout = window;
         self
     }
 
@@ -833,6 +850,11 @@ impl Transport for HttpTransport {
             .endpoint
             .expect("HttpTransport::configure must run before serve");
         let bind = self.bind;
+        let window = self.shutdown_timeout;
+        // poem keeps its count of open connections to itself, so the transport
+        // counts the sockets it accepts — which is also the only count that sees
+        // an upgraded connection, since poem stops tracking one at the upgrade.
+        let drain = Arc::new(Drain::default());
         let listener = match self.tls {
             Some(tls) => {
                 // Built before the listener binds, and fallible on purpose: a
@@ -843,16 +865,27 @@ impl Transport for HttpTransport {
                     .into_rustls_stream()
                     .context("the configured TLS material cannot serve")?;
                 tracing::debug!(target: crate::target::HTTP, addr = %bind, tls = true, "transport listening");
-                TcpListener::bind(bind).rustls(stream).boxed()
+                drain.track(TcpListener::bind(bind)).rustls(stream).boxed()
             }
             None => {
                 tracing::debug!(target: crate::target::HTTP, addr = %bind, tls = false, "transport listening");
-                TcpListener::bind(bind).boxed()
+                drain.track(TcpListener::bind(bind)).boxed()
+            }
+        };
+        // The window is poem's to enforce: past it, poem drops every connection
+        // it still serves. `begin` runs before poem starts that clock, so every
+        // socket poem closes at the bound is counted as closed by it.
+        let signal = {
+            let drain = Arc::clone(&drain);
+            async move {
+                cancel.cancelled().await;
+                drain.begin(window);
             }
         };
         Server::new(listener)
-            .run_with_graceful_shutdown(endpoint, async move { cancel.cancelled().await }, None)
+            .run_with_graceful_shutdown(endpoint, signal, Some(window))
             .await?;
+        drain.report(window);
         Ok(())
     }
 }
@@ -911,6 +944,11 @@ mod tests {
         assert!(d.tls.is_none());
         assert!(d.server_header.is_none());
         assert!(d.endpoint.is_none());
+        assert_eq!(
+            d.shutdown_timeout,
+            crate::HttpConfig::default().shutdown_timeout,
+            "a transport built by hand gets the window a configured one defaults to",
+        );
     }
 
     #[test]

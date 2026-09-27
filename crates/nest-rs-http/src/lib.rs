@@ -15,6 +15,7 @@ mod config;
 mod context;
 mod controller;
 mod cors;
+mod drain;
 mod edge;
 mod endpoint;
 mod error;

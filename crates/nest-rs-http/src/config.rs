@@ -21,6 +21,25 @@ const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
 /// Default wall-clock budget for one request.
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+/// Default shutdown window: 25 seconds, under the 30 a Kubernetes pod is given
+/// by default between `SIGTERM` and `SIGKILL`. What is still open when it closes
+/// is closed by the transport, which says so, rather than by the kill, which
+/// says nothing and leaves the shutdown lifecycle hooks unrun.
+pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// The variable the shutdown window is read from, and the range it must fall in.
+const SHUTDOWN_TIMEOUT: SecondsWithin = SecondsWithin {
+    key: "SHUTDOWN_TIMEOUT_SECS",
+    field: "shutdown_timeout",
+    least: 1,
+    least_why: "a shorter window cuts every request in flight at the signal, and `0` is not the \
+                off switch it is for `REQUEST_TIMEOUT_SECS`: a shutdown that waits without a \
+                bound is what this window exists to prevent",
+    most: 3600,
+    most_why: "a window past an hour is a unit slip more often than a choice (`25000` meant as \
+               milliseconds is seven hours), and it outlasts the grace period an orchestrator \
+               gives a replica, whose kill then cuts what the window held without a word",
+};
 
 /// HTTP transport options resolved at boot. Every field is settable both via
 /// `NESTRS_HTTP__*` env vars (read by [`Config::from_env`]) and via the pinned
@@ -161,6 +180,22 @@ pub struct HttpConfig {
     /// none sent. Read from `NESTRS_HTTP__SSE_KEEP_ALIVE_SECS` (whole seconds;
     /// `0` ⇒ none); defaults to 15 seconds.
     pub sse_keep_alive: Option<Duration>,
+    /// How long the transport lets open connections finish after a shutdown
+    /// signal. The listener closes at the signal and every connection is asked
+    /// to finish what it is answering; one still open when the window closes is
+    /// closed at once — a request still running is dropped without an answer,
+    /// and a streaming response (an `#[sse]` stream, an MCP stream) is cut, so
+    /// its client reconnects. One `warn` on `nest_rs::http` names how many. A
+    /// WebSocket is not closed by the window: poem hands an upgraded connection
+    /// to its handler at the upgrade and stops tracking it, so it ends with its
+    /// handler or with the process — the same line counts those apart, as
+    /// `upgraded_open`.
+    ///
+    /// Read from `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
+    /// 3600 — refused outside, from the environment and from the pinned struct
+    /// alike; defaults to 25 seconds. Keep the pod's grace period above it plus
+    /// the shutdown hooks' own bound.
+    pub shutdown_timeout: Duration,
 }
 
 impl Default for HttpConfig {
@@ -186,6 +221,7 @@ impl Default for HttpConfig {
             trusted_proxies: Vec::new(),
             sse_max_connection: Some(Duration::from_secs(DEFAULT_SSE_MAX_CONNECTION_SECS)),
             sse_keep_alive: Some(Duration::from_secs(DEFAULT_SSE_KEEP_ALIVE_SECS)),
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
         }
     }
 }
@@ -264,7 +300,75 @@ impl Config for HttpConfig {
             trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
             sse_max_connection: env.seconds("SSE_MAX_CONNECTION_SECS", base.sse_max_connection)?,
             sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,
+            shutdown_timeout: SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?,
         })
+    }
+}
+
+/// A duration read in whole seconds that must fall in `[least, most]`, and why
+/// each end holds.
+struct SecondsWithin {
+    /// The variable's key in the namespace.
+    key: &'static str,
+    /// The field the value is pinned through in code.
+    field: &'static str,
+    /// The floor, in seconds.
+    least: u64,
+    least_why: &'static str,
+    /// The ceiling, in seconds.
+    most: u64,
+    most_why: &'static str,
+}
+
+impl SecondsWithin {
+    /// The value — the variable's when it is set, `base` when it is not —
+    /// refused outside the range, never clamped in silence: under the spelling
+    /// that supplied it, so a value given as a file is refused under `_FILE`,
+    /// or, for a value pinned in code, under the variable that would override
+    /// it, naming the field.
+    fn read(&self, env: &ConfigService, base: Duration) -> Result<Duration> {
+        let (least, most) = (
+            Duration::from_secs(self.least),
+            Duration::from_secs(self.most),
+        );
+        let Some(setting) = env.setting(self.key)? else {
+            return match base {
+                base if base < least => Err(self.pinned(env, base, "least", least, self.least_why)),
+                base if base > most => Err(self.pinned(env, base, "most", most, self.most_why)),
+                base => Ok(base),
+            };
+        };
+        match setting.parse::<u64>()? {
+            secs if secs < self.least => Err(setting.refuse(format_args!(
+                "must be at least {} — {}",
+                self.least, self.least_why
+            ))),
+            secs if secs > self.most => Err(setting.refuse(format_args!(
+                "must be at most {} — {}",
+                self.most, self.most_why
+            ))),
+            secs => Ok(Duration::from_secs(secs)),
+        }
+    }
+
+    /// The refusal of a value pinned in code, which has no spelling of its own
+    /// to be refused under.
+    fn pinned(
+        &self,
+        env: &ConfigService,
+        base: Duration,
+        end: &str,
+        limit: Duration,
+        why: &str,
+    ) -> nest_rs_config::ConfigError {
+        nest_rs_config::ConfigError::parse(
+            env.var_name(self.key),
+            format!(
+                "is not set, and `HttpConfig::{}` pinned in code is {base:?} where it must be at \
+                 {end} {limit:?} — {why}",
+                self.field
+            ),
+        )
     }
 }
 
@@ -358,6 +462,7 @@ mod tests {
             ("TLS_RELOAD_SECS", SECRET.to_owned()),
             ("CORS_MAX_AGE", SECRET.to_owned()),
             ("HSTS", format!("{SECRET}\u{7}")),
+            ("SHUTDOWN_TIMEOUT_SECS", SECRET.to_owned()),
         ] {
             figment::Jail::expect_with(|jail| {
                 jail.create_file("value", &content)?;
@@ -629,6 +734,101 @@ mod tests {
             .request_timeout,
             Some(Duration::from_secs(15)),
         );
+    }
+
+    #[test]
+    fn the_shutdown_window_defaults_to_25s_and_reads_whole_seconds_over_a_pinned_base() {
+        assert_eq!(
+            HttpConfig::default().shutdown_timeout,
+            Duration::from_secs(25)
+        );
+        let pinned = HttpConfig {
+            shutdown_timeout: Duration::from_secs(10),
+            ..Default::default()
+        };
+        assert_eq!(
+            HttpConfig::from_env(&ConfigService::with_vars("http", []), pinned.clone())
+                .expect("the overlay resolves")
+                .shutdown_timeout,
+            Duration::from_secs(10),
+            "nothing in the env ⇒ the pin is the answer",
+        );
+        assert_eq!(
+            HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("SHUTDOWN_TIMEOUT_SECS", "40")]),
+                pinned,
+            )
+            .expect("the overlay resolves")
+            .shutdown_timeout,
+            Duration::from_secs(40),
+        );
+    }
+
+    /// A window outside `[1, 3600]` is refused naming the variable, never
+    /// clamped — and `0` is refused rather than read as the shared "off", since
+    /// an unbounded shutdown is what the window exists to prevent. Both edges
+    /// hold.
+    #[test]
+    fn a_shutdown_window_outside_its_range_is_refused_naming_the_variable() {
+        let var = nest_rs_config::var_name("http", "SHUTDOWN_TIMEOUT_SECS");
+        for (value, reason) in [
+            ("0", "must be at least 1"),
+            ("3601", "must be at most 3600"),
+        ] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("SHUTDOWN_TIMEOUT_SECS", value)]),
+                HttpConfig::default(),
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(refused.contains(&var), "{value}: {refused}");
+            assert!(refused.contains(reason), "{value}: {refused}");
+        }
+        for (value, secs) in [("1", 1), ("3600", 3600)] {
+            let cfg = HttpConfig::from_env(
+                &ConfigService::with_vars("http", [("SHUTDOWN_TIMEOUT_SECS", value)]),
+                HttpConfig::default(),
+            )
+            .expect("an edge of the range is inside it");
+            assert_eq!(cfg.shutdown_timeout, Duration::from_secs(secs));
+        }
+    }
+
+    /// A pinned window has no spelling of its own, so it is refused under the
+    /// variable that would override it, naming the field — and only when that
+    /// variable is silent: a set variable is the answer, whatever was pinned.
+    #[test]
+    fn a_pinned_shutdown_window_outside_its_range_is_refused_naming_the_field() {
+        let var = nest_rs_config::var_name("http", "SHUTDOWN_TIMEOUT_SECS");
+        for pinned in [
+            Duration::ZERO,
+            Duration::from_millis(999),
+            Duration::from_secs(3601),
+        ] {
+            let refused = HttpConfig::from_env(
+                &ConfigService::with_vars("http", []),
+                HttpConfig {
+                    shutdown_timeout: pinned,
+                    ..Default::default()
+                },
+            )
+            .expect_err("refused")
+            .to_string();
+            assert!(refused.contains(&var), "{pinned:?}: {refused}");
+            assert!(
+                refused.contains("HttpConfig::shutdown_timeout"),
+                "{pinned:?}: {refused}"
+            );
+        }
+        let cfg = HttpConfig::from_env(
+            &ConfigService::with_vars("http", [("SHUTDOWN_TIMEOUT_SECS", "5")]),
+            HttpConfig {
+                shutdown_timeout: Duration::ZERO,
+                ..Default::default()
+            },
+        )
+        .expect("the variable overrides the pin");
+        assert_eq!(cfg.shutdown_timeout, Duration::from_secs(5));
     }
 
     #[test]

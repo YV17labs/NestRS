@@ -73,9 +73,17 @@ serde.workspace = true
 nest-rs-guards = { path = "../nest-rs-guards" }
 nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # `tests/global_prefix.rs` drives an in-process server through poem's
-# `TestClient`, gated behind poem's `test` feature.
-poem = { workspace = true, features = ["test"] }
-tokio.workspace = true
+# `TestClient`, gated behind poem's `test` feature. `websocket` lets
+# `tests/integration/transport.rs` hold a real WebSocket open across a shutdown —
+# an upgraded connection is the one poem's shutdown window neither waits for nor
+# closes, and the transport's report has to say so.
+poem = { workspace = true, features = ["test", "websocket"] }
+# `test-util` (not part of tokio's `full`) pauses time, so the shutdown window is
+# proved at its default length without the suite waiting it out.
+tokio = { workspace = true, features = ["test-util"] }
+# The client half of that WebSocket — the same crate poem's server half runs on,
+# so it adds no crate to the graph.
+tokio-tungstenite.workspace = true
 # `tests/global_prefix.rs` env-path test isolates the process env via
 # `figment::Jail`, matching how `nest-rs-config` itself tests env reads.
 figment = { workspace = true, features = ["test"] }

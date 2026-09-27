@@ -18,6 +18,7 @@ mod security_headers;
 mod sse;
 mod tls;
 mod trace_context;
+mod transport;
 mod versioning;
 
 use nest_rs_core::{App, Module, Transport};

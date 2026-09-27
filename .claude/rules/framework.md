@@ -477,6 +477,29 @@ boot and a value built in code alike, so the check has one site and its sentence
 names the settings the caller actually wrote. Ranking the tiers of related
 variables inside the loader was tried and removed.
 
+**A duration a deployment sets has a floor and a ceiling**, and a value outside
+them fails the boot naming the variable — pinned in code or read from the
+environment alike, since it breaks the module the same way from either side, and
+never clamped in silence. The floor is where the thing stops working: a lease too
+short to renew, a poll that spends Redis hundreds of scripts a second. The ceiling
+is where a typo stops being a setting: an orphan threshold in the millions delays
+crash recovery by weeks, and past a few hundred thousand years apalis panics in
+its heartbeat. **No value the boot accepts may panic a library below it**, and
+the ceiling is what makes that true. Built: `RedisWorkerConfig`'s `orphan_after`
+(5 s to a day), `lease` (1 s to half the orphan threshold), `poll_interval` (10 ms
+to the orphan threshold) and `shutdown_timeout` (1 s to an hour), and
+`HttpConfig::shutdown_timeout` (1 s to an hour). Every other duration a framework
+`#[config]` reads has a floor at best and no ceiling yet, and each is an owner
+question until it is decided: HTTP's `REQUEST_TIMEOUT_SECS`,
+`SSE_MAX_CONNECTION_SECS` and `SSE_KEEP_ALIVE_SECS`, `WS__MAX_CONNECTION_SECS`,
+`GRAPHQL__MAX_CONNECTION_SECS` and MCP's `SSE_KEEP_ALIVE_SECS` / `SSE_RETRY_SECS`
+(all read through `ConfigService::seconds`, where `0` means off, so their floor is
+a second); `HTTP__TLS_RELOAD_SECS`; `REDIS__CONNECT_TIMEOUT_SECS` (at least 1);
+`SEAORM__CONNECT_TIMEOUT_SECS`; `HEALTH__INDICATOR_TIMEOUT_MS` /
+`PROBE_DEADLINE_MS`; `THROTTLER__WINDOW_SECS`; `AUTHN__LEEWAY_SECS` /
+`EXPIRES_IN_SECS`; and `OPENTELEMETRY__METRIC_INTERVAL_SECS` (`0` keeps the
+SDK's default).
+
 **A variable no config claims is reported, never ignored.** A deployment that
 misspells a variable, or keeps a name a release renamed, gets the default — and
 without a report, no signal, since nothing ever asks for the value. So the loader
@@ -786,16 +809,64 @@ backend's behaviour has taken that backend's semantics for its contract.
 trusted to answer, never to answer in time: past its bound a call is treated as a
 backend that cannot answer, and never waited on in silence, because a hung
 backend is a job that stops or a request that stalls with nothing to say why.
-The scheduler abandons an `OccurrenceLock` call once its occurrence goes stale —
-its hold less `MAX_SKEW` — and skips the occurrence at `warn`, and abandons an
-in-flight claim when its loop is cancelled, so a shutdown stays bounded;
-`ThrottlerGuard` bounds `ThrottlerStore::hit` by a constant and, past it, denies
-the request — fail closed, at `warn` with fields — as `RedisThrottler` itself does
-when Redis cannot answer. The bound is the framework's net, not the backend's
-budget: a backend still bounds each command it sends, as `RedisConnection`'s
-connect budget does, so an outage arrives promptly as the backend's own error
-rather than at the net. Any other port call the framework awaits is presumed to
-owe the same until it is checked.
+
+**The bound is a net, never the backend's budget.** A backend still bounds each
+command it sends — `RedisConnection` answers or fails every command within its
+connect budget (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by default) — so an
+outage arrives as the backend's own error, with its cause, and a net fires only
+on a backend that stopped bounding itself. So every net sits above the budget of
+each adapter the framework ships, and a test pins the order wherever both
+constants are visible: `nest-rs-redis` asserts its default connect budget is
+below `HIT_TIMEOUT` and below the queue port's net. Past a net every member fails
+closed, each in its own terms:
+
+- **`OccurrenceLock::claim` / `claimed`** — the occurrence's stale threshold (its
+  hold less `MAX_SKEW`), and the loop's cancellation: the occurrence is skipped
+  at `warn`, and a claim in flight at shutdown is abandoned.
+- **`ThrottlerStore::hit`** — `HIT_TIMEOUT`, 20 s beside the trait, and below the
+  HTTP edge's request timeout so a hung store reads as the same `429` on every
+  edge: the request is denied for the window, at `warn` naming the store
+  (`ThrottlerStore::name`).
+- **`JobProducer::enqueue` / `remove` / `remove_unique`, and `CheckpointStore::load`
+  / `save` / `clear`** — one net the queue port declares for every backend: a
+  push or a cancel past it is an error to its caller, and a checkpoint past it
+  fails the attempt as retryable, so the job runs again rather than on progress
+  nobody confirmed.
+- **`Strategy::authenticate`** — `AuthnGuard`'s net, above any shipped strategy's
+  budget: the request is denied, fail closed, at `warn` with fields. The shipped
+  `JwtStrategy` verifies locally; the net is for an app's strategy that calls a
+  backend — token introspection, an API-key lookup.
+- **An `#[indicators]` method** — its indicator timeout
+  (`NESTRS_HEALTH__INDICATOR_TIMEOUT_MS`) under the probe's deadline: the
+  indicator reads down, at `warn`.
+
+**One member is not bounded, and it is the owner's question.** The database:
+acquiring a connection is bounded by the pool
+(`NESTRS_SEAORM__CONNECT_TIMEOUT_SECS`), but a `Repo` statement — or the `BEGIN` /
+`COMMIT` / `ROLLBACK` a job context settles through — on a connection that stopped
+answering is not, because `SeaOrmConfig` exposes no statement timeout (sea-orm 2's
+`ConnectOptions::statement_timeout`, Postgres's `statement_timeout`). A hung
+`COMMIT` holds its tick, and with it the scheduler's stop. Possible, unbuilt, and
+raised rather than refused. Outside the family by construction:
+`AbilityFactory::define` / `define_visitor`, the WS `Registry` and `ConfigSource`
+are synchronous, and an `EventBus` listener is in-process developer code, not a
+backend.
+
+**An outbound call the framework makes carries its own bounds**, on the same
+net-over-budget reading. `OAuthClient`'s HTTP client has a connect timeout and a
+total one, constants argued against the identity-provider calls it makes — the
+token exchange and the userinfo fetch, which `nest-rs-social`'s providers make
+through it too. `Storage` takes `object_store`'s own: 30 s a request, 5 s to
+connect, at most ten retries within three minutes. The OpenTelemetry exporter's
+are the SDK's, cited where `nest-rs-opentelemetry` shuts it down. A client
+without one is bounded by the edge's request timeout where there is one, and
+behind a queue job or a tick by nothing.
+
+**Whether this becomes a `CLAUDE.md` invariant** — *every port call the framework
+awaits has a bound, and shutdown abandons an in-flight call rather than awaiting
+it* — is an owner question. Until it is answered the rule binds the framework
+crates this file is loaded for, and a new awaited call is presumed to owe a net
+until it is checked.
 
 **The namespace falls out of the contract — it is never arbitrated.** A port
 owns a config namespace **if and only if its contract requires the integrator to
@@ -1186,7 +1257,49 @@ elsewhere, and each is its own report.
 `#[hooks]` submits phase-tagged methods (`#[on_module_init]`,
 `#[on_application_bootstrap]`, `#[on_module_destroy]`, …) to `inventory`;
 `App::run` drains per phase. Per-provider, run in `(provider, method)`
-name order; init failure aborts boot, shutdown is best-effort.
+name order; init failure aborts boot. Shutdown is best-effort — a hook that
+fails is logged and the next one runs — **and bounded**: each shutdown hook runs
+under a bound declared beside the phase runner and argued there, and a hook still
+running past it is abandoned with a `warn` naming its module and the hook.
+
+### Shutdown is bounded end to end
+
+**A wait on the way down without a bound is a `SIGKILL` with nothing to say
+why.** An orchestrator sends `SIGTERM`, waits its grace period — 30 s by default
+on Kubernetes — and kills: whatever the process still waited on dies with it, and
+a replica that never exits stalls a rollout. So every wait on the way down has a
+bound, and what still runs at the bound is abandoned with a `warn` naming it,
+never awaited in silence. The way down is three steps, in order, each with its
+own bound:
+
+1. **The transports stop, together.** The signal cancels the token every `serve`
+   shares, and `App::run` joins them all.
+   - **HTTP** hands poem a graceful-shutdown timeout, `HttpConfig::shutdown_timeout`
+     (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, pinned or from the environment: 25 s by
+     default, under the kubelet's 30 s; 1 s to an hour). A connection still open
+     at the bound — an SSE stream, an MCP session, a WebSocket — is closed, with
+     one `warn` saying how many were. The request timeout bounds a handler, never a
+     streaming body, which is why this bound is the transport's own.
+   - **The Redis worker** stops fetching and drains within
+     `RedisWorkerConfig::shutdown_timeout` (*A shutdown stays inside
+     `shutdown_timeout`*, in the queue's entry below).
+   - **The scheduler** starts no tick once shutdown is observed and abandons a lock
+     call in flight, but it **joins a tick already running** rather than dropping
+     it, because a dropped attempt holds its row locks until its statement drains
+     (`data-layer.md`, *An abandoned attempt*). A tick that never returns therefore
+     holds the stop, and bounding a running tick — and deciding what it would
+     release — is an owner question.
+2. **The shutdown hooks run** — `#[on_module_destroy]`,
+   `#[before_application_shutdown]`, `#[on_application_shutdown]` — each under its
+   bound (*Lifecycle hooks*, above).
+3. **Telemetry flushes** when `main` drops the guard `OpenTelemetry::init_with`
+   returned: the tracer, meter and logger providers shut down within the SDK's
+   own export timeouts, which `nest-rs-opentelemetry` cites where it calls them.
+
+**The steps add up, so the grace period has to hold their sum** — the longest
+transport bound, then every hook's, then the flush. That is why the demo chart
+gives the worker 45 s for its 30 s drain, and why HTTP's default stops short of
+the kubelet's 30 s rather than at it.
 
 ## Surface crates — decisions, not mechanics
 
@@ -1259,9 +1372,12 @@ name order; init failure aborts boot, shutdown is best-effort.
   declared factory carrying `nest_rs_schedule::BACKEND_REMEDY` — so a reachable
   `"one"` job with no binding fails the boot naming the job, and two bindings
   contest. **At most once, never at least once**: a claim that errors, one still
-  unanswered when its occurrence goes stale, and an occurrence reached that late
-  are all skipped at `warn`, and a replica that stops after claiming loses the
-  occurrence. Work that must not be lost is a queue job the tick pushes. The
+  unanswered when its occurrence goes stale or when shutdown is asked for, and an
+  occurrence reached that late are all skipped at `warn`, and a replica that stops
+  after claiming loses the occurrence. A claim answered before shutdown is
+  observed still fires, as a tick that won its wait does — withholding it would
+  lose an occurrence this replica holds the key to, which no other replica can
+  then fire. Work that must not be lost is a queue job the tick pushes. The
   lock's backends: Redis, built; an in-process one, refused — a lock no other
   replica can see decides nothing across replicas, which is why `BACKEND_REMEDY`
   answers with `replicas = "each"`; a database one (an expiring claims table, or
@@ -1401,10 +1517,14 @@ name order; init failure aborts boot, shutdown is best-effort.
   `max_attempts`, 5 by default: the adapter answers so only where a hand-back
   failed, but retries, throttle deferrals and lease hand-backs all count toward
   it, and no port event fires. So every record the adapter files — push, delayed
-  push, re-filing, hand-back —
-  carries a context whose `max_attempts` is `usize::MAX`, built through
-  `RedisContext`'s public `Deserialize`, and a unit test pins apalis's serde field
-  names, so a bump that renames them fails the tests, not a deployment.
+  push, re-filing, hand-back — carries a context whose `max_attempts` is
+  `u32::MAX` (`LIFTED_CAP`), built through `RedisContext`'s public `Deserialize`,
+  and a unit test pins apalis's serde field names, so a bump that renames them
+  fails the tests, not a deployment. **`u32::MAX`, never `usize::MAX`**: apalis
+  reads the cap into a `usize` as wide as the host reading the record, so a cap a
+  64-bit replica wrote would not decode on a 32-bit one, and apalis's fetch would
+  fail every poll for the batch holding it. No job is delivered four billion
+  times, and a test decodes the stored cap as 32 bits wide.
 
   **A shutdown stays inside `shutdown_timeout`.** The worker stops fetching at
   once, lets running attempts finish for the window less a reserve (five seconds,
@@ -1425,7 +1545,15 @@ name order; init failure aborts boot, shutdown is best-effort.
   by the producer that filed it, on a one-second tick while it has delayed
   records outstanding, so a due job reaches `…:active` — the list KEDA reads —
   with no worker running, and a deployment with no producer process running keeps
-  `minReplicaCount: 1`; a unique key is claimed atomically before the job is filed
+  `minReplicaCount: 1`; **a worker promotes its own queue's due records at the
+  fetch's pace** — on its own one-second tick, through the same public
+  `enqueue_scheduled`, in batches of `min(799, max(100, concurrency))` while any
+  are due, the producer's shape at the worker's size — where apalis's own scan
+  moved one fetch's worth a second, a single job for a method of concurrency 1; so
+  a burst of retries or hand-backs falling due together reaches `…:active`, and
+  the autoscaler, as fast as a replica can take it, and its Redis cost is written
+  where the queue's scaling is; a unique key is claimed atomically before the job
+  is filed
   and released when the job settles or is cancelled — **at most once over pushes,
   never a lock**; a cancel writes its tombstone only while no attempt holds the
   lease, so `Ok(true)` means the job never starts, and apalis's structures are
@@ -1543,8 +1671,8 @@ name order; init failure aborts boot, shutdown is best-effort.
   `#[api(...)]` enriches an op.
 - **`nest-rs-social`** — open provider contract. **Flow-owning**
   `SocialProvider` trait: `authorize`/`exchange` default to the shared
-  PKCE/CSRF flow (through `nest-rs-authn`'s `OAuth2Client`, whose
-  `exchange` yields a `TokenSet`), so a standard provider implements
+  PKCE/CSRF flow (through the provider's `nest_rs_oauth_client::OAuthClient`,
+  whose `exchange` yields a `TokenSet`), so a standard provider implements
   only `profile`; a non-standard one (Apple's ES256 secret, id_token
   identity) overrides a step **without changing the trait**. A social
   provider is **not a DI provider** — never `#[inject]`ed by type, only

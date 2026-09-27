@@ -56,6 +56,17 @@ Four clauses, load-bearing in this order.
    population and once from eleven literal paths, and the drift was in the
    literal half.
 
+   **A derivation reads what makes a member, never one way of spelling it.** The
+   grammars join enrolled a decorator by reading its name out of the string
+   literal an `unknown_argument` or `unmatched_meta` call opens with. The
+   worker-job family words those sentences through `JobDecorator::name()`, and
+   `#[api]` refused strangers in a sentence of its own, so `#[every]`, `#[cron]`,
+   `#[after]` and `#[api]` — each with a `key = value` grammar — stood outside the
+   population with their holes unjoined, while the join reported the family
+   whole. It now enrols `JobDecorator::ALL` beside the literals, and `#[api]`
+   refuses an unknown key through `unknown_argument` and a bare one with the
+   family's sentence rather than `syn`'s `expected =`.
+
 2. **A declared family is joined, and the join answers both questions.** One
    test per family joins members × obligations. An empty cell **fails** — that
    is the hole. The other direction is not a failure but a **precondition**:
@@ -145,6 +156,14 @@ section does not bind it.
   named for that test alone, since a worker in one process takes another
   test's jobs; a test that pushes where no worker drains uses a name or a
   key unique to its run, and deletes what it filed.
+- **A suite that boots over SeaORM runs on an `EphemeralDatabase`**, never on
+  the database `<PREFIX>_SEAORM__URL` names: it creates one, seeds its
+  connection (`provide_arc(db.connection())`), which short-circuits the pool
+  `SeaOrmModule` would open, and drops it with the guard. The live suite's users
+  test seeded the main database until 7.0 — it failed on an unmigrated one, and
+  left rows behind whenever it failed before its own cleanup. The demo worker's
+  e2e still boots `WorkerModule` over the main database's pool, writing nothing
+  there: the one open member.
 - **A test that needs its own database or user seeds its config**
   (`TestApp::provide`) rather than pinning a `for_root` base: the suite's
   own `<PREFIX>_REDIS__URL` outranks a pin, field by field, and would move

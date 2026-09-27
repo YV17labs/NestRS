@@ -55,7 +55,10 @@ every feature, always. **A product never inverts it** into a single
 top-level edge folder injecting every domain service: that trades the
 module gate — an app importing exactly the edges it serves — for a
 god-adapter no app can subset, and it hides every tool or route behind
-one provider in the access graph.
+one provider in the access graph. **It is refused, not merely discouraged**: the
+naming join refuses an edge folder directly under `features/src/`, because no
+name an adapter there could take is allowed — `features` is a container, never a
+subject (*Every type in a `module.rs` shares the stem* in `architecture.md`).
 
 **A transport that cannot host two features at one mount point is a
 framework defect.** Report it and keep the shape; it is never a licence

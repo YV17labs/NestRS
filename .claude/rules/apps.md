@@ -10,7 +10,10 @@ paths:
 # Apps — pure composition
 
 `demo/apps/<name>/` is **`main.rs` + `module.rs` only, by default**.
-Not `examples/`, not `services/`.
+Not `examples/`, not `services/` — and never an edge folder directly under the
+app's `src/`, which the naming join refuses: an adapter there could only be
+named for the app, and the app's name stops at `<App>Module` (*Every type in a
+`module.rs` shares the stem* in `architecture.md`).
 
 `main` holds only `App::builder().module::<AppModule>()` (+ transports),
 plus the imperative global-layer seams `request-layers.md` sanctions

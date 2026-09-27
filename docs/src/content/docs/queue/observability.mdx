@@ -102,6 +102,7 @@ either `job_id` or `worker`:
 | `job filed for its next attempt`, `job deferred to its throttle's next window` | `debug` | A retry on the schedule, and an attempt over its throttle. |
 | `job lease not asked for; …`, `job lease not renewed; retrying`, `job settled mark not written; …` | `warn` | Redis refused a guard call — see [Delivery on Redis](/queue/delivery/#when-redis-is-slow-or-gone). |
 | `queue fetch failed; …`, `queue worker heartbeat failed; …`, `scheduled jobs not moved onto the queue; …` | `warn` | Redis refused one of apalis's own calls, which it makes again. |
+| `due jobs not moved onto the queue; retrying` | `warn` | Redis refused the worker's scan of the schedule; `retry_in_ms` says when it runs again. |
 | `job lease lost while its attempt runs; another delivery may run it too` | `error` | The attempt's lease lapsed under it. |
 | `job not handed back; …` | `error` | Redis refused a hand-back: apalis files the job's stored record again, due at once, and it runs again. |
 | `job acknowledgement lost; …` | `error` | A job stays in flight and is delivered again once swept. |
@@ -110,9 +111,10 @@ either `job_id` or `worker`:
 A producer files lines of its own on the same target, among them
 `jobs wait under the 6.x key layout; …` once per queue at `warn` — see
 [Upgrading queues from 6.x](/queue/upgrading/) — `job push unanswered; …` at
-`warn` when a push under a unique key never heard back, `due delayed jobs not
-moved onto the queue; retrying` at `warn`, and `queued job cancelled` at `info`
-when a cancel answered `true`.
+`warn` when a push under a unique key never heard back, `due jobs not moved
+onto the queue; retrying` at `warn` when Redis refused its scan of the delayed
+jobs it filed, and `queued job cancelled` at `info` when a cancel answered
+`true`.
 
 ## What boot looks like
 

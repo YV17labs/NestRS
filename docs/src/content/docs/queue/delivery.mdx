@@ -172,10 +172,10 @@ self.queue
 The job waits on `scheduled`, due on the second its delay ends — apalis
 schedules on whole seconds, and the backend rounds up, so a job never runs
 before its instant. Every worker scans the schedule once a second, moving up to
-its method's `concurrency` due jobs onto `active` each time, and so does the
-producer that filed them — a hundred at a time — for as long as it has delayed
-jobs of its own still ahead, so a due job reaches the list an autoscaler reads
-even while no worker runs. A retry is the same filing: the port's backoff
+a hundred due jobs onto `active` each time — its method's `concurrency` when
+that is more — and so does the producer that filed them, a hundred at a time,
+for as long as it has delayed jobs of its own still ahead, so a due job reaches
+the list an autoscaler reads even while no worker runs. A retry is the same filing: the port's backoff
 decides when, and the next attempt waits on the schedule rather than in a
 worker. What that means for a deployment scaled to zero is on
 [Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).

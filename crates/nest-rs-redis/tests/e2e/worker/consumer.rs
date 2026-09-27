@@ -25,12 +25,20 @@
 //! it, and one still running as it closes is interrupted and handed back, for a
 //! replica that starts later to run.
 //!
+//! **Due records reach the queue at the fetch's pace.** A burst of records
+//! falling due at once — retries, hand-backs — is moved onto `active` a hundred
+//! a second at the least, by the worker's own promotion, where apalis's scan
+//! moved one fetch's worth: one record a second at the default concurrency.
+//!
 //! Every test has its own queue and its own counters, since nextest runs them
 //! side by side on one Redis.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use apalis::prelude::{Request, Storage};
+use apalis_redis::{Config, RedisStorage};
 
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobProducerExt, processor, queue};
@@ -599,4 +607,132 @@ async fn an_attempt_outlasting_the_shutdown_window_is_handed_back_within_it() {
         "interrupted once, then run by the next replica"
     );
     assert_eq!(OUTLASTED.finished(run), 1, "and completed exactly once");
+}
+
+// --- due records reach the queue at the fetch's pace ---------------------------
+
+/// How many records fall due at once: past a promotion's hundred, so reaching
+/// `active` takes two of its scans — and a hundred and fifty of apalis's, at the
+/// default concurrency's one record a scan.
+const BURST: usize = 150;
+
+/// Whether a job holding the only permit has started, and whether to let it go.
+static BLOCKING: AtomicBool = AtomicBool::new(false);
+static RELEASED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BurstCommand {
+    blocks: bool,
+}
+
+const BURST_QUEUE: &str = "nestrs-e2e-promotion-burst";
+
+#[queue(name = "nestrs-e2e-promotion-burst", job = BurstCommand)]
+struct BurstQueue;
+
+#[injectable]
+#[derive(Default)]
+struct BurstProcessor;
+
+#[processor]
+impl BurstProcessor {
+    /// One permit: a job that blocks holds it, so the replica fetches nothing
+    /// while the burst is moved onto its queue.
+    #[process(queue = BurstQueue, retries = 0)]
+    async fn run(&self, job: BurstCommand) -> anyhow::Result<()> {
+        if job.blocks {
+            BLOCKING.store(true, Ordering::SeqCst);
+            while !RELEASED.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [BurstProcessor],
+)]
+struct BurstModule;
+
+/// A burst of records filed due at once on the schedule — a peer's hand-backs,
+/// filed through apalis's own `schedule_request` as a worker files one — is on
+/// `active`, every record of it, within two of the worker's promotion scans,
+/// while the method's one permit is held and nothing is fetched. Moved at the
+/// fetch's pace by apalis's scan, the burst would have taken a hundred and fifty
+/// seconds, one record a second.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_burst_of_due_records_reaches_active_within_two_promotion_scans() {
+    crate::forget(BURST_QUEUE).await;
+    let replica = crate::replica::<BurstModule>().await;
+    replica
+        .producer
+        .push(BurstQueue, BurstCommand { blocks: true }, None)
+        .await
+        .expect("enqueue the job that holds the permit");
+    crate::wait_until(Duration::from_secs(15), || BLOCKING.load(Ordering::SeqCst)).await;
+    assert!(
+        BLOCKING.load(Ordering::SeqCst),
+        "the permit is held before the burst"
+    );
+
+    let mut apalis: RedisStorage<serde_json::Value, nest_rs_redis::RedisConnection> =
+        RedisStorage::new_with_config(
+            crate::connect().await,
+            Config::default().set_namespace(&crate::namespace(BURST_QUEUE)),
+        );
+    let due = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| i64::try_from(since.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or_default();
+    let mut filed = Vec::with_capacity(BURST);
+    for _ in 0..BURST {
+        let record = Request::new(serde_json::json!({
+            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
+            "payload": { "blocks": false },
+        }));
+        let parts = apalis
+            .schedule_request(record, due)
+            .await
+            .expect("a record filed due on the schedule");
+        filed.push(parts.task_id.to_string());
+    }
+    let burst_filed = Instant::now();
+
+    let mut admin = crate::connect().await;
+    let active = format!("{}:active", crate::namespace(BURST_QUEUE));
+    let mut waiting: Vec<String> = Vec::new();
+    while burst_filed.elapsed() < Duration::from_secs(5) {
+        waiting = redis::cmd("LRANGE")
+            .arg(&active)
+            .arg(0)
+            .arg(-1)
+            .query_async(&mut admin)
+            .await
+            .expect("LRANGE");
+        if filed.iter().all(|id| waiting.contains(id)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let took = burst_filed.elapsed();
+
+    RELEASED.store(true, Ordering::SeqCst);
+    replica
+        .worker
+        .shutdown()
+        .await
+        .expect("clean worker shutdown");
+    crate::forget(BURST_QUEUE).await;
+
+    let promoted = filed.iter().filter(|id| waiting.contains(id)).count();
+    assert_eq!(
+        promoted, BURST,
+        "every record of the burst reached active, not one fetch's worth a second"
+    );
+    assert!(
+        took < Duration::from_secs(3),
+        "within two promotion scans of a second each, not {took:?}"
+    );
 }

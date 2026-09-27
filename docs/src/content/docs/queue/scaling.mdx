@@ -104,16 +104,22 @@ running jobs. For a method whose jobs run for minutes, that is minutes of
 waiting behind a busy replica while another sits idle, so keep its
 `concurrency` to what one replica should hold.
 
-**Held-back jobs reach the queue at `concurrency` a second.** A delayed push, a
-retry's next attempt and a job handed back wait on the schedule until a scan
-moves them onto `active`. Each worker scans once a second and moves up to its
-method's `concurrency` due jobs per scan; the producer that filed delayed jobs
-moves up to a hundred a second while it has some ahead. A burst of due retries
-drains onto the queue at `concurrency` a second per replica, below the fetch's
-ceiling.
+**Held-back jobs reach the queue a hundred a second, or more.** A delayed push,
+a retry's next attempt and a job handed back wait on the schedule until a scan
+moves them onto `active`. Each method of each running worker scans once a
+second and moves up to a hundred due jobs per scan — its `concurrency` when that
+is more, 799 at the most — so a burst of due retries or hand-backs reaches
+`active`, and a trigger reading it, within seconds; the producer that filed
+delayed jobs moves up to a hundred a second too, while it has some ahead. The
+scan is one script a second per method per replica — what apalis's own scan
+cost when it ran each second; that scan, which moves one fetch's worth, now
+runs at apalis's default of half a minute, as a backstop. A scan costs Redis in
+proportion to what it moves — one read of the schedule, one push of the ids,
+one trim — so a burst of 150 due jobs is two scripts, where one fetch's worth a
+second made it 150 at the default `concurrency`.
 
 **An idle method still costs Redis every poll**: a fetch and a sweep of silent
-peers, plus a scan of the schedule each second and a heartbeat. Measured with
+peers, plus the worker's scan of the schedule each second and a heartbeat. Measured with
 `INFO commandstats` over ten seconds, one idle method on one replica sent about
 20 scripts a second at the 100 ms default — 58 commands, counting the ones the
 scripts run — and 140 scripts, 420 commands, at the 10 ms floor. Multiply by
@@ -244,16 +250,19 @@ wake the deployment.
 - `crates/nest-rs-queue/src/process_options.rs` — `ProcessOptions` and
   `Throttle`.
 - `crates/nest-rs-redis/src/worker/consumer.rs` — each method's permits, the
-  fetch of up to `concurrency` jobs per poll, and each replica's id.
-- `crates/nest-rs-redis/src/worker/config.rs` — the poll, and every floor.
+  fetch of up to `concurrency` jobs per poll, each replica's id, and how many
+  due jobs its scan of the schedule moves.
+- `crates/nest-rs-redis/src/worker/config.rs` — the poll, and every bound.
 - `crates/nest-rs-redis/src/worker/lease.rs` — the throttle's window, counted in
   the step that admits an attempt.
+- `crates/nest-rs-redis/src/promotion.rs` — one scan of a queue's schedule,
+  which both a worker and a producer run.
 - `crates/nest-rs-redis/src/queue/promoter.rs` — the producer moving the delayed
   jobs it filed onto the list KEDA reads.
 - `crates/nest-rs-redis/tests/e2e/worker/consumer.rs`, `worker/lease.rs` and
   `queue/promoter.rs` — both bounds, one poll filling every permit, the jobs a
-  busy replica holds, and a delayed job reaching that list with no worker
-  running, against live Redis.
+  busy replica holds, a burst of due jobs reaching that list within two scans,
+  and a delayed job reaching it with no worker running, against live Redis.
 
 ## Going further
 

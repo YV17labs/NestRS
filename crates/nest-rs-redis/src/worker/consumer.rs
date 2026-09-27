@@ -40,6 +40,16 @@
 //! it, so the second delivery hands it back until the first has settled it, then
 //! acknowledges it without running. Measured in `tests/e2e/worker/`.
 //!
+//! **Due records reach the queue at the fetch's pace.** A record held back —
+//! a delayed push, a retry's next attempt, a job handed back — waits on the
+//! queue's schedule until a scan moves it onto `active`, where the worker fetches
+//! it and an autoscaler counts it. Each method's worker runs a [`Promotion`] of
+//! its own, every second, moving up to a hundred due records or its
+//! `concurrency`, whichever is more — 799 at the most — so a burst of due retries
+//! or hand-backs reaches `active` within seconds rather than one fetch's worth a
+//! second. apalis's own scan, which moves one fetch's worth, is left at its
+//! default thirty seconds, a backstop.
+//!
 //! **A shutdown drains within its window.** The worker stops fetching at once;
 //! attempts running get [`RedisWorkerConfig::shutdown_timeout`] less a reserve to
 //! finish, and whatever still runs when that closes is interrupted and handed
@@ -61,17 +71,21 @@ use nest_rs_core::{Container, Transport};
 use nest_rs_queue::consume;
 use nest_rs_queue::{ProcessMethod, QueueName};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 use super::delivery::{Deliveries, Task};
 use super::lease::Leases;
 use crate::backend::{BACKEND, uncapped_context};
 use crate::connection::CONNECTION_REMEDY;
 use crate::error::LegacyLayoutError;
+use crate::promotion::{self, Promotion};
 use crate::{RedisConnection, RedisWorkerConfig, layout};
 
-/// How often a worker moves the records whose time has come from Redis's
-/// scheduled set to its queue, up to its fetch size each time — see `storage`.
-const SCHEDULED_SCAN: Duration = Duration::from_secs(1);
+/// How often apalis's own scan moves due records onto the queue, one fetch's
+/// worth each time: its default, half a minute. The worker's [`Promotion`]
+/// moves them every second, a larger batch at a time, so this scan only backs
+/// it up.
+const APALIS_SCAN: Duration = Duration::from_secs(30);
 
 /// What a drain keeps back from its window to hand interrupted jobs back in:
 /// five seconds, or half the window when that is shorter.
@@ -143,6 +157,9 @@ impl Transport for RedisWorker {
             .unwrap_or_default();
 
         let interrupt = CancellationToken::new();
+        // Each method's promotion, for as long as `serve` runs — the drain
+        // included, where a job handed back is due at once.
+        let mut promoting = Vec::new();
         let mut workers = HashMap::new();
         let mut built = Vec::new();
         for method in &self.methods {
@@ -154,6 +171,9 @@ impl Transport for RedisWorker {
         let reporter = Reporter::new(workers);
         let mut monitor = Monitor::new().on_event(move |event| reporter.report(&event));
         for (method, queue, id) in built {
+            promoting.push(AbortOnDropHandle::new(tokio::spawn(promote(
+                Promotion::new(&connection, &queue, promoted_per_scan(concurrency(method))),
+            ))));
             let filing = uncapped_context(Some(&id)).with_context(|| {
                 format!(
                     "RedisWorker could not build the apalis context queue `{queue}`'s records are \
@@ -324,12 +344,12 @@ const MOST_PER_FETCH: usize = LUA_UNPACK_LIMIT / FETCHES_PER_SWEEP;
 /// The fetch size bounds apalis's two other loops the same way. A record
 /// scheduled for later — a delayed push, a retry, a job handed back — becomes
 /// available on apalis's `enqueue_scheduled` scan, which moves up to
-/// `buffer_size` due records per scan; it sleeps before its first tick and
-/// defaults to thirty seconds, which would run a job's next attempt up to half a
-/// minute after the wait the port asked for — at a one-second backoff, thirty
-/// times it — so it runs every second, keeping the lateness under the port's
-/// own jitter. And every poll, as at start, apalis sweeps up to ten times
-/// `buffer_size` of the jobs silent peers held back onto the queue.
+/// `buffer_size` due records per scan: one due record a second, at the default
+/// concurrency, were it the one moving them. The worker's [`Promotion`] moves
+/// them instead, every second and a hundred at the least (`promoted_per_scan`),
+/// so apalis's scan stays at its default half a minute, a backstop. And every
+/// poll, as at start, apalis sweeps up to ten times `buffer_size` of the jobs
+/// silent peers held back onto the queue.
 ///
 /// The heartbeat and the orphan threshold are the config's: a worker proves it
 /// is alive every tenth of the threshold, so a peer only ever sweeps one that
@@ -338,9 +358,30 @@ fn fetching(queue: &QueueName, config: &RedisWorkerConfig, concurrency: usize) -
     layout::config(queue)
         .set_buffer_size(concurrency.min(MOST_PER_FETCH))
         .set_poll_interval(config.poll_interval)
-        .set_enqueue_scheduled(SCHEDULED_SCAN)
+        .set_enqueue_scheduled(APALIS_SCAN)
         .set_keep_alive(config.heartbeat())
         .set_reenqueue_orphaned_after(config.orphan_after)
+}
+
+/// How many due records a method's promotion moves per scan: a hundred, or its
+/// `concurrency` when that is more — a burst of due jobs then reaches `active`
+/// at least as fast as one replica fetches it — and never more than one fetch
+/// may claim, the most apalis's scripts hand Lua at once.
+fn promoted_per_scan(concurrency: usize) -> usize {
+    concurrency.clamp(promotion::BATCH, MOST_PER_FETCH)
+}
+
+// `clamp` panics when its floor passes its ceiling; both are constants, so the
+// order is checked where they are compiled rather than on every worker's start.
+const _: () = assert!(promotion::BATCH <= MOST_PER_FETCH);
+
+/// Move `promotion`'s due records onto its queue, a scan a tick, until the task
+/// is aborted — when `serve` returns.
+async fn promote(mut promotion: Promotion) {
+    loop {
+        tokio::time::sleep(promotion.wait()).await;
+        promotion.scan().await;
+    }
 }
 
 /// How many attempts of `method` one replica runs at once — its permits, and
@@ -634,8 +675,29 @@ mod tests {
         assert_eq!(settings.get_poll_interval(), &Duration::from_millis(25));
         assert_eq!(settings.get_keep_alive(), &config.heartbeat());
         assert_eq!(settings.reenqueue_orphaned_after(), config.orphan_after);
-        assert_eq!(settings.get_enqueue_scheduled(), &SCHEDULED_SCAN);
+        assert_eq!(settings.get_enqueue_scheduled(), &APALIS_SCAN);
         assert_eq!(settings.get_namespace(), &layout::namespace(&queue));
+    }
+
+    /// A method's promotion moves a hundred due records a scan, or its
+    /// `concurrency` when that is more, and never more than a fetch may claim —
+    /// the Lua bound a scan's single push of ids meets too.
+    #[test]
+    fn a_promotion_moves_a_hundred_or_the_methods_concurrency_up_to_a_fetchs_most() {
+        for (concurrency, moved) in [
+            (1, 100),
+            (100, 100),
+            (250, 250),
+            (799, 799),
+            (800, 799),
+            (100_000, 799),
+        ] {
+            assert_eq!(
+                promoted_per_scan(concurrency),
+                moved,
+                "concurrency {concurrency}"
+            );
+        }
     }
 
     /// Two workers in one process are two consumers: an id is never reused, so

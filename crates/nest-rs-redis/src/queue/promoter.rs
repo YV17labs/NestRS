@@ -5,14 +5,14 @@
 //!
 //! apalis keeps a delayed record on the queue's schedule, and only its
 //! `enqueue_scheduled` moves a due one onto the list a worker fetches from — a
-//! call its own worker makes on a heartbeat. That list is also what an
-//! autoscaler reads (KEDA's `redis` trigger polls its length), so with no worker
-//! running a due job would never appear there, and the autoscaler waiting for it
-//! would never start the worker that could have moved it: a deployment scaled to
-//! zero would hold a delayed job forever. So the producer that filed it moves it
-//! too, on a one-second tick, for as long as it has delayed records of its own
-//! still ahead of it; the tick stops by itself once the last of them is due and
-//! nothing due is left behind.
+//! [`Promotion`] every running worker runs each second. That list is also what
+//! an autoscaler reads (KEDA's `redis` trigger polls its length), so with no
+//! worker running a due job would never appear there, and the autoscaler waiting
+//! for it would never start the worker that could have moved it: a deployment
+//! scaled to zero would hold a delayed job forever. So the producer that filed it
+//! moves it too, on the same one-second tick and a hundred at a time, for as long
+//! as it has delayed records of its own still ahead of it; the tick stops by
+//! itself once the last of them is due and nothing due is left behind.
 //!
 //! **What it does not cover** is a producer that exits before its records are
 //! due. They stay on the schedule until a worker or a producer scans it again,
@@ -22,24 +22,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use apalis_redis::RedisStorage;
 use nest_rs_queue::QueueName;
 
 use crate::RedisConnection;
-use crate::layout;
-
-/// How often a producer with delayed records outstanding scans their schedule:
-/// once a second, the resolution apalis schedules on.
-const TICK: Duration = Duration::from_secs(1);
-
-/// The most records one scan moves; a scan that moves this many runs again at
-/// the next tick, however far its deadline.
-const BATCH: usize = 100;
-
-/// The longest a tick backs off to while Redis refuses the scan.
-const MAX_BACKOFF: Duration = Duration::from_secs(30);
+use crate::promotion::{BATCH, Promotion};
 
 /// The delayed records one producer has filed and not yet seen due, per queue:
 /// the second the last of them is due. A queue in the map has a scan running.
@@ -61,7 +49,11 @@ impl Promoter {
             return;
         }
         outstanding.insert(queue.clone(), second);
-        tokio::spawn(scan(self.clone(), conn.clone(), queue.clone()));
+        tokio::spawn(scan(
+            self.clone(),
+            Promotion::new(conn, queue, BATCH),
+            queue.clone(),
+        ));
     }
 
     /// Whether `queue` still has records ahead of `now` — and when it has none,
@@ -81,48 +73,20 @@ impl Promoter {
     }
 }
 
-/// Move `queue`'s due records onto its list every [`TICK`] until the last
-/// record this producer filed is due and a scan found nothing more to move.
-async fn scan(promoter: Promoter, conn: RedisConnection, queue: QueueName) {
-    let mut storage: RedisStorage<serde_json::Value, RedisConnection> =
-        RedisStorage::new_with_config(conn, layout::config(&queue));
-    let mut wait = TICK;
+/// Move `queue`'s due records onto its list at every tick until the last
+/// record this producer filed is due and a scan found fewer than a batch to
+/// move — nothing due is then left behind.
+async fn scan(promoter: Promoter, mut promotion: Promotion, queue: QueueName) {
     loop {
-        tokio::time::sleep(wait).await;
+        tokio::time::sleep(promotion.wait()).await;
         let now = now_second();
-        match storage.enqueue_scheduled(BATCH).await {
-            Ok(moved) => {
-                wait = TICK;
-                if moved > 0 {
-                    tracing::debug!(
-                        target: nest_rs_queue::TARGET,
-                        queue = %queue,
-                        moved,
-                        "due delayed jobs moved onto the queue",
-                    );
-                }
-                if moved < BATCH && promoter.done_with(&queue, now) {
-                    return;
-                }
-            }
-            Err(error) => {
-                wait = (wait * 2).min(MAX_BACKOFF);
-                report_scan_failure(&queue, wait, &error);
-            }
+        if let Some(moved) = promotion.scan().await
+            && moved < BATCH
+            && promoter.done_with(&queue, now)
+        {
+            return;
         }
     }
-}
-
-/// A scan Redis refused, said at `warn` with when the next one runs: the due
-/// jobs it would have moved wait until then — or until a worker's own scan.
-fn report_scan_failure(queue: &QueueName, retry_in: Duration, error: &redis::RedisError) {
-    tracing::warn!(
-        target: nest_rs_queue::TARGET,
-        queue = %queue,
-        retry_in_ms = u64::try_from(retry_in.as_millis()).unwrap_or(u64::MAX),
-        error = %nest_rs_core::error_message(error),
-        "due delayed jobs not moved onto the queue; retrying",
-    );
 }
 
 /// The current second, as apalis's schedule counts it.
@@ -158,24 +122,5 @@ mod tests {
             promoter.done_with(&audio, 0),
             "a queue not outstanding is done"
         );
-    }
-
-    /// A scan Redis refused is said at `warn`, with when the next one runs.
-    #[test]
-    fn a_scan_redis_refuses_is_said_with_the_next_try() {
-        let logs = nest_rs_testing::LogCapture::install();
-        let audio = QueueName::new("audio").expect("a valid name");
-        report_scan_failure(
-            &audio,
-            Duration::from_secs(2),
-            &redis::RedisError::from(std::io::Error::other("timed out")),
-        );
-        let refused = logs.expect_one(
-            nest_rs_queue::TARGET,
-            "due delayed jobs not moved onto the queue; retrying",
-        );
-        assert_eq!(refused.level, "warn");
-        assert_eq!(refused.field("retry_in_ms").as_deref(), Some("2000"));
-        assert_eq!(refused.field("error").as_deref(), Some("timed out"));
     }
 }

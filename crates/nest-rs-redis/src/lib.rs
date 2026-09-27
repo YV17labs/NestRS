@@ -47,6 +47,7 @@ mod connection;
 mod error;
 mod layout;
 mod module;
+mod promotion;
 mod queue;
 #[cfg(feature = "schedule")]
 mod schedule;

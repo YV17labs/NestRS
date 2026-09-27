@@ -164,3 +164,8 @@ the access contract only. Batch field fetches with `#[dataloader]`
 - **`src/orgs/`** — the ~30-line full HTTP CRUD slice (the North Star
   measurement).
 - **`src/posts/`** — tutorial feature exemplar.
+- **`src/notifications/schedule/`** — a scheduled job that is the deployment's
+  work, not the process's: `#[every("1h", replicas = "one")]`, hosted by the
+  worker beside `ScheduleModule` and `nest_rs::redis::RedisScheduleModule`, so
+  scaling the worker never multiplies it. A job about the process itself —
+  `audio`'s heartbeat — keeps the default, `"each"`.

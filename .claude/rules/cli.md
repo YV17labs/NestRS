@@ -78,6 +78,18 @@ exemplar or a naming rule ⇒ update the matching template in the same
 task, and vice versa. A generator that emits a layout the rules forbid
 is a defect on par with breaking the exemplar itself.
 
+**Every generator is compiled, not only read.** `tests/e2e/scaffold.rs` runs
+every adapter generator over both port shapes from inside an app
+(`-p apps/hello`), so the edits it makes to that app's `module.rs` and manifest
+compile too; it covers the second app `nestrs new` adds to a workspace and
+`g migration`, and holds the result to the scaffold's own `clippy -D warnings`.
+Its `EDGES` list is joined to `Transport::ALL` by
+`naming::tests::the_e2e_suite_compiles_every_edge`, so an edge the CLI gains
+cannot ship uncompiled. The integration suite's text assertions are not that
+proof — they read a wrong import as readily as a right one (*That distinction is
+load-bearing* in `framework.md`) — and `g graphql` over a resource wrote a
+resolver that did not compile through 6.0 and 6.1 because only they covered it.
+
 Scaffolded span targets use the app-name style (`features::<snake>`),
 not `nest_rs::*` — deliberate: generated code is app code, not
 framework code.

@@ -29,7 +29,7 @@ composition — the app lists the edges it serves.
 | `live` | WebSockets |
 | `auth` | token issuer (signs; `api` only verifies) |
 | `assistant` | MCP |
-| `worker` | queue |
+| `worker` | queue, and the one-replica notifications purge |
 
 Simple hello/blog layouts are CLI-scaffolded only — see the docs, not
 hosted in this repo.

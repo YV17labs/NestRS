@@ -117,8 +117,10 @@ Adapters carry transport mechanics; the service carries intent.
 - **`#[processor]`** on the impl block orchestrates the per-method
   `#[process]` attributes and submits one queue consumer per decorated
   method.
-- **`#[process(queue, retries)]`** binds the method to a `Queue`
-  **type** and gives it a retry budget. The job type is read from the
+- **`#[process(queue, retries, concurrency)]`** binds the method to a
+  `Queue` **type**, gives it a retry budget, and lets `concurrency`
+  attempts run side by side on each replica — see
+  [How many at once](#how-many-at-once-and-how-fast). The job type is read from the
   method's first parameter after `&self`, and the macro asserts it is
   `AudioQueue::Job` — a handler consuming the wrong payload is a compile
   error naming both types. A queue is drained by one method: a second

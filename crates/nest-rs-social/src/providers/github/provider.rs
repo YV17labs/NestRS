@@ -160,6 +160,24 @@ mod tests {
         );
     }
 
+    /// A GitHub login makes three calls through the client, one after another —
+    /// the code exchange, `/user` in [`SocialProvider::profile`], `/user/emails`
+    /// in `resolve_email` — the most any provider this crate ships makes. Each
+    /// may run to `CALL_TIMEOUT` before the client reports it, so the three
+    /// together must fit inside `AuthnGuard`'s net: past it, the guard would cut
+    /// short a login still being answered and replace the client's sentence,
+    /// which names the endpoint, with its own, which names only the strategy.
+    #[test]
+    fn a_login_s_provider_calls_fit_inside_the_guard_s_net() {
+        const CALLS: u32 = 3;
+        let login = OAuthClient::CALL_TIMEOUT * CALLS;
+        assert!(
+            login < nest_rs_authn::AUTHENTICATE_TIMEOUT,
+            "{login:?} vs {:?}",
+            nest_rs_authn::AUTHENTICATE_TIMEOUT,
+        );
+    }
+
     #[test]
     fn profile_email_maps_to_unverified_when_it_is_the_only_source() {
         // The `resolve_email` fallback path: an email the emails endpoint never

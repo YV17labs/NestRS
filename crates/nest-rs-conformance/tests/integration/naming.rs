@@ -51,6 +51,7 @@ mod floors {
     pub(super) const VOCABULARY_FILES: usize = 150;
     pub(super) const ERROR_TYPES: usize = 30;
     pub(super) const ADAPTER_ROOT_FILES: usize = 6;
+    pub(super) const PRODUCT_SOURCE_ROOTS: usize = 6;
 }
 
 /// Fold a name to what it *says*, discarding how it was cased or separated:
@@ -88,6 +89,47 @@ fn subject_of(krate: &str) -> &str {
     krate.strip_prefix("nest-rs-").unwrap_or(krate)
 }
 
+/// Words whose PascalCase is not a mechanical uppercase of the first letter.
+///
+/// Consulted **per `-`-separated segment**, so a family declares its spelling
+/// once and every member inherits it: `oauth` here is what makes
+/// `oauth-client`, `oauth-server` and `oauth-resource` derive `OAuthClient`,
+/// `OAuthServer` and `OAuthResource` without a line each. A role added to the
+/// family tomorrow needs no edit here.
+const SPELLED: [(&str, &str); 6] = [
+    ("oauth", "OAuth"),
+    ("seaorm", "SeaOrm"),
+    ("openapi", "OpenApi"),
+    ("opentelemetry", "OpenTelemetry"),
+    ("macro-hygiene", "MacroHygiene"),
+    ("graphql", "Graphql"),
+];
+
+/// A folder or crate word as the type that names it spells it.
+fn pascal(s: &str) -> String {
+    s.split(['-', '_'])
+        .map(|w| match SPELLED.iter().find(|(k, _)| *k == w) {
+            Some((_, spelled)) => (*spelled).to_owned(),
+            None => {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect()
+}
+
+/// The folder the product lives under, from the repository root — the `demo/`
+/// workspace, whose `apps/` and `crates/` are its two fixed halves (`CLAUDE.md`,
+/// *Two workspaces*).
+const PRODUCT: &str = "demo";
+
+/// Where the product's crates sit below [`PRODUCT`]: its binaries, and the
+/// libraries they share.
+const PRODUCT_WORKSPACES: [&str; 2] = ["apps", "crates"];
+
 /// **The law: the stem is the crate's subject plus every folder below `src/`.**
 ///
 /// `CLAUDE.md` calls naming the pillar, and this is the mechanical half of it:
@@ -116,36 +158,6 @@ fn subject_of(krate: &str) -> &str {
 /// prefixes: `audio/http/module.rs` is `AudioHttpModule`.
 #[test]
 fn every_module_type_is_named_for_its_path() {
-    /// Words whose PascalCase is not a mechanical uppercase of the first letter.
-    ///
-    /// Consulted **per `-`-separated segment**, so a family declares its
-    /// spelling once and every member inherits it: `oauth` here is what makes
-    /// `oauth-client`, `oauth-server` and `oauth-resource` derive `OAuthClient`,
-    /// `OAuthServer` and `OAuthResource` without a line each. A role added to
-    /// the family tomorrow needs no edit here.
-    const SPELLED: [(&str, &str); 6] = [
-        ("oauth", "OAuth"),
-        ("seaorm", "SeaOrm"),
-        ("openapi", "OpenApi"),
-        ("opentelemetry", "OpenTelemetry"),
-        ("macro-hygiene", "MacroHygiene"),
-        ("graphql", "Graphql"),
-    ];
-    fn pascal(s: &str) -> String {
-        s.split(['-', '_'])
-            .map(|w| match SPELLED.iter().find(|(k, _)| *k == w) {
-                Some((_, spelled)) => (*spelled).to_owned(),
-                None => {
-                    let mut c = w.chars();
-                    match c.next() {
-                        Some(f) => f.to_ascii_uppercase().to_string() + c.as_str(),
-                        None => String::new(),
-                    }
-                }
-            })
-            .collect()
-    }
-
     let mut holes = BTreeSet::new();
     let mut scanned = 0usize;
     let root = repo_root();
@@ -226,8 +238,10 @@ fn every_module_type_is_named_for_its_path() {
 /// an adapter *of* something, and `HttpController` would name the adapter twice
 /// and the thing it adapts never.
 ///
-/// **An edge folder directly under a crate's `src/` adapts the crate itself**,
-/// so its adapter takes the crate's subject — see [`module_word`].
+/// **An edge folder directly under a framework crate's `src/` adapts the crate
+/// itself**, so its adapter takes the crate's subject — see [`module_word`]. In
+/// a product crate there is no such adapter to name: it is refused where it
+/// sits, by [`an_edge_adapter_in_a_product_crate_sits_in_a_module_folder`].
 #[test]
 fn every_edge_adapter_is_named_for_the_module_it_adapts() {
     let (scanned, offenders) = misnamed_adapters(&repo_root());
@@ -297,13 +311,17 @@ fn misnamed_adapters(root: &Path) -> (usize, Vec<String>) {
 ///
 /// **The module folder above the edge — unless that folder is a source root**,
 /// which names a layout level and no module. An edge folder directly under a
-/// crate's `src/` adapts the crate itself, so it takes the crate's subject:
-/// `nest-rs-x/src/http/controller.rs` is `XController`, the stem the module join
-/// already gives `nest-rs-x/src/http/module.rs` (`XHttpModule`). Read as a
-/// module, `src` expected a `SrcController` and refused the right name. A
-/// product crate's subject is its directory, as it is for its module
-/// (`demo/apps/api/src/http/controller.rs` is `ApiController`, beside
-/// `ApiModule`).
+/// framework crate's `src/` adapts the crate itself, so it takes the crate's
+/// subject: `nest-rs-x/src/http/controller.rs` is `XController`, the stem the
+/// module join already gives `nest-rs-x/src/http/module.rs` (`XHttpModule`).
+/// Read as a module, `src` expected a `SrcController` and refused the right name.
+///
+/// **A product crate's source root has no word to give**, because the crate is
+/// not a subject there: the app name stops at `<App>Module`, and a product
+/// library is a container of modules. So nothing is named for it — an edge
+/// folder there is refused where it sits
+/// ([`an_edge_adapter_in_a_product_crate_sits_in_a_module_folder`]), and one
+/// refusal says so rather than two sentences disagreeing about one folder.
 ///
 /// **A suite root is the same level**, because a suite's module tree mirrors
 /// `src/` (`testing.md`): `tests/integration/http/` is the mirror of `src/http/`,
@@ -312,6 +330,7 @@ fn misnamed_adapters(root: &Path) -> (usize, Vec<String>) {
 /// shadow a real module.
 fn module_word<'a>(above: &'a [std::borrow::Cow<'a, str>]) -> Option<&'a str> {
     match above {
+        [area, .., root] if root == "src" && area == PRODUCT => None,
         [.., krate, root] if root == "src" => Some(subject_of(krate)),
         [.., krate, tests, _suite] if tests == "tests" => Some(subject_of(krate)),
         [.., module] => Some(module),
@@ -339,7 +358,8 @@ fn an_edge_folder_directly_under_src_adapts_the_crate() {
             "crates/nest-rs-oauth-probe/src/http/controller.rs",
             "pub struct OAuthProbeController;",
         ),
-        // A product crate's subject is its directory.
+        // A product crate's root gives no word, so its adapter is not read here
+        // — it is refused where it sits, by the placement rule.
         (
             "demo/apps/api/src/graphql/resolver.rs",
             "pub struct ApiResolver;",
@@ -378,7 +398,7 @@ fn an_edge_folder_directly_under_src_adapts_the_crate() {
     assert_eq!(
         verdict,
         (
-            9,
+            8,
             vec![
                 "IntegrationProcessor in crates/nest-rs-probe/tests/integration/queue/processor.rs"
                     .to_owned(),
@@ -387,6 +407,163 @@ fn an_edge_folder_directly_under_src_adapts_the_crate() {
             ],
         ),
     );
+}
+
+/// **In a product crate, an edge adapter sits in a module folder** — never
+/// directly under an app's or a library's `src/`.
+///
+/// The framework reads that level as the crate adapting itself, because a
+/// framework crate is named for its subject (`nest-rs-x/src/http/` is
+/// `XController`). A product crate is not a subject at that level, and
+/// `architecture.md` says so twice: *"the app name stops at `<App>Module`"*, and
+/// a product library is *"a container — its modules are domains"*. So an adapter
+/// there adapts nothing a reader can name, and the edge it serves belongs to the
+/// module that owns the domain — `src/<module>/<edge>/`, named for that module.
+///
+/// **A file is the same module as a folder**: `src/http.rs` declares `crate::http`
+/// exactly as `src/http/mod.rs` does, so both spellings are refused, and a rule
+/// that caught one would teach the other. Every product crate is read, the
+/// binaries and every library beside `features` — the reserved-vocabulary join
+/// reads `features` and the apps only, and answered an edge there with *"pick
+/// the domain word"*, which is the wrong remedy for an adapter that is misplaced
+/// rather than misnamed; it leaves the edge words to this one sentence.
+///
+/// Framework crates keep their reading. A scaffolded project is a product too,
+/// and is outside this suite: `nestrs lint` runs only the pairing rule, and
+/// whether it should run this one is the owner's.
+#[test]
+fn an_edge_adapter_in_a_product_crate_sits_in_a_module_folder() {
+    let (scanned, offenders) = edges_at_a_product_root(&repo_root());
+    baseline::floor(
+        scanned,
+        floors::PRODUCT_SOURCE_ROOTS,
+        "product source roots",
+    );
+    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+}
+
+/// The product source roots below `root` that hold a module named for an edge,
+/// each with the sentence refusing it, and how many roots were read.
+fn edges_at_a_product_root(root: &Path) -> (usize, Vec<String>) {
+    let mut scanned = 0usize;
+    let mut offenders = Vec::new();
+    for workspace in PRODUCT_WORKSPACES {
+        let Ok(crates) = std::fs::read_dir(root.join(PRODUCT).join(workspace)) else {
+            continue;
+        };
+        for krate in crates.flatten() {
+            let Some(name) = krate.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let src = krate.path().join("src");
+            let Ok(entries) = std::fs::read_dir(&src) else {
+                continue;
+            };
+            scanned += 1;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let module = if path.is_dir() {
+                    path.file_name()
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    path.file_stem()
+                } else {
+                    continue;
+                };
+                let Some(edge) = module
+                    .and_then(|m| m.to_str())
+                    .filter(|m| crate::EDGES.contains(m))
+                else {
+                    continue;
+                };
+                let container = if workspace == "apps" {
+                    format!(
+                        "the app name stops at `{}Module`, so nothing below it adapts the app",
+                        pascal(&name),
+                    )
+                } else {
+                    "a product library is a container of modules, never a subject, so there is \
+                     no module at its root to adapt"
+                        .to_owned()
+                };
+                offenders.push(format!(
+                    "{} — an edge adapter belongs to a module folder: move it to \
+                     `src/<module>/{edge}/`, named for the module it adapts; {container}",
+                    relative(&path, root),
+                ));
+            }
+        }
+    }
+    offenders.sort();
+    (scanned, offenders)
+}
+
+/// [`edges_at_a_product_root`] and [`misnamed_adapters`] on one planted tree:
+/// both spellings of an edge module refused at an app's root and at a library's,
+/// the same folder a module owns left alone, the framework's reading of its own
+/// root kept — and no adapter answered twice.
+#[test]
+fn an_edge_at_a_product_root_is_refused_where_a_framework_root_is_read() {
+    const TREE: [(&str, &str); 8] = [
+        (
+            "demo/apps/api/src/http/controller.rs",
+            "pub struct ApiController;",
+        ),
+        ("demo/apps/api/src/graphql.rs", "pub struct ApiResolver;"),
+        (
+            "demo/crates/features/src/ws/gateway.rs",
+            "pub struct FeaturesGateway;",
+        ),
+        // A module owns the edge, in an app and in a library.
+        (
+            "demo/apps/api/src/users/http/controller.rs",
+            "pub struct UsersController;",
+        ),
+        (
+            "demo/crates/features/src/posts/ws/gateway.rs",
+            "pub struct PostsGateway;",
+        ),
+        // A word that only opens like an edge is not one, and a suite is not a
+        // source root.
+        ("demo/apps/api/src/httpd/mod.rs", "pub struct Daemon;"),
+        ("demo/apps/api/tests/e2e/http.rs", "fn served() {}"),
+        // The framework's own root keeps its reading.
+        (
+            "crates/nest-rs-probe/src/http/controller.rs",
+            "pub struct ProbeController;",
+        ),
+    ];
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("naming-product-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    crate::plant(&root, &TREE);
+    let placed = edges_at_a_product_root(&root);
+    let named = misnamed_adapters(&root);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(
+        placed,
+        (
+            2,
+            vec![
+                "demo/apps/api/src/graphql.rs — an edge adapter belongs to a module folder: \
+                 move it to `src/<module>/graphql/`, named for the module it adapts; the app \
+                 name stops at `ApiModule`, so nothing below it adapts the app"
+                    .to_owned(),
+                "demo/apps/api/src/http — an edge adapter belongs to a module folder: move it \
+                 to `src/<module>/http/`, named for the module it adapts; the app name stops at \
+                 `ApiModule`, so nothing below it adapts the app"
+                    .to_owned(),
+                "demo/crates/features/src/ws — an edge adapter belongs to a module folder: move \
+                 it to `src/<module>/ws/`, named for the module it adapts; a product library is \
+                 a container of modules, never a subject, so there is no module at its root to \
+                 adapt"
+                    .to_owned(),
+            ],
+        ),
+    );
+    // The two module-owned adapters and the framework's, and not the refused
+    // ones: a misplaced adapter is answered once, by where it sits.
+    assert_eq!(named, (3, Vec::new()));
 }
 
 /// `architecture.md`: "**No `*_module.rs`, ever.** One `#[module]` per file, one
@@ -474,7 +651,9 @@ fn invented_folders(root: &Path) -> Vec<String> {
 /// module's `http/` is the sanctioned edge folder and its `dtos/` the sanctioned
 /// plural role folder. What the rule forbids is a *module* — a domain — taking
 /// one. So the population is the folders directly under a product `src/`, which
-/// is where a module lives.
+/// is where a module lives. The edge words are the one row left out: at that
+/// level they are an adapter in the wrong place, and the placement rule words
+/// the remedy (`src/<module>/<edge>/`) that "pick the domain word" would not.
 ///
 /// The reserved list is derived from `architecture.md` itself, by the CLI that
 /// ships that file — recopying it, or re-parsing it, would be the second copy
@@ -510,7 +689,11 @@ fn no_module_takes_a_name_from_the_structural_vocabulary() {
             let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
-            if reserved.contains(name.as_str()) {
+            // An edge word here is an adapter misplaced rather than a module
+            // misnamed, so "pick the domain word" is the wrong remedy for it:
+            // [`an_edge_adapter_in_a_product_crate_sits_in_a_module_folder`]
+            // answers it, naming the move, over every product crate.
+            if reserved.contains(name.as_str()) && !crate::EDGES.contains(&name.as_str()) {
                 offenders.push(relative(&entry.path(), &root));
             }
         }
@@ -1359,7 +1542,7 @@ fn namespace_is_the_stem() {
 /// reading judged differently; the comment beside it says how.
 #[test]
 fn no_verdict_depends_on_where_the_checkout_sits() {
-    const TREE: [(&str, &str); 12] = [
+    const TREE: [(&str, &str); 13] = [
         // The dispatch vocabulary: an HTTP marker and a WS one, both source.
         (
             "crates/nest-rs-probe/src/lib.rs",
@@ -1426,11 +1609,19 @@ fn no_verdict_depends_on_where_the_checkout_sits() {
             "crates/nest-rs-probe/tests/integration/principal.rs",
             "pub struct DeskOperator;",
         ),
+        // An app's root holding an edge: refused where it sits, and read off
+        // `demo/` below the root — under `…/src/schedule/…` a reading of the
+        // absolute path would have found a source root above every file.
+        (
+            "demo/apps/probe/src/http/controller.rs",
+            "pub struct ProbeController;",
+        ),
     ];
 
     #[derive(Debug, PartialEq)]
     struct Verdicts {
         adapters: (usize, Vec<String>),
+        placed: (usize, Vec<String>),
         invented: Vec<String>,
         edges: EdgeFolders,
         lint_checked: usize,
@@ -1440,6 +1631,7 @@ fn no_verdict_depends_on_where_the_checkout_sits() {
         let lint = nest_rs_cli::lint::scan(root);
         Verdicts {
             adapters: misnamed_adapters(root),
+            placed: edges_at_a_product_root(root),
             invented: invented_folders(root),
             edges: edge_folders(root),
             lint_checked: lint.checked,
@@ -1463,11 +1655,20 @@ fn no_verdict_depends_on_where_the_checkout_sits() {
             2,
             vec!["UsersController in crates/nest-rs-probe/src/posts/http/controller.rs".to_owned()],
         ),
+        placed: (
+            1,
+            vec![
+                "demo/apps/probe/src/http — an edge adapter belongs to a module folder: move it \
+                 to `src/<module>/http/`, named for the module it adapts; the app name stops at \
+                 `ProbeModule`, so nothing below it adapts the app"
+                    .to_owned(),
+            ],
+        ),
         invented: vec!["crates/nest-rs-probe/src/shared".to_owned()],
         edges: EdgeFolders {
             markers: 2,
             entries: 2,
-            scanned: 4,
+            scanned: 5,
             offenders: vec![
                 "crates/nest-rs-probe/src/http/guard.rs sits under http/ and answers \
                  fn check_ws_message() (ws), impl WsProbe (ws)"

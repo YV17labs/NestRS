@@ -77,7 +77,10 @@ pub struct AuthModule;
 
 Two pieces, one rule. `OpenTelemetry::init(name)?` installs the global
 subscriber and must run **before** `App::builder()`. The returned guard flushes
-batch exporters on Drop, so it must live until `main` returns.
+batch exporters on Drop, so it must live until `main` returns. The SDK bounds
+that flush: each of the three providers waits at most five seconds for its
+final export, so a collector that stopped answering delays the exit by fifteen
+seconds at most and never holds it.
 `OpenTelemetryModule` then mounts the per-request HTTP interceptor and exposes
 the meter as a provider.
 

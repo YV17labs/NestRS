@@ -139,6 +139,14 @@ lifecycle treat failure differently, and deliberately:
   even if one fails — a failure is logged at `error` on the
   `nest_rs::lifecycle` target and the next hook still runs, so one
   provider's botched cleanup can't skip another's.
+- **Shutdown is bounded.** A hook still running after five seconds
+  (`SHUTDOWN_HOOK_TIMEOUT`) is abandoned: it is dropped where it waits, so
+  what it had not done stays undone, a `warn` names its phase, provider,
+  method and module, and the next hook runs. Five is the margin a Kubernetes
+  pod's default 30-second grace leaves after the HTTP transport's 25-second
+  [shutdown window](/http/configuration/#shutdown), so one hook that hangs
+  spends that margin and no more. The bound reaches a hook that awaits; one
+  that blocks its thread is past any timer's reach.
 
 ```text frame="terminal"
 Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migrations
@@ -155,13 +163,17 @@ build container
 → on_application_bootstrap  ┘
 → serve (until SIGINT / SIGTERM, or a transport errors)
 → on_module_destroy            ┐
-→ before_application_shutdown  │ exhaustive — every hook runs, errors logged
-→ on_application_shutdown      ┘
+→ before_application_shutdown  │ exhaustive — every hook runs, errors logged,
+→ on_application_shutdown      ┘ each abandoned past five seconds
 ```
 
 Shutdown is triggered by `SIGINT` / `SIGTERM` (a shared cancellation
 token cancels every transport), or by the first transport that errors —
-which cancels the rest, then runs the teardown phases.
+which cancels the rest, then runs the teardown phases once the last
+transport has stopped. The HTTP transport stops within its shutdown window
+(`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`) and the queue worker within its drain
+window (`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`); a scheduled tick
+already running is awaited to its end.
 
 <Aside type="tip">
 A test harness can drive the init phases without serving: `App::init()`
@@ -175,8 +187,9 @@ performs.
 - **Init** — warm a cache, verify migrations applied, register with a
   service discovery backend, prime a connection pool, assert an
   external dependency is reachable (fail boot if not).
-- **Shutdown** — flush a buffer, drain in-flight work, deregister from
-  discovery, emit a final metric or report.
+- **Shutdown** — flush a buffer, deregister from discovery, emit a final
+  metric or report, each inside the five-second bound. Draining in-flight
+  work belongs to a transport's own window, which a deployment sets.
 
 The `UsersService` in the Publish workspace uses
 `#[on_application_shutdown]` to log how many users exist at teardown —

@@ -37,7 +37,8 @@ pub struct ApiModule;
 
 Default values: host `0.0.0.0`, port `3000`, no TLS (plain HTTP), no CORS,
 no framework `Server` header, a `2 MiB` request-body cap, a `30`-second
-request timeout, fail-secure boot on, and the default security headers on.
+request timeout, a `25`-second shutdown window, fail-secure boot on, and the
+default security headers on.
 
 ## `HttpConfig` fields
 
@@ -61,6 +62,7 @@ Real env always wins over the `.env` cascade.
 | `global_prefix` | `NESTRS_HTTP__GLOBAL_PREFIX` | unset ⇒ no prefix | `HttpConfig::default().with_global_prefix("/api")` |
 | `max_body_bytes` | `NESTRS_HTTP__MAX_BODY_BYTES` (bytes) | `2 MiB` | `HttpConfig::default().with_max_body_bytes(4 * 1024 * 1024)` |
 | `request_timeout` | `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (seconds, `0` ⇒ off) | `30 s` | `HttpConfig { request_timeout: Some(Duration::from_secs(15)), ..Default::default() }` |
+| `shutdown_timeout` | `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS` (seconds, `1`–`3600`) | `25 s` | `HttpConfig { shutdown_timeout: Duration::from_secs(55), ..Default::default() }` |
 | `fail_secure_strict` | `NESTRS_HTTP__FAIL_SECURE_STRICT` (`true`/`false`) | `true` | `HttpConfig { fail_secure_strict: false, ..Default::default() }` |
 | `security_headers` | `NESTRS_HTTP__SECURITY_HEADERS` (master), `__CONTENT_TYPE_OPTIONS`, `__FRAME_OPTIONS`, `__HSTS`, `__REFERRER_POLICY`, `__CROSS_ORIGIN_OPENER_POLICY`, `__CROSS_ORIGIN_RESOURCE_POLICY`, `__CROSS_ORIGIN_EMBEDDER_POLICY`, `__PERMISSIONS_POLICY`, `__CONTENT_SECURITY_POLICY` | on (safe values) | `HttpConfig { security_headers: HttpSecurityHeaders { enabled: false, ..Default::default() }, ..Default::default() }` |
 | `compression` | `NESTRS_HTTP__COMPRESSION` (`true`/`false`) | `false` | `HttpConfig { compression: true, ..Default::default() }` |
@@ -264,6 +266,43 @@ client SDK or a load balancer that retries a `504` on another node is acting
 on "that node's upstream is flaky", and re-runs a handler that will overrun
 again. §15.6.4 is the origin's own sentence — explicitly temporary, and
 paired with `Retry-After`.
+
+## Shutdown
+
+On `SIGTERM` or `SIGINT` the transport stops accepting and gives what is open
+`shutdown_timeout` to finish — `25` seconds by default, under the `30` a
+Kubernetes pod gets between `SIGTERM` and `SIGKILL`. Raise it together with the
+pod's grace period:
+
+```bash title=".env.production" frame="terminal"
+NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS=55    # beside terminationGracePeriodSeconds: 65
+```
+
+Whole seconds from `1` to `3600`; anything outside fails the boot naming the
+variable, and so does a pinned value outside the range. `0` is refused rather
+than read as "off" — the spelling `REQUEST_TIMEOUT_SECS` uses — because a
+shutdown that waits without a bound is what the window exists to prevent.
+
+What the window does depends on what the connection is doing:
+
+- **Idle** — a kept-alive connection with nothing in flight is closed at the
+  signal; the window is not spent on it.
+- **A request still running** — is answered, and its connection closed after
+  the answer. If the window closes first, the connection is dropped: the
+  handler is cancelled where it waits, and the client gets no answer.
+- **A stream** — an [`#[sse]` stream](/http/streaming/) or an MCP stream never
+  finishes on its own, so it holds the window to its end and is cut there; the
+  client's `EventSource` reconnects, to another replica once this one has left
+  the load balancer.
+- **A WebSocket** — is not the window's. poem hands an upgraded connection to
+  its handler and stops tracking it, so the transport neither waits for it nor
+  closes it: it ends when its handler ends it, or with the process.
+
+When the window closes on open connections, one `warn` on `nest_rs::http`
+counts them: `cut`, the connections it closed, and `upgraded_open`, the
+WebSockets still open. The shutdown hooks run once every transport has stopped,
+each bounded in turn — see [Lifecycle](/fundamentals/lifecycle/#ordering-and-failure) —
+so keep the grace period above this window plus theirs.
 
 ## Default security headers
 

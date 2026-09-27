@@ -357,7 +357,7 @@
       "type_key"
     ]
   },
-  "test_count": 2506,
+  "test_count": 2516,
   "version_req": "7.0",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -437,7 +437,8 @@
         "access_log",
         "trusted_proxies",
         "sse_max_connection",
-        "sse_keep_alive"
+        "sse_keep_alive",
+        "shutdown_timeout"
       ],
       "profile_split": false
     },

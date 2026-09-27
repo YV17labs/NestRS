@@ -413,8 +413,8 @@ fn an_edge_folder_directly_under_src_adapts_the_crate() {
 /// directly under an app's or a library's `src/`.
 ///
 /// The framework reads that level as the crate adapting itself, because a
-/// framework crate is named for its subject (`nest-rs-x/src/http/` is
-/// `XController`). A product crate is not a subject at that level, and
+/// framework crate is named for its subject (`nest-rs-x/src/http/controller.rs`
+/// is `XController`). A product crate is not a subject at that level, and
 /// `architecture.md` says so twice: *"the app name stops at `<App>Module`"*, and
 /// a product library is *"a container — its modules are domains"*. So an adapter
 /// there adapts nothing a reader can name, and the edge it serves belongs to the

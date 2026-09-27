@@ -66,7 +66,7 @@ use std::path::{Path, PathBuf};
 use nest_rs_codegen::JobDecorator;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    files_with_extension, flatten, is_cfg_test, read, relative, repo_root, rust_files,
+    files_with_extension, is_cfg_test, read, relative, repo_root, rust_files,
 };
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
@@ -453,11 +453,18 @@ fn stripped(mut arg: &[TokenTree]) -> &[TokenTree] {
 }
 
 /// `Table::Variant…` — the table, the variant as written, and how many tokens
-/// follow it — through any leading path (`nest_rs_codegen::JobDecorator::Cron`).
+/// follow it — through any leading path, absolute or not
+/// (`::nest_rs_codegen::JobDecorator::Cron`).
 fn table_path(
-    arg: &[TokenTree],
+    mut arg: &[TokenTree],
     tables: &BTreeMap<String, Vec<(String, String)>>,
 ) -> Option<(String, String, usize)> {
+    if let [TokenTree::Punct(a), TokenTree::Punct(b), rest @ ..] = arg
+        && a.as_char() == ':'
+        && b.as_char() == ':'
+    {
+        arg = rest;
+    }
     let mut at = 0;
     loop {
         let [
@@ -646,35 +653,85 @@ fn bound(pat: &syn::Pat) -> Option<String> {
 }
 
 /// Every `name(…)` in `body`, at any depth, with its arguments split at the
-/// commas between them. `fn name(…)` is a declaration and `name!(…)` a macro,
-/// so neither is a call.
+/// commas between them — `name::<T>(…)` included, because
+/// `reject_duplicate_argument` is generic and a turbofish must not hide a call
+/// from the join. `fn name(…)` is a declaration and `name!(…)` a macro, so
+/// neither is a call.
 fn calls(body: TokenStream) -> Vec<(String, Vec<Vec<TokenTree>>)> {
-    let mut flat = Vec::new();
-    flatten(body, &mut flat);
     let mut out = Vec::new();
-    for (at, window) in flat.windows(2).enumerate() {
-        let [TokenTree::Ident(callee), TokenTree::Group(args)] = window else {
+    calls_in(body, &mut out);
+    out
+}
+
+fn calls_in(tokens: TokenStream, out: &mut Vec<(String, Vec<Vec<TokenTree>>)>) {
+    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+    for (at, tree) in trees.iter().enumerate() {
+        match tree {
+            TokenTree::Group(group) => calls_in(group.stream(), out),
+            TokenTree::Ident(callee) => {
+                let declared = at.checked_sub(1).is_some_and(
+                    |before| matches!(&trees[before], TokenTree::Ident(i) if i == "fn"),
+                );
+                if declared {
+                    continue;
+                }
+                if let Some(TokenTree::Group(args)) = trees.get(past_turbofish(&trees, at + 1))
+                    && args.delimiter() == Delimiter::Parenthesis
+                {
+                    out.push((callee.to_string(), arguments(args.stream())));
+                }
+            }
+            TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+    }
+}
+
+/// The index just past a turbofish opening at `at` — `::<A, B<C>>` — or `at`
+/// itself when none does. An arrow's `>` (`fn() -> T`) closes nothing.
+fn past_turbofish(trees: &[TokenTree], at: usize) -> usize {
+    let opens = matches!(
+        trees.get(at..at + 3),
+        Some([TokenTree::Punct(a), TokenTree::Punct(b), TokenTree::Punct(c)])
+            if a.as_char() == ':' && b.as_char() == ':' && c.as_char() == '<'
+    );
+    if !opens {
+        return at;
+    }
+    let mut depth = 0usize;
+    let mut arrow = false;
+    for (offset, tree) in trees.iter().enumerate().skip(at + 2) {
+        let TokenTree::Punct(punct) = tree else {
+            arrow = false;
             continue;
         };
-        let declared = at
-            .checked_sub(1)
-            .is_some_and(|before| matches!(&flat[before], TokenTree::Ident(i) if i == "fn"));
-        if args.delimiter() != Delimiter::Parenthesis || declared {
-            continue;
-        }
-        let mut split: Vec<Vec<TokenTree>> = vec![Vec::new()];
-        for tree in args.stream() {
-            match &tree {
-                TokenTree::Punct(p) if p.as_char() == ',' => split.push(Vec::new()),
-                _ => split.last_mut().expect("never empty").push(tree),
+        match punct.as_char() {
+            '<' => depth += 1,
+            '>' if !arrow => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return offset + 1;
+                }
             }
+            _ => {}
         }
-        if split.last().is_some_and(Vec::is_empty) {
-            split.pop();
-        }
-        out.push((callee.to_string(), split));
+        arrow = punct.as_char() == '-';
     }
-    out
+    at
+}
+
+/// A call's arguments, split at the commas between them.
+fn arguments(stream: TokenStream) -> Vec<Vec<TokenTree>> {
+    let mut split: Vec<Vec<TokenTree>> = vec![Vec::new()];
+    for tree in stream {
+        match &tree {
+            TokenTree::Punct(p) if p.as_char() == ',' => split.push(Vec::new()),
+            _ => split.last_mut().expect("never empty").push(tree),
+        }
+    }
+    if split.last().is_some_and(Vec::is_empty) {
+        split.pop();
+    }
+    split
 }
 
 /// Every trybuild snapshot in the tree, read once for every cell that asks.
@@ -839,6 +896,10 @@ fn a_decorator_is_read_through_each_shape_it_reaches_the_sentence_in() {
              fn variant() { job_key(JobDecorator::Cron, \"x\"); }\n\
              fn forwarded(attr: &str) { unknown_argument(attr, \"x\"); }\n\
              fn caller() { forwarded(\"gamma\"); }\n\
+             fn turbofish() { unknown_argument::<Vec<u8>>(\"delta\", \"x\"); }\n\
+             fn absolute() {\n\
+                 unknown_argument(::nest_rs_codegen::JobDecorator::After.name(), \"x\");\n\
+             }\n\
              fn computed(key: &str) { unknown_argument(&format!(\"#{key}\"), \"x\"); }",
         ),
         (
@@ -859,24 +920,26 @@ fn a_decorator_is_read_through_each_shape_it_reaches_the_sentence_in() {
     let reading = Sources::collect(&root).reading(UNKNOWN_KEY);
     let _ = std::fs::remove_dir_all(&root);
 
-    let crates = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect();
-    let every_job = ["process", "every", "cron", "after"];
-    let mut members: BTreeMap<String, BTreeSet<String>> = BTreeMap::from([
-        ("alpha".to_owned(), crates(&["nest-rs-alpha-macros"])),
-        ("beta".to_owned(), crates(&["nest-rs-alpha-macros"])),
-        ("gamma".to_owned(), crates(&["nest-rs-alpha-macros"])),
+    let crates = |names: &[&str]| -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    };
+    let (alpha, beta) = ("nest-rs-alpha-macros", "nest-rs-beta-macros");
+    let members = BTreeMap::from([
+        // A literal, at the sentence and at `unmatched_meta`.
+        ("alpha".to_owned(), crates(&[alpha])),
+        ("beta".to_owned(), crates(&[alpha])),
+        // A literal given to a function that hands it on.
+        ("gamma".to_owned(), crates(&[alpha])),
+        // A turbofish does not hide a call.
+        ("delta".to_owned(), crates(&[alpha])),
+        // A table's variant names its member — through a constant, written
+        // directly, and through an absolute path — and a value only data decides
+        // names every member.
+        ("process".to_owned(), crates(&[alpha, beta])),
+        ("cron".to_owned(), crates(&[alpha, beta])),
+        ("after".to_owned(), crates(&[alpha, beta])),
+        ("every".to_owned(), crates(&[beta])),
     ]);
-    for job in every_job {
-        members.insert(job.to_owned(), crates(&["nest-rs-beta-macros"]));
-    }
-    members
-        .get_mut("process")
-        .expect("planted")
-        .insert("nest-rs-alpha-macros".to_owned());
-    members
-        .get_mut("cron")
-        .expect("planted")
-        .insert("nest-rs-alpha-macros".to_owned());
 
     assert_eq!(reading.members, members);
     assert_eq!(

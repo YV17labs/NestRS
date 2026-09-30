@@ -171,9 +171,11 @@ pub trait JobProducerExt: JobProducer {
     /// [`ENQUEUE_BATCH`] jobs at most, in order, returning one receipt per job in
     /// input order.
     ///
-    /// Not atomic: when it fails, the jobs of the calls before the failing one
-    /// are queued and some prefix of its own may be, and the error does not say
-    /// how many, so a caller retrying the whole batch can queue a job twice. Each
+    /// Not atomic. A failure after the backend accepted some of its calls is
+    /// [`QueueError::PartiallyQueued`], carrying the receipts of the jobs of
+    /// those calls — queued, and to be left out of a retry — beside the failure
+    /// that stopped the push; the jobs of the failing call may be queued too,
+    /// and no receipt says which, so retrying them can queue one twice. Each
     /// call is waited on for [`BACKEND_TIMEOUT`](crate::BACKEND_TIMEOUT) at most. A delay applies to
     /// every job; a unique key names one job and is refused here with
     /// [`QueueError::InvalidOptions`] — push jobs that each need one with
@@ -329,17 +331,29 @@ async fn push_values<P: JobProducer + ?Sized>(
         .into_iter()
         .map(|payload| envelope::seal(payload, JobId::mint(), options.unique_key()))
         .collect();
-    let receipts = envelopes
+    let mut receipts: Vec<PushReceipt> = envelopes
         .iter()
         .map(|envelope| PushReceipt::new(queue.clone(), envelope.id().clone()))
         .collect();
     let mut envelopes = envelopes.into_iter();
+    let mut accepted = 0;
     loop {
         let batch: Vec<Envelope> = envelopes.by_ref().take(ENQUEUE_BATCH).collect();
         if batch.is_empty() {
             return Ok(receipts);
         }
-        enqueue(producer, queue, batch, options).await?;
+        let size = batch.len();
+        if let Err(failed) = enqueue(producer, queue, batch, options).await {
+            if accepted == 0 {
+                return Err(failed);
+            }
+            receipts.truncate(accepted);
+            return Err(QueueError::PartiallyQueued {
+                receipts,
+                source: Box::new(failed),
+            });
+        }
+        accepted += size;
     }
 }
 

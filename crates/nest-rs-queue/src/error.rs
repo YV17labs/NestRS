@@ -10,7 +10,7 @@
 use thiserror::Error;
 
 use crate::capability::unsupported;
-use crate::{BACKEND_TIMEOUT, Capability, JobId, PushOptions, QueueName};
+use crate::{BACKEND_TIMEOUT, Capability, JobId, PushOptions, PushReceipt, QueueName};
 
 /// A failure of a queue operation: a push, a cancel, or a checkpoint save.
 #[derive(Debug, Error)]
@@ -96,6 +96,27 @@ pub enum QueueError {
         key: String,
         /// The job holding it.
         holder: JobId,
+    },
+    /// A push of many failed after the backend accepted some of its calls.
+    ///
+    /// `receipts` names the jobs of every call the backend accepted, in input
+    /// order — they are queued and will run, and a receipt is what cancels one
+    /// or tells it from a job to push again. `source` is the failure of the call
+    /// that stopped the push, whose own jobs no receipt covers: a backend's call
+    /// is not atomic, so some of them may be queued too — at-least-once, as after
+    /// any failure to answer. A push failing at its first call returns that
+    /// failure itself.
+    #[error(
+        "the queue backend accepted {} job(s) of the push before a call failed; their receipts \
+         are on the error, and the jobs of the failed call may be queued too",
+        receipts.len(),
+    )]
+    PartiallyQueued {
+        /// The jobs the backend accepted, in input order.
+        receipts: Vec<PushReceipt>,
+        /// Why the push stopped.
+        #[source]
+        source: Box<QueueError>,
     },
     /// Options no push could honour: together, or at all on this backend.
     ///

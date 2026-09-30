@@ -187,16 +187,8 @@ impl RedisQueueProducer {
         let now = SystemTime::now();
         let due = match options.delay() {
             None => None,
-            Some(delay) => match delay.deadline(now) {
-                // An instant already past is an immediate push.
-                Some(at) if at <= now => None,
-                Some(at) => Some(at),
-                None => {
-                    return Err(QueueError::InvalidOptions {
-                        reason: "the delay ends past the last instant the clock can represent",
-                    });
-                }
-            },
+            // An instant already past is an immediate push.
+            Some(delay) => Some(delay.deadline(now)?).filter(|at| *at > now),
         };
         let until_due = due
             .and_then(|at| at.duration_since(now).ok())

@@ -797,8 +797,9 @@ async fn a_backend_answering_inside_the_net_is_waited_for() {
 }
 
 /// A push of many the net cuts short fails naming the call, and nothing is
-/// handed to the backend after it: the batch answered before it is queued, as
-/// the push's contract says a prefix may be.
+/// handed to the backend after it — and the error carries the receipts of the
+/// batch the backend accepted, which is queued. They were missing: a caller
+/// could neither cancel nor leave out of a retry the jobs already queued.
 #[tokio::test(start_paused = true)]
 async fn a_push_of_many_the_net_cuts_short_stops_at_the_batch_never_answered() {
     let producer = SilentProducer::answering(1, Duration::ZERO);
@@ -812,13 +813,47 @@ async fn a_push_of_many_the_net_cuts_short_stops_at_the_batch_never_answered() {
     .await
     .expect_err("the second batch is never answered");
 
+    let QueueError::PartiallyQueued { receipts, source } = &refused else {
+        panic!("the first batch was accepted, so the push was partly queued: {refused:?}");
+    };
+    assert_eq!(
+        receipts.len(),
+        ENQUEUE_BATCH,
+        "one receipt per accepted job"
+    );
     assert!(
-        unanswered(&refused, "transcode", "JobProducer::enqueue"),
-        "{refused:?}"
+        receipts
+            .iter()
+            .all(|receipt| receipt.queue().as_str() == "transcode"),
+        "{receipts:?}"
+    );
+    assert!(
+        unanswered(source, "transcode", "JobProducer::enqueue"),
+        "{source:?}"
+    );
+    assert!(
+        nest_rs_core::error_message(&refused).contains("did not answer `JobProducer::enqueue`"),
+        "the cause is said with the error: {refused}"
     );
     assert_eq!(
         producer.calls(),
         [ENQUEUE_BATCH, 1],
         "the first batch was answered, the second never was, and nothing followed it",
+    );
+
+    // A push failing at its first call queued nothing: its error is the failure.
+    let silent = SilentProducer::answering(0, Duration::ZERO);
+    let refused = within_twice_the_net(silent.push_many(
+        TranscodeQueue,
+        (0..=ENQUEUE_BATCH).map(|n| TranscodeCommand {
+            file: format!("{n}.wav"),
+        }),
+        None,
+    ))
+    .await
+    .expect_err("nothing is answered");
+    assert!(
+        unanswered(&refused, "transcode", "JobProducer::enqueue"),
+        "{refused:?}"
     );
 }

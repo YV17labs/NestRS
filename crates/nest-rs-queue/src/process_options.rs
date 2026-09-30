@@ -21,6 +21,13 @@ pub struct Throttle {
 }
 
 impl Throttle {
+    /// The shortest window a throttle counts over: a millisecond, the resolution
+    /// of the coarsest store the framework ships — Redis's `PEXPIRE` — and the
+    /// same floor as `nest_rs_throttler::Throttle::MIN_WINDOW`, the other rate
+    /// the framework declares. A shorter window limits nothing, and the boot
+    /// refuses one ([`consume::discover`](crate::consume::discover)).
+    pub const MIN_WINDOW: Duration = Duration::from_millis(1);
+
     /// `limit` attempt starts per `window`.
     pub const fn new(limit: NonZeroU32, window: Duration) -> Self {
         Self { limit, window }

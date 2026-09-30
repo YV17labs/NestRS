@@ -34,7 +34,7 @@ use crate::envelope::{self, Opened, Unusable};
 use crate::inventory::{HandlerContext, JobHandler};
 use crate::{
     CheckpointStore, Envelope, JobError, JobId, ProcessMethod, QueueBackend, QueueName, TARGET,
-    backoff, unit,
+    Throttle, backoff, unit,
 };
 
 /// A job span's `messaging.operation.name` and `messaging.operation.type`:
@@ -93,13 +93,16 @@ pub fn discover(
                 method.name()
             ));
         }
+        // A window under a millisecond is zero to a store counting in
+        // milliseconds, and a zero window limits nothing.
         if let Some(throttle) = method.options().throttle()
-            && throttle.window().is_zero()
+            && throttle.window() < Throttle::MIN_WINDOW
         {
             refusals.push(format!(
-                "`{}` declares a throttle window of zero, which would limit nothing: a window \
-                 is longer than zero",
+                "`{}` declares a throttle window under a millisecond, which would limit nothing: \
+                 a window is at least {:?}",
                 method.name(),
+                Throttle::MIN_WINDOW,
             ));
         }
         for capability in method.required_capabilities().iter() {

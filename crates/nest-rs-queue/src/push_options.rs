@@ -15,13 +15,33 @@ pub enum Delay {
 }
 
 impl Delay {
-    /// The instant the delay ends for a push made at `pushed_at`; `None` when
-    /// that instant is past what the clock can represent.
-    pub fn deadline(self, pushed_at: SystemTime) -> Option<SystemTime> {
-        match self {
+    /// The latest instant a job may be due at, as the time since the Unix
+    /// epoch: `9999-12-31T23:59:59.999Z`, the last instant RFC 3339 writes.
+    ///
+    /// A bound on the *instant*, not on the delay, because the instant is what
+    /// a backend stores: every store that keeps a timestamp represents one this
+    /// late, and Redis — which holds a job's records for a millisecond count
+    /// past it — refuses an expiry whose instant overflows its `i64`
+    /// milliseconds, which a delay alone within that range still reached.
+    pub const LATEST_DUE: Duration = Duration::from_millis(253_402_300_799_999);
+
+    /// The instant the delay ends for a push made at `pushed_at`, refused with
+    /// [`QueueError::InvalidOptions`] when it is later than
+    /// [`LATEST_DUE`](Self::LATEST_DUE).
+    pub fn deadline(self, pushed_at: SystemTime) -> Result<SystemTime, QueueError> {
+        let at = match self {
             Self::For(delay) => pushed_at.checked_add(delay),
             Self::Until(at) => Some(at),
-        }
+        };
+        // An instant before the epoch is long past, so an immediate push.
+        at.filter(|at| {
+            at.duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(true, |since| since <= Self::LATEST_DUE)
+        })
+        .ok_or(QueueError::InvalidOptions {
+            reason: "the delay ends after 9999-12-31T23:59:59.999Z, the last instant RFC 3339 \
+                     writes and the latest a job may be due at",
+        })
     }
 }
 
@@ -118,6 +138,9 @@ impl PushOptions {
 
     /// Refuse options no backend could honour, before any backend sees them.
     pub(crate) fn check(&self) -> Result<(), QueueError> {
+        if let Some(delay) = self.delay {
+            delay.deadline(SystemTime::now())?;
+        }
         match &self.unique {
             Some(key) => check_unique_key(key),
             None => Ok(()),
@@ -152,8 +175,42 @@ mod tests {
             .with_delay(at);
         assert_eq!(options.delay(), Some(Delay::Until(at)));
         assert_eq!(
-            Delay::For(Duration::from_secs(5)).deadline(at),
+            Delay::For(Duration::from_secs(5)).deadline(at).ok(),
             Some(at + Duration::from_secs(5)),
+        );
+    }
+
+    /// A job is due no later than RFC 3339's last instant, however the delay is
+    /// spelled — and refused at the port, before any backend sees it. A delay of
+    /// 400 million years reached Redis and came back as a backend failure.
+    #[test]
+    fn a_delay_ending_after_the_latest_due_instant_is_refused_at_the_port() {
+        let latest = SystemTime::UNIX_EPOCH + Delay::LATEST_DUE;
+        let now = SystemTime::now();
+        assert_eq!(Delay::Until(latest).deadline(now).ok(), Some(latest));
+        let refused = [
+            Delay::Until(latest + Duration::from_millis(1)),
+            Delay::For(Duration::from_secs(400_000_000 * 365 * 86_400)),
+            Delay::For(Duration::MAX),
+        ];
+        for delay in refused {
+            assert!(
+                matches!(delay.deadline(now), Err(QueueError::InvalidOptions { .. })),
+                "{delay:?}"
+            );
+            let options = PushOptions::default().with_delay(delay);
+            let said = options
+                .check()
+                .expect_err("refused at the port")
+                .to_string();
+            assert!(said.contains("9999-12-31T23:59:59.999Z"), "{said}");
+        }
+        assert!(
+            PushOptions::default()
+                .with_delay(Duration::from_secs(1000 * 365 * 86_400))
+                .check()
+                .is_ok(),
+            "a thousand years is still an instant RFC 3339 writes"
         );
     }
 

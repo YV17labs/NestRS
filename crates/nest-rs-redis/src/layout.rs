@@ -136,9 +136,14 @@ pub(crate) fn throttle_key(queue: &QueueName) -> String {
     THROTTLE.replace(QUEUE_SLOT, queue.as_str())
 }
 
-/// `duration` in whole milliseconds, at least one — Redis refuses a zero `PX`.
+/// `duration` in whole milliseconds, at least one — Redis refuses a zero `PX` —
+/// and at most [`Delay::LATEST_DUE`](nest_rs_queue::Delay::LATEST_DUE): Redis
+/// refuses an expiry whose instant overflows its `i64` milliseconds, and a
+/// duration a declaration may carry — a throttle window of `u64::MAX` ms —
+/// reached it, failing every admission. Past that bound a key outlives any
+/// deployment, which is what a longer one would have meant.
 pub(crate) fn millis(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis())
+    u64::try_from(duration.min(nest_rs_queue::Delay::LATEST_DUE).as_millis())
         .unwrap_or(u64::MAX)
         .max(1)
 }
@@ -227,6 +232,19 @@ pub(crate) fn outside_the_acl(error: &redis::RedisError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every duration a key is kept for is one Redis accepts: a window a
+    /// declaration may carry up to `u64::MAX` ms used to reach `PEXPIRE`
+    /// whole, which Redis refuses.
+    #[test]
+    fn a_duration_redis_would_refuse_is_kept_for_the_longest_it_accepts() {
+        let longest =
+            u64::try_from(nest_rs_queue::Delay::LATEST_DUE.as_millis()).expect("the bound fits");
+        assert_eq!(millis(Duration::MAX), longest);
+        assert_eq!(millis(Duration::from_millis(u64::MAX)), longest);
+        assert!(i64::try_from(longest).is_ok_and(|ms| ms < i64::MAX / 2));
+        assert_eq!(millis(Duration::from_micros(500)), 1, "never zero");
+    }
 
     fn audio() -> QueueName {
         QueueName::new("audio").expect("a valid name")

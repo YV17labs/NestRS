@@ -811,6 +811,7 @@ struct FirstClaimant;
 struct SecondClaimant;
 struct BadlyNamedHost;
 struct ZeroWindowHost;
+struct SubMillisecondWindowHost;
 
 nest_rs_core::inventory::submit! {
     ProcessMethod::new(
@@ -849,6 +850,14 @@ nest_rs_core::inventory::submit! {
         module_path!(), "BadlyNamedHost::run", "nestrs:queue:dead",
         ProcessOptions::DEFAULT,
         TypeId::of::<BadlyNamedHost>, never_runs,
+    )
+}
+
+nest_rs_core::inventory::submit! {
+    ProcessMethod::new(
+        module_path!(), "SubMillisecondWindowHost::run", "half-a-millisecond",
+        ProcessOptions::DEFAULT.with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_micros(500))),
+        TypeId::of::<SubMillisecondWindowHost>, never_runs,
     )
 }
 
@@ -927,16 +936,29 @@ fn an_entry_draining_a_name_outside_the_rule_fails_the_boot() {
 
 /// `#[process]` refuses `window = "0s"` at compile time; an entry built by hand
 /// says nothing until the boot, which is the one place left to say it — on
-/// every backend, since a window of zero limits nothing on any of them.
+/// every backend, since a window of zero limits nothing on any of them. Nor
+/// does one under a millisecond, which a store counting in milliseconds reads
+/// as zero: half a millisecond booted.
 #[test]
-fn an_entry_with_a_zero_throttle_window_fails_the_boot() {
-    let refusal = discover_only::<ZeroWindowHost>(&FULL)
-        .expect_err("a zero window limits nothing")
-        .to_string();
-    assert!(
-        refusal.contains("ZeroWindowHost::run") && refusal.contains("window of zero"),
-        "{refusal}",
-    );
+fn an_entry_with_a_throttle_window_under_a_millisecond_fails_the_boot() {
+    for (site, refusal) in [
+        (
+            "ZeroWindowHost::run",
+            discover_only::<ZeroWindowHost>(&FULL),
+        ),
+        (
+            "SubMillisecondWindowHost::run",
+            discover_only::<SubMillisecondWindowHost>(&FULL),
+        ),
+    ] {
+        let refusal = refusal
+            .expect_err("a window under a millisecond limits nothing")
+            .to_string();
+        assert!(
+            refusal.contains(site) && refusal.contains("under a millisecond"),
+            "{refusal}",
+        );
+    }
 }
 
 #[test]

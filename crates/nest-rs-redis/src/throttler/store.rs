@@ -103,9 +103,10 @@ impl RedisThrottler {
 #[async_trait]
 impl ThrottlerStore for RedisThrottler {
     async fn hit(&self, key: &str, limit: Throttle) -> Decision {
-        // `as u64` is saturating-safe here: a `Duration` window never exceeds
-        // `u64::MAX` ms in any real config, and Redis PEXPIRE takes an i64 ms.
-        let window_ms = limit.window().as_millis().min(u64::MAX as u128) as u64;
+        // Through the crate's one conversion: Redis refuses an expiry whose
+        // instant overflows its `i64` milliseconds, which `Throttle::new` lets a
+        // window reach — every hit then failed, closed, with a warn apiece.
+        let window_ms = crate::layout::millis(limit.window());
         match self.run(key, window_ms).await {
             Ok((count, ttl_ms)) => {
                 // Denied when the count has passed the limit — identical rule to

@@ -11,7 +11,7 @@ use std::time::Duration;
 /// any limit — a rate limiter guarding a login failing open without a word —
 /// and on Redis, whose windows are counted in milliseconds, so did any window
 /// under one. The same shape as `nest_rs_queue::Throttle`, the other rate the
-/// framework declares, whose zero window is refused at boot.
+/// framework declares, whose window under a millisecond is refused at boot.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct Throttle {

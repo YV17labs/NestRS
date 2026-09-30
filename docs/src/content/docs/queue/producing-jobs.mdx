@@ -124,8 +124,10 @@ opens, so the concrete type resolves too when a service genuinely needs it.
 
 A push is refused before anything is filed when its options cannot be honoured
 — `QueueError::Unsupported` for an option the backend does not declare,
-`QueueError::InvalidUniqueKey` for a key no backend could file — or when a
-unique key is held. Past those, an error from the backend is a failure to
+`QueueError::InvalidUniqueKey` for a key no backend could file,
+`QueueError::InvalidOptions` for a delay ending after `9999-12-31T23:59:59.999Z`,
+the last instant RFC 3339 writes (`Delay::LATEST_DUE`) — or when a unique key is
+held. Past those, an error from the backend is a failure to
 *answer*: the job may be queued and its reply lost, so a caller that retries such
 a push can queue it twice unless it carries a unique key.
 
@@ -141,9 +143,13 @@ so a push made inside a request fails with an error naming its queue while the
 request can still answer.
 
 `push_many` hands the backend its jobs a hundred at a time (`ENQUEUE_BATCH`),
-each call under the net, so the net holds a push of any size. It is not atomic:
-when it fails, the calls before the failing one are queued, and some of its own
-jobs may be.
+each call under the net, so the net holds a push of any size. It is not atomic.
+When a call fails after the backend accepted earlier ones, the error is
+`QueueError::PartiallyQueued { receipts, source }`: `receipts` names every job
+of the accepted calls — queued, and to be left out of a retry or cancelled —
+and `source` is the failure that stopped the push. The failing call's own jobs
+may be queued too, and no receipt says which, so retrying those can queue one
+twice. A push failing at its first call returns that failure alone.
 
 ## Holding a job back
 

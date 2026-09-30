@@ -57,14 +57,14 @@ pub(crate) fn tools(args: TokenStream, input: TokenStream) -> TokenStream {
 fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let args = match parse_mcp_args(args.into()) {
         Ok(parsed) => parsed,
-        Err(err) => return err.to_compile_error().into(),
+        Err(err) => return refused_beside(err, item),
     };
 
     // Interceptors and filters have no per-operation seam on this transport, so
     // binding one here would be a silent no-op — named compile error instead,
     // the same answer GraphQL and WS give.
     if let Err(err) = reject_http_only_layers(&item.attrs, "MCP", "host") {
-        return err.to_compile_error().into();
+        return refused_beside(err, item);
     }
     // Host-scope (provider) guard declarations — same shape and same mental
     // model as `#[controller] struct` + `#[resolver] struct` + `#[gateway]
@@ -72,7 +72,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     // operation's chain at runtime through `__nestrs_mcp_host_guard_specs()`.
     let guards = match take_path_list(&mut item.attrs, "use_guards") {
         Ok(paths) => paths,
-        Err(err) => return err.to_compile_error().into(),
+        Err(err) => return refused_beside(err, item),
     };
     // Host-scope guards fold into the same per-operation chain the operations'
     // own do, so they run `Guard::check_mcp` and owe the same capability.
@@ -86,7 +86,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
         ..
     } = match build_injectable_body(&mut item) {
         Ok(body) => body,
-        Err(err) => return err.to_compile_error().into(),
+        Err(err) => return refused_beside(err, item),
     };
 
     let name = item.ident.clone();
@@ -181,6 +181,49 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
                         <Self>::tool_router().list_all()
                     },
                 )
+            }
+        }
+    }
+    .into()
+}
+
+/// A refused `#[mcp(..)]` argument, reported **beside the struct as written**.
+///
+/// Returning the error alone dropped the struct, so the `#[tools]` impl beside
+/// it answered `cannot find type` — a second error blamed on correct code, and
+/// the one host of the four that cascaded. The helper attributes this decorator
+/// would have consumed come off, or rustc would report them as unknown, and the
+/// one item the impl half reads off the host is filled in empty — the mirror of
+/// what `DecoratorPair::keep_item_on_refusal` does for an impl half. The
+/// refusal already fails the build; the stand-in only keeps it the one error.
+fn refused_beside(err: syn::Error, mut item: ItemStruct) -> TokenStream {
+    item.attrs.retain(|attr| {
+        ![
+            "use_guards",
+            "use_interceptors",
+            "use_filters",
+            "use_exception_filters",
+        ]
+        .iter()
+        .any(|consumed| attr.path().is_ident(consumed))
+    });
+    if let syn::Fields::Named(fields) = &mut item.fields {
+        for field in &mut fields.named {
+            field.attrs.retain(|attr| !attr.path().is_ident("inject"));
+        }
+    }
+    let err = err.to_compile_error();
+    let name = &item.ident;
+    let (impl_generics, ty_generics, where_clause) = item.generics.split_for_impl();
+    quote! {
+        #err
+        #item
+        impl #impl_generics #name #ty_generics #where_clause {
+            #[doc(hidden)]
+            pub fn __nestrs_mcp_host_guard_specs()
+                -> ::std::vec::Vec<::nest_rs_guards::dispatch::ScopedGuardSpec>
+            {
+                ::std::vec::Vec::new()
             }
         }
     }

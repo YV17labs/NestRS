@@ -3,9 +3,3 @@ error: #[mcp] takes at most one `path`
    |
 10 | #[mcp(path = "/a", path = "/b")]
    |                    ^^^^^^^^^^^
-
-error[E0425]: cannot find type `DemoTool` in this scope
-  --> tests/integration/diagnostics/mcp_duplicate_argument.rs:15:6
-   |
-15 | impl DemoTool {
-   |      ^^^^^^^^ not found in this scope

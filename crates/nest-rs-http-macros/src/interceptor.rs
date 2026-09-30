@@ -23,39 +23,44 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
     if args.is_empty() {
         return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
     }
-    // **The whole list, then exactly one of it.** `syn::parse::<Meta>` consumes
-    // one and reports the rest as syn's "unexpected token", which names neither
-    // the key nor the fact — so `#[interceptor(priority = 1, priority = 2)]`
-    // died on the grammar rather than on the duplicate, and the shared sentence
-    // this decorator already uses for an unknown key had no counterpart for a
-    // repeated one.
+    // **The whole list, read key by key in order.** `syn::parse::<Meta>`
+    // consumes one and reports the rest as syn's "unexpected token", which names
+    // neither the key nor the fact. And each key is read for what it *is* before
+    // it is counted: refusing any second argument as a repeated `priority` told
+    // `#[interceptor(prority = 1, order = 2)]` it had repeated a key it never
+    // wrote, and never named the misspelling.
     let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(TokenStream2::from(args))?;
-    let mut metas = metas.into_iter();
-    let meta = metas.next().expect("a non-empty argument list");
-    if let Some(second) = metas.next() {
-        return Err(syn::Error::new_spanned(
-            second,
-            nest_rs_codegen::duplicate_argument("interceptor", "priority"),
-        ));
-    }
-    // Both questions through the shared helper that answers them together: a
-    // bare `#[interceptor(priority)]` is a `Meta::Path`, and so is a bare
-    // *unknown* key — one wording said "expected `priority = <integer>`" to
-    // both, which is right for the first and false for the second.
-    let Meta::NameValue(nv) = meta else {
-        return Err(nest_rs_codegen::unmatched_meta(
+    let mut priority: Option<syn::MetaNameValue> = None;
+    for meta in metas {
+        // Both questions through the shared helper that answers them together: a
+        // bare `#[interceptor(priority)]` is a `Meta::Path`, and so is a bare
+        // *unknown* key — one wording said "expected `priority = <integer>`" to
+        // both, which is right for the first and false for the second.
+        let Meta::NameValue(nv) = meta else {
+            return Err(nest_rs_codegen::unmatched_meta(
+                "interceptor",
+                &meta,
+                &["priority"],
+            ));
+        };
+        if !nv.path.is_ident("priority") {
+            let name = nest_rs_codegen::key_as_written(&nv.path);
+            return Err(syn::Error::new(
+                nv.path.span(),
+                nest_rs_codegen::unknown_argument("interceptor", &name, &["priority"]),
+            ));
+        }
+        nest_rs_codegen::reject_duplicate_argument(
+            priority.is_some(),
+            &nv.path,
             "interceptor",
-            &meta,
-            &["priority"],
-        ));
-    };
-    if !nv.path.is_ident("priority") {
-        let name = nest_rs_codegen::key_as_written(&nv.path);
-        return Err(syn::Error::new(
-            nv.path.span(),
-            nest_rs_codegen::unknown_argument("interceptor", &name, &["priority"]),
-        ));
+            "priority",
+        )?;
+        priority = Some(nv);
     }
+    let Some(nv) = priority else {
+        return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
+    };
     let priority = priority_value(&nv.value)?;
     Ok(quote! { #priority })
 }

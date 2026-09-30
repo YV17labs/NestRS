@@ -273,7 +273,9 @@
     "Namespaced": [],
     "OccurrenceLock": [
       "claim",
-      "claimed"
+      "claimed",
+      "release",
+      "renew"
     ],
     "Opaque": [
       "opaque"
@@ -357,7 +359,7 @@
       "type_key"
     ]
   },
-  "test_count": 2631,
+  "test_count": 2674,
   "version_req": "7.0",
   "otel_binding": "_otel",
   "envelope_keys": [
@@ -365,6 +367,7 @@
     "attempt",
     "id",
     "payload",
+    "trace_minted",
     "traceparent",
     "tracestate",
     "unique_key",

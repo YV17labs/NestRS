@@ -68,13 +68,31 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
     // `decorator` arrives as `"#[controller]"`; the shared sentence brackets the
     // name itself, so it is handed the bare word.
     let attr = decorator.trim_start_matches("#[").trim_end_matches(']');
-    let literals = match value {
+    // Through the invisible group a `macro_rules!` forwards `$v:expr` in, as
+    // every other value reader reads: a forwarded list arrived as
+    // `Expr::Group(Array)`, fell to the scalar arm, and was refused as "takes a
+    // string literal" — false for the list, which it did not even offer.
+    let literals = match crate::ungrouped_expr(value) {
         Expr::Array(array) => array
             .elems
             .iter()
             .map(|elem| crate::args::require_str_lit(elem, attr, "version", "1"))
             .collect::<syn::Result<Vec<_>>>()?,
-        other => vec![crate::args::require_str_lit(other, attr, "version", "1")?],
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(single),
+            ..
+        }) => vec![single.clone()],
+        other => {
+            return Err(syn::Error::new_spanned(
+                other,
+                crate::args::takes_value(
+                    attr,
+                    Some("version"),
+                    "a string literal or a list of them, e.g. `version = \"1\"` or \
+                     `version = [\"1\", \"2\"]`",
+                ),
+            ));
+        }
     };
     if literals.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -313,6 +331,33 @@ impl Edge {
 mod tests {
     use super::*;
     use quote::quote;
+
+    /// A list a `macro_rules!` forwarded as `$versions:expr` arrives inside an
+    /// invisible group, and is the same list — it was refused as "takes a
+    /// string literal".
+    #[test]
+    fn a_forwarded_version_list_is_read_through_its_group() {
+        let list: Expr = syn::parse_quote!(["1", "2"]);
+        let forwarded = Expr::Group(syn::ExprGroup {
+            attrs: Vec::new(),
+            group_token: Default::default(),
+            expr: Box::new(list),
+        });
+        let versions =
+            parse_version_list(&forwarded, "#[controller]").expect("a forwarded list is a list");
+        let read: Vec<String> = versions.iter().map(LitStr::value).collect();
+        assert_eq!(read, ["1", "2"]);
+
+        let wrong: Expr = syn::parse_quote!(1);
+        let Err(refusal) = parse_version_list(&wrong, "#[controller]") else {
+            panic!("a number is no version");
+        };
+        let refusal = refusal.to_string();
+        assert!(
+            refusal.contains("or a list of them"),
+            "the refusal offers the list spelling: {refusal}",
+        );
+    }
 
     // A variant added later cannot ship a blank sentence: every edge owes a
     // reason *and* a remedy, and both have to reach the message the developer

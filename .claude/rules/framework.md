@@ -731,7 +731,8 @@ in keys of its own and reported upstream.
 | | `…:unique:<key>` | the job holding a unique key |
 | | `…:throttle` | the attempts started in the current window — one per queue, since one method drains a queue |
 | throttler | `nestrs:throttler:buckets:<subject>` | one client's current window |
-| schedule | `nestrs:schedule:claims:<occurrence>` | an occurrence's claim — the port's token (`<provider>:<method>:<instant_ms>`) verbatim; the key's existence is the claim, and its value names the claimer for operators only |
+| schedule | `nestrs:schedule:claims:<occurrence>` | an occurrence's claim — the port's token (`<module path>:<provider>:<method>:<instant_ms>`, the declaring module's path a level per `::`) verbatim; the key's existence is the claim, and its value names the claimer and its run for operators only |
+| | `nestrs:schedule:leases:<job>` | the run of the job going on now — the port's job identity (`<module path>:<provider>:<method>`) verbatim, held by the run that claimed an occurrence, renewed while it lasts and released when it ends |
 
 **Nothing is kept forever, and nothing that is still owed lapses early.** Every
 record of a job still waiting lives a week past the instant the job is due
@@ -895,6 +896,10 @@ closed, each in its own terms:
 - **`OccurrenceLock::claim` / `claimed`** — the occurrence's stale threshold (its
   hold less `MAX_SKEW`), and the loop's cancellation: the occurrence is skipped
   at `warn`, and a claim in flight at shutdown is abandoned.
+  **`renew` / `release`** — the renewal's beat, a third of the lease: a renewal
+  past it is retried at `warn`, a release past it leaves the lease to lapse, at
+  `warn`. A release is not cut by shutdown, because a replica leaving after a run
+  is every deploy, and one that kept its lease would hold the job on every peer.
 - **`ThrottlerStore::hit`** — `HIT_TIMEOUT`, 20 s beside the trait, and below the
   HTTP edge's request timeout so a hung store reads as the same `429` on every
   edge: the request is denied for the window, at `warn` naming the store
@@ -1438,8 +1443,17 @@ the kubelet's 30 s rather than at it.
 
   **Where a recurring job fires is declared, never inferred.** `#[every]` and
   `#[cron]` take `replicas = "each"` (the default: every replica fires) or
-  `"one"` (each occurrence fires on at most one replica); `#[after]` refuses the
-  key, since a one-shot fires on the replica that booted. `"one"` claims each
+  `"one"` — **as if one replica ran the job**: each occurrence fires on at most
+  one replica, and no two runs overlap, since one replica never overlaps its own;
+  `#[after]` refuses the key, since a one-shot fires on the replica that booted.
+  The first half is the occurrence's *claim*, the second the job's *run lease*,
+  taken atomically with it and renewed while the run lasts: an occurrence falling
+  due while the job runs elsewhere is left unclaimed, and the replica running it
+  fires the latest late and reports the rest, as one replica does. A job's
+  identity — what its lease and its claims are keyed on — opens with the path of
+  the module that declared it, because the lock is shared by every app of a
+  deployment and the boot sees one: two apps' same-named jobs are two jobs, one
+  job in a crate both link is one. `"one"` claims each
   occurrence through the `OccurrenceLock` port, selected by import —
   `nest_rs::redis::RedisScheduleModule` (feature `redis-schedule`) binds it as a
   declared factory carrying `nest_rs_schedule::BACKEND_REMEDY` — so a reachable
@@ -1447,7 +1461,7 @@ the kubelet's 30 s rather than at it.
   contest. **At most once, never at least once**: a claim that errors, one still
   unanswered when its occurrence goes stale or when shutdown is asked for, and an
   occurrence reached that late are all skipped at `warn`, and a replica that stops
-  after claiming loses the occurrence. A claim answered before shutdown is
+  after claiming loses the occurrence and holds the job until its lease lapses. A claim answered before shutdown is
   observed still fires, as a tick that won its wait does — withholding it would
   lose an occurrence this replica holds the key to, which no other replica can
   then fire. Work that must not be lost is a queue job the tick pushes. The

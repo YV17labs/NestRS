@@ -13,13 +13,14 @@ use std::time::Duration;
 
 use nest_rs_core::{ContainerBuilder, Module, injectable, module};
 use nest_rs_schedule::{
-    BACKEND_REMEDY, OccurrenceLock, OccurrenceLockError, Replicas, ScheduleModule, ScheduledMethod,
-    Scheduler, scheduled,
+    BACKEND_REMEDY, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError, Replicas,
+    ScheduleModule, ScheduledMethod, Scheduler, scheduled,
 };
 use nest_rs_testing::TestApp;
 
 static RUNS: AtomicU64 = AtomicU64::new(0);
-static CLAIMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static CLAIMED: Mutex<Vec<Occurrence>> = Mutex::new(Vec::new());
+static RELEASED: Mutex<Vec<Occurrence>> = Mutex::new(Vec::new());
 
 #[injectable]
 #[derive(Default)]
@@ -45,22 +46,31 @@ fn declared() -> &'static ScheduledMethod {
         .expect("`#[scheduled]` submitted the host's one trigger")
 }
 
-/// Grants every claim, and records the token each was made under.
+/// Grants every claim, and records each claim and each release.
 struct RecordingLock;
 
 #[async_trait::async_trait]
 impl OccurrenceLock for RecordingLock {
-    async fn claim(&self, occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
-        CLAIMED.lock().expect("lock").push(occurrence.to_owned());
-        Ok(true)
+    async fn claim(&self, occurrence: &Occurrence) -> Result<OccurrenceClaim, OccurrenceLockError> {
+        CLAIMED.lock().expect("lock").push(occurrence.clone());
+        Ok(OccurrenceClaim::Claimed)
     }
 
-    async fn claimed(&self, occurrence: &str) -> Result<bool, OccurrenceLockError> {
+    async fn claimed(&self, token: &str) -> Result<bool, OccurrenceLockError> {
         Ok(CLAIMED
             .lock()
             .expect("lock")
             .iter()
-            .any(|claimed| claimed == occurrence))
+            .any(|claimed| claimed.token == token))
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        RELEASED.lock().expect("lock").push(occurrence.clone());
+        Ok(())
     }
 }
 
@@ -115,8 +125,13 @@ struct UnboundRoot;
 
 /// The documented wiring runs: the decorator's `replicas = "one"` reaches the
 /// scheduler, the binding's lock is the one it claims through, every claim is
-/// made under the job's identity and an instant on a multiple of the period, and
-/// each occurrence the lock granted fired once.
+/// made under the job's identity — the declaring module's path, the provider and
+/// the method, a level each — and an instant on a multiple of the period, each
+/// occurrence the lock granted fired once, and each run gave its lease back.
+///
+/// The declaring path is what keeps two apps of one deployment apart: keyed on
+/// `Provider:method` alone, an API's and a worker's own `MaintenanceTasks::sweep`
+/// claimed each other's occurrences through the lock they share.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
     let declared = declared();
@@ -144,14 +159,42 @@ async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
         claimed.len(),
         "each granted occurrence fired, once",
     );
-    let identity = format!("{}:{}:", declared.provider, declared.method);
-    for token in &claimed {
-        let instant: u64 = token
-            .strip_prefix(&identity)
+    let job = format!(
+        "{}:{}:{}",
+        declared.origin.replace("::", ":"),
+        declared.provider,
+        declared.method
+    );
+    assert!(
+        job.starts_with("integration:occurrence:"),
+        "the identity opens with the path that declared the job: {job}"
+    );
+    for occurrence in &claimed {
+        assert_eq!(
+            occurrence.job, job,
+            "the lease is the job's: {occurrence:?}"
+        );
+        let instant: u64 = occurrence
+            .token
+            .strip_prefix(&format!("{job}:"))
             .and_then(|instant| instant.parse().ok())
-            .unwrap_or_else(|| panic!("a claim is `{identity}<instant>`: {token}"));
-        assert_eq!(instant % 100, 0, "ticks on the epoch: {token}");
+            .unwrap_or_else(|| panic!("a claim is `{job}:<instant>`: {occurrence:?}"));
+        assert_eq!(instant % 100, 0, "ticks on the epoch: {occurrence:?}");
     }
+    let runs: std::collections::HashSet<&str> = claimed
+        .iter()
+        .map(|occurrence| occurrence.run.as_str())
+        .collect();
+    assert_eq!(
+        runs.len(),
+        claimed.len(),
+        "each run holds the lease as itself"
+    );
+    assert_eq!(
+        *RELEASED.lock().expect("lock"),
+        claimed,
+        "every run gave its lease back once it ended"
+    );
 }
 
 /// Two bindings for one port are two deliberate declarations, and the boot

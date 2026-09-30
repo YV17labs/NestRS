@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use nest_rs_core::{App, ContainerBuilder, Module, module};
 use nest_rs_redis::{RedisConfig, RedisModule, RedisScheduleModule};
-use nest_rs_schedule::{OccurrenceLock, OccurrenceLockError};
+use nest_rs_schedule::{Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError};
 
 /// A Redis nothing listens on: were a factory to run, the boot would fail on
 /// the dial at once rather than reach whatever Redis the machine holds.
@@ -26,12 +26,23 @@ struct ElsewhereLock;
 
 #[async_trait::async_trait]
 impl OccurrenceLock for ElsewhereLock {
-    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(
+        &self,
+        _occurrence: &Occurrence,
+    ) -> Result<OccurrenceClaim, OccurrenceLockError> {
+        Ok(OccurrenceClaim::Claimed)
+    }
+
+    async fn claimed(&self, _token: &str) -> Result<bool, OccurrenceLockError> {
+        Ok(false)
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
         Ok(true)
     }
 
-    async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
-        Ok(false)
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 

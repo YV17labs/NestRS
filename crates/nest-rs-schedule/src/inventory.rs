@@ -36,6 +36,11 @@ pub type RunFn =
 /// a single label so structured logs can filter/group on either alone — a
 /// composite string would be unqueryable once the output is JSON.
 pub struct CronJobMeta {
+    /// `module_path!()` of the code declaring the job. The first levels of its
+    /// identity: the same job declared in a crate several apps link coordinates
+    /// its occurrences across all of them, and two apps each declaring a
+    /// same-named job of their own do not claim each other's.
+    pub origin: &'static str,
     /// The host struct, e.g. `"AudioTasks"`.
     pub provider: &'static str,
     /// The scheduled method, e.g. `"heartbeat"`.
@@ -58,10 +63,11 @@ pub struct CronJobMeta {
 /// Link-time inventory entry submitted by `#[scheduled]` per `#[every]` /
 /// `#[cron]` / `#[after]`-tagged method.
 pub struct ScheduledMethod {
-    /// `module_path!()` of the crate that declared it — read by
+    /// `module_path!()` of the module that declared it — read by
     /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick the
-    /// report level, and emitted as a field so a skip line names a type the
-    /// developer can find.
+    /// report level, emitted as a field so a skip line names a type the
+    /// developer can find, and the first levels of the job's identity, copied to
+    /// the synthesized [`CronJobMeta`].
     pub origin: &'static str,
     /// The host struct (e.g. `"AudioTasks"`) — logged as its own field and
     /// copied to the synthesized [`CronJobMeta`].

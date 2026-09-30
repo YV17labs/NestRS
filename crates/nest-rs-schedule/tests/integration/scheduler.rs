@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use nest_rs_core::{Container, Transport};
 use nest_rs_schedule::nest_rs_worker::{JobSettlement, JobTransaction};
 use nest_rs_schedule::{
-    CronExpression, CronJobMeta, OccurrenceLock, OccurrenceLockError, Replicas, RunFn, Scheduler,
-    Trigger,
+    CronExpression, CronJobMeta, Occurrence, OccurrenceClaim, OccurrenceLock, OccurrenceLockError,
+    Replicas, RunFn, Scheduler, Trigger,
 };
 use nest_rs_testing::LogCapture;
 use nest_rs_worker::{self, JobContext};
@@ -56,6 +56,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
 
     let container = crate::hermetic()
         .attach_meta::<IntervalHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "IntervalHost",
             method: "interval",
             trigger: Trigger::Interval(Duration::from_millis(200)),
@@ -64,6 +65,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             replicas: Replicas::Each,
         })
         .attach_meta::<TimeoutHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "TimeoutHost",
             method: "timeout",
             trigger: Trigger::Timeout(Duration::from_millis(300)),
@@ -72,6 +74,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             replicas: Replicas::Each,
         })
         .attach_meta::<CronHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "CronHost",
             method: "cron",
             trigger: Trigger::Cron {
@@ -141,6 +144,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
 
     let container = crate::hermetic()
         .attach_meta::<PanicHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "PanicHost",
             method: "panics",
             trigger: Trigger::Interval(Duration::from_millis(100)),
@@ -149,6 +153,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             replicas: Replicas::Each,
         })
         .attach_meta::<SurvivorHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "SurvivorHost",
             method: "survives",
             trigger: Trigger::Interval(Duration::from_millis(100)),
@@ -191,6 +196,7 @@ async fn invalid_cron_expression_fails_configure() {
 
     let container = crate::hermetic()
         .attach_meta::<BadHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "BadHost",
             method: "broken",
             trigger: Trigger::Cron {
@@ -253,6 +259,7 @@ async fn jobs_run_inside_the_bound_job_context() {
     let container = crate::hermetic()
         .provide_dyn::<dyn JobContext>(Arc::new(MarkerContext))
         .attach_meta::<ObserveHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "ObserveHost",
             method: "observe",
             trigger: Trigger::Interval(Duration::from_millis(100)),
@@ -325,6 +332,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
     let logs = nest_rs_testing::LogCapture::install();
     let container = crate::hermetic()
         .attach_meta::<NamedPanicHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "NamedPanicHost",
             method: "panics",
             trigger: Trigger::Interval(Duration::from_millis(50)),
@@ -406,6 +414,7 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
     let logs = nest_rs_testing::LogCapture::install();
     let container = crate::hermetic()
         .attach_meta::<WrappedFailureHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "WrappedFailureHost",
             method: "tick",
             trigger: Trigger::Interval(Duration::from_millis(50)),
@@ -457,6 +466,7 @@ async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
             ),
         )))
         .attach_meta::<UnsettleableHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "UnsettleableHost",
             method: "tick",
             trigger: Trigger::Interval(Duration::from_millis(50)),
@@ -533,6 +543,7 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
 
     let container = crate::hermetic()
         .attach_meta::<NeverHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "NeverHost",
             method: "never",
             trigger: Trigger::Cron {
@@ -577,30 +588,54 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
 }
 
 /// A lock every replica in a test reaches, standing in for the store a
-/// deployment shares: it records each claim and grants an occurrence to its
-/// first claimant only.
+/// deployment shares: it records each claim, grants an occurrence to its first
+/// claimant only, and holds each job's run lease for the run that took it until
+/// that run releases it — a store whose leases never lapse, since no run here
+/// stops without releasing.
 #[derive(Default)]
 struct SharedLock {
     claims: std::sync::Mutex<Vec<(String, Duration)>>,
     granted: std::sync::Mutex<std::collections::HashSet<String>>,
+    leases: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 #[async_trait::async_trait]
 impl OccurrenceLock for SharedLock {
-    async fn claim(&self, occurrence: &str, hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(&self, occurrence: &Occurrence) -> Result<OccurrenceClaim, OccurrenceLockError> {
         self.claims
             .lock()
             .expect("lock")
-            .push((occurrence.to_owned(), hold));
-        Ok(self
+            .push((occurrence.token.clone(), occurrence.hold));
+        let mut leases = self.leases.lock().expect("lock");
+        if leases.contains_key(&occurrence.job) {
+            return Ok(OccurrenceClaim::RunningElsewhere);
+        }
+        if !self
             .granted
             .lock()
             .expect("lock")
-            .insert(occurrence.to_owned()))
+            .insert(occurrence.token.clone())
+        {
+            return Ok(OccurrenceClaim::ClaimedElsewhere);
+        }
+        leases.insert(occurrence.job.clone(), occurrence.run.clone());
+        Ok(OccurrenceClaim::Claimed)
     }
 
-    async fn claimed(&self, occurrence: &str) -> Result<bool, OccurrenceLockError> {
-        Ok(self.granted.lock().expect("lock").contains(occurrence))
+    async fn claimed(&self, token: &str) -> Result<bool, OccurrenceLockError> {
+        Ok(self.granted.lock().expect("lock").contains(token))
+    }
+
+    async fn renew(&self, occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(self.leases.lock().expect("lock").get(&occurrence.job) == Some(&occurrence.run))
+    }
+
+    async fn release(&self, occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        let mut leases = self.leases.lock().expect("lock");
+        if leases.get(&occurrence.job) == Some(&occurrence.run) {
+            leases.remove(&occurrence.job);
+        }
+        Ok(())
     }
 }
 
@@ -644,6 +679,7 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
         let container = crate::hermetic()
             .provide_dyn::<dyn OccurrenceLock>(shared)
             .attach_meta::<OnceHost, CronJobMeta>(CronJobMeta {
+                origin: module_path!(),
                 provider: PROVIDER,
                 method: METHOD,
                 trigger: Trigger::Interval(PERIOD),
@@ -693,13 +729,119 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
             "a claim outlasts clock skew: {hold:?}"
         );
         assert!(
-            occurrence.starts_with(&format!("{PROVIDER}:{METHOD}:")),
+            occurrence.starts_with(&format!(
+                "{}:{PROVIDER}:{METHOD}:",
+                module_path!().replace("::", ":")
+            )),
             "an occurrence is a level per `::`, so no segment is empty: {occurrence}",
         );
     }
 }
 
 static CRON_ONCE_HITS: AtomicU64 = AtomicU64::new(0);
+
+static OVERLAP_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+static OVERLAP_MOST: AtomicU64 = AtomicU64::new(0);
+static OVERLAP_RUNS: AtomicU64 = AtomicU64::new(0);
+
+/// A run three and a half periods long, counting how many are in flight at once.
+fn tick_overlapping(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        let in_flight = OVERLAP_IN_FLIGHT.fetch_add(1, Ordering::SeqCst) + 1;
+        OVERLAP_MOST.fetch_max(in_flight, Ordering::SeqCst);
+        OVERLAP_RUNS.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        OVERLAP_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        Ok(())
+    })
+}
+
+/// `replicas = "one"` is one replica running the job, and one replica never
+/// overlaps its own runs. Keyed per occurrence alone, a run outlasting its
+/// period left each idle replica to claim the next instant, and the audit
+/// measured three runs of one job in flight on three replicas. The run lease
+/// taken with the claim holds the job on every replica while a run lasts, and
+/// the replica running it reports the occurrences it overran, as one replica
+/// does — not the idle ones, which would say it once each.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_run_outlasting_its_period_holds_the_job_on_every_replica() {
+    struct OverlapHost;
+    const PERIOD: Duration = Duration::from_millis(100);
+
+    let logs = LogCapture::install_global();
+    let lock = Arc::new(SharedLock::default());
+    let cancel = CancellationToken::new();
+    let mut serving = Vec::new();
+    for _ in 0..3 {
+        let shared: Arc<dyn OccurrenceLock> = lock.clone();
+        let container = crate::hermetic()
+            .provide_dyn::<dyn OccurrenceLock>(shared)
+            .attach_meta::<OverlapHost, CronJobMeta>(CronJobMeta {
+                origin: module_path!(),
+                provider: "OverlapHost",
+                method: "overlap",
+                trigger: Trigger::Interval(PERIOD),
+                run: tick_overlapping,
+                transaction: JobTransaction::Pool,
+                replicas: Replicas::One,
+            })
+            .build();
+        let mut scheduler = Scheduler::new();
+        scheduler
+            .configure(&container)
+            .await
+            .expect("a replica configures with a lock bound");
+        serving.push(tokio::spawn(Box::new(scheduler).serve(cancel.clone())));
+    }
+    tokio::time::sleep(Duration::from_millis(1_600)).await;
+    cancel.cancel();
+    for replica in serving {
+        replica
+            .await
+            .expect("serve task joins")
+            .expect("serve returns Ok");
+    }
+
+    assert!(
+        OVERLAP_RUNS.load(Ordering::SeqCst) >= 2,
+        "the job ran, back to back, within 1.6 s"
+    );
+    assert_eq!(
+        OVERLAP_MOST.load(Ordering::SeqCst),
+        1,
+        "no two runs of a job firing once overlap, on any replica"
+    );
+    let overrun: Vec<_> = logs
+        .find(
+            nest_rs_schedule::TARGET,
+            "occurrences skipped: they fell due while the previous one was claimed or run",
+        )
+        .into_iter()
+        .filter(|event| event.field("provider").as_deref() == Some("OverlapHost"))
+        .collect();
+    assert!(
+        !overrun.is_empty(),
+        "the replica that ran the job reports what its run overran"
+    );
+    for event in &overrun {
+        assert_eq!(event.level, "warn");
+        assert_eq!(
+            event.field("claimed_elsewhere").as_deref(),
+            Some("0"),
+            "nobody ran an occurrence while the job was running: {event:?}"
+        );
+    }
+    assert!(
+        logs.find(
+            nest_rs_schedule::TARGET,
+            "occurrence left to another replica, which is running the job",
+        )
+        .into_iter()
+        .any(|event| event.level == "debug"
+            && event.field("provider").as_deref() == Some("OverlapHost")),
+        "an idle replica leaves the occurrence to the one running the job, at debug"
+    );
+}
 
 fn tick_cron_once(_: &Container) -> RunFuture<'_> {
     Box::pin(async {
@@ -719,6 +861,7 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(shared)
         .attach_meta::<CronOnceHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "CronOnceHost",
             method: "each_second",
             trigger: Trigger::Cron {
@@ -764,6 +907,7 @@ async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
 
     let container = crate::hermetic()
         .attach_meta::<LonelyHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "LonelyHost",
             method: "once",
             trigger: Trigger::Interval(Duration::from_secs(5)),
@@ -795,6 +939,7 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<OneShotHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "OneShotHost",
             method: "warmup",
             trigger: Trigger::Timeout(Duration::from_millis(10)),
@@ -819,6 +964,7 @@ async fn a_zero_interval_fails_the_boot() {
 
     let container = crate::hermetic()
         .attach_meta::<ZeroHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "ZeroHost",
             method: "spin",
             trigger: Trigger::Interval(Duration::ZERO),
@@ -848,6 +994,7 @@ async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
         let container = crate::hermetic()
             .provide_dyn::<dyn OccurrenceLock>(lock)
             .attach_meta::<SubMillisecondHost, CronJobMeta>(CronJobMeta {
+                origin: module_path!(),
                 provider: "SubMillisecondHost",
                 method: "spin",
                 trigger: Trigger::Interval(Duration::from_micros(500)),
@@ -886,12 +1033,23 @@ struct FailingLock;
 
 #[async_trait::async_trait]
 impl OccurrenceLock for FailingLock {
-    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(
+        &self,
+        _occurrence: &Occurrence,
+    ) -> Result<OccurrenceClaim, OccurrenceLockError> {
         Err(unreachable_lock())
     }
 
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Err(unreachable_lock())
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -917,6 +1075,7 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<UnclaimedHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "UnclaimedHost",
             method: "once",
             trigger: Trigger::Interval(Duration::from_millis(50)),
@@ -991,16 +1150,27 @@ struct SlowLock {
 
 #[async_trait::async_trait]
 impl OccurrenceLock for SlowLock {
-    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(
+        &self,
+        _occurrence: &Occurrence,
+    ) -> Result<OccurrenceClaim, OccurrenceLockError> {
         if self.claimed.swap(true, Ordering::SeqCst) {
-            return Ok(false);
+            return Ok(OccurrenceClaim::ClaimedElsewhere);
         }
         tokio::time::sleep(Duration::from_millis(1_100)).await;
-        Ok(true)
+        Ok(OccurrenceClaim::Claimed)
     }
 
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Ok(false)
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -1028,6 +1198,7 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<OverrunHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "OverrunHost",
             method: "sweep",
             trigger: Trigger::Interval(PERIOD),
@@ -1100,16 +1271,17 @@ fn tick_noop(_: &Container) -> RunFuture<'_> {
 }
 
 /// Two jobs under one `Provider::method` — two `Tasks` structs in two modules,
-/// each with a `sweep` — would claim each other's occurrences, and each run
-/// about half of them. Refused at boot, every origin named once — two jobs
-/// declared at one site are that site, counted.
+/// each with a `sweep` — file lines nobody can tell apart, since the lines carry
+/// the provider and the method. Refused at boot, every origin named once — two
+/// jobs declared at one site are that site, counted.
 #[tokio::test]
-async fn two_jobs_sharing_one_identity_fail_the_boot_naming_both() {
+async fn two_jobs_sharing_one_name_fail_the_boot_naming_both() {
     struct FirstTasks;
     struct SecondTasks;
 
     let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
     let meta = || CronJobMeta {
+        origin: module_path!(),
         provider: "Tasks",
         method: "sweep",
         trigger: Trigger::Interval(Duration::from_secs(1)),
@@ -1125,14 +1297,14 @@ async fn two_jobs_sharing_one_identity_fail_the_boot_naming_both() {
     let refusal = Scheduler::new()
         .configure(&container)
         .await
-        .expect_err("one identity, two jobs")
+        .expect_err("one name, two jobs")
         .to_string();
     assert!(
-        refusal.contains("`Tasks::sweep`") && refusal.contains("share one identity"),
+        refusal.contains("`Tasks::sweep`") && refusal.contains("share one name"),
         "{refusal}"
     );
     assert!(
-        refusal.contains("(declared twice in attached metadata)"),
+        refusal.contains(&format!("(declared twice in {})", module_path!())),
         "one site, named once: {refusal}"
     );
 }
@@ -1147,16 +1319,27 @@ struct PeerFiredLock {
 
 #[async_trait::async_trait]
 impl OccurrenceLock for PeerFiredLock {
-    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(
+        &self,
+        _occurrence: &Occurrence,
+    ) -> Result<OccurrenceClaim, OccurrenceLockError> {
         if self.claimed.swap(true, Ordering::SeqCst) {
-            return Ok(false);
+            return Ok(OccurrenceClaim::ClaimedElsewhere);
         }
         tokio::time::sleep(Duration::from_millis(1_100)).await;
-        Ok(true)
+        Ok(OccurrenceClaim::Claimed)
     }
 
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Ok(true)
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -1173,6 +1356,7 @@ async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<PeerFiredHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "PeerFiredHost",
             method: "sweep",
             trigger: Trigger::Interval(PERIOD),
@@ -1243,6 +1427,7 @@ async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_tha
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<BackToBackHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "BackToBackHost",
             method: "crunch",
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
@@ -1335,6 +1520,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<StalledIntervalHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "StalledIntervalHost",
             method: "tick",
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
@@ -1343,6 +1529,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
             replicas: Replicas::One,
         })
         .attach_meta::<StalledCronHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "StalledCronHost",
             method: "tick",
             trigger: Trigger::Cron {
@@ -1426,6 +1613,7 @@ async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud
     let logs = LogCapture::install();
     let container = crate::hermetic()
         .attach_meta::<LongRunHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "LongRunHost",
             method: "crunch",
             trigger: Trigger::Interval(PERIOD),
@@ -1494,6 +1682,7 @@ async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
     let logs = LogCapture::install();
     let container = crate::hermetic()
         .attach_meta::<SlightlyLongHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "SlightlyLongHost",
             method: "crunch",
             trigger: Trigger::Interval(Duration::from_millis(100)),
@@ -1538,18 +1727,26 @@ struct StallingLock {
 
 #[async_trait::async_trait]
 impl OccurrenceLock for StallingLock {
-    async fn claim(&self, occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(&self, occurrence: &Occurrence) -> Result<OccurrenceClaim, OccurrenceLockError> {
         self.claims
             .lock()
             .expect("lock")
-            .push(instant_of(occurrence));
+            .push(instant_of(&occurrence.token));
         tokio::time::sleep(Duration::from_millis(300)).await;
-        Ok(false)
+        Ok(OccurrenceClaim::ClaimedElsewhere)
     }
 
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         tokio::time::sleep(Duration::from_millis(300)).await;
         Ok(false)
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -1563,13 +1760,13 @@ struct RecordingLock {
 
 #[async_trait::async_trait]
 impl OccurrenceLock for RecordingLock {
-    async fn claim(&self, occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(&self, occurrence: &Occurrence) -> Result<OccurrenceClaim, OccurrenceLockError> {
         self.claimed_at_claim
             .lock()
             .expect("lock")
-            .push(occurrence.to_owned());
+            .push(occurrence.token.clone());
         tokio::time::sleep(Duration::from_millis(300)).await;
-        Ok(true)
+        Ok(OccurrenceClaim::Claimed)
     }
 
     async fn claimed(&self, occurrence: &str) -> Result<bool, OccurrenceLockError> {
@@ -1578,6 +1775,14 @@ impl OccurrenceLock for RecordingLock {
             .expect("lock")
             .push(occurrence.to_owned());
         Ok(false)
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -1600,6 +1805,7 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
         .attach_meta::<RecordedHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: PROVIDER,
             method: METHOD,
             trigger: Trigger::Interval(Duration::from_millis(100)),
@@ -1630,8 +1836,9 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
         "a stalled claim overruns, so the overrun check ran: {asked:?}"
     );
 
-    // One identity at both sites, a level per `::`, and the instant last.
-    let identity = format!("{PROVIDER}:{METHOD}:");
+    // One identity at both sites — the declaring path, the provider and the
+    // method, a level per `::` — and the instant last.
+    let identity = format!("{}:{PROVIDER}:{METHOD}:", module_path!().replace("::", ":"));
     for token in claimed.iter().chain(&asked) {
         let instant = token
             .strip_prefix(&identity)
@@ -1663,6 +1870,7 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
         .attach_meta::<StalledHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "StalledHost",
             method: "sweep",
             trigger: Trigger::Interval(Duration::from_millis(PERIOD_MS)),
@@ -1729,16 +1937,27 @@ struct UnanswerableLock {
 
 #[async_trait::async_trait]
 impl OccurrenceLock for UnanswerableLock {
-    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(
+        &self,
+        _occurrence: &Occurrence,
+    ) -> Result<OccurrenceClaim, OccurrenceLockError> {
         if self.claimed.swap(true, Ordering::SeqCst) {
-            return Ok(false);
+            return Ok(OccurrenceClaim::ClaimedElsewhere);
         }
         tokio::time::sleep(Duration::from_millis(1_100)).await;
-        Ok(true)
+        Ok(OccurrenceClaim::Claimed)
     }
 
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Err(unreachable_lock())
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -1754,6 +1973,7 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<UnanswerableHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "UnanswerableHost",
             method: "sweep",
             trigger: Trigger::Interval(Duration::from_millis(5)),
@@ -1831,13 +2051,24 @@ struct PanickingLock {
 
 #[async_trait::async_trait]
 impl OccurrenceLock for PanickingLock {
-    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(
+        &self,
+        _occurrence: &Occurrence,
+    ) -> Result<OccurrenceClaim, OccurrenceLockError> {
         self.claims.fetch_add(1, Ordering::SeqCst);
         panic!("the lock store's client panicked");
     }
 
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         panic!("the lock store's client panicked");
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -1867,6 +2098,7 @@ async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(bound)
         .attach_meta::<PanickedLockHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "PanickedLockHost",
             method: "once",
             trigger: Trigger::Interval(Duration::from_millis(50)),
@@ -1933,6 +2165,7 @@ async fn a_run_panicking_before_its_future_keeps_its_schedule() {
 
     let container = crate::hermetic()
         .attach_meta::<EarlyPanicHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "EarlyPanicHost",
             method: "panics_early",
             trigger: Trigger::Interval(Duration::from_millis(100)),
@@ -1980,12 +2213,23 @@ struct UnwritableLock;
 
 #[async_trait::async_trait]
 impl OccurrenceLock for UnwritableLock {
-    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(
+        &self,
+        _occurrence: &Occurrence,
+    ) -> Result<OccurrenceClaim, OccurrenceLockError> {
         Err(OccurrenceLockError::new(UnwritableError))
     }
 
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Err(OccurrenceLockError::new(UnwritableError))
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -2006,6 +2250,7 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
         .attach_meta::<DoomedHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "DoomedHost",
             method: "once",
             trigger: Trigger::Interval(Duration::from_millis(50)),
@@ -2053,13 +2298,24 @@ struct HungLock {
 
 #[async_trait::async_trait]
 impl OccurrenceLock for HungLock {
-    async fn claim(&self, _occurrence: &str, _hold: Duration) -> Result<bool, OccurrenceLockError> {
+    async fn claim(
+        &self,
+        _occurrence: &Occurrence,
+    ) -> Result<OccurrenceClaim, OccurrenceLockError> {
         self.sent.notify_one();
         std::future::pending().await
     }
 
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         std::future::pending().await
+    }
+
+    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
+        Ok(true)
+    }
+
+    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
+        Ok(())
     }
 }
 
@@ -2082,6 +2338,7 @@ async fn shut_down_while_a_claim_hangs(
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(shared)
         .attach_meta::<HungHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
             provider: "HungHost",
             method,
             trigger,

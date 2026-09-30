@@ -258,8 +258,9 @@ A scheduled method fires on **every** replica by default — `replicas = "each"`
 which is right for work that is per-process: a cache warm-up, a local sweep.
 Work that is the deployment's — purge what has expired, close the hour's
 invoices, send the digest — declares `replicas = "one"` on `#[every]` or
-`#[cron]`, and each occurrence then fires on one replica. The demo's worker
-purges expired notifications that way:
+`#[cron]`, and the job then runs **as if one replica ran it**: each occurrence
+fires on one replica, and never while a run of the job is still going on
+another. The demo's worker purges expired notifications that way:
 
 ```rust title="crates/features/src/notifications/schedule/tasks.rs (from the demo, abridged)"
 #[scheduled]
@@ -276,7 +277,10 @@ The worker is the app the demo's chart scales on queue depth, to as many as ten
 replicas once KEDA is on. Left at the default, every replica would run the purge
 each hour — ten purges for one hour's expired rows, contending for the same rows
 whenever two run close together. Declared `"one"`, each hour's occurrence runs
-once, on whichever replica claims it.
+once, on whichever replica claims it, and a purge that outlasts its hour holds
+the job on every replica until it ends, exactly as it would hold a single
+replica: the hours that fell due meanwhile are reported skipped by the replica
+that ran it, and the latest fires late, once, when the run ends.
 
 The replicas agree through Redis. Enable `redis-schedule` (see
 [Install](#install)), then import the binding beside `ScheduleModule` in every
@@ -319,12 +323,31 @@ there is no shared occurrence to claim.
 Every replica reaches **the same instants**: an `#[every]` declared so ticks on
 multiples of its period counted from the Unix epoch rather than from its own
 boot, and a `#[cron]` on the instants its expression names. At each one, every
-replica sends one atomic `SET … NX PX` for that occurrence's key; the replica
-whose `SET` created the key fires the method, and the others log `occurrence
-claimed by another replica` at `debug` and wait for the next one. The key is
-held for twice the job's period — for a cron job, twice the gap to its next
-occurrence — and never less than a minute, then Redis forgets it, so claims never
-accumulate.
+replica sends Redis one atomic script, which asks two questions in order:
+
+1. **Is the job running?** A replica running it holds the job's *run lease*.
+   While it does, the occurrence is left unclaimed and the replica asking logs
+   `occurrence left to another replica, which is running the job` at `debug`: the
+   replica running the job fires the latest occurrence late once its run ends,
+   and reports the ones before it, as a single replica held by a long run does.
+2. **Is the occurrence claimed?** The first replica whose `SET … NX` creates the
+   occurrence's key has claimed it, takes the run lease in the same script, and
+   fires the method; the others log `occurrence claimed by another replica` at
+   `debug` and wait for the next one.
+
+The claim is held for twice the job's period — for a cron job, twice the gap to
+its next occurrence — and never less than a minute, then Redis forgets it, so
+claims never accumulate. The run lease lasts thirty seconds, is renewed every ten
+while the run lasts, and is given back when the run ends, however it ended.
+
+**A job is its declaration, not its name.** Its identity opens with the path of
+the module that declared it, so a job declared in a crate every app links —
+`features`, in the demo — is one job wherever it runs, while an API and a
+worker that each declare their own `MaintenanceTasks::sweep` have two, and never
+claim each other's occurrences through the Redis they share. Two jobs under one
+`Provider::method` in one app still fail its boot, naming where each was
+declared, because the lines a job files carry its provider and method and could
+not tell the two apart.
 
 ### At most once, not exactly once
 
@@ -355,7 +378,13 @@ replica — the thing the declaration exists to prevent. So:
   before that, and a run already started, are not cut short: the run finishes,
   then the scheduler stops.
 - **A replica that stops after claiming loses that occurrence.** Nobody else
-  will fire it.
+  will fire it, and its run lease holds the job on every replica until it lapses,
+  within thirty seconds; the occurrences falling due meanwhile are lost with it.
+- **A run whose lease cannot be renewed goes on**, since cutting it would cut
+  its transaction halfway. A renewal Redis refuses is a `warn`, `run lease not
+  renewed; retrying`, and two in a row still leave the lease held; a lease found
+  gone is an `error`, `run lease lost while its job runs; another replica may run
+  it too` — the one failure after which two runs of the job may overlap.
 
 Work that must not be lost belongs in a [queue](/queue/) job the tick pushes —
 a queue delivers at least once, with retries — and the tick itself stays the
@@ -363,26 +392,33 @@ thin *when* of the first section.
 
 When a claim or a long run holds a replica past later occurrences, the replica
 asks Redis which of them a peer claimed: those are fine and say so at `debug`,
-and the rest are reported skipped at `warn`, counted. A claim outlives the
-occurrence after it, so an overrun of one occurrence is always answered; a longer
-one reports its earliest occurrences unclaimed, since their claims have lapsed by
-then.
+and the rest are reported skipped at `warn`, counted. After a long run the answer
+is every one of them, since the run held the job; after a slow claim or a stalled
+replica, peers may have fired some. A claim outlives the occurrence after it, so
+an overrun of one occurrence is always answered; a longer one reports its
+earliest occurrences unclaimed, since their claims have lapsed by then.
 
-### The key
+### The keys
 
 ```text
-nestrs:schedule:claims:<provider>:<method>:<instant_ms>
+nestrs:schedule:claims:<module path>:<provider>:<method>:<instant_ms>
+nestrs:schedule:leases:<module path>:<provider>:<method>
 ```
 
-One key per occurrence claimed, the instant in milliseconds since the Unix
-epoch — `nestrs:schedule:claims:NotificationsTasks:purge_expired:1789002000000`.
-Its value names the replica that claimed it — its `HOSTNAME` and process id —
-for an operator reading it during an incident; the lock decides on the key's
-existence alone.
-`SCAN 0 MATCH nestrs:schedule:claims:NotificationsTasks:*` lists one provider's
-claims still held. The prefix is fixed rather than the deployment's: two deployments
-sharing a Redis are separated by the logical database in `NESTRS_REDIS__URL`.
-A Redis ACL for the app has to allow `SET` and `EXISTS` on that pattern.
+The module path is the declaring module's, a level per `::`. A **claim** is one
+key per occurrence claimed, the instant in milliseconds since the Unix epoch —
+`nestrs:schedule:claims:features:notifications:schedule:tasks:NotificationsTasks:purge_expired:1789002000000`.
+A **lease** is one key per job running now, gone when its run ends. Each value
+names the replica that wrote it — its `HOSTNAME` and process id — and the
+`trace_id` of the run, for an operator reading it during an incident; the lock
+decides on the key's existence and on the run alone.
+`SCAN 0 MATCH nestrs:schedule:claims:features:notifications:*` lists one module's
+claims still held, and `SCAN 0 MATCH nestrs:schedule:leases:*` every job running
+now. The prefix is fixed rather than the deployment's: two deployments sharing a
+Redis are separated by the logical database in `NESTRS_REDIS__URL`.
+The claim, the renewal and the release are Lua scripts, sent as `EVALSHA` with a
+`SCRIPT LOAD` the first time Redis has not cached one, and an overrun question is
+an `EXISTS`: a Redis ACL for the app has to allow all three on those patterns.
 
 ## The ambient data context
 

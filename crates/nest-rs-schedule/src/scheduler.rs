@@ -10,15 +10,19 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use croner::Cron;
 use futures_util::FutureExt;
-use nest_rs_core::{Container, Discovery, ReachableProviders, Transport, inventory, panic_message};
+use nest_rs_core::{
+    Container, Correlation, Discovery, ReachableProviders, Transport, inventory, panic_message,
+};
 use nest_rs_worker::{JobContext, JobTransaction, Unhonoured, run_in_job_context};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 
 use crate::{
-    BACKEND_REMEDY, CronJobMeta, OccurrenceLock, Replicas, RunFn, ScheduledMethod, Trigger,
+    BACKEND_REMEDY, CronJobMeta, Occurrence, OccurrenceClaim, OccurrenceLock, Replicas, RunFn,
+    ScheduledMethod, Trigger,
 };
 
 /// The shortest time an occurrence stays claimed. Keys are distinct per
@@ -28,6 +32,17 @@ use crate::{
 /// minute is far past what NTP leaves, and short enough that the backend forgets
 /// a short job's keys soon after.
 const MIN_HOLD: Duration = Duration::from_secs(60);
+
+/// How long a job's run lease lasts unless it is renewed — the time a replica
+/// that stopped mid-run holds its job on every other replica. The worker's
+/// default job lease, for the same trade: long enough that a busy process never
+/// loses it between two renewals, short enough that a crash costs half a minute.
+const LEASE: Duration = Duration::from_secs(30);
+
+/// How often a run renews its lease: every third of it, so two renewals in a row
+/// can fail before it lapses. Also the bound on each renewal and on the release,
+/// since an answer later than the next beat is one the lease did not wait for.
+const RENEW_EVERY: Duration = Duration::from_secs(10);
 
 /// How far two replicas' clocks may disagree while a stalled replica still skips,
 /// rather than fires a second time, an occurrence a peer claimed. The replica
@@ -81,10 +96,12 @@ struct Task {
     replicas: Replicas,
 }
 
-/// A job's identity, kept split (host struct + method) so logs filter on
-/// either field alone instead of parsing a baked `Provider::method` string.
+/// A job's identity, kept split (declaring module, host struct, method) so logs
+/// filter on the provider or the method alone instead of parsing a baked
+/// `Provider::method` string.
 #[derive(Clone, Copy)]
 struct JobId {
+    origin: &'static str,
     provider: &'static str,
     method: &'static str,
 }
@@ -96,14 +113,35 @@ impl std::fmt::Display for JobId {
 }
 
 impl JobId {
-    /// The token an [`OccurrenceLock`] claims and is asked about — **one
-    /// derivation, because two sites read it.**
+    /// What an occurrence lock holds the job's run lease under, and what every
+    /// occurrence's token opens with: the declaring module's path, the provider
+    /// and the method, **one `:`-separated level each** —
+    /// `features:notifications:schedule:tasks:NotificationsTasks:purge_expired`.
     ///
-    /// A level per `::`, never the `Display` form: the token becomes a member of
-    /// whatever key the bound lock writes, and `Provider::method` inside a
-    /// `:`-delimited name leaves an empty segment no operator can glob. Split,
-    /// the two parts are two levels, so `…:claims:AudioTasks:*` names one host's
-    /// occurrences.
+    /// **The declaring path is part of it**, because the lock is shared by every
+    /// app of a deployment — an API and a worker on one Redis — and the boot sees
+    /// one app's jobs only. Keyed on `Provider:method`, two apps each declaring
+    /// their own `MaintenanceTasks::sweep` claimed each other's occurrences, and
+    /// each job ran on some of them, with nothing said above `debug`. The path
+    /// tells them apart, while one job declared in a crate both apps link is still
+    /// one job, coordinating across both.
+    ///
+    /// A level per `::`, never the `Display` form: the identity becomes a member
+    /// of whatever key the bound lock writes, and `::` inside a `:`-delimited name
+    /// leaves an empty segment no operator can glob. Read that way, the key opens
+    /// with the provider's own path, so an operator finds the type from the key.
+    /// [`levels_refusal`](Self::levels_refusal) keeps it injective.
+    fn identity(&self) -> String {
+        let mut identity = self.origin.replace("::", ":");
+        for level in [self.provider, self.method] {
+            identity.push(':');
+            identity.push_str(level);
+        }
+        identity
+    }
+
+    /// The token an occurrence is claimed under and asked about — **one
+    /// derivation, because two sites read it.**
     ///
     /// It is a method rather than a `format!` at each site because the claim and
     /// the overrun check must agree exactly: built twice, they disagreed the
@@ -114,20 +152,30 @@ impl JobId {
         format!("{}:{instant_ms}", self.identity())
     }
 
-    /// What an occurrence's token identifies the job by, which is **not** the
-    /// `Display` form.
+    /// Why this identity cannot be a key's levels, if it cannot: a level that is
+    /// empty or carries a `:` of its own.
     ///
-    /// The boot refuses two jobs under one identity because they would claim
-    /// each other's occurrences, so it has to compare the string the claim is
-    /// addressed by. It compared `Provider::method` instead, and joining the two
-    /// parts with a single `:` made that wrong in a way nothing could see: a
-    /// provider named `A:B` with a method `c` and a provider `A` with a method
-    /// `B:c` have different `Display` forms and one token, so both passed the
-    /// check and then split one occurrence between them. Reachable only through
-    /// `attach_meta`, whose `provider`/`method` are plain strings — `#[scheduled]`
-    /// writes idents — but the check is worth having where the lock looks.
-    fn identity(&self) -> String {
-        format!("{}:{}", self.provider, self.method)
+    /// Joined by `:`, the levels are one string, and two jobs whose levels differ
+    /// could then spell one token — a provider `A:B` with a method `c` and a
+    /// provider `A` with a method `B:c` — and split one occurrence between them,
+    /// in two apps where no boot sees both. `#[scheduled]` writes idents and
+    /// `module_path!()`, which can do neither; a job attached by hand, whose parts
+    /// are plain strings, is held to the same shape at the boot.
+    fn levels_refusal(&self) -> Option<String> {
+        let broken = |level: &str| level.is_empty() || level.contains(':');
+        if self.origin.split("::").any(broken) {
+            return Some(format!(
+                "its origin `{}` is not a module path — `module_path!()` of the code declaring \
+                 it",
+                self.origin
+            ));
+        }
+        [("provider", self.provider), ("method", self.method)]
+            .into_iter()
+            .find(|(_, level)| broken(level))
+            .map(|(part, level)| {
+                format!("its {part} `{level}` is empty or carries a `:`, and it is one level")
+            })
     }
 }
 
@@ -170,9 +218,16 @@ impl Scheduler {
 
     fn resolve(meta: &Arc<CronJobMeta>) -> Result<Job> {
         let id = JobId {
+            origin: meta.origin,
             provider: meta.provider,
             method: meta.method,
         };
+        if let Some(why) = id.levels_refusal() {
+            anyhow::bail!(
+                "scheduled job `{id}` cannot be identified: {why} of the key its occurrences are \
+                 claimed under"
+            );
+        }
         Ok(match meta.trigger {
             Trigger::Interval(period) => {
                 // The duration grammar refuses this at compile time; a job
@@ -249,12 +304,6 @@ impl Transport for Scheduler {
             .iter()
             .map(|d| Scheduler::resolve(&d.meta))
             .collect::<Result<Vec<_>>>()?;
-        // Where each job was declared, for the refusal below: an attached
-        // metadata carries no path of its own.
-        let mut origins: Vec<(JobId, &'static str)> = jobs
-            .iter()
-            .map(|job| (job.id(), "attached metadata"))
-            .collect();
         // Path 2: link-time inventory from `#[scheduled]` — module-gated by
         // `ReachableProviders` so a job whose provider lives in an unimported
         // module compiles in but does not fire.
@@ -271,6 +320,7 @@ impl Transport for Scheduler {
                 continue;
             }
             let synthesized = Arc::new(CronJobMeta {
+                origin: entry.origin,
                 provider: entry.provider,
                 method: entry.method,
                 trigger: entry.trigger,
@@ -278,17 +328,14 @@ impl Transport for Scheduler {
                 transaction: entry.transaction,
                 replicas: entry.replicas,
             });
-            let job = Scheduler::resolve(&synthesized)?;
-            origins.push((job.id(), entry.origin));
-            jobs.push(job);
+            jobs.push(Scheduler::resolve(&synthesized)?);
         }
 
-        // A job's `Provider::method` is its identity: what its lines are
-        // filtered on, and what an occurrence lock is keyed on. Two jobs under
-        // one identity — two `Tasks` structs in two modules, each with a `sweep`
-        // — would claim each other's occurrences, and each run about half of
-        // them. Named at boot, both origins.
-        refuse_shared_identities(&origins)?;
+        // A job's `Provider::method` is what its lines carry and are filtered
+        // on. Two jobs under one name — two `Tasks` structs in two modules, each
+        // with a `sweep` — would file lines nobody can tell apart. Named at boot,
+        // both origins.
+        refuse_shared_names(&jobs.iter().map(Job::id).collect::<Vec<_>>())?;
 
         // The earliest site that sees both facts: which jobs declared one replica
         // is the code's, and whether a lock is bound is the app's imports.
@@ -460,7 +507,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                             report_skipped(id, now_ms.saturating_sub(since_ms), now_ms, &overrun);
                         }
                         previous = deadline;
-                        runner.fire(id, task, None).await;
+                        runner.fire(id, task, Correlation::minted(None), None).await;
                     }
                 }
             }
@@ -511,7 +558,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
             tokio::select! {
                 biased;
                 _ = token.cancelled() => return,
-                _ = sleep(delay) => runner.fire(id, task, None).await,
+                _ = sleep(delay) => runner.fire(id, task, Correlation::minted(None), None).await,
             }
             token.cancelled().await;
         }
@@ -565,7 +612,9 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                         return;
                     };
                     match task.replicas {
-                        Replicas::Each => runner.fire(id, task, None).await,
+                        Replicas::Each => {
+                            runner.fire(id, task, Correlation::minted(None), None).await
+                        }
                         Replicas::One => {
                             runner
                                 .claim_then_fire(id, task, instant_ms, hold, &token)
@@ -836,29 +885,22 @@ fn report_skipped(id: JobId, from_ms: u64, now_ms: u64, overrun: &Overrun) {
 
 /// Refuse two jobs sharing one `Provider::method`, naming where each was
 /// declared.
-fn refuse_shared_identities(origins: &[(JobId, &'static str)]) -> Result<()> {
-    // **Grouped by what the lock sees, named by what the developer wrote.** The
-    // key is `provider:method`, because that is the string an occurrence is
-    // claimed under; the name printed is `Provider::method`, because that is the
-    // declaration a reader goes and edits. They differ only when a part carries
-    // a `:` of its own, and then the sentence names every form that collided.
-    let mut by_identity: std::collections::BTreeMap<String, Vec<(String, &'static str)>> =
+///
+/// The name is what a job's lines carry, so two jobs under one name in one app
+/// cannot be told apart in its logs. It is **not** what an occurrence lock keys
+/// on — that is [`JobId::identity`], which carries the declaring path and whose
+/// levels [`JobId::levels_refusal`] keeps injective — so two such jobs would no
+/// longer claim each other's occurrences; this check is about the reader.
+fn refuse_shared_names(ids: &[JobId]) -> Result<()> {
+    let mut by_name: std::collections::BTreeMap<String, Vec<&'static str>> =
         std::collections::BTreeMap::new();
-    for (id, origin) in origins {
-        by_identity
-            .entry(id.identity())
-            .or_default()
-            .push((id.to_string(), *origin));
+    for id in ids {
+        by_name.entry(id.to_string()).or_default().push(id.origin);
     }
-    let shared: Vec<String> = by_identity
+    let shared: Vec<String> = by_name
         .into_iter()
         .filter(|(_, declared)| declared.len() > 1)
-        .map(|(_, jobs)| {
-            let mut names: Vec<&str> = jobs.iter().map(|(written, _)| written.as_str()).collect();
-            names.sort_unstable();
-            names.dedup();
-            let identity = names.join("` and `");
-            let mut declared: Vec<&'static str> = jobs.iter().map(|(_, at)| *at).collect();
+        .map(|(name, mut declared)| {
             // Several jobs at one site share its path: named once, and counted.
             declared.sort_unstable();
             let sites: Vec<String> = declared
@@ -872,23 +914,164 @@ fn refuse_shared_identities(origins: &[(JobId, &'static str)]) -> Result<()> {
                     format!("{times} in {}", jobs[0])
                 })
                 .collect();
-            format!("`{identity}` (declared {})", sites.join(" and "))
+            format!("`{name}` (declared {})", sites.join(" and "))
         })
         .collect();
     if shared.is_empty() {
         return Ok(());
     }
     anyhow::bail!(
-        "scheduled jobs share one identity: {}. The identity is `provider:method`, the string a \
-         job's occurrence lock is keyed on and its lines are filtered by, so two jobs under one \
-         name cannot be told apart and two firing once would claim each other's occurrences: \
-         rename one provider, or fold the two methods into one",
+        "scheduled jobs share one name: {}. `provider` and `method` are what a job's lines carry \
+         and are filtered by, so two jobs under one name cannot be told apart in them: rename \
+         one provider, or fold the two methods into one",
         shared.join(", "),
     )
 }
 
+/// The run lease a job firing once took with its claim on the occurrence at
+/// `instant_ms`, held while that occurrence fires.
+struct RunLease {
+    lock: Arc<dyn OccurrenceLock>,
+    occurrence: Arc<Occurrence>,
+    id: JobId,
+    instant_ms: u64,
+}
+
+impl RunLease {
+    /// Keep the lease renewed until the handle is dropped: every [`RENEW_EVERY`],
+    /// on a task of its own, so a run that blocks its thread does not starve the
+    /// renewal — the worker's job lease, for the same reason.
+    ///
+    /// A renewal the lock refuses, or leaves unanswered past the next beat, is
+    /// said at `warn` and tried again: two of them in a row still leave the lease
+    /// held. A lease found lost is said at `error` once and no longer renewed —
+    /// the one failure after which another replica may start the job while this
+    /// run goes on, so the one that breaks the promise `replicas = "one"` makes.
+    ///
+    /// The task carries the tick's span and trace, since its lines are the run's.
+    fn keep(&self) -> AbortOnDropHandle<()> {
+        let lock = Arc::clone(&self.lock);
+        let occurrence = Arc::clone(&self.occurrence);
+        let (id, instant_ms) = (self.id, self.instant_ms);
+        let renewing = async move {
+            let lease_ms = u64::try_from(LEASE.as_millis()).unwrap_or(u64::MAX);
+            // Nothing cancels a renewal but the run ending, which drops this task.
+            let running = CancellationToken::new();
+            loop {
+                sleep(RENEW_EVERY).await;
+                match bounded(RENEW_EVERY, &running, async {
+                    lock.renew(&occurrence).await
+                })
+                .await
+                {
+                    Bounded::Answered(Ok(Ok(true))) => {}
+                    Bounded::Answered(Ok(Ok(false))) => {
+                        tracing::error!(
+                            target: crate::TARGET,
+                            provider = id.provider,
+                            method = id.method,
+                            occurrence = instant_ms,
+                            lease_ms,
+                            "run lease lost while its job runs; another replica may run it too",
+                        );
+                        return;
+                    }
+                    Bounded::Answered(Ok(Err(error))) => tracing::warn!(
+                        target: crate::TARGET,
+                        provider = id.provider,
+                        method = id.method,
+                        occurrence = instant_ms,
+                        error = %nest_rs_core::error_message(&error),
+                        "run lease not renewed; retrying",
+                    ),
+                    Bounded::Stale | Bounded::Cancelled => tracing::warn!(
+                        target: crate::TARGET,
+                        provider = id.provider,
+                        method = id.method,
+                        occurrence = instant_ms,
+                        waited_ms = RENEW_EVERY.as_millis() as u64,
+                        "run lease not renewed; retrying",
+                    ),
+                    Bounded::Answered(Err(payload)) => tracing::error!(
+                        target: crate::TARGET,
+                        provider = id.provider,
+                        method = id.method,
+                        occurrence = instant_ms,
+                        panic = panic_message(&*payload),
+                        "occurrence lock panicked renewing a run lease; retrying",
+                    ),
+                }
+            }
+        };
+        let correlation = Correlation::inherited();
+        AbortOnDropHandle::new(tokio::spawn(
+            nest_rs_core::with_request_scope(None, correlation, renewing)
+                .instrument(tracing::Span::current()),
+        ))
+    }
+
+    /// Give the lease back, so the job's next occurrence need not wait for it to
+    /// lapse — on this replica least of all, whose next claim would otherwise find
+    /// its own lease and leave the occurrence to nobody.
+    ///
+    /// Awaited, since the loop's next claim must not race it, for at most
+    /// [`RENEW_EVERY`], and **not** abandoned at shutdown: a replica leaving after
+    /// a run is the common case — every deploy — and one that did not give its
+    /// lease back would hold the job on every peer for the rest of it. A release
+    /// that fails is said at `warn`, and the lease lapses on its own.
+    async fn release(&self) {
+        let lease_ms = u64::try_from(LEASE.as_millis()).unwrap_or(u64::MAX);
+        let running = CancellationToken::new();
+        match bounded(RENEW_EVERY, &running, async {
+            self.lock.release(&self.occurrence).await
+        })
+        .await
+        {
+            Bounded::Answered(Ok(Ok(()))) => {}
+            Bounded::Answered(Ok(Err(error))) => tracing::warn!(
+                target: crate::TARGET,
+                provider = self.id.provider,
+                method = self.id.method,
+                occurrence = self.instant_ms,
+                lease_ms,
+                error = %nest_rs_core::error_message(&error),
+                "run lease not released; the job waits for it to lapse",
+            ),
+            Bounded::Stale | Bounded::Cancelled => tracing::warn!(
+                target: crate::TARGET,
+                provider = self.id.provider,
+                method = self.id.method,
+                occurrence = self.instant_ms,
+                lease_ms,
+                waited_ms = RENEW_EVERY.as_millis() as u64,
+                "run lease not released; the job waits for it to lapse",
+            ),
+            Bounded::Answered(Err(payload)) => tracing::error!(
+                target: crate::TARGET,
+                provider = self.id.provider,
+                method = self.id.method,
+                occurrence = self.instant_ms,
+                lease_ms,
+                panic = panic_message(&*payload),
+                "occurrence lock panicked releasing a run lease; the job waits for it to lapse",
+            ),
+        }
+    }
+}
+
 impl Runner {
     /// Fire the occurrence at `instant_ms` only if this replica claims it.
+    ///
+    /// **And only while no run of the job is going on elsewhere.** The claim
+    /// takes the job's run lease with it, atomically, and a lease another replica
+    /// holds leaves the occurrence unclaimed: `replicas = "one"` reads as one
+    /// replica running the job, and one replica never overlaps its own runs.
+    /// Keyed per occurrence alone, a run outlasting its period let each idle
+    /// replica claim the next instant, and up to one run per replica overlapped —
+    /// the contention the declaration is chosen to avoid. The replica running the
+    /// job then reaches the latest occurrence due once its run ends, still
+    /// unclaimed, fires it late and reports the ones before it, as a single
+    /// replica does.
     ///
     /// Fail closed: a claim that errors — or no lock at all, which `configure`
     /// already refused — skips the occurrence, because firing unclaimed would
@@ -935,17 +1118,24 @@ impl Runner {
             );
             return;
         }
-        let occurrence = id.occurrence(instant_ms);
+        // A tick is a unit of work with no upstream — nothing enqueued it and no
+        // caller is waiting — so it mints its own trace, here rather than when it
+        // fires: the trace id is also what the run's lease is held as, so an
+        // operator reading the lease finds the trace of the run holding it.
+        let correlation = Correlation::minted(None);
+        let occurrence = Arc::new(Occurrence {
+            job: id.identity(),
+            token: id.occurrence(instant_ms),
+            hold,
+            run: correlation.trace_id().to_string(),
+            lease: LEASE,
+        });
         let budget = left_until(stale_at(instant_ms, hold));
         let sent = Instant::now();
         let claimed = match &self.lock {
             Some(lock) => {
-                match bounded(budget, cancel, async {
-                    lock.claim(&occurrence, hold).await
-                })
-                .await
-                {
-                    Bounded::Answered(Ok(claimed)) => claimed,
+                match bounded(budget, cancel, async { lock.claim(&occurrence).await }).await {
+                    Bounded::Answered(Ok(claimed)) => claimed.map(|claimed| (claimed, lock)),
                     // Not answered while an answer could still be acted on: the call
                     // is dropped, the occurrence skipped, and the loop goes on to the
                     // next one rather than waiting on a lock that may never answer.
@@ -999,9 +1189,17 @@ impl Runner {
             )),
         };
         match claimed {
-            Ok(true) => {
+            Ok((OccurrenceClaim::Claimed, lock)) => {
+                let lease = RunLease {
+                    lock: Arc::clone(lock),
+                    occurrence,
+                    id,
+                    instant_ms,
+                };
                 // Judged again on the clock after the answer, which can come a
-                // connect budget after the check above.
+                // connect budget after the check above. The claim is then left to
+                // expire, unfired, and the lease given back at once: holding it
+                // would hold the job on every replica for nothing.
                 if let Some(late_ms) =
                     reached_after_hold(epoch_millis(SystemTime::now()), instant_ms, hold_ms)
                 {
@@ -1016,16 +1214,27 @@ impl Runner {
                         "occurrence skipped: its claim was answered too near its hold's end, when a \
                          peer's claim may already be forgotten, so firing it could fire it twice",
                     );
+                    lease.release().await;
                     return;
                 }
-                self.fire(id, task, Some(instant_ms)).await
+                self.fire(id, task, correlation, Some(lease)).await
             }
-            Ok(false) => tracing::debug!(
+            Ok((OccurrenceClaim::ClaimedElsewhere, _)) => tracing::debug!(
                 target: crate::TARGET,
                 provider = id.provider,
                 method = id.method,
                 occurrence = instant_ms,
                 "occurrence claimed by another replica",
+            ),
+            // The peer running the job reports this occurrence — fired late or
+            // skipped — once its run ends, as a single replica held by a long run
+            // does; said here it would be said once per idle replica.
+            Ok((OccurrenceClaim::RunningElsewhere, _)) => tracing::debug!(
+                target: crate::TARGET,
+                provider = id.provider,
+                method = id.method,
+                occurrence = instant_ms,
+                "occurrence left to another replica, which is running the job",
             ),
             Err(error) => tracing::warn!(
                 target: crate::TARGET,
@@ -1180,17 +1389,18 @@ impl Runner {
         );
     }
 
-    /// `occurrence` is the instant a job firing once across replicas claimed,
-    /// carried on the span and the line so the fire and the claim it followed
-    /// name one thing; a job firing on every replica claims nothing and carries
-    /// none.
-    async fn fire(&self, id: JobId, task: Task, occurrence: Option<u64>) {
-        // A tick is a unit of work with no upstream — nothing enqueued it and no
-        // caller is waiting — so it mints its own id rather than inheriting one.
-        // That is the whole of what makes a scheduled job's events attributable: a
-        // job that enqueues work seals this id into the payload, so the worker that
-        // picks it up files under the tick that caused it.
-        let correlation = nest_rs_core::Correlation::minted(None);
+    /// Fire one tick under `correlation`, the trace it mints. `lease` is the run
+    /// lease a job firing once across replicas took with its claim — its instant
+    /// is carried on the span and the line, so the fire and the claim it followed
+    /// name one thing — and a job firing on every replica claims nothing and
+    /// carries none.
+    ///
+    /// The lease is renewed for as long as the run lasts and released once it
+    /// ends, whatever it ended in: a failure and a panic are the run's outcome,
+    /// caught below, and the job's next occurrence on any replica should not wait
+    /// out the lease for them.
+    async fn fire(&self, id: JobId, task: Task, correlation: Correlation, lease: Option<RunLease>) {
+        let occurrence = lease.as_ref().map(|lease| lease.instant_ms);
         let span = nest_rs_core::operation_span!(
             target: crate::TARGET,
             // No caller and no wire: the clock is not a producer.
@@ -1202,13 +1412,17 @@ impl Runner {
             occurrence,
         );
         let scope = Arc::new(nest_rs_core::RequestScope::new(self.container.clone()));
-        nest_rs_core::with_request_scope(
-            Some(scope),
-            correlation,
-            self.fire_inner(id, task, occurrence),
-        )
-        .instrument(span)
-        .await
+        let run = async {
+            let keeping = lease.as_ref().map(RunLease::keep);
+            self.fire_inner(id, task, occurrence).await;
+            drop(keeping);
+            if let Some(lease) = &lease {
+                lease.release().await;
+            }
+        };
+        nest_rs_core::with_request_scope(Some(scope), correlation, run)
+            .instrument(span)
+            .await
     }
 
     async fn fire_inner(&self, id: JobId, task: Task, occurrence: Option<u64>) {
@@ -1353,14 +1567,27 @@ mod tests {
         impl OccurrenceLock for PanicsAnswering {
             async fn claim(
                 &self,
-                _occurrence: &str,
-                _hold: Duration,
-            ) -> Result<bool, crate::OccurrenceLockError> {
-                Ok(true)
+                _occurrence: &Occurrence,
+            ) -> Result<OccurrenceClaim, crate::OccurrenceLockError> {
+                Ok(OccurrenceClaim::Claimed)
             }
 
             async fn claimed(&self, _occurrence: &str) -> Result<bool, crate::OccurrenceLockError> {
                 panic!("the lock store's client panicked")
+            }
+
+            async fn renew(
+                &self,
+                _occurrence: &Occurrence,
+            ) -> Result<bool, crate::OccurrenceLockError> {
+                Ok(true)
+            }
+
+            async fn release(
+                &self,
+                _occurrence: &Occurrence,
+            ) -> Result<(), crate::OccurrenceLockError> {
+                Ok(())
             }
         }
 
@@ -1371,6 +1598,7 @@ mod tests {
             lock: Some(Arc::new(PanicsAnswering)),
         };
         let id = JobId {
+            origin: "features::tasks",
             provider: "OverrunTasks",
             method: "sweep",
         };
@@ -1415,14 +1643,27 @@ mod tests {
         impl OccurrenceLock for Granting {
             async fn claim(
                 &self,
-                _occurrence: &str,
-                _hold: Duration,
-            ) -> Result<bool, crate::OccurrenceLockError> {
-                Ok(true)
+                _occurrence: &Occurrence,
+            ) -> Result<OccurrenceClaim, crate::OccurrenceLockError> {
+                Ok(OccurrenceClaim::Claimed)
             }
 
             async fn claimed(&self, _occurrence: &str) -> Result<bool, crate::OccurrenceLockError> {
                 Ok(false)
+            }
+
+            async fn renew(
+                &self,
+                _occurrence: &Occurrence,
+            ) -> Result<bool, crate::OccurrenceLockError> {
+                Ok(true)
+            }
+
+            async fn release(
+                &self,
+                _occurrence: &Occurrence,
+            ) -> Result<(), crate::OccurrenceLockError> {
+                Ok(())
             }
         }
         static RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1442,6 +1683,7 @@ mod tests {
             lock: Some(Arc::new(Granting)),
         };
         let id = JobId {
+            origin: "features::tasks",
             provider: "StalledTasks",
             method: "sweep",
         };
@@ -1505,20 +1747,36 @@ mod tests {
     /// the first time the bound polls it, as it is when a stalled process resumes.
     #[tokio::test]
     async fn a_claim_answered_too_near_its_holds_end_is_not_fired() {
+        static GIVEN_BACK: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         struct GrantingAfterAStall;
         #[async_trait]
         impl OccurrenceLock for GrantingAfterAStall {
             async fn claim(
                 &self,
-                _occurrence: &str,
-                _hold: Duration,
-            ) -> Result<bool, crate::OccurrenceLockError> {
+                _occurrence: &Occurrence,
+            ) -> Result<OccurrenceClaim, crate::OccurrenceLockError> {
                 std::thread::sleep(Duration::from_millis(1_200));
-                Ok(true)
+                Ok(OccurrenceClaim::Claimed)
             }
 
             async fn claimed(&self, _occurrence: &str) -> Result<bool, crate::OccurrenceLockError> {
                 Ok(false)
+            }
+
+            async fn renew(
+                &self,
+                _occurrence: &Occurrence,
+            ) -> Result<bool, crate::OccurrenceLockError> {
+                Ok(true)
+            }
+
+            async fn release(
+                &self,
+                _occurrence: &Occurrence,
+            ) -> Result<(), crate::OccurrenceLockError> {
+                GIVEN_BACK.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
             }
         }
         static RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1538,6 +1796,7 @@ mod tests {
             lock: Some(Arc::new(GrantingAfterAStall)),
         };
         let id = JobId {
+            origin: "features::tasks",
             provider: "SlowTasks",
             method: "sweep",
         };
@@ -1557,6 +1816,10 @@ mod tests {
         assert!(
             !RAN.load(std::sync::atomic::Ordering::SeqCst),
             "the occurrence is not fired"
+        );
+        assert!(
+            GIVEN_BACK.load(std::sync::atomic::Ordering::SeqCst),
+            "the lease taken with the claim is given back, not held for nothing"
         );
         logs.expect_none(
             crate::TARGET,
@@ -1608,9 +1871,8 @@ mod tests {
     impl OccurrenceLock for NeverAnswering {
         async fn claim(
             &self,
-            _occurrence: &str,
-            _hold: Duration,
-        ) -> Result<bool, crate::OccurrenceLockError> {
+            _occurrence: &Occurrence,
+        ) -> Result<OccurrenceClaim, crate::OccurrenceLockError> {
             self.claims
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             std::future::pending().await
@@ -1618,6 +1880,20 @@ mod tests {
 
         async fn claimed(&self, _occurrence: &str) -> Result<bool, crate::OccurrenceLockError> {
             std::future::pending().await
+        }
+
+        async fn renew(
+            &self,
+            _occurrence: &Occurrence,
+        ) -> Result<bool, crate::OccurrenceLockError> {
+            Ok(true)
+        }
+
+        async fn release(
+            &self,
+            _occurrence: &Occurrence,
+        ) -> Result<(), crate::OccurrenceLockError> {
+            Ok(())
         }
     }
 
@@ -1631,8 +1907,25 @@ mod tests {
         impl OccurrenceLock for PanicsWhenCalled {
             fn claim<'a, 'b, 'c>(
                 &'a self,
-                _occurrence: &'b str,
-                _hold: Duration,
+                _occurrence: &'b Occurrence,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = Result<OccurrenceClaim, crate::OccurrenceLockError>,
+                        > + Send
+                        + 'c,
+                >,
+            >
+            where
+                'a: 'c,
+                'b: 'c,
+            {
+                panic!("the lock panicked before handing back its claim")
+            }
+
+            fn renew<'a, 'b, 'c>(
+                &'a self,
+                _occurrence: &'b Occurrence,
             ) -> std::pin::Pin<
                 Box<
                     dyn std::future::Future<Output = Result<bool, crate::OccurrenceLockError>>
@@ -1644,7 +1937,24 @@ mod tests {
                 'a: 'c,
                 'b: 'c,
             {
-                panic!("the lock panicked before handing back its claim")
+                panic!("the lock panicked before handing back its renewal")
+            }
+
+            fn release<'a, 'b, 'c>(
+                &'a self,
+                _occurrence: &'b Occurrence,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<(), crate::OccurrenceLockError>>
+                        + Send
+                        + 'c,
+                >,
+            >
+            where
+                'a: 'c,
+                'b: 'c,
+            {
+                panic!("the lock panicked before handing back its release")
             }
 
             fn claimed<'a, 'b, 'c>(
@@ -1677,6 +1987,7 @@ mod tests {
             lock: Some(Arc::new(PanicsWhenCalled)),
         };
         let id = JobId {
+            origin: "features::tasks",
             provider: "EagerTasks",
             method: "sweep",
         };
@@ -1746,6 +2057,7 @@ mod tests {
             })),
         };
         let id = JobId {
+            origin: "features::tasks",
             provider: "HungTasks",
             method: "sweep",
         };
@@ -1798,6 +2110,7 @@ mod tests {
             })),
         };
         let id = JobId {
+            origin: "features::tasks",
             provider: "HungTasks",
             method: "sweep",
         };
@@ -1855,6 +2168,7 @@ mod tests {
         };
         let job = Job::Interval {
             id: JobId {
+                origin: "features::tasks",
                 provider: "HungTasks",
                 method: "sweep",
             },
@@ -1907,15 +2221,28 @@ mod tests {
         impl OccurrenceLock for GrantingAtShutdown {
             async fn claim(
                 &self,
-                _occurrence: &str,
-                _hold: Duration,
-            ) -> Result<bool, crate::OccurrenceLockError> {
+                _occurrence: &Occurrence,
+            ) -> Result<OccurrenceClaim, crate::OccurrenceLockError> {
                 self.shutdown.cancelled().await;
-                Ok(true)
+                Ok(OccurrenceClaim::Claimed)
             }
 
             async fn claimed(&self, _occurrence: &str) -> Result<bool, crate::OccurrenceLockError> {
                 Ok(false)
+            }
+
+            async fn renew(
+                &self,
+                _occurrence: &Occurrence,
+            ) -> Result<bool, crate::OccurrenceLockError> {
+                Ok(true)
+            }
+
+            async fn release(
+                &self,
+                _occurrence: &Occurrence,
+            ) -> Result<(), crate::OccurrenceLockError> {
+                Ok(())
             }
         }
         static RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1938,6 +2265,7 @@ mod tests {
             })),
         };
         let id = JobId {
+            origin: "features::tasks",
             provider: "LeavingTasks",
             method: "sweep",
         };
@@ -1988,6 +2316,7 @@ mod tests {
             })),
         };
         let id = JobId {
+            origin: "features::tasks",
             provider: "HungTasks",
             method: "sweep",
         };
@@ -2185,81 +2514,100 @@ mod tests {
     }
 
     /// Several jobs at one site are that site, counted; each other site is named
-    /// with its own count; an identity no second job shares is not named.
+    /// with its own count; a name no second job shares is not named.
     #[test]
-    fn jobs_sharing_an_identity_are_named_by_site_and_counted() {
-        let refusal = refuse_shared_identities(&[
-            (
-                JobId {
-                    provider: "Tasks",
-                    method: "sweep",
-                },
-                "features::billing",
-            ),
-            (
-                JobId {
-                    provider: "Tasks",
-                    method: "sweep",
-                },
-                "attached metadata",
-            ),
-            (
-                JobId {
-                    provider: "Tasks",
-                    method: "sweep",
-                },
-                "attached metadata",
-            ),
-            (
-                JobId {
-                    provider: "Tasks",
-                    method: "heartbeat",
-                },
-                "features::health",
-            ),
+    fn jobs_sharing_a_name_are_named_by_site_and_counted() {
+        let job = |origin, method| JobId {
+            origin,
+            provider: "Tasks",
+            method,
+        };
+        let refusal = refuse_shared_names(&[
+            job("features::billing", "sweep"),
+            job("features::audit", "sweep"),
+            job("features::audit", "sweep"),
+            job("features::health", "heartbeat"),
         ])
-        .expect_err("one identity, three jobs")
+        .expect_err("one name, three jobs")
         .to_string();
         assert!(
             refusal.contains(
-                "`Tasks::sweep` (declared twice in attached metadata and once in features::billing)"
+                "`Tasks::sweep` (declared twice in features::audit and once in features::billing)"
             ),
             "{refusal}"
         );
         assert!(!refusal.contains("Tasks::heartbeat"), "{refusal}");
     }
 
-    /// Two jobs whose written names differ and whose **lock identity** does not.
-    ///
-    /// The check compared `Provider::method` once, and joining the identity's two
-    /// parts with a single `:` made that the wrong string: these two passed the
-    /// boot and then split one occurrence between them, which is verbatim what
-    /// the refusal says cannot happen. Only reachable through `attach_meta`,
-    /// whose parts are plain strings.
+    /// Two apps of one deployment share its lock, and the boot sees one app. Each
+    /// declaring its own `MaintenanceTasks::sweep` — legal, and the naming law's
+    /// own shape — they claimed each other's occurrences under one token, and
+    /// each job ran on some of them with nothing said above `debug`. The
+    /// declaring path is the token's first levels, so they are two jobs now; the
+    /// job one shared crate declares has one path, so one token, in every app.
     #[test]
-    fn two_written_names_that_claim_one_occurrence_are_refused_and_both_named() {
-        let refusal = refuse_shared_identities(&[
-            (
-                JobId {
-                    provider: "A:B",
-                    method: "c",
-                },
-                "attached metadata",
-            ),
-            (
-                JobId {
-                    provider: "A",
-                    method: "B:c",
-                },
-                "attached metadata",
-            ),
-        ])
-        .expect_err("one lock identity, two jobs")
-        .to_string();
-        assert!(
-            refusal.contains("`A::B:c` and `A:B::c`"),
-            "both written forms are named: {refusal}"
+    fn a_jobs_identity_opens_with_the_path_that_declared_it() {
+        let api = JobId {
+            origin: "api::maintenance::schedule::tasks",
+            provider: "MaintenanceTasks",
+            method: "sweep",
+        };
+        let worker = JobId {
+            origin: "worker::maintenance::schedule::tasks",
+            ..api
+        };
+        assert_eq!(
+            api.identity(),
+            "api:maintenance:schedule:tasks:MaintenanceTasks:sweep"
         );
+        assert_eq!(
+            api.occurrence(1_789_000_000_000),
+            "api:maintenance:schedule:tasks:MaintenanceTasks:sweep:1789000000000"
+        );
+        assert_ne!(
+            api.occurrence(1_789_000_000_000),
+            worker.occurrence(1_789_000_000_000),
+            "two apps' same-named jobs claim apart"
+        );
+    }
+
+    /// The levels are joined by `:`, so a level carrying one could spell another
+    /// job's token — a provider `A:B` with a method `c` and a provider `A` with a
+    /// method `B:c` — and split its occurrences, in two apps no boot sees
+    /// together. Only a job attached by hand can, and the boot refuses it.
+    #[test]
+    fn a_level_that_is_empty_or_carries_a_colon_cannot_identify_a_job() {
+        let job = |origin, provider, method| JobId {
+            origin,
+            provider,
+            method,
+        };
+        assert!(
+            job("features::tasks", "Tasks", "sweep")
+                .levels_refusal()
+                .is_none()
+        );
+        assert!(
+            job("attached metadata", "Tasks", "sweep")
+                .levels_refusal()
+                .is_none(),
+            "a level is any string without a `:`"
+        );
+        for broken in [
+            job("features::tasks", "A:B", "c"),
+            job("features::tasks", "A", "B:c"),
+            job("features::tasks", "", "c"),
+            job("features:tasks", "A", "c"),
+            job("features::", "A", "c"),
+            job("", "A", "c"),
+        ] {
+            assert!(
+                broken.levels_refusal().is_some(),
+                "`{}` from `{}` is refused",
+                broken.identity(),
+                broken.origin
+            );
+        }
     }
 
     /// A replica held past the following occurrence asks who claimed the one it
@@ -2285,5 +2633,306 @@ mod tests {
             );
         }
         assert_eq!(claim_hold(Duration::MAX), Duration::MAX, "saturates");
+    }
+
+    /// A lock answering every claim with `claim`, every renewal with `renewed`
+    /// and every release with `released`, and counting the renewals and the
+    /// releases it was asked for.
+    struct LeaseDouble {
+        claim: OccurrenceClaim,
+        renewed: fn() -> Result<bool, crate::OccurrenceLockError>,
+        released: fn() -> Result<(), crate::OccurrenceLockError>,
+        renewals: std::sync::atomic::AtomicUsize,
+        releases: std::sync::atomic::AtomicUsize,
+    }
+
+    impl LeaseDouble {
+        fn new(
+            claim: OccurrenceClaim,
+            renewed: fn() -> Result<bool, crate::OccurrenceLockError>,
+        ) -> Arc<Self> {
+            Self::releasing(claim, renewed, || Ok(()))
+        }
+
+        fn releasing(
+            claim: OccurrenceClaim,
+            renewed: fn() -> Result<bool, crate::OccurrenceLockError>,
+            released: fn() -> Result<(), crate::OccurrenceLockError>,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                claim,
+                renewed,
+                released,
+                renewals: std::sync::atomic::AtomicUsize::new(0),
+                releases: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        fn renewals(&self) -> usize {
+            self.renewals.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn releases(&self) -> usize {
+            self.releases.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl OccurrenceLock for LeaseDouble {
+        async fn claim(
+            &self,
+            _occurrence: &Occurrence,
+        ) -> Result<OccurrenceClaim, crate::OccurrenceLockError> {
+            Ok(self.claim)
+        }
+
+        async fn claimed(&self, _token: &str) -> Result<bool, crate::OccurrenceLockError> {
+            Ok(false)
+        }
+
+        async fn renew(
+            &self,
+            _occurrence: &Occurrence,
+        ) -> Result<bool, crate::OccurrenceLockError> {
+            self.renewals
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (self.renewed)()
+        }
+
+        async fn release(
+            &self,
+            _occurrence: &Occurrence,
+        ) -> Result<(), crate::OccurrenceLockError> {
+            self.releases
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            (self.released)()
+        }
+    }
+
+    /// Claim the current instant for `run` through `lock`, and fire it if won.
+    async fn claim_now(lock: Arc<LeaseDouble>, run: RunFn) {
+        let runner = Runner {
+            container: Container::builder().build(),
+            ctx: None,
+            lock: Some(lock as Arc<dyn OccurrenceLock>),
+        };
+        let id = JobId {
+            origin: "features::tasks",
+            provider: "LeasedTasks",
+            method: "sweep",
+        };
+        let task = Task {
+            run,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::One,
+        };
+        let instant_ms = epoch_millis(SystemTime::now());
+        runner
+            .claim_then_fire(id, task, instant_ms, MIN_HOLD, &CancellationToken::new())
+            .await;
+    }
+
+    fn run_25_seconds(
+        _: &Container,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async {
+            sleep(Duration::from_secs(25)).await;
+            Ok(())
+        })
+    }
+
+    /// A run holds the job on every replica while it lasts: its lease is renewed
+    /// every third of its length — twice in twenty-five seconds — and given back
+    /// once, when the run ends, so the next occurrence need not wait it out.
+    #[tokio::test(start_paused = true)]
+    async fn a_claimed_run_renews_its_lease_while_it_runs_and_releases_it_after() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let lock = LeaseDouble::new(OccurrenceClaim::Claimed, || Ok(true));
+
+        claim_now(Arc::clone(&lock), run_25_seconds).await;
+
+        assert_eq!(lock.renewals(), 2, "renewed at ten and twenty seconds");
+        assert_eq!(lock.releases(), 1, "released once, after the run");
+        logs.expect_none(crate::TARGET, "run lease not renewed; retrying");
+    }
+
+    /// A lease found lost is the one failure after which a peer may start the
+    /// job while this run goes on: said once, at `error`, and not renewed again.
+    #[tokio::test(start_paused = true)]
+    async fn a_lease_found_lost_is_an_error_once_and_no_longer_renewed() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let lock = LeaseDouble::new(OccurrenceClaim::Claimed, || Ok(false));
+
+        claim_now(Arc::clone(&lock), run_25_seconds).await;
+
+        assert_eq!(lock.renewals(), 1, "not renewed once found lost");
+        let lost = logs.expect_one(
+            crate::TARGET,
+            "run lease lost while its job runs; another replica may run it too",
+        );
+        assert_eq!(lost.level, "error");
+        assert_eq!(lost.field("provider").as_deref(), Some("LeasedTasks"));
+        assert_eq!(lost.field("lease_ms").as_deref(), Some("30000"));
+    }
+
+    /// A renewal the lock refuses leaves the lease held for two more beats, so
+    /// it is a `warn` naming the lock's error, and tried again.
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_renewal_is_a_warn_and_tried_again() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let lock = LeaseDouble::new(OccurrenceClaim::Claimed, || {
+            Err(crate::OccurrenceLockError::new(
+                "the lock store is unreachable",
+            ))
+        });
+
+        claim_now(Arc::clone(&lock), run_25_seconds).await;
+
+        assert_eq!(lock.renewals(), 2, "tried again at the next beat");
+        let refused = logs.find(crate::TARGET, "run lease not renewed; retrying");
+        assert_eq!(refused.len(), 2, "{:#?}", logs.events());
+        assert_eq!(refused[0].level, "warn");
+        assert_eq!(
+            refused[0].field("error").as_deref(),
+            Some("the lock store is unreachable")
+        );
+        assert_eq!(lock.releases(), 1);
+    }
+
+    /// A failure and a panic are the run's outcome, caught and reported; the
+    /// job's next occurrence on any replica does not wait out the lease for them.
+    #[tokio::test]
+    async fn a_run_that_panics_still_gives_its_lease_back() {
+        fn run(
+            _: &Container,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async { panic!("the job panicked") })
+        }
+        let _logs = nest_rs_testing::LogCapture::install();
+        let lock = LeaseDouble::new(OccurrenceClaim::Claimed, || Ok(true));
+
+        claim_now(Arc::clone(&lock), run).await;
+
+        assert_eq!(lock.releases(), 1);
+    }
+
+    /// An occurrence falling due while a peer runs the job is left to that peer
+    /// — fired late or reported skipped once its run ends — and said here only
+    /// at `debug`, since every idle replica would say it.
+    #[tokio::test]
+    async fn an_occurrence_while_the_job_runs_elsewhere_is_left_to_that_replica() {
+        static RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        fn run(
+            _: &Container,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async {
+                RAN.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+        }
+        let logs = nest_rs_testing::LogCapture::install();
+        let lock = LeaseDouble::new(OccurrenceClaim::RunningElsewhere, || Ok(true));
+
+        claim_now(Arc::clone(&lock), run).await;
+
+        assert!(!RAN.load(std::sync::atomic::Ordering::SeqCst), "not fired");
+        assert_eq!(lock.releases(), 0, "no lease taken, none given back");
+        let left = logs.expect_one(
+            crate::TARGET,
+            "occurrence left to another replica, which is running the job",
+        );
+        assert_eq!(left.level, "debug");
+        assert_eq!(left.field("provider").as_deref(), Some("LeasedTasks"));
+    }
+
+    /// A lock that panics renewing answers nothing: the panic is named at
+    /// `error`, the lease counted as not renewed, and the renewal tried again —
+    /// the run it guards goes on.
+    #[tokio::test(start_paused = true)]
+    async fn a_lock_panicking_as_it_renews_is_named_and_tried_again() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let lock = LeaseDouble::new(OccurrenceClaim::Claimed, || {
+            panic!("the lock store's client panicked")
+        });
+
+        claim_now(Arc::clone(&lock), run_25_seconds).await;
+
+        assert_eq!(lock.renewals(), 2, "tried again at the next beat");
+        let panicked = logs.find(
+            crate::TARGET,
+            "occurrence lock panicked renewing a run lease; retrying",
+        );
+        assert_eq!(panicked.len(), 2, "{:#?}", logs.events());
+        assert_eq!(panicked[0].level, "error");
+        assert_eq!(
+            panicked[0].field("panic").as_deref(),
+            Some("the lock store's client panicked")
+        );
+        assert_eq!(
+            lock.releases(),
+            1,
+            "and the lease is given back after the run"
+        );
+    }
+
+    /// A release the lock refuses leaves the lease to lapse, which holds the job
+    /// on every replica until it does: said at `warn`, with the lock's error and
+    /// how long the lease lasts.
+    #[tokio::test]
+    async fn a_refused_release_says_the_job_waits_for_the_lease_to_lapse() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let lock = LeaseDouble::releasing(
+            OccurrenceClaim::Claimed,
+            || Ok(true),
+            || {
+                Err(crate::OccurrenceLockError::new(
+                    "the lock store is unreachable",
+                ))
+            },
+        );
+
+        claim_now(Arc::clone(&lock), noop).await;
+
+        let refused = logs.expect_one(
+            crate::TARGET,
+            "run lease not released; the job waits for it to lapse",
+        );
+        assert_eq!(refused.level, "warn");
+        assert_eq!(
+            refused.field("error").as_deref(),
+            Some("the lock store is unreachable")
+        );
+        assert_eq!(refused.field("lease_ms").as_deref(), Some("30000"));
+        assert_eq!(refused.field("provider").as_deref(), Some("LeasedTasks"));
+    }
+
+    /// A lock that panics releasing is contained like one that panics claiming:
+    /// named at `error`, and the lease left to lapse.
+    #[tokio::test]
+    async fn a_lock_panicking_as_it_releases_is_named_and_the_lease_left_to_lapse() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let lock = LeaseDouble::releasing(
+            OccurrenceClaim::Claimed,
+            || Ok(true),
+            || panic!("the lock store's client panicked"),
+        );
+
+        claim_now(Arc::clone(&lock), noop).await;
+
+        let panicked = logs.expect_one(
+            crate::TARGET,
+            "occurrence lock panicked releasing a run lease; the job waits for it to lapse",
+        );
+        assert_eq!(panicked.level, "error");
+        assert_eq!(
+            panicked.field("panic").as_deref(),
+            Some("the lock store's client panicked")
+        );
+    }
+
+    fn noop(
+        _: &Container,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
     }
 }

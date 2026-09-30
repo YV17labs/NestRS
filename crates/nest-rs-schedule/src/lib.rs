@@ -13,7 +13,8 @@
 //! Every replica of an app fires every occurrence unless a job says otherwise:
 //! `replicas = "one"` on `#[every]` or `#[cron]` fires each occurrence on the one
 //! replica whose claim on it succeeds, through the [`OccurrenceLock`] a backend
-//! binds — at most once, never at least once.
+//! binds — at most once, never at least once — and never while a run of the job
+//! is still going on another replica.
 
 // Opts OUT of the workspace `unsafe_code = "forbid"` lint (no `[lints]
 // workspace = true` in Cargo.toml): `tests/integration/module.rs` needs
@@ -45,7 +46,7 @@ pub mod unit;
 pub use error::OccurrenceLockError;
 pub use inventory::{CronJobMeta, RunFn, ScheduledMethod};
 pub use module::ScheduleModule;
-pub use occurrence::{BACKEND_REMEDY, OccurrenceLock};
+pub use occurrence::{BACKEND_REMEDY, Occurrence, OccurrenceClaim, OccurrenceLock};
 pub use replicas::Replicas;
 // Re-exported so `#[every]` / `#[cron]` / `#[after]` emit their
 // `JobTransaction` through this crate's own root, the way every other path the

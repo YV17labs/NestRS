@@ -247,6 +247,11 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut validate = Vec::new();
         let mut complexity: Option<Expr> = None;
         let mut via: Option<LitStr> = None;
+        // A repeated key is refused across every `#[expose]` on the field, as
+        // the struct half's are: a repeat is one declaration dropped by source
+        // order — `via` decides which foreign key a `HasMany` follows,
+        // `complexity` the query-cost limit.
+        let mut input_written = false;
 
         // Pull PK + relation column info out of the `#[sea_orm(...)]` attrs in
         // the same pass. The attrs stay on the field so SeaORM still owns them
@@ -301,6 +306,13 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             }
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("input") {
+                    nest_rs_codegen::reject_duplicate_argument(
+                        input_written,
+                        &m.path,
+                        "expose",
+                        "input",
+                    )?;
+                    input_written = true;
                     for kind in listed(
                         &m,
                         "input",
@@ -324,6 +336,12 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                         }
                     }
                 } else if m.path.is_ident("validate") {
+                    nest_rs_codegen::reject_duplicate_argument(
+                        !validate.is_empty(),
+                        &m.path,
+                        "expose",
+                        "validate",
+                    )?;
                     if !m.input.peek(syn::token::Paren) {
                         return Err(m.error(nest_rs_codegen::takes_value(
                             "expose",
@@ -342,12 +360,24 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     // `HasMany` resolver takes `first`/`after`, so the
                     // expression may name them; every other field has no
                     // arguments to name.
+                    nest_rs_codegen::reject_duplicate_argument(
+                        complexity.is_some(),
+                        &m.path,
+                        "expose",
+                        "complexity",
+                    )?;
                     equals(&m, "complexity")?;
                     complexity = Some(m.value()?.parse::<Expr>()?);
                 } else if m.path.is_ident("via") {
                     // Which of the child's foreign keys a `HasMany` follows.
                     // A column name, not a path: the marker type the parent
                     // resolves it to is the framework's business.
+                    nest_rs_codegen::reject_duplicate_argument(
+                        via.is_some(),
+                        &m.path,
+                        "expose",
+                        "via",
+                    )?;
                     equals(&m, "via")?;
                     let written: Expr = m.value()?.parse()?;
                     let lit =
@@ -368,7 +398,7 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     return Err(m.error(nest_rs_codegen::unknown_argument(
                         "expose",
                         &nest_rs_codegen::key_as_written(&m.path),
-                        &["input", "validate", "complexity", "via"],
+                        &FIELD_KEYS,
                     )));
                 }
                 Ok(())
@@ -586,6 +616,10 @@ fn foreign_key(written: &Expr) -> syn::Result<Ident> {
 
 /// A field key's list value — `input(create, update)` — each element read as
 /// written, or the key refused naming what its list takes when no list follows.
+/// The field half's key set — the `#[expose]` written on a column, as opposed
+/// to the one on the `Model`.
+const FIELD_KEYS: [&str; 4] = ["input", "validate", "complexity", "via"];
+
 fn listed(m: &syn::meta::ParseNestedMeta<'_>, key: &str, takes: &str) -> syn::Result<Vec<Expr>> {
     if !m.input.peek(syn::token::Paren) {
         return Err(m.error(nest_rs_codegen::takes_value("expose", Some(key), takes)));

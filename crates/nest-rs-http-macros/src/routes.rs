@@ -685,15 +685,13 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             _ => unreachable!("verb_ident filtered above"),
         };
 
-        let api = match method.attrs.iter().position(|a| a.path().is_ident("api")) {
-            Some(a_idx) => {
-                let a_attr = method.attrs.remove(a_idx);
-                match parse_api_attr(&a_attr) {
-                    Ok(api) => api,
-                    Err(err) => return err.to_compile_error().into(),
-                }
-            }
-            None => ApiMeta::default(),
+        let api = match nest_rs_codegen::take_single_attr(&mut method.attrs, "api") {
+            Ok(Some(a_attr)) => match parse_api_attr(&a_attr) {
+                Ok(api) => api,
+                Err(err) => return err.to_compile_error().into(),
+            },
+            Ok(None) => ApiMeta::default(),
+            Err(err) => return err.to_compile_error().into(),
         };
         let summary = opt_str(&api.summary);
         let description = opt_str(&api.description);

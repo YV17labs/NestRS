@@ -58,8 +58,7 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
 
             for field in fields.named.iter_mut() {
                 let field_name = field.ident.clone().expect("named field has an ident");
-                let inject_idx = field.attrs.iter().position(|a| a.path().is_ident("inject"));
-                let Some(idx) = inject_idx else {
+                let Some(inject_attr) = crate::take_single_attr(&mut field.attrs, "inject")? else {
                     // CORE-I5: an `Arc<…>` (or `Option<Arc<…>>`) field with no
                     // `#[inject]` is almost always a *forgotten* injection.
                     // Silently `Default::default()`-ing it — an empty config, a
@@ -81,7 +80,6 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
                     });
                     continue;
                 };
-                let inject_attr = field.attrs.remove(idx);
                 has_inject = true;
 
                 let field_ty = &field.ty;

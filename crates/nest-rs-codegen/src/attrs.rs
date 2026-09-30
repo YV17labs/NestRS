@@ -213,10 +213,9 @@ fn split_at_commas(tokens: TokenStream) -> Vec<TokenStream> {
 /// `crud_write`, `crud_location`) get the refusal for free, which is what
 /// *"refusals are shared, not per key"* buys.
 pub fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<bool> {
-    let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
+    let Some(attr) = take_single_attr(attrs, ident)? else {
         return Ok(false);
     };
-    let attr = attrs.remove(pos);
     if !matches!(attr.meta, syn::Meta::Path(_)) {
         return Err(syn::Error::new_spanned(
             &attr,
@@ -227,6 +226,34 @@ pub fn take_flag_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<bo
         ));
     }
     Ok(true)
+}
+
+/// Remove the one `#[<ident>]` on an item, refusing a second copy by name.
+///
+/// A decorator that takes the first match and leaves the rest let a second copy
+/// reach rustc as `cannot find attribute `public` in this scope` — no decorator,
+/// no reason, no remedy, which is the failure the named refusals exist to end.
+/// `#[public]` at every edge, every flag [`take_flag_attr`] reads, `#[api]` and
+/// `#[inject]` all answered a repeat that way while their siblings
+/// (`#[http_code]`, `#[version]`, `#[use_guards]`, `#[authorize]`) named it.
+/// The span is the second copy, the one to delete.
+pub fn take_single_attr(attrs: &mut Vec<Attribute>, ident: &str) -> syn::Result<Option<Attribute>> {
+    let Some(pos) = attrs.iter().position(|a| a.path().is_ident(ident)) else {
+        return Ok(None);
+    };
+    let attr = attrs.remove(pos);
+    if let Some(second) = attrs.iter().find(|a| a.path().is_ident(ident)) {
+        return Err(syn::Error::new_spanned(second, repeated_attribute(ident)));
+    }
+    Ok(Some(attr))
+}
+
+/// The sentence [`take_single_attr`] refuses a second copy with.
+pub fn repeated_attribute(ident: &str) -> String {
+    format!(
+        "`#[{ident}]` is written twice here — it declares once, and a second copy would be \
+         read by nothing. Keep one, with everything it says"
+    )
 }
 
 /// Extract and remove a `#[<ident>(PathA, PathB)]` attribute, returning its

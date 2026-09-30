@@ -1,0 +1,5 @@
+error: `#[inject]` is written twice here — it declares once, and a second copy would be read by nothing. Keep one, with everything it says
+  --> tests/integration/diagnostics/inject_written_twice.rs:16:5
+   |
+16 |     #[inject(key = "replica")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^

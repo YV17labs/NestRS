@@ -45,8 +45,8 @@ pub use args::{
     unmatched_meta,
 };
 pub use attrs::{
-    Conditional, cfg_attrs, delegated_attrs, reject_http_only_layers, take_flag_attr,
-    take_path_list,
+    Conditional, cfg_attrs, delegated_attrs, reject_http_only_layers, repeated_attribute,
+    take_flag_attr, take_path_list, take_single_attr,
 };
 pub use capability::guard_capability_bounds;
 pub use casing::{pascal_case, snake_case};

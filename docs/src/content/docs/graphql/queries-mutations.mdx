@@ -60,11 +60,13 @@ $ curl -sX POST http://localhost:3000/graphql \
 {"data":{"userCount":42}}
 ```
 
-The method name is camelCased by one rule: split at each `_`, and capitalise
-the first letter of every part after the first — `user_count` is `userCount`,
-`get_2fa` is `get2fa`. The framework states that name on the field itself, so the
-name a duplicate is checked under is the name served; `#[graphql(name = "…")]`
-overrides it. Primitive returns map to their GraphQL scalar (`i32` → `Int`,
+The method name is camelCased by async-graphql's own rule: a new word starts
+after each `_` **and after a digit**, and a capital after a lowercase letter is
+kept — `user_count` is `userCount`, `get_2fa` is `get2Fa`, `userID` stays
+`userID`. The framework states that name on the field itself, so the name a
+duplicate is checked under is the name served: two methods the rule reads as one
+field (`a1_b` and `a_1b` are both `a1B`) are a compile error rather than one body
+answering for the other. `#[graphql(name = "…")]` overrides it. Primitive returns map to their GraphQL scalar (`i32` → `Int`,
 `String` → `String`, `bool` → `Boolean`).
 
 ## Arguments

@@ -1745,27 +1745,48 @@ fn graphql_name(attrs: &[Attribute]) -> syn::Result<Option<String>> {
     Ok(None)
 }
 
-/// A method name as the schema serves it: `lowerCamel`, read at each `_` and
-/// nowhere else — `get_2fa` is `get2fa`, `a_1b` is `a1b`, `userID` stays `userID`.
+/// A method name as the schema serves it — **async-graphql's own rule**, so
+/// stating it changes nothing a client sees: `get_2fa` is `get2Fa`, `a_1b` is
+/// `a1B`, `page_2_items` is `page2Items`, `userID` stays `userID`.
 ///
-/// The framework's rule, not async-graphql's. Its default reads the name through
-/// `Inflector`, which also splits at a digit and folds a capital run, so `a1_b`
-/// and `a_1b` were one field to it and two to the identity check here: both
-/// compiled, and the schema documented one method's arguments while the other's
-/// body ran. The name this returns is therefore *stated* on every field the
-/// expansion emits ([`name_the_field`]), so the identity checked is the name
-/// served, whatever async-graphql's default becomes.
-fn lower_camel(snake: &str) -> String {
-    let mut camel = String::with_capacity(snake.len());
-    for (index, word) in snake.split('_').filter(|word| !word.is_empty()).enumerate() {
-        let mut chars = word.chars();
-        if let Some(first) = chars.next() {
-            if index == 0 {
-                camel.push(first);
-            } else {
-                camel.extend(first.to_uppercase());
-            }
-            camel.extend(chars);
+/// async-graphql's default for a field is `Inflector`'s `to_camel_case`, which
+/// starts a new word at a separator **and after a digit**, and keeps a capital
+/// after a lowercase letter. The expansion states the name on every field it
+/// emits ([`name_the_field`]) so the identity the duplicate check reads is the
+/// name served; for that statement to be invisible it has to be the name
+/// async-graphql would have served anyway. 7.0's first cut split at `_` only, so
+/// `get_2fa` moved from `get2Fa` to `get2fa` and every client query naming it
+/// broke with "unknown field" while the CHANGELOG said the SDL was unchanged.
+///
+/// Ported rather than depended on: `Inflector`'s last release is from 2019, past
+/// the freshness bar for a new direct dependency, and the rule is these lines.
+/// The regression test holds it against async-graphql's derive itself, so the
+/// port cannot drift from the oracle unnoticed. Two methods this reads as one
+/// field — `a1_b` and `a_1b` are both `a1B` — are refused by the duplicate
+/// check, which is right: async-graphql would have served one of them.
+fn lower_camel(name: &str) -> String {
+    let trimmed = name.trim_end_matches(|c: char| !c.is_alphanumeric());
+    let mut camel = String::with_capacity(trimmed.len());
+    let mut new_word = false;
+    let mut last = ' ';
+    let mut started = false;
+    for c in trimmed.chars() {
+        if !c.is_alphanumeric() {
+            // A separator starts a word once something has been written; a
+            // leading one is skipped.
+            new_word |= started;
+        } else if c.is_numeric() {
+            started = true;
+            new_word = true;
+            camel.push(c);
+        } else if new_word || (last.is_lowercase() && c.is_uppercase()) {
+            started = true;
+            new_word = false;
+            camel.push(c.to_ascii_uppercase());
+        } else {
+            started = true;
+            last = c;
+            camel.push(c.to_ascii_lowercase());
         }
     }
     camel
@@ -2050,6 +2071,28 @@ mod tests {
         let err = resolver_impl_inner(item)
             .expect_err("#[authorize] and #[public] together must fail to expand");
         assert!(err.to_string().contains("contradict"), "{}", err);
+    }
+
+    /// The served name is async-graphql's (`Inflector`'s `to_camel_case`): a
+    /// word starts after `_` and after a digit, a capital after a lowercase
+    /// letter is kept, and the rest is lowercased.
+    #[test]
+    fn a_method_name_is_camel_cased_as_async_graphql_does() {
+        for (method, served) in [
+            ("user_count", "userCount"),
+            ("get_2fa", "get2Fa"),
+            ("a_1b", "a1B"),
+            ("a1_b", "a1B"),
+            ("page_2_items", "page2Items"),
+            ("v2_api", "v2Api"),
+            ("userID", "userID"),
+            ("user_id", "userId"),
+            ("_leading", "leading"),
+            ("trailing_", "trailing"),
+            ("x", "x"),
+        ] {
+            assert_eq!(lower_camel(method), served, "{method}");
+        }
     }
 
     /// Every role's wrapper runs the guard chain and answers a `Result`,

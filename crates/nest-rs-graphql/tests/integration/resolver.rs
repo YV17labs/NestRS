@@ -246,11 +246,12 @@ async fn an_operation_calls_its_method_and_not_a_trait_method_of_the_same_name()
 
 // ---------------------------------------------------------------------------
 // The name a field is served under is the name its identity was checked under.
-// async-graphql's own rule (`Inflector`'s camel case) read `a1_b` and `a_1b` as
-// one field, and `user_id` and `userID` as one, while `#[operations]` read them
-// as two — so both compiled, and the schema documented one method's arguments
-// while the other's body ran. Every field is now named by the framework, so the
-// check and the schema read one rule.
+// async-graphql's own rule (`Inflector`'s camel case) reads `a1_b` and `a_1b` as
+// one field; through 6.x both compiled and one method's body ran for the other's
+// field. The framework now states every field's name *by that same rule*, so the
+// duplicate check refuses the pair at compile time
+// (`diagnostics/operations_two_methods_one_served_name`) and every name served is
+// the one async-graphql would have served.
 
 #[derive(nest_rs_graphql::async_graphql::SimpleObject)]
 #[graphql(complex)]
@@ -263,18 +264,6 @@ struct NamingResolver;
 
 #[operations]
 impl NamingResolver {
-    #[query]
-    #[public]
-    async fn a1_b(&self, left: i32) -> String {
-        format!("a1_b:{left}")
-    }
-
-    #[query]
-    #[public]
-    async fn a_1b(&self, right: i32) -> String {
-        format!("a_1b:{right}")
-    }
-
     #[query]
     #[public]
     async fn get_2fa(&self) -> String {
@@ -301,11 +290,6 @@ impl NamingResolver {
     }
 
     #[field_resolver]
-    async fn a1_b_total(&self, parent: &Ledger, left: i32) -> String {
-        format!("a1_b_total:{}:{left}", parent.id)
-    }
-
-    #[field_resolver]
     async fn a_1b_total(&self, parent: &Ledger, right: i32) -> String {
         format!("a_1b_total:{}:{right}", parent.id)
     }
@@ -328,18 +312,10 @@ async fn naming_query(query: &str) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn two_methods_the_camel_case_rule_folds_alike_are_two_fields_each_running_its_own_body() {
-    let body = naming_query("{ a1B(left: 1) a1b(right: 2) }").await;
+async fn a_digit_after_an_underscore_starts_a_word_as_async_graphql_reads_it() {
+    let body = naming_query("{ get2Fa }").await;
     assert!(body["errors"].is_null(), "{body}");
-    assert_eq!(body["data"]["a1B"], "a1_b:1", "{body}");
-    assert_eq!(body["data"]["a1b"], "a_1b:2", "{body}");
-}
-
-#[tokio::test]
-async fn a_digit_after_an_underscore_is_served_as_written() {
-    let body = naming_query("{ get2fa }").await;
-    assert!(body["errors"].is_null(), "{body}");
-    assert_eq!(body["data"]["get2fa"], "get_2fa", "{body}");
+    assert_eq!(body["data"]["get2Fa"], "get_2fa", "{body}");
 }
 
 #[tokio::test]
@@ -351,15 +327,156 @@ async fn a_capitalised_method_name_is_its_own_field() {
 }
 
 #[tokio::test]
-async fn field_resolvers_the_camel_case_rule_folds_alike_each_run_their_own_body() {
-    let body = naming_query("{ ledger(id: 4) { a1BTotal(left: 1) a1bTotal(right: 2) } }").await;
+async fn a_field_resolver_is_named_by_the_same_rule() {
+    let body = naming_query("{ ledger(id: 4) { a1BTotal(right: 2) } }").await;
     assert!(body["errors"].is_null(), "{body}");
     assert_eq!(
-        body["data"]["ledger"]["a1BTotal"], "a1_b_total:4:1",
+        body["data"]["ledger"]["a1BTotal"], "a_1b_total:4:2",
         "{body}"
     );
-    assert_eq!(
-        body["data"]["ledger"]["a1bTotal"], "a_1b_total:4:2",
-        "{body}"
+}
+
+// ---------------------------------------------------------------------------
+// The served field name is async-graphql's. `#[operations]` states the name on
+// every field it emits, so the name its duplicate check reads is the name
+// served — and that statement must be invisible: the name async-graphql's own
+// derive would serve for the same method. 7.0's first cut split at `_` only, so
+// `get_2fa` moved from `get2Fa` to `get2fa` and a client query naming it broke.
+// The oracle is async-graphql's derive itself, never a copy of its rule.
+
+use nest_rs_graphql::async_graphql;
+
+/// The method names both halves carry: a digit after `_`, a digit run, a digit
+/// before a letter, a capital run, and the plain case.
+struct Oracle;
+
+#[async_graphql::Object]
+impl Oracle {
+    async fn get_2fa(&self) -> i32 {
+        1
+    }
+    async fn a_1b(&self) -> i32 {
+        1
+    }
+    async fn page_2_items(&self) -> i32 {
+        1
+    }
+    async fn v2_api(&self) -> i32 {
+        1
+    }
+    #[allow(non_snake_case)]
+    async fn userID(&self) -> i32 {
+        1
+    }
+    async fn user_count(&self) -> i32 {
+        1
+    }
+}
+
+#[resolver]
+struct OracleResolver;
+
+#[operations]
+impl OracleResolver {
+    #[query]
+    #[public]
+    async fn get_2fa(&self) -> i32 {
+        1
+    }
+    #[query]
+    #[public]
+    async fn a_1b(&self) -> i32 {
+        1
+    }
+    #[query]
+    #[public]
+    async fn page_2_items(&self) -> i32 {
+        1
+    }
+    #[query]
+    #[public]
+    async fn v2_api(&self) -> i32 {
+        1
+    }
+    #[allow(non_snake_case)]
+    #[query]
+    #[public]
+    async fn userID(&self) -> i32 {
+        1
+    }
+    #[query]
+    #[public]
+    async fn user_count(&self) -> i32 {
+        1
+    }
+}
+
+#[module(providers = [OracleResolver])]
+struct OracleFeatureModule;
+
+#[module(imports = [
+    GraphqlModule::for_root(Some(GraphqlConfig {
+        disable_introspection: false,
+        ..GraphqlConfig::default()
+    })),
+    OracleFeatureModule,
+])]
+struct AppWithOracleNames;
+
+const QUERY_FIELDS: &str = "{ __schema { queryType { fields { name } } } }";
+
+fn field_names(data: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    data["__schema"]["queryType"]["fields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|field| field["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_field_is_served_under_the_name_async_graphql_gives_the_method() {
+    let oracle = async_graphql::Schema::build(
+        Oracle,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .finish()
+    .execute(QUERY_FIELDS)
+    .await;
+    assert!(oracle.errors.is_empty(), "{:?}", oracle.errors);
+    let expected = field_names(&oracle.data.into_json().expect("introspection answers JSON"));
+    assert!(
+        expected.contains("get2Fa") && expected.contains("a1B"),
+        "the oracle splits at a digit: {expected:?}",
+    );
+
+    let app = TestApp::builder()
+        .module::<AppWithOracleNames>()
+        .http(HttpTransport::new())
+        .build()
+        .await
+        .expect("the schema boots and mounts at /graphql");
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": QUERY_FIELDS }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let text = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a GraphQL response body");
+    let body: serde_json::Value = serde_json::from_str(&text).expect("a GraphQL response is JSON");
+    let served = field_names(&body["data"]);
+
+    let missing: Vec<&String> = expected.difference(&served).collect();
+    assert!(
+        missing.is_empty(),
+        "fields async-graphql would serve that #[operations] does not: {missing:?} — served \
+         {served:?}",
     );
 }

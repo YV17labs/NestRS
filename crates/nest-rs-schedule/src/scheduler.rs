@@ -23,8 +23,10 @@ use crate::{
 
 /// The shortest time an occurrence stays claimed. Keys are distinct per
 /// instant, so a hold only has to outlast the skew between two replicas'
-/// clocks: a minute is far past what NTP leaves, and short enough that the
-/// backend forgets the key soon after.
+/// clocks — and, since a replica held past the following occurrence asks who
+/// fired the ones it overran, that following occurrence too ([`claim_hold`]): a
+/// minute is far past what NTP leaves, and short enough that the backend forgets
+/// a short job's keys soon after.
 const MIN_HOLD: Duration = Duration::from_secs(60);
 
 /// How far two replicas' clocks may disagree while a stalled replica still skips,
@@ -465,7 +467,7 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
         }
         Job::Interval { period, task, .. } => {
             let period_ms = u64::try_from(period.as_millis()).unwrap_or(u64::MAX);
-            let hold = period.max(MIN_HOLD);
+            let hold = claim_hold(period);
             // The last instant this loop reached: at boot, the multiple of the
             // period at or before the clock, which is not due, so the first one
             // reached is the next.
@@ -550,13 +552,12 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
                     CronDue::NoneYet => (Some(target), Overrun::default()),
                     CronDue::PastCap(overrun) => (None, overrun),
                 };
-                // The instant reached and how long its claim holds: the gap to the
-                // following occurrence, so a key outlives any replica still
-                // reaching this one.
+                // The instant reached and how long its claim holds, read off the
+                // gap to the following occurrence ([`claim_hold`]).
                 let reached = instant.map(|instant| {
                     let hold = next_occurrence(&schedule, tz, instant)
                         .and_then(|following| (following - instant).to_std().ok())
-                        .map_or(MIN_HOLD, |gap| gap.max(MIN_HOLD));
+                        .map_or(MIN_HOLD, claim_hold);
                     (u64::try_from(instant.timestamp_millis()).unwrap_or(0), hold)
                 });
                 let fire = async {
@@ -600,6 +601,27 @@ async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
             }
         }
     }
+}
+
+/// How long the claim on an occurrence holds, `gap` being the time to the job's
+/// following occurrence: **twice the gap**, and never less than [`MIN_HOLD`].
+///
+/// A replica held past the following occurrence — by a slow claim, a stall —
+/// reaches the latest one due and asks the lock who claimed the ones it overran,
+/// and it can only ask once the following one is due: a gap after this one at
+/// the earliest. Held for the gap alone, the claim on the occurrence it overran
+/// had expired by the time it asked, and for every job whose period is a minute
+/// or more — past the floor, where the hold *was* the gap — each occurrence a
+/// peer fired was reported skipped at `warn`, claimed nowhere. Twice the gap
+/// answers the question for the occurrence overrun most often, the one just
+/// before the one reached; an overrun longer than a gap reports its earliest
+/// unclaimed, as the port says.
+///
+/// It costs keys, never correctness: tokens are distinct per instant, so a claim
+/// still held when the next occurrence is claimed stands beside it, and a job
+/// holds two claims where it held one.
+fn claim_hold(gap: Duration) -> Duration {
+    gap.saturating_mul(2).max(MIN_HOLD)
 }
 
 /// The latest multiple of `period_ms` at or before `at_ms`. Aligned on the epoch
@@ -2238,5 +2260,30 @@ mod tests {
             refusal.contains("`A::B:c` and `A:B::c`"),
             "both written forms are named: {refusal}"
         );
+    }
+
+    /// A replica held past the following occurrence asks who claimed the one it
+    /// overran once it reaches the next — a gap after that occurrence at the
+    /// earliest, and up to two gaps after it. Held for the gap alone, as it was
+    /// past the one-minute floor, the claim had lapsed by then, and every
+    /// occurrence a peer fired was reported skipped.
+    #[test]
+    fn a_claim_outlives_the_occurrence_after_the_one_it_holds() {
+        for gap in [
+            Duration::from_millis(1),
+            Duration::from_secs(1),
+            Duration::from_secs(59),
+            Duration::from_secs(60),
+            Duration::from_secs(3_600),
+            Duration::from_secs(86_400),
+        ] {
+            let hold = claim_hold(gap);
+            assert!(hold >= MIN_HOLD, "{gap:?}: never under the floor");
+            assert!(
+                hold >= gap * 2,
+                "{gap:?}: held {hold:?}, lapsing before the occurrence two gaps on"
+            );
+        }
+        assert_eq!(claim_hold(Duration::MAX), Duration::MAX, "saturates");
     }
 }

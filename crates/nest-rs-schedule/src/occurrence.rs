@@ -63,8 +63,10 @@ pub trait OccurrenceLock: Send + Sync + 'static {
     /// occurrences a replica overran while it claimed or ran the one before, so
     /// the ones a peer fired are told apart from the ones nobody did.
     ///
-    /// `Ok(false)` once the claim's hold has ended, whoever held it, so an
-    /// overrun longer than a hold reports its earliest occurrences unclaimed.
+    /// `Ok(false)` once the claim's hold has ended, whoever held it. A hold is
+    /// twice the gap to the following occurrence, so an overrun of one
+    /// occurrence is always answered; a longer one reports its earliest
+    /// occurrences unclaimed.
     async fn claimed(&self, occurrence: &str) -> Result<bool, OccurrenceLockError>;
 }
 

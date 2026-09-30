@@ -322,8 +322,9 @@ boot, and a `#[cron]` on the instants its expression names. At each one, every
 replica sends one atomic `SET … NX PX` for that occurrence's key; the replica
 whose `SET` created the key fires the method, and the others log `occurrence
 claimed by another replica` at `debug` and wait for the next one. The key is
-held for the job's period — for a cron job, the gap to its next occurrence — and
-never less than a minute, then Redis forgets it, so claims never accumulate.
+held for twice the job's period — for a cron job, twice the gap to its next
+occurrence — and never less than a minute, then Redis forgets it, so claims never
+accumulate.
 
 ### At most once, not exactly once
 
@@ -362,7 +363,10 @@ thin *when* of the first section.
 
 When a claim or a long run holds a replica past later occurrences, the replica
 asks Redis which of them a peer claimed: those are fine and say so at `debug`,
-and the rest are reported skipped at `warn`, counted.
+and the rest are reported skipped at `warn`, counted. A claim outlives the
+occurrence after it, so an overrun of one occurrence is always answered; a longer
+one reports its earliest occurrences unclaimed, since their claims have lapsed by
+then.
 
 ### The key
 

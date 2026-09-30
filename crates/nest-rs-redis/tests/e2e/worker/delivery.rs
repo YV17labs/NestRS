@@ -25,6 +25,11 @@
 //! answers apalis with the plain error, and the job still runs; and a job whose
 //! budget is spent is dead-lettered by the port, once.
 //!
+//! **An attempt that never returns spends the budget too.** The envelope counts
+//! the attempts that answered; the adapter counts the ones that started, so a
+//! job whose attempt takes its replica down is dead-lettered once those spend
+//! its budget, rather than crash-looping every replica that starts.
+//!
 //! Every assertion follows the job by the id its push returned, and every
 //! handler counts by a marker this run chose.
 
@@ -530,6 +535,7 @@ async fn grant(admin: &mut RedisConnection, schedule: bool) {
             "settled:*",
             "cancelled:*",
             "checkpoints:*",
+            "attempts:*",
             "unique:*",
             "throttle",
         ] {
@@ -738,4 +744,96 @@ async fn the_ports_budget_dead_letters_a_job_once_past_apalis_cap() {
     );
     assert_eq!(spent[0].field("attempts").as_deref(), Some("2"));
     assert_eq!(killed, 1, "one record on apalis's dead set");
+}
+
+// --- an attempt that never returns spends the budget -----------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CrashCommand {
+    run: u64,
+}
+
+static CRASHED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-delivery-crash", job = CrashCommand)]
+struct CrashQueue;
+
+#[injectable]
+#[derive(Default)]
+struct CrashProcessor;
+
+#[processor]
+impl CrashProcessor {
+    /// Never answers: the replica running it is killed before it could.
+    #[process(queue = CrashQueue, retries = 1)]
+    async fn run(&self, job: CrashCommand) -> anyhow::Result<()> {
+        CRASHED.start(job.run);
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [CrashProcessor],
+)]
+struct CrashModule;
+
+/// A job whose attempt takes its replica down — an abort, an OOM kill, a hang
+/// until the pod is killed — returns no answer, so the envelope never counts it,
+/// and before the adapter counted starts itself such a job was delivered forever,
+/// crash-looping every replica an autoscaler started. The attempts it starts
+/// spend the budget instead: with `retries = 1` it runs twice, each run killed,
+/// and the third delivery dead-letters it without running, saying two attempts
+/// never returned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_whose_attempts_never_return_is_dead_lettered_once_they_spend_its_budget() {
+    let logs = LogCapture::install_global();
+    let run = crate::this_run();
+    let mut replica = crate::mortal_replica::<CrashModule>().await;
+    let receipt = replica
+        .producer
+        .push(CrashQueue, CrashCommand { run }, None)
+        .await
+        .expect("enqueue");
+    for started in 1..=2 {
+        crate::wait_until(Duration::from_secs(15), || CRASHED.of(run).len() == started).await;
+        assert_eq!(CRASHED.of(run).len(), started, "attempt {started} started");
+        replica.kill().await;
+        replica = crate::mortal_replica::<CrashModule>().await;
+    }
+
+    let spent = "job dead-lettered: retry budget spent by attempts that never returned";
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline && logs.find(nest_rs_queue::TARGET, spent).is_empty() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    replica.kill().await;
+
+    let dead_letters = logs.find(nest_rs_queue::TARGET, spent);
+    assert_eq!(
+        dead_letters.len(),
+        1,
+        "the third delivery dead-letters the job, once: {dead_letters:#?}"
+    );
+    assert_eq!(dead_letters[0].level, "error");
+    assert_eq!(dead_letters[0].field("unfinished").as_deref(), Some("2"));
+    assert_eq!(dead_letters[0].field("attempts").as_deref(), Some("2"));
+    assert_eq!(
+        lines_of(&logs, &receipt),
+        [line(3, "error")],
+        "the one line the job files is the dead letter's: the killed attempts answered nothing",
+    );
+    assert_eq!(
+        CRASHED.of(run).len(),
+        2,
+        "the budget of two attempts ran twice, and nothing ran a third",
+    );
+    let mark = crate::key_of(
+        "nestrs-e2e-delivery-crash",
+        "settled",
+        &receipt.id().to_string(),
+    );
+    assert_eq!(crate::read(&mark).await.as_deref(), Some("dead-lettered"));
 }

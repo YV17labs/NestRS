@@ -203,6 +203,9 @@ pub struct Delivery {
     id: JobId,
     /// The attempt the next call to [`attempt`] runs.
     attempt: u32,
+    /// How many attempts the backend saw start that never returned an answer —
+    /// see [`Delivery::with_attempts_started`].
+    unfinished: u32,
     unique_key: Option<String>,
     backend_id: Option<String>,
     message: Value,
@@ -230,6 +233,7 @@ impl Delivery {
             queue,
             id: identity.id.unwrap_or_else(JobId::mint),
             attempt: identity.attempt.unwrap_or(1),
+            unfinished: 0,
             unique_key: identity.unique_key,
             backend_id: None,
             message,
@@ -243,6 +247,25 @@ impl Delivery {
     /// [`JobId`] as `backend_id`, never in its place.
     pub fn with_backend_id(mut self, backend_id: impl Into<String>) -> Self {
         self.backend_id = Some(backend_id.into());
+        self
+    }
+
+    /// How many attempts at this job the backend has seen start, this
+    /// delivery's included — for a backend that can count them per job.
+    ///
+    /// The envelope counts only the attempts that answered: a retry files the
+    /// next attempt's number, and an attempt whose process died — an abort, an
+    /// OOM kill, a hang until the pod was killed — files nothing, so the job
+    /// comes back at the attempt it was at, and would come back forever. With
+    /// the backend's count, the delivery runs the later of the two, so an
+    /// attempt that never returned spends the budget as a failed one does, and
+    /// a job past it is dead-lettered without running, saying how many never
+    /// returned. A backend counts a start when an attempt is admitted, and takes
+    /// it back when it hands the job back unrun — a drain — since that attempt
+    /// never ran to anything.
+    pub fn with_attempts_started(mut self, started: u32) -> Self {
+        self.unfinished = started.saturating_sub(self.attempt);
+        self.attempt = self.attempt.max(started);
         self
     }
 
@@ -263,8 +286,9 @@ impl Delivery {
         &self.id
     }
 
-    /// The attempt the next call to [`attempt`] runs, from 1: the envelope's,
-    /// then one more after each [`AttemptOutcome::Retry`].
+    /// The attempt the next call to [`attempt`] runs, from 1: the envelope's —
+    /// or the backend's count of attempts started, when that is later — then
+    /// one more after each [`AttemptOutcome::Retry`].
     pub fn attempt(&self) -> u32 {
         self.attempt
     }
@@ -291,15 +315,21 @@ impl Delivery {
 /// the port's: a retryable failure is [`AttemptOutcome::Retry`] while the
 /// attempt is within `retries` re-runs of the first — and the delivery counts
 /// the next one — and [`AttemptOutcome::DeadLetter`] on the last, so an adapter
-/// never counts, and every backend spends a budget alike. When the job reaches
-/// its terminal outcome, its checkpoint is cleared.
+/// never counts, and every backend spends a budget alike. A delivery already
+/// past its last attempt — the backend saw attempts start that never returned
+/// ([`Delivery::with_attempts_started`]) — is dead-lettered without running.
+/// When the job reaches its terminal outcome, its checkpoint is cleared.
 pub async fn attempt(
     method: &'static ProcessMethod,
     delivery: &mut Delivery,
     container: Container,
 ) -> AttemptOutcome {
     let attempt = delivery.attempt;
-    let last = attempt > method.options().retries();
+    let retries = method.options().retries();
+    let last = attempt > retries;
+    // Attempts that never returned spent the budget before this one: nothing
+    // runs, and the job is dead-lettered saying so.
+    let spent = attempt > retries.saturating_add(1);
     // Only an attempt another may follow needs its own copy of the stored value.
     let message = if last {
         std::mem::take(&mut delivery.message)
@@ -316,6 +346,13 @@ pub async fn attempt(
             Ok(Opened::Unversioned(value)) => (Ok(value), None, true, Unusable::default()),
             Err(refused) => (Err(refused), None, false, Unusable::default()),
         };
+    let input = match payload {
+        _ if spent => Input::Spent {
+            unfinished: delivery.unfinished,
+        },
+        Ok(payload) => Input::Payload(payload),
+        Err(refused) => Input::Refused(refused),
+    };
     // The producer sealed its W3C trace context into the envelope, because a
     // queue is the one hop the framework crosses that is a *process* boundary
     // rather than a task one. Continuing it here is what makes the HTTP request
@@ -416,7 +453,7 @@ pub async fn attempt(
             }
         }
         let job_id = identity.job_id.clone();
-        let outcome = run(method.handler(), payload, context, identity, last, retry_after).await;
+        let outcome = run(method.handler(), input, context, identity, last, retry_after).await;
         if !matches!(outcome, AttemptOutcome::Retry { .. })
             && let Some(checkpoints) = checkpoints
         {
@@ -528,6 +565,20 @@ pub async fn refuse(
     .await
 }
 
+/// What an attempt runs on.
+enum Input {
+    /// The payload the envelope carried, for the handler.
+    Payload(Value),
+    /// Nothing: the envelope was refused, and this is why.
+    Refused(JobError),
+    /// Nothing: the attempts the backend saw start spent the budget, and
+    /// `unfinished` of them never returned an answer.
+    Spent {
+        /// How many attempts ended without an answer.
+        unfinished: u32,
+    },
+}
+
 /// What one job attempt is, for the line that reports it ran.
 ///
 /// Held as a value rather than read back off the span: `tracing` gives no way to
@@ -552,35 +603,53 @@ struct JobIdentity {
 /// | retryable `Err`, budget left | `job failed; will retry within the budget` (`warn`) | `Retry` |
 /// | retryable `Err`, last attempt | `job dead-lettered: retry budget spent` (`error`) | `DeadLetter` |
 /// | **panic** | `job dead-lettered: handler panicked` (`error`) | `DeadLetter` |
+/// | budget spent by attempts that never returned | `job dead-lettered: retry budget spent by attempts that never returned` (`error`) | `DeadLetter` |
 ///
 /// The panic is caught **here** rather than left to a backend's panic layer,
 /// which would contain it correctly and unwind past this function — skipping the
 /// per-job span and every event below.
 async fn run(
     handler: JobHandler,
-    payload: Result<Value, JobError>,
+    input: Input,
     context: HandlerContext,
     identity: JobIdentity,
     last: bool,
     retry_after: Duration,
 ) -> AttemptOutcome {
     let started = Instant::now();
-    let outcome = match payload {
-        Ok(payload) => {
-            AssertUnwindSafe(handler(payload, context))
-                .catch_unwind()
-                .await
-        }
+    // `Err` when nothing ran: attempts that never returned spent the budget
+    // before this one, `Err`'s count of them.
+    let outcome = match input {
+        Input::Payload(payload) => Ok(AssertUnwindSafe(handler(payload, context))
+            .catch_unwind()
+            .await),
         // An envelope of another version never reaches the handler: the refusal
         // is the attempt's outcome.
-        Err(refused) => Ok(Err(refused)),
+        Input::Refused(refused) => Ok(Ok(Err(refused))),
+        Input::Spent { unfinished } => Err(unfinished),
     };
     // Every terminal state, one detail event and one line. The detail says
     // *why* and stays on `nest_rs::queue`; the line says the job ran, and is the
     // family's. Neither restates the other's fields.
     let (settled, result) = match outcome {
-        Ok(Ok(())) => (nest_rs_core::operation_log::OK, AttemptOutcome::Ok),
-        Ok(Err(error)) if !error.retryable => {
+        Err(unfinished) => {
+            let spent = identity.attempt.saturating_sub(1);
+            tracing::error!(
+                target: TARGET,
+                attempts = spent,
+                unfinished,
+                "job dead-lettered: retry budget spent by attempts that never returned",
+            );
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(JobError::abort(format!(
+                    "{spent} attempt(s) spent the retry budget, {unfinished} of them ending \
+                     without an answer: the process running each stopped before it returned"
+                ))),
+            )
+        }
+        Ok(Ok(Ok(()))) => (nest_rs_core::operation_log::OK, AttemptOutcome::Ok),
+        Ok(Ok(Err(error))) if !error.retryable => {
             // `errors` carries the rejection's per-field detail when it had any —
             // the member name HTTP and the WebSocket error frame use, so one query
             // shape finds a validation failure on any transport.
@@ -600,7 +669,7 @@ async fn run(
                 AttemptOutcome::DeadLetter(error),
             )
         }
-        Ok(Err(error)) if last => {
+        Ok(Ok(Err(error))) if last => {
             tracing::error!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
@@ -612,7 +681,7 @@ async fn run(
                 AttemptOutcome::DeadLetter(error),
             )
         }
-        Ok(Err(error)) => {
+        Ok(Ok(Err(error))) => {
             tracing::warn!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
@@ -624,7 +693,7 @@ async fn run(
                 AttemptOutcome::Retry { after: retry_after },
             )
         }
-        Err(panic) => {
+        Ok(Err(panic)) => {
             let detail = panic_message(panic.as_ref()).to_owned();
             tracing::error!(
                 target: TARGET,
@@ -686,7 +755,7 @@ mod tests {
     async fn run_payload(handler: JobHandler, last: bool) -> AttemptOutcome {
         run(
             handler,
-            Ok(serde_json::json!({})),
+            Input::Payload(serde_json::json!({})),
             context(),
             identity(1),
             last,
@@ -905,7 +974,7 @@ mod tests {
         let logs = LogCapture::install();
         let result = run(
             flaky,
-            Ok(serde_json::json!({})),
+            Input::Payload(serde_json::json!({})),
             context(),
             identity(4),
             true,
@@ -924,6 +993,81 @@ mod tests {
         );
     }
 
+    /// A backend's count of attempts started stands in for the attempts that
+    /// never returned: the delivery runs the later of the envelope's attempt
+    /// and that count, and knows how many ended without an answer. A count
+    /// behind the envelope — a backend that lost it — changes nothing.
+    #[test]
+    fn a_delivery_runs_the_later_of_the_envelopes_attempt_and_the_backends_count() {
+        static COUNTING: QueueBackend = QueueBackend::new("counting", crate::Capabilities::NONE);
+        let stored = |attempt: u32| {
+            serde_json::json!({
+                "v": crate::WIRE_FORMAT_VERSION,
+                "id": "01890a5d-ac96-774b-bcce-b302099a8057",
+                "attempt": attempt,
+                "payload": {},
+            })
+        };
+        let queue = || QueueName::new("audio").expect("a valid name");
+
+        let crashed = Delivery::new(&COUNTING, queue(), stored(1)).with_attempts_started(3);
+        assert_eq!(crashed.attempt(), 3);
+        assert_eq!(
+            crashed.unfinished, 2,
+            "two attempts started and never returned"
+        );
+
+        let answered = Delivery::new(&COUNTING, queue(), stored(2)).with_attempts_started(2);
+        assert_eq!(answered.attempt(), 2);
+        assert_eq!(answered.unfinished, 0);
+
+        let behind = Delivery::new(&COUNTING, queue(), stored(4)).with_attempts_started(1);
+        assert_eq!(behind.attempt(), 4);
+        assert_eq!(behind.unfinished, 0);
+    }
+
+    /// Attempts that never returned spent the budget: nothing runs, the job is
+    /// dead-lettered, and both the event and the dead-letter's sentence say how
+    /// many never returned — the one fact an operator needs to look for a crash
+    /// rather than a failure.
+    #[tokio::test]
+    async fn a_budget_spent_by_attempts_that_never_returned_dead_letters_without_running() {
+        fn unreachable_handler(_job: Value, _context: HandlerContext) -> Handler {
+            Box::pin(async { panic!("the handler must not run once the budget is spent") })
+        }
+
+        let logs = LogCapture::install();
+        let result = run(
+            unreachable_handler,
+            Input::Spent { unfinished: 2 },
+            context(),
+            identity(3),
+            true,
+            Duration::from_secs(1),
+        )
+        .await;
+        let AttemptOutcome::DeadLetter(error) = result else {
+            panic!("a spent budget dead-letters, got {result:?}")
+        };
+        assert!(!error.retryable);
+        assert!(
+            error
+                .to_string()
+                .contains("2 of them ending without an answer"),
+            "{error}"
+        );
+        let said = logs.expect_one(
+            TARGET,
+            "job dead-lettered: retry budget spent by attempts that never returned",
+        );
+        assert_eq!(said.level, "error");
+        assert_eq!(said.field("unfinished").as_deref(), Some("2"));
+        assert_eq!(said.field("attempts").as_deref(), Some("2"));
+        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, unit::JOB);
+        assert_eq!(line.field("outcome").as_deref(), Some("error"));
+        assert_eq!(line.field("attempt").as_deref(), Some("3"));
+    }
+
     /// An envelope of another version is refused before the handler runs, and
     /// dead-letters like any deterministic failure.
     #[tokio::test]
@@ -935,7 +1079,7 @@ mod tests {
         let logs = LogCapture::install();
         let result = run(
             unreachable_handler,
-            Err(JobError::abort("unsupported job wire-format version 99")),
+            Input::Refused(JobError::abort("unsupported job wire-format version 99")),
             context(),
             identity(1),
             false,

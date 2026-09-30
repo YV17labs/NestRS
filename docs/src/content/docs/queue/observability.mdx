@@ -82,6 +82,13 @@ new `span_id`:
 ERROR nest_rs::queue: job dead-lettered: retry budget spent error=transcode failed attempts=4 trace_id=01a0deaacf9670f8a924efd95a2ec64b span_id=a506bd5f6e799390
 ```
 
+An attempt whose process died answers nothing, so it files no line; on a
+backend that counts the attempts it starts, the delivery that finds them past
+the budget dead-letters the job without running it, as
+`job dead-lettered: retry budget spent by attempts that never returned` at
+`error` with `unfinished` counting them, beside a `queue.job` line at the next
+attempt's number.
+
 See [Retries and failure](/queue/retries-and-failure/) for the policy behind
 `attempt`.
 

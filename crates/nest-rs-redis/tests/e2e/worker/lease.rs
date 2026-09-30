@@ -267,7 +267,8 @@ struct DeathProcessor;
 
 #[processor]
 impl DeathProcessor {
-    #[process(queue = DeathQueue, retries = 0)]
+    /// One retry: the attempt that dies with its replica spends the first.
+    #[process(queue = DeathQueue, retries = 1)]
     async fn slow(&self, job: GuardedCommand) -> anyhow::Result<()> {
         run_guarded(&ORPHANED, job).await;
         Ok(())

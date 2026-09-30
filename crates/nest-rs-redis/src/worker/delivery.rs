@@ -205,7 +205,10 @@ impl Deliveries {
             .admit(delivery.id(), delivery.unique_key(), holder)
             .await;
         let lease = match admission {
-            Ok(Admission::Granted(lease)) => lease,
+            Ok(Admission::Granted(lease)) => {
+                delivery = delivery.with_attempts_started(lease.started());
+                lease
+            }
             Ok(Admission::Settled(settlement)) => {
                 return self.acknowledge_settled(&delivery, settlement).await;
             }
@@ -271,7 +274,7 @@ impl Deliveries {
             let answer = self
                 .hand_back(&delivery, &task, resting, Duration::ZERO, Why::Shutdown)
                 .await;
-            self.release(&lease, &delivery, Duration::ZERO).await;
+            self.release(&lease, &delivery, Duration::ZERO, true).await;
             return answer;
         };
 
@@ -290,7 +293,7 @@ impl Deliveries {
                 let answer = self
                     .hand_back(&delivery, &task, next, after, Why::Retry)
                     .await;
-                self.release(&lease, &delivery, after).await;
+                self.release(&lease, &delivery, after, false).await;
                 answer
             }
         }
@@ -361,10 +364,12 @@ impl Deliveries {
     }
 
     /// Drop the lease of a job that goes back to the queue, due again after
-    /// `next`. One Redis refused lapses on its own, and until then delays the
-    /// job's next delivery.
-    async fn release(&self, lease: &Lease, delivery: &Delivery, next: Duration) {
-        if let Err(error) = lease.release(next).await {
+    /// `next` — `unrun` when its attempt was cut before it answered. One Redis
+    /// refused lapses on its own, and until then delays the job's next
+    /// delivery; an unrun attempt it did not take back counts against the
+    /// budget as one that never returned.
+    async fn release(&self, lease: &Lease, delivery: &Delivery, next: Duration, unrun: bool) {
+        if let Err(error) = lease.release(next, unrun).await {
             report_guard(Guard::NotDropped, &self.queue, delivery.id(), &error);
         }
     }

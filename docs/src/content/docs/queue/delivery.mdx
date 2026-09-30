@@ -53,6 +53,7 @@ does not use, each keyed by the job id a push returns.
 | `nestrs:queue:<queue>:settled:<job_id>` | That the job reached its outcome, and which one | the framework |
 | `nestrs:queue:<queue>:cancelled:<job_id>` | That a cancel promised the job never starts | the framework |
 | `nestrs:queue:<queue>:checkpoints:<job_id>` | The progress the job saved | the framework |
+| `nestrs:queue:<queue>:attempts:<job_id>` | How many attempts at the job have started, less those a drain handed back unrun | the framework |
 | `nestrs:queue:<queue>:unique:<key>` | The id of the job holding a unique key | the framework |
 | `nestrs:queue:<queue>:throttle` | How many attempts of the queue's method started in the current window | the framework |
 
@@ -110,8 +111,15 @@ for the whole threshold — ten missed proofs at the default.
 A replica that crashes mid-attempt leaves its job in flight. The next replica
 to start sweeps it back onto the queue at once and runs it once the dead
 replica's lease lapses; with none starting, a running peer sweeps it after the
-orphan threshold. The attempt that died is not counted: the job runs again at
-the attempt it was at, from the start of its body, so a crash between a
+orphan threshold. **The attempt that died counts against the budget.** The
+envelope only counts attempts that answered, so each delivery that takes the
+lease also counts a start, in `…:attempts:<job_id>`, and the port runs the later
+of the two: a job that takes its replica down every time — an abort, an OOM
+kill, a hang until the pod is killed — runs `retries + 1` times, then is
+dead-lettered without running, as
+`job dead-lettered: retry budget spent by attempts that never returned`, its
+`unfinished` field saying how many never did. A drain's hand-back takes its start
+back. The job runs again from the start of its body, so a crash between a
 database commit and the settled mark writes twice — the transaction bounds a
 retry, never a redelivery.
 

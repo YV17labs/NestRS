@@ -50,7 +50,11 @@ is the `job dead-lettered: handler panicked` event beneath it. Install
 ## The retry shape
 
 `retries = N` is `N + 1` attempts in all: the first try and `N` retries. The
-default is `0` — the job is tried once.
+default is `0` — the job is tried once. An attempt that never returns counts
+too, on a backend that counts the attempts it starts (the Redis one does): a
+job whose attempt takes its process down — an abort, an OOM kill, a hang until
+the pod is killed — runs `N + 1` times, then is dead-lettered as
+`job dead-lettered: retry budget spent by attempts that never returned`.
 
 After attempt `n` fails, the job waits `min(5 min, 1 s · 2^(n − 1))` before
 attempt `n + 1`, scaled by a jitter between 0.8 and 1.2. The jitter is derived

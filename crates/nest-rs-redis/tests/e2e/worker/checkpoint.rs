@@ -47,7 +47,9 @@ struct ImportProcessor;
 impl ImportProcessor {
     /// The first attempt saves `1` and fails retryably; the second saves `2` and
     /// holds on until its replica dies; the one after it resumes and completes.
-    #[process(queue = ImportQueue, retries = 1, transactional = false)]
+    /// Three attempts: one fails, one dies with its replica — which spends the
+    /// budget like a failure — and the third completes.
+    #[process(queue = ImportQueue, retries = 2, transactional = false)]
     async fn import(
         &self,
         job: ImportCommand,

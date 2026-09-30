@@ -696,6 +696,7 @@ in keys of its own and reported upstream.
 | | `…:settled:<job_id>` | how the job ended, so a later delivery is answered as the first was |
 | | `…:cancelled:<job_id>` | a cancel's promise that the job never starts |
 | | `…:checkpoints:<job_id>` | the progress the job saved |
+| | `…:attempts:<job_id>` | the attempts started at the job, less those a drain handed back unrun — how the port counts an attempt whose process died, which the envelope never could |
 | | `…:unique:<key>` | the job holding a unique key |
 | | `…:throttle` | the attempts started in the current window — one per queue, since one method drains a queue |
 | throttler | `nestrs:throttler:buckets:<subject>` | one client's current window |

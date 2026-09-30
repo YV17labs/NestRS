@@ -81,9 +81,15 @@ script. A second delivery then does one of two things, and neither runs the job:
   completed or dead-lettered, without running.
 
 A settled mark lasts an hour, or two orphan thresholds plus a lease when that
-is longer; one written while the worker drains lasts a week, since its
-acknowledgement may never reach Redis and the next replica may start days
-later.
+is longer — and a week when its acknowledgement may never reach Redis. apalis
+acknowledges a job from its worker's own loop after the delivery answers, and
+drops what is still queued when the worker stops, or what Redis refuses; the
+job then waits in flight until a replica starts, which may be days later. So a
+mark written while the worker drains lasts a week, and so does the mark of every
+job settled within a poll and a heartbeat before the drain began, or before
+apalis reported an acknowledgement lost. A replica that stays down longer than a
+week, or whose acknowledgements lag further behind than that span, can still
+see such a job run twice.
 
 <Aside type="caution">
 The guard covers apalis's redeliveries. It cannot make a lease outlive its
@@ -131,7 +137,7 @@ wait the same way. What a delivery does when a call fails:
 | handing a job back | apalis files its stored record again, due at once — the attempt it was fetched at, or its next one when the filing landed after all — or a sweep does, when Redis refuses apalis too | `job not handed back; …`, `error` |
 | renewing the lease | the attempt runs on, and the renewal is tried again | `job lease not renewed; retrying`, `warn` |
 | writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
-| the acknowledgement | delivered again once swept, and answered by its settled mark without running | `job acknowledgement lost; …`, `error` |
+| the acknowledgement | stays in the replica's flight until a replica starts and sweeps it — a live replica's is never taken by the periodic sweep — and is answered by its settled mark without running; the marks of the jobs settled lately are kept a week for it | `job acknowledgement lost; …`, `error` |
 
 A fetch that fails is retried at the next poll. When its connection failed
 under it, Redis may have run it all the same, and the jobs it claimed then wait

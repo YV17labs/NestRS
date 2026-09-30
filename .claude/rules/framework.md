@@ -707,9 +707,14 @@ record of a job still waiting lives a week past the instant the job is due
 unique key whose job vanished — and the week is a constant: a knob would need the
 queue binding's first `#[config]` and its `for_root`, an owner question rather than
 a default. A settled mark lives past the latest a sweep could hand the job to a
-second delivery, `max(1 h, 2 × orphan_after + lease)`, and a week when the job
-settled during a drain; at about 120 bytes a job that is a documented cost, not a
-setting.
+second delivery, `max(1 h, 2 × orphan_after + lease)` — and a week when its
+acknowledgement may be lost, since a job whose acknowledgement apalis dropped
+stays in flight until *some* replica starts, however much later: a job settled
+during a drain, and every job settled within the span an acknowledgement takes
+(`acknowledged_within`, a poll and a heartbeat) before the drain began or before
+apalis reported one lost. A quiet longer than that week, or an acknowledgement
+loop further behind than the span, is the residual, and stated as such. At about
+120 bytes a job that is a documented cost, not a setting.
 
 **The 6.x layout is refused, never read.** 6.x handed apalis the queue's bare
 name, so its jobs sit at the root of the keyspace, where a 7.0 worker never looks,
@@ -1554,8 +1559,9 @@ the kubelet's 30 s rather than at it.
   past the whole window is said at `error` and left to its lease. The drain is the
   worker's own rather than apalis's, because apalis-redis 0.7.4 drops the
   acknowledgement of a task that ends while its worker drains: a hand-back takes
-  the task out of flight itself, and a job settled during a drain keeps its
-  settled mark for a week, since whichever replica starts next delivers it again.
+  the task out of flight itself, and a job settled during a drain — or within
+  the span an acknowledgement takes before it — keeps its settled mark for a
+  week, since whichever replica starts next delivers it again.
   What an interrupted attempt's transaction holds is `data-layer.md`'s, under *An
   abandoned attempt*.
 

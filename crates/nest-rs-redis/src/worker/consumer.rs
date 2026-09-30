@@ -54,7 +54,9 @@
 //! attempts running get [`RedisWorkerConfig::shutdown_timeout`] less a reserve to
 //! finish, and whatever still runs when that closes is interrupted and handed
 //! back to the queue inside the reserve — so the orchestrator's SIGKILL never
-//! lands on a job the worker still holds.
+//! lands on a job the worker still holds. Beside it, the jobs settled just before
+//! it keep their marks a week, since apalis drops the acknowledgements it has
+//! not written yet ([`Leases`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -73,8 +75,8 @@ use nest_rs_queue::{ProcessMethod, QueueName};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-use super::delivery::{Deliveries, Task};
-use super::lease::Leases;
+use super::delivery::{Deliveries, SETTLED_WHILE_DRAINING, Task};
+use super::lease::{Keeping, Leases, report_kept};
 use crate::backend::{BACKEND, uncapped_context};
 use crate::connection::CONNECTION_REMEDY;
 use crate::error::LegacyLayoutError;
@@ -160,16 +162,13 @@ impl Transport for RedisWorker {
         // Each method's promotion, for as long as `serve` runs — the drain
         // included, where a job handed back is due at once.
         let mut promoting = Vec::new();
-        let mut workers = HashMap::new();
         let mut built = Vec::new();
         for method in &self.methods {
             let queue = QueueName::new(method.queue())?;
-            let id = worker_id();
-            workers.insert(id.clone(), queue.clone());
-            built.push((method, queue, id));
+            built.push((method, queue, worker_id()));
         }
-        let reporter = Reporter::new(workers);
-        let mut monitor = Monitor::new().on_event(move |event| reporter.report(&event));
+        let mut workers = HashMap::new();
+        let mut monitor = Monitor::new();
         for (method, queue, id) in built {
             promoting.push(AbortOnDropHandle::new(tokio::spawn(promote(
                 Promotion::new(&connection, &queue, promoted_per_scan(concurrency(method))),
@@ -193,6 +192,7 @@ impl Transport for RedisWorker {
                     queue,
                     config.lease,
                     config.orphan_after,
+                    config.acknowledged_within(),
                     method.options().throttle(),
                 ),
                 draining: cancel.clone(),
@@ -204,8 +204,19 @@ impl Transport for RedisWorker {
                 &config,
                 concurrency(method),
             );
+            workers.insert(
+                id.clone(),
+                (deliveries.queue.clone(), Arc::clone(&deliveries.leases)),
+            );
             monitor = register(monitor, &id, method, fetching, deliveries);
         }
+        let reporter = Reporter::new(workers);
+        let guards: Vec<Arc<Leases>> = reporter
+            .workers
+            .values()
+            .map(|(_, leases)| Arc::clone(leases))
+            .collect();
+        let monitor = monitor.on_event(move |event| reporter.report(&event));
 
         let signal = cancel.clone();
         let run = monitor.run_with_signal(async move {
@@ -213,11 +224,28 @@ impl Transport for RedisWorker {
             Ok(())
         });
         tokio::pin!(run);
-        tokio::select! {
-            finished = &mut run => return Ok(finished?),
-            () = cancel.cancelled() => {}
+        let stopped = tokio::select! {
+            finished = &mut run => Some(finished),
+            () = cancel.cancelled() => None,
+        };
+        // apalis drops every acknowledgement still queued once its workers
+        // stop, so the jobs answered just before the stop keep their marks as
+        // long as the ones settled during the drain — beside the drain, not
+        // before it, which has its own window to keep, and whether the workers
+        // stopped before this loop saw the signal or after.
+        let mut remembering = tokio::task::JoinSet::new();
+        for leases in guards {
+            remembering.spawn(async move {
+                let kept = leases.remember_settled_lately(SETTLED_WHILE_DRAINING).await;
+                report_kept(leases.queue(), Keeping::Drain, kept);
+            });
         }
-        drain(run, &interrupt, config.shutdown_timeout).await
+        let drained = match stopped {
+            Some(finished) => finished.map_err(anyhow::Error::from),
+            None => drain(run, &interrupt, config.shutdown_timeout).await,
+        };
+        while remembering.join_next().await.is_some() {}
+        drained
     }
 }
 
@@ -470,17 +498,18 @@ fn worker_id() -> String {
 const UNREGISTERED_REPEAT: Duration = Duration::from_secs(30);
 
 /// Says what apalis says about the workers of one replica, at the level each
-/// event deserves. apalis logs nothing through `tracing` itself, so an event
-/// dropped here is a failure nobody hears of.
+/// event deserves — and keeps the recent settled marks of a worker whose
+/// acknowledgement apalis lost. apalis logs nothing through `tracing` itself,
+/// so an event dropped here is a failure nobody hears of.
 struct Reporter {
-    /// Each worker's queue, by the id apalis names it with.
-    workers: HashMap<String, QueueName>,
+    /// Each worker's queue and delivery guard, by the id apalis names it with.
+    workers: HashMap<String, (QueueName, Arc<Leases>)>,
     /// When each worker was last said to be unregistered.
     unregistered: Mutex<HashMap<String, Instant>>,
 }
 
 impl Reporter {
-    fn new(workers: HashMap<String, QueueName>) -> Self {
+    fn new(workers: HashMap<String, (QueueName, Arc<Leases>)>) -> Self {
         Self {
             workers,
             unregistered: Mutex::default(),
@@ -489,11 +518,8 @@ impl Reporter {
 
     fn report(&self, event: &Worker<Event>) {
         let worker = event.id().name();
-        let queue = self
-            .workers
-            .get(worker)
-            .map(QueueName::as_str)
-            .unwrap_or_default();
+        let guarded = self.workers.get(worker);
+        let queue = guarded.map(|(queue, _)| queue.as_str()).unwrap_or_default();
         match event.inner() {
             Event::Start => tracing::info!(
                 target: nest_rs_queue::TARGET,
@@ -511,7 +537,14 @@ impl Reporter {
             Event::Error(error) if unregistered(error.as_ref()) => {
                 self.report_unregistered(queue, worker);
             }
-            Event::Error(error) => report_error(queue, worker, error.as_ref()),
+            Event::Error(error) => {
+                if acknowledgement_lost(error.as_ref())
+                    && let Some((_, leases)) = guarded
+                {
+                    leases.keep_settled_lately(SETTLED_WHILE_DRAINING);
+                }
+                report_error(queue, worker, error.as_ref());
+            }
         }
     }
 
@@ -545,6 +578,14 @@ impl Reporter {
             );
         }
     }
+}
+
+/// Whether `error` is apalis's report of an acknowledgement it could not write.
+fn acknowledgement_lost(error: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(
+        error.downcast_ref::<RedisPollError>(),
+        Some(RedisPollError::AckError(_))
+    )
 }
 
 /// Whether `error` is a fetch refused because a peer's sweep unregistered the
@@ -688,8 +729,8 @@ fn report_trouble(trouble: Trouble, queue: &str, worker: &str, error: &str) {
             queue,
             worker,
             error,
-            "job acknowledgement lost; the job is delivered again once swept, and its settled mark \
-             keeps it from running twice",
+            "job acknowledgement lost; the job stays in flight until a replica starts, and the \
+             worker's recently settled jobs keep their marks a week so it does not run twice",
         ),
     }
 }
@@ -794,11 +835,15 @@ mod tests {
         ] {
             assert_eq!(Trouble::of(&error), trouble);
         }
+        assert!(acknowledgement_lost(&RedisPollError::AckError(failure())));
+        assert!(!acknowledgement_lost(&RedisPollError::PollNextError(
+            failure()
+        )));
         report_error("audio", "host:01", &RedisPollError::AckError(failure()));
         let lost = logs.expect_one(
             nest_rs_queue::TARGET,
-            "job acknowledgement lost; the job is delivered again once swept, and its settled mark \
-             keeps it from running twice",
+            "job acknowledgement lost; the job stays in flight until a replica starts, and the \
+             worker's recently settled jobs keep their marks a week so it does not run twice",
         );
         assert_eq!(lost.level, "error");
         assert_eq!(lost.field("queue").as_deref(), Some("audio"));

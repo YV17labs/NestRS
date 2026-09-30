@@ -41,10 +41,12 @@
 //! **A hand-back never waits on an acknowledgement.** apalis-redis 0.7
 //! acknowledges a task through a channel its worker's heartbeat drains, and the
 //! heartbeat is dropped the moment the last task of a stopping worker ends — so
-//! the acknowledgement of a task ending during the drain never reaches Redis.
-//! A hand-back therefore takes the task out of flight itself, through apalis's
-//! own `reschedule`; and a job settled while the worker drains keeps its settled
-//! mark for [`SETTLED_WHILE_DRAINING`], since whichever replica starts next
+//! the acknowledgement of a task ending during the drain never reaches Redis,
+//! nor that of one answered just before it that was still queued. A hand-back
+//! therefore takes the task out of flight itself, through apalis's own
+//! `reschedule`; and a job settled while the worker drains, or within the span
+//! an acknowledgement can take before it, keeps its settled mark for
+//! [`SETTLED_WHILE_DRAINING`] ([`Leases`]), since whichever replica starts next
 //! delivers it again, whenever that is.
 
 use std::sync::Arc;
@@ -309,6 +311,8 @@ impl Deliveries {
             settled = settlement.as_str(),
             "job delivered again after it settled; acknowledged without running",
         );
+        // This answer's acknowledgement can be lost like the first one's.
+        self.leases.settled_lately(delivery.id());
         if self.draining.is_cancelled()
             && let Err(error) = self
                 .leases
@@ -328,11 +332,13 @@ impl Deliveries {
     /// Record the job's terminal outcome, and drop its lease. A mark Redis
     /// refused is said and survived: the outcome stands, and only a second
     /// delivery of the job — which the mark exists to stop — could run it again.
+    ///
+    /// The job is noted among those settled lately before the drain is read
+    /// again: a drain that began meanwhile either finds it noted, and keeps its
+    /// mark with the rest, or is seen here, and the mark is kept now.
     async fn settle(&self, lease: &Lease, delivery: &Delivery, outcome: Settlement) {
-        let remember = self
-            .draining
-            .is_cancelled()
-            .then_some(SETTLED_WHILE_DRAINING);
+        let draining = self.draining.is_cancelled();
+        let remember = draining.then_some(SETTLED_WHILE_DRAINING);
         if let Err(error) = lease.settle(outcome, remember).await {
             report_guard(
                 Guard::NotSettled(outcome),
@@ -340,6 +346,17 @@ impl Deliveries {
                 delivery.id(),
                 &error,
             );
+            return;
+        }
+        self.leases.settled_lately(delivery.id());
+        if !draining
+            && self.draining.is_cancelled()
+            && let Err(error) = self
+                .leases
+                .remember(delivery.id(), SETTLED_WHILE_DRAINING)
+                .await
+        {
+            report_guard(Guard::NotExtended, &self.queue, delivery.id(), &error);
         }
     }
 

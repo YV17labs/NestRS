@@ -159,6 +159,20 @@ impl RedisWorkerConfig {
     pub(crate) fn heartbeat(&self) -> Duration {
         (self.orphan_after / HEARTBEATS_PER_THRESHOLD).max(MIN_HEARTBEAT)
     }
+
+    /// How long after a delivery answers its acknowledgement may still be on
+    /// its way to Redis: a poll, then a heartbeat.
+    ///
+    /// apalis-redis 0.7 acknowledges from the loop that also fetches, beats and
+    /// sweeps, one call at a time, so an answer waits behind whatever that loop
+    /// is doing and the answers queued before it. A loop further behind than a
+    /// heartbeat has let its own heartbeat slip as well — a replica that far
+    /// behind is one its peers are on their way to sweeping, and a job it held
+    /// that is redelivered by a sweep is what a settled mark's usual span
+    /// already covers.
+    pub(crate) fn acknowledged_within(&self) -> Duration {
+        self.poll_interval.saturating_add(self.heartbeat())
+    }
 }
 
 impl Default for RedisWorkerConfig {

@@ -729,7 +729,7 @@ in keys of its own and reported upstream.
 | | `…:checkpoints:<job_id>` | the progress the job saved |
 | | `…:attempts:<job_id>` | the attempts started at the job, less those a drain handed back unrun — how the port counts an attempt whose process died, which the envelope never could |
 | | `…:unique:<key>` | the job holding a unique key |
-| | `…:throttle` | the attempts started in the current window — one per queue, since one method drains a queue |
+| | `…:throttle` | the attempts started in the current window, less those handed back unread (a `Defer`, taken back only inside the window that counted it) — one per queue, since one method drains a queue |
 | throttler | `nestrs:throttler:buckets:<subject>` | one client's current window |
 | schedule | `nestrs:schedule:claims:<occurrence>` | an occurrence's claim — the port's token (`<module path>:<provider>:<method>:<instant_ms>`, the declaring module's path a level per `::`) verbatim; the key's existence is the claim, and its value names the claimer and its run for operators only |
 | | `nestrs:schedule:leases:<job>` | the run of the job going on now — the port's job identity (`<module path>:<provider>:<method>`) verbatim, held by the run that claimed an occurrence, renewed while it lasts and released when it ends |

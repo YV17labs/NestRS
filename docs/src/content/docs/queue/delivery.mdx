@@ -55,7 +55,7 @@ does not use, each keyed by the job id a push returns.
 | `nestrs:queue:<queue>:checkpoints:<job_id>` | The progress the job saved | the framework |
 | `nestrs:queue:<queue>:attempts:<job_id>` | How many attempts at the job have started, less those a drain handed back unrun | the framework |
 | `nestrs:queue:<queue>:unique:<key>` | The id of the job holding a unique key | the framework |
-| `nestrs:queue:<queue>:throttle` | How many attempts of the queue's method started in the current window | the framework |
+| `nestrs:queue:<queue>:throttle` | How many attempts of the queue's method started in the current window, less those handed back unread | the framework |
 
 Nothing sits at the root of the keyspace, so a Redis user whose ACL reaches
 `~nestrs:*` and nothing else runs a queue end to end.

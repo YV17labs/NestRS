@@ -140,7 +140,12 @@ a provider's requests per minute; reach for `concurrency` when it is a resource
 the job holds while it runs. Both apply at once: a throttled method still runs at
 most its `concurrency` attempts at a time.
 
-- **A retry is an attempt like any other**, and counts against the limit.
+- **A retry is an attempt like any other**, and counts against the limit. So
+  does an attempt a drain interrupts: it started, and did whatever it did
+  downstream before the cut.
+- **A job no attempt read is not a start.** One a newer release sealed goes back
+  unread during a rolling deploy, and gives its start back to the window that
+  counted it — never to the next one, should that window have ended meanwhile.
 - **An attempt over the limit is not an attempt.** It goes back to the schedule
   for when the window ends, keeps its attempt number, costs the retry budget
   nothing, and is never dropped.

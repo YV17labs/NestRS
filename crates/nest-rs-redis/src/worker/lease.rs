@@ -72,7 +72,7 @@ const SETTLED_FLOOR: Duration = Duration::from_secs(60 * 60);
 /// | answer | reply |
 /// | --- | --- |
 /// | settled | `{0, 0, how it settled}` |
-/// | the lease taken | `{1, attempts started with this one, ''}` |
+/// | the lease taken | `{1, attempts started with this one, the throttle window's end or ''}` |
 /// | held by another delivery | `{2, ms until it lapses, its holder}` |
 /// | cancelled | `{3, 0, ''}` |
 /// | over its throttle | `{4, ms until the window ends, ''}` |
@@ -88,6 +88,11 @@ const SETTLED_FLOOR: Duration = Duration::from_secs(60 * 60);
 /// long as a delivery of it could come again. A job granted counts the attempt
 /// it starts; one granted or deferred renews what it holds by as long, counted
 /// from its next delivery.
+///
+/// A start counted against the throttle answers the instant its window ends,
+/// in Redis's own milliseconds — the window's identity, which [`RELEASE`]
+/// compares before it takes the start back: the counter is one key, and a
+/// window that ended between the two scripts is another window's count.
 const ADMIT: &str = r"
 local settled = redis.call('GET', KEYS[1])
 if settled then
@@ -136,7 +141,13 @@ redis.call('PEXPIRE', KEYS[5], ARGV[3])
 if KEYS[8] and redis.call('GET', KEYS[8]) == ARGV[4] then
   redis.call('PEXPIRE', KEYS[8], ARGV[3])
 end
-return {1, started, ''}
+local window = ''
+if limit > 0 then
+  local now = redis.call('TIME')
+  window = tostring(tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+    + redis.call('PTTL', KEYS[6]))
+end
+return {1, started, window}
 ";
 
 /// Extend the lease while its holder still holds it: `1` renewed, `0` lost.
@@ -176,26 +187,42 @@ return 0
 
 /// Drop the lease if this delivery still holds it — an attempt that ends
 /// without settling the job: a retry filed for later, a job handed back — and
-/// renew what the job holds until its next delivery and past it. An attempt
-/// handed back unrun takes back the start it counted, while its lease is still
-/// its own: past that, the count may be another delivery's.
+/// renew what the job holds until its next delivery and past it. What the
+/// attempt gives back ([`Unsettled`]) is taken back while its lease is still its
+/// own: past that, the count may be another delivery's. The throttle's start is
+/// taken back only inside the window that counted it — the one ending at the
+/// instant [`ADMIT`] answered, give or take the millisecond two clock readings
+/// can differ by.
 ///
-/// `KEYS`: lease, open, checkpoints, attempts, then the unique claim when the
-/// job holds one. `ARGV`: the holder, how long the job's records are kept from
-/// now, the job's id, and `1` when the attempt is handed back unrun.
+/// `KEYS`: lease, open, checkpoints, attempts, throttle, then the unique claim
+/// when the job holds one. `ARGV`: the holder, how long the job's records are
+/// kept from now, the job's id, what the attempt gives back (`0` nothing, `1`
+/// its attempt, `2` its attempt and its throttle start), the end of the window
+/// its throttle start was counted in (`''` for none), and how far apart two
+/// readings of that end may be and still name one window.
 const RELEASE: &str = r"
 local released = 0
 if redis.call('GET', KEYS[1]) == ARGV[1] then
   released = redis.call('DEL', KEYS[1])
-  if ARGV[4] == '1' and tonumber(redis.call('GET', KEYS[4]) or '0') > 0 then
+  if ARGV[4] ~= '0' and tonumber(redis.call('GET', KEYS[4]) or '0') > 0 then
     redis.call('DECR', KEYS[4])
+  end
+  if ARGV[4] == '2' and ARGV[5] ~= '' then
+    local left = redis.call('PTTL', KEYS[5])
+    if left > 0 and tonumber(redis.call('GET', KEYS[5]) or '0') > 0 then
+      local now = redis.call('TIME')
+      local ends = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000) + left
+      if math.abs(ends - tonumber(ARGV[5])) <= tonumber(ARGV[6]) then
+        redis.call('DECR', KEYS[5])
+      end
+    end
   end
 end
 redis.call('PEXPIRE', KEYS[2], ARGV[2])
 redis.call('PEXPIRE', KEYS[3], ARGV[2])
 redis.call('PEXPIRE', KEYS[4], ARGV[2])
-if KEYS[5] and redis.call('GET', KEYS[5]) == ARGV[3] then
-  redis.call('PEXPIRE', KEYS[5], ARGV[2])
+if KEYS[6] and redis.call('GET', KEYS[6]) == ARGV[3] then
+  redis.call('PEXPIRE', KEYS[6], ARGV[2])
 end
 return released
 ";
@@ -252,6 +279,34 @@ pub(crate) enum Admission {
         /// How long until the window ends.
         ends_in: Duration,
     },
+}
+
+/// What an attempt that goes back to the queue gives back of what its
+/// admission counted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unsettled {
+    /// It answered — a retry filed for later: its start counts against the
+    /// budget and the throttle alike.
+    Answered,
+    /// It was cut before it answered — the drain window closed on it: the
+    /// budget takes its start back, since the attempt never returned, and the
+    /// throttle keeps it, since the attempt ran and did whatever it did
+    /// downstream before the cut.
+    Cut,
+    /// Nothing ran — a job a newer release sealed: the budget and the throttle
+    /// both take its start back, since the method was never called.
+    Unread,
+}
+
+impl Unsettled {
+    /// `ARGV[4]` of [`RELEASE`].
+    fn gives_back(self) -> u8 {
+        match self {
+            Self::Answered => 0,
+            Self::Cut => 1,
+            Self::Unread => 2,
+        }
+    }
 }
 
 /// How a job ended, as its settled mark records it.
@@ -350,13 +405,14 @@ impl Leases {
             .await?;
         Ok(match answer {
             (0, _, mark) => Admission::Settled(Settlement::read(&mark)),
-            (1, started, _) => Admission::Granted(Lease {
+            (1, started, window) => Admission::Granted(Lease {
                 leases: Arc::clone(self),
                 key: lease,
                 claim,
                 job: job.clone(),
                 holder,
                 started: u32::try_from(started).unwrap_or(u32::MAX),
+                window,
             }),
             (3, ..) => Admission::Cancelled,
             (4, ends_in, _) => Admission::Throttled {
@@ -465,6 +521,10 @@ pub(crate) struct Lease {
     holder: String,
     /// How many attempts at the job have started, this one included.
     started: u32,
+    /// When the throttle window this attempt's start was counted in ends, in
+    /// Redis's milliseconds as [`ADMIT`] answered it — `""` when the method
+    /// declares no throttle. Handed back to [`RELEASE`] as it came.
+    window: String,
 }
 
 impl Lease {
@@ -534,20 +594,21 @@ impl Lease {
     }
 
     /// Drop the lease without settling the job: its next attempt is filed for
-    /// `next` from now, or it was handed back — `unrun` when the attempt was
-    /// cut before it answered, which then takes back the start it counted. What
-    /// the job holds is renewed until that delivery and past it.
+    /// `next` from now, or it was handed back — and take back what `unsettled`
+    /// says the attempt did not spend. What the job holds is renewed until that
+    /// delivery and past it.
     pub(crate) async fn release(
         &self,
         next: Duration,
-        unrun: bool,
+        unsettled: Unsettled,
     ) -> Result<(), redis::RedisError> {
         let leases = &self.leases;
         let mut invocation = leases.release.key(&self.key);
         invocation
             .key(job_key(OPEN, &leases.queue, &self.job))
             .key(job_key(CHECKPOINTS, &leases.queue, &self.job))
-            .key(job_key(ATTEMPTS, &leases.queue, &self.job));
+            .key(job_key(ATTEMPTS, &leases.queue, &self.job))
+            .key(layout::throttle_key(&leases.queue));
         if let Some(claim) = &self.claim {
             invocation.key(claim);
         }
@@ -555,7 +616,9 @@ impl Lease {
             .arg(&self.holder)
             .arg(millis(next.saturating_add(KEPT_PAST_DUE)))
             .arg(self.job.to_string())
-            .arg(u8::from(unrun))
+            .arg(unsettled.gives_back())
+            .arg(&self.window)
+            .arg(same_window_within(leases.throttle))
             .invoke_async::<i64>(&mut leases.conn.clone())
             .await
             .map(drop)
@@ -597,6 +660,18 @@ fn still_held(
             true
         }
     }
+}
+
+/// How far apart, in milliseconds, two readings of one throttle window's end
+/// may be and still name that window: one, the most a clock reading and a
+/// `PTTL` truncated to the millisecond can differ by — and never as far as the
+/// next window's end, which is a whole window later, so a one-millisecond
+/// window must match exactly. A start this misses stays counted, which errs
+/// towards starting fewer.
+fn same_window_within(throttle: Option<Throttle>) -> u64 {
+    throttle.map_or(0, |throttle| {
+        millis(throttle.window()).saturating_sub(1).min(1)
+    })
 }
 
 /// How many marks one pipeline keeps: a thousand `PEXPIRE`s, so a busy queue's

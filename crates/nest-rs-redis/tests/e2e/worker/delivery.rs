@@ -868,7 +868,7 @@ struct NewerProcessor;
 
 #[processor]
 impl NewerProcessor {
-    #[process(queue = NewerQueue)]
+    #[process(queue = NewerQueue, throttle(limit = 5, window = "1m"))]
     async fn run(&self, job: RetryCommand) -> anyhow::Result<()> {
         NEWER.start(job.run);
         Ok(())
@@ -885,7 +885,9 @@ struct NewerModule;
 /// attempt is counted, the record goes back to the schedule as it was stored,
 /// and the line names the job by the id its push returned. It was dead-lettered,
 /// under an id minted for the delivery: a rolling deploy lost every such job an
-/// old replica fetched.
+/// old replica fetched. Nor does it keep a start against its method's throttle:
+/// every deferral of a newer job used to, so a rolling deploy shrank the window
+/// the jobs this release can run were left.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_job_a_newer_release_sealed_is_handed_back_as_stored_and_never_dead_lettered() {
     use apalis::prelude::{Request, Storage};
@@ -944,6 +946,16 @@ async fn a_job_a_newer_release_sealed_is_handed_back_as_stored_and_never_dead_le
     assert!(
         started.unwrap_or(0) == 0,
         "no attempt is counted: {started:?}"
+    );
+    let throttled: Option<i64> = redis::cmd("GET")
+        .arg(format!("{}:throttle", crate::namespace(NEWER_QUEUE)))
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("GET");
+    assert_eq!(
+        throttled.unwrap_or(0),
+        0,
+        "no start is left counted against the throttle's window",
     );
     let scheduled: Vec<String> = redis::cmd("ZRANGE")
         .arg(apalis.scheduled_jobs_set())

@@ -270,7 +270,9 @@ storage can count the attempts it starts per job, pass the count:
 runs the later of the two, and dead-letters a job whose count is past the
 budget without running it. Count a start when the attempt is admitted, and take
 it back when you hand the job back unrun — a drain, a `Defer` — since that
-attempt never ran to anything. A storage that cannot count leaves the loop open, and its
+attempt never ran to anything. A throttle's start is taken back for a `Defer`
+alone, and only inside the window that counted it: a drained attempt ran, and
+did whatever it did downstream before the cut. A storage that cannot count leaves the loop open, and its
 page says so. A record your storage cannot route to any method goes through
 `consume::refuse`, which files the dead-letter the way an attempt would — a
 record *your* code holds: one it fetched and could not decode, or one naming a

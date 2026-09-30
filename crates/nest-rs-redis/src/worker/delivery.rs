@@ -62,7 +62,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use super::checkpoint::RedisCheckpoint;
 use super::gate::ThrottleGate;
-use super::lease::{Admission, Lease, Leases, Settlement};
+use super::lease::{Admission, Lease, Leases, Settlement, Unsettled};
 use crate::RedisConnection;
 use crate::backend::{BACKEND, due_second};
 
@@ -283,7 +283,8 @@ impl Deliveries {
             let answer = self
                 .hand_back(&delivery, &task, resting, Duration::ZERO, Why::Shutdown)
                 .await;
-            self.release(&lease, &delivery, Duration::ZERO, true).await;
+            self.release(&lease, &delivery, Duration::ZERO, Unsettled::Cut)
+                .await;
             return answer;
         };
 
@@ -302,16 +303,19 @@ impl Deliveries {
                 let answer = self
                     .hand_back(&delivery, &task, next, after, Why::Retry)
                     .await;
-                self.release(&lease, &delivery, after, false).await;
+                self.release(&lease, &delivery, after, Unsettled::Answered)
+                    .await;
                 answer
             }
-            // Nothing ran: the record goes back as it was stored, and the start
-            // the admission counted is taken back, as for a drain.
+            // Nothing ran: the record goes back as it was stored, and every
+            // start the admission counted is taken back — the throttle's too,
+            // since the method was never called.
             AttemptOutcome::Defer { after } => {
                 let answer = self
                     .hand_back(&delivery, &task, resting, after, Why::NewerRelease)
                     .await;
-                self.release(&lease, &delivery, after, true).await;
+                self.release(&lease, &delivery, after, Unsettled::Unread)
+                    .await;
                 answer
             }
         }
@@ -382,12 +386,18 @@ impl Deliveries {
     }
 
     /// Drop the lease of a job that goes back to the queue, due again after
-    /// `next` — `unrun` when its attempt was cut before it answered. One Redis
-    /// refused lapses on its own, and until then delays the job's next
-    /// delivery; an unrun attempt it did not take back counts against the
-    /// budget as one that never returned.
-    async fn release(&self, lease: &Lease, delivery: &Delivery, next: Duration, unrun: bool) {
-        if let Err(error) = lease.release(next, unrun).await {
+    /// `next`, taking back what `unsettled` says its attempt did not spend. One
+    /// Redis refused lapses on its own, and until then delays the job's next
+    /// delivery; an attempt it did not take back counts against the budget as
+    /// one that never returned, and a start against the throttle's window.
+    async fn release(
+        &self,
+        lease: &Lease,
+        delivery: &Delivery,
+        next: Duration,
+        unsettled: Unsettled,
+    ) {
+        if let Err(error) = lease.release(next, unsettled).await {
             report_guard(Guard::NotDropped, &self.queue, delivery.id(), &error);
         }
     }

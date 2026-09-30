@@ -827,7 +827,14 @@ backend is a job that stops or a request that stalls with nothing to say why.
 command it sends — `RedisConnection` answers or fails every command within its
 connect budget (`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, 10 s by default) — so an
 outage arrives as the backend's own error, with its cause, and a net fires only
-on a backend that stopped bounding itself. So every net sits above the budget of
+on a backend that stopped bounding itself. **A command whose answer is the only
+record of what it claimed is never cut**, because a timeout does not undo it: the
+Redis worker's fetch (which claims jobs into its replica's flight) and the
+guard's admission (a lease, a throttle start, an attempt) wait for their answer
+on the same socket through `RedisConnection::without_budget`, and end when the
+socket's liveness — keepalive, and `TCP_USER_TIMEOUT` on Linux, both at the
+budget and never under a second — says Redis is gone rather than slow. Neither is a port call a net sits
+over. So every net sits above the budget of
 each adapter the framework ships, and a test pins the order wherever both
 constants are visible: `nest-rs-redis` asserts its default connect budget is
 below `HIT_TIMEOUT` and below the queue port's net. Past a net every member fails

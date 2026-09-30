@@ -111,11 +111,19 @@ retry, never a redelivery.
 
 ## When Redis is slow or gone
 
-Every command a worker sends — apalis's and the guard's alike — answers or fails
-within `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so an
-outage fails calls rather than holding them. A timeout says the answer did not
-arrive in time, never that the command did not run. What a delivery does when a
-call fails:
+A command a worker sends answers or fails within
+`NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, ten seconds by default, so an outage fails
+calls rather than holding them. A timeout says the answer did not arrive in time,
+never that the command did not run — which is why two commands wait for their
+answer however late it comes: apalis's **fetch**, and the **admission** that
+takes a job's lease. Each claims something in the script it answers with — the
+fetch, the jobs it hands this replica; the admission, the lease, a throttle start
+and the attempt — so a wait cut at the budget would leave the claim held for
+nobody: fetched jobs in a live replica's flight, never run and never swept. They
+end when Redis answers, or when the socket learns Redis is gone rather than slow:
+keepalive probes after the budget idle and, on Linux, `TCP_USER_TIMEOUT` at the
+budget — each a second at the least. apalis's heartbeat and acknowledgements share the fetch's connection and
+wait the same way. What a delivery does when a call fails:
 
 | The call that failed | What happens to the job | The line, on `nest_rs::queue` |
 |---|---|---|
@@ -125,7 +133,10 @@ call fails:
 | writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
 | the acknowledgement | delivered again once swept, and answered by its settled mark without running | `job acknowledgement lost; …`, `error` |
 
-A fetch or a heartbeat that fails is retried by apalis on its next tick, and a
+A fetch that fails is retried at the next poll. When its connection failed
+under it, Redis may have run it all the same, and the jobs it claimed then wait
+in this replica's in-flight set until a replica starts and sweeps them back —
+the `warn` says so. A heartbeat that fails is retried on its next tick, and a
 scan of the schedule after a backoff doubling up to thirty seconds; each is said
 at `warn`. A heartbeat that keeps failing past the orphan threshold lets a peer
 take the replica's jobs — the case the lease exists for.
@@ -282,6 +293,18 @@ that.
   apalis reads it into a `usize`, as wide as the host reading it: a record a
   64-bit replica filed with its own `usize::MAX` would not decode on a 32-bit
   one, and apalis's fetch would fail on every poll for the batch holding it.
+- **A record apalis cannot decode holds back the jobs fetched beside it.**
+  apalis-redis 0.7.4 claims a fetch's jobs in one script and decodes them
+  afterwards, in the worker; at the first record it cannot read — written by
+  hand, by a foreign producer, or by a release whose records apalis no longer
+  reads — it drops the whole batch, already in the replica's flight. The worker
+  never sees those jobs, so none reaches the port's dead-letter: they wait until
+  a replica starts and sweeps them back, when the same record fails that
+  replica's fetch in turn. The fetch is apalis's, private to it, so the worker
+  names what happened instead — `queue fetch met a record apalis cannot decode;
+  …`, at `error` — and the remedy is the operator's: remove the record from
+  `…:data` and the id from the in-flight set holding it. A method of
+  `concurrency` 1 fetches one record at a time and strands only the record.
 - **A settle Redis refuses closes nothing.** The step that marks a job settled
   also lets go of its unique key and closes its open record; when Redis refuses
   it, the worker says so at `warn`, and until the job's records lapse a push under

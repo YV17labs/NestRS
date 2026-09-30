@@ -463,6 +463,11 @@ async fn clear_checkpoint(checkpoints: &CheckpointCell, job_id: &JobId) {
 /// `queue`: the span is named for it only when it is a name a push could have
 /// written, and the raw string reaches the event alone, where the formatter
 /// escapes it.
+///
+/// **Only a driver that holds the record can call it.** One whose library
+/// decodes inside its own fetch never sees the record that failed, nor the
+/// batch dropped with it — `nest-rs-redis` on apalis-redis 0.7.4 is such a
+/// driver, and says so in its own line instead of routing here.
 pub async fn refuse(
     backend: &'static QueueBackend,
     queue: Option<&str>,

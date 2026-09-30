@@ -87,6 +87,8 @@ pub(crate) struct Deliveries {
     /// of every lease its deliveries hold.
     pub(crate) worker: String,
     pub(crate) container: Container,
+    /// The queue's storage on the budgeted connection, which hand-backs file
+    /// through — never the one apalis fetches with.
     pub(crate) storage: RedisStorage<serde_json::Value, RedisConnection>,
     /// What a record this method's deliveries file back carries: apalis's
     /// attempt cap lifted, and this worker as the one that fetched it — see
@@ -360,6 +362,12 @@ impl Deliveries {
     /// as separate commands, and a failure between the two would leave a job in
     /// neither place; scheduling the same task first means every failure after it
     /// leaves the job scheduled, at worst still in flight as well.
+    ///
+    /// **Each call is safe to cut at the budget.** A filing that timed out and
+    /// ran anyway files the same task under the same id, so the plain failure
+    /// that follows files it once more in place, never beside it; a `reschedule`
+    /// that timed out and ran leaves the job scheduled and out of flight, which
+    /// is where it was going.
     async fn hand_back(
         &self,
         delivery: &Delivery,

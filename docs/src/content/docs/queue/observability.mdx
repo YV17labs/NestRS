@@ -101,11 +101,12 @@ either `job_id` or `worker`:
 | `job delivered after it was cancelled; acknowledged without running` | `info` | A delivery that met a cancel's tombstone. |
 | `job filed for its next attempt`, `job deferred to its throttle's next window` | `debug` | A retry on the schedule, and an attempt over its throttle. |
 | `job lease not asked for; …`, `job lease not renewed; retrying`, `job settled mark not written; …` | `warn` | Redis refused a guard call — see [Delivery on Redis](/queue/delivery/#when-redis-is-slow-or-gone). |
-| `queue fetch failed; …`, `queue worker heartbeat failed; …`, `scheduled jobs not moved onto the queue; …` | `warn` | Redis refused one of apalis's own calls, which it makes again. |
+| `queue fetch failed; …`, `queue worker heartbeat failed; …`, `scheduled jobs not moved onto the queue; …` | `warn` | One of apalis's own calls failed, and it makes it again; a fetch whose connection failed under it may have claimed jobs, which wait in flight until a replica starts. |
 | `due jobs not moved onto the queue; retrying` | `warn` | Redis refused the worker's scan of the schedule; `retry_in_ms` says when it runs again. |
 | `job lease lost while its attempt runs; another delivery may run it too` | `error` | The attempt's lease lapsed under it. |
 | `job not handed back; …` | `error` | Redis refused a hand-back: apalis files the job's stored record again, due at once, and it runs again. |
 | `job acknowledgement lost; …` | `error` | A job stays in flight and is delivered again once swept. |
+| `queue fetch met a record apalis cannot decode; …` | `error` | A fetch claimed a record apalis cannot read, and dropped its whole batch in flight — see [Delivery on Redis](/queue/delivery/#limits). |
 | `queue workers did not stop within the shutdown window; …` | `error` | An attempt outlived the drain and its reserve. |
 
 A producer files lines of its own on the same target, among them

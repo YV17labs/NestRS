@@ -30,11 +30,15 @@
 //! a second at the least, by the worker's own promotion, where apalis's scan
 //! moved one fetch's worth: one record a second at the default concurrency.
 //!
+//! **A fetch Redis answers late still delivers what it claimed.** The fetch
+//! claims ids into the replica's flight in the script it answers with, so a
+//! wait cut at the connection's budget would strand them; it waits instead.
+//!
 //! Every test has its own queue and its own counters, since nextest runs them
 //! side by side on one Redis.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use apalis::prelude::{Request, Storage};
@@ -43,8 +47,8 @@ use apalis_redis::{Config, RedisStorage};
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobProducerExt, processor, queue};
 use nest_rs_redis::{
-    RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorkerConfig,
-    RedisWorkerModule,
+    RedisConfig, RedisConnection, RedisModule, RedisQueueModule, RedisQueueProducer,
+    RedisWorkerConfig, RedisWorkerModule,
 };
 use nest_rs_testing::LogCapture;
 use serde::{Deserialize, Serialize};
@@ -734,5 +738,263 @@ async fn a_burst_of_due_records_reaches_active_within_two_promotion_scans() {
     assert!(
         took < Duration::from_secs(3),
         "within two promotion scans of a second each, not {took:?}"
+    );
+}
+
+// --- a fetch Redis answers late --------------------------------------------------
+
+/// A TCP proxy in front of the dev container Redis that, while it is slow, holds
+/// every answer back for `delay` before passing it on — in order, the connection
+/// up throughout: Redis paused by a failover, stalled by a fork or another
+/// client's script, or a network that queues.
+struct SlowProxy {
+    addr: std::net::SocketAddr,
+    slow: Arc<AtomicBool>,
+}
+
+impl SlowProxy {
+    async fn start(delay: Duration) -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let upstream = crate::redis_address();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the proxy");
+        let addr = listener.local_addr().expect("the proxy's address");
+        let slow = Arc::new(AtomicBool::new(false));
+        let slowing = Arc::clone(&slow);
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let Ok(server) = tokio::net::TcpStream::connect(&upstream).await else {
+                    continue;
+                };
+                let (mut from_client, mut to_server) = (client.into_split(), server.into_split());
+                tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut from_client.0, &mut to_server.1).await;
+                });
+                let (answers, mut released) =
+                    tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
+                tokio::spawn(async move {
+                    while let Some((due, chunk)) = released.recv().await {
+                        tokio::time::sleep_until(due).await;
+                        if from_client.1.write_all(&chunk).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                let slowing = Arc::clone(&slowing);
+                tokio::spawn(async move {
+                    let mut chunk = vec![0u8; 64 * 1024];
+                    loop {
+                        let read = match to_server.0.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => read,
+                        };
+                        let held = if slowing.load(Ordering::SeqCst) {
+                            delay
+                        } else {
+                            Duration::ZERO
+                        };
+                        let due = tokio::time::Instant::now() + held;
+                        if answers.send((due, chunk[..read].to_vec())).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        Self { addr, slow }
+    }
+
+    fn url(&self) -> String {
+        format!("redis://{}/", self.addr)
+    }
+
+    fn slow_down(&self, slow: bool) {
+        self.slow.store(slow, Ordering::SeqCst);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StalledCommand {
+    run: u64,
+}
+
+static STALLED: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-fetch-stalled", job = StalledCommand)]
+struct StalledQueue;
+
+#[injectable]
+#[derive(Default)]
+struct StalledProcessor;
+
+#[processor]
+impl StalledProcessor {
+    #[process(queue = StalledQueue, retries = 0)]
+    async fn run(&self, job: StalledCommand) -> anyhow::Result<()> {
+        STALLED.start(job.run);
+        STALLED.finish(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(None), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [StalledProcessor],
+)]
+struct StalledModule;
+
+/// The budget the stalled replica's connection runs under, and how long its
+/// answers are held back: three times as long.
+const STALL_BUDGET: Duration = Duration::from_secs(1);
+const STALL: Duration = Duration::from_secs(3);
+
+/// Redis answers a replica's fetch three budgets late. The fetch has already
+/// claimed the job into the replica's flight when it runs, so a wait cut at the
+/// budget would leave the job there — never run, never swept while the replica
+/// lives, gone from the list an autoscaler reads. The fetch waits for its answer
+/// instead, and the job runs, once, as soon as Redis answers again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fetch_redis_answers_past_the_budget_still_runs_the_jobs_it_claimed() {
+    let proxy = SlowProxy::start(STALL).await;
+    let replica = crate::replica_on::<StalledModule>(RedisConfig {
+        url: proxy.url(),
+        connect_timeout: STALL_BUDGET,
+        ..Default::default()
+    })
+    .await;
+    let producer = crate::producer().await;
+
+    let control = crate::this_run();
+    producer
+        .push(StalledQueue, StalledCommand { run: control }, None)
+        .await
+        .expect("enqueue the control job");
+    crate::wait_until(Duration::from_secs(10), || STALLED.finished(control) == 1).await;
+    assert_eq!(
+        STALLED.finished(control),
+        1,
+        "the replica runs a job while Redis answers at once"
+    );
+
+    let run = crate::this_run();
+    proxy.slow_down(true);
+    producer
+        .push(StalledQueue, StalledCommand { run }, None)
+        .await
+        .expect("enqueue straight to Redis, past the proxy");
+    tokio::time::sleep(STALL + STALL_BUDGET).await;
+    proxy.slow_down(false);
+
+    crate::wait_until(Duration::from_secs(15), || STALLED.finished(run) == 1).await;
+    let waiting = crate::waiting("nestrs-e2e-fetch-stalled").await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+
+    assert_eq!(
+        STALLED.finished(run),
+        1,
+        "the job the stalled fetch claimed ran, not left in the replica's flight",
+    );
+    assert_eq!(STALLED.of(run).len(), 1, "and ran once");
+    assert_eq!(waiting, 0, "nothing waits on the queue behind it");
+}
+
+// --- a record apalis cannot decode ----------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PoisonCommand {
+    run: u64,
+}
+
+static POISONED: Runs = Runs::new();
+
+const POISON_QUEUE: &str = "nestrs-e2e-fetch-poison";
+
+#[queue(name = "nestrs-e2e-fetch-poison", job = PoisonCommand)]
+struct PoisonQueue;
+
+#[injectable]
+#[derive(Default)]
+struct PoisonProcessor;
+
+#[processor]
+impl PoisonProcessor {
+    #[process(queue = PoisonQueue, retries = 0, concurrency = 4)]
+    async fn run(&self, job: PoisonCommand) -> anyhow::Result<()> {
+        POISONED.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [PoisonProcessor],
+)]
+struct PoisonModule;
+
+/// A record on the queue that is not one apalis can decode — written by hand,
+/// by a foreign producer, by a version apalis no longer reads — fails the whole
+/// fetch that claimed it, after the claim: apalis-redis 0.7.4 decodes a batch
+/// once it is in flight, and drops it at the first record it cannot read. The
+/// job fetched beside it then waits in the replica's flight, and nothing in the
+/// worker can route it through the port's refusal, since apalis owns the fetch.
+/// What the worker owes is the line saying so, at `error`, naming the queue —
+/// never the generic retry a transport failure gets.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fetch_meeting_a_record_apalis_cannot_decode_says_what_it_stranded() {
+    crate::forget(POISON_QUEUE).await;
+    let logs = LogCapture::install_global();
+    let producer = crate::producer().await;
+    let run = crate::this_run();
+    producer
+        .push(PoisonQueue, PoisonCommand { run }, None)
+        .await
+        .expect("enqueue the job fetched beside the record");
+    let apalis = Config::default().set_namespace(&crate::namespace(POISON_QUEUE));
+    let mut admin = crate::connect().await;
+    let _: () = redis::pipe()
+        .hset(apalis.job_data_hash(), "poison", "this is not json")
+        .ignore()
+        .lpush(apalis.active_jobs_list(), "poison")
+        .ignore()
+        .query_async(&mut admin)
+        .await
+        .expect("file a record apalis cannot decode");
+
+    let replica = crate::replica::<PoisonModule>().await;
+    let said = "queue fetch met a record apalis cannot decode; it and every job fetched beside \
+                it wait in flight until a replica starts";
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && logs.find(nest_rs_queue::TARGET, said).is_empty() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    replica.worker.shutdown().await.expect("clean shutdown");
+    crate::forget(POISON_QUEUE).await;
+
+    let stranded: Vec<_> = logs
+        .find(nest_rs_queue::TARGET, said)
+        .into_iter()
+        .filter(|event| event.field("queue").as_deref() == Some(POISON_QUEUE))
+        .collect();
+    assert_eq!(
+        stranded.len(),
+        1,
+        "said once, for the one fetch: {stranded:#?}"
+    );
+    assert_eq!(stranded[0].level, "error");
+    assert!(
+        logs.find(
+            nest_rs_queue::TARGET,
+            "queue fetch failed; retrying at the next poll, and any job it claimed before failing \
+             waits in flight until a replica starts",
+        )
+        .iter()
+        .all(|event| event.field("queue").as_deref() != Some(POISON_QUEUE)),
+        "and not as a transport failure",
+    );
+    assert!(
+        POISONED.of(run).is_empty(),
+        "the job fetched beside it waited, which is apalis's limit this line names",
     );
 }

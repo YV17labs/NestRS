@@ -14,8 +14,18 @@
 //! reply timeout inside the client would never cover. A failure Redis reports —
 //! a dropped connection, a refusal — arrives when it happens; the budget running
 //! out arrives as a timeout (`redis::RedisError::is_timeout`). Without the bound
-//! an outage held every caller: the rate limiter's request, a push, and every
-//! loop apalis runs, for as long as the client kept reopening.
+//! an outage held every caller: the rate limiter's request, a push, a cancel.
+//!
+//! **Except the commands whose late answer is the only record of what they
+//! did.** A worker's fetch moves the ids it claims into its replica's in-flight
+//! set and answers with their records: cut at the budget, it still runs, and the
+//! jobs it claimed wait in the flight of a replica that never received them —
+//! never run, never swept while that replica lives. So the worker reaches
+//! Redis through [`RedisConnection::without_budget`], on the same socket, and
+//! waits for those answers however late; what ends a wait on a Redis that is
+//! gone is the socket itself — its keepalive, and on Linux its
+//! `TCP_USER_TIMEOUT`, both at the budget and never under a second
+//! ([`liveness`]) — and the client reopening it.
 //!
 //! **What the URL and [`RedisTls`](crate::RedisTls) say about TLS holds for every
 //! connection the client opens**, the ones it reopens behind its callers
@@ -32,6 +42,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use redis::aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig};
+use redis::io::tcp::TcpSettings;
+use redis::io::tcp::socket2::TcpKeepalive;
 use redis::{Cmd, ConnectionAddr, IntoConnectionInfo, Pipeline, RedisFuture, Value};
 
 use crate::error::RedisError;
@@ -65,7 +77,9 @@ pub(crate) const CONNECTION_REMEDY: &str = "RedisConnection is not registered �
 #[derive(Clone)]
 pub struct RedisConnection {
     manager: ConnectionManager,
-    budget: Duration,
+    /// How long a command waits for its answer — `None` on the handle
+    /// [`without_budget`](Self::without_budget) returns.
+    budget: Option<Duration>,
     /// TLS refusals met reopening the connection — `None` over plaintext, where
     /// no handshake can be refused.
     refusals: Option<Arc<TlsRefusals>>,
@@ -161,6 +175,10 @@ const MAX_RETRY_BACKOFF_MS: u64 = 2_000;
 /// reconnect backoff takes the same ceiling.
 const MAX_RETRY_BACKOFF: Duration = Duration::from_millis(MAX_RETRY_BACKOFF_MS);
 
+/// The shortest the socket waits before it probes, or before it gives up on
+/// what it sent: the kernel counts the first in whole seconds and refuses zero.
+const LIVENESS_FLOOR: Duration = Duration::from_secs(1);
+
 /// How much each reconnect attempt's wait grows over the last. `redis`
 /// defaults to a hundredfold, from one second, which after two failures is a
 /// minute between attempts — a Redis back after a restart then waits out that
@@ -242,7 +260,7 @@ impl RedisConnection {
                     });
                     return Ok(Self {
                         manager,
-                        budget,
+                        budget: Some(budget),
                         refusals,
                     });
                 }
@@ -296,13 +314,31 @@ impl RedisConnection {
     }
 }
 
+impl RedisConnection {
+    /// This connection with no budget on its commands: on the same socket, each
+    /// waits for its answer however late it comes.
+    ///
+    /// For the commands whose answer is the only record of what they did — a
+    /// fetch, which claims jobs for the replica it answers, and the admission
+    /// that takes a job's lease, counts its start and its throttle — a timeout
+    /// that cuts them does not undo them: it strands what they claimed. A Redis
+    /// that is gone still ends the wait, through the socket's liveness and the
+    /// client's reconnect, never through a timer that cannot tell slow from gone.
+    pub(crate) fn without_budget(&self) -> Self {
+        Self {
+            budget: None,
+            ..self.clone()
+        }
+    }
+}
+
 impl ConnectionLike for RedisConnection {
     fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
         let budget = self.budget;
         let refusals = self.refusals.as_ref();
         let call = self.manager.send_packed_command(cmd);
         Box::pin(async move {
-            let outcome = bounded(budget, call).await?;
+            let outcome = within(budget, call).await?;
             if let Some(refusals) = refusals {
                 refusals.observe(&outcome);
             }
@@ -320,7 +356,7 @@ impl ConnectionLike for RedisConnection {
         let refusals = self.refusals.as_ref();
         let call = self.manager.send_packed_commands(pipeline, offset, count);
         Box::pin(async move {
-            let outcome = bounded(budget, call).await?;
+            let outcome = within(budget, call).await?;
             if let Some(refusals) = refusals {
                 refusals.observe(&outcome);
             }
@@ -330,6 +366,18 @@ impl ConnectionLike for RedisConnection {
 
     fn get_db(&self) -> i64 {
         self.manager.get_db()
+    }
+}
+
+/// `call` within `budget` when the handle has one, and waited for whole when
+/// it has none.
+async fn within<F: Future>(
+    budget: Option<Duration>,
+    call: F,
+) -> Result<F::Output, redis::RedisError> {
+    match budget {
+        Some(budget) => bounded(budget, call).await,
+        None => Ok(call.await),
     }
 }
 
@@ -434,12 +482,35 @@ async fn prove(
 /// by the budget, as the boot's are, and the backoff between attempts doubling
 /// to the boot's ceiling rather than `redis`'s hundredfold. The reply timeout
 /// stays off, because [`RedisConnection`] bounds every command itself — the
-/// wait for a reopened connection included, which that timeout would miss.
+/// wait for a reopened connection included, which that timeout would miss — and
+/// the commands it must not bound are the ones the timeout would strand too.
 fn manager_config(budget: Duration) -> ConnectionManagerConfig {
     ConnectionManagerConfig::new()
         .set_connection_timeout(budget)
         .set_factor(RECONNECT_FACTOR)
         .set_max_delay(MAX_RETRY_BACKOFF_MS)
+        .set_tcp_settings(liveness(budget))
+}
+
+/// How the socket learns that Redis is gone rather than slow, so a command
+/// waiting without a budget ([`RedisConnection::without_budget`]) ends when it
+/// is: keepalive probes once the socket has been idle for the budget, and on
+/// Linux a `TCP_USER_TIMEOUT` of the budget, which drops the socket when what
+/// was sent has gone unacknowledged that long — a network that swallows
+/// packets, a host that vanished. A Redis that is only slow — paused, forking,
+/// busy with another client's script — still acknowledges every byte, so
+/// neither fires, and the answer is received when it comes.
+///
+/// The kernel reads the idle time in whole seconds, and refuses zero — which a
+/// budget under a second would round to, failing every dial — so both are a
+/// second at the least: under that, a retransmitted packet would drop a socket
+/// whose answers a command is waiting for.
+fn liveness(budget: Duration) -> TcpSettings {
+    let silence = budget.max(LIVENESS_FLOOR);
+    let settings = TcpSettings::default().set_keepalive(TcpKeepalive::new().with_time(silence));
+    #[cfg(any(target_os = "android", target_os = "fuchsia", target_os = "linux"))]
+    let settings = settings.set_user_timeout(silence);
+    settings
 }
 
 /// The endpoint the connect diagnostics name, in logs and in the boot error:
@@ -996,6 +1067,30 @@ mod tests {
             "the event names the budget that elapsed, unrounded: {:?}",
             expired.fields,
         );
+    }
+
+    /// A budget under a second still opens a socket: the keepalive's idle time,
+    /// which the kernel counts in whole seconds and refuses at zero, is a
+    /// second at the least — at zero every dial failed and the boot ran out its
+    /// budget retrying it — and so is the time the socket gives what it sent.
+    #[test]
+    fn the_sockets_liveness_is_a_whole_second_at_the_least() {
+        for (budget, shown) in [
+            (Duration::from_millis(300), "1s"),
+            (Duration::from_millis(999), "1s"),
+            (Duration::from_secs(10), "10s"),
+        ] {
+            let settings = format!("{:?}", liveness(budget));
+            assert!(
+                settings.contains(&format!("time: Some({shown})")),
+                "{budget:?}: {settings}"
+            );
+            #[cfg(target_os = "linux")]
+            assert!(
+                settings.contains(&format!("user_timeout: Some({shown})")),
+                "{budget:?}: {settings}"
+            );
+        }
     }
 
     /// A command that never answers is failed at the budget, as a timeout the

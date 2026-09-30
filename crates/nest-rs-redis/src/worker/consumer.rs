@@ -198,7 +198,13 @@ impl Transport for RedisWorker {
                 draining: cancel.clone(),
                 interrupt: interrupt.clone(),
             });
-            monitor = register(monitor, &id, method, deliveries);
+            let fetching = storage(
+                &connection.without_budget(),
+                &deliveries.queue,
+                &config,
+                concurrency(method),
+            );
+            monitor = register(monitor, &id, method, fetching, deliveries);
         }
 
         let signal = cancel.clone();
@@ -296,6 +302,16 @@ where
 }
 
 /// The storage one method's worker reads, under its queue's namespace.
+///
+/// apalis's worker runs it on a connection [`without_budget`]: its fetch claims
+/// the jobs it answers with, so a fetch cut at the budget still runs and leaves
+/// them in this replica's flight, where nothing ever runs them while it lives.
+/// Its heartbeat and its acknowledgements ride the same handle — apalis gives a
+/// storage one connection — and answer late rather than not at all. A
+/// delivery's own hand-backs go through a storage on the budgeted connection:
+/// each is safe to cut (`hand_back`).
+///
+/// [`without_budget`]: RedisConnection::without_budget
 fn storage(
     conn: &RedisConnection,
     queue: &QueueName,
@@ -398,9 +414,9 @@ fn register(
     monitor: Monitor,
     id: &str,
     method: &'static ProcessMethod,
+    storage: RedisStorage<serde_json::Value, RedisConnection>,
     deliveries: Arc<Deliveries>,
 ) -> Monitor {
-    let storage = deliveries.storage.clone();
     // Position is load-bearing for the panic layer: a delivery runs on a task of
     // its own and `consume::attempt` catches a handler panic itself (so the event
     // lands inside the per-job span), which leaves this layer as the **backstop**
@@ -561,8 +577,12 @@ fn report_error(queue: &str, worker: &str, error: &(dyn std::error::Error + 'sta
 /// Which of apalis's own calls a worker's heartbeat failed at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Trouble {
-    /// Fetching the next job.
+    /// Fetching the next job: the connection failed under it, or Redis refused
+    /// it.
     Fetch,
+    /// Fetching the next job: Redis answered, and one record it handed back is
+    /// not one apalis can decode.
+    Undecodable,
     /// Proving the worker is alive.
     Heartbeat,
     /// Moving due records from the schedule onto the queue.
@@ -578,6 +598,7 @@ enum Trouble {
 impl Trouble {
     fn of(error: &RedisPollError) -> Self {
         match error {
+            RedisPollError::PollNextError(cause) if undecodable(cause) => Self::Undecodable,
             RedisPollError::PollNextError(_) => Self::Fetch,
             RedisPollError::KeepAliveError(_) => Self::Heartbeat,
             RedisPollError::EnqueueScheduledError(_) => Self::Promotion,
@@ -588,16 +609,51 @@ impl Trouble {
     }
 }
 
+/// Whether a fetch failed on a record apalis could not decode, rather than on
+/// the connection or a refusal.
+///
+/// apalis-redis 0.7.4 decodes a fetch's records after the script that claimed
+/// them has run, and reports the first it cannot read as an `InvalidData` io
+/// error of its own making. The connection reports two errors of that kind as
+/// well, both TLS: a refused negotiation, which carries rustls's error, and a
+/// connection `redis` failed to reopen, which it words `Reconnecting failed: …`
+/// — neither is a record.
+fn undecodable(error: &redis::RedisError) -> bool {
+    std::error::Error::source(error)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some_and(|io| {
+            io.kind() == std::io::ErrorKind::InvalidData
+                && !crate::tls::negotiation_failed(error)
+                && !io.to_string().starts_with(REOPEN_FAILED)
+        })
+}
+
+/// How `redis` 0.32 words a connection it could not reopen, before the cause.
+const REOPEN_FAILED: &str = "Reconnecting failed";
+
 /// The line for `trouble`: `warn` for a call apalis makes again on its own, and
-/// `error` for a lost acknowledgement — the one that makes a job run again.
+/// `error` where jobs wait that nothing will run while this replica lives — a
+/// lost acknowledgement, a fetch that met a record apalis cannot decode.
 fn report_trouble(trouble: Trouble, queue: &str, worker: &str, error: &str) {
     match trouble {
+        // A fetch that failed because its connection did may have run: the jobs
+        // it claimed then wait in this replica's flight, which only a starting
+        // replica's sweep empties. A fetch Redis refused claimed nothing.
         Trouble::Fetch => tracing::warn!(
             target: nest_rs_queue::TARGET,
             queue,
             worker,
             error,
-            "queue fetch failed; retrying at the next poll",
+            "queue fetch failed; retrying at the next poll, and any job it claimed before failing \
+             waits in flight until a replica starts",
+        ),
+        Trouble::Undecodable => tracing::error!(
+            target: nest_rs_queue::TARGET,
+            queue,
+            worker,
+            error,
+            "queue fetch met a record apalis cannot decode; it and every job fetched beside it \
+             wait in flight until a replica starts",
         ),
         Trouble::Heartbeat => tracing::warn!(
             target: nest_rs_queue::TARGET,
@@ -764,7 +820,8 @@ mod tests {
         }
         let fetch = logs.expect_one(
             nest_rs_queue::TARGET,
-            "queue fetch failed; retrying at the next poll",
+            "queue fetch failed; retrying at the next poll, and any job it claimed before failing \
+             waits in flight until a replica starts",
         );
         let heartbeat = logs.expect_one(
             nest_rs_queue::TARGET,
@@ -792,6 +849,39 @@ mod tests {
             apalis::prelude::Error::Abort(Arc::new(Box::new(std::io::Error::other("bad payload"))));
         report_error("audio", "host:01", &answered);
         logs.expect_none(nest_rs_queue::TARGET, "queue worker error");
+    }
+
+    /// A record apalis cannot decode strands the jobs fetched beside it, so it
+    /// is its own line, at `error` — and the connection's own `InvalidData`
+    /// errors, a refused or failed TLS reopening, are not mistaken for one.
+    #[test]
+    fn a_fetch_meeting_a_record_apalis_cannot_decode_is_its_own_error() {
+        let logs = LogCapture::install();
+        let poison = RedisPollError::PollNextError(redis::RedisError::from(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "expected value at line 1 column 1",
+        )));
+        assert_eq!(Trouble::of(&poison), Trouble::Undecodable);
+        let reopening =
+            RedisPollError::PollNextError(redis::RedisError::from(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{REOPEN_FAILED}: invalid peer certificate: UnknownIssuer"),
+            )));
+        assert_eq!(Trouble::of(&reopening), Trouble::Fetch);
+        let refused = RedisPollError::PollNextError(redis::RedisError::from(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+        )));
+        assert_eq!(Trouble::of(&refused), Trouble::Fetch);
+
+        report_error("audio", "host:01", &poison);
+        let said = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "queue fetch met a record apalis cannot decode; it and every job fetched beside it \
+             wait in flight until a replica starts",
+        );
+        assert_eq!(said.level, "error");
+        assert_eq!(said.field("queue").as_deref(), Some("audio"));
     }
 
     /// apalis repeats a sweep's unregistration on every poll until the worker

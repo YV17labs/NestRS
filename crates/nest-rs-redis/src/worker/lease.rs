@@ -178,6 +178,10 @@ return released
 /// worker, shared by its deliveries.
 pub(crate) struct Leases {
     conn: RedisConnection,
+    /// The same connection without its budget, which admission runs on: a cut
+    /// admission still runs, and would leave a lease, a throttle start and an
+    /// attempt no delivery holds.
+    admitting: RedisConnection,
     queue: QueueName,
     lease: Duration,
     settled_for: Duration,
@@ -257,6 +261,7 @@ impl Leases {
         throttle: Option<Throttle>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            admitting: conn.without_budget(),
             conn,
             queue,
             lease,
@@ -301,7 +306,7 @@ impl Leases {
             .arg(job.to_string())
             .arg(limit)
             .arg(window)
-            .invoke_async(&mut self.conn.clone())
+            .invoke_async(&mut self.admitting.clone())
             .await?;
         Ok(match answer {
             (0, _, mark) => Admission::Settled(Settlement::read(&mark)),

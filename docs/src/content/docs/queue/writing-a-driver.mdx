@@ -243,7 +243,14 @@ acknowledges this delivery; one without it waits `after` itself — giving up
 the wait, never the job, at shutdown — and calls `attempt` again with the same
 delivery. `DeadLetter` is final: a deterministic failure, or the last attempt
 of the budget. A record your storage cannot route to any method goes through
-`consume::refuse`, which files the dead-letter the way an attempt would.
+`consume::refuse`, which files the dead-letter the way an attempt would — a
+record *your* code holds: one it fetched and could not decode, or one naming a
+queue no method serves. A library that decodes inside its own fetch never hands
+you the record it choked on, and then there is nothing to refuse: the Redis
+driver is in that case, because apalis-redis 0.7.4 drops a fetched batch at its
+first undecodable record, and it says so in a line of its own and on its
+[Delivery](/queue/delivery/#limits) page. Owning the fetch is the only way to do
+better, so a driver whose library allows it decodes record by record.
 
 A method whose options declare a checkpoint needs its store on the delivery —
 `Delivery::with_checkpoint(store)`, one `CheckpointStore` per job, keyed by

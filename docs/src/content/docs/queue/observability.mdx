@@ -122,8 +122,9 @@ said at `info` —
 `a key at a 6.x queue name is not the structure 6.x kept there; …` — and left
 alone. A producer files lines of its own on the same target, among them
 `jobs wait under the 6.x key layout; …` once per queue at `warn` — see
-[Upgrading queues from 6.x](/queue/upgrading/) — `job push unanswered; …` at
-`warn` when a push under a unique key never heard back, `due jobs not moved
+[Upgrading queues from 6.x](/queue/upgrading/) — `unique key claimed without
+its job confirmed queued; …` at `warn` when a push under a unique key never
+learned whether its job was queued, its `step` saying where, `due jobs not moved
 onto the queue; retrying` at `warn` when Redis refused its scan of the delayed
 jobs it filed, and `queued job cancelled` at `info` when a cancel answered
 `true`.

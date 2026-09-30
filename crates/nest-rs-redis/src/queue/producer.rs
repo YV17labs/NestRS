@@ -28,6 +28,15 @@
 //! the queue — and they lapse [`KEPT_PAST_DUE`] after the job was due if it is
 //! not.
 //!
+//! **A claim is held briefly until its job is known to be queued.** It is taken
+//! for [`CLAIM_HOLD`] and extended to the job's full keeping once Redis confirms
+//! the filing. A push that never learns whether its job was queued — its claim or
+//! its filing unanswered, the call dropped by a caller or by the port's net —
+//! leaves a claim that lapses within the hold, and says so at `warn`: a key held
+//! for a week by a job that was never filed silently refused every retry under
+//! it. The direction this errs in is at-least-once: a job that *was* queued and
+//! whose claim lapses before a worker admits it may be pushed again under its key.
+//!
 //! **A cancel is a tombstone.** apalis's structures are never touched: a cancel
 //! writes `cancelled` beside the job — atomically against the delivery guard's
 //! lease, so it answers `true` only while no attempt runs — and closes what the
@@ -52,7 +61,7 @@ use apalis::prelude::{Request, Storage};
 use apalis_redis::RedisStorage;
 use async_trait::async_trait;
 use nest_rs_queue::{
-    Envelope, JobId, JobProducer, PushOptions, QueueBackend, QueueError, QueueName,
+    BACKEND_TIMEOUT, Envelope, JobId, JobProducer, PushOptions, QueueBackend, QueueError, QueueName,
 };
 use redis::Script;
 
@@ -61,20 +70,39 @@ use crate::RedisConnection;
 use crate::backend::{BACKEND, due_second, uncapped_context};
 use crate::layout::{self, CANCELLED, CHECKPOINTS, KEPT_PAST_DUE, LEASES, OPEN, job_key, millis};
 
+/// How long a unique key is claimed before its job is confirmed queued: twice
+/// the port's net. Every call the port makes is dropped at the net
+/// ([`BACKEND_TIMEOUT`]), so a push still going confirms its filing — and
+/// extends the claim — well inside the hold, and one that never will lets the
+/// key go within it.
+pub(crate) const CLAIM_HOLD: Duration = Duration::from_secs(BACKEND_TIMEOUT.as_secs() * 2);
+
 /// Open a job pushed under a unique key: claim the key for it and open its
 /// record, unless another job holds the key — whose id it answers, or `''` when
 /// the key was free and is now this job's.
 ///
-/// `KEYS`: the claim, the job's open record. `ARGV`: the job's id, how long both
-/// are kept, the unique key.
+/// `KEYS`: the claim, the job's open record. `ARGV`: the job's id, how long the
+/// open record is kept, the unique key, how long the claim is held until the
+/// job is confirmed queued.
 const CLAIM: &str = r"
 local holder = redis.call('GET', KEYS[1])
 if holder then
   return holder
 end
-redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[4])
 redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[2])
 return ''
+";
+
+/// Keep a claim for its job's full keeping, if the job still holds it: `1`
+/// extended, `0` no longer the job's — settled or cancelled meanwhile.
+///
+/// `KEYS`: the claim. `ARGV`: the job's id, how long it is kept.
+const KEEP: &str = r"
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return 0
 ";
 
 /// Close what a push opened for a job it did not file: its open record, and
@@ -133,6 +161,7 @@ pub struct RedisQueueProducer {
     /// again.
     checked: Arc<Mutex<HashSet<QueueName>>>,
     claim: Script,
+    keep: Script,
     close: Script,
     cancel: Script,
 }
@@ -145,6 +174,7 @@ impl RedisQueueProducer {
             promoter: Promoter::default(),
             checked: Arc::default(),
             claim: Script::new(CLAIM),
+            keep: Script::new(KEEP),
             close: Script::new(CLOSE),
             cancel: Script::new(CANCEL),
         }
@@ -193,9 +223,11 @@ impl RedisQueueProducer {
         let until_due = due
             .and_then(|at| at.duration_since(now).ok())
             .unwrap_or_default();
-        let opened = self
-            .open(queue, &envelopes, until_due.saturating_add(KEPT_PAST_DUE))
-            .await?;
+        let kept = until_due.saturating_add(KEPT_PAST_DUE);
+        // Every claim this push takes is watched until its job is confirmed
+        // queued, or its fate said: a push dropped in between says so as it goes.
+        let mut unconfirmed = Unconfirmed::new(queue);
+        let opened = self.open(queue, &envelopes, kept, &mut unconfirmed).await?;
 
         // `push` takes `&mut self`; storage is a cheap clone of the connection
         // handle, so build one per call rather than force callers to hold it mut.
@@ -217,6 +249,10 @@ impl RedisQueueProducer {
                     {
                         self.promoter.watch(&self.conn, queue, second);
                     }
+                    if let Some(key) = &opened[at].unique {
+                        self.keep_claim(queue, &opened[at].id, key, kept).await;
+                        unconfirmed.said(&opened[at].id);
+                    }
                     continue;
                 }
                 Err(error) => error,
@@ -232,7 +268,7 @@ impl RedisQueueProducer {
                 &opened[at..]
             } else {
                 if let Some(key) = &failed.unique {
-                    report_unanswered(queue, &failed.id, key, &error);
+                    report_short_hold(queue, &failed.id, key, Step::FilingUnanswered, Some(&error));
                 }
                 if error.is_timeout() {
                     &[]
@@ -241,6 +277,7 @@ impl RedisQueueProducer {
                 }
             };
             self.close_quietly(queue, unfiled).await;
+            unconfirmed.all_said();
             return Err(QueueError::backend(error));
         }
         Ok(())
@@ -256,6 +293,7 @@ impl RedisQueueProducer {
         queue: &QueueName,
         envelopes: &[Envelope],
         kept: Duration,
+        unconfirmed: &mut Unconfirmed,
     ) -> Result<Vec<Opened>, QueueError> {
         let kept = millis(kept);
         let mut plain = redis::pipe();
@@ -276,18 +314,35 @@ impl RedisQueueProducer {
                 opened.push(job);
                 continue;
             };
-            let holder: String = self
+            // Watched from before the claim is sent: a claim dropped in flight
+            // may have landed.
+            unconfirmed.watch(&job.id, key);
+            let claimed = self
                 .claim
                 .key(layout::unique_key(queue, key))
                 .key(job_key(OPEN, queue, &job.id))
                 .arg(job.id.to_string())
                 .arg(kept)
                 .arg(key)
-                .invoke_async(&mut self.conn.clone())
-                .await
-                .map_err(QueueError::backend)?;
+                .arg(millis(CLAIM_HOLD))
+                .invoke_async::<String>(&mut self.conn.clone())
+                .await;
+            let holder = match claimed {
+                Ok(holder) => holder,
+                Err(error) => {
+                    // Refused, the claim was not taken; unanswered, it may have
+                    // been, and nothing will confirm it.
+                    if !answered(&error) {
+                        report_short_hold(queue, &job.id, key, Step::ClaimUnanswered, Some(&error));
+                    }
+                    self.close_quietly(queue, &opened).await;
+                    unconfirmed.all_said();
+                    return Err(QueueError::backend(error));
+                }
+            };
             if !holder.is_empty() {
                 self.close_quietly(queue, &opened).await;
+                unconfirmed.all_said();
                 return Err(QueueError::UniqueKeyHeld {
                     queue: queue.clone(),
                     key: key.clone(),
@@ -303,6 +358,22 @@ impl RedisQueueProducer {
                 .map_err(QueueError::backend)?;
         }
         Ok(opened)
+    }
+
+    /// Keep `job`'s claim on `key` for `kept`, now that its filing is confirmed.
+    /// A claim Redis did not extend lapses within [`CLAIM_HOLD`], which is said;
+    /// one no longer the job's — a worker settled it meanwhile — is left alone.
+    async fn keep_claim(&self, queue: &QueueName, job: &JobId, key: &str, kept: Duration) {
+        let kept = self
+            .keep
+            .key(layout::unique_key(queue, key))
+            .arg(job.to_string())
+            .arg(millis(kept))
+            .invoke_async::<i64>(&mut self.conn.clone())
+            .await;
+        if let Err(error) = kept {
+            report_short_hold(queue, job, key, Step::NotExtended, Some(&error));
+        }
     }
 
     /// Close the records of `jobs`, which this push opened and did not file —
@@ -438,18 +509,92 @@ fn report_left_held(queue: &QueueName, job: &JobId, key: &str, error: &redis::Re
     );
 }
 
-/// A push whose filing went unanswered, pushed under a unique key: the job may
-/// be on the queue, so the key stays held by it — which is what a push under the
-/// key is refused naming.
-fn report_unanswered(queue: &QueueName, job: &JobId, key: &str, error: &redis::RedisError) {
+/// Why a push could not confirm the job its unique claim names was queued.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// The claim got no answer: it may have been taken, and the job was not
+    /// filed.
+    ClaimUnanswered,
+    /// The filing got no answer: the job may be queued.
+    FilingUnanswered,
+    /// The job is queued, and Redis did not extend its claim.
+    NotExtended,
+    /// The push was dropped — by its caller, or by the port's net — between
+    /// the claim and the confirmation: the job may be queued.
+    Dropped,
+}
+
+impl Step {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ClaimUnanswered => "claim unanswered",
+            Self::FilingUnanswered => "filing unanswered",
+            Self::NotExtended => "claim not extended",
+            Self::Dropped => "push dropped",
+        }
+    }
+}
+
+/// A unique claim whose job the push could not confirm queued: the key is held
+/// for [`CLAIM_HOLD`] at most — longer only if a worker admits the job, which
+/// renews it — and a push under it is refused, naming `job`, until then.
+fn report_short_hold(
+    queue: &QueueName,
+    job: &JobId,
+    key: &str,
+    step: Step,
+    error: Option<&redis::RedisError>,
+) {
     tracing::warn!(
         target: nest_rs_queue::TARGET,
         queue = %queue,
         job_id = %job,
         unique_key = key,
-        error = %nest_rs_core::error_message(error),
-        "job push unanswered; the job may be queued, so its unique key stays held by it",
+        step = step.as_str(),
+        held_ms = millis(CLAIM_HOLD),
+        error = error.map(|error| tracing::field::display(nest_rs_core::error_message(error))),
+        "unique key claimed without its job confirmed queued; the claim lapses within its hold \
+         unless a worker admits the job",
     );
+}
+
+/// The unique claims a push took and has not yet confirmed or said: dropped
+/// with any left — the push cut short between a claim and its confirmation —
+/// each is said as it goes.
+struct Unconfirmed {
+    queue: QueueName,
+    claims: Vec<(JobId, String)>,
+}
+
+impl Unconfirmed {
+    fn new(queue: &QueueName) -> Self {
+        Self {
+            queue: queue.clone(),
+            claims: Vec::new(),
+        }
+    }
+
+    fn watch(&mut self, job: &JobId, key: &str) {
+        self.claims.push((job.clone(), key.to_owned()));
+    }
+
+    /// `job`'s claim is confirmed, or its fate already said.
+    fn said(&mut self, job: &JobId) {
+        self.claims.retain(|(held, _)| held != job);
+    }
+
+    /// Every claim's fate is said, or closed.
+    fn all_said(&mut self) {
+        self.claims.clear();
+    }
+}
+
+impl Drop for Unconfirmed {
+    fn drop(&mut self) {
+        for (job, key) in &self.claims {
+            report_short_hold(&self.queue, job, key, Step::Dropped, None);
+        }
+    }
 }
 
 #[async_trait]
@@ -566,23 +711,69 @@ mod tests {
         let audio = QueueName::new("audio").expect("a valid name");
         let job = JobId::parse("01890a5d-ac96-774b-bcce-b302099a8057").expect("a job id");
         let reset = redis::RedisError::from(std::io::Error::other("connection reset"));
-        report_unanswered(&audio, &job, "clip-1", &reset);
+        report_short_hold(&audio, &job, "clip-1", Step::FilingUnanswered, Some(&reset));
         report_left_held(&audio, &job, "clip-1", &reset);
 
-        let unanswered = logs.expect_one(
-            nest_rs_queue::TARGET,
-            "job push unanswered; the job may be queued, so its unique key stays held by it",
-        );
+        let unconfirmed = logs.expect_one(nest_rs_queue::TARGET, SHORT_HOLD);
         let left = logs.expect_one(
             nest_rs_queue::TARGET,
             "unique key left held by a push that did not file its job; cancel_unique frees it, \
              and it lapses on its own otherwise",
         );
-        for event in [unanswered, left] {
+        assert_eq!(
+            unconfirmed.field("step").as_deref(),
+            Some("filing unanswered")
+        );
+        assert_eq!(
+            unconfirmed.field("held_ms"),
+            Some(millis(CLAIM_HOLD).to_string())
+        );
+        for event in [unconfirmed, left] {
             assert_eq!(event.level, "warn", "{event:?}");
             assert_eq!(event.field("job_id"), Some(job.to_string()));
             assert_eq!(event.field("unique_key").as_deref(), Some("clip-1"));
             assert_eq!(event.field("error").as_deref(), Some("connection reset"));
         }
+    }
+
+    const SHORT_HOLD: &str = "unique key claimed without its job confirmed queued; the claim \
+                              lapses within its hold unless a worker admits the job";
+
+    /// A push dropped between its claim and the confirmation — by its caller,
+    /// or by the port's net — says so as it goes, naming the job and the key: it
+    /// said nothing, and the claim it left refused every retry for a week.
+    #[test]
+    fn a_push_dropped_before_its_claim_is_confirmed_says_so_as_it_goes() {
+        let logs = LogCapture::install();
+        let audio = QueueName::new("audio").expect("a valid name");
+        let job = |id: &str| JobId::parse(id).expect("a job id");
+        let dropped = job("01890a5d-ac96-774b-bcce-b302099a8057");
+        let confirmed = job("01890a5d-ac96-774b-bcce-b302099a8058");
+        {
+            let mut unconfirmed = Unconfirmed::new(&audio);
+            unconfirmed.watch(&dropped, "clip-1");
+            unconfirmed.watch(&confirmed, "clip-2");
+            unconfirmed.said(&confirmed);
+        }
+        let said = logs.expect_one(nest_rs_queue::TARGET, SHORT_HOLD);
+        assert_eq!(said.level, "warn");
+        assert_eq!(said.field("job_id"), Some(dropped.to_string()));
+        assert_eq!(said.field("unique_key").as_deref(), Some("clip-1"));
+        assert_eq!(said.field("step").as_deref(), Some("push dropped"));
+        assert!(said.field("error").is_none(), "nothing failed: {said:?}");
+
+        let mut settled = Unconfirmed::new(&audio);
+        settled.watch(&job("01890a5d-ac96-774b-bcce-b302099a8059"), "clip-3");
+        settled.all_said();
+        drop(settled);
+        assert_eq!(logs.find(nest_rs_queue::TARGET, SHORT_HOLD).len(), 1);
+    }
+
+    /// The hold outlasts every call the port waits on, so a push still going
+    /// always confirms inside it.
+    #[test]
+    fn a_claim_is_held_past_the_ports_net() {
+        assert!(CLAIM_HOLD > BACKEND_TIMEOUT);
+        assert!(CLAIM_HOLD < KEPT_PAST_DUE);
     }
 }

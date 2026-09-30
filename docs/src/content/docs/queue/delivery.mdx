@@ -213,12 +213,24 @@ so pushes racing for one key queue one job, and a push refused because the
 key is held files nothing. The job lets go of the key in the step that settles
 it, completed or dead-lettered, and a cancel lets go of it too.
 
-A push can fail after the claim. When Redis answered the filing — refused it
-— the job is not on the queue, and the push lets go of the key before it
-returns the error. When the answer never came, the job may be on the queue, so
-the key stays held by it, and a `warn` naming the job and the key says so:
-retrying such a push is refused naming a job the caller never received, and
-`cancel_unique` frees the key if that job never started.
+The claim is taken for forty seconds — twice the queue port's twenty-second
+net, which ends every call a push makes — and extended to the job's full keeping
+once Redis confirms the filing. A push can fail after the claim. When Redis
+answered the filing — refused it — the job is not on the queue, and the push
+lets go of the key before it returns the error. When a push never learns
+whether its job was queued — the claim or the filing got no answer, Redis did
+not extend the claim, or the caller or the net dropped the push midway — the
+claim lapses within those forty seconds, unless a worker admits the job first,
+which keeps it. One `warn` says so, naming the job, the key and the step:
+
+```text
+WARN nest_rs::queue: unique key claimed without its job confirmed queued; the claim lapses within its hold unless a worker admits the job queue=audio job_id=01a0… unique_key="transcode-song.wav" step="filing unanswered" held_ms=40000 error="…"
+```
+
+Until then a retry is refused naming a job the caller never received, and
+`cancel_unique` frees the key if that job never started. The direction this
+errs in is at-least-once: a job that *was* queued, and that no worker admits
+inside the hold, can be pushed again under its key.
 
 ## Cancels
 
@@ -252,10 +264,11 @@ is due**, renewed each time a delivery admits the job, files its next attempt
 or hands it back. A job that is delivered stays well inside it; the bound is
 for a job that never is.
 
-A job can vanish without reaching an outcome a worker sees: a producer that
-stops between claiming a key and filing the job leaves the claim behind. That
-claim refuses pushes under its key for at most a week past the job's due time,
-and `cancel_unique` frees it sooner. The same week caps a job that waits: one
+A job can vanish without reaching an outcome a worker sees: one filed and then
+lost outside the framework leaves its claim behind. That claim refuses pushes
+under its key for at most a week past the job's due time, and `cancel_unique`
+frees it sooner. A producer that stops between claiming a key and filing the
+job leaves a claim of forty seconds, as above. The same week caps a job that waits: one
 still waiting a week past its due time has been forgotten — its key is free,
 its checkpoint gone, and a cancel's promise no longer outlives the tombstone
 that kept it.

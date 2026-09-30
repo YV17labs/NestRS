@@ -489,3 +489,63 @@ async fn a_push_through_a_silent_redis_fails_within_one_budget_naming_it() {
         "one budget, not the check's and the filing's in a row: took {took:?}"
     );
 }
+
+/// A unique claim that ran on Redis and whose answer was lost holds its key for
+/// the claim's hold, not a week, and says so naming the job and the key. The job
+/// was never filed; the claim held the key a week with nothing logged, and every
+/// retry under it was refused naming a job that exists nowhere.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_unique_claim_whose_answer_is_lost_lapses_within_its_hold_and_says_so() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let proxy = crate::MutingProxy::start().await;
+    let conn = RedisConnection::connect(&RedisConfig {
+        url: proxy.url(),
+        connect_timeout: Duration::from_secs(1),
+        ..RedisConfig::default()
+    })
+    .await
+    .expect("connect through the proxy");
+    let producer = RedisQueueProducer::new(conn);
+    let queue = format!("nestrs-e2e-unique-lost-{}", crate::this_run());
+    let under = |key: &str| PushOptions::default().with_unique(key);
+
+    // Answered: the scripts are in Redis's cache, and the claim is extended to
+    // the job's keeping once its filing is confirmed.
+    producer
+        .push_json(&queue, json!({ "n": 1 }), under("answered"))
+        .await
+        .expect("a push Redis answers");
+    let answered = crate::pttl(&crate::key_of(&queue, "unique", "answered")).await;
+    assert!(
+        answered > 6 * 24 * 60 * 60 * 1000,
+        "a confirmed job keeps its key for its keeping, not {answered} ms"
+    );
+
+    proxy.mute();
+    let refused = producer
+        .push_json(&queue, json!({ "n": 2 }), under("lost"))
+        .await
+        .expect_err("the claim's answer never arrives");
+    assert!(matches!(refused, QueueError::Backend(_)), "{refused:?}");
+
+    let claim = crate::key_of(&queue, "unique", "lost");
+    let holder = crate::read(&claim)
+        .await
+        .expect("the claim ran on Redis all the same");
+    let held = crate::pttl(&claim).await;
+    assert!(
+        held > 0 && held <= 40_000,
+        "held for the claim's hold, twice the port's net, not {held} ms"
+    );
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "unique key claimed without its job confirmed queued; the claim lapses within its hold \
+         unless a worker admits the job",
+    );
+    assert_eq!(said.level, "warn");
+    assert_eq!(said.field("step").as_deref(), Some("claim unanswered"));
+    assert_eq!(said.field("job_id"), Some(holder));
+    assert_eq!(said.field("unique_key").as_deref(), Some("lost"));
+
+    crate::forget(&queue).await;
+}

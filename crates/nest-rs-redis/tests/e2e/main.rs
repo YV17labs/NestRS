@@ -36,7 +36,7 @@ mod tls;
 mod worker;
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -237,6 +237,64 @@ impl DarkeningProxy {
 
     fn dials_while_dark(&self) -> usize {
         self.dials_while_dark.load(Ordering::SeqCst)
+    }
+}
+
+/// A proxy in front of the dev container Redis that, once muted, still carries
+/// every command to Redis and drops every reply — a command that runs and whose
+/// answer is lost, the case only a network can make.
+struct MutingProxy {
+    addr: SocketAddr,
+    muted: Arc<AtomicBool>,
+}
+
+impl MutingProxy {
+    async fn start() -> Self {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let upstream = redis_address();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the proxy");
+        let addr = listener.local_addr().expect("the proxy's address");
+        let muted = Arc::new(AtomicBool::new(false));
+        let muting = Arc::clone(&muted);
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let Ok(server) = TcpStream::connect(&upstream).await else {
+                    continue;
+                };
+                let (mut from_client, mut to_client) = client.into_split();
+                let (mut from_server, mut to_server) = server.into_split();
+                tokio::spawn(async move {
+                    let _ = tokio::io::copy(&mut from_client, &mut to_server).await;
+                });
+                let muting = Arc::clone(&muting);
+                tokio::spawn(async move {
+                    let mut chunk = [0_u8; 16 * 1024];
+                    while let Ok(read) = from_server.read(&mut chunk).await {
+                        if read == 0 {
+                            break;
+                        }
+                        if muting.load(Ordering::SeqCst) {
+                            continue;
+                        }
+                        if to_client.write_all(&chunk[..read]).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        Self { addr, muted }
+    }
+
+    fn url(&self) -> String {
+        format!("redis://{}/", self.addr)
+    }
+
+    fn mute(&self) {
+        self.muted.store(true, Ordering::SeqCst);
     }
 }
 

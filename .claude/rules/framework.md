@@ -736,7 +736,13 @@ in keys of its own and reported upstream.
 **Nothing is kept forever, and nothing that is still owed lapses early.** Every
 record of a job still waiting lives a week past the instant the job is due
 (`KEPT_PAST_DUE`), renewed by every delivery that touches it — the bound on a
-unique key whose job vanished — and the week is a constant: a knob would need the
+unique key whose job vanished. **A unique claim is the one record taken shorter**:
+it is held for `CLAIM_HOLD`, twice the port's `BACKEND_TIMEOUT`, and extended to
+the week once Redis confirms the filing, because a push that never learns
+whether its job was queued — a claim or a filing unanswered, a call dropped by
+its caller or by the net — must not refuse every retry under the key for a week
+in the name of a job that was never filed; it says so at `warn`, naming the step,
+and errs toward at-least-once. The week is a constant: a knob would need the
 queue binding's first `#[config]` and its `for_root`, an owner question rather than
 a default. A settled mark lives past the latest a sweep could hand the job to a
 second delivery, `max(1 h, 2 × orphan_after + lease)` — and a week when its

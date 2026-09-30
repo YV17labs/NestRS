@@ -163,6 +163,33 @@ async fn a_checkpoint_is_cleared_when_its_job_dead_letters() {
     assert_eq!(store.saved(), None, "a dead letter is the job's end too");
 }
 
+/// A saved state that no longer decodes dead-letters the job, and the sentence
+/// names what kind of value was found — never the value, which is the job's own
+/// data and would otherwise sit in the dead-letter log line and record.
+#[tokio::test]
+async fn a_checkpoint_that_does_not_decode_is_reported_without_its_value() {
+    let store = Arc::new(MemoryStore::default());
+    *store.saved.lock().expect("lock") = Some(json!("sk_live_51HsecretTOKEN"));
+    let container = Container::builder().provide(ImportProcessor).build();
+    let mut delivery = delivery("one-shot-imports", &store);
+
+    let outcome = consume::attempt(
+        method("ImportProcessor::import_once"),
+        &mut delivery,
+        container,
+    )
+    .await;
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("the same bytes never decode on a retry: {outcome:?}");
+    };
+    let said = error.to_string();
+    assert!(
+        said.ends_with("does not decode: invalid type: a string, expected u32"),
+        "{said}"
+    );
+    assert!(!said.contains("sk_live"), "{said}");
+}
+
 /// The outcome is decided before the clear runs: a store that cannot clear is
 /// said, at `warn`, and the job still completes.
 #[tokio::test]

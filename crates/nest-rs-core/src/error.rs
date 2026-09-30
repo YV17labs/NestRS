@@ -1,4 +1,5 @@
-//! Every error the boot can fail with, and nothing else.
+//! Every error the boot can fail with, and [`DecodeError`] — the one error the
+//! kernel lends every edge rather than raises.
 //!
 //! They are here rather than beside the pass that raises them because four of
 //! the nine are not the access graph's at all — `DuplicateProviderError`,
@@ -15,6 +16,7 @@
 //! validators: the descriptors the `#[module]` macro submits, the reachability
 //! set, and the passes themselves.
 
+use serde_json::error::Category;
 use thiserror::Error;
 
 /// A provider depends on something its module does not import and that is not
@@ -239,4 +241,260 @@ pub struct KeyedDependencyError {
     pub type_name: &'static str,
     /// The requested key — named alongside the type so both appear in the error.
     pub key: &'static str,
+}
+
+/// A payload that did not decode, as every edge reports it: the category of the
+/// failure, the line and column when the payload was text, the kind of value
+/// found and the type expected — never the value.
+///
+/// serde's own sentences quote the value they refused: ``invalid type: string
+/// "sk_live_…", expected u64``, ``unknown variant `4242…`, expected `Visa` ``. A
+/// payload is somebody's data, and every edge that reports a failure to decode
+/// one puts that sentence where it is read by more people, and kept longer, than
+/// the payload ever was — a log line, a dead-letter record, an error frame. So
+/// the framework reports it the way `Valid` and `Header<T>` already do.
+///
+/// **Fail-secure by construction.** The sentence is rebuilt from the shapes serde
+/// and serde_json are known to word; any other — a type's own `custom` message,
+/// which may quote anything — is reported by its category alone.
+///
+/// Built from the [`serde_json::Error`] a decode returned
+/// (`DecodeError::new(&error)`, or `.map_err(DecodeError::from)`), and carried
+/// where that error would have been: as the `source` of the edge's own error, or
+/// displayed in its sentence.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{sentence}")]
+pub struct DecodeError {
+    sentence: String,
+}
+
+impl DecodeError {
+    /// The report of `error`, without the value it quoted.
+    pub fn new(error: &serde_json::Error) -> Self {
+        let rendered = error.to_string();
+        // serde_json appends the position to every message read from text, and
+        // to none read from a value.
+        let position = (error.line() > 0)
+            .then(|| format!(" at line {} column {}", error.line(), error.column()));
+        let message = position
+            .as_deref()
+            .and_then(|position| rendered.strip_suffix(position))
+            .unwrap_or(&rendered);
+        let mut sentence = match error.classify() {
+            Category::Data => data(message),
+            // serde_json's own wording: one fixed sentence per fault of the text
+            // or the reader, naming no byte of the input.
+            Category::Syntax | Category::Eof | Category::Io => message.to_owned(),
+        };
+        if let Some(position) = position {
+            sentence.push_str(&position);
+        }
+        Self { sentence }
+    }
+}
+
+impl From<serde_json::Error> for DecodeError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::new(&error)
+    }
+}
+
+impl From<&serde_json::Error> for DecodeError {
+    fn from(error: &serde_json::Error) -> Self {
+        Self::new(error)
+    }
+}
+
+/// What a data error — a value that is valid JSON and not the type — is reported
+/// as, rebuilt from the shapes serde words.
+fn data(message: &str) -> String {
+    if let Some(rest) = message.strip_prefix("invalid type: ") {
+        return found("invalid type", rest);
+    }
+    if let Some(rest) = message.strip_prefix("invalid value: ") {
+        return found("invalid value", rest);
+    }
+    // The variant is a value, spelled by whoever wrote the payload; the list of
+    // variants is the type's.
+    if let Some(rest) = message.strip_prefix("unknown variant ") {
+        return match expected(rest) {
+            Some(expected) => format!("unknown variant, {expected}"),
+            None if rest.ends_with(", there are no variants") => {
+                "unknown variant, there are no variants".to_owned()
+            }
+            None => "unknown variant".to_owned(),
+        };
+    }
+    // Sentences naming a count, or a field of the type's own, and nothing the
+    // payload holds as a value.
+    const KEPT: [&str; 6] = [
+        "invalid length ",
+        "missing field `",
+        "duplicate field `",
+        "unknown field `",
+        "data did not match any variant of untagged enum ",
+        "no variant of enum ",
+    ];
+    if KEPT.iter().any(|kept| message.starts_with(kept)) {
+        return message.to_owned();
+    }
+    "a value its type does not accept".to_owned()
+}
+
+/// `invalid type` or `invalid value`, said with the kind of value found and the
+/// type expected.
+fn found(what: &str, rest: &str) -> String {
+    let kind = kind(rest);
+    match expected(rest) {
+        Some(expected) => format!("{what}: {kind}, {expected}"),
+        None => format!("{what}: {kind}"),
+    }
+}
+
+/// The `expected …` tail serde closes a refusal with. The last one: a value
+/// spelled before it may itself contain the words, the type's description after
+/// it does not.
+fn expected(rest: &str) -> Option<&str> {
+    rest.rfind(", expected ").map(|at| &rest[at + 2..])
+}
+
+/// The kind of value serde's `Unexpected` names at the head of `rest`, without
+/// the value it quotes after the kind.
+fn kind(rest: &str) -> &'static str {
+    const QUOTING: [(&str, &str); 5] = [
+        ("boolean `", "a boolean"),
+        ("integer `", "an integer"),
+        ("floating point `", "a floating point number"),
+        ("character `", "a character"),
+        ("string \"", "a string"),
+    ];
+    const BARE: [(&str, &str); 12] = [
+        ("unit value", "null"),
+        ("byte array", "a byte array"),
+        ("Option value", "an optional value"),
+        ("newtype struct", "a newtype struct"),
+        ("sequence", "a sequence"),
+        ("map", "a map"),
+        ("enum", "an enum"),
+        ("unit variant", "a unit variant"),
+        ("newtype variant", "a newtype variant"),
+        ("tuple variant", "a tuple variant"),
+        ("struct variant", "a struct variant"),
+        ("null", "null"),
+    ];
+    if let Some((_, kind)) = QUOTING.iter().find(|(head, _)| rest.starts_with(head)) {
+        return kind;
+    }
+    BARE.iter()
+        .find(|(head, _)| {
+            rest.strip_prefix(head)
+                .is_some_and(|tail| tail.is_empty() || tail.starts_with(", expected "))
+        })
+        .map_or("a value", |(_, kind)| kind)
+}
+
+#[cfg(test)]
+mod decode_error_tests {
+    use serde::Deserialize;
+    use serde_json::json;
+
+    use super::*;
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    enum Card {
+        Visa,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Charge {
+        amount: u64,
+        card: Card,
+    }
+
+    fn from_value(value: serde_json::Value) -> String {
+        let error = serde_json::from_value::<Charge>(value).expect_err("does not decode");
+        DecodeError::new(&error).to_string()
+    }
+
+    fn from_str(text: &str) -> String {
+        let error = serde_json::from_str::<Charge>(text).expect_err("does not decode");
+        DecodeError::new(&error).to_string()
+    }
+
+    /// The audit's two probes: a secret where a number was expected, a card
+    /// number where a variant was. serde quotes both; the report quotes neither.
+    #[test]
+    fn a_refused_value_is_said_by_its_kind_and_never_quoted() {
+        let secret = from_value(json!({ "amount": "sk_live_51HsecretTOKEN", "card": "Visa" }));
+        assert_eq!(secret, "invalid type: a string, expected u64");
+        let card = from_value(json!({ "amount": 1, "card": "4242424242424242" }));
+        assert_eq!(card, "unknown variant, expected `Visa`");
+        for report in [secret, card] {
+            assert!(
+                !report.contains("sk_live") && !report.contains("4242"),
+                "{report}"
+            );
+        }
+    }
+
+    /// Read from text, the report keeps the position, which is *where*.
+    #[test]
+    fn a_payload_read_from_text_keeps_its_line_and_column() {
+        assert_eq!(
+            from_str(r#"{"amount": true, "card": "Visa"}"#),
+            "invalid type: a boolean, expected u64 at line 1 column 15"
+        );
+        assert_eq!(
+            from_str(r#"{"amount": 1, "card": "Visa""#),
+            "EOF while parsing an object at line 1 column 28",
+            "a fault of the text is serde_json's own sentence, which quotes nothing",
+        );
+    }
+
+    /// A value spelling serde's own separator cannot move the cut into the type's
+    /// half of the sentence.
+    #[test]
+    fn a_value_spelling_the_separator_is_still_not_quoted() {
+        let report = from_value(json!({ "amount": "x, expected u64, leaked", "card": "Visa" }));
+        assert_eq!(report, "invalid type: a string, expected u64");
+    }
+
+    /// Every kind serde_json can find where a number was expected, and the
+    /// sentences that name only the type's own fields or a count, kept whole.
+    #[test]
+    fn kinds_and_the_type_s_own_sentences_are_kept() {
+        assert_eq!(
+            from_value(json!({ "amount": null, "card": "Visa" })),
+            "invalid type: null, expected u64"
+        );
+        assert_eq!(
+            from_value(json!({ "amount": [1], "card": "Visa" })),
+            "invalid type: a sequence, expected u64"
+        );
+        assert_eq!(
+            from_value(json!({ "amount": -5, "card": "Visa" })),
+            "invalid value: an integer, expected u64"
+        );
+        assert_eq!(
+            from_value(json!({ "amount": 1.5, "card": "Visa" })),
+            "invalid type: a floating point number, expected u64"
+        );
+        assert_eq!(
+            from_value(json!({ "card": "Visa" })),
+            "missing field `amount`"
+        );
+    }
+
+    /// A type's own `custom` message may quote anything, so it is reported by
+    /// its category alone.
+    #[test]
+    fn a_message_of_no_known_shape_is_reported_without_its_text() {
+        let error = <serde_json::Error as serde::de::Error>::custom("token ya29.secret refused");
+        assert_eq!(
+            DecodeError::new(&error).to_string(),
+            "a value its type does not accept"
+        );
+    }
 }

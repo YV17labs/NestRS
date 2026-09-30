@@ -190,6 +190,21 @@ impl JobError {
         }
     }
 
+    /// The failure of a payload that does not decode as the job type of the
+    /// queue it came from — deterministic, since the same bytes never decode on
+    /// a retry. Said by where and what kind ([`DecodeError`](nest_rs_core::DecodeError)),
+    /// never by the value: the sentence lands in the dead-letter log line and
+    /// record, and the payload is somebody's data.
+    ///
+    /// `#[doc(hidden)]`: the handler `#[processor]` emits is its one caller.
+    #[doc(hidden)]
+    pub fn undecodable(queue: &str, error: &serde_json::Error) -> Self {
+        Self::abort(format!(
+            "failed to deserialize job for queue `{queue}`: {}",
+            nest_rs_core::DecodeError::new(error),
+        ))
+    }
+
     /// Attach structured detail to a failure — what a rejected pipe knows about
     /// *which* field failed.
     pub fn with_details(mut self, details: Option<serde_json::Value>) -> Self {

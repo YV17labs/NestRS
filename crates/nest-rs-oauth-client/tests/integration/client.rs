@@ -433,6 +433,48 @@ async fn a_read_answered_with_an_error_status_names_the_endpoint_and_the_status(
     );
 }
 
+/// A profile that does not decode as the app's shape is reported by where and
+/// what kind of value was found — never by the value, which is the caller's
+/// profile or a token the provider put where the app expected something else.
+#[tokio::test]
+async fn a_read_whose_body_does_not_decode_quotes_none_of_it() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    const PROVIDER_TOKEN: &str = "ya29.provider-token-never-quoted";
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a local listener");
+    let addr = listener.local_addr().expect("a bound address");
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let mut request = [0_u8; 4096];
+        let _ = socket.read(&mut request).await;
+        let body = format!(r#"{{"id":"{PROVIDER_TOKEN}"}}"#);
+        let answer = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+             connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(answer.as_bytes()).await.expect("answer");
+    });
+    #[derive(Debug, serde::Deserialize)]
+    #[allow(dead_code)]
+    struct Profile {
+        id: u64,
+    }
+    let error = client_for(addr)
+        .userinfo::<Profile>(ACCESS_TOKEN)
+        .await
+        .expect_err("a profile of another shape is no profile");
+    assert_eq!(
+        sentence_of(&error, &[PROVIDER_TOKEN]),
+        format!(
+            "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) answered a body \
+             that does not parse: invalid type: a string, expected u64 at line 1 column 40"
+        ),
+    );
+}
+
 /// The bounds against each other: the connection has to fit inside the call,
 /// or a slow handshake would be reported as a call that did not answer.
 #[test]

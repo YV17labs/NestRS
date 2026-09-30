@@ -29,6 +29,8 @@ pub(crate) fn warn_mask_failure(
     // passes nothing and the field is simply absent.
     transport: Option<&'static str>,
     event: Option<&str>,
+    // A serde failure over the subject's own values is rendered without them —
+    // `error_message` says a decode failure by where and what kind.
     err: Option<&(dyn std::error::Error + 'static)>,
 ) {
     // Two arms rather than one, because `tracing` fixes an event's fields at
@@ -519,6 +521,36 @@ mod tests {
         logs.expect_none(
             "nest_rs::authz",
             "ability rule predicate does not match its keyed subject — failing closed",
+        );
+    }
+
+    /// A mask that could not reconcile the subject's values is said without
+    /// them: serde quoted the value it refused, and the value is the subject's
+    /// own data — the very thing a mask exists to guard.
+    #[test]
+    fn a_mask_failure_names_what_kind_of_value_it_found_never_the_value() {
+        #[derive(Debug, serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Wire {
+            age: u64,
+        }
+        let logs = nest_rs_testing::LogCapture::install();
+        let refused =
+            serde_json::from_value::<Wire>(serde_json::json!({ "age": "ada@example.com" }))
+                .expect_err("a string is no age");
+        warn_mask_failure(
+            "Widget",
+            Action::Read,
+            mask_reason::IRRECONCILABLE,
+            "wire value could not be reconciled with the entity model",
+            None,
+            None,
+            Some(&refused),
+        );
+        let event = logs.expect_one(crate::TARGET, "response masking failed");
+        assert_eq!(
+            event.field("error").as_deref(),
+            Some("invalid type: a string, expected u64")
         );
     }
 }

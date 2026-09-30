@@ -641,6 +641,36 @@ async fn a_malformed_payload_warns_on_the_ws_target() {
     assert_eq!(event.field("event").as_deref(), Some("named"));
 }
 
+/// A payload that does not decode is reported by where and what kind, never by
+/// the value — in the line and in the frame. serde's sentence quoted the value,
+/// so whatever a client put in the wrong field reached the server's log.
+#[tokio::test]
+async fn a_malformed_payload_is_reported_without_its_value() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "named",
+            serde_json::json!({ "name": 4_242_424_242_424_242_u64 }),
+        )
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("expected an error frame");
+    };
+    assert_eq!(
+        frame.error,
+        "invalid payload for `named`: invalid type: an integer, expected a string"
+    );
+    let event = logs.expect_one(
+        "nest_rs::ws",
+        "subscribe_message payload failed to deserialize",
+    );
+    assert_eq!(
+        event.field("error").as_deref(),
+        Some("invalid type: an integer, expected a string")
+    );
+}
+
 // ── The mount address: `#[gateway(version = …)]` ────────────────────────────
 //
 // A gateway's mount is a path a client selects, so it declares a version the

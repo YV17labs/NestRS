@@ -145,6 +145,75 @@ async fn a_missing_provider_and_an_undecodable_payload_dead_letter_without_panic
     );
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+enum CardKind {
+    Visa,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct ChargeCommand {
+    amount: u64,
+    card: CardKind,
+}
+
+#[queue(name = "charges", job = ChargeCommand)]
+struct ChargeQueue;
+
+struct ChargeProcessor;
+
+impl nest_rs_core::ProviderResidency for ChargeProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl ChargeProcessor {
+    #[process(queue = ChargeQueue)]
+    async fn charge(&self, _job: ChargeCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// A payload that does not decode is dead-lettered naming the queue, where the
+/// decode failed and what kind of value it found — never the value. serde's own
+/// sentence quoted it, into the error-level dead-letter line and the backend's
+/// dead-letter record: a field whose type changed between a producer and an
+/// older worker leaked whatever it held.
+#[tokio::test]
+async fn an_undecodable_payload_is_dead_lettered_without_its_values() {
+    for (payload, said) in [
+        (
+            json!({ "amount": "sk_live_51HsecretTOKEN", "card": "Visa" }),
+            "failed to deserialize job for queue `charges`: invalid type: a string, expected u64",
+        ),
+        (
+            json!({ "amount": 1, "card": "4242424242424242" }),
+            "failed to deserialize job for queue `charges`: unknown variant, expected `Visa`",
+        ),
+    ] {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut delivery = Delivery::new(
+            &BARE,
+            QueueName::new("charges").expect("a valid name"),
+            json!({ "v": WIRE_FORMAT_VERSION, "payload": payload }),
+        );
+        let outcome = consume::attempt(
+            method("ChargeProcessor::charge"),
+            &mut delivery,
+            Container::builder().provide(ChargeProcessor).build(),
+        )
+        .await;
+        let AttemptOutcome::DeadLetter(error) = outcome else {
+            panic!("the same bytes never decode on a retry: {outcome:?}");
+        };
+        assert_eq!(error.to_string(), said, "the dead-letter record's reason");
+        let logged = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "job dead-lettered: non-retryable failure",
+        );
+        assert_eq!(logged.field("error").as_deref(), Some(said));
+    }
+}
+
 static TRIMMED: Mutex<Option<String>> = Mutex::new(None);
 
 // The pipe carrier is the handler's type; the queue's `job` is the wire payload

@@ -545,8 +545,15 @@ Three consequences are load-bearing enough to repeat here:
   `demo/` and in every CLI template: `%err` prints one sentence, and the cause an
   operator acts on is the one beneath it. A surface bounded `E: Display` cannot
   walk a chain, so no framework surface that logs an error is bounded that way.
+- **A decode failure is said without its value.** serde quotes the value it
+  refused, and a payload is somebody's data — a client's, a producer's, a
+  provider's. Every site that decodes one reports the failure through
+  `nest_rs_core::DecodeError` — where, what kind of value, the type expected —
+  in its line, its stored record and its reply alike, and `error_message` renders
+  any `serde_json::Error` in a chain that way, so a cause nobody formatted by hand
+  is covered too. A site that formats a serde error with `{e}` is the leak.
 - **A value is escaped by the formatter, never by the call site.** Any field can
-  carry a string a client chose — a WS event name, a serde error echoing input —
+  carry a string a client chose — a WS event name, a decode failure's position —
   so `TextFormat` escapes every field value it writes, and a line break or a
   control character can never forge a second line (CWE-117, OWASP Logging Cheat
   Sheet). JSON output is escaped by construction.

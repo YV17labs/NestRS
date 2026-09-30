@@ -174,7 +174,10 @@ so you don't have to think about them separately:
   help: the payload shape is wrong, so it is classified **non-retryable**
   and dead-letters on the **first** attempt, logging
   `job dead-lettered: non-retryable failure` at `error`. The `retries`
-  budget is not consumed.
+  budget is not consumed. The reason names where the payload failed and what
+  kind of value it found — ``invalid type: a string, expected u64`` — and never
+  the value: serde's own sentence quotes it, and the reason lands in the log
+  line and the dead-letter record, where a payload's data does not belong.
 - **Container resolution failures** — `Container::get` of the
   `#[processor]` host can fail if a dep wasn't seeded. The handler
   returns `Err` with the resolution error. This usually means a

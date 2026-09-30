@@ -42,7 +42,8 @@ pub enum MaskReplyError {
     /// transport is missing, so masking cannot run.
     #[error("no ambient ability — is the transport's authz bridge installed?")]
     NoAmbientAbility,
-    /// The wire value could not be reconciled with the entity model.
+    /// The wire value could not be reconciled with the entity model — said by
+    /// where and what kind, never by the value.
     #[error("wire value could not be reconciled with the entity model")]
-    Irreconcilable(#[source] serde_json::Error),
+    Irreconcilable(#[source] nest_rs_core::DecodeError),
 }

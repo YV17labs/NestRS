@@ -311,12 +311,10 @@ fn emit_method(
                     ::std::result::Result::Ok(j) => j,
                     ::std::result::Result::Err(e) => {
                         // Deterministic: the same bytes never deserialize on
-                        // retry — abort and dead-letter.
+                        // retry — abort and dead-letter, naming where and what
+                        // kind, never the value.
                         return ::std::result::Result::Err(
-                            ::nest_rs_queue::JobError::abort(::std::format!(
-                                "failed to deserialize job for queue `{}`: {e}",
-                                #queue_str,
-                            )),
+                            ::nest_rs_queue::JobError::undecodable(#queue_str, &e),
                         );
                     }
                 };

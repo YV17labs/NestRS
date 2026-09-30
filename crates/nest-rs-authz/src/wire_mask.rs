@@ -71,7 +71,9 @@ where
                 None,
                 Some(&err),
             );
-            Err(MaskReplyError::Irreconcilable(err))
+            Err(MaskReplyError::Irreconcilable(
+                nest_rs_core::DecodeError::new(&err),
+            ))
         }
     }
 }

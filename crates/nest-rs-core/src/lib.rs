@@ -109,8 +109,9 @@ pub use discovery::{Discovered, Discovery};
 pub use env_flag::parse_bool;
 pub use env_prefix::EnvPrefix;
 pub use error::{
-    AccessGraphError, ContestedDeclarationError, DuplicateProviderError, FactoryCycleError,
-    KeyedDependencyError, MissingDependencyError, ScopeViolationError, UnresolvedFactoryError,
+    AccessGraphError, ContestedDeclarationError, DecodeError, DuplicateProviderError,
+    FactoryCycleError, KeyedDependencyError, MissingDependencyError, ScopeViolationError,
+    UnresolvedFactoryError,
 };
 pub use error_message::error_message;
 pub use identifier::UUID_V7_REQUIRED;

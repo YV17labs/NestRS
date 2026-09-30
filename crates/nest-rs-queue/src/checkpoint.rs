@@ -150,9 +150,11 @@ where
             )));
         };
         let state = match cell.load().await {
+            // Said without the value: a checkpoint is the job's own data.
             Ok(Some(saved)) => Some(serde_json::from_value(saved).map_err(|error| {
                 JobError::abort(format!(
-                    "the checkpoint saved for a job from queue `{queue}` does not decode: {error}"
+                    "the checkpoint saved for a job from queue `{queue}` does not decode: {}",
+                    nest_rs_core::DecodeError::new(&error),
                 ))
             })?),
             Ok(None) => None,

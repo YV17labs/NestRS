@@ -153,11 +153,17 @@ impl WsReply {
     /// Its own constructor rather than a bare [`error`](Self::error) so the
     /// `warn` cannot be forgotten at the one call site that produces it —
     /// malformed input from a client is a denied dispatch like any other.
-    pub fn payload_error(event: &str, error: &(dyn std::error::Error + 'static)) -> WsReply {
+    ///
+    /// Both the line and the frame say where the payload failed and what kind
+    /// of value was found ([`DecodeError`](nest_rs_core::DecodeError)), never
+    /// the value: serde's own sentence quotes it, and a client's payload is not
+    /// the log's to keep.
+    pub fn payload_error(event: &str, error: &serde_json::Error) -> WsReply {
+        let error = nest_rs_core::DecodeError::new(error);
         tracing::warn!(
             target: crate::TARGET,
             event,
-            error = %nest_rs_core::error_message(error),
+            error = %error,
             "subscribe_message payload failed to deserialize",
         );
         WsReply::Error(WsError::new(format!(

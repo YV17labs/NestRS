@@ -303,8 +303,11 @@ impl<E> ContextEndpoint<E> {
                 Ok(variables) => variables,
                 Err(err) => {
                     return Err(variable_pipe_error_response(
+                        // Where and what kind, never the value: the variables
+                        // are the caller's.
                         &nest_rs_pipes::PipeError::new(format!(
-                            "variable pipe produced an invalid variables object: {err}"
+                            "variable pipe produced an invalid variables object: {}",
+                            nest_rs_core::DecodeError::new(&err),
                         )),
                     ));
                 }

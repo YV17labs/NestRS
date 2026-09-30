@@ -444,9 +444,12 @@ impl OAuthClient {
             .text()
             .await
             .map_err(|error| call_failed(endpoint, error))?;
+        // Said without the value serde would quote: a provider's body carries
+        // the profile, and may carry a token.
         serde_json::from_str(&body).map_err(|error| {
             AuthError::Failed(format!(
-                "{endpoint} answered a body that does not parse: {error}"
+                "{endpoint} answered a body that does not parse: {}",
+                nest_rs_core::DecodeError::new(&error),
             ))
         })
     }

@@ -15,16 +15,23 @@ use std::error::Error;
 /// than joined. A chain saying nothing at all is said to be one rather than filed
 /// as an empty field: its `Debug` would say as little — `""` for a string error —
 /// or more than a log should, a field its `Display` left out.
+///
+/// **A decode failure anywhere in the chain is said without its value.** A
+/// [`serde_json::Error`] — the error itself or any cause beneath it — is rendered
+/// as its [`DecodeError`](crate::DecodeError), naming where and what kind: serde
+/// quotes the value it refused, and the value is a payload's, which the line an
+/// operator reads is no place for. A wrapper that spells its cause into its own
+/// sentence is its author's to word.
 pub fn error_message(error: &(dyn Error + 'static)) -> String {
     const NO_MESSAGE: &str = "an error with no message";
 
-    let mut sentence = error.to_string();
+    let mut sentence = said(error);
     if sentence.trim().is_empty() {
         sentence.clear();
     }
     let mut source = error.source();
     while let Some(cause) = source {
-        let text = cause.to_string();
+        let text = said(cause);
         // `strip_suffix` rather than `ends_with(&format!(": {text}"))`: the
         // formatted needle was a whole `String` built and dropped per cause, for
         // a suffix test — a third of this function's cost, paid at every site
@@ -45,6 +52,15 @@ pub fn error_message(error: &(dyn Error + 'static)) -> String {
         return NO_MESSAGE.to_owned();
     }
     sentence
+}
+
+/// One link of the chain, as it is said: its own sentence, or a decode
+/// failure's without the value.
+fn said(error: &(dyn Error + 'static)) -> String {
+    match error.downcast_ref::<serde_json::Error>() {
+        Some(decode) => crate::DecodeError::new(decode).to_string(),
+        None => error.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -160,5 +176,28 @@ mod tests {
             cause: Some(io("failed")),
         };
         assert_eq!(error_message(&error), "the queue backend failed: failed");
+    }
+
+    /// A decode failure in the chain — the error or a cause — is said without
+    /// the value serde quoted, whichever site renders it.
+    #[test]
+    fn a_decode_failure_in_the_chain_is_said_without_its_value() {
+        let decode = || -> Box<dyn Error + Send + Sync> {
+            Box::new(serde_json::from_str::<u64>(r#""sk_live_secret""#).expect_err("no number"))
+        };
+        assert_eq!(
+            error_message(&*decode()),
+            "invalid type: a string, expected u64 at line 1 column 16"
+        );
+        let wrapped = Wrapped {
+            message: "the queue value could not be converted",
+            cause: Some(decode()),
+        };
+        let said = error_message(&wrapped);
+        assert_eq!(
+            said,
+            "the queue value could not be converted: invalid type: a string, expected u64 at \
+             line 1 column 16"
+        );
     }
 }

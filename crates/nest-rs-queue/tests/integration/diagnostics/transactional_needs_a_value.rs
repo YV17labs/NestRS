@@ -3,18 +3,14 @@
 //! whichever of the four job decorators they wrote it on.
 
 use nest_rs_core::injectable;
-use nest_rs_queue::{QueueName, processor};
+use nest_rs_queue::{processor, queue};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Command;
 
+#[queue(name = "q", job = Command)]
 struct Q;
-
-impl QueueName for Q {
-    const NAME: &'static str = "q";
-    type Job = Command;
-}
 
 #[injectable]
 #[derive(Default)]

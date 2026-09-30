@@ -187,3 +187,12 @@ section does not bind it.
 - **trybuild and doctests compile the sources on disk when they run**, so a
   file edited while a suite runs voids that run; re-run it rather than
   reading its failures.
+- **A compile-fail snapshot pins the refusal its fixture exists for, and no
+  error the fixture made on its own.** A fixture that does not parse, or whose
+  names no longer resolve, stays red whatever the decorator says — so the
+  refusal it promises can change or vanish with the suite green. Both are
+  mechanised in `nest-rs-conformance`'s `snapshots` join: a fixture must parse,
+  and its `.stderr` carries no name-resolution code (`E0404`, `E0432`, `E0433`,
+  `E0599`, …) unless its `//!` says `deliberately fails to resolve`. Read a
+  regenerated `.stderr` before committing it; the join catches the two
+  mechanical cases, not a cascade of any other kind.

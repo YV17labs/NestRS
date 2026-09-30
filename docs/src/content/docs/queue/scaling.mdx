@@ -232,6 +232,22 @@ the busiest. KEDA dials Redis itself, so `address` is `host:port` rather than th
 URL the framework reads; a password, TLS and a database index are the scaler's
 own metadata.
 
+**The trigger counts waiting jobs, never running ones.** A fetch takes a job off
+`active` as it claims it, so a job a replica runs — or has fetched and not yet
+started — is in that replica's in-flight set, and a replica busy with long jobs
+reads as idle once the list drains. KEDA then scales down, and the pod it stops
+drains: running attempts get the shutdown window, and what still runs when it
+closes is interrupted and handed back to the queue, to run again on another
+replica from the start — see [Shutdown](/queue/delivery/#shutdown). Nothing is
+lost, but the work done so far is, unless the method keeps a
+[checkpoint](/queue/retries-and-failure/#resuming-where-an-attempt-stopped). Pair the trigger with the settings
+that bound this: a scale-down stabilization window at least as long as a job
+runs (`advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.stabilizationWindowSeconds`
+on the `ScaledObject`, and a `cooldownPeriod` for the last replica), and a pod
+`terminationGracePeriodSeconds` above the drain window,
+`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, raised as far as a job's length
+when jobs are long.
+
 <Aside type="caution">
 **Scaling to zero strands work the trigger cannot see.** A job held back — a
 delayed push, a retry waiting for its backoff — waits on

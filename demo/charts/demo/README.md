@@ -80,6 +80,28 @@ the `#[queue]` declaration gives it. Its `listLength` is the backlog one replica
 is sized for, so it moves with the method's `concurrency`: the audio trigger
 asks for a replica per 20 waiting because each one runs four transcodes at once.
 
+The trigger counts **waiting** jobs only. A fetch takes a job off `active`, so a
+replica busy with long transcodes reads as idle once the list drains, and KEDA
+may scale it down mid-job. The pod then drains: running jobs get the shutdown
+window, and what still runs when it closes is handed back to the queue and runs
+again, from the start, on another replica. Nothing is lost, but the work is
+done twice. Bound it with a scale-down stabilization window at least as long as
+a job — `keda.behavior`, rendered as the ScaledObject's
+`advanced.horizontalPodAutoscalerConfig.behavior`:
+
+```yaml
+apps:
+  worker:
+    keda:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 600
+```
+
+— and keep `terminationGracePeriodSeconds` above
+`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, raising both toward a job's
+length when jobs are long (see [Graceful shutdown](#graceful-shutdown)).
+
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of
 its own, and two of them would scale the same Deployment against each other.
 

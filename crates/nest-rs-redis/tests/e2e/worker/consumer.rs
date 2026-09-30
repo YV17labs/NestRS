@@ -127,8 +127,15 @@ struct HoldCommand {
 }
 
 /// A job an earlier run of the suite left in flight on `queue`, under a
-/// consumer long silent — what every test counting its jobs starts beside.
+/// consumer long silent — what every test counting its jobs starts beside —
+/// and nothing else of that run.
+///
+/// The queue is cleared first: the ghost an earlier run planted may still be
+/// waiting on `active` when that run's worker stopped, at the head of the list,
+/// and the first fetch would take it before this run's jobs — one fewer of
+/// them than the test declares waiting.
 async fn ghost_of_an_earlier_run(queue: &str) {
+    crate::forget(queue).await;
     crate::ghost(queue, serde_json::json!({ "seq": 0, "run": 0 })).await;
 }
 

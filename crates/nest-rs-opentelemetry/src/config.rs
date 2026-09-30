@@ -113,9 +113,14 @@ impl OpenTelemetryConfig {
 
     /// `service_name` is the default; `NESTRS_OPENTELEMETRY__SERVICE_NAME` overrides.
     ///
-    /// `Err` when a variable cannot be read at all — both of its spellings set,
-    /// or a `<KEY>_FILE` naming an unreadable file; a readable value that does not
-    /// parse keeps its default with a warning, as before.
+    /// `Err`, naming the variable, when one cannot be read — both of its
+    /// spellings set, or a `<KEY>_FILE` naming an unreadable file — or when
+    /// `SAMPLE_RATIO` or `METRIC_INTERVAL_SECS` holds a value that does not
+    /// parse, or a ratio that is not a number. Only the two
+    /// `<PREFIX>_LOG_FORMAT` / `<PREFIX>_LOG_SOURCE_LOCATION` settings keep
+    /// their default with a warning instead: they are the framework-wide logging
+    /// family, which the kernel's fallback logger reads the same way before any
+    /// error path exists.
     pub fn from_env(service_name: impl Into<String>) -> Result<Self, ConfigError> {
         let mut cfg = Self::new(service_name);
         // The ordinary namespaced reader — constructing one has no side effect
@@ -163,7 +168,13 @@ impl OpenTelemetryConfig {
         // Set-but-unparseable is boot-fatal, naming the spelling that was set and
         // never a value read from a file — the framework-wide contract, which a
         // `from_env` returning `Result` can now keep.
-        if let Some(ratio) = env.parse::<f64>("SAMPLE_RATIO")? {
+        if let Some(setting) = env.setting("SAMPLE_RATIO")? {
+            let ratio = setting.parse::<f64>()?;
+            // `NaN` parses as an `f64` and survives `clamp`, so a sampler would
+            // be handed a ratio that is no ratio at all.
+            if ratio.is_nan() {
+                return Err(setting.refuse("must be a number between 0 and 1"));
+            }
             cfg.trace_sample_ratio = ratio.clamp(0.0, 1.0);
         }
         // `0` is the documented sentinel for "keep the default".
@@ -514,5 +525,23 @@ mod tests {
                 Ok(())
             });
         }
+    }
+
+    /// `NaN` parses as an `f64` and survives the clamp, so it reached the
+    /// sampler as a ratio that is no ratio; it is refused naming the variable.
+    #[test]
+    fn from_env_refuses_a_ratio_that_is_not_a_number() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(var_name("opentelemetry", "SAMPLE_RATIO"), "NaN");
+            let err = OpenTelemetryConfig::from_env("svc")
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(&var_name("opentelemetry", "SAMPLE_RATIO"))
+                    && err.contains("between 0 and 1"),
+                "{err}"
+            );
+            Ok(())
+        });
     }
 }

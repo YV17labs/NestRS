@@ -10,16 +10,22 @@
 //!   The closest key that *was* read comes back as `suggestion` when one is
 //!   near enough to be the intended one.
 //! - **A misspelled namespace** — [`MISSPELLED_CONFIG_NAMESPACE`]. The variable
-//!   spells a namespace this binary links with other separators: `OAUTH_RESOURCE`
-//!   for `oauth__resource`, the family-level rename 7.0 made, or the level
-//!   separator run into a word one — `SEAORM_URL` for `SEAORM__URL`, the
-//!   spelling every `DATABASE_URL` teaches. The linked spelling comes back as
-//!   `suggestion`.
+//!   spells a namespace this binary links otherwise than the loader reads it:
+//!   with other separators — `OAUTH_RESOURCE` for `oauth__resource`, the
+//!   family-level rename 7.0 made, or the level separator run into a word one,
+//!   `SEAORM_URL` for `SEAORM__URL`, the spelling every `DATABASE_URL` teaches;
+//!   in another case, prefix included, since the loader folds none; or one
+//!   misspelled segment away, a family member's included — `PORBE_KEYS` for
+//!   `probe_keys`, `PROBE__MEMBR` for `probe__member` ([`is_near_miss`]). The
+//!   linked spelling comes back as `suggestion`.
 //!
 //! **Everything else is silent, and that is the design rather than a gap.** One
 //! `.env` routinely serves several binaries — the demo's `api` and `worker` link
-//! different configs — so a namespace this binary does not know is another
-//! binary's, never a mistake. The same reading makes a key holding `__` under a
+//! different configs — so a namespace this binary does not know, and that is no
+//! near miss of one it does, is another binary's, never a mistake. The near-miss
+//! reach is kept narrow for that reason, and the conformance suite holds every
+//! namespace of both workspaces outside it of every other, so no binary of the
+//! tree reports a sibling's variables. The same reading makes a key holding `__` under a
 //! known namespace a sub-namespace some other binary links (`redis__worker`
 //! under `redis`), reported only when it is a near miss of a key read here.
 //!
@@ -99,10 +105,10 @@ use crate::service::var_name;
 /// that was read is close enough to be the intended one.
 pub const UNREAD_CONFIG_VARIABLE: &str = "config variable read by no config";
 
-/// The event for a variable whose namespace matches a linked one only once the
-/// separators are set aside — the separators inside the namespace, or the one
-/// that closes it. Fields: `variable`, `namespace` (the linked spelling), and
-/// `suggestion` — the variable under that spelling.
+/// The event for a variable whose namespace is a near miss of a linked one —
+/// other separators, another case, or one misspelled segment. Fields:
+/// `variable`, `namespace` (the linked spelling), and `suggestion` — the
+/// variable under that spelling.
 pub const MISSPELLED_CONFIG_NAMESPACE: &str = "config variable under a misspelled namespace";
 
 /// A variable set under the framework's prefix that no config claims, and why.
@@ -114,8 +120,8 @@ enum Unclaimed {
         namespace: String,
         suggestion: Option<String>,
     },
-    /// Under a spelling of a linked namespace that differs in its separators,
-    /// including the `__` that ends it.
+    /// Under a near miss of a linked namespace — its separators, the `__` that
+    /// ends it included, its case, or one of its segments.
     Namespace {
         variable: String,
         namespace: String,
@@ -308,16 +314,29 @@ pub(crate) fn after_read(namespace: &str, complete: bool) {
 /// Every variable name under the prefix, from the process environment and the
 /// `.env` cascade — the two tiers a config read consults. Values are dropped as
 /// they are listed.
+///
+/// A name whose prefix is written in another case is listed too: the loader
+/// never reads it, so it is a misspelling to report. Windows is the exception,
+/// for the process environment only — its lookups fold case, so a name there is
+/// listed as the loader reads it.
 fn environment_names() -> BTreeSet<String> {
     let root = EnvPrefix::var("");
+    let under_root = |name: &String| strip_root(name, &root).is_some();
     let mut names: BTreeSet<String> = std::env::vars_os()
         .filter_map(|(name, _)| name.into_string().ok())
-        .filter(|name| name.starts_with(&root))
+        .map(|name| {
+            if cfg!(windows) {
+                name.to_ascii_uppercase()
+            } else {
+                name
+            }
+        })
+        .filter(under_root)
         .collect();
     names.extend(
         crate::dotenv::dotenv_values()
             .keys()
-            .filter(|name| name.starts_with(&root))
+            .filter(|name| under_root(name))
             .cloned(),
     );
     names
@@ -364,12 +383,20 @@ fn unread_keys(
         .collect()
 }
 
-/// The variables whose namespace equals one of `unchecked` once the separators
-/// are set aside, but is spelled otherwise.
+/// The variables whose namespace is a near miss of one of `unchecked`: equal
+/// once separators and case are set aside, or one misspelled segment away from
+/// it ([`is_near_miss`]).
 ///
-/// Splits are tried at each `__`, outermost first, and the first one that
-/// names a linked namespace *exactly* ends the search: that variable is
-/// correctly spelled, and whatever follows is its key.
+/// The loader is exact — `var_name` upper-cases the namespace, and neither the
+/// process environment nor the cascade folds case — so a namespace is spelled
+/// correctly only as that exact text, under the exact prefix. The longest split
+/// at a `__` that names an owned namespace exactly makes the variable that
+/// namespace's, and whatever follows is its key: the key half judges it —
+/// unless a longer split is a near miss of a member of that namespace's own
+/// family, so a typo in a member's segment (`PROBE__MEMBR` for
+/// `probe__member`) is found although `probe` itself is owned. A variable with
+/// no exact owner is looked for at every split. The nearest candidate wins,
+/// ties to the one that sorts first.
 fn misspelled_namespaces(
     names: &BTreeSet<String>,
     known: &BTreeSet<String>,
@@ -379,26 +406,98 @@ fn misspelled_namespaces(
     let root = EnvPrefix::var("");
     let mut out = Vec::new();
     for name in names.iter().filter(|name| !known.contains(*name)) {
-        let Some(rest) = name.strip_prefix(&root) else {
+        let Some((exact_prefix, rest)) = strip_root(name, &root) else {
             continue;
         };
-        for (at, _) in rest.match_indices("__").filter(|(at, _)| *at > 0) {
-            let (written, key) = (&rest[..at], &rest[at + 2..]);
-            if linked.iter().any(|ns| ns.eq_ignore_ascii_case(written)) {
-                break;
-            }
-            let squashed = squash(written);
-            if let Some(namespace) = unchecked.iter().copied().find(|ns| squash(ns) == squashed) {
-                out.push(Unclaimed::Namespace {
-                    variable: name.clone(),
-                    namespace: namespace.to_owned(),
-                    suggestion: var_name(namespace, key),
-                });
-                break;
-            }
+        let splits: Vec<usize> = rest
+            .match_indices("__")
+            .map(|(at, _)| at)
+            .filter(|at| *at > 0)
+            .collect();
+        let owned = exact_prefix
+            .then(|| {
+                splits.iter().copied().rev().find(|at| {
+                    linked
+                        .iter()
+                        .any(|ns| ns.to_ascii_uppercase() == rest[..*at])
+                })
+            })
+            .flatten();
+        let family = owned.map(|at| format!("{}__", &rest[..at]));
+        let nearest = splits
+            .iter()
+            .copied()
+            .filter(|at| owned.is_none_or(|owned| *at > owned))
+            .flat_map(|at| {
+                let written = &rest[..at];
+                let family = family.clone();
+                unchecked
+                    .iter()
+                    .copied()
+                    .filter(move |ns| ns.to_ascii_uppercase() != written || !exact_prefix)
+                    .filter(move |ns| {
+                        family
+                            .as_ref()
+                            .is_none_or(|family| ns.to_ascii_uppercase().starts_with(family))
+                    })
+                    .filter_map(move |ns| near_miss(written, ns).map(|distance| (distance, ns, at)))
+            })
+            .min_by_key(|(distance, ns, _)| (*distance, *ns));
+        if let Some((_, namespace, at)) = nearest {
+            out.push(Unclaimed::Namespace {
+                variable: name.clone(),
+                namespace: namespace.to_owned(),
+                suggestion: var_name(namespace, &rest[at + 2..]),
+            });
         }
     }
     out
+}
+
+/// `name` with the prefix removed, and whether the prefix was written exactly —
+/// a prefix in another case is a misspelling, never another binary's.
+fn strip_root<'n>(name: &'n str, root: &str) -> Option<(bool, &'n str)> {
+    let head = name.get(..root.len())?;
+    head.eq_ignore_ascii_case(root)
+        .then(|| (head == root, &name[root.len()..]))
+}
+
+/// Whether `written` is a near miss of the namespace `namespace` — the rule the
+/// misspelled-namespace report applies, exposed so a suite can hold a tree's
+/// own namespaces apart by it: two linked namespaces that are near misses of
+/// each other would each report the other's variables.
+///
+/// Equal once separators and case are set aside is nearest of all. Otherwise
+/// the two must have as many `__` segments, all equal but one — separators and
+/// case set aside — and that one within a quarter of its longer spelling, at
+/// least one edit: `PORBE_KEYS` for `probe_keys`, `PROBE__MEMBR` for
+/// `probe__member`. **Tighter than a key's reach, deliberately**: a namespace a
+/// binary does not link is another binary's, and siblings of one family share
+/// every segment but the last — `social__github` and a `social__gitlab` must not
+/// read as one misspelled for the other, where a third of a segment would.
+pub fn is_near_miss(written: &str, namespace: &str) -> bool {
+    near_miss(written, namespace).is_some()
+}
+
+fn near_miss(written: &str, namespace: &str) -> Option<usize> {
+    if squash(written) == squash(namespace) {
+        return Some(0);
+    }
+    let (typed, linked): (Vec<String>, Vec<String>) = (
+        written.split("__").map(squash).collect(),
+        namespace.split("__").map(squash).collect(),
+    );
+    if typed.len() != linked.len() {
+        return None;
+    }
+    let mut differing = typed.iter().zip(&linked).filter(|(a, b)| a != b);
+    let (a, b) = differing.next()?;
+    if differing.next().is_some() {
+        return None;
+    }
+    let distance = distance(a, b);
+    let reach = (a.chars().count().max(b.chars().count()) / 4).max(1);
+    (distance <= reach).then_some(distance)
 }
 
 /// The variables with no `__` after the prefix that equal, once separators and
@@ -431,9 +530,7 @@ fn run_together(
         .iter()
         .filter(|name| !known.contains(*name))
         .filter_map(|name| {
-            let rest = name
-                .strip_prefix(&root)
-                .filter(|rest| !rest.contains("__"))?;
+            let (_, rest) = strip_root(name, &root).filter(|(_, rest)| !rest.contains("__"))?;
             let (namespace, suggestion) = read.get(&squash(rest))?;
             Some(Unclaimed::Namespace {
                 variable: name.clone(),
@@ -655,6 +752,78 @@ mod tests {
         assert!(
             found.is_empty(),
             "`FIXTURE` is linked, so `MEMBER__URL` is its key, not a namespace: {found:?}",
+        );
+    }
+
+    /// The loader is exact: a namespace spelled in another case is not the
+    /// linked one, however its letters compare once case is folded.
+    #[test]
+    fn a_namespace_in_another_case_is_misspelled() {
+        let written = var_name("fixture", "PORT").replace("FIXTURE", "Fixture");
+        let found = misspelled_namespaces(
+            &set(std::slice::from_ref(&written)),
+            &BTreeSet::new(),
+            &["fixture"],
+            &["fixture"],
+        );
+        assert_eq!(
+            found,
+            [Unclaimed::Namespace {
+                variable: written,
+                namespace: "fixture".to_owned(),
+                suggestion: var_name("fixture", "PORT"),
+            }],
+        );
+    }
+
+    /// A typo in a member's own segment is found although the family's root is
+    /// owned too — and only a member of that root's family is a candidate there.
+    #[test]
+    fn a_typo_in_a_member_segment_is_found_under_an_owned_root() {
+        let typo = var_name("fixture__membr", "URL");
+        let linked = ["fixture", "fixture__member", "fixturemembr"];
+        let found = misspelled_namespaces(
+            &set(std::slice::from_ref(&typo)),
+            &BTreeSet::new(),
+            &linked,
+            &linked,
+        );
+        assert_eq!(
+            found,
+            [Unclaimed::Namespace {
+                variable: typo,
+                namespace: "fixture__member".to_owned(),
+                suggestion: var_name("fixture__member", "URL"),
+            }],
+        );
+    }
+
+    #[test]
+    fn a_near_miss_is_one_misspelled_segment_within_a_quarter_of_it() {
+        assert!(is_near_miss("PORBE_KEYS", "probe_keys"), "a swapped pair");
+        assert!(
+            is_near_miss("PROBE__MEMBR", "probe__member"),
+            "a member's segment"
+        );
+        assert!(
+            is_near_miss("OAUTH_RESOURCE", "oauth__resource"),
+            "separators alone"
+        );
+        assert!(
+            !is_near_miss("SOCIAL__GITLAB", "social__github"),
+            "a sibling member"
+        );
+        assert!(
+            !is_near_miss("FIXTURE__OTHER", "fixture__member"),
+            "another word"
+        );
+        assert!(
+            !is_near_miss("PROBE__MEMBR", "probe__membr__x"),
+            "another depth"
+        );
+        assert!(
+            !is_near_miss("PORBE__MEMBR", "probe__member"),
+            "two misspelled segments"
         );
     }
 

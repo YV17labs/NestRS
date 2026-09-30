@@ -265,10 +265,12 @@ default in place and nothing said so. The boot now does, once per variable, at
 | Message | When | Fields |
 |---|---|---|
 | `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough |
-| `config variable under a misspelled namespace` | the variable's namespace equals one this binary links once separators and case are set aside — `NESTRS_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `NESTRS_SEAORM_URL` for `seaorm` | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
+| `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary links — other separators (`NESTRS_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `NESTRS_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`NESTRS_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment, a family member's included (`NESTRS_SEAROM__URL`, `NESTRS_OAUTH__RESOURSE__RESOURCE`) | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
 
 Everything else stays silent, and that is the design. One `.env` serves several
-binaries, so a namespace this binary does not link is another binary's, and a
+binaries, so a namespace this binary does not link, and that is no near miss of
+one it does, is another binary's — the framework's own namespaces are held
+further apart than that, so no binary of yours reports another's — and a
 key holding `__` under a namespace it does read is a sub-namespace another
 binary links — `redis__worker` under `redis` — reported only when it is a near
 miss of a key read here. The framework's process-level names, `NESTRS_LOG*`,

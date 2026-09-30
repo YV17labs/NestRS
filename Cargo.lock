@@ -2745,6 +2745,7 @@ version = "7.0.0"
 dependencies = [
  "nest-rs-cli",
  "nest-rs-codegen",
+ "nest-rs-config",
  "proc-macro2",
  "quote",
  "serde",

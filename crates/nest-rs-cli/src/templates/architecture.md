@@ -371,7 +371,10 @@ file and the module that reads it; from a module they know the variable. The
 vendor is in the variable when the vendor is in the path — never one without
 the other — and `NESTRS_DATABASE__URL`, the universal convention, is exactly
 what this forbids: a word that names neither the crate nor the type that parses
-it. Enforced by `namespace_is_the_stem` in `naming.rs`.
+it. Enforced by `namespace_is_the_stem` in `naming.rs`. **One namespace, one
+type**: from a variable a reader finds the one type that parses it, so two
+`#[config]` structs declaring one namespace are refused at boot, naming both —
+two configs in one folder are two folders.
 
 **`Config` names a `#[config]`, and nothing else.** A settings struct a config
 nests — its TLS, its CORS policy — is vocabulary, so the file names the kind and

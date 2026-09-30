@@ -64,7 +64,9 @@ Three pieces do the heavy lifting:
 
 - **`#[config(namespace = "posts")]`** binds the struct to the
   `NESTRS_POSTS__*` scheme. The macro wires the `Namespaced` trait — no
-  manual constant to write.
+  manual constant to write. A namespace belongs to one struct: a second
+  `#[config]` declaring it fails the boot naming both, so a variable always
+  names the one type that reads it.
 - **`impl Config { fn from_env(env: &ConfigService, base: Self) }`** is the
   hand-written contract: one line per variable. A reviewer reading this
   file knows exactly which env vars exist, with which defaults, and what

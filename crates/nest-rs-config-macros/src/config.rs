@@ -41,18 +41,24 @@ pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     // The namespace is also filed with the link-time registry, so the binary
     // knows every config namespace it carries before any module reads one —
     // the population the unclaimed-variable report checks a variable's
-    // namespace against. The literal, not the type: a generic config files one
-    // entry, and nothing about the namespace depends on the parameters.
+    // namespace against, and the one a second type declaring the same
+    // namespace is refused against. The literal and the declaration, not the
+    // type: a generic config files one entry, and nothing about the namespace
+    // depends on the parameters.
+    let declaration = quote! {
+        ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#name))
+    };
     quote! {
         #derive
         #item
 
         impl #impl_generics ::nest_rs_config::Namespaced for #name #ty_generics #where_clause {
             const NAMESPACE: &'static str = #namespace_lit;
+            const DECLARATION: &'static str = #declaration;
         }
 
         ::nest_rs_config::inventory::submit! {
-            ::nest_rs_config::ConfigNamespace::new(#namespace_lit)
+            ::nest_rs_config::ConfigNamespace::new(#namespace_lit, #declaration)
         }
     }
     .into()

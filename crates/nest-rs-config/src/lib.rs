@@ -11,8 +11,8 @@
 //! here follows, `ACME_SEAORM__URL` through `ACME_ENV`.
 //!
 //! A variable set under the prefix that no config reads is reported rather than
-//! ignored — a misspelled key, or a namespace spelled with other separators than
-//! the one the binary links ([`unclaimed`]).
+//! ignored — a misspelled key, or a near miss of a namespace the binary links:
+//! other separators, another case, one misspelled segment ([`unclaimed`]).
 
 #![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]

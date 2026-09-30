@@ -8,5 +8,6 @@
 mod diagnostics;
 mod dotenv;
 mod env_prefix;
+mod namespace;
 mod service;
 mod unclaimed;

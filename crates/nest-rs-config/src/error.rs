@@ -65,6 +65,28 @@ pub enum ConfigError {
         /// The type that claimed it second.
         claimant: &'static str,
     },
+    /// Two configuration types declare one namespace.
+    ///
+    /// A namespace is read off the declaring file's path as the type's own name
+    /// is, so from a variable a reader finds the one type that parses it. Two
+    /// types under one namespace break that, and the unclaimed-variable report
+    /// with it: its key check runs once a config of the namespace has been
+    /// read, and the other type's keys were then reported as read by nothing on
+    /// a deployment that set them correctly. Raised at the read of either type,
+    /// whichever comes first.
+    #[error(
+        "the namespace `{namespace}` is declared by {} configuration types — {}. A namespace \
+         belongs to one type, so that a variable under it names the type that reads it: give \
+         each its own `#[config(namespace = \"…\")]`, read off its own path.",
+        declarations.len(),
+        declarations.iter().map(|d| format!("`{d}`")).collect::<Vec<_>>().join(" and "),
+    )]
+    SharedNamespace {
+        /// The namespace both declare.
+        namespace: &'static str,
+        /// Every type declaring it, sorted.
+        declarations: Vec<&'static str>,
+    },
     /// A `<KEY>_FILE` variable names a file that could not be read.
     ///
     /// The variable's value is never carried: an operator who pastes key

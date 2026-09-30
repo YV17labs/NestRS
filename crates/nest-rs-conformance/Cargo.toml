@@ -43,6 +43,10 @@ nest-rs-cli = { path = "../nest-rs-cli" }
 # names, which would be the second list the table exists to replace. Syn,
 # quote and proc-macro2 already sit in this graph, so the edge adds one crate.
 nest-rs-codegen = { workspace = true }
+# The namespaces join judges the tree by the unclaimed-variable report's own
+# near-miss rule rather than a copy of it, and the doctor's parity join runs the
+# loader it mirrors. A workspace crate: the edge adds no third-party dependency.
+nest-rs-config = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

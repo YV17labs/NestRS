@@ -15,6 +15,13 @@ use crate::service::ConfigService;
 pub trait Namespaced {
     /// The `<DOMAIN>` segment of every `<PREFIX>_<DOMAIN>__<KEY>` this type reads.
     const NAMESPACE: &'static str;
+
+    /// The struct that declares the namespace — its module path and ident, as
+    /// the decorator writes it. **Internal ABI**, compared against the link-time
+    /// registry so a namespace two types declare is refused; empty on a
+    /// hand-written impl, which then answers by its type name.
+    #[doc(hidden)]
+    const DECLARATION: &'static str = "";
 }
 
 /// Read `C`'s namespace over `base`, recording which variables it claimed.
@@ -39,12 +46,17 @@ pub trait Namespaced {
 /// registry is the third caller — because what had to go is the *override*, not
 /// the reachability: a free function cannot be replaced by the type it checks.
 ///
+/// It refuses first a namespace another type declares too
+/// ([`ConfigError::SharedNamespace`](crate::ConfigError)): before any variable
+/// is read, so neither type claims a value the other would have been given.
+///
 /// It is also where the environment is checked for variables no config claims
 /// ([`crate::unclaimed`]): the read just finished is the one moment this
 /// namespace's keys are known, so the report runs here, before either error
 /// below can end the boot — a renamed variable is named ahead of the failure
 /// its absence causes.
 pub fn read<C: Config>(env: &ConfigService, base: C) -> Result<C> {
+    crate::namespace::sole_declaration::<C>()?;
     let (value, claim) = crate::service::claiming::<C, _>(|| C::from_env(env, base));
     if env.reads_environment() {
         crate::unclaimed::after_read(env.namespace(), value.is_ok());

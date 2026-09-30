@@ -1,12 +1,11 @@
 //! What `ConfigService` claims on behalf of the type it is reading for.
 //!
-//! `<PREFIX>_<DOMAIN>__<KEY>` is a flat, process-global name space and nothing
-//! owned uniqueness over it. Several types sharing a `<DOMAIN>` is deliberate —
-//! `nest-rs-authn` ships three `authn` configs — but two types reading one
-//! *variable* means a deployment setting it configures whichever happened to
-//! read it, both silently. Their key sets were disjoint by accident of the
-//! current fields, which is a fact about today rather than a property anything
-//! held.
+//! `<PREFIX>_<DOMAIN>__<KEY>` is a flat, process-global name space. A
+//! `<DOMAIN>` belongs to one type — two declaring it are refused before either
+//! reads (`namespace.rs`) — but a type can still *read* a variable of another
+//! domain, by opening a reader on it inside its own `from_env`. Two types
+//! reading one variable means a deployment setting it configures whichever
+//! happened to read it, both silently; the claim registry is what refuses that.
 //!
 //! Each test owns its process (nextest), because the claim registry is
 //! process-global by construction: it is what a boot builds up across every
@@ -28,42 +27,23 @@ impl Config for First {
     }
 }
 
-/// A second type in the same domain, reading a **different** key — the shape
-/// `nest-rs-authn` ships three of, and the one that must keep working.
-#[config(namespace = "claims")]
-#[derive(Clone, Debug, Default)]
-struct Sibling {
-    audience: Option<String>,
-}
-
-impl Config for Sibling {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        Ok(Self {
-            audience: env.get("AUDIENCE")?.or(base.audience),
-        })
-    }
-}
-
-/// A second type reading the **same** key. Nothing in the type system, the
-/// macro or the namespace grammar can see this — only the read can.
-#[config(namespace = "claims")]
+/// A second type reading the **same** variable, through a reader it opened on
+/// `First`'s domain. Nothing in the type system, the macro or the namespace
+/// grammar can see this — only the read can.
+#[config(namespace = "claims_contender")]
 #[derive(Clone, Debug, Default)]
 struct Contender {
     token: Option<String>,
 }
 
 impl Config for Contender {
-    fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+    fn from_env(_env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            token: env.get("TOKEN")?.or(base.token),
+            token: ConfigService::for_namespace("claims")
+                .get("TOKEN")?
+                .or(base.token),
         })
     }
-}
-
-#[test]
-fn two_types_may_share_a_domain_while_their_keys_differ() {
-    First::load().expect("the first claims its key");
-    Sibling::load().expect("a sibling in the same domain claims another");
 }
 
 #[test]
@@ -133,16 +113,18 @@ fn a_key_read_through_a_const_is_claimed_like_any_other() {
         }
     }
 
-    #[config(namespace = "claims_const")]
+    #[config(namespace = "claims_const_borrower")]
     #[derive(Clone, Debug, Default)]
     struct AlsoViaConst {
         token: Option<String>,
     }
 
     impl Config for AlsoViaConst {
-        fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        fn from_env(_env: &ConfigService, base: Self) -> Result<Self> {
             Ok(Self {
-                token: env.get(KEY)?.or(base.token),
+                token: ConfigService::for_namespace("claims_const")
+                    .get(KEY)?
+                    .or(base.token),
             })
         }
     }
@@ -173,16 +155,18 @@ fn citing_a_variable_is_not_claiming_it() {
         }
     }
 
-    #[config(namespace = "claims_cite")]
+    #[config(namespace = "claims_cite_reader")]
     #[derive(Clone, Debug, Default)]
     struct Reader {
         token: Option<String>,
     }
 
     impl Config for Reader {
-        fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+        fn from_env(_env: &ConfigService, base: Self) -> Result<Self> {
             Ok(Self {
-                token: env.get("TOKEN")?.or(base.token),
+                token: ConfigService::for_namespace("claims_cite")
+                    .get("TOKEN")?
+                    .or(base.token),
             })
         }
     }

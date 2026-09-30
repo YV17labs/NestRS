@@ -485,3 +485,74 @@ fn under_a_custom_prefix_only_its_own_names_are_examined() {
         Ok(())
     });
 }
+
+/// The loader is exact — neither the environment nor the cascade folds case —
+/// so a namespace or a prefix spelled in another case configures nothing. It
+/// was treated as correctly spelled and reported by nothing; each is now
+/// reported with the name the loader reads.
+#[test]
+#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+fn a_namespace_or_a_prefix_in_another_case_is_reported_with_the_name_read() {
+    figment::Jail::expect_with(|jail| {
+        let port = var_name("unclaimed_keys", "PORT");
+        let url = var_name("unclaimed__member", "URL");
+        let mixed = port.replace("UNCLAIMED_KEYS", "Unclaimed_Keys");
+        let family = url.replace("UNCLAIMED__MEMBER", "Unclaimed__Member");
+        let lowered = port.to_ascii_lowercase();
+        for name in [&mixed, &family, &lowered] {
+            jail.set_env(name, "8080");
+        }
+        let logs = LogCapture::install();
+
+        let config = KeysConfig::load().expect("the config loads");
+        MemberConfig::load().expect("the member loads");
+
+        assert_eq!(
+            config.port, 0,
+            "no spelling in another case reached the field"
+        );
+        for (name, suggestion) in [(&mixed, &port), (&family, &url), (&lowered, &port)] {
+            let event = report(&logs, MISSPELLED_CONFIG_NAMESPACE, name);
+            assert_eq!(
+                event.field("suggestion").as_deref(),
+                Some(suggestion.as_str())
+            );
+        }
+        Ok(())
+    });
+}
+
+/// A letter typo in a namespace — in a family member's segment too — is one
+/// edit from a namespace this binary links, and is reported like a key's typo
+/// is; a sibling member differing by a whole word is another binary's and
+/// stays silent.
+#[test]
+#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+fn a_misspelled_namespace_is_reported_with_the_namespace_linked() {
+    figment::Jail::expect_with(|jail| {
+        let swapped = var_name("unclaimde_keys", "PORT");
+        let member = var_name("unclaimed__membr", "URL");
+        let sibling = var_name("unclaimed__other", "URL");
+        for name in [&swapped, &member, &sibling] {
+            jail.set_env(name, "x");
+        }
+        let logs = LogCapture::install();
+
+        KeysConfig::load().expect("the config loads");
+        MemberConfig::load().expect("the member loads");
+
+        let event = report(&logs, MISSPELLED_CONFIG_NAMESPACE, &swapped);
+        assert_eq!(event.field("namespace").as_deref(), Some("unclaimed_keys"));
+        assert_eq!(
+            event.field("suggestion"),
+            Some(var_name("unclaimed_keys", "PORT"))
+        );
+        let event = report(&logs, MISSPELLED_CONFIG_NAMESPACE, &member);
+        assert_eq!(
+            event.field("suggestion"),
+            Some(var_name("unclaimed__member", "URL"))
+        );
+        assert_silent(&logs, &sibling);
+        Ok(())
+    });
+}

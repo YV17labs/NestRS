@@ -48,6 +48,7 @@ mod floors {
     pub(super) const EDGE_FOLDER_FILES: usize = 60;
     pub(super) const BINDING_FOLDER_FILES: usize = 8;
     pub(super) const CONFIGS: usize = 10;
+    pub(super) const TREE_NAMESPACES: usize = 15;
     pub(super) const VOCABULARY_FILES: usize = 150;
     pub(super) const ERROR_TYPES: usize = 30;
     pub(super) const ADAPTER_ROOT_FILES: usize = 6;
@@ -1520,6 +1521,52 @@ fn namespace_is_the_stem() {
         "namespaces that disagree with their stem",
         "a namespace chosen rather than read off the path — move the config to \
          where its word belongs, or take the word of where it sits",
+    );
+}
+
+/// **No namespace of the tree is a near miss of another**, by the rule the
+/// loader's report applies.
+///
+/// A binary reports a variable whose namespace is a near miss of one it links
+/// (`nest_rs_config::unclaimed::is_near_miss`), and stays silent on any other,
+/// since one `.env` serves several binaries. That silence is only safe while no
+/// two namespaces a deployment may set side by side are near misses of each
+/// other: the demo's `api` would otherwise report its `worker`'s variables as
+/// typos. Derived over every `#[config]` in both workspaces and judged by the
+/// report's own function, so the rule shipped and the rule met are one symbol.
+#[test]
+fn no_namespace_is_a_near_miss_of_another() {
+    let root = repo_root();
+    let mut declared: Vec<(String, String)> = Vec::new();
+    for krate in crate_dirs() {
+        for path in rust_files(&krate.join("src")) {
+            let Some(ast) = parsed(&path) else { continue };
+            for item in &ast.items {
+                let Item::Struct(s) = item else { continue };
+                if let Some(namespace) = nest_rs_conformance::sources::config_namespace(&s.attrs) {
+                    declared.push((namespace, relative(&path, &root)));
+                }
+            }
+        }
+    }
+    baseline::floor(
+        declared.len(),
+        floors::TREE_NAMESPACES,
+        "`#[config]` namespaces in both workspaces",
+    );
+    let mut near = BTreeSet::new();
+    for (i, (a, at)) in declared.iter().enumerate() {
+        for (b, bt) in &declared[i + 1..] {
+            if a != b && nest_rs_config::unclaimed::is_near_miss(a, b) {
+                near.insert(format!("`{a}` ({at}) and `{b}` ({bt})"));
+            }
+        }
+    }
+    assert!(
+        near.is_empty(),
+        "namespaces the unclaimed-variable report would read as one misspelled for the other — \
+         a binary linking one would report the other's variables; rename one:\n{}",
+        near.into_iter().collect::<Vec<_>>().join("\n"),
     );
 }
 

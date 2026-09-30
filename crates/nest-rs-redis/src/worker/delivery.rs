@@ -61,6 +61,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use super::checkpoint::RedisCheckpoint;
+use super::gate::ThrottleGate;
 use super::lease::{Admission, Lease, Leases, Settlement};
 use crate::RedisConnection;
 use crate::backend::{BACKEND, due_second};
@@ -97,6 +98,8 @@ pub(crate) struct Deliveries {
     /// `uncapped_context`.
     pub(crate) filing: RedisContext,
     pub(crate) leases: Arc<Leases>,
+    /// The method's fetch, shut while its throttle's window is full.
+    pub(crate) gate: Arc<ThrottleGate>,
     /// The shutdown began: no job is fetched any more, and a job settled from
     /// here on may lose its acknowledgement.
     pub(crate) draining: CancellationToken,
@@ -224,6 +227,9 @@ impl Deliveries {
                 return Ok(());
             }
             Ok(Admission::Throttled { ends_in }) => {
+                // Nothing this replica fetches before the window ends could
+                // start: it stops fetching until then.
+                self.gate.shut_for(ends_in);
                 let wait = ends_in.max(SHORTEST_HAND_BACK);
                 return self
                     .hand_back(&delivery, &task, resting, wait, Why::Throttled)

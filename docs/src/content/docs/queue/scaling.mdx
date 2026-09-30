@@ -147,17 +147,31 @@ most its `concurrency` attempts at a time.
 - **It limits the deployment.** On Redis the count is one key per queue,
   incremented by the step that admits an attempt, so every replica counts against
   one number and no two admissions race.
+- **A full window stops the fetch.** On Redis, the first attempt a window refuses
+  shuts that replica's fetch for the method until the window ends — the instant
+  the refusal read off the count's key. The backlog waits on the queue, where
+  peers and an autoscaler see it, rather than circling through the schedule, so
+  a window costs each replica one fetch of refusals — at most its `concurrency` —
+  whatever the backlog: a 10,000-job backlog under `limit = 1, window = "2s"`
+  and `concurrency = 4` cost 726 Redis calls in nine seconds where the worker
+  idles at 567, against some 8,700 when every poll fetched. Jobs the last fetch
+  brought wait in the replica and start once the window opens; a drain hands
+  them back.
 
-After 125 pushes to the method above, 120 started and the window's count had 44
-seconds left; the other five waited on the schedule for it to end:
+After 125 pushes to the method above on one replica, 120 started and the
+window's count had 42 seconds left; the next fetch's four were refused and wait
+on the schedule for it to end, and the fifth waits on the queue, which the
+replica stopped fetching from:
 
 ```text frame="terminal"
 $ redis-cli GET nestrs:queue:notifications:throttle
 "120"
 $ redis-cli PTTL nestrs:queue:notifications:throttle
-(integer) 44009
+(integer) 42022
 $ redis-cli ZCARD nestrs:queue:notifications:scheduled
-(integer) 5
+(integer) 4
+$ redis-cli LLEN nestrs:queue:notifications:active
+(integer) 1
 ```
 
 The Redis window is **fixed** and opens with its first start: the key expires

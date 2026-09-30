@@ -1588,8 +1588,13 @@ the kubelet's 30 s rather than at it.
   never touched; a throttle is a fixed window per queue, opened by its first start and
   closed by its key's expiry — the HTTP limiter's algorithm, so no two replicas
   have to agree on a clock — and starts either side of a window's end can reach
-  twice the limit in a short span, which the page says; a checkpoint is one key
-  per job, cleared at its terminal outcome.
+  twice the limit in a short span, which the page says; **a refusal shuts that
+  replica's fetch for the method until the window ends** (`worker/gate.rs`, a
+  tower layer holding the worker unready, so apalis fetches nothing), because a
+  throttled backlog left fetchable is admitted, refused and re-filed every poll —
+  a window costing the backlog, never `limit`; with the gate it costs each
+  replica one fetch of refusals; a checkpoint is one key per job, cleared at its
+  terminal outcome.
 
   **One queue per runtime key is refused on this backend, not deferred.**
   `#[queue(prefix = …)]` is a compile error naming why: apalis 0.7 binds one

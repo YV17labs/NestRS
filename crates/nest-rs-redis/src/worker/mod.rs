@@ -8,6 +8,7 @@ mod checkpoint;
 mod config;
 mod consumer;
 mod delivery;
+mod gate;
 mod lease;
 mod module;
 

@@ -76,6 +76,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use super::delivery::{Deliveries, SETTLED_WHILE_DRAINING, Task};
+use super::gate::ThrottleGate;
 use super::lease::{Keeping, Leases, report_kept};
 use crate::backend::{BACKEND, uncapped_context};
 use crate::connection::CONNECTION_REMEDY;
@@ -195,6 +196,7 @@ impl Transport for RedisWorker {
                     config.acknowledged_within(),
                     method.options().throttle(),
                 ),
+                gate: ThrottleGate::new(cancel.clone()),
                 draining: cancel.clone(),
                 interrupt: interrupt.clone(),
             });
@@ -453,11 +455,15 @@ fn register(
     // dead-letters rather than re-queues, so one bad job cannot take down the
     // queue's consumer.
     let worker = WorkerBuilder::new(id)
-        // The method's permits, and the outermost layer so a permit covers a
-        // job's whole delivery. apalis delegates `poll_ready` to the inner
-        // service, so with every permit held the fetch loop backs off rather
-        // than piling work into memory: the next job stays in Redis, where
-        // another replica can take it.
+        // The throttle's gate, outermost: while the method's window is full the
+        // worker is not ready, so apalis fetches nothing and takes no permit —
+        // the backlog waits on the queue, not round the schedule.
+        .layer(deliveries.gate.layer())
+        // The method's permits, so a permit covers a job's whole delivery.
+        // apalis delegates `poll_ready` to the inner service, so with every
+        // permit held the fetch loop backs off rather than piling work into
+        // memory: the next job stays in Redis, where another replica can take
+        // it.
         .concurrency(concurrency(method))
         .layer(ErrorHandlingLayer::new())
         .layer(CatchPanicLayer::new())

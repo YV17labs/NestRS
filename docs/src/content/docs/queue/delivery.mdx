@@ -237,7 +237,10 @@ A method's throttle is counted in `…:throttle` by the step that admits an
 attempt, in the same script as the lease, so every replica counts against one
 number and no two admissions race. An attempt over the limit is handed back to
 the schedule for when the window ends, as it was fetched, and files
-`job deferred to its throttle's next window` as detail. The window's shape, and
+`job deferred to its throttle's next window` as detail — and shuts that
+replica's fetch for the method until then, so the rest of the backlog waits on
+`active` instead of being fetched, refused and filed back one poll after
+another. The window's shape, and
 what it allows at its edges, is on
 [Concurrency and scaling](/queue/scaling/#throttling-starts).
 

@@ -41,6 +41,10 @@ tracing.workspace = true
 # layer would be a second one, counted where the method's is not.
 apalis = { workspace = true, features = ["timeout", "catch-panic", "limit"] }
 apalis-redis.workspace = true
+# The traits of the layer that holds a throttled method's worker unready while
+# its window is full, so it stops fetching: apalis builds its worker from tower
+# and re-exports neither `Layer` nor `Service`. Already in the tree through it.
+tower.workspace = true
 # `throttler` feature only: the shared `dyn ThrottlerStore` seam + config types
 # reused verbatim (the guard is transport-agnostic; only the backing store
 # changes), running the atomic fixed-window Lua script over the shared

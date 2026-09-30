@@ -1024,3 +1024,95 @@ async fn a_lost_acknowledgement_keeps_the_marks_of_the_jobs_settled_lately_a_wee
         "while the replica runs on, the mark is kept a week, not {left} ms",
     );
 }
+
+// --- a throttled method stops fetching until its window ends -----------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BacklogCommand {
+    run: u64,
+}
+
+static BACKLOG: Runs = Runs::new();
+
+const BACKLOG_QUEUE: &str = "nestrs-e2e-lease-throttle-backlog";
+
+/// The throttled method's permits, and so the most one fetch brings.
+const BACKLOG_CONCURRENCY: usize = 4;
+
+#[queue(name = "nestrs-e2e-lease-throttle-backlog", job = BacklogCommand)]
+struct BacklogQueue;
+
+#[injectable]
+#[derive(Default)]
+struct BacklogProcessor;
+
+#[processor]
+impl BacklogProcessor {
+    #[process(queue = BacklogQueue, concurrency = 4, throttle(limit = 1, window = "2s"))]
+    async fn run(&self, job: BacklogCommand) -> anyhow::Result<()> {
+        BACKLOG.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [BacklogProcessor],
+)]
+struct BacklogModule;
+
+/// A backlog far past the limit waits on the queue while the window is full:
+/// the first refusal shuts the method's fetch until the window ends, so each
+/// window costs the replica one fetch's worth of refusals, whatever the backlog.
+/// Fetching on, the replica cycled the backlog through admission and the
+/// schedule — some forty refusals a second here, twenty-odd Redis calls each —
+/// to start one job a window all the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_throttled_backlog_waits_on_the_queue_and_costs_a_window_one_fetch_of_refusals() {
+    const BACKLOG_JOBS: usize = 200;
+    const WATCHED: Duration = Duration::from_secs(5);
+    crate::forget(BACKLOG_QUEUE).await;
+    let logs = LogCapture::install_global();
+    let run = crate::this_run();
+    let producer = crate::producer().await;
+    let jobs: Vec<BacklogCommand> = (0..BACKLOG_JOBS).map(|_| BacklogCommand { run }).collect();
+    producer
+        .push_many(BacklogQueue, jobs, None)
+        .await
+        .expect("the backlog");
+
+    let replica = crate::replica::<BacklogModule>().await;
+    tokio::time::sleep(WATCHED).await;
+    let waiting = crate::waiting(BACKLOG_QUEUE).await;
+    replica.worker.shutdown().await.expect("clean shutdown");
+    crate::forget(BACKLOG_QUEUE).await;
+
+    let refused = logs
+        .find(
+            nest_rs_queue::TARGET,
+            "job deferred to its throttle's next window",
+        )
+        .into_iter()
+        .filter(|event| event.field("queue").as_deref() == Some(BACKLOG_QUEUE))
+        .count();
+    let started = BACKLOG.of(run).len();
+    assert!(
+        (2..=4).contains(&started),
+        "one start a window of two seconds, not {started}"
+    );
+    let windows = WATCHED.as_secs() as usize / 2 + 1;
+    assert!(
+        refused <= windows * BACKLOG_CONCURRENCY,
+        "at most one fetch of refusals a window — {windows} windows of {BACKLOG_CONCURRENCY} — \
+         not {refused}",
+    );
+    // Apart from the jobs started, one fetch refused and filed for the window's
+    // end, and one fetched and held for it.
+    let elsewhere = started + 2 * BACKLOG_CONCURRENCY;
+    let unstarted = i64::try_from(BACKLOG_JOBS - elsewhere).unwrap_or(0);
+    assert!(
+        waiting >= unstarted,
+        "the backlog waits on the queue, where peers and an autoscaler see it: {waiting} of \
+         {BACKLOG_JOBS}",
+    );
+}

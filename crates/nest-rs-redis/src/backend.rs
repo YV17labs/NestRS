@@ -31,7 +31,9 @@ use serde::de::Error as _;
 ///   without running it.
 /// - **Throttle.** A fixed window per queue, counted in Redis by the step that
 ///   admits an attempt: the window opens with its first start and ends when its
-///   key expires, and an attempt over the limit is handed back for when it ends.
+///   key expires, and an attempt over the limit is handed back for when it ends
+///   — and shuts the replica's fetch for the method until then, so the backlog
+///   waits on the queue rather than circling through the schedule.
 /// - **Checkpoints.** One key per job, read once per delivery and cleared at the
 ///   job's terminal outcome.
 ///

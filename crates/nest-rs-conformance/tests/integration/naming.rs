@@ -16,8 +16,12 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use nest_rs_conformance::baseline;
-use nest_rs_conformance::sources::{crate_dirs, parsed, relative, repo_root, rust_files, segments};
+use nest_rs_conformance::sources::{
+    crate_dirs, flatten, is_cfg_test, parsed, relative, repo_root, rust_files, segments,
+};
+use proc_macro2::TokenTree;
 use syn::Item;
+use syn::visit::Visit;
 
 /// One per gated join in this module. Named rather than written at the call
 /// site for the reason every interpreted string here is: a mistyped filename
@@ -69,19 +73,87 @@ fn folded(name: &str) -> String {
         .collect()
 }
 
-/// The DI types a parsed `module.rs` declares — the module and the seam types
-/// that travel with it. All three share the stem; checking only the `*Module`
-/// is how a `RedisThrottlerModule` came to sit beside a `ThrottlerSetup`.
+/// Every type a parsed `module.rs` declares, whatever its suffix or visibility.
+///
+/// `architecture.md`: "**Every type in a `module.rs` shares the stem**, not just
+/// the module". Membership used to be the suffix the rule imposes — `*Module`,
+/// `*Setup`, `*Host` — so the rule could only ever be checked on types that
+/// already half-obeyed it: `#[module] pub struct Wiring;` was not a member, and
+/// neither was the private `AudienceBinding` the rule's own worked example sat
+/// beside. So every struct, enum, union and alias is read, at any depth
+/// outside `#[cfg(test)]`, and so is one a macro declares in the file — a
+/// `struct Name` in any macro's tokens. A type a macro names through a
+/// metavariable (`struct $name`) cannot be read, and is reported as such.
+///
+/// A trait is not a member: it is vocabulary that lives with its concern, and
+/// the one `module.rs` holding traits is the kernel's, where `Module` and
+/// `DynamicModule` *are* the concept the file is named for — the shape
+/// `container.rs` holding `Container` has.
 fn declared_module_types(file: &syn::File) -> Vec<String> {
-    file.items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Struct(s) => Some(s.ident.to_string()),
-            Item::Type(t) => Some(t.ident.to_string()),
-            _ => None,
-        })
-        .filter(|n| n.ends_with("Module") || n.ends_with("Setup") || n.ends_with("Host"))
-        .collect()
+    let mut types = ModuleTypes::default();
+    types.visit_file(file);
+    types.0
+}
+
+/// What a macro's tokens spell as a type declaration.
+const METAVARIABLE: &str = "(a type a macro names through a metavariable)";
+
+#[derive(Default)]
+struct ModuleTypes(Vec<String>);
+
+impl ModuleTypes {
+    fn declared_in(&mut self, tokens: proc_macro2::TokenStream) {
+        let mut flat = Vec::new();
+        flatten(tokens, &mut flat);
+        for pair in flat.windows(2) {
+            let TokenTree::Ident(keyword) = &pair[0] else {
+                continue;
+            };
+            if !["struct", "enum", "union"].contains(&keyword.to_string().as_str()) {
+                continue;
+            }
+            match &pair[1] {
+                TokenTree::Ident(name) => self.0.push(name.to_string()),
+                TokenTree::Punct(dollar) if dollar.as_char() == '$' => {
+                    self.0.push(METAVARIABLE.to_owned());
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ModuleTypes {
+    fn visit_item(&mut self, node: &'ast Item) {
+        let attrs = match node {
+            Item::Struct(i) => &i.attrs,
+            Item::Enum(i) => &i.attrs,
+            Item::Union(i) => &i.attrs,
+            Item::Type(i) => &i.attrs,
+            Item::Trait(i) => &i.attrs,
+            Item::Mod(i) => &i.attrs,
+            Item::Fn(i) => &i.attrs,
+            Item::Impl(i) => &i.attrs,
+            Item::Macro(i) => &i.attrs,
+            _ => return syn::visit::visit_item(self, node),
+        };
+        if is_cfg_test(attrs) {
+            return;
+        }
+        match node {
+            Item::Struct(i) => self.0.push(i.ident.to_string()),
+            Item::Enum(i) => self.0.push(i.ident.to_string()),
+            Item::Union(i) => self.0.push(i.ident.to_string()),
+            Item::Type(i) => self.0.push(i.ident.to_string()),
+            Item::Macro(i) => self.declared_in(i.mac.tokens.clone()),
+            _ => {}
+        }
+        syn::visit::visit_item(self, node);
+    }
+
+    fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
+        self.declared_in(node.mac.tokens.clone());
+    }
 }
 
 /// A crate's own subject — what follows the workspace prefix, which names the
@@ -159,11 +231,29 @@ const PRODUCT_WORKSPACES: [&str; 2] = ["apps", "crates"];
 /// prefixes: `audio/http/module.rs` is `AudioHttpModule`.
 #[test]
 fn every_module_type_is_named_for_its_path() {
+    let root = repo_root();
+    let (holes, scanned) = module_type_holes(&root, &crate_dirs());
+
+    baseline::floor(scanned, floors::MODULE_TYPES, "module types");
+    baseline::gate(
+        MODULES_BASELINE,
+        &holes,
+        scanned,
+        "module types",
+        "module types whose name does not carry their path",
+        "a type a reader cannot locate from its name, or name from its location. \
+         The fix is the rename, or the folder the file should have been in — never \
+         a line here",
+    );
+}
+
+/// The module types below `dirs` whose name does not carry their path, and how
+/// many were read.
+fn module_type_holes(root: &Path, dirs: &[std::path::PathBuf]) -> (BTreeSet<String>, usize) {
     let mut holes = BTreeSet::new();
     let mut scanned = 0usize;
-    let root = repo_root();
 
-    for dir in crate_dirs() {
+    for dir in dirs {
         let Some(krate) = dir.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -179,6 +269,12 @@ fn every_module_type_is_named_for_its_path() {
             None => String::new(),
         };
 
+        // A proc-macro crate's `module.rs` is the `#[module]` decorator's own
+        // implementation, named for the decorator it expands — a DI module is
+        // what it emits, never what it holds.
+        if krate.ends_with("-macros") {
+            continue;
+        }
         let src = dir.join("src");
         for path in rust_files(&src) {
             if path.file_name().is_some_and(|n| n != "module.rs") {
@@ -210,24 +306,142 @@ fn every_module_type_is_named_for_its_path() {
                 if !name.starts_with(&stem) {
                     holes.insert(format!(
                         "{name}  ({})  — expected `{stem}…`",
-                        relative(&path, &root),
+                        relative(&path, root),
                     ));
                 }
             }
         }
     }
+    (holes, scanned)
+}
 
-    baseline::floor(scanned, floors::MODULE_TYPES, "module types");
-    baseline::gate(
-        MODULES_BASELINE,
-        &holes,
-        scanned,
-        "module types",
-        "module types whose name does not carry their path",
-        "a type a reader cannot locate from its name, or name from its location. \
-         The fix is the rename, or the folder the file should have been in — never \
-         a line here",
+/// The membership on a planted tree: a `#[module]` named for nothing, a private
+/// provider, a type a macro declares and one it names through a metavariable
+/// are all read, whatever their suffix — and a test's type is not.
+#[test]
+fn every_type_a_module_rs_declares_is_a_member() {
+    const TREE: [(&str, &str); 2] = [
+        (
+            "crates/nest-rs-probe/Cargo.toml",
+            "[package]\nname = \"nest-rs-probe\"\n",
+        ),
+        (
+            "crates/nest-rs-probe/src/billing/module.rs",
+            "#[module] pub struct ProbeBillingModule;\n\
+             #[module] pub struct Wiring;\n\
+             #[injectable] struct AudienceBinding;\n\
+             macro_rules! declare { () => { pub struct BillingModule; }; }\n\
+             declare!();\n\
+             macro_rules! named { ($n:ident) => { pub struct $n; }; }\n\
+             named!(Anything);\n\
+             #[cfg(test)] mod tests { struct Fixture; }\n",
+        ),
+    ];
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("naming-module-types-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    crate::plant(&root, &TREE);
+    let (holes, scanned) = module_type_holes(&root, &[root.join("crates/nest-rs-probe")]);
+    let _ = std::fs::remove_dir_all(&root);
+
+    let file = "crates/nest-rs-probe/src/billing/module.rs";
+    assert_eq!(
+        scanned, 5,
+        "the module, the stray, the provider, and the two macros"
     );
+    assert_eq!(
+        holes.into_iter().collect::<Vec<_>>(),
+        [
+            format!("{METAVARIABLE}  ({file})  — expected `ProbeBilling…`"),
+            format!("AudienceBinding  ({file})  — expected `ProbeBilling…`"),
+            format!("BillingModule  ({file})  — expected `ProbeBilling…`"),
+            format!("Wiring  ({file})  — expected `ProbeBilling…`"),
+        ],
+    );
+}
+
+/// **A DI module is declared in a `module.rs`, and only there.**
+///
+/// `architecture.md`: "`module.rs` is the DI module … One `#[module]` per file,
+/// one `module.rs` per folder". The naming law is checked on `module.rs`, so a
+/// `#[module]` — or a hand-written `impl Module` — anywhere else is a module
+/// no naming rule reads, whatever it is called. No baseline: the tree holds
+/// none.
+#[test]
+fn every_di_module_is_declared_in_a_module_rs() {
+    let root = repo_root();
+    let mut offenders = BTreeSet::new();
+    for dir in crate_dirs() {
+        if dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("-macros"))
+        {
+            continue;
+        }
+        for path in rust_files(&dir.join("src")) {
+            let Some(ast) = parsed(&path) else { continue };
+            let mut found = DiModules::default();
+            found.visit_file(&ast);
+            let here = path.file_name().is_some_and(|n| n == "module.rs");
+            if !here && found.0 > 0 {
+                offenders.insert(format!("{} declares a DI module", relative(&path, &root)));
+            }
+            if here && found.0 > 1 {
+                offenders.insert(format!(
+                    "{} declares {} DI modules — one per file, two modules are two folders",
+                    relative(&path, &root),
+                    found.0,
+                ));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a `#[module]` or an `impl Module` outside its own `module.rs`: {offenders:#?}",
+    );
+}
+
+/// How many `#[module]` structs and `impl Module for` blocks a file holds,
+/// outside `#[cfg(test)]`.
+#[derive(Default)]
+struct DiModules(usize);
+
+impl<'ast> Visit<'ast> for DiModules {
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        if !is_cfg_test(&node.attrs) {
+            syn::visit::visit_item_mod(self, node);
+        }
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        if !is_cfg_test(&node.attrs) {
+            syn::visit::visit_item_fn(self, node);
+        }
+    }
+
+    fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
+        let decorated = node.attrs.iter().any(|attr| {
+            attr.path()
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "module")
+        });
+        if decorated && !is_cfg_test(&node.attrs) {
+            self.0 += 1;
+        }
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        let implements = node.trait_.as_ref().is_some_and(|(path, _)| {
+            path.segments
+                .last()
+                .is_some_and(|segment| segment.ident == "Module")
+        });
+        if implements && !is_cfg_test(&node.attrs) {
+            self.0 += 1;
+        }
+    }
 }
 
 /// **The same law one level down: an edge adapter is named for its module.**

@@ -36,6 +36,7 @@
 /// challenge stamped onto a `401`, and the boot-time audience binding.
 pub const TARGET: &str = "nest_rs::oauth::resource";
 
+mod audience;
 mod config;
 mod controller;
 mod interceptor;

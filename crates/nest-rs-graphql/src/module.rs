@@ -5,11 +5,11 @@ use std::sync::Arc;
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
 use nest_rs_http::{HttpBootCheck, HttpEndpointMeta};
-use poem::http::header;
-use poem::{Endpoint, IntoResponse, Request, Response, Route};
+use poem::Route;
 
 use crate::config::GraphqlConfig;
 use crate::context::OperationBridge;
+use crate::endpoint::GetEndpoint;
 use crate::resolver::{build_schema, check_operations};
 use crate::subscription::SubscriptionEndpoint;
 
@@ -169,15 +169,15 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 Arc::clone(&bridge),
                 options.max_batch_size,
             ))
-            .get(GetEndpoint {
-                subscriptions: SubscriptionEndpoint::new(schema, bridge, options.max_connection),
-                playground: options.playground.then(|| {
+            .get(GetEndpoint::new(
+                SubscriptionEndpoint::new(schema, bridge, options.max_connection),
+                options.playground.then(|| {
                     async_graphql::http::playground_source(
                         async_graphql::http::GraphQLPlaygroundConfig::new(options.path.as_str())
                             .subscription_endpoint(options.path.as_str()),
                     )
                 }),
-            });
+            ));
             // GraphQL authenticates per-operation — through the registered
             // `GraphqlOperationGuard` bridge, or the global-pool fallback when
             // none is registered — never at the HTTP edge (the self-mount is
@@ -191,44 +191,4 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
         })
         .exempt(),
     )
-}
-
-/// `GET <path>`: the graphql-ws socket, or the playground.
-///
-/// One path rather than two, because that is what a graphql-ws client assumes —
-/// `graphql-ws`, Apollo and the playground all point their socket at the same
-/// URL they POST to. The two are told apart by the request, not by the route:
-/// an upgrade is a subscription, anything else is a browser.
-struct GetEndpoint<E> {
-    subscriptions: SubscriptionEndpoint<E>,
-    /// Rendered once at mount; `None` when the playground is off (the default).
-    playground: Option<String>,
-}
-
-impl<E: async_graphql::Executor> Endpoint for GetEndpoint<E> {
-    type Output = Response;
-
-    async fn call(&self, req: Request) -> poem::Result<Response> {
-        // `Connection: Upgrade` is the hop-by-hop header a proxy may rewrite or
-        // list beside other tokens, so the *presence of an upgrade target*
-        // (`Upgrade: websocket`) is what decides — the same fact poem's own
-        // `WebSocket` extractor requires, checked before we take the socket path
-        // so a plain browser still gets the playground.
-        let upgrading = req
-            .headers()
-            .get(header::UPGRADE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
-        if upgrading {
-            return self.subscriptions.call(req).await;
-        }
-        match &self.playground {
-            Some(html) => Ok(poem::web::Html(html.clone()).into_response()),
-            // No playground and not an upgrade: the path serves POST and
-            // sockets, so a bare GET is the wrong method, not a missing route.
-            None => Err(poem::Error::from_status(
-                poem::http::StatusCode::METHOD_NOT_ALLOWED,
-            )),
-        }
-    }
 }

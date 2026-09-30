@@ -145,7 +145,12 @@ rather than inventing a name for it.
 
 Enforced, not merely written: `naming.rs` in `nest-rs-conformance` derives every
 `module.rs` and every edge adapter in both workspaces and fails on a name that
-does not match its path. Its baseline is empty and only shrinks.
+does not match its path. A `module.rs` is read for **every type it declares**,
+whatever its suffix or visibility — a provider that is not the module's own (a
+lifecycle hook, an endpoint) gets a file named for it rather than sitting beside
+the module as a private stranger — and a `#[module]` or an `impl Module`
+anywhere but a `module.rs` fails on where it is. Its baseline is empty and only
+shrinks.
 
 **One documented precedence, and it is the only one.** A file whose subject is a
 *capability* rather than its module keeps the capability's name — `audio`'s

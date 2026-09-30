@@ -39,6 +39,21 @@
 //!   the sentence — `unmatched_meta`, `job_key` — whose own callers are then read
 //!   the same way.
 //!
+//! A call is read under the name it is **written** as, so two spellings that
+//! reach the sentence without naming it are resolved first: an import alias
+//! (`use nest_rs_codegen::unknown_argument as unknown;`) is read as the function
+//! it renames, and a local `macro_rules!` is a way of its own — each rule a
+//! scope whose metavariables hand a name on exactly as a parameter does, and each
+//! `name!(…)` invocation a call to it. Both used to leave their decorator out of
+//! the population while the readability test passed.
+//!
+//! **A decorator name is not a grammar.** `#[expose]` is two — the one on the
+//! `Model` and the one on a column — worded in one crate, and the struct half's
+//! repeat refusal and snapshots filled the field half's cells, which refused
+//! nothing. So where the unknown-key call lists its key set readably, that set
+//! is the grammar's identity, and each cell is filled only by a refusal or a
+//! snapshot naming one of *its* keys ([`key_sets`], [`repeated_keys`]).
+//!
 //! Any other shape is a call the join cannot read, and
 //! [`every_call_to_a_family_sentence_names_its_decorator_readably`] fails naming
 //! it rather than letting its decorator drop out; and
@@ -184,10 +199,13 @@ impl Sources {
                 let Ok(ast) = syn::parse_file(&text) else {
                     continue;
                 };
+                let mut aliases = Aliases::default();
+                aliases.visit_file(&ast);
                 let mut visit = Collect {
                     krate: &krate,
                     file: relative(&path, root),
                     sources: &mut sources,
+                    aliases: aliases.0,
                 };
                 visit.visit_file(&ast);
             }
@@ -330,6 +348,15 @@ impl Sources {
         depth: usize,
     ) -> Vec<Named> {
         let arg = stripped(arg);
+        // A `macro_rules!` metavariable, `$attr`, is its rule's parameter.
+        let arg = match arg {
+            [TokenTree::Punct(dollar), rest @ ..]
+                if dollar.as_char() == '$' && matches!(rest, [TokenTree::Ident(_)]) =>
+            {
+                rest
+            }
+            other => other,
+        };
         let unreadable = || vec![Named::Unreadable(spelled(arg))];
         if depth > DEPTH {
             return unreadable();
@@ -536,6 +563,19 @@ struct Collect<'a> {
     krate: &'a str,
     file: String,
     sources: &'a mut Sources,
+    /// This file's import aliases, the alias to the name it renames.
+    aliases: BTreeMap<String, String>,
+}
+
+/// Every `use … as …` of a file, at any depth, the alias to the name it renames.
+#[derive(Default)]
+struct Aliases(BTreeMap<String, String>);
+
+impl<'ast> Visit<'ast> for Aliases {
+    fn visit_use_rename(&mut self, node: &'ast syn::UseRename) {
+        self.0
+            .insert(node.rename.to_string(), node.ident.to_string());
+    }
 }
 
 impl Collect<'_> {
@@ -566,8 +606,71 @@ impl Collect<'_> {
             name: sig.ident.to_string(),
             params,
             lets: lets.0,
-            calls: calls(body),
+            calls: self.unaliased(calls(body)),
         });
+    }
+
+    /// `calls` with every callee written through an import alias read as the
+    /// name it renames.
+    fn unaliased(
+        &self,
+        mut calls: Vec<(String, Vec<Vec<TokenTree>>)>,
+    ) -> Vec<(String, Vec<Vec<TokenTree>>)> {
+        for (callee, _) in &mut calls {
+            if let Some(original) = self.aliases.get(callee) {
+                *callee = original.clone();
+            }
+        }
+        calls
+    }
+
+    /// One scope per rule of a `macro_rules! name`, named `name!`: its
+    /// metavariables, in the order the matcher binds them, are its parameters —
+    /// typed as a name, since a rule hands on whatever it is given — and its
+    /// transcriber is its body.
+    fn macro_rules(&mut self, name: &syn::Ident, body: TokenStream) {
+        let trees: Vec<TokenTree> = body.into_iter().collect();
+        let mut at = 0;
+        while let (
+            Some(TokenTree::Group(matcher)),
+            Some(TokenTree::Punct(eq)),
+            Some(TokenTree::Punct(gt)),
+            Some(TokenTree::Group(transcriber)),
+        ) = (
+            trees.get(at),
+            trees.get(at + 1),
+            trees.get(at + 2),
+            trees.get(at + 3),
+        ) {
+            if eq.as_char() != '=' || gt.as_char() != '>' {
+                break;
+            }
+            let mut flat = Vec::new();
+            nest_rs_conformance::sources::flatten(matcher.stream(), &mut flat);
+            let params = flat
+                .windows(2)
+                .filter_map(|pair| match pair {
+                    [TokenTree::Punct(dollar), TokenTree::Ident(var)]
+                        if dollar.as_char() == '$' =>
+                    {
+                        Some((var.to_string(), NAME.to_owned()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            self.sources.scopes.push(Scope {
+                krate: self.krate.to_owned(),
+                file: self.file.clone(),
+                name: format!("{name}!"),
+                params,
+                lets: BTreeMap::new(),
+                calls: self.unaliased(calls(transcriber.stream())),
+            });
+            at += 4;
+            if matches!(trees.get(at), Some(TokenTree::Punct(p)) if p.as_char() == ';') {
+                at += 1;
+            }
+        }
     }
 
     fn constant(&mut self, ident: &syn::Ident, ty: &syn::Type, init: &syn::Expr) {
@@ -582,6 +685,16 @@ impl Collect<'_> {
 }
 
 impl<'ast> Visit<'ast> for Collect<'_> {
+    fn visit_item_macro(&mut self, node: &'ast syn::ItemMacro) {
+        if node.mac.path.is_ident("macro_rules")
+            && let Some(name) = &node.ident
+            && !is_cfg_test(&node.attrs)
+        {
+            self.macro_rules(name, node.mac.tokens.clone());
+        }
+        syn::visit::visit_item_macro(self, node);
+    }
+
     fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
         if !is_cfg_test(&node.attrs) {
             syn::visit::visit_item_mod(self, node);
@@ -655,8 +768,9 @@ fn bound(pat: &syn::Pat) -> Option<String> {
 /// Every `name(…)` in `body`, at any depth, with its arguments split at the
 /// commas between them — `name::<T>(…)` included, because
 /// `reject_duplicate_argument` is generic and a turbofish must not hide a call
-/// from the join. `fn name(…)` is a declaration and `name!(…)` a macro, so
-/// neither is a call.
+/// from the join. `fn name(…)` is a declaration, so it is not a call. A macro
+/// invocation `name!(…)` is recorded as a call to `name!` — a name no function
+/// can have, so it only ever reaches a local `macro_rules!` way.
 fn calls(body: TokenStream) -> Vec<(String, Vec<Vec<TokenTree>>)> {
     let mut out = Vec::new();
     calls_in(body, &mut out);
@@ -679,6 +793,13 @@ fn calls_in(tokens: TokenStream, out: &mut Vec<(String, Vec<Vec<TokenTree>>)>) {
                     && args.delimiter() == Delimiter::Parenthesis
                 {
                     out.push((callee.to_string(), arguments(args.stream())));
+                }
+                if let (Some(TokenTree::Punct(bang)), Some(TokenTree::Group(args))) =
+                    (trees.get(at + 1), trees.get(at + 2))
+                    && bang.as_char() == '!'
+                    && args.delimiter() != Delimiter::None
+                {
+                    out.push((format!("{callee}!"), arguments(args.stream())));
                 }
             }
             TokenTree::Punct(_) | TokenTree::Literal(_) => {}
@@ -763,6 +884,145 @@ fn snapshotted(snapshots: &[String], needles: &[&str]) -> bool {
         .any(|text| needles.iter().all(|needle| text.contains(needle)))
 }
 
+/// Every key set a decorator's unknown-key call lists, per decorator and crate —
+/// the grammar's identity where one decorator name carries several.
+///
+/// Only a direct call listing its keys readably is read: a literal array, or a
+/// binding or a constant holding one. A key set computed at run time
+/// (`api_key_names()`, a job table's column) leaves its grammar keyed by the
+/// decorator alone, as the join read every grammar before.
+fn key_sets(sources: &Sources) -> BTreeMap<(String, String), BTreeSet<Vec<String>>> {
+    let tables = tables();
+    let mut out: BTreeMap<(String, String), BTreeSet<Vec<String>>> = BTreeMap::new();
+    for scope in &sources.scopes {
+        for (callee, args) in &scope.calls {
+            if callee != UNKNOWN_KEY || args.len() < 3 {
+                continue;
+            }
+            let Some(keys) = sources.listed(&args[2], scope, 0) else {
+                continue;
+            };
+            for named in sources.resolve(&args[0], scope, &tables, 0) {
+                if let Named::Member(attr) = named {
+                    out.entry((attr, scope.krate.clone()))
+                        .or_default()
+                        .insert(keys.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The keys a decorator's repeat refusals name, per decorator and crate —
+/// `None` when one names its key only at run time, which then covers any key.
+fn repeated_keys(sources: &Sources) -> BTreeMap<(String, String), Option<BTreeSet<String>>> {
+    let tables = tables();
+    let mut out: BTreeMap<(String, String), Option<BTreeSet<String>>> = BTreeMap::new();
+    for scope in &sources.scopes {
+        for (callee, args) in &scope.calls {
+            let (at_attr, at_key) = match callee.as_str() {
+                "reject_duplicate_argument" => (2, 3),
+                REPEATED_KEY => (0, 1),
+                _ => continue,
+            };
+            let (Some(attr), Some(key)) = (args.get(at_attr), args.get(at_key)) else {
+                continue;
+            };
+            let key = match stripped(key) {
+                [TokenTree::Literal(literal)] => {
+                    syn::parse_str::<syn::LitStr>(&literal.to_string())
+                        .ok()
+                        .map(|lit| lit.value())
+                }
+                _ => None,
+            };
+            for named in sources.resolve(attr, scope, &tables, 0) {
+                let Named::Member(attr) = named else { continue };
+                let entry = out
+                    .entry((attr, scope.krate.clone()))
+                    .or_insert_with(|| Some(BTreeSet::new()));
+                match (&key, entry.as_mut()) {
+                    (Some(key), Some(keys)) => {
+                        keys.insert(key.clone());
+                    }
+                    (None, _) => *entry = None,
+                    (Some(_), None) => {}
+                }
+            }
+        }
+    }
+    out
+}
+
+impl Sources {
+    /// The string literals a key-set argument lists, read through a `&`, a
+    /// binding and a constant.
+    fn listed(&self, arg: &[TokenTree], scope: &Scope, depth: usize) -> Option<Vec<String>> {
+        if depth > DEPTH {
+            return None;
+        }
+        match stripped(arg) {
+            [TokenTree::Group(group)] if group.delimiter() == Delimiter::Bracket => {
+                let mut keys = Vec::new();
+                for item in arguments(group.stream()) {
+                    let [TokenTree::Literal(literal)] = item.as_slice() else {
+                        return None;
+                    };
+                    keys.push(
+                        syn::parse_str::<syn::LitStr>(&literal.to_string())
+                            .ok()?
+                            .value(),
+                    );
+                }
+                keys.sort();
+                Some(keys)
+            }
+            [TokenTree::Ident(ident)] => {
+                let ident = ident.to_string();
+                if let Some([init]) = scope.lets.get(&ident).map(Vec::as_slice) {
+                    return self.listed(init, scope, depth + 1);
+                }
+                let (_, init) = self
+                    .consts
+                    .get(&(scope.krate.clone(), ident.clone()))
+                    .or_else(|| self.consts.get(&(CODEGEN.to_owned(), ident)))?;
+                self.listed(init, &Scope::of_constant(scope), depth + 1)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Whether a snapshot line opening with `prefix` names, in the backticked span
+/// right after it, one of `keys` — `#[process] takes at most one `throttle(limit)``
+/// names `limit`.
+fn names_a_key(snapshots: &[String], prefix: &str, suffix: &str, keys: &[String]) -> bool {
+    snapshots.iter().flat_map(|text| text.lines()).any(|line| {
+        let Some(at) = line.find(prefix) else {
+            return false;
+        };
+        let rest = &line[at + prefix.len()..];
+        let Some(end) = rest.find('`') else {
+            return false;
+        };
+        let named = &rest[..end];
+        line.contains(suffix) && keys.iter().any(|key| named.contains(key.as_str()))
+    })
+}
+
+/// Whether a snapshot's unknown-key refusal for `attr` offers every one of
+/// `keys` — the key set that line lists is the grammar that refused.
+fn offers_every_key(snapshots: &[String], attr: &str, keys: &[String]) -> bool {
+    let unknown = format!("unknown #[{attr}] argument ");
+    snapshots.iter().flat_map(|text| text.lines()).any(|line| {
+        line.contains(&unknown)
+            && line.split_once("; expected ").is_some_and(|(_, offered)| {
+                keys.iter().all(|key| offered.contains(&format!("`{key}`")))
+            })
+    })
+}
+
 #[test]
 fn every_key_value_grammar_refuses_the_four_ways_of_getting_it_wrong() {
     let root = repo_root();
@@ -776,43 +1036,86 @@ fn every_key_value_grammar_refuses_the_four_ways_of_getting_it_wrong() {
     );
 
     let snapshots = snapshots(&root);
+    let key_sets = key_sets(&sources);
+    let repeated = repeated_keys(&sources);
     let mut holes = BTreeSet::new();
     let mut cells = 0usize;
     for (attr, crates) in &grammars {
-        let duplicate = format!("#[{attr}] takes at most one ");
-        let bare = format!("#[{attr}] `");
-        let unknown = format!("unknown #[{attr}] argument ");
-        // Refused by a crate that words this grammar: another crate's decorator
-        // of the same name is not this one.
-        let refuses_a_repeat = repeats.get(attr).is_some_and(|by| !by.is_disjoint(crates));
-        for (column, present) in [
-            (
-                "a duplicate key refused, through the shared `reject_duplicate_argument`",
-                refuses_a_repeat,
-            ),
-            (
-                "a snapshot pinning the duplicate-key refusal",
-                snapshotted(&snapshots, &[&duplicate]),
-            ),
-            (
-                "a snapshot pinning the unknown-key refusal",
-                snapshotted(&snapshots, &[&unknown]),
-            ),
-            (
-                "a snapshot pinning the bare-key refusal",
-                snapshotted(&snapshots, &[&bare, "needs a value"]),
-            ),
-        ] {
-            cells += 1;
-            if !present {
-                // **The crate first, and not only for context.** A baseline
-                // line starting with `#` is a comment to `baseline::compare`,
-                // and a cell keyed `#[authorize] :: …` is exactly that — the
-                // two recorded holes read as prose and the join reported them
-                // as new on every run. Naming the crate that words the grammar
-                // is also the more useful key: it says where to go.
-                let owners = crates.iter().cloned().collect::<Vec<_>>().join(", ");
-                holes.insert(format!("{owners} #[{attr}] :: {column}"));
+        // One decorator name, one grammar per key set its crates list — or one
+        // grammar keyed by the name alone where no key set is readable.
+        let mut by_keys: BTreeMap<Option<Vec<String>>, BTreeSet<String>> = BTreeMap::new();
+        for krate in crates {
+            match key_sets.get(&(attr.clone(), krate.clone())) {
+                Some(sets) => {
+                    for keys in sets {
+                        by_keys
+                            .entry(Some(keys.clone()))
+                            .or_default()
+                            .insert(krate.clone());
+                    }
+                }
+                None => {
+                    by_keys.entry(None).or_default().insert(krate.clone());
+                }
+            }
+        }
+        let several = by_keys.len() > 1;
+        for (keys, owners) in &by_keys {
+            let duplicate = format!("#[{attr}] takes at most one ");
+            let bare = format!("#[{attr}] `");
+            let unknown = format!("unknown #[{attr}] argument ");
+            let (refuses_a_repeat, repeat_pinned, unknown_pinned, bare_pinned) = match keys {
+                Some(keys) => (
+                    owners.iter().any(|krate| {
+                        match repeated.get(&(attr.clone(), krate.clone())) {
+                            Some(None) => true,
+                            Some(Some(named)) => keys.iter().any(|key| named.contains(key)),
+                            // Refused through a way the direct read does not
+                            // see: the decorator-level answer stands.
+                            None => repeats.get(attr).is_some_and(|by| by.contains(krate)),
+                        }
+                    }),
+                    names_a_key(&snapshots, &format!("{duplicate}`"), "", keys),
+                    offers_every_key(&snapshots, attr, keys),
+                    names_a_key(&snapshots, &bare, "needs a value", keys),
+                ),
+                // Refused by a crate that words this grammar: another crate's
+                // decorator of the same name is not this one.
+                None => (
+                    repeats.get(attr).is_some_and(|by| !by.is_disjoint(owners)),
+                    snapshotted(&snapshots, &[&duplicate]),
+                    snapshotted(&snapshots, &[&unknown]),
+                    snapshotted(&snapshots, &[&bare, "needs a value"]),
+                ),
+            };
+            for (column, present) in [
+                (
+                    "a duplicate key refused, through the shared `reject_duplicate_argument`",
+                    refuses_a_repeat,
+                ),
+                (
+                    "a snapshot pinning the duplicate-key refusal",
+                    repeat_pinned,
+                ),
+                ("a snapshot pinning the unknown-key refusal", unknown_pinned),
+                ("a snapshot pinning the bare-key refusal", bare_pinned),
+            ] {
+                cells += 1;
+                if !present {
+                    // **The crate first, and not only for context.** A baseline
+                    // line starting with `#` is a comment to `baseline::compare`,
+                    // and a cell keyed `#[authorize] :: …` is exactly that — the
+                    // two recorded holes read as prose and the join reported them
+                    // as new on every run. Naming the crate that words the grammar
+                    // is also the more useful key: it says where to go. The key
+                    // set joins it only where one name carries several grammars.
+                    let owners = owners.iter().cloned().collect::<Vec<_>>().join(", ");
+                    let grammar = match (several, keys) {
+                        (true, Some(keys)) => format!(" ({})", keys.join(", ")),
+                        _ => String::new(),
+                    };
+                    holes.insert(format!("{owners} #[{attr}]{grammar} :: {column}"));
+                }
             }
         }
     }
@@ -900,7 +1203,13 @@ fn a_decorator_is_read_through_each_shape_it_reaches_the_sentence_in() {
              fn absolute() {\n\
                  unknown_argument(::nest_rs_codegen::JobDecorator::After.name(), \"x\");\n\
              }\n\
-             fn computed(key: &str) { unknown_argument(&format!(\"#{key}\"), \"x\"); }",
+             fn computed(key: &str) { unknown_argument(&format!(\"#{key}\"), \"x\"); }\n\
+             use nest_rs_codegen::unknown_argument as unknown;\n\
+             fn aliased() { unknown(\"epsilon\", \"x\"); }\n\
+             macro_rules! refuse {\n\
+                 ($attr:expr, $name:expr) => { nest_rs_codegen::unknown_argument($attr, $name) };\n\
+             }\n\
+             fn through_a_macro(name: &str) { refuse!(\"zeta\", name); }",
         ),
         (
             "crates/nest-rs-beta-macros/src/lib.rs",
@@ -932,6 +1241,10 @@ fn a_decorator_is_read_through_each_shape_it_reaches_the_sentence_in() {
         ("gamma".to_owned(), crates(&[alpha])),
         // A turbofish does not hide a call.
         ("delta".to_owned(), crates(&[alpha])),
+        // Nor an import alias, nor a local `macro_rules!` handing its
+        // metavariable on — both used to drop their decorator in silence.
+        ("epsilon".to_owned(), crates(&[alpha])),
+        ("zeta".to_owned(), crates(&[alpha])),
         // A table's variant names its member — through a constant, written
         // directly, and through an absolute path — and a value only data decides
         // names every member.
@@ -954,5 +1267,55 @@ fn a_decorator_is_read_through_each_shape_it_reaches_the_sentence_in() {
             "crates/nest-rs-beta-macros/src/lib.rs: `unreached` hands a decorator's name on to \
              the sentence, and no call to it is read",
         ],
+    );
+}
+
+/// [`key_sets`] and [`repeated_keys`], on a planted tree: one decorator name
+/// worded as two grammars in one crate — the shape `#[expose]` has — is two key
+/// sets, and a repeat refusal naming a key of one says nothing of the other.
+#[test]
+fn one_decorator_name_with_two_grammars_is_two_key_sets() {
+    const TREE: [(&str, &str); 2] = [
+        (
+            "crates/nest-rs-codegen/src/args.rs",
+            "pub fn unknown_argument(attr: &str, name: &str, expected: &[&str]) -> String { \
+                 format!(\"{attr}{name}{expected:?}\") }\n\
+             pub fn duplicate_argument(attr: &str, name: &str) -> String { format!(\"{attr}{name}\") }\n\
+             pub fn reject_duplicate_argument(taken: bool, at: &str, attr: &str, name: &str) { \
+                 if taken { duplicate_argument(attr, name); } }",
+        ),
+        (
+            "crates/nest-rs-omega-macros/src/lib.rs",
+            "const FIELD_KEYS: [&str; 2] = [\"via\", \"complexity\"];\n\
+             fn on_the_struct(name: &str, taken: bool) {\n\
+                 reject_duplicate_argument(taken, name, \"omega\", \"name\");\n\
+                 unknown_argument(\"omega\", name, &[\"name\", \"service\"]);\n\
+             }\n\
+             fn on_a_field(name: &str) { unknown_argument(\"omega\", name, &FIELD_KEYS); }",
+        ),
+    ];
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("grammars-key-sets-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    crate::plant(&root, &TREE);
+    let sources = Sources::collect(&root);
+    let _ = std::fs::remove_dir_all(&root);
+
+    let key = ("omega".to_owned(), "nest-rs-omega-macros".to_owned());
+    let sets: Vec<Vec<String>> = key_sets(&sources)
+        .remove(&key)
+        .map(|sets| sets.into_iter().collect())
+        .unwrap_or_default();
+    assert_eq!(
+        sets,
+        [
+            vec!["complexity".to_owned(), "via".to_owned()],
+            vec!["name".to_owned(), "service".to_owned()],
+        ],
+    );
+    assert_eq!(
+        repeated_keys(&sources).remove(&key),
+        Some(Some(BTreeSet::from(["name".to_owned()]))),
+        "the struct half's refusal names `name`, which is no key of the field half",
     );
 }

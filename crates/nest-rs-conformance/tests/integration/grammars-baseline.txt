@@ -1,7 +1,7 @@
 # Ways of writing a decorator's arguments wrong that the decorator does not
 # name. **It only shrinks.**
 #
-# Two cells of fifty-six, and neither is work: at both, a *bare key* is not a
+# Two cells, and neither is work: at both, a *bare key* is not a
 # mistake, so there is nothing to refuse. `CLAUDE.md` is explicit that this is
 # the right shape — "Cannot is not the same as not yet… A site where the thing
 # is possible but unbuilt is an owner question, raised as one; writing its
@@ -13,7 +13,12 @@
 # accepted a repeated key and dropped one of the two declarations by source
 # order — on `#[api]` that is published prose, which `CLAUDE.md` mandates the
 # attribute *instead of* a doc comment for; on `#[authorize]` it is which service
-# loads the authorized subject. `#[config]`, `#[queue]`, `#[inject]` and
+# loads the authorized subject.
+#
+# A grammar is a key set, not a decorator name. `#[expose]` is two in one crate —
+# the `Model`'s and a column's — and the struct half's refusals filled the field
+# half's cells until the join read the key set each unknown-key call lists; the
+# field half then refused its repeats (`via`, `complexity`) for the first time. `#[config]`, `#[queue]`, `#[inject]` and
 # `#[interceptor]` each let a bare key die on syn's `expected =`, which names the
 # grammar and not the key.
 #

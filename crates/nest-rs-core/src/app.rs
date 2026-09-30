@@ -150,8 +150,10 @@ impl App {
     /// Configure each transport against the container, run the init lifecycle
     /// hooks, then run all transports concurrently. SIGINT / SIGTERM cancels the
     /// shared token; the first transport that errors also cancels the others.
-    /// Once the transports have stopped, the shutdown lifecycle hooks run, each
-    /// abandoned past [`SHUTDOWN_HOOK_TIMEOUT`](crate::SHUTDOWN_HOOK_TIMEOUT).
+    /// Once the transports have stopped, the shutdown lifecycle hooks run, all
+    /// three phases inside one budget,
+    /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT); a hook that
+    /// panics is reported and the rest still run.
     /// The transports are awaited without a bound of this method's own: each
     /// owes its own, per [`Transport::serve`].
     ///
@@ -220,10 +222,17 @@ impl App {
         }
 
         // Shutdown is best-effort: every provider's cleanup runs even if one
-        // fails or a transport errored.
-        run_phase_lenient(&container, LifecyclePhase::OnModuleDestroy).await;
-        run_phase_lenient(&container, LifecyclePhase::BeforeApplicationShutdown).await;
-        run_phase_lenient(&container, LifecyclePhase::OnApplicationShutdown).await;
+        // fails, panics or a transport errored — and the three phases share one
+        // deadline, so the teardown's cost is bounded whatever the hook count.
+        let deadline = tokio::time::Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT;
+        run_phase_lenient(&container, LifecyclePhase::OnModuleDestroy, deadline).await;
+        run_phase_lenient(
+            &container,
+            LifecyclePhase::BeforeApplicationShutdown,
+            deadline,
+        )
+        .await;
+        run_phase_lenient(&container, LifecyclePhase::OnApplicationShutdown, deadline).await;
 
         match first_err {
             Some(e) => Err(e),

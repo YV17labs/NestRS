@@ -11,30 +11,45 @@
 //! that needs another service injects it.
 
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::time::Duration;
 
+use futures_util::FutureExt as _;
+use tokio::time::Instant;
+
 use crate::container::Container;
 
-/// How long one shutdown hook may run before it is abandoned and the next one
-/// starts.
+/// How long the shutdown hooks may run, all of them together, before what still
+/// waits is abandoned.
 ///
-/// Five seconds, argued against the budget it is spent from. Kubernetes gives a
-/// pod 30 seconds between `SIGTERM` and `SIGKILL` by default, and the HTTP
-/// transport's shutdown window (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 25 s by
-/// default) spends 25 of them whenever a connection is still open at its end —
-/// an `#[sse]` stream is enough. The hooks run once every transport has
-/// stopped, so the margin they are left is those five: one hook that hangs
-/// spends the margin and no more, and the process still ends inside the default
-/// grace rather than to a kill that skips every later hook and the telemetry
-/// flush. It is also the OpenTelemetry SDK's own bound on shutting one provider
-/// down, so the two waits that follow the transports agree.
+/// **One budget for the whole teardown, never one per hook**, because the budget
+/// it is spent from is per process. Kubernetes gives a pod 30 seconds between
+/// `SIGTERM` and `SIGKILL` by default, and the way down spends them in three
+/// steps, each bounded by default so the three sum under the grace:
+///
+/// | Step | Bound | Default |
+/// |---|---|---|
+/// | the transports stop | the HTTP shutdown window, `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS` | 20 s |
+/// | the shutdown hooks run | this budget, across all three phases | 5 s |
+/// | telemetry flushes | `nest_rs_opentelemetry`'s flush bound, every provider at once | 3 s |
+///
+/// 28 seconds, two short of the kill: a process past its grace dies without a
+/// line, skipping every later hook and the flush. A bound per hook could not
+/// hold that sum — `k` hooks that hang cost `k` times the bound — which is why
+/// the budget is a deadline the three phases share.
+///
+/// **Once it is spent, every later hook still starts.** Each is polled once
+/// against the elapsed deadline: a hook that finishes without waiting — a
+/// counter logged, a buffer handed to a channel — finishes, and one that waits
+/// is abandoned at once, with the same `warn` naming it. A hook is never skipped
+/// in silence.
 ///
 /// A constant rather than a setting: a cleanup that needs longer is draining
 /// work, and draining belongs in a transport's own window, which a deployment
 /// does configure. The bound covers a hook that waits — an `async fn` pending on
 /// I/O, a lock, a channel; one that blocks its thread is past any timer's reach.
-pub const SHUTDOWN_HOOK_TIMEOUT: Duration = Duration::from_secs(5);
+pub const SHUTDOWN_HOOKS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Lifecycle phase at which a hook runs. Init phases run after the container
 /// is built and transports configured, before serving; shutdown phases run
@@ -133,37 +148,90 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
             method = hook.method,
             "running lifecycle hook",
         );
-        (hook.run)(container).await.map_err(|err| {
-            err.context(format!(
-                "lifecycle hook {}::{} ({phase:?}) failed",
-                hook.provider, hook.method
-            ))
-        })?;
+        match contained((hook.run)(container)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                return Err(err.context(format!(
+                    "lifecycle hook {}::{} ({phase:?}) failed",
+                    hook.provider, hook.method
+                )));
+            }
+            Err(payload) => {
+                // The message rides the line, under the field every contained
+                // panic is logged with; the error names the hook, as a failed
+                // one's does, and aborts the boot the same way.
+                tracing::error!(
+                    target: crate::target::LIFECYCLE,
+                    ?phase,
+                    provider = hook.provider,
+                    method = hook.method,
+                    origin = hook.origin,
+                    panic = crate::panic_message(payload.as_ref()),
+                    "lifecycle hook panicked; the boot is aborted",
+                );
+                anyhow::bail!(
+                    "lifecycle hook {}::{} ({phase:?}) panicked",
+                    hook.provider,
+                    hook.method,
+                );
+            }
+        }
     }
     Ok(())
 }
 
+/// `hook`, with a panic inside it caught and handed back as its payload.
+///
+/// A hook is developer code, and an unwind out of one used to leave `App::run`
+/// with it: at init, the boot aborted with no line naming the hook; at shutdown,
+/// every later hook — in its phase and in the phases after — never ran. Both
+/// runners contain it, and each reports it the way it reports an error.
+async fn contained(
+    hook: HookFuture<'_>,
+) -> Result<anyhow::Result<()>, Box<dyn std::any::Any + Send>> {
+    AssertUnwindSafe(hook).catch_unwind().await
+}
+
 /// Shutdown-phase runner: best-effort, logs failures and continues so one
-/// provider's cleanup error does not skip another's — and bounded by
-/// [`SHUTDOWN_HOOK_TIMEOUT`], so neither does one provider's cleanup that never
-/// returns. An abandoned hook's future is dropped where it waits, as any
+/// provider's cleanup error — or panic — does not skip another's, and bounded by
+/// `deadline`, which the three shutdown phases share
+/// ([`SHUTDOWN_HOOKS_TIMEOUT`]), so neither does one provider's cleanup that
+/// never returns. An abandoned hook's future is dropped where it waits, as any
 /// cancelled task is: what it held is released, and what it had not yet done
 /// stays undone, which is why the line naming it is a `warn`.
-pub(crate) async fn run_phase_lenient(container: &Container, phase: LifecyclePhase) {
+pub(crate) async fn run_phase_lenient(
+    container: &Container,
+    phase: LifecyclePhase,
+    deadline: Instant,
+) {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
             report_inert_hook(hook, phase);
             continue;
         }
-        match tokio::time::timeout(SHUTDOWN_HOOK_TIMEOUT, (hook.run)(container)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => tracing::error!(
+        let started = Instant::now();
+        // Polled once even past the deadline — `timeout_at` polls the hook
+        // before its timer — so a hook that finishes without waiting still runs
+        // once the budget is spent. See `SHUTDOWN_HOOKS_TIMEOUT`.
+        match tokio::time::timeout_at(deadline, contained((hook.run)(container))).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(err))) => tracing::error!(
                 target: crate::target::LIFECYCLE,
                 ?phase,
                 provider = hook.provider,
                 method = hook.method,
+                origin = hook.origin,
                 error = %crate::error_message(&*err),
                 "lifecycle hook failed",
+            ),
+            Ok(Err(payload)) => tracing::error!(
+                target: crate::target::LIFECYCLE,
+                ?phase,
+                provider = hook.provider,
+                method = hook.method,
+                origin = hook.origin,
+                panic = crate::panic_message(payload.as_ref()),
+                "shutdown hook panicked, and the hooks after it still run",
             ),
             Err(_) => tracing::warn!(
                 target: crate::target::LIFECYCLE,
@@ -171,9 +239,10 @@ pub(crate) async fn run_phase_lenient(container: &Container, phase: LifecyclePha
                 provider = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
-                waited_ms = u64::try_from(SHUTDOWN_HOOK_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
-                "shutdown hook abandoned: it did not return within the bound, and the hooks after \
-                 it still run",
+                waited_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                budget_ms = u64::try_from(SHUTDOWN_HOOKS_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                "shutdown hook abandoned: the shutdown hooks' budget was spent while it waited, \
+                 and the hooks after it still start",
             ),
         }
     }
@@ -272,6 +341,11 @@ mod tests {
             .await
             .expect("a skipped hook must not fail the phase");
         // Shutdown runner: same skip, best-effort (also must not panic).
-        run_phase_lenient(&container, LifecyclePhase::BeforeApplicationShutdown).await;
+        run_phase_lenient(
+            &container,
+            LifecyclePhase::BeforeApplicationShutdown,
+            Instant::now() + SHUTDOWN_HOOKS_TIMEOUT,
+        )
+        .await;
     }
 }

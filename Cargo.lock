@@ -2760,6 +2760,7 @@ version = "7.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures-util",
  "inventory",
  "nest-rs-core-macros",
  "nest-rs-testing",

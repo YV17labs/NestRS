@@ -25,6 +25,9 @@ thiserror.workspace = true
 nest-rs-core-macros.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+# `catch_unwind` around a lifecycle hook: a panic in one is reported, not
+# propagated out of `App::run`.
+futures-util.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

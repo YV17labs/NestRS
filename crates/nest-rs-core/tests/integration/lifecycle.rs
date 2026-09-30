@@ -14,7 +14,7 @@ use nest_rs_core::target;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use nest_rs_core::{App, SHUTDOWN_HOOK_TIMEOUT, hooks, injectable, module};
+use nest_rs_core::{App, SHUTDOWN_HOOKS_TIMEOUT, hooks, injectable, module};
 use nest_rs_testing::LogCapture;
 
 trait Bridge: Send + Sync {}
@@ -259,6 +259,10 @@ async fn a_hook_runs_where_a_trait_on_arc_shares_its_name() {
     assert_eq!(WARMED.load(Ordering::SeqCst), 1);
 }
 
+/// The line an abandoned shutdown hook is named on.
+const ABANDONED: &str = "shutdown hook abandoned: the shutdown hooks' budget was spent while it \
+                         waited, and the hooks after it still start";
+
 /// Every shutdown hook that ran after the stuck one.
 static TIDIED: AtomicUsize = AtomicUsize::new(0);
 
@@ -304,9 +308,11 @@ struct StuckOnDestroyModule;
 
 /// A shutdown hook that never returns used to hold the process until the
 /// orchestrator killed it — skipping every hook after it and the telemetry
-/// flush. It is abandoned at its bound, named at `warn`, and the rest still run.
+/// flush. It is abandoned when the budget is spent, named at `warn`, and the
+/// rest still run: a hook that finishes without waiting finishes even past the
+/// budget.
 #[tokio::test(start_paused = true)]
-async fn a_shutdown_hook_that_never_returns_is_abandoned_at_its_bound_and_the_rest_still_run() {
+async fn a_shutdown_hook_that_never_returns_is_abandoned_at_the_budget_and_the_rest_still_run() {
     let logs = LogCapture::install();
     let started = tokio::time::Instant::now();
     App::new::<StuckOnDestroyModule>()
@@ -317,19 +323,15 @@ async fn a_shutdown_hook_that_never_returns_is_abandoned_at_its_bound_and_the_re
     let took = started.elapsed();
 
     assert!(
-        took >= SHUTDOWN_HOOK_TIMEOUT && took < SHUTDOWN_HOOK_TIMEOUT + Duration::from_secs(1),
-        "shutdown waited on the stuck hook for its bound and no longer, took {took:?}",
+        took >= SHUTDOWN_HOOKS_TIMEOUT && took < SHUTDOWN_HOOKS_TIMEOUT + Duration::from_secs(1),
+        "shutdown waited on the stuck hook for the budget and no longer, took {took:?}",
     );
     assert_eq!(
         TIDIED.load(Ordering::SeqCst),
         3,
         "the hook after it in its phase, and one in each later phase, all ran",
     );
-    let event = logs.expect_one(
-        target::LIFECYCLE,
-        "shutdown hook abandoned: it did not return within the bound, and the hooks after it \
-         still run",
-    );
+    let event = logs.expect_one(target::LIFECYCLE, ABANDONED);
     assert_eq!(event.level, "warn");
     assert!(
         event
@@ -349,6 +351,214 @@ async fn a_shutdown_hook_that_never_returns_is_abandoned_at_its_bound_and_the_re
     );
     assert_eq!(
         event.field("waited_ms"),
-        Some(SHUTDOWN_HOOK_TIMEOUT.as_millis().to_string()),
+        Some(SHUTDOWN_HOOKS_TIMEOUT.as_millis().to_string()),
+    );
+    assert_eq!(
+        event.field("budget_ms"),
+        Some(SHUTDOWN_HOOKS_TIMEOUT.as_millis().to_string()),
+    );
+}
+
+/// A cleanup that never returns, in every shutdown phase and twice in the
+/// first.
+#[injectable]
+#[derive(Default)]
+struct StuckEverywhere;
+
+#[hooks]
+impl StuckEverywhere {
+    #[on_module_destroy]
+    async fn a(&self) {
+        std::future::pending::<()>().await;
+    }
+
+    #[on_module_destroy]
+    async fn b(&self) {
+        std::future::pending::<()>().await;
+    }
+
+    #[before_application_shutdown]
+    async fn c(&self) {
+        std::future::pending::<()>().await;
+    }
+
+    #[on_application_shutdown]
+    async fn d(&self) {
+        std::future::pending::<()>().await;
+    }
+}
+
+#[module(providers = [StuckEverywhere])]
+struct StuckEverywhereModule;
+
+/// The budget is the teardown's, not each hook's: four hooks that hang cost
+/// five seconds, not twenty. A bound per hook let `k` stuck hooks spend `k`
+/// times it, which no grace period can be sized against.
+#[tokio::test(start_paused = true)]
+async fn four_stuck_shutdown_hooks_share_one_budget_and_each_is_named() {
+    let logs = LogCapture::install();
+    let started = tokio::time::Instant::now();
+    App::new::<StuckEverywhereModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("abandoned cleanups are not an error: shutdown is best-effort");
+    let took = started.elapsed();
+
+    assert!(
+        took >= SHUTDOWN_HOOKS_TIMEOUT && took < SHUTDOWN_HOOKS_TIMEOUT + Duration::from_secs(1),
+        "the four stuck hooks were held to one budget between them, took {took:?}",
+    );
+    let abandoned: Vec<_> = logs
+        .find(target::LIFECYCLE, ABANDONED)
+        .into_iter()
+        .filter(|event| {
+            event
+                .field("provider")
+                .is_some_and(|p| p.contains("StuckEverywhere"))
+        })
+        .map(|event| {
+            (
+                event.field("method").unwrap_or_default(),
+                event.field("waited_ms").unwrap_or_default(),
+            )
+        })
+        .collect();
+    let budget = SHUTDOWN_HOOKS_TIMEOUT.as_millis().to_string();
+    assert_eq!(
+        abandoned,
+        vec![
+            ("a".to_owned(), budget),
+            ("b".to_owned(), "0".to_owned()),
+            ("c".to_owned(), "0".to_owned()),
+            ("d".to_owned(), "0".to_owned()),
+        ],
+        "the first spends the budget, and each one after it is started, abandoned and named",
+    );
+}
+
+/// Every hook that ran after the panicking one.
+static AFTER_PANIC: AtomicUsize = AtomicUsize::new(0);
+
+#[injectable]
+#[derive(Default)]
+struct AaPanicsOnDestroy;
+
+#[hooks]
+impl AaPanicsOnDestroy {
+    #[on_module_destroy]
+    async fn release(&self) {
+        panic!("the pool was already closed");
+    }
+}
+
+/// Sorts after `AaPanicsOnDestroy` in its phase, and has a hook in a later one.
+#[injectable]
+#[derive(Default)]
+struct ZzAfterPanic;
+
+#[hooks]
+impl ZzAfterPanic {
+    #[on_module_destroy]
+    async fn release(&self) {
+        AFTER_PANIC.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[on_application_shutdown]
+    async fn close(&self) {
+        AFTER_PANIC.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[module(providers = [AaPanicsOnDestroy, ZzAfterPanic])]
+struct PanicOnDestroyModule;
+
+/// A panic in a shutdown hook used to unwind out of `App::run`, skipping every
+/// later hook in its phase and in the phases after, with no line naming it. It
+/// is contained like an error: named at `error`, and the rest still run.
+#[tokio::test]
+async fn a_panicking_shutdown_hook_is_named_at_error_and_the_rest_still_run() {
+    let logs = LogCapture::install();
+    let outcome = tokio::spawn(async {
+        App::new::<PanicOnDestroyModule>()
+            .expect("the module boots")
+            .run()
+            .await
+    })
+    .await;
+
+    assert!(
+        matches!(outcome, Ok(Ok(()))),
+        "a panicking cleanup is contained: shutdown is best-effort, got {outcome:?}",
+    );
+    assert_eq!(
+        AFTER_PANIC.load(Ordering::SeqCst),
+        2,
+        "the hook after it in its phase, and the one in a later phase, both ran",
+    );
+    let event = logs.expect_one(
+        target::LIFECYCLE,
+        "shutdown hook panicked, and the hooks after it still run",
+    );
+    assert_eq!(event.level, "error");
+    assert!(
+        event
+            .field("provider")
+            .is_some_and(|p| p.contains("AaPanicsOnDestroy")),
+        "{:?}",
+        event.fields,
+    );
+    assert_eq!(event.field("method").as_deref(), Some("release"));
+    assert_eq!(event.field("phase").as_deref(), Some("OnModuleDestroy"));
+    assert_eq!(
+        event.field("panic").as_deref(),
+        Some("the pool was already closed"),
+    );
+}
+
+#[injectable]
+#[derive(Default)]
+struct PanicsOnInit;
+
+#[hooks]
+impl PanicsOnInit {
+    #[on_module_init]
+    async fn warm(&self) {
+        panic!("the cache backend refused the warm-up");
+    }
+}
+
+#[module(providers = [PanicsOnInit])]
+struct PanicOnInitModule;
+
+/// Init is strict, so a panicking init hook still aborts the boot — but as the
+/// error a failing one returns, naming the hook, and with the panic's message on
+/// a line, rather than an unwind out of `App::run` that names nothing.
+#[tokio::test]
+async fn a_panicking_init_hook_aborts_the_boot_with_an_error_naming_it() {
+    let logs = LogCapture::install();
+    let outcome = tokio::spawn(async {
+        App::new::<PanicOnInitModule>()
+            .expect("the module boots")
+            .run()
+            .await
+    })
+    .await
+    .expect("the panic is contained, not propagated out of `App::run`");
+    let error = outcome.expect_err("an init hook that panicked aborts the boot");
+    assert_eq!(
+        error.to_string(),
+        "lifecycle hook PanicsOnInit::warm (OnModuleInit) panicked",
+    );
+    let event = logs.expect_one(
+        target::LIFECYCLE,
+        "lifecycle hook panicked; the boot is aborted",
+    );
+    assert_eq!(event.level, "error");
+    assert_eq!(event.field("method").as_deref(), Some("warm"));
+    assert_eq!(event.field("phase").as_deref(), Some("OnModuleInit"));
+    assert_eq!(
+        event.field("panic").as_deref(),
+        Some("the cache backend refused the warm-up"),
     );
 }

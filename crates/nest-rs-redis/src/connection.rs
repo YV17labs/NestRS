@@ -330,6 +330,18 @@ impl RedisConnection {
             ..self.clone()
         }
     }
+
+    /// The client's own connection underneath — for an apalis call implemented
+    /// only over it (`BackendExpose` on a `RedisStorage` of apalis's default
+    /// connection), which [`bound`](Self::bound) then holds to the budget.
+    pub(crate) fn manager(&self) -> ConnectionManager {
+        self.manager.clone()
+    }
+
+    /// `call` within this connection's budget, as every command on it is.
+    pub(crate) async fn bound<F: Future>(&self, call: F) -> Result<F::Output, redis::RedisError> {
+        within(self.budget, call).await
+    }
 }
 
 impl ConnectionLike for RedisConnection {

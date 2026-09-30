@@ -149,12 +149,15 @@ pub enum RedisError {
      are gone. Or move them, with every worker of the queue stopped and before anything is pushed \
      under `{namespace}`: `RENAMENX` each of the queue's 6.x keys to the same structure under \
      `{namespace}` — the in-flight set takes one step more, listed with the rest on the queue \
-     documentation's \"Upgrading queues from 6.x\" page"
+     documentation's \"Upgrading queues from 6.x\" page. If those keys are an application's \
+     own rather than a 6.x queue's, rename them out of the way instead: moved under \
+     `{namespace}`, they would be read as jobs"
 )]
 pub(crate) struct LegacyLayoutError {
     /// The queue whose jobs wait under the old layout.
     pub(crate) queue: String,
-    /// The old keys that still hold jobs, comma-separated.
+    /// What the old layout holds, as apalis counted it: each structure, and how
+    /// many jobs — comma-separated.
     pub(crate) keys: String,
     /// Where the queue lives now.
     pub(crate) namespace: String,

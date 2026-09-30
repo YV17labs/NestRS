@@ -144,6 +144,80 @@ async fn jobs_left_under_the_6x_layout_refuse_the_worker_and_warn_the_producer_o
     worker.shutdown().await.expect("clean shutdown");
 }
 
+// --- an application's key at a 6.x name ------------------------------------------
+
+const COLLIDING_QUEUE: &str = "nestrs-e2e-layout-colliding";
+
+#[queue(name = "nestrs-e2e-layout-colliding", job = LayoutCommand)]
+struct CollidingQueue;
+
+#[injectable]
+#[derive(Default)]
+struct CollidingProcessor;
+
+#[processor]
+impl CollidingProcessor {
+    #[process(queue = CollidingQueue, retries = 0)]
+    async fn run(&self, _job: LayoutCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    providers = [CollidingProcessor],
+)]
+struct CollidingModule;
+
+/// An application's own key that happens to sit at the name 6.x kept a queue's
+/// waiting list under — a string, here — holds no job: the check asks apalis,
+/// which counts lists and sets and refuses a string, so the worker starts, the
+/// key is left as it was, and the boot says why it was not counted. Counted by
+/// name, it refused the boot and printed a `RENAMENX` that would have put a
+/// string where apalis pushes, failing every push and fetch after it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_applications_key_at_a_6x_name_is_not_taken_for_jobs() {
+    let logs = LogCapture::install_global();
+    let mut admin = crate::connect().await;
+    let flag = format!("{COLLIDING_QUEUE}:active");
+    let _: () = redis::cmd("SET")
+        .arg(&flag)
+        .arg("an application's own flag")
+        .query_async(&mut admin)
+        .await
+        .expect("SET");
+
+    let started = crate::replica::<CollidingModule>().await;
+    started.worker.shutdown().await.expect("clean shutdown");
+    let kept: Option<String> = redis::cmd("GET")
+        .arg(&flag)
+        .query_async(&mut admin)
+        .await
+        .expect("GET");
+    let _: i64 = redis::cmd("DEL")
+        .arg(&flag)
+        .query_async(&mut admin)
+        .await
+        .expect("DEL");
+
+    assert_eq!(
+        kept.as_deref(),
+        Some("an application's own flag"),
+        "left as it was"
+    );
+    let said: Vec<_> = logs
+        .find(
+            nest_rs_queue::TARGET,
+            "a key at a 6.x queue name is not the structure 6.x kept there; left alone, and not \
+             counted as jobs",
+        )
+        .into_iter()
+        .filter(|event| event.field("queue").as_deref() == Some(COLLIDING_QUEUE))
+        .collect();
+    assert_eq!(said.len(), 1, "the boot says why: {said:#?}");
+    assert_eq!(said[0].level, "info");
+}
+
 // --- moving a queue out of the 6.x layout ------------------------------------------
 
 const MOVED_QUEUE: &str = "nestrs-e2e-layout-moved";

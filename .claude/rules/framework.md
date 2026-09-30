@@ -683,9 +683,12 @@ symmetry and nothing else.
 `nestrs:queue:<queue>`, and apalis derives its own structures from it —
 `…:active`, `…:inflight:<worker>`, `…:scheduled`, `…:data`, `…:dead`, `…:done`,
 `…:failed`, `…:signal`, `…:consumers`. The framework reads and writes those only
-through apalis's public API, never with a command or a script of its own, and
-files its own records beside them, one structure per fact, under words apalis
-does not use. An apalis behaviour the framework cannot live with is worked around
+through apalis's public API, never with a command or a script of its own — and
+never names one by hand: a name it needs is read off `apalis_redis::Config`'s
+getters, so it moves when apalis's derivation does (the keys join's
+`no_framework_code_spells_an_apalis_structure_by_hand` fails on a literal that
+spells one under `crates/*/src/`) — and files its own records beside them, one
+structure per fact, under words apalis does not use. An apalis behaviour the framework cannot live with is worked around
 in keys of its own and reported upstream.
 
 | concern | key | holds |
@@ -724,9 +727,18 @@ start** while one holds a job, naming the keys and both ways out — drain with 
 workers, or move with `RENAMENX` (never `RENAME`, which would overwrite what 7.0
 already filed) — and the producer **warns** once per queue instead, because
 refusing there would block the drain-first rollout, which upgrades producers
-first. The check is `EXISTS` on three exact names — never a `SCAN`, which costs
-the whole keyspace and which an ACL confined to `nestrs:*` refuses — and a
-`NOPERM` answer is said, never taken for an empty layout. The move the docs print
+first. The check is apalis's own `stats`, on a storage opened under the queue's
+bare name — the rule above holds for 6.x's structures too, so the names are
+apalis's getters' and the read is apalis's script, never a command of the
+framework's — and it counts the waiting list and the registered in-flight sets.
+A key of another type at one of those names is refused by Redis (`WRONGTYPE`)
+and read as not 6.x's, said at `info`, never counted as jobs nor printed as a
+`RENAMENX` into apalis's list. **The 6.x schedule is not counted**: no public
+apalis call counts a schedule, so the upgrading page has the operator count it,
+and whether a read of it is worth an exception to the rule above is an owner
+question. Never a `SCAN`, which costs the whole keyspace and which an ACL
+confined to `nestrs:*` refuses; a `NOPERM` answer is said, never taken for an
+empty layout. The move the docs print
 is the one `layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once`
 runs.
 

@@ -31,14 +31,19 @@
 //! ever deliver.
 //!
 //! **6.x handed apalis the queue's bare name**, so its jobs sit at the root —
-//! `<queue>:active`, `<queue>:scheduled`, and the one in-flight set its worker
-//! kept, named for the queue as well. A 7.0 worker reads none of them, so jobs
-//! left there would wait forever without a word; [`legacy_jobs`] finds them, the
-//! worker refuses to start beside them, and the producer says so once per queue.
+//! `<queue>:active`, `<queue>:scheduled`, and the in-flight sets its workers
+//! kept. A 7.0 worker reads none of them, so jobs left there would wait forever
+//! without a word; [`legacy_jobs`] finds them, the worker refuses to start beside
+//! them, and the producer says so once per queue. It asks apalis — its `stats`,
+//! on a storage opened under the 6.x namespace — and never reads those keys
+//! itself: apalis's structures are apalis's, 6.x's included, and a key of
+//! another type at one of those names, an application's own, is apalis's to
+//! refuse rather than the framework's to count as jobs.
 
 use std::time::Duration;
 
-use apalis_redis::Config;
+use apalis::prelude::BackendExpose;
+use apalis_redis::{Config, RedisStorage};
 use nest_rs_queue::{JobId, QueueName};
 
 use crate::RedisConnection;
@@ -145,39 +150,71 @@ pub(crate) fn config(queue: &QueueName) -> Config {
     Config::default().set_namespace(&namespace(queue))
 }
 
-/// The keys under which 6.x kept jobs that have not finished — waiting, held
-/// for later, or taken by a worker — for `queue`. Its namespace was the queue's
-/// bare name, and so was its worker's id, which is why the in-flight set is
-/// named for the queue twice. Exact names rather than a `SCAN`: an ACL scoped to
-/// this deployment's keys can answer three names, and a pattern over the whole
-/// keyspace cannot be answered cheaply by anyone.
-fn legacy_keys(queue: &QueueName) -> [String; 3] {
-    let queue = queue.as_str();
-    [
-        format!("{queue}:active"),
-        format!("{queue}:scheduled"),
-        format!("{queue}:inflight:{queue}"),
-    ]
+/// The storage settings 6.x handed apalis for `queue`: the queue's bare name as
+/// its namespace, from which apalis derives every structure — so a name is read
+/// off apalis's getters, never spelled here.
+fn legacy_config(queue: &QueueName) -> Config {
+    Config::default().set_namespace(queue.as_str())
 }
 
-/// The 6.x keys still holding jobs for `queue` — empty when there are none.
-/// Read only: one `EXISTS` per name, in one round trip. Redis deletes an empty
-/// list, set or sorted set, so a name that exists holds at least one job.
+/// The jobs the 6.x layout still holds for `queue`, as apalis counts them — each
+/// structure's key and how many — empty when there are none.
+///
+/// apalis's `stats` on a storage opened under the 6.x namespace, in one script:
+/// the jobs waiting on its list, and those in flight in the sets of the workers
+/// registered as its consumers. A key of another type at one of those names is
+/// not 6.x's — an application's own under the same name — and apalis refuses
+/// the read (`WRONGTYPE`); that is said, and nothing is counted, rather than
+/// taking it for jobs and printing a move into apalis's list.
+///
+/// **Not counted: jobs 6.x held back for later.** apalis's public calls count no
+/// schedule, and the framework reads apalis's structures through nothing else;
+/// the upgrading page has the operator look at it before a 7.0 worker starts.
 pub(crate) async fn legacy_jobs(
     conn: &RedisConnection,
     queue: &QueueName,
 ) -> Result<Vec<String>, redis::RedisError> {
-    let keys = legacy_keys(queue);
-    let mut pipeline = redis::pipe();
-    for key in &keys {
-        pipeline.exists(key);
+    let layout = legacy_config(queue);
+    let storage: RedisStorage<serde_json::Value> =
+        RedisStorage::new_with_config(conn.manager(), layout.clone());
+    let stats = match conn.bound(storage.stats()).await? {
+        Ok(stats) => stats,
+        Err(error) if not_the_6x_layout(&error) => {
+            tracing::info!(
+                target: nest_rs_queue::TARGET,
+                queue = %queue,
+                error = %nest_rs_core::error_message(&error),
+                "a key at a 6.x queue name is not the structure 6.x kept there; left alone, and \
+                 not counted as jobs",
+            );
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error),
+    };
+    let mut held = Vec::new();
+    if stats.pending > 0 {
+        held.push(format!(
+            "{} waiting on {}",
+            stats.pending,
+            layout.active_jobs_list()
+        ));
     }
-    let present: Vec<bool> = pipeline.query_async(&mut conn.clone()).await?;
-    Ok(keys
-        .into_iter()
-        .zip(present)
-        .filter_map(|(key, present)| present.then_some(key))
-        .collect())
+    if stats.running > 0 {
+        held.push(format!(
+            "{} in flight in the sets {} lists",
+            stats.running,
+            layout.consumers_set()
+        ));
+    }
+    Ok(held)
+}
+
+/// Whether apalis refused to count the 6.x layout because a key at one of its
+/// names holds another type — the answer Redis gives a list or set command on
+/// a key that is not one, which a script's call carries in its text on Redis
+/// before 7.
+fn not_the_6x_layout(error: &redis::RedisError) -> bool {
+    error.code() == Some("WRONGTYPE") || error.to_string().contains("WRONGTYPE")
 }
 
 /// Whether Redis refused a read of the 6.x keys because the connection's ACL
@@ -238,14 +275,43 @@ mod tests {
         assert_eq!(millis(Duration::ZERO), 1);
     }
 
-    /// Every 6.x name is the queue's own at the root, which the framework's
-    /// namespace never is — so a check can never mistake one for the other.
+    /// Every 6.x name is apalis's derivation from the queue's bare name, at the
+    /// root, which the framework's namespace never is — so a check can never
+    /// mistake one for the other.
     #[test]
     fn the_legacy_names_sit_at_the_root_under_the_queues_bare_name() {
+        let legacy = legacy_config(&audio());
         let root = format!("{}:", audio());
-        for key in legacy_keys(&audio()) {
+        for key in [
+            legacy.active_jobs_list(),
+            legacy.consumers_set(),
+            legacy.scheduled_jobs_set(),
+        ] {
             assert!(key.starts_with(&root), "{key}");
             assert!(!key.starts_with(&namespace(&audio())), "{key}");
         }
+    }
+
+    /// A key of another type at a 6.x name is refused by Redis, and read as
+    /// not 6.x's — whether the code comes back as Redis 7 sends it or inside a
+    /// script error's text as Redis 6.2 words it — and nothing else is.
+    #[test]
+    fn a_key_of_another_type_at_a_6x_name_is_read_as_not_the_6x_layout() {
+        let seven = redis::RedisError::from((
+            redis::ErrorKind::ExtensionError,
+            "WRONGTYPE",
+            "Operation against a key holding the wrong kind of value".to_owned(),
+        ));
+        let six = redis::RedisError::from((
+            redis::ErrorKind::ResponseError,
+            "An error was signalled by the server",
+            "Error running script: @user_script:30: WRONGTYPE Operation against a key holding \
+             the wrong kind of value"
+                .to_owned(),
+        ));
+        let refused = redis::RedisError::from(std::io::Error::other("connection reset"));
+        assert!(not_the_6x_layout(&seven));
+        assert!(not_the_6x_layout(&six));
+        assert!(!not_the_6x_layout(&refused));
     }
 }

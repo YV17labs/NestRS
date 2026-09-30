@@ -154,6 +154,19 @@ fn at_the_root(key: &str) -> bool {
         && key.chars().all(is_key_char)
 }
 
+/// Whether `key` names one of apalis's structures under whatever namespace it
+/// was handed — a literal, a placeholder, the framework's prefix — as a
+/// derivation written by hand would: any level after the first is one of
+/// apalis's words. A sentence is not a key ([`is_key_char`]).
+fn names_an_apalis_structure(key: &str) -> bool {
+    key.contains(SEP)
+        && key.chars().all(is_key_char)
+        && key
+            .split(SEP)
+            .skip(1)
+            .any(|level| APALIS_STRUCTURES.contains(&level.trim_end_matches('*')))
+}
+
 /// Below this the walk is reading the wrong tree, and a hole it fails to report
 /// is a hole nobody looks for again.
 const FLOOR: usize = 2;
@@ -173,6 +186,9 @@ struct Scan {
     running: BTreeSet<String>,
     /// apalis structures at the root of the keyspace, spelled in Rust.
     rooted: BTreeMap<String, BTreeSet<String>>,
+    /// apalis structures the framework's running code derives by hand — any
+    /// name, placeholder or prefix, ending in one of apalis's words.
+    by_hand: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Scan {
@@ -197,6 +213,16 @@ impl Scan {
     /// key is built on a constant (`format!("{NAMESPACE}:{name}")`), so what it
     /// names cannot be read from the literal, and the rule asks for the constant.
     fn take(&mut self, value: String) {
+        if self.file_runs
+            && self.in_test == 0
+            && self.file.starts_with("crates/")
+            && names_an_apalis_structure(&value)
+        {
+            self.by_hand
+                .entry(value.clone())
+                .or_default()
+                .insert(self.file.clone());
+        }
         let ours = value
             .strip_prefix(PREFIX)
             .is_some_and(|rest| !rest.is_empty() && rest.chars().all(is_key_char));
@@ -676,6 +702,55 @@ fn a_placeholder_level_accepts_any_member_and_nothing_else() {
         spelled(&["nestrs", "throttler", "audio"]),
     ] {
         assert!(!built_from_a_declared_key(&hole, &declared), "{hole}");
+    }
+}
+
+/// **apalis's structures are apalis's**, and the framework reads them only
+/// through apalis's public API (`framework.md`, *A key a datastore holds*). A
+/// name spelled by hand — `{queue}:active`, `{}:inflight:{}` — is a second copy
+/// of apalis's derivation: were apalis to move it, the copy would find nothing
+/// and say nothing. Every name the framework's running code needs is read off
+/// `apalis_redis::Config`'s getters, so no literal under a `crates/*/src/`
+/// spells one; a suite may, since it states the layout it checks.
+#[test]
+fn no_framework_code_spells_an_apalis_structure_by_hand() {
+    let scan = declared_in_rust(&repo_root());
+    let holes: Vec<String> = scan
+        .by_hand
+        .iter()
+        .map(|(key, files)| {
+            format!(
+                "`{key}` spells apalis-redis's key derivation by hand ({}): read it off \
+                 `apalis_redis::Config`'s getters, so the name moves when apalis's does",
+                spelled(files),
+            )
+        })
+        .collect();
+    assert!(holes.is_empty(), "{}", holes.join("\n"));
+}
+
+/// What counts as a hand-spelled apalis name: any namespace, then one of
+/// apalis's words at any level past the first — and nothing that only shares
+/// the separator or the word.
+#[test]
+fn a_hand_spelled_apalis_name_is_one_of_its_words_under_any_namespace() {
+    let key = |segments: &[&str]| segments.join(":");
+    for spelled in [
+        key(&["{queue}", "active"]),
+        key(&["{queue}", "inflight", "{queue}"]),
+        key(&["{}", "scheduled"]),
+        key(&["nestrs", "queue", "{queue}", "consumers"]),
+    ] {
+        assert!(names_an_apalis_structure(&spelled), "{spelled}");
+    }
+    for not_one in [
+        key(&["active"]),
+        key(&["nestrs", "queue", "{queue}"]),
+        key(&["nestrs", "queue", "{queue}", "settled", "{job}"]),
+        "the queue: active jobs".to_owned(),
+        key(&["{queue}", "activeness"]),
+    ] {
+        assert!(!names_an_apalis_structure(&not_one), "{not_one}");
     }
 }
 

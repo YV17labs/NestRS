@@ -91,12 +91,15 @@ struct SprocketsResolver;
 
 #[operations]
 impl SprocketsResolver {
-    /// `fn`, not `async fn`: the entity resolver async-graphql awaits is the one
-    /// the expansion emits, and it calls this one without an `.await`.
+    /// `fn`, not `async fn`, and a bare return: the entity resolver
+    /// async-graphql awaits is the one the expansion emits — `async`, and
+    /// answering a `Result` so the guard chain has somewhere to put a denial —
+    /// and it calls this one without an `.await`. A bare return was refused
+    /// while the chain was compiled out of one.
     #[entity]
     #[public]
-    fn find_sprocket_by_id(&self, id: i32) -> Result<Sprocket> {
-        Ok(Sprocket { id })
+    fn find_sprocket_by_id(&self, id: i32) -> Sprocket {
+        Sprocket { id }
     }
 }
 

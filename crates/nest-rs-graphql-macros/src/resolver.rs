@@ -488,12 +488,11 @@ fn piped_args(sig: &Signature) -> Vec<PipedArg> {
 }
 
 /// True when the method's return type's last path segment ends with `Result`
-/// (`Result`, `GqlResult`, any `*Result` alias) — the macro only emits the
-/// global guard chain (with its `?`-propagated `async_graphql::Error`) on
-/// `Result`-returning queries/mutations. A bare-return resolver can't surface
-/// an authn/authz failure, so the global chain stays off it (and the posture
-/// check forces it to be `#[public]`). An alias that hides `Result` under an
-/// unrelated name isn't recognised — spell the return type `Result` there.
+/// (`Result`, `GqlResult`, any `*Result` alias) — the method is then already
+/// fallible, and the wrapper returns its type as written. Anything else is a
+/// bare `T`, which the wrapper answers as `async_graphql::Result<T>`
+/// ([`wrapper_output`]) so the guard chain, the gate, the pipes and the mask
+/// have a failure channel whatever the developer wrote.
 fn sig_returns_result(sig: &Signature) -> bool {
     match &sig.output {
         syn::ReturnType::Default => false,
@@ -613,6 +612,28 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
     (sig, ident)
 }
 
+/// Which `::nest_rs_guards::GraphqlSite` a chain names — the one thing the
+/// roles' chains differ by.
+#[derive(Clone, Copy)]
+enum ChainSite {
+    /// A root field: the app-wide pool folds in.
+    Operation,
+    /// An `#[entity]`: the federation gate in front of `_entities` runs the pool.
+    Entity,
+    /// A `#[field_resolver]`: the root field it resolves under ran the pool.
+    Field,
+}
+
+impl ChainSite {
+    fn path(self) -> TokenStream2 {
+        match self {
+            Self::Operation => quote!(::nest_rs_guards::GraphqlSite::Operation),
+            Self::Entity => quote!(::nest_rs_guards::GraphqlSite::Entity),
+            Self::Field => quote!(::nest_rs_guards::GraphqlSite::Field),
+        }
+    }
+}
+
 /// Emit the unified Layer System chain for a resolver operation: global +
 /// resolver-scope + per-method guards, deduped by `TypeId`. Resolver-scope
 /// guards are read at runtime via `<Self>::__nestrs_resolver_guard_specs()`
@@ -622,40 +643,29 @@ fn ensure_ctx_param(sig: &Signature) -> (Signature, Ident) {
 /// the developer writes `#[use_guards(...)]` on the struct, same as for
 /// HTTP controllers and WS gateways.
 ///
-/// `needs_global = false` (a bare-return resolver that can't surface a
-/// denial) AND no method/force guards skips the chain entirely. Resolver-
-/// scope guards alone still trigger the chain because the struct may have
-/// declared them.
+/// **Always emitted, whatever the operation returns.** It was once left out of
+/// an operation returning a bare `T`, on the reasoning that a bare body has
+/// nowhere to put a denial — so a resolver-scope or app-wide guard protected
+/// only the operations that happened to return `Result`, and `-> Vec<Secret>`
+/// under a deny-all resolver guard served the data. The failure channel is the
+/// *wrapper's*: every method the expansion emits returns `Result`
+/// ([`wrapper_output`]), so the chain's `?` always has somewhere to go and a
+/// denial is a field error whatever the developer's method returns.
 ///
-/// `is_entity` names the site rather than picking a function: the runner is one
-/// seam, and `GraphqlSite` is what decides whether the app-wide pool is folded
-/// here or left to the federation gate in front of `_entities`.
+/// `site` names the pool's treatment rather than picking a function: the
+/// runner is one seam.
 fn layered_resolver_chain(
     self_ty: &Type,
     method_guards: &[Path],
     force_guards: &[Path],
     ctx: &Ident,
     route_label: &str,
-    needs_global: bool,
-    is_entity: bool,
+    site: ChainSite,
 ) -> TokenStream2 {
     let label_lit = LitStr::new(route_label, proc_macro2::Span::call_site());
     let method_specs = scoped_specs(method_guards, quote!(dyn ::nest_rs_guards::Guard));
     let force_typeids = force_guard_typeids(force_guards);
-    if !needs_global && method_guards.is_empty() && force_guards.is_empty() {
-        // Bare-return resolver with no method/force guards. Bare-return
-        // can't surface an `Err`, so emitting a chain that propagates `?`
-        // would not compile; it also can't enforce any auth posture, so
-        // skipping is honest. Resolver-scope guards on the struct only
-        // run when the method returns `Result` — which is also where
-        // auth/authz denials make sense semantically.
-        return quote!();
-    }
-    let site = if is_entity {
-        quote!(::nest_rs_guards::GraphqlSite::Entity)
-    } else {
-        quote!(::nest_rs_guards::GraphqlSite::Operation)
-    };
+    let site = site.path();
     quote! {
         {
             // Composed once per site against this container, then memoized —
@@ -679,6 +689,33 @@ fn layered_resolver_chain(
     }
 }
 
+/// The return type of the method the expansion emits: the developer's own when
+/// it is already a `Result`, `async_graphql::Result<T>` around a bare `T`.
+///
+/// Spelled with `Result` as its last segment because async-graphql decides
+/// "fallible?" by that spelling — the alias refusal on a `#[subscription]` is
+/// the same fact read from the other side.
+fn wrapper_output(sig: &Signature) -> syn::ReturnType {
+    if sig_returns_result(sig) {
+        return sig.output.clone();
+    }
+    let ty: Type = match &sig.output {
+        syn::ReturnType::Type(_, ty) => (**ty).clone(),
+        syn::ReturnType::Default => parse_quote!(()),
+    };
+    parse_quote!(-> ::nest_rs_graphql::async_graphql::Result<#ty>)
+}
+
+/// The developer's call as a `Result`, whatever it returns — the value the
+/// wrapper's posture, mask and operation line all read.
+fn call_as_result(sig: &Signature, call: TokenStream2) -> TokenStream2 {
+    if sig_returns_result(sig) {
+        call
+    } else {
+        quote!(::core::result::Result::<_, ::nest_rs_graphql::async_graphql::Error>::Ok(#call))
+    }
+}
+
 /// The closed role vocabulary, read by the verb predicate **and** by the
 /// one-role refusal — so the set a method is checked against and the set it is
 /// told about cannot disagree.
@@ -693,19 +730,20 @@ const ROLE_ATTRS: [&str; 5] = [
 /// What an `#[entity]` owes beyond what a `#[query]` owes, refused at its own
 /// span rather than inside async-graphql's derive.
 ///
-/// **Four, in the order they are checked**, and naming them is the point — a
+/// **Three, in the order they are checked**, and naming them is the point — a
 /// count drifts the moment one is added:
 ///
 /// 1. no `#[entity(...)]` arguments — the `@key` is read off the method's own;
 /// 2. no `#[graphql(...)]` of the method's own;
-/// 3. at least one argument, since those arguments *are* the key;
-/// 4. a `Result` return.
+/// 3. at least one argument, since those arguments *are* the key.
 ///
-/// Three of the four are async-graphql's rules reworded and re-spanned: it
-/// reports "Entity need to have at least one key" against the `#[operations]`
+/// All three are async-graphql's rules reworded and re-spanned: it reports
+/// "Entity need to have at least one key" against the `#[operations]`
 /// attribute, followed by a cascade naming a generated type the developer never
-/// wrote. The fourth is this framework's, and it is the load-bearing one — see
-/// the `Result` arm. async-graphql's "Must be asynchronous" is not among them: it
+/// wrote. A fourth — a `Result` return — was refused here while the guard chain
+/// was compiled out of a bare-return operation; the chain now runs whatever the
+/// method returns, so an entity's return type is as free as a query's.
+/// async-graphql's "Must be asynchronous" is not among them: it
 /// binds the method the expansion emits, which is always `async`, so a `fn` is
 /// served like any operation's.
 ///
@@ -761,23 +799,6 @@ fn entity_refusals(attr: &Attribute, other: &[Attribute], sig: &Signature) -> sy
             "an `#[entity]` method needs at least one argument — those arguments *are* the \
              `@key` the router matches a reference against, so an entity resolver with none \
              is a type no router can address",
-        ));
-    }
-    // The one rule that is ours, and the reason it is stricter here than on a
-    // `#[query]`: the resolver-scope guard chain is only emitted for a
-    // `Result`-returning operation, because a bare-return body has nowhere to
-    // put a denial. On a `#[query]` that trade is visible — the operation is in
-    // the document and a reviewer reads its signature. An entity is reached
-    // through `_entities` for a type the client never named, so a silently
-    // omitted chain is invisible from both the schema and the wire.
-    if !sig_returns_result(sig) {
-        return Err(syn::Error::new_spanned(
-            &sig.output,
-            "an `#[entity]` returns `Result<...>`: the guard chain is only emitted where a \
-             denial has somewhere to go, and this is the one operation a client never \
-             names — a resolver-scope `#[use_guards]` compiled out here is invisible in \
-             the schema and on the wire. Spell it `Result<T>`, or `Result<Option<T>>` for \
-             a reference that may resolve to nothing",
         ));
     }
     Ok(())
@@ -926,13 +947,11 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 .chain(&force_method_guards)
                 .map(|guard| (cfgs.clone(), guard.clone())),
         );
-        // `#[field_resolver]` skips resolver-level guards: a field resolver
-        // runs per-row, and the operation's auth posture is already enforced
-        // by the operation guard plus the resolver-level guard on the root
-        // query/mutation. Running it per row would just re-probe the
-        // ability for every element. A `#[field_resolver]` needing its own
-        // gate still binds `#[use_guards]` at the method level. The access
-        // graph still sees the resolver-level dependency via `all_guard_paths`.
+        // A `#[field_resolver]` runs its resolver's `#[use_guards]` and its own
+        // method's, never the app-wide pool: the root field it resolves under
+        // ran that once for the request (`GraphqlSite::Field`). The resolver's
+        // own guards do run — the parent may come from another resolver's
+        // root, which never ran them.
         let is_field = verb_attr.path().is_ident("field_resolver");
 
         // The delegating method keeps the signature and any remaining attrs
@@ -996,8 +1015,8 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                      for an extra per-field gate bind `#[use_guards(...)]` here",
                 ));
             }
-            // Field resolvers gate per-row — they never replay the global
-            // chain; only their own `#[use_guards]` apply.
+            // Field resolvers gate per-row — their resolver's `#[use_guards]` and
+            // their own, never the pool again (`ChainSite::Field`).
             let field_label = format!("{}.{}", quote!(#self_ty), method_name);
             let (parent_ty, deleg, deps) = field_method(
                 &self_ty,
@@ -1019,21 +1038,14 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         } else {
             // Posture is mandatory and fail-secure: an operation the developer
             // forgot to think about does not compile, instead of shipping
-            // ungated and unmasked. `#[authorize]` needs a `Result` return so
-            // the gate's denial (and a masking failure) can surface.
+            // ungated and unmasked. Any return type carries either posture: the
+            // gate's denial and a masking failure surface through the wrapper's
+            // `Result`, whatever the developer's method returns.
             match (&authorize_spec, is_public) {
                 (Some(_), true) => {
                     return Err(syn::Error::new_spanned(
                         &method.sig.ident,
                         nest_rs_codegen::posture_contradiction(),
-                    ));
-                }
-                (Some(_), false) if !sig_returns_result(&method.sig) => {
-                    return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        "`#[authorize(...)]` needs a `Result` return type so a denial (and a \
-                         masking failure) can surface as a GraphQL error; a bare-return \
-                         operation can only be `#[public]`",
                     ));
                 }
                 (None, false) if is_entity => {
@@ -1150,19 +1162,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // wrapper exposes `T` on the wire, runs the pipe, and forwards the
             // carrier — the resolver body only ever calls the service.
             let piped = piped_args(&sig);
-            // A pipe can reject, and a rejection has to reach the client — so
-            // the wrapper propagates it with `?`, which a bare-return operation
-            // has nowhere to put. Named here rather than surfacing as "cannot
-            // use the `?` operator" pointing at `#[operations]`, which says
-            // nothing about the pipe that caused it.
-            if !piped.is_empty() && !sig_returns_result(&method.sig) {
-                return Err(syn::Error::new_spanned(
-                    &method.sig.ident,
-                    "an operation taking a `Piped<P, T>` / `Valid<T>` argument returns \
-                     `Result<...>`: a pipe rejects invalid input, and the rejection has to \
-                     surface as a GraphQL error rather than being swallowed",
-                ));
-            }
+            // A pipe can reject, and the rejection reaches the client through the
+            // wrapper's `Result` — so a bare-return operation takes one as readily
+            // as a fallible one.
             // The wrapper signature strips both bind and pipe wrappers from the
             // wire: the `Authorized<A, E>` subject becomes the `id` string
             // argument, and each `Piped<P, T>` / `Valid<T>` becomes its wire
@@ -1206,14 +1208,13 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // an `Arc`, and method lookup tries the `Arc` before it derefs, so a
             // trait method of the operation's name implemented for `Arc<T>` ran
             // instead.
-            let call = await_if_async(
+            let call = call_as_result(
                 &sig,
-                quote! { <#self_ty>::#method_name(&*self.0, #(#call_args),*) },
+                await_if_async(
+                    &sig,
+                    quote! { <#self_ty>::#method_name(&*self.0, #(#call_args),*) },
+                ),
             );
-            // Global guard chain runs on `Result`-returning queries/mutations
-            // only (bare-return resolvers can't surface a denial). Local
-            // `#[use_guards]` chain runs through the same chain helper.
-            let needs_global = sig_returns_result(&sig);
             let role_label = if is_entity {
                 ENTITY_ROLE
             } else {
@@ -1227,19 +1228,22 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // Always emit the chain: even when the method declares no
             // method-scope guards, the struct may have declared
             // resolver-scope guards (read at runtime through
-            // `__nestrs_resolver_guard_specs()`). Bare-return resolvers
-            // can't surface a denial, so they still skip globals — the
-            // chain helper's `run_layered_graphql_chain` is harmless when
-            // every scope is empty.
-            let (gsig, gctx) = ensure_ctx_param(&wrapper_sig);
+            // `__nestrs_resolver_guard_specs()`), and the app its pool. The
+            // wrapper returns `Result` whatever the method does, so a denial
+            // always has somewhere to go.
+            let (mut gsig, gctx) = ensure_ctx_param(&wrapper_sig);
+            gsig.output = wrapper_output(&sig);
             let checks = layered_resolver_chain(
                 &self_ty,
                 &method_guards,
                 &force_method_guards,
                 &gctx,
                 &route_label,
-                needs_global,
-                is_entity,
+                if is_entity {
+                    ChainSite::Entity
+                } else {
+                    ChainSite::Operation
+                },
             );
             // `#[authorize(A, E)]`: class gate before the call, automatic
             // response masking after it — the same two effects the HTTP
@@ -1392,14 +1396,9 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 }
             } else {
                 let role_lit = LitStr::new(role_label, proc_macro2::Span::call_site());
-                // A bare-return operation has no failure channel, so `ok` there
-                // is honest rather than assumed — the same reading the
-                // subscription line's `outcome` takes.
-                let succeeded = if needs_global {
-                    quote!(::core::result::Result::is_ok)
-                } else {
-                    quote!(|_| true)
-                };
+                // The wrapper always answers a `Result`, so a denial is an
+                // `error` line whatever the developer's method returns.
+                let succeeded = quote!(::core::result::Result::is_ok);
                 // The wrapper is `async` whatever the developer's method is: the
                 // unit is awaited, and the body it wraps already had to be —
                 // every emitted guard chain awaits. The developer's own method
@@ -1629,23 +1628,16 @@ fn field_method(
                     method_name,
                     quote!(#dep_ty),
                 );
-                // Non-panicking on `Result`-returning resolvers (the common
-                // case): a missing provider degrades to a named GraphQL
-                // error, matching the `data_opt` pattern the relation
-                // resolvers use. A bare-return resolver has no error channel,
-                // so the named panic stays there — the access graph has
-                // already validated the dep at boot either way.
-                if sig_returns_result(sig) {
-                    dep_bindings.push(quote! {
-                        let #dep = __container.get::<#dep_ty>().ok_or_else(|| {
-                            ::nest_rs_graphql::async_graphql::Error::new(#msg)
-                        })?;
-                    });
-                } else {
-                    dep_bindings.push(quote! {
-                        let #dep = __container.get::<#dep_ty>().expect(#msg);
-                    });
-                }
+                // A missing provider degrades to a named GraphQL error, matching
+                // the `data_opt` pattern the relation resolvers use — through the
+                // wrapper's `Result`, so a bare-return resolver no longer panics
+                // on a request path. The access graph has already validated the
+                // dep at boot either way.
+                dep_bindings.push(quote! {
+                    let #dep = __container.get::<#dep_ty>().ok_or_else(|| {
+                        ::nest_rs_graphql::async_graphql::Error::new(#msg)
+                    })?;
+                });
                 call_args.push(quote! { &#dep });
                 injected_deps.push(dep_ty.clone());
             }
@@ -1657,44 +1649,39 @@ fn field_method(
 
     let generics = &sig.generics;
     let where_clause = &sig.generics.where_clause;
-    let output = &sig.output;
+    let output = wrapper_output(sig);
 
-    // `#[field_resolver]` never runs global guards (operation-level
-    // enforcement already happened), so `needs_global` is `false`. The
-    // chain helper still consults `<Self>::__nestrs_resolver_guard_specs()`
-    // for resolver-scope guards declared on the struct — same uniform
-    // mental model. `is_public` is irrelevant: there's no global chain to skip.
+    // Always emitted, whatever the method returns: the resolver's own
+    // `#[use_guards]` and the method's run here, and the app-wide pool does not
+    // — the root field this resolves under ran it once for the request
+    // (`GraphqlSite::Field`).
     let checks = layered_resolver_chain(
         self_ty,
         guards,
         force_guards,
         &format_ident!("__ctx"),
         field_label,
-        false,
-        false,
+        ChainSite::Field,
     );
     // A field resolver is a dispatched unit of work like any other role — it
     // runs its own guard chain, hits its own services and has its own duration —
     // so it files the same line. `#[operations]` is where every role's chain is
     // composed, and this is that seam for the `#[ComplexObject]` half.
     let role_lit = LitStr::new(FIELD_ROLE, proc_macro2::Span::call_site());
-    let succeeded = if sig_returns_result(sig) {
-        quote!(::core::result::Result::is_ok)
-    } else {
-        // A bare-return field resolver cannot report a failure, so `ok` is what
-        // it knows rather than what it assumes.
-        quote!(|_| true)
-    };
+    let succeeded = quote!(::core::result::Result::is_ok);
     // Always `async`, whatever the developer's method is — see the root
     // operation's wrapper. `#await_tok` still follows the inner method's own
     // spelling.
     // By path: the resolver is built by value here, and method lookup on a value
     // tries a trait method taking `self` before the `&self` it derefs to.
-    let call = await_if_async(
+    let call = call_as_result(
         sig,
-        quote! {
-            <#self_ty>::#method_name(&__resolver, self #(, #call_args)*)
-        },
+        await_if_async(
+            sig,
+            quote! {
+                <#self_ty>::#method_name(&__resolver, self #(, #call_args)*)
+            },
+        ),
     );
     let method = quote! {
         #(#deleg_attrs)*
@@ -2065,21 +2052,56 @@ mod tests {
         assert!(err.to_string().contains("contradict"), "{}", err);
     }
 
-    // `#[authorize]` needs a `Result` return so a denial (or a masking failure)
-    // can surface as a GraphQL error — a bare-return authorized op is rejected.
+    /// Every role's wrapper runs the guard chain and answers a `Result`,
+    /// whatever the developer's method returns. The chain used to be compiled
+    /// out of a bare-return operation, so a resolver-scope or app-wide guard
+    /// protected only the operations that happened to return `Result`.
     #[test]
-    fn authorize_on_bare_return_fails_to_expand() {
+    fn a_bare_return_operation_runs_the_chain_through_a_result_wrapper() {
         let item: ItemImpl = parse_quote! {
             impl DemoResolver {
                 #[query]
+                #[public]
+                async fn count(&self) -> i32 { 0 }
+
+                #[query]
                 #[authorize(::nest_rs_authz::Read, Thing)]
-                async fn thing(&self) -> i32 {
-                    0
-                }
+                async fn thing(&self) -> Thing { Thing }
+
+                #[subscription]
+                #[public]
+                async fn ticks(&self) -> impl Stream<Item = i32> { stream() }
+
+                #[field_resolver]
+                async fn label(&self, parent: &Thing) -> String { String::new() }
             }
         };
-        let err = resolver_impl_inner(item)
-            .expect_err("an #[authorize] op with a bare return must fail to expand");
-        assert!(err.to_string().contains("Result"), "{}", err);
+        let expanded = resolver_impl_inner(item)
+            .expect("a bare-return operation expands under either posture")
+            .to_string();
+        assert_eq!(
+            expanded.matches("run_layered_graphql_chain").count(),
+            4,
+            "one chain per role: {expanded}",
+        );
+        for wrapped in [
+            "async_graphql :: Result < i32 >",
+            "async_graphql :: Result < Thing >",
+            "async_graphql :: Result < impl Stream < Item = i32 > >",
+            "async_graphql :: Result < String >",
+        ] {
+            assert!(
+                expanded.contains(wrapped),
+                "missing `{wrapped}`: {expanded}"
+            );
+        }
+        assert!(
+            expanded.contains("GraphqlSite :: Field"),
+            "a field resolver names its own site: {expanded}",
+        );
+        assert!(
+            !expanded.contains(". expect ("),
+            "no request-path panic in a wrapper: {expanded}",
+        );
     }
 }

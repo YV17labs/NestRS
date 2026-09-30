@@ -198,3 +198,262 @@ async fn resolver_guard_denies_a_non_admin() {
         "an anonymous request is forbidden by the resolver guard",
     );
 }
+
+// ---------------------------------------------------------------------------
+// The chain runs whatever an operation returns. It was once emitted only for a
+// `Result`-returning operation, so under a deny-all resolver guard `-> i32` and
+// `-> Vec<String>` answered their data, and an app-wide guard protected only
+// the operations that happened to be fallible. Every role is here — a query
+// (async and sync), a subscription and a field resolver — because the gate was
+// one condition shared by all of them.
+
+/// Refuses every GraphQL operation it is asked about.
+#[injectable]
+#[derive(Default)]
+struct DenyAll;
+
+impl Layer for DenyAll {}
+
+#[async_trait]
+impl Guard for DenyAll {
+    async fn check_graphql(
+        &self,
+        _op: &GraphqlOperationContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        Err(Denial::forbidden("denied by the resolver-scope guard"))
+    }
+}
+
+impl GraphqlGuard for DenyAll {}
+impl HttpGuard for DenyAll {}
+
+/// Counts the GraphQL operations it is asked about, and lets each through.
+#[injectable]
+#[derive(Default)]
+struct CountingGuard {
+    seen: std::sync::atomic::AtomicUsize,
+}
+
+impl Layer for CountingGuard {}
+
+#[async_trait]
+impl Guard for CountingGuard {
+    async fn check_graphql(
+        &self,
+        _op: &GraphqlOperationContext<'_>,
+    ) -> std::result::Result<(), Denial> {
+        self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl GraphqlGuard for CountingGuard {}
+impl HttpGuard for CountingGuard {}
+
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+#[graphql(complex)]
+struct Shelf {
+    id: i32,
+}
+
+/// Extended only by [`SealedResolver`], and produced only by
+/// [`ShelfResolver`]'s root — async-graphql takes one `#[ComplexObject]` per type.
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+#[graphql(complex)]
+struct Vault {
+    id: i32,
+}
+
+#[resolver]
+struct ShelfResolver;
+
+#[operations]
+impl ShelfResolver {
+    #[query]
+    #[public]
+    async fn shelves(&self) -> Vec<Shelf> {
+        (1..=3).map(|id| Shelf { id }).collect()
+    }
+
+    #[query]
+    #[public]
+    async fn vaults(&self) -> Vec<Vault> {
+        (1..=3).map(|id| Vault { id }).collect()
+    }
+
+    #[query]
+    #[public]
+    async fn open_count(&self) -> i32 {
+        7
+    }
+
+    #[field_resolver]
+    async fn label(&self, parent: &Shelf) -> String {
+        format!("shelf-{}", parent.id)
+    }
+}
+
+#[resolver]
+#[use_guards(DenyAll)]
+struct SealedResolver;
+
+#[operations]
+impl SealedResolver {
+    #[query]
+    #[public]
+    async fn sealed_count(&self) -> i32 {
+        42
+    }
+
+    #[query]
+    #[public]
+    async fn sealed_secrets(&self) -> Vec<String> {
+        vec!["classified".into()]
+    }
+
+    #[query]
+    #[public]
+    fn sealed_sync(&self) -> i32 {
+        42
+    }
+
+    #[query]
+    #[public]
+    async fn sealed_fallible(&self) -> Result<i32> {
+        Ok(42)
+    }
+
+    #[subscription]
+    #[public]
+    fn sealed_ticks(
+        &self,
+    ) -> impl nest_rs_graphql::async_graphql::futures_util::Stream<Item = i32> {
+        nest_rs_graphql::async_graphql::futures_util::stream::iter([42])
+    }
+
+    /// Extends a type another resolver's root produces — a root that never ran
+    /// this resolver's guards, so the field has to run them itself.
+    #[field_resolver]
+    async fn sealed_note(&self, parent: &Vault) -> String {
+        format!("classified-{}", parent.id)
+    }
+}
+
+#[module(
+    imports = [GraphqlModule::for_root(None)],
+    providers = [DenyAll, CountingGuard, ShelfResolver, SealedResolver],
+)]
+struct ChainModule;
+
+async fn chain_app(global: Option<nest_rs_guards::GuardSpec>) -> TestApp {
+    let builder = TestApp::builder()
+        .module::<ChainModule>()
+        .http(nest_rs_http::HttpTransport::new());
+    match global {
+        Some(spec) => builder.use_guards_global([spec]),
+        None => builder,
+    }
+    .build()
+    .await
+    .expect("the schema boots and mounts at /graphql")
+}
+
+async fn query(app: &TestApp, document: &str) -> serde_json::Value {
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": document }))
+        .send()
+        .await;
+    resp.assert_status(StatusCode::OK);
+    let text = resp
+        .0
+        .into_body()
+        .into_string()
+        .await
+        .expect("a GraphQL response body");
+    serde_json::from_str(&text).expect("a GraphQL response is JSON")
+}
+
+fn assert_denied(body: &serde_json::Value, field: &str) {
+    let rendered = body.to_string();
+    assert!(
+        !rendered.contains("classified") && !rendered.contains("42"),
+        "`{field}` served its data past a deny-all guard: {rendered}",
+    );
+    let errors = body["errors"].as_array().cloned().unwrap_or_default();
+    assert!(
+        errors.iter().any(|e| e["extensions"]["code"] == "FORBIDDEN"
+            && e["path"][e["path"]
+                .as_array()
+                .map_or(0, |p| p.len().saturating_sub(1))]
+                == field),
+        "`{field}` answers the guard's denial as a field error: {rendered}",
+    );
+}
+
+#[tokio::test]
+async fn a_resolver_guard_runs_on_every_operation_whatever_it_returns() {
+    let app = chain_app(None).await;
+    for field in [
+        "sealedCount",
+        "sealedSecrets",
+        "sealedSync",
+        "sealedFallible",
+    ] {
+        let body = query(&app, &format!("{{ {field} }}")).await;
+        assert_denied(&body, field);
+    }
+    let body = query(&app, "{ vaults { id sealedNote } }").await;
+    assert_denied(&body, "sealedNote");
+}
+
+#[tokio::test]
+async fn a_resolver_guard_runs_on_a_bare_stream_subscription() {
+    let app = chain_app(None).await;
+    let mut socket = app.graphql_socket().open();
+    socket.connect().await;
+    socket.subscribe("sealed", "subscription { sealedTicks }");
+    let message = socket
+        .next_message()
+        .await
+        .expect("the subscription answers");
+    let rendered = message.to_string();
+    assert!(
+        rendered.contains("denied by the resolver-scope guard") && !rendered.contains("42"),
+        "the subscription is refused before it streams: {rendered}",
+    );
+}
+
+#[tokio::test]
+async fn an_app_wide_guard_runs_on_a_bare_return_operation() {
+    let app = chain_app(Some(guard::<DenyAll>())).await;
+    let body = query(&app, "{ openCount }").await;
+    let rendered = body.to_string();
+    assert!(
+        !rendered.contains('7') && rendered.contains("FORBIDDEN"),
+        "the app-wide guard refuses a bare-return operation: {rendered}",
+    );
+}
+
+/// The pool runs once per root field, never once per parent a field resolver
+/// extends: the root field that produced the parents already ran it in the same
+/// request.
+#[tokio::test]
+async fn the_app_wide_pool_runs_once_per_root_field_not_per_parent() {
+    let app = chain_app(Some(guard::<CountingGuard>())).await;
+    let body = query(&app, "{ shelves { id label } }").await;
+    assert_eq!(
+        body["data"]["shelves"][2]["label"], "shelf-3",
+        "the field resolver answers: {body}",
+    );
+    let counter = app
+        .container()
+        .get::<CountingGuard>()
+        .expect("the counting guard is a provider of the booted app");
+    assert_eq!(
+        counter.seen.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "one root field, three parents: the pool ran once",
+    );
+}

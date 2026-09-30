@@ -51,11 +51,8 @@ It is therefore a `#[query]` in every respect that matters:
 | Argument pipes | run — `Valid<T>` / `Piped<P, T>` on the key arguments |
 | Response mask | runs — the entity is masked against the caller's ability like any other row |
 
-Five things it refuses that a `#[query]` does not, each a named compile error:
+Four things it refuses that a `#[query]` does not, each a named compile error:
 
-- a **`Result` return** is required — the guard chain is only emitted where a
-  denial has somewhere to go, and a chain compiled out here is invisible in the
-  schema and on the wire;
 - **`bind = Service`** is refused — it answers `NOT_FOUND` for an absent row and
   `FORBIDDEN` for a withheld one, which by key is an existence oracle; load the
   row in the body and answer `None` for both;

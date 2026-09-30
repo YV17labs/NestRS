@@ -82,6 +82,19 @@ Ordering inside an operation is fixed and load-bearing: **chain → gate → pip
 call → mask**. The gate precedes the pipes so a caller the gate refuses never pays
 for validation, and a validation message never doubles as an existence oracle.
 
+**The chain runs whatever the operation returns.** The failure channel is the
+emitted wrapper's, never the developer's method: every GraphQL wrapper — query,
+mutation, subscription, entity, field resolver — answers a `Result`, wrapping a
+bare `T` as `async_graphql::Result<T>`, so a denial, a gate refusal, a pipe
+rejection and a masking failure all reach the client as a field error. Through
+6.x and 7.0's first cut the chain was compiled out of a bare-return operation
+("nowhere to put a denial"), so `-> Vec<Secret>` under a deny-all resolver guard
+served the data and an app-wide guard protected only the fallible operations —
+the return type was deciding the posture, which only `#[authorize]`/`#[public]`
+may. No return type is refused for that reason any more: not on an `#[entity]`,
+not beside `#[authorize]`, not beside a pipe. WS `#[messages]` and MCP `#[tools]`
+never had the condition.
+
 **The two federation root fields are the fifth guard site, and they had none.**
 `_service` and `_entities` are resolved by async-graphql's own `QueryRoot`,
 above the merged root, so the chain `#[operations]` emits inside a body cannot
@@ -98,6 +111,12 @@ field. Three facts follow, each load-bearing:
   (`GlobalBucket::Skip`) — it ran at the field, and folding it again would put
   the multiplier on every pooled check in the caller's hands. No other site may
   subtract a bucket without naming where it ran instead.
+- **A `#[field_resolver]` composes everything but the pool as well**, and names
+  where it ran: the root field of the same request that produced its parent
+  (`GraphqlSite::Field`). Folding it there put one pooled check per *parent* — a
+  throttler hit or a token verification per row of a list. Its resolver's own
+  `#[use_guards]` do run, whether or not the method declares any: the parent may
+  come from another resolver's root, which never ran them.
 - **`Guard::check_graphql` takes a `GraphqlOperationContext`, not a `Context`**,
   and that is the same rule as everywhere else: async-graphql hands an extension
   an `ExtensionContext` and offers no public constructor bridging the two, so one
@@ -115,18 +134,18 @@ mandatory posture, worded to name the reason. It is a role and not a modifier:
 `_entities` is a `Query`-root field, so combining `#[entity]` with `#[mutation]`
 or `#[subscription]` is a compile error naming both.
 
-**Being unnamed is also why it is stricter than a `#[query]` in five places**,
+**Being unnamed is also why it is stricter than a `#[query]` in four places**,
 each a compile error, and they are named rather than counted because a count
-drifts the day one is added: a `Result` return (the chain is emitted only where a
-denial has somewhere to go — a bare-return entity would silently have none, and
-unlike a `#[query]` nothing in the document would show it), no `bind = Service`
+drifts the day one is added: no `bind = Service`
 (its `NOT_FOUND`/`FORBIDDEN` split is an existence oracle on a field addressed by
 key), no `#[entity(key = …)]` (the key is inferred from the arguments), no
 `#[graphql(…)]` of the method's own (async-graphql reads the *first* one on a
 method and the decorator has to emit `#[graphql(entity)]` there, so the
 developer's would silently take its place and the method would stop being an
-entity), and at least one argument. Four live in `entity_refusals`; the `bind`
-one is refused where the posture is parsed. `fn` is accepted beside `async fn`, as
+entity), and at least one argument. Three live in `entity_refusals`; the `bind`
+one is refused where the posture is parsed. A fifth — a `Result` return — was
+withdrawn with the rule above: it existed only because the chain was compiled
+out of a bare return. `fn` is accepted beside `async fn`, as
 at every operation: the resolver async-graphql awaits is the one the expansion
 emits, which calls the method with or without an `.await`.
 

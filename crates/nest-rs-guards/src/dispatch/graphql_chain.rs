@@ -1,7 +1,9 @@
 //! GraphQL per-site chain runner. Emitted inline at the start of every
-//! `#[query]` / `#[mutation]` / `#[entity]` / `#[field_resolver]` by
-//! `#[operations]`, which names the site — `#[entity]` leaves the app-wide pool
-//! to the federation gate, everything else folds it.
+//! `#[query]` / `#[mutation]` / `#[subscription]` / `#[entity]` /
+//! `#[field_resolver]` by `#[operations]`, whatever the method returns, which
+//! names the site — `#[entity]` leaves the app-wide pool to the federation gate,
+//! `#[field_resolver]` to the root field it resolves under, and a root field
+//! folds it.
 //!
 //! The cell, the sources and the composition live in [`chain`](super::chain);
 //! this file is what GraphQL adds to them — `check_graphql` and the error frame
@@ -22,10 +24,19 @@ use crate::dispatch::denial_convert::denial_to_graphql_error;
 /// here rather than a third `pub fn`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GraphqlSite {
-    /// A `#[query]` / `#[mutation]` / `#[field_resolver]`: the app-wide pool
+    /// A `#[query]` / `#[mutation]` / `#[subscription]`: the app-wide pool
     /// runs here, since `/graphql`'s edge is `EdgePosture::Exempt` and its
     /// operation guard is the app's authz bridge rather than the pool.
     Operation,
+    /// A `#[field_resolver]`: its own resolver's `#[use_guards]` and its own
+    /// method's run, the pool does not. Every value a field resolver extends was
+    /// produced by a root field **of the same request**, which already ran the
+    /// pool against a context that cannot differ; folding it again runs every
+    /// pooled guard once per *parent* — a throttler counting one hit per row of
+    /// a list, an authenticator verifying one token per row. The resolver-scope
+    /// guards do run: the parent may come from another resolver's root, which
+    /// never ran this one's.
+    Field,
     /// An `#[entity]`, reached only through `_entities` — in front of which
     /// `nest_rs_graphql`'s federation gate runs the pool once per field,
     /// whatever the representation count. Folding it again here would run every
@@ -52,6 +63,7 @@ impl GraphqlSite {
     fn bucket(self) -> fn(&Container) -> GlobalBucket {
         match self {
             Self::Operation => |_| GlobalBucket::Fold,
+            Self::Field => |_| GlobalBucket::Skip,
             Self::Entity => |container| match container.get::<FederationGate>() {
                 Some(_) => GlobalBucket::Skip,
                 None => GlobalBucket::Fold,

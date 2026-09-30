@@ -48,6 +48,14 @@ impl PipeResolver {
         Ok(raw.into_inner())
     }
 
+    /// The same rejection from a bare-return operation: the wrapper answers a
+    /// `Result` whatever the method returns, so the pipe needs nothing of it.
+    #[query]
+    #[public]
+    async fn checked_bare(&self, raw: Piped<Reject, String>) -> String {
+        raw.into_inner()
+    }
+
     /// `Valid<T>`: validates the input object, exposing `NameInput` on the wire.
     #[query]
     #[public]
@@ -101,6 +109,25 @@ async fn a_rejecting_pipe_surfaces_a_graphql_error() {
         .http()
         .post("/graphql")
         .body_json(&serde_json::json!({ "query": "{ checked(raw: \"whatever\") }" }))
+        .send()
+        .await;
+    resp.assert_status_is_ok();
+    let json = resp.json().await;
+    let errors = json.value().object().get("errors").array();
+    let first = errors
+        .iter()
+        .next()
+        .expect("a pipe rejection yields one error");
+    assert_eq!(first.object().get("message").string(), "bad input");
+}
+
+#[tokio::test]
+async fn a_rejecting_pipe_surfaces_from_a_bare_return_operation() {
+    let app = boot().await;
+    let resp = app
+        .http()
+        .post("/graphql")
+        .body_json(&serde_json::json!({ "query": "{ checkedBare(raw: \"whatever\") }" }))
         .send()
         .await;
     resp.assert_status_is_ok();

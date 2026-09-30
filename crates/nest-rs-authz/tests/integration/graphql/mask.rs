@@ -161,6 +161,18 @@ impl MaskResolver {
         ])
     }
 
+    /// The posture on a bare return: the gate's denial and the mask's failure
+    /// reach the client through the wrapper's `Result`, so the developer's
+    /// method need not be fallible to carry either.
+    #[query]
+    #[authorize(Read, widget::Entity)]
+    async fn bare_widget(&self) -> WidgetDto {
+        WidgetDto {
+            id: 1,
+            name: Some("ada".into()),
+        }
+    }
+
     #[query]
     #[authorize(Read, widget::Entity)]
     async fn strict_widget(&self) -> GqlResult<StrictWidgetDto> {
@@ -345,6 +357,26 @@ async fn a_caller_with_no_grant_reads_no_strict_row() {
         "the class gate rejects a caller with no Read rule: {json}",
     );
     assert!(!json["errors"].as_array().unwrap_or(&vec![]).is_empty());
+}
+
+#[tokio::test]
+async fn a_bare_return_operation_is_gated_and_masked() {
+    let app = boot().await;
+    let admin = query(&app, "admin", "{ bareWidget { id name } }").await;
+    assert_eq!(admin["data"]["bareWidget"]["name"], "ada", "{admin}");
+    let viewer = query(&app, "viewer", "{ bareWidget { id name } }").await;
+    assert_eq!(viewer["data"]["bareWidget"]["id"], 1, "{viewer}");
+    assert_eq!(
+        viewer["data"]["bareWidget"]["name"],
+        serde_json::Value::Null,
+        "the mask strips a bare return as it does a fallible one: {viewer}",
+    );
+    let nobody = query(&app, "", "{ bareWidget { id name } }").await;
+    assert!(
+        !nobody["errors"].as_array().unwrap_or(&vec![]).is_empty()
+            && !nobody.to_string().contains("ada"),
+        "the class gate refuses a bare return as it does a fallible one: {nobody}",
+    );
 }
 
 #[tokio::test]

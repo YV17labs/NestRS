@@ -358,6 +358,14 @@ impl Delivery {
 ///
 /// A job sealed by a newer release runs nothing: the delivery says so once, at
 /// `warn`, naming both versions, and the answer is [`AttemptOutcome::Defer`].
+///
+/// **An attempt its driver drops still files its line.** A driver stops an
+/// attempt by dropping this future — a drain whose window closed on it, a
+/// worker torn down — and the handler is dropped where it waits. That attempt
+/// was a unit of work all the same, so it files its `queue.job` line with
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) and the time it ran,
+/// in the job's own trace; what the driver does with the job next — hand it
+/// back, take the attempt back — is the driver's to say.
 pub async fn attempt(
     method: &'static ProcessMethod,
     delivery: &mut Delivery,
@@ -660,6 +668,68 @@ struct JobIdentity {
     attempt: u32,
 }
 
+/// An attempt's `queue.job` line, filed exactly once: with the outcome the
+/// attempt settled on, or — dropped before it settled — with
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
+///
+/// Dropped inside the attempt's span and ambient scope, since both wrappers
+/// drop the future they wrap inside what they install, so the cancelled line
+/// carries the job's trace like every other line of the attempt.
+struct JobLine {
+    identity: JobIdentity,
+    started: Instant,
+    filed: bool,
+}
+
+impl JobLine {
+    fn open(identity: JobIdentity) -> Self {
+        Self {
+            identity,
+            started: Instant::now(),
+            filed: false,
+        }
+    }
+
+    /// File the line for an attempt that settled on `outcome`.
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+        self.filed = true;
+    }
+
+    fn emit(&self, outcome: &'static str) {
+        let identity = &self.identity;
+        tracing::info!(
+            name: unit::JOB,
+            target: nest_rs_core::operation_log::TARGET,
+            message = unit::JOB,
+            queue = %identity.queue,
+            processor = identity.processor,
+            job_id = %identity.job_id,
+            backend_id = identity.backend_id.as_deref(),
+            attempt = identity.attempt,
+            outcome,
+            duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
+        );
+    }
+}
+
+impl Drop for JobLine {
+    fn drop(&mut self) {
+        if self.filed {
+            return;
+        }
+        // Unwinding out of the port's own code rather than dropped by a driver:
+        // the handler's panics are caught before here, so this one is ours, and
+        // the unit still ended in one.
+        let outcome = if std::thread::panicking() {
+            nest_rs_core::operation_log::PANIC
+        } else {
+            nest_rs_core::operation_log::CANCELLED
+        };
+        self.emit(outcome);
+    }
+}
+
 /// Run one job handler — or refuse the envelope it would have run on — and turn
 /// the outcome into the event it logs plus the [`AttemptOutcome`] the adapter
 /// translates. Lifted out of [`attempt`] so every terminal state is reachable
@@ -685,7 +755,8 @@ async fn run(
     last: bool,
     retry_after: Duration,
 ) -> AttemptOutcome {
-    let started = Instant::now();
+    let attempt = identity.attempt;
+    let line = JobLine::open(identity);
     // `Err` when nothing ran: attempts that never returned spent the budget
     // before this one, `Err`'s count of them.
     let outcome = match input {
@@ -702,7 +773,7 @@ async fn run(
     // family's. Neither restates the other's fields.
     let (settled, result) = match outcome {
         Err(unfinished) => {
-            let spent = identity.attempt.saturating_sub(1);
+            let spent = attempt.saturating_sub(1);
             tracing::error!(
                 target: TARGET,
                 attempts = spent,
@@ -742,7 +813,7 @@ async fn run(
             tracing::error!(
                 target: TARGET,
                 error = %nest_rs_core::error_message(&error),
-                attempts = identity.attempt,
+                attempts = attempt,
                 "job dead-lettered: retry budget spent",
             );
             (
@@ -779,18 +850,7 @@ async fn run(
         }
     };
 
-    tracing::info!(
-        name: unit::JOB,
-        target: nest_rs_core::operation_log::TARGET,
-        message = unit::JOB,
-        queue = %identity.queue,
-        processor = identity.processor,
-        job_id = %identity.job_id,
-        backend_id = identity.backend_id.as_deref(),
-        attempt = identity.attempt,
-        outcome = settled,
-        duration_ms = nest_rs_core::operation_log::duration_ms(started),
-    );
+    line.file(settled);
     result
 }
 

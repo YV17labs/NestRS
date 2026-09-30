@@ -379,6 +379,70 @@ async fn a_retryable_failure_runs_again_while_the_budget_lasts_then_dead_letters
     );
 }
 
+/// Told when the stuck method has started, so its attempt is dropped mid-run.
+static STUCK_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+struct StuckProcessor;
+
+impl nest_rs_core::ProviderResidency for StuckProcessor {
+    const SINGLETON: bool = true;
+}
+
+#[processor]
+impl StuckProcessor {
+    #[process(queue = TranscodeQueue)]
+    async fn stuck(&self, _job: TranscodeCommand) -> anyhow::Result<()> {
+        STUCK_STARTED.notify_one();
+        std::future::pending::<()>().await;
+        Ok(())
+    }
+}
+
+/// A driver stops an attempt by dropping it — a drain whose window closed on
+/// it. The attempt was a unit of work all the same: it files its `queue.job`
+/// line once, `cancelled`, in the job's trace, and no dead letter or retry is
+/// said for it — what happens to the job next is the driver's.
+#[tokio::test]
+async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = Container::builder().provide(StuckProcessor).build();
+    let mut delivery = transcode_delivery("stuck.wav");
+
+    {
+        let attempt = consume::attempt(method("StuckProcessor::stuck"), &mut delivery, container);
+        tokio::select! {
+            outcome = attempt => panic!("the stuck method settled: {outcome:?}"),
+            () = STUCK_STARTED.notified() => {}
+        }
+    }
+
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_queue::unit::JOB,
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "{line:#?}",
+    );
+    assert_eq!(line.field("attempt").as_deref(), Some("1"));
+    assert_eq!(line.field("queue").as_deref(), Some("transcode"));
+    assert!(line.field("duration_ms").is_some(), "{line:#?}");
+    let span = logs.expect_span(nest_rs_queue::TARGET, nest_rs_queue::unit::JOB);
+    assert!(
+        line.trace_id.is_some(),
+        "the line carries the job's trace: {line:#?}"
+    );
+    assert_eq!(line.trace_id, span.field("trace_id"), "{line:#?}");
+    assert!(
+        logs.events()
+            .iter()
+            .all(|event| !event.message.starts_with("job dead-lettered")
+                && !event.message.starts_with("job failed")),
+        "a dropped attempt is neither failed nor dead-lettered here",
+    );
+}
+
 /// The `queue.job` spans an attempt opened, in creation order.
 fn job_spans(logs: &nest_rs_testing::LogCapture) -> Vec<nest_rs_testing::CapturedSpan> {
     logs.spans()

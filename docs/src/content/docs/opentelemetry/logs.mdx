@@ -163,9 +163,13 @@ query could pick the wrong one.
 Every one carries `duration_ms`, and every one but HTTP carries `outcome`
 (`ok` / `error` / `panic` / `cancelled`) — a request has `status`, which says how
 it ended more precisely than four words could. `cancelled` is a unit stopped
-before it settled and dropped where it waited: MCP files it for an operation its
-client cancelled, or that the HTTP transport stopped at the end of its shutdown
-window. So one query answers "what did this deployment
+before it settled and dropped where it waited, and every edge that can see one
+stopped files it: MCP for an operation its client cancelled, or that the HTTP
+transport stopped at the end of its shutdown window; HTTP for a request dropped
+before it answered — cut by that window, or left by its client — which is,
+with a handler that panicked (`panic`), the one HTTP line with an `outcome` and
+without a `status`, since nothing was answered; and the queue for an attempt its worker stopped, a drain whose window
+closed on it included. So one query answers "what did this deployment
 do", and "what failed" is `outcome != ok` or `status >= 400`.
 
 ```text frame="terminal"

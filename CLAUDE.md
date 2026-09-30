@@ -700,7 +700,11 @@ affordable.** The ids relate lines; the *identity* of the work — which route,
 which event, which job, which tool — is an **event** attribute on a line the edge
 emits once per unit, the way HTTP's access log always has. An edge without
 that line leaves its work anonymous on the console, which is the state HTTP's
-access log has always prevented and the other edges lacked.
+access log has always prevented and the other edges lacked. **A unit stopped
+before it settles still files it** — dropped at a shutdown window, cancelled by
+its caller, torn down with its worker — as `outcome = cancelled`. Where the edge
+does not stop the unit itself, the line is filed by a guard dropped with the
+unit's future, since code that has to notice the stop is code that can miss it.
 
 **A unit of work has one canonical name, and it is `<edge>.<unit>`.** It is
 declared once by **the crate that owns the edge**, as `<crate>::unit::<UNIT>`

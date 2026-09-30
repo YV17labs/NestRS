@@ -1374,7 +1374,21 @@ own bound:
      through the shutdown hooks. A stopped unit files `outcome = cancelled`.
    - **The Redis worker** stops fetching and drains within
      `RedisWorkerConfig::shutdown_timeout` (*A shutdown stays inside
-     `shutdown_timeout`*, in the queue's entry below).
+     `shutdown_timeout`*, in the queue's entry below). An attempt the drain
+     interrupts files its `queue.job` line `outcome = cancelled` — from the port,
+     which files it for any attempt a driver drops, so a second adapter owes
+     nothing for it.
+
+   **A unit of work cut on the way down still files its operation line**, with
+   `outcome = cancelled` and the time it ran: *every edge files one line per unit
+   of work* holds for the units a shutdown stops, which are exactly the ones an
+   operator reads the log for afterwards. Where the edge does not stop the unit
+   itself — HTTP's handler is dropped by hyper, a queue attempt by its driver —
+   the line is filed by a guard dropped with the unit's future, so it cannot
+   depend on the edge noticing the stop; MCP stops its operations itself and
+   files the line where it does.
+   Built at HTTP, MCP and the queue; a WebSocket or GraphQL-over-WS handler is
+   not closed by the window at all, which is an owner question.
    - **The scheduler** starts no tick once shutdown is observed and abandons a lock
      call in flight, but it **joins a tick already running** rather than dropping
      it, because a dropped attempt holds its row locks until its statement drains

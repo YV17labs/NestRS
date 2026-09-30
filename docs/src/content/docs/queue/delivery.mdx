@@ -173,7 +173,8 @@ A shutdown stops fetching at once. Running attempts get the shutdown window,
 less a reserve of five seconds (half the window when that is shorter), to
 finish where they run, and jobs the replica fetched but had not started still
 start as permits free inside it. What still runs when the window closes is interrupted
-and its job handed back to the queue inside the reserve, so the orchestrator's
+— its `queue.job` line filed with `outcome="cancelled"` — and its job handed
+back to the queue inside the reserve, so the orchestrator's
 `SIGKILL` never lands on a job the worker still holds — give the pod a grace
 period above the window. A retry's next attempt is already on the schedule, so
 it holds nothing up. An attempt that outlives even the reserve is said at

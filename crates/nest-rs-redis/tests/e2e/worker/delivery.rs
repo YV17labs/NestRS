@@ -824,10 +824,18 @@ async fn a_job_whose_attempts_never_return_is_dead_lettered_once_they_spend_its_
     assert_eq!(dead_letters[0].level, "error");
     assert_eq!(dead_letters[0].field("unfinished").as_deref(), Some("2"));
     assert_eq!(dead_letters[0].field("attempts").as_deref(), Some("2"));
+    // The replica is killed in process, by aborting its worker, which drops each
+    // attempt where it waits: those file `cancelled`, where a process killed
+    // outright files nothing. Either way neither answered, and both spent the
+    // budget.
     assert_eq!(
         lines_of(&logs, &receipt),
-        [line(3, "error")],
-        "the one line the job files is the dead letter's: the killed attempts answered nothing",
+        [
+            line(1, operation_log::CANCELLED),
+            line(2, operation_log::CANCELLED),
+            line(3, operation_log::ERROR),
+        ],
+        "the killed attempts were stopped, not failed, and the dead letter is the third's",
     );
     assert_eq!(
         CRASHED.of(run).len(),

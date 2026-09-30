@@ -646,6 +646,25 @@ async fn an_attempt_outlasting_the_shutdown_window_is_handed_back_within_it() {
         .find(|event| crate::names(event, receipt.id()))
         .unwrap_or_else(|| panic!("the job was handed back, not dropped: {handed_back:#?}"));
     assert_eq!(handed_back.field("reason").as_deref(), Some("shutdown"));
+    // The interrupted attempt was a unit of work: it files its line, once, and
+    // says it was stopped rather than that it failed.
+    let lines = logs.find(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_queue::unit::JOB,
+    );
+    let lines: Vec<_> = lines
+        .iter()
+        .filter(|line| crate::names(line, receipt.id()))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one line for the interrupted attempt: {lines:#?}"
+    );
+    assert_eq!(
+        lines[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
     assert_eq!(
         OUTLASTED.finished(run),
         0,

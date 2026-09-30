@@ -37,16 +37,7 @@ impl Validate for IssuerConfig {
 
 impl Config for IssuerConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
-        let clients = match env.setting("CLIENTS")? {
-            Some(raw) => serde_json::from_str(&raw.value).map_err(|e| {
-                if raw.from_file() {
-                    raw.refuse("does not hold a JSON list of clients")
-                } else {
-                    raw.refuse(e)
-                }
-            })?,
-            None => base.clients,
-        };
+        let clients = env.json("CLIENTS")?.unwrap_or(base.clients);
         let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(base.default_org_id);
         Ok(Self {
             clients,
@@ -104,11 +95,12 @@ mod tests {
 
         let refusal = refusal.expect("a mistyped clients file is refused");
         assert!(refusal.contains(&env.var_name("CLIENTS_FILE")), "{refusal}");
+        assert!(refusal.contains("invalid type"), "{refusal}");
         assert!(!refusal.contains("hunter2"), "{refusal}");
     }
 
     #[test]
-    fn inline_clients_that_do_not_parse_are_refused_under_the_inline_variable_with_the_reason() {
+    fn inline_clients_that_do_not_parse_are_refused_without_their_content() {
         let env = ConfigService::with_vars("issuer", [("CLIENTS", MISTYPED_CLIENTS)]);
         let refusal = IssuerConfig::from_env(&env, IssuerConfig::default())
             .err()
@@ -121,6 +113,7 @@ mod tests {
             "{refusal}"
         );
         assert!(refusal.contains("invalid type"), "{refusal}");
+        assert!(!refusal.contains("hunter2"), "{refusal}");
     }
 
     #[test]

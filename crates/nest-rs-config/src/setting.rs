@@ -4,6 +4,9 @@
 use std::fmt;
 use std::str::FromStr;
 
+use nest_rs_core::DecodeError;
+use serde::de::DeserializeOwned;
+
 use crate::error::ConfigError;
 
 /// One key's value and the variable that supplied it: `<KEY>` when it was
@@ -75,6 +78,21 @@ impl Setting {
             } else {
                 self.refuse(e)
             }
+        })
+    }
+
+    /// The value decoded from JSON as `T`, refused under this setting's variable
+    /// when it does not decode.
+    ///
+    /// The refusal is [`ConfigError::Decode`], worded by
+    /// [`DecodeError`] for both spellings: where the value failed, the kind of
+    /// value found and the type expected, never the value — unlike
+    /// [`parse`](Self::parse), which keeps an inline parser's reason, since a
+    /// structured value is where records carrying credentials are written.
+    pub fn json<T: DeserializeOwned>(&self) -> Result<T, ConfigError> {
+        serde_json::from_str(&self.value).map_err(|error| ConfigError::Decode {
+            var: self.var.clone(),
+            source: DecodeError::new(&error),
         })
     }
 

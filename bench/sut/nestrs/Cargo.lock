@@ -1635,6 +1635,8 @@ dependencies = [
  "libc",
  "nest-rs-config-macros",
  "nest-rs-core",
+ "serde",
+ "serde_json",
  "thiserror",
  "tracing",
  "validator",

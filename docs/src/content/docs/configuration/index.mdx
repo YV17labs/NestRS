@@ -204,6 +204,7 @@ prefix. Every method is sync, and every one that reads a value returns a
 | `env.parse::<T>("KEY")?` → `Option<T>`         | Same, parsed via `FromStr`                  |
 | `env.flag("KEY", default)?` → `bool`           | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
 | `env.list("KEY", default)?` → `Vec<String>`    | Comma-separated, trimmed, empties dropped   |
+| `env.json::<T>("KEY")?` → `Option<T>`          | A structured value — a list of records, a map — written as JSON |
 | `env.seconds("KEY", base)?` → `Option<Duration>` | Whole seconds; `0` means off              |
 | `env.count("KEY", base)?` → `Option<usize>`    | A whole count; `0` means unlimited          |
 | `env.setting("KEY")?` → `Option<Setting>`      | The raw string and the spelling that supplied it — for a value your own code refuses |
@@ -232,6 +233,16 @@ and `setting.shown()` renders the value when it was inline and
 `<the content of the file NESTRS_<NS>__KEY_FILE names>` when it was not.
 `env.parse` refuses the same way, and drops the parser's own reason for a value
 read from a file, since that reason may quote its input.
+
+**A structured value is refused without its content, whichever spelling gave
+it.** `env.json::<T>("KEY")?` decodes a JSON value as any `Deserialize` type, and
+a value that does not decode fails the boot saying where it failed, the kind of
+value found and the type expected — `invalid value for NESTRS_ISSUER__CLIENTS:
+invalid type: a string, expected a sequence at line 1 column 76` — never the
+value itself, inline or not: a list of records is where a deployment writes
+credentials, such as each OAuth client's secret. Decode one through `env.json`
+rather than `serde_json::from_str` in your own `from_env`, whose error quotes
+what it refused.
 
 Empty strings count as unset, so `FOO=` in a `.env` file does not blank
 an in-code default.

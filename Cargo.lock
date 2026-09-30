@@ -2722,6 +2722,8 @@ dependencies = [
  "nest-rs-config-macros",
  "nest-rs-core",
  "nest-rs-testing",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

@@ -7,6 +7,7 @@
 //! about itself.
 
 mod canon;
+mod decodes;
 mod dependencies;
 mod docs;
 mod edges;

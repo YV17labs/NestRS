@@ -517,6 +517,21 @@ impl ConfigService {
             .transpose()
     }
 
+    /// A structured value — a list of records, a map — written as JSON and
+    /// decoded as `T`. Unset is `None`; a value that does not decode is
+    /// boot-fatal naming the variable, and the refusal never quotes the value
+    /// ([`Setting::json`]).
+    ///
+    /// The one reader for a structured value, so no config decodes one itself
+    /// and words serde's sentence — which quotes what it refused — into a boot
+    /// error.
+    pub fn json<T>(&self, key: &str) -> Result<Option<T>, ConfigError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        self.setting(key)?.map(|setting| setting.json()).transpose()
+    }
+
     /// `1`/`true`/`yes`/`on` and their negatives, case-insensitive.
     ///
     /// The vocabulary is [`nest_rs_core::parse_bool`], not a copy of it: this
@@ -754,6 +769,74 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(inline.contains("unknown value \"sideways\""), "{inline}");
+            Ok(())
+        });
+    }
+
+    /// A record a structured value lists: a client and the secret it carries.
+    #[derive(Debug, serde::Deserialize, PartialEq)]
+    struct Client {
+        client_id: String,
+        client_secret: String,
+        scopes: Vec<String>,
+    }
+
+    /// `scopes` given as a string where a list is expected, beside a secret.
+    const MISTYPED: &str =
+        r#"[{"client_id":"ci","client_secret":"hunter2-SECRET","scopes":"hunter2-SCOPE"}]"#;
+
+    /// A structured value decodes as its type, and unset is `None`.
+    #[test]
+    fn json_decodes_a_structured_value_and_is_none_when_unset() {
+        let env = ConfigService::with_vars(
+            "fixture",
+            [(
+                "CLIENTS",
+                r#"[{"client_id":"ci","client_secret":"s","scopes":["user"]}]"#,
+            )],
+        );
+        let clients: Vec<Client> = env.json("CLIENTS").unwrap().expect("set");
+        assert_eq!(
+            clients,
+            [Client {
+                client_id: "ci".into(),
+                client_secret: "s".into(),
+                scopes: vec!["user".into()],
+            }]
+        );
+        assert!(env.json::<Vec<Client>>("UNSET").unwrap().is_none());
+    }
+
+    /// serde's sentence quotes the value it refused — here a scope list given as
+    /// a string, and beside it a client's secret. The refusal names the variable,
+    /// says where and what kind of value it found, and quotes no byte of it,
+    /// inline or from a file alike.
+    #[test]
+    fn a_structured_value_that_does_not_decode_is_refused_without_its_value() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("clients.json", MISTYPED)?;
+            for (env, var) in [
+                (
+                    ConfigService::with_vars("fixture", [("CLIENTS", MISTYPED)]),
+                    var_name("fixture", "CLIENTS"),
+                ),
+                (
+                    ConfigService::with_vars("fixture", [("CLIENTS_FILE", "clients.json")]),
+                    var_name("fixture", "CLIENTS_FILE"),
+                ),
+            ] {
+                let err = env.json::<Vec<Client>>("CLIENTS").unwrap_err();
+                assert!(
+                    matches!(&err, ConfigError::Decode { var: named, .. } if *named == var),
+                    "{err:?}"
+                );
+                let rendered = nest_rs_core::error_message(&err);
+                assert!(rendered.contains(&var), "{rendered}");
+                assert!(rendered.contains("invalid type: a string"), "{rendered}");
+                assert!(rendered.contains("line 1 column"), "{rendered}");
+                assert!(!rendered.contains("hunter2"), "{rendered}");
+                assert!(!format!("{err:?}").contains("hunter2"), "{err:?}");
+            }
             Ok(())
         });
     }

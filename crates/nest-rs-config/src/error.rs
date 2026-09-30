@@ -2,6 +2,7 @@
 
 use std::fmt::Write as _;
 
+use nest_rs_core::DecodeError;
 use thiserror::Error;
 use validator::{ValidationErrors, ValidationErrorsKind};
 
@@ -16,6 +17,21 @@ pub enum ConfigError {
         var: String,
         /// Why the value was rejected.
         message: String,
+    },
+    /// A structured value that did not decode as its type.
+    ///
+    /// Carries [`DecodeError`], never serde's own sentence: that one quotes the
+    /// value it refused, and a structured value is where a deployment writes
+    /// records with credentials in them — an OAuth client list carries each
+    /// client's secret. So the refusal says where the value failed, what kind of
+    /// value it found and what it expected, whichever spelling supplied it.
+    #[error("invalid value for {var}: {source}")]
+    Decode {
+        /// The variable that supplied the value — `<KEY>` or `<KEY>_FILE`.
+        var: String,
+        /// Where and why it did not decode, without the value.
+        #[source]
+        source: DecodeError,
     },
     /// A loaded config failed `validator::Validate`.
     ///

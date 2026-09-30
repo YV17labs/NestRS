@@ -551,7 +551,10 @@ Three consequences are load-bearing enough to repeat here:
   `nest_rs_core::DecodeError` — where, what kind of value, the type expected —
   in its line, its stored record and its reply alike, and `error_message` renders
   any `serde_json::Error` in a chain that way, so a cause nobody formatted by hand
-  is covered too. A site that formats a serde error with `{e}` is the leak.
+  is covered too. A site that formats a serde error with `{e}` is the leak. A
+  `#[config]` value is a payload too — a structured one is where a deployment
+  writes client secrets — so it is decoded by `ConfigService::json`, once, in
+  `nest-rs-config`, and never by a config's own `serde_json::from_str`.
 - **A value is escaped by the formatter, never by the call site.** Any field can
   carry a string a client chose — a WS event name, a decode failure's position —
   so `TextFormat` escapes every field value it writes, and a line break or a

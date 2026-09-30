@@ -146,12 +146,26 @@ it is created.
 
 `.github/workflows/` holds `publish.yml` (tag `v*.*.*` →
 `cargo workspaces publish`), `docs-pages.yml` (docs lint + deploy) and
-`security-watch.yml` (daily, and on a lockfile change on `main`:
-cargo-audit over the three lockfiles with warnings denied, plus a build
-on the Rust beta toolchain; a failure opens or updates one issue).
+`security-watch.yml` (daily, and on a lockfile or manifest change on
+`main`: cargo-audit over the three lockfiles with warnings denied, a build
+on the Rust beta toolchain, and the **feature matrix** — every crate
+checked alone under its own defaults, then the umbrella with each feature
+alone; a failure opens or updates one issue).
 **No CI runs clippy/fmt/nextest.** The *Definition of done* in
 `CLAUDE.md` is enforced locally, by you, every time — never assume CI
 will catch what you skipped.
+
+**Every local build is one feature union**, and that is a blind spot of
+its own: `--workspace` unifies every member's features, and the hygiene
+witness enables all of them. A crate that compiles only because a sibling
+turned a feature on passes both — `nest-rs-authz` shipped in 7.0 naming the
+optional `nest-rs-core` from its always-compiled engine, so `authz` alone
+and every headless `seaorm` build failed. The local half of the gate is the
+`dependencies` join in `nest-rs-conformance`: every path rooted at an
+**optional** dependency sits below a `#[cfg(feature = …)]` whose feature
+enables it — through the `mod` tree, the item, the statement and a macro
+call's tokens. What a static read cannot see — a path that resolves only
+under a dependency's *forwarded* feature — is the feature matrix's.
 
 The watch is a **monitor, not a gate**: nothing waits on it and it is
 never a required check. It exists because the local loop cannot notice

@@ -15,6 +15,15 @@
 #     apalis-redis 0.7.4 carries a never-type-fallback lint that rustc says will
 #     become a hard error "in a future release in all editions"; beta runs six
 #     weeks ahead of stable, so a failure here is the notice before the break.
+#   * `feature-matrix` — every workspace crate checked alone under its own
+#     default features, then the umbrella with each of its features alone. Every
+#     local gate builds one feature union (`--workspace` unifies, the hygiene
+#     witness enables everything), so a crate that compiles only because a
+#     sibling turned a feature on is invisible there: `nest-rs-authz` shipped
+#     not compiling alone that way. The `dependencies` conformance join catches
+#     the static half locally (an optional dependency named outside a gate that
+#     enables it); a path that resolves only under a dependency's forwarded
+#     feature needs a real build, and this is it.
 #
 # A failure opens one issue, or comments on it while it stays open, so the
 # signal outlives the Actions tab. `GITHUB_TOKEN` is scoped to that one write.
@@ -29,6 +38,7 @@ on:
     branches: [main]
     paths:
       - '**/Cargo.lock'
+      - '**/Cargo.toml'
       - '.cargo/audit.toml'
       - '.github/workflows/security-watch.yml'
 
@@ -112,8 +122,60 @@ jobs:
       - name: Report future incompatibilities
         run: cargo +beta report future-incompatibilities || echo "no future-incompatibility report"
 
+  feature-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97'
+
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-matrix-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-matrix-
+
+      # Derived from `cargo metadata`, never listed: a crate added later is
+      # checked the day it lands, and so is an umbrella feature. `default` and
+      # `full` are unions, which is what every other build already is.
+      - name: Every crate alone, and every umbrella feature alone
+        run: |
+          status=0
+          meta=$(cargo metadata --no-deps --format-version 1)
+          for crate in $(echo "$meta" | jq -r '.packages[].name' | sort); do
+            if cargo check -p "$crate" --quiet; then
+              echo "- \`$crate\` alone: ok" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`$crate\` alone: **does not compile**" >> "$GITHUB_STEP_SUMMARY"
+              status=1
+            fi
+          done
+          features=$(echo "$meta" | jq -r '.packages[] | select(.name == "nest-rs") | .features | keys[]' | grep -vx 'default\|full')
+          for feature in "" $features; do
+            if cargo check -p nest-rs --no-default-features ${feature:+--features "$feature"} --quiet; then
+              echo "- \`nest-rs\` with \`${feature:-no features}\`: ok" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`nest-rs\` with \`${feature:-no features}\`: **does not compile**" >> "$GITHUB_STEP_SUMMARY"
+              status=1
+            fi
+          done
+          exit $status
+
   report:
-    needs: [audit, future-incompat]
+    needs: [audit, future-incompat, feature-matrix]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -125,6 +187,7 @@ jobs:
         env:
           AUDIT: ${{ needs.audit.result }}
           FUTURE_INCOMPAT: ${{ needs.future-incompat.result }}
+          FEATURE_MATRIX: ${{ needs.feature-matrix.result }}
         with:
           script: |
             const title = 'Security watch: a scheduled check failed';
@@ -134,8 +197,9 @@ jobs:
               '',
               `- advisory audit (three lockfiles): **${process.env.AUDIT}**`,
               `- beta build (future-incompat lints): **${process.env.FUTURE_INCOMPAT}**`,
+              `- feature matrix (each crate alone, each umbrella feature alone): **${process.env.FEATURE_MATRIX}**`,
               '',
-              'An audit failure means a lockfile resolves a crate with an advisory that `.cargo/audit.toml` does not argue away: update the crate, or add an ignore with the reason it is unreachable. A beta failure means the next stable will not build the framework.',
+              'An audit failure means a lockfile resolves a crate with an advisory that `.cargo/audit.toml` does not argue away: update the crate, or add an ignore with the reason it is unreachable. A beta failure means the next stable will not build the framework. A feature-matrix failure means a crate or an umbrella feature does not compile on its own: the step summary names which.',
             ].join('\n');
             const open = await github.paginate(github.rest.issues.listForRepo, {
               ...context.repo, state: 'open', per_page: 100,

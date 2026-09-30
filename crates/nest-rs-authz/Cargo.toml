@@ -25,7 +25,6 @@ default = []
 # forwarding existed solely because the guard's `check_ws_message` used to
 # compile under `http`, which is what the guard living in `http/` cost.
 http = [
-    "dep:nest-rs-core",
     "dep:nest-rs-http",
     "dep:nest-rs-guards",
     "dep:nest-rs-resource",
@@ -36,7 +35,6 @@ http = [
 # resolver-side `bind` helper and `LoaderScope` live in
 # `nest_rs_seaorm::graphql`.
 graphql = [
-    "dep:nest-rs-core",
     "dep:nest-rs-graphql",
     # The root `AbilityGuard` is what a resolver binds, and its `check_http`
     # entry is what `GraphqlAbilityBridge` runs in band — so this surface needs
@@ -58,7 +56,6 @@ graphql = [
 # forwards `nest-rs-guards/graphql`: it is what seeds the in-band fallback
 # (`GlobalPoolMcpGuard`) so `use_guards_global` reaches `/mcp`.
 mcp = [
-    "dep:nest-rs-core",
     "dep:nest-rs-mcp",
     # Same as GraphQL: the root guard's `check_http` is what `McpAbilityBridge`
     # runs in band.
@@ -79,7 +76,6 @@ mcp = [
 # `denial_to_ws_error`, so a gate refusal and a guard refusal reach the client
 # through one frame.
 ws = [
-    "dep:nest-rs-core",
     "dep:nest-rs-ws",
     # The root guard's `check_ws_message` lives behind *this* feature now, and
     # its `check_http` entry is what runs on the upgrade.
@@ -110,9 +106,13 @@ tracing.workspace = true
 # `AbilityBuilder::build` returns a typed error when a rule's relation
 # predicate is malformed (the `Deny` sentinel).
 thiserror.workspace = true
+# The kernel every crate composes on: the engine names it for
+# `error_message`, which renders a masking failure's cause chain. It was
+# optional while only the transport bindings named it, and the engine
+# naming it under `default = []` is what broke `authz` alone.
+nest-rs-core.workspace = true
 
 # Optional dependencies — pulled in by the feature flags above.
-nest-rs-core = { workspace = true, optional = true }
 nest-rs-http = { workspace = true, optional = true }
 nest-rs-graphql = { workspace = true, optional = true }
 nest-rs-guards = { workspace = true, optional = true }

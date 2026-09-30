@@ -30,6 +30,24 @@ so `cargo install --locked nest-rs-cli` was never exposed. The advisory sat in t
 tree for eleven days with nothing noticing, which is what the daily advisory watch
 below now exists for.
 
+### A GraphQL operation runs its guards whatever it returns
+
+`#[operations]` emitted the guard chain only for an operation whose return type
+read as a `Result`, so under a deny-all `#[use_guards]` on the resolver, or an
+app-wide guard, an operation returning `i32`, `Vec<T>` or a bare `impl Stream`
+subscription served its data in 6.1. Every wrapper the macro emits now answers a
+`Result` — a bare `T` becomes `async_graphql::Result<T>` — so a denial is a field
+error on every query, mutation, subscription, `#[entity]` resolver and field
+resolver. **Breaking for anything relying on the gap:** such an operation now
+needs the posture its guards ask for. A bare return beside `#[authorize]`, beside
+a `Valid<T>` or `Piped<P, T>` argument, and on an `#[entity]` is accepted now; those
+refusals existed only because of the gap.
+
+A `#[field_resolver]` runs its resolver's `#[use_guards]` and its own on every
+call, and leaves the app-wide pool to the request's root field
+(`GraphqlSite::Field`). It used to run nothing unless its method declared a guard,
+and then the pool once per parent row.
+
 ### The queue port: a push names its job, a retry backs off, and a backend says what it honours
 
 6.1's port was three methods over a string: `push_json(name, value)` for a backend
@@ -54,10 +72,13 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   `PushReceipt { queue, id }` per job. A delivery reads the id back out of the
   envelope, never from a backend's own task id, which rides beside it as
   `backend_id` — so `messaging.message.id`, the operation line's `job_id`, a cancel,
-  a unique claim and a checkpoint name one value on every backend. `push_many` is one
-  call to the backend and is not atomic, which it says. `push_to::<Q>` and the
-  string-taking `push(name, job)` are gone; `push_json` is the one hatch for a queue
-  this binary does not declare. A job a 6.x producer sealed carries no id and still
+  a unique claim and a checkpoint name one value on every backend. `push_many`
+  reaches the backend `ENQUEUE_BATCH` (100) jobs per call and is not atomic, which
+  it says: a push that fails after the backend accepted some of its calls answers
+  `QueueError::PartiallyQueued { receipts, source }`, the receipts of every job
+  already queued beside the failure that stopped it, so a retry leaves them out.
+  `push_to::<Q>` and the string-taking `push(name, job)` are gone; `push_json` is
+  the one hatch for a queue this binary does not declare. A job a 6.x producer sealed carries no id and still
   runs, under an id minted for each delivery until a retry seals one.
 - **A queue's type is `Queue`, and `QueueName` is the checked name a backend
   receives.** `#[queue(name = "audio", job = TranscodeCommand)]` now implements
@@ -71,7 +92,10 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   `PushOptions::default().with_delay(..)` holds a job back and `.with_unique(key)`
   keeps at most one job per key pending or running — at most once over pushes, never
   a lock, which the method says. A second push under a held key is refused with
-  `QueueError::UniqueKeyHeld`, naming the holder's `JobId`, and files nothing.
+  `QueueError::UniqueKeyHeld`, naming the holder's `JobId`, and files nothing. A
+  delay ending after 9999-12-31T23:59:59.999Z (`Delay::LATEST_DUE`) is refused at
+  the push with `QueueError::InvalidOptions`, and `Delay::deadline` returns a
+  `Result`.
 - **A retry backs off, and the budget is the port's.** The envelope counts the
   attempt (absent reads as 1). A retryable failure with budget left waits
   `min(5 min, 1 s · 2^(attempt − 1))` before the next attempt, jittered into
@@ -81,6 +105,30 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   on every backend. A spent budget dead-letters the job once, and so, at once, does
   a failure no other attempt could clear — a payload that does not deserialize, a
   pipe rejection, a panic. A 6.1 retry ran again at once, in the worker.
+- **Breaking: an attempt that never returns spends the retry budget.** An attempt
+  whose process died — an abort, an OOM kill, a pod killed mid-job — filed
+  nothing, so 6.1 ran the job again at the same attempt, for free, as often as it
+  crashed a replica. A driver now hands the port the attempts its storage saw
+  start (`Delivery::with_attempts_started(n)`), the port runs the later of that
+  and the envelope's attempt, and a job past `retries + 1` is dead-lettered
+  without running: `job dead-lettered: retry budget spent by attempts that never
+  returned`, at `error`, with `unfinished`. `retries = 0` means tried once, crash
+  or not, so a method that relied on a crash being retried declares a retry. An
+  attempt cut by a shutdown's drain and handed back to the queue is not counted.
+- **An older worker hands a newer release's job back instead of failing it.**
+  During a rolling deploy, a job sealed with a wire-format version newer than the
+  worker's runs nothing, spends no attempt and returns to its queue exactly as
+  stored, due again after a minute (`consume::NEWER_RELEASE_WAIT`), with one
+  `warn`, `job sealed by a newer release handed back unread`, naming both versions
+  and the job's id. 6.1 failed it as an error and spent its retries on it. A
+  driver re-files
+  `AttemptOutcome::Defer { after }` unchanged, through `retry_envelope()`.
+- **A retry keeps the trace it started in.** A job whose envelope carried no
+  usable `traceparent` starts a trace on its first attempt; the record re-filed
+  for the next one marks that trace as the consumer's (`"trace_minted": true`), so
+  every attempt reports `continued_trace=false` and each later attempt is a child
+  of the first. An envelope key a delivery cannot use is said once per job, not
+  once per attempt.
 - **`#[process(concurrency = N)]` is back**, reversing 6f787ce5 by owner decision:
   how many attempts of that method one replica runs at once, default 1 — per method
   and per replica, so another method's jobs never wait on this one's permits.
@@ -89,7 +137,9 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   method *start* per window across the deployment, and **a `Checkpoint<S>` parameter**
   keeps a job's progress across its retries and a replica that died holding it,
   cleared at the job's outcome; it requires `transactional = false`, so a retry never
-  resumes past database work its failed attempt rolled back.
+  resumes past database work its failed attempt rolled back. A throttle window under
+  a millisecond (`Throttle::MIN_WINDOW`), like a zero one, fails the boot: a
+  millisecond is the finest a backend is handed.
 - **`cancel(&receipt)` and `cancel_unique(Q, key)`** answer `Ok(true)` only for a
   job that had not started and now never will, and `Ok(false)` for one that started,
   finished or is unknown.
@@ -106,21 +156,23 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   backend declaring cancellation — `remove` and `remove_unique`; the port checks
   the name and the options, mints the ids and seals the envelopes before any of it
   reaches the driver. On the consuming side, `consume::discover(container, &BACKEND)`
-  refuses a method whose keys the backend cannot honour, and `consume::attempt`
-  answers an `AttemptOutcome` — `Ok`, `Retry { after }` with the backoff above, or
-  `DeadLetter` — over a `Delivery` the driver builds.
+  refuses a method whose keys the backend cannot honour — and two methods draining
+  one queue — and `consume::attempt` answers an `AttemptOutcome` — `Ok`,
+  `Retry { after }` with the backoff above, `DeadLetter`, or `Defer { after }` for a
+  job a newer release sealed — over a `Delivery` the driver builds. What 6.1
+  exported for a driver to do those steps itself is gone: `envelope::seal` and
+  `envelope::open` (the `envelope` module is private, its type is
+  `nest_rs_queue::Envelope`), `check_duplicate_queue_claims`, which
+  `consume::discover` runs, and the `Processor` trait, which the framework never
+  called — a consumer is a `#[processor]` host and its `#[process]` methods.
+  The `tracing` re-export, which only the 6.1 macro's expansion used, is gone too;
+  a crate logging through it depends on `tracing` itself.
 - **`ProcessMethod` is read through accessors.** Its fields are private;
   `name()`, `queue()` and `options()` (a `ProcessOptions` holding `retries`,
   `concurrency`, `throttle` and whether the method checkpoints) replace them.
 - **A `#[process]` method returns any `Result<(), E>`** whose error converts into
   `Box<dyn Error + Send + Sync>` — `anyhow::Result<()>` remains the usual spelling —
   and may be a plain `fn`.
-- **A queue per runtime key is refused, and says why.** `#[queue(prefix = ..)]` is a
-  compile error naming the Redis backend's facts: each queue is drained from a list
-  of its own that every worker replica polls — one idle queue costs Redis about 58
-  commands a second, measured on 8.6.3 — so a queue per key costs a poller per key
-  and leaves an autoscaler no single list to read. Declare one queue and carry the
-  key in the job.
 
 ### The Redis queue lives under `nestrs:queue:`, runs a twice-delivered job once, and keeps every capability the port names
 
@@ -129,10 +181,15 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   names — and the framework keeps its own records beside them, so a Redis user
   whose ACL reaches `~nestrs:*` runs a queue end to end. 6.x kept jobs at the
   root of the keyspace under the queue's bare name: a 7.0 worker refuses to start
-  beside them, naming the keys and the two ways out — drain them with a 6.x
-  worker, or `RENAMENX` them under the namespace, as the queue documentation's
-  *Upgrading queues from 6.x* page lays out and the e2e suite runs — and a 7.0
-  producer says so once per queue.
+  beside them, counting what apalis's own `stats` finds under that name — jobs
+  waiting, and jobs in flight in the sets 6.x workers registered — with the key
+  each sits under and the two ways out: drain them with a 6.x worker, or
+  `RENAMENX` them under the namespace, as the queue documentation's *Upgrading
+  queues from 6.x* page lays out and the e2e suite runs. A 7.0 producer says so
+  once per queue. The check reads no key itself: a key of another type at one of
+  those names, an application's own, is left alone and said at `info`. apalis
+  counts no schedule, so jobs 6.x held back for later are counted by the
+  operator, as that page says.
 - **A job apalis delivers twice runs once.** A delivery takes the job's lease
   before its attempt and leaves a settled mark after it; a second delivery is
   handed back while the lease is held, and acknowledged without running once the
@@ -176,6 +233,13 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   to ten times that many of a silent peer's jobs. An idle method costs Redis about
   58 commands a second per replica at the default poll and about 420 at the floor,
   every poll a fetch and a sweep, jobs or none.
+- **A fetch that fails says what it may have stranded.** A fetch that fails after
+  apalis claimed jobs leaves them in the replica's flight until some replica
+  starts, and its `warn` now says so. A fetch meeting a record apalis-redis cannot
+  decode is its own line, at `error` — `queue fetch met a record apalis cannot
+  decode; it and every job fetched beside it wait in flight until a replica
+  starts` — because apalis 0.7.4 drops the whole batch it claimed at that record,
+  a limit the Delivery page states and an issue drafted upstream.
 - **Breaking: `RedisWorkerConfig` gains `orphan_after`, `lease` and
   `poll_interval`**, beside 6.1's `shutdown_timeout`, so a struct literal without
   `..Default::default()` no longer compiles. Every duration it takes has a floor
@@ -200,7 +264,14 @@ let receipt = queue.push(AudioQueue, command, None).await?;
 - **`Capability::UniquePush`.** A push under a held key is refused with
   `QueueError::UniqueKeyHeld`, naming the job that holds it, and files nothing;
   the key is claimed in the step that reads it, so racing pushes queue one job,
-  and it is let go when the job completes, dead-letters or is cancelled.
+  and it is let go when the job completes, dead-letters or is cancelled. The
+  claim is held forty seconds (`CLAIM_HOLD`, twice the port's `BACKEND_TIMEOUT`)
+  until Redis confirms the job queued, then for the job's lifetime: a push that
+  never learns whether its job was queued — the claim or the filing unanswered,
+  the claim not extended, the push dropped by its caller or by the port's net —
+  lets the key lapse within the hold rather than refusing every retry under it
+  for a week, and says so at `warn`, `unique key claimed without its job confirmed
+  queued; …`, with the `step`. At-least-once is the direction it errs in.
 - **`Capability::Cancellation`.** `cancel(&receipt)` and `cancel_unique(queue,
   key)` answer `true` only while no attempt runs — a job waiting on its queue, on
   its delay or for its next attempt — and the delivery that meets the cancel
@@ -209,14 +280,27 @@ let receipt = queue.push(AudioQueue, command, None).await?;
 - **`Capability::Throttle`.** `#[process(throttle(limit, window))]` is counted
   across every replica in one fixed window per queue, opened by its first start;
   an attempt over the limit waits for the window's end, keeps its attempt number,
-  and is never dropped.
+  and is never dropped. The first refusal stops that replica's fetch until the
+  window ends, so a backlog waits on `…:active`, where peers and a KEDA trigger
+  see it, rather than being fetched, refused and re-filed every poll: a
+  10,000-job backlog under `limit = 1, window = "2s"` and `concurrency = 4` went
+  from about 8,700 Redis calls and 339 refusals in nine seconds to 726 and 15,
+  for the same starts. A job handed back unread — one a newer release sealed —
+  takes its start back, inside the window that counted it only.
 - **`Capability::Checkpoint`.** A job's `Checkpoint<S>` outlives its retries and
   a replica that died holding it, and goes with the job's outcome.
 - **Nothing a job leaves waits forever.** Its open record, unique key,
-  checkpoint and a cancel's tombstone last a week past the instant the job is
+  checkpoint, attempt count and a cancel's tombstone last a week past the instant the job is
   due, renewed by every delivery — the bound on a key whose job vanished, which
   `cancel_unique` frees sooner. A settled mark costs about 120 bytes per job and
-  lasts `max(1 h, 2 · orphan_after + lease)`.
+  lasts `max(1 h, 2 · orphan_after + lease)` — and a week when its
+  acknowledgement may be lost, since apalis drops the acknowledgements still
+  queued when a worker stops and never retries one Redis refused, which leaves the
+  job in flight until some replica starts, however much later: a job settled
+  during a drain, and every job settled within a poll and a heartbeat before the
+  drain began or before apalis reported an acknowledgement lost.
+  `settled marks kept a week`, at `debug` with its `reason`, says when they were
+  kept, and a `warn` when Redis refused.
 - **What the guard costs.** A delivery runs two more scripts than it did — the lease
   and the settle — and a push one more round trip, for the job's open record (about
   110 µs to 200 µs sequential, on loopback).
@@ -235,20 +319,37 @@ after two failures. **Breaking for code that reached the manager.**
   the one `ConnectionManager` every binding shares: apalis's storage runs on it
   (`RedisStorage<_, RedisConnection>`), the rate limiter and the occurrence lock send
   their commands on a clone, and a command of your own runs on one too.
-  `manager()` is gone — there is nothing left to hand out.
+  `manager()` is no longer public — there is nothing left to hand out.
 - **Every command is bounded end to end by `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`**,
   the wait for a reopened connection included, and fails as a timeout the caller
   reads with `is_timeout()`. A timeout says the answer did not come, never that the
   command did not run. The reconnect backoff doubles to a two-second ceiling.
+- **Except where a cut would strand work: a worker's fetch and its admission wait
+  for their answer.** A fetch cut after apalis claimed its jobs left them in a
+  live replica's flight — never run, never swept while that replica lived,
+  invisible to the queue's length — and an admission cut after it ran left a
+  phantom lease, throttle start and attempt. apalis's fetch, its heartbeat and
+  its acknowledgements, which share the fetch's connection, and the delivery
+  guard's admission run on the same socket without the per-command cut; what
+  ends a wait on a Redis that is gone is the socket itself, whose keepalive and,
+  on Linux, `TCP_USER_TIMEOUT` are set to the budget, never under a second. Every
+  other command the worker sends — a hand-back, a settle, a lease renewal — keeps
+  the budget, and is harmless when cut.
 - **The boot proves Redis and says what went wrong.**
   `RedisConnection::connect(&RedisConfig)` replaces `connect(url)` and
   `connect_within(url, budget)`: each attempt proves Redis with a `PING` on a
-  connection opened once, and only then opens the one the app keeps. What every
-  attempt would repeat fails at once — `RedisError::InvalidUrl` for a URL the
-  client cannot parse, `RedisError::Refused` for refused credentials, an ACL denying
-  the proof or a database index out of range — and what may clear is retried within
-  the budget and ends as `RedisError::Unreachable`. `RedisError::Connect` is gone.
-  The endpoint every error and line names is the address dialled, never the URL.
+  connection opened once, closed before it opens the one the app keeps, so a Redis
+  with one client slot left still boots. What every attempt would repeat fails at
+  once — `RedisError::InvalidUrl` for a URL the client cannot parse,
+  `RedisError::Refused` for an answer naming the deployment's own settings: refused
+  credentials, an ACL denying the proof, a database index the server lacks, a
+  protocol it does not speak. Every other answer may clear — `LOADING`, `BUSY`,
+  `MASTERDOWN`, `TRYAGAIN`, a code the client does not know — and is retried within
+  the budget, which ends as `RedisError::Unready`, carrying Redis's last answer, or
+  `RedisError::Unreachable` when Redis never answered. A zero budget built in code
+  is refused before anything is dialled (`RedisError::Budget`).
+  `RedisError::Connect` is gone. The endpoint every error and line names is the
+  address dialled, never the URL.
 
 ### `rediss://` is verified TLS
 
@@ -296,6 +397,16 @@ after two failures. **Breaking for code that reached the manager.**
   default, which the guard's line uses to say which store went quiet. No
   implementor has to change; a call written `store.name()` is ambiguous only where
   another trait in scope has a `name` method too.
+- **Breaking: a throttle's window is never under a millisecond.** `Throttle`'s
+  `limit` and `window` are private, read with `limit()` and `window()` as on
+  `nest_rs_queue::Throttle`, and `Throttle::new` refuses a window under
+  `Throttle::MIN_WINDOW` (1 ms): a compile error in a `const`, a failed boot at the
+  route in `#[meta]`. `NESTRS_THROTTLER__WINDOW_SECS=0`, and a
+  `ThrottlerConfig::window_secs` of `Some(0)` pinned in code, fail the boot naming
+  the variable. A zero window reset every bucket on every hit, so every request
+  was let through at any limit; and a window too long for Redis, up to
+  `u64::MAX` milliseconds, is now kept for the longest Redis accepts, where it
+  failed every hit, closed.
 - `BACKEND_REMEDY` moves beside the `ThrottlerStore` contract it belongs to; its
   path from the crate root is unchanged.
 
@@ -305,22 +416,47 @@ after two failures. **Breaking for code that reached the manager.**
 heartbeat and wrong for a tick that enqueues work: three replicas enqueue three
 jobs per occurrence, and nothing said so.
 
-- **`replicas = "one"`** on `#[every]` or `#[cron]` fires each occurrence on the
-  one replica whose claim on it succeeds. `"each"`, the default, keeps the
-  previous behaviour. `#[after]` refuses the key at compile time, because each
-  replica's boot is its own event.
-- **The claim goes through a port, `OccurrenceLock`**, which a backend binds as
-  one declared factory for `Arc<dyn OccurrenceLock>` carrying
+- **`replicas = "one"`** on `#[every]` or `#[cron]` runs the job as one replica
+  would: each occurrence fires on the one replica whose claim on it succeeds, and
+  never while a run of the job is still going on another. `"each"`, the default,
+  keeps the previous behaviour. `#[after]` refuses the key at compile time,
+  because each replica's boot is its own event.
+- **The claim goes through a port, `OccurrenceLock`**: `claim` takes an
+  `Occurrence` — the job, the occurrence's token, the claim's hold, the run and
+  its lease — and answers `Claimed`, `ClaimedElsewhere` or `RunningElsewhere`,
+  with `renew` and `release` for the lease and `claimed(token)` for an overrun
+  occurrence. A backend binds it as one declared factory for
+  `Arc<dyn OccurrenceLock>` carrying
   `nest_rs::schedule::BACKEND_REMEDY`. The boot fails when a reachable job
   declares `replicas = "one"` and no lock is bound, naming the job and that
   remedy; two lock bindings fail it too.
 - **Redis binds it: `nest_rs::redis::RedisScheduleModule`**, behind the new
   umbrella feature `redis-schedule` (`cargo add nest-rs --features
   redis-schedule`). A bare import beside `ScheduleModule` and
-  `RedisModule::for_root`, it claims each occurrence with one `SET … NX PX` on
-  the shared connection, under `nestrs:schedule:claims:<occurrence>`, and asks
-  about an overrun one with `EXISTS`. A Redis ACL has to allow both on that
-  pattern.
+  `RedisModule::for_root`, it claims each occurrence and takes the job's run lease
+  in one atomic Lua script on the shared connection —
+  `nestrs:schedule:claims:<module path>:<provider>:<method>:<instant_ms>` and
+  `nestrs:schedule:leases:<module path>:<provider>:<method>` — renews and releases
+  the lease with two more, and asks about an overrun occurrence with `EXISTS`.
+  The scripts are sent as `EVALSHA`, with a `SCRIPT LOAD` the first time, so a
+  Redis ACL has to allow `EVALSHA`, `SCRIPT LOAD` and `EXISTS` on those patterns.
+- **A run holds the job on every replica while it lasts.** The claim takes a
+  thirty-second run lease with it, renewed every ten seconds while the run lasts
+  and given back when it ends, panic or not. An occurrence falling due meanwhile
+  is left unclaimed, logged at `debug` as `occurrence left to another replica,
+  which is running the job`; the replica running the job fires the latest one
+  late once its run ends and reports the ones before it. Keyed per occurrence
+  alone, a run outlasting its period would let every idle replica claim the next
+  instant, and up to one run per replica would overlap. A renewal Redis refuses
+  is a `warn`, `run lease not renewed; retrying`; a lease found gone is an
+  `error`, `run lease lost while its job runs; another replica may run it too`;
+  a release that fails is a `warn`, `run lease not released; the job waits for it
+  to lapse`. A replica that stops mid-run holds the job until its lease lapses.
+- **A job is its declaration, not its name.** Its identity opens with the path of
+  the module that declared it, a level per `::`, so an API and a worker that each
+  declare their own `MaintenanceTasks::sweep` never claim each other's
+  occurrences through the Redis they share. A job declared in a crate both apps
+  link is one job.
 - **The scheduler bounds every lock call itself.** A claim, or a question about
   an overrun occurrence, not answered by the time the occurrence goes stale — its
   hold less the ten seconds of clock skew — is abandoned: the occurrence is
@@ -350,8 +486,9 @@ jobs per occurrence, and nothing said so.
   answered that late: its peer's claim may already be gone. A replica that
   crashes after claiming loses that occurrence; work that must not be lost
   belongs in a queue job the tick enqueues. Replica clocks must agree within ten
-  seconds. A claim is made under `<provider>:<method>:<instant>` — a level per
-  `::` — and lasts until the following occurrence, at least a minute.
+  seconds. A claim is made under `<module path>:<provider>:<method>:<instant>` — a
+  level per `::` — and lasts twice the gap to the following occurrence, at least
+  a minute, so a replica that overran one occurrence can still ask who fired it.
 - **Occurrences that fall due while the previous one is claimed or run are
   counted aloud**, whichever `replicas` a job declares: one `warn`,
   `occurrences skipped: they fell due while the previous one was claimed or run`,
@@ -362,12 +499,15 @@ jobs per occurrence, and nothing said so.
   rest. A job firing once asks the lock about the first hundred it overran, so the
   ones a peer fired are told apart from the ones nobody did (`claimed_elsewhere`,
   `unanswered`, `unchecked`).
-- **Breaking:** `ScheduledMethod` and `CronJobMeta` gain a `replicas` field, and
+- **Breaking:** `ScheduledMethod` and `CronJobMeta` gain a `replicas` field and
+  `CronJobMeta` an `origin`, the `module_path!()` of the code declaring the job;
   the `scheduled job (…)` boot lines and the `schedule.tick` line carry
   `replicas`; a job firing once carries the `occurrence` it claimed on its tick.
-- **Breaking:** two jobs sharing one `Provider::method` fail the boot, naming
-  both and where each was declared. Their lines could not be told apart, and
-  firing once they would claim each other's occurrences.
+- **Breaking:** two jobs sharing one `Provider::method` in one app fail the boot,
+  naming both and where each was declared: their lines carry provider and method
+  and could not be told apart. A job attached by hand whose origin, provider or
+  method is empty or carries a `:` fails the boot too, since each is one level of
+  its key.
 - A job registered by hand with a zero interval fails the boot instead of
   panicking the scheduler, and so does one under a millisecond — finer than the
   duration grammar writes or the timer resolves — and a one-shot declaring one
@@ -391,25 +531,58 @@ adapter beneath it, so a healthy backend is never cut short, and a wait past it 
 abandoned with a `warn` naming what it was waiting on.
 
 - **HTTP waits for open connections no longer than
-  `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`**, handed to poem's graceful shutdown: 25
-  seconds by default — under the 30 a pod gets by default between `SIGTERM` and
-  `SIGKILL` — from 1 to 3600, pinned through `HttpConfig`'s `shutdown_timeout` or
-  read from the environment alike; `0` is refused rather than read as an off
-  switch. At the bound a request still running is dropped unanswered and a stream
-  is cut, and one `warn` on `nest_rs::http` — `connections still open as the
-  shutdown window closes are cut; …` — carries `cut`, `upgraded_open` and
-  `shutdown_timeout_ms`. A WebSocket leaves poem's count at its upgrade, so the
+  `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`**, handed to poem's graceful shutdown: 20
+  seconds by default, so the window, the shutdown hooks' 5 seconds and
+  OpenTelemetry's 3-second flush — 28 seconds, pinned by a test from the
+  constants themselves — end inside the 30 a pod gets by default between
+  `SIGTERM` and `SIGKILL`; from 1 to 3600, pinned through `HttpConfig`'s
+  `shutdown_timeout` or read from the environment alike; `0` is refused rather
+  than read as an off switch. A deployment that widens the window keeps
+  `terminationGracePeriodSeconds` at least 8 seconds above it. At the bound a
+  request still running is dropped unanswered, over HTTP/1.1 and HTTP/2 alike,
+  and a stream is cut, and one `warn` on `nest_rs::http` — `connections still
+  open as the shutdown window closes are cut; …` — carries `cut`,
+  `upgraded_open` and `shutdown_timeout_ms`. A WebSocket leaves poem's count at its upgrade, so the
   window neither waits for nor closes one: it ends with its handler or with the
   process. 6.1 handed poem no window, so an `#[sse]` or MCP stream held a stopping
   replica until its own four-hour ceiling or the kubelet's `SIGKILL`, which left
   the shutdown hooks unrun. **Breaking** for an `HttpConfig` struct literal without
   `..Default::default()`.
-- **Every shutdown lifecycle hook runs under a bound** — `OnModuleDestroy`,
-  `BeforeApplicationShutdown`, `OnApplicationShutdown` — and a hook past it is
-  abandoned with a `warn` naming its module and the hook.
-- **OpenTelemetry's provider shutdown is bounded**, by the SDK's own export
-  timeouts or by the framework's, so a collector that stopped answering never holds
-  the exit.
+- **The shutdown lifecycle hooks share one budget** —
+  `nest_rs::core::SHUTDOWN_HOOKS_TIMEOUT`, 5 seconds across `OnModuleDestroy`,
+  `BeforeApplicationShutdown` and `OnApplicationShutdown` together. Once it is
+  spent every later hook is still started and polled once, so a hook that does
+  not wait still runs, and a hook that waits is abandoned with a `warn`, `shutdown
+  hook abandoned: …`, naming its module and the hook, with `waited_ms` and
+  `budget_ms`.
+- **A lifecycle hook that panics no longer unwinds out of `App::run`.** At
+  shutdown it is logged at `error` on `nest_rs::lifecycle`, with the `panic`, and
+  the hooks after it run; at init it is logged the same way and the boot fails
+  with `lifecycle hook X::y (OnModuleInit) panicked`.
+- **OpenTelemetry's final flush shuts the tracer, meter and logger providers down
+  together**, bounded by `nest_rs::opentelemetry::FLUSH_TIMEOUT` — 3 seconds in
+  all — so a collector that stopped answering never holds the exit; a provider
+  still exporting at the bound is named on stderr.
+- **An MCP operation ends with the transport that carried it.** One still running
+  when the HTTP transport stops, or cancelled by its client
+  (`notifications/cancelled`), is dropped where it waits rather than running on
+  through the shutdown hooks. A self-mount that runs units of work off their
+  connections declares a `nest_rs::http::DetachedWork`
+  (`HttpEndpointMeta::runs_detached`), which the transport stops after its window,
+  waiting at most `DetachedWork::SETTLE_TIMEOUT` (500 ms), with a `warn` counting
+  what it stopped; `#[mcp]` declares one per endpoint.
+- **A unit of work stopped before it settles still files its operation line.**
+  An HTTP request dropped at the shutdown window, or by a client that hung up
+  before the answer, files `http.request` with `outcome="cancelled"`, the time it
+  ran, and no `status` or `bytes`; a handler that panics files
+  `outcome="panic"`. An MCP operation dropped as above files `mcp.operation` with
+  the new `nest_rs::core::operation_log::CANCELLED`. A queue attempt its worker
+  stops — a drain closing its window on a running job, or a worker torn down —
+  files `queue.job` with `outcome="cancelled"` in the job's trace; it comes from
+  the port, so every driver files it. HTTP and the queue used to leave no line,
+  and MCP filed `outcome="ok"` for an operation nobody answered. A stream cut at the window
+  still files its line when its body ends, with the head's status and the bytes
+  written.
 - **`AuthnGuard` waits `nest_rs::authn::AUTHENTICATE_TIMEOUT` — 20 seconds — for
   `Strategy::authenticate`**, on every edge that reaches it: a route, the GraphQL
   and MCP fallbacks, a gateway's upgrade. Past it the credential was never
@@ -473,10 +646,18 @@ abandoned with a `warn` naming what it was waiting on.
   OAuth, social and storage configs, and **a storage credential pair is replaced
   whole**: `ACCESS_KEY` set without `SECRET_KEY`, or the reverse, fails the boot
   rather than pairing it with a default or a value pinned in code.
+- **A structured value is decoded by `ConfigService::json` and refused without its
+  content.** `env.json::<T>("KEY")?` decodes a JSON value, inline or through its
+  `_FILE` spelling, as any `Deserialize` type; one that does not decode fails the
+  boot with `ConfigError::Decode`, worded by `nest_rs::core::DecodeError` — the
+  variable, where the value failed, the kind of value found and the type
+  expected, never the value. A `from_env` decoding a structured value through
+  `serde_json` itself quotes it back, a client secret in a mistyped list included,
+  so a conformance join refuses one in the framework and the demo.
 - `OpenTelemetryConfig::from_env` returns a `Result`, and an unparseable
-  `SAMPLE_RATIO` or `METRIC_INTERVAL_SECS` fails `OpenTelemetry::init` with
-  `OpenTelemetryError::Config`, naming the variable, where it used to keep the
-  default after a line on stderr.
+  `SAMPLE_RATIO` or `METRIC_INTERVAL_SECS` — `NaN` included — fails
+  `OpenTelemetry::init` with `OpenTelemetryError::Config`, naming the variable,
+  where it used to keep the default after a line on stderr.
 
 ### A variable nothing reads is reported at boot
 
@@ -489,20 +670,58 @@ environment and the `.env` cascade for two shapes, each reported once, at `warn`
 
 - `config variable read by no config` — a key under a namespace this binary read
   that nothing read, with the nearest key that was read as `suggestion`;
-- `config variable under a misspelled namespace` — a variable whose namespace equals
-  a linked one once separators and case are set aside: `NESTRS_OAUTH_RESOURCE__*`
-  for `oauth__resource`, or `NESTRS_SEAORM_URL`, the spelling every `DATABASE_URL`
-  teaches, for `NESTRS_SEAORM__URL`. The `suggestion` is always a name the binary
-  reads.
+- `config variable under a misspelled namespace` — a variable spelling a linked
+  namespace otherwise than the loader reads it: with other separators,
+  `NESTRS_OAUTH_RESOURCE__*` for `oauth__resource`, or `NESTRS_SEAORM_URL`, the
+  spelling every `DATABASE_URL` teaches, for `NESTRS_SEAORM__URL`; in another case,
+  the prefix's included (`NESTRS_Seaorm__URL`, `nestrs_seaorm__url`), since the
+  loader folds none; or one misspelled segment away, a family member's included
+  (`NESTRS_SEAROM__URL`, `NESTRS_OAUTH__RESOURSE__…`). The `suggestion` is always a
+  name the binary reads.
 
 Everything else stays silent on purpose: one `.env` serves several binaries, and
-another binary's namespace is not a mistake. The key half runs per namespace, where
-that namespace's `from_env` ran, because a config's keys are knowable only there —
-`HttpCors` reads five of its six keys only when `CORS_ORIGINS` is set, so a
-process-wide dry run would report a correct deployment. A read made before any
-subscriber listens waits for the first read that has one, and a deployment that
-filters the target out pays nothing for the scan. `nestrs doctor` stays out of it:
-it links no framework crate, so it cannot know which namespaces a binary reads.
+another binary's namespace is not a mistake — so the near-miss reach is narrow, one
+segment within a quarter of its length, and a conformance join holds every
+namespace of both workspaces outside it of every other. The key half runs per
+namespace, where that namespace's `from_env` ran, because a config's keys are
+knowable only there — `HttpCors` reads five of its six keys only when
+`CORS_ORIGINS` is set, so a process-wide dry run would report a correct
+deployment. A read made before any subscriber listens waits for the first read
+that has one, and a deployment that filters the target out pays nothing for the
+scan. `nestrs doctor` stays out of it: it links no framework crate, so it cannot
+know which namespaces a binary reads.
+
+**Breaking: a namespace belongs to one type.** Two `#[config]` structs declaring
+the same namespace fail the boot at the read of either, naming both
+(`ConfigError::SharedNamespace`). 6.1 let both read it, and the report above
+would file the keys only the second one reads as read by nothing, on a correct
+deployment; from a variable, a reader now finds the one type that parses it.
+
+### Every bounded duration is refused outside its range, from the environment and from code alike
+
+**Breaking for a value that booted before.** One reader,
+`nest_rs::config::DurationBounds`, holds every duration the framework bounds,
+whether the environment set it or code pinned it, and refuses it in one sentence
+naming the variable — under its `_FILE` spelling when that supplied it — and, for a
+value set in code, the field (`` `Type::field` set in code is … ``).
+
+- `NESTRS_SEAORM__CONNECT_TIMEOUT_SECS` and `NESTRS_THROTTLER__WINDOW_SECS` refuse
+  `0`, as `NESTRS_REDIS__CONNECT_TIMEOUT_SECS` already did, and so do a zero
+  `RedisConfig::connect_timeout`, `SeaOrmConfig::connect_timeout_secs: Some(0)` and
+  `ThrottlerConfig::window_secs: Some(0)` pinned in code; a sub-second Redis budget
+  set in code is still taken. A zero Redis budget pinned in code booted into
+  `could not reach Redis … within 0ns`, a zero SeaORM timeout failed every acquire
+  and blamed the pool, and a zero window let every request through at any limit.
+- `NESTRS_AUTHN__EXPIRES_IN_SECS` holds 1 second to thirty days and
+  `NESTRS_AUTHN__LEEWAY_SECS` 0 to 300 seconds (RFC 7519 §4.1.4), and so does a
+  `JwtOptions` built in code, checked by `JwtService::new`; an unbounded value
+  overflowed every mint or verify.
+- The HTTP shutdown window and the Redis worker's durations, above, are read the
+  same way, and `NESTRS_HEALTH__*_MS` keep their one-millisecond floor under the
+  shared sentence.
+
+A duration no bound names — `NESTRS_HTTP__REQUEST_TIMEOUT_SECS`, where `0` means
+off — is read as before.
 
 ### A logged error names every cause beneath it, and a value in a text line cannot forge another
 
@@ -517,6 +736,16 @@ it links no framework crate, so it cannot know which namespaces a binary reads.
   it took anything `Display`, so the line it files carries the whole chain. `anyhow`,
   a `DbErr`, a `String` and every `thiserror` type qualify; a type that is only
   `Display` implements `std::error::Error` first.
+- **A payload that does not decode is reported without its value.** serde's
+  sentences quote the value they refuse, and the queue's dead-letter line and
+  record, the WebSocket payload error, the GraphQL variable-pipe error, the OAuth
+  client's read failures and authz's mask failures all carried it. Each now says
+  where the payload failed, what kind of value was found and what type was
+  expected — `nest_rs::core::DecodeError`, which keeps a missing, unknown or
+  duplicate field's name and drops every value — and `error_message` renders any
+  `serde_json::Error` in a chain the same way. **Breaking:**
+  `WsReply::payload_error` takes the `serde_json::Error`, and
+  `MaskReplyError::Irreconcilable` carries a `DecodeError`.
 - **`TextFormat` escapes every field value it writes**, the message included —
   controls, bidirectional overrides and invisible formatting characters as Rust's
   debug escapes — so a client-chosen string carrying a line break can never forge a
@@ -559,7 +788,7 @@ trybuild snapshot:
   decorator takes and this one cannot — `retries` or `concurrency` on an
   `#[every]`, `tz` on a `#[process]` — is refused with the fact that makes it
   meaningless there, never as a misspelling. The job family's keys are one table,
-  `nest_rs_codegen::job`: every member (`JobDecorator` — `#[process]`, `#[every]`,
+  in `nest-rs-codegen`'s `job.rs`: every member (`JobDecorator` — `#[process]`, `#[every]`,
   `#[cron]`, `#[after]`) crossed with every key (`JobKey`) is a cell of one
   exhaustive `match`, so a key or a member added without an answer at every
   crossing does not build, and each parser reads its keys from it.
@@ -603,7 +832,17 @@ invisible group it arrives in, where it was refused as not a string literal at
 `#[controller(path)]`, `#[gateway(path)]`, `#[mcp(path)]`, `#[cron(tz)]`,
 `#[config(namespace)]`, `#[api(summary)]` and the version list — depending on the
 argument's position — and a cron expression forwarded that way is validated at
-compile time like a literal written in place.
+compile time like a literal written in place. A whole `version = [...]` list
+forwarded that way is read too, where it was refused.
+
+A decorator read once refuses a second copy by name — `#[public]` at every edge,
+every flag, `#[api]` and `#[inject]` — where rustc said `cannot find attribute`.
+The `#[expose]` written on a column refuses a repeated `via`, `complexity`, `input`
+or `validate`; a repeated `via` used to load the rows the second foreign key
+links. `#[crud(create = T, ops = [list, get])]` is refused, where the input type
+of an op `ops` leaves out was dropped in silence. `#[interceptor]` names a
+misspelled key rather than reporting a repeated `priority`, and a refused
+`#[mcp(...)]` argument no longer blames the `#[tools]` impl beside it.
 
 **Breaking for decorator authors** building on `nest_rs_codegen`: the worker-job
 helpers take the member of the family they word rather than its name —
@@ -632,6 +871,10 @@ and the grammars above are public — `cfg_attrs`, `DispatchKeys`,
   in one version, in a shared one, in every version, under true `#[cfg]`s — is
   refused naming both methods. Two verbs on one method and a generic method are
   refused too.
+- **`#[http_code]`, `#[response_header]` and `#[redirect]` work written
+  path-qualified** (`#[nest_rs::http::http_code(201)]`), and a shaper `#[routes]`
+  does not read — outside a `#[routes]` impl, or under an import alias — is a
+  compile error, where it was a silent no-op.
 - The edge's typed errors move to `error.rs` with their public paths unchanged,
   and the transport never quotes a PEM value it cannot parse.
 
@@ -643,11 +886,14 @@ and the grammars above are public — `cfg_attrs`, `DispatchKeys`,
   one event or one connection hook, a method carrying two roles, an `#[on_connect]`
   returning a value, a generic method and a receiver other than `&self`. For code
   building replies by hand, `WsReply::from_handler_error` takes the error by value
-  and `payload_error` a `&dyn Error`; `WsScopeError` moves to `error.rs`, its path
-  unchanged.
+  and `payload_error` the `serde_json::Error` it reports without its value (see
+  *A logged error names every cause beneath it*); `WsScopeError` moves to
+  `error.rs`, its path unchanged.
 - **GraphQL.** A resolver's field name is written by the macro rather than left to
-  async-graphql — the served SDL is unchanged — so two methods naming one field
-  are refused at compile time with both named. `#[dataloader]` carries a method's
+  async-graphql, by async-graphql's own rule — a new word after `_` and after a
+  digit, so `get_2fa` is still served as `get2Fa` and the served SDL is unchanged —
+  so two methods naming one field, `a1_b` beside `a_1b` included, are refused at
+  compile time with both named. `#[dataloader]` carries a method's
   `#[cfg]` onto the loader it generates and calls the batch by its path, and a
   synchronous subscription or `#[entity]` resolver is accepted.
 - **MCP: rmcp 3.1 → 3.4.** `ServerInfo` is `ServerConfig` upstream, and
@@ -656,7 +902,10 @@ and the grammars above are public — `cfg_attrs`, `DispatchKeys`,
   one per host. A project scaffolded from 6.1 resolves rmcp 3.4.1 today, whose
   deprecation of `ServerInfo` turns a `#[tools]` expansion into a `-D warnings`
   failure; 7.0 is its fix. `#[tools]` refuses two methods claiming one tool or
-  prompt name.
+  prompt name. A `#[tool]` or `#[prompt]` doc line written as
+  `#[doc = include_str!(…)]` or `concat!(…)` is part of the description sent to
+  the model; it was dropped, and a doc written only that way was refused as
+  missing.
 
 ### An HMAC secret is held to its hash's size, and a key is judged once
 
@@ -703,17 +952,21 @@ key the settings make.
   default) and the retry budget, and the generated tick notes `replicas = "one"`,
   which needs `RedisScheduleModule` and the `redis-schedule` feature.
 - **`nestrs doctor` follows the loader.** An empty shell variable hides both `.env`
-  spellings, nothing is trimmed that the loader keeps, a `_FILE` spelling is read
-  as the app would read it, and `NESTRS_ENV=prod` sends it to `.env.production`
-  rather than a `.env.prod` no app reads. Its tests no longer read the developer's
-  own shell.
+  spellings, nothing is trimmed that the loader keeps, and `NESTRS_ENV=prod` sends
+  it to `.env.production` rather than a `.env.prod` no app reads. Each variable is
+  answered as the loader reads it — a conformance join runs the two side by side on
+  every shape a variable takes: a `_FILE` naming a file that holds nothing is `not
+  set`, and one naming a missing or unreadable file, or a variable given both inline
+  and as a file, is reported as failing the app's boot and blocks. Its tests no
+  longer read the developer's shell or working directory.
 - **The scaffold follows 7.0**: `.env` explains the `_FILE` form and that a secret
   beside an EdDSA key fails the boot, the queue template pushes with
   `push(Q, job, None)`, the WS template logs through
   `error_message`, and the `AGENTS.md` a new project carries states the rules as
   7.0 reads them — `events/` is an edge and never a plural folder, a family is a
-  level of a config namespace, `Config` names a `#[config]` and nothing else, the
-  queue port owns a job's id and its retry budget, and an edge folder directly
+  level of a config namespace, a namespace belongs to one `#[config]`, `Config`
+  names a `#[config]` and nothing else, every type a `module.rs` declares shares
+  its stem, the queue port owns a job's id and its retry budget, and an edge folder directly
   under a framework crate's `src/` takes the crate's subject
   (`nest-rs-x/src/http/controller.rs` is `XController`). It says how each edge is
   guarded — a controller and a gateway bind `AuthnGuard, AuthzGuard`, a resolver
@@ -854,12 +1107,18 @@ future handlebars that restores the default flips it back.
 - **`.github/workflows/security-watch.yml` notices what the local loop cannot.**
   RUSTSEC-2026-0285 sat in every lockfile for eleven days because the Definition of
   done runs when someone touches the tree. The watch runs daily, on demand and
-  whenever a lockfile or the audit policy changes on `main`: cargo-audit over the
+  whenever a lockfile, a manifest or the audit policy changes on `main`: cargo-audit over the
   framework's, the demo's and the benchmark's lockfiles with warnings denied, so an
   `unsound` or `unmaintained` advisory fails too, and a build of the framework on the
   beta toolchain, where apalis-redis 0.7.4's never-type-fallback lint turns into a
-  hard error six weeks before stable. A failure opens one issue, or comments on it
-  while it stays open. It is a monitor, not a gate.
+  hard error six weeks before stable. A third job checks every crate alone under
+  its default features, and the umbrella with each feature alone: every local gate
+  builds one feature union, so a crate compiling only because a sibling turned a
+  feature on is invisible there — which is how `nest-rs-authz`'s 7.0 engine came to
+  name `nest-rs-core` while it was optional before this release fixed it. The
+  static half of that runs locally too, as the `dependencies` conformance join. A
+  failure opens one issue, or comments on it while it stays open. It is a monitor,
+  not a gate.
 - **apalis-redis 0.7.4 (2025-11-18) is kept past the 12-month freshness bar, by
   decision, and the root manifest says why.** The only newer line,
   1.0.0-rc.9, fails dead-replica recovery: a worker that exits without its clean
@@ -898,20 +1157,30 @@ future handlebars that restores the default flips it back.
   replica**: `#[every("1h", replicas = "one")]` on a new
   `NotificationsScheduleModule`, wired beside `nest_rs::redis::RedisScheduleModule`
   under the umbrella's `redis-schedule` feature, each occurrence claimed under
-  `nestrs:schedule:claims:NotificationsTasks:purge_expired:<instant>`. It deletes
+  `nestrs:schedule:claims:features:notifications:schedule:tasks:NotificationsTasks:purge_expired:<instant>`. It deletes
   through `Repo`, at most a thousand rows a tick. The chart's README says scaling
   the worker does not multiply its schedule.
 - **Every error the demo logs goes through `error_message`**, at all eleven sites,
   so a wrapper such as `AudioError::Queue` names the cause beneath it.
 - The posts MCP host reports itself as a `ServerConfig` read from `nest_rs::mcp`, the
   audio feature pushes through `push(AudioQueue, command, None)`, the issuer's
-  `CLIENTS` is read and refused through its `Setting` — so a mistyped value is never
+  `CLIENTS` is decoded through `ConfigService::json` — so a mistyped value is never
   quoted, a client secret included — and the e2e suites read their database and
   Redis URLs through `ConfigService`, so a `_FILE` spelling reaches them.
 - The live app's e2e suite boots on a throwaway database, as every other suite
   over SeaORM does, and never opens the one `NESTRS_SEAORM__URL` names — one of its
   tests seeded that database directly, failed on an unmigrated one and could leave
   rows behind. `cargo check --locked` works in `demo/` again.
+- **The demo's e2e suites no longer share Redis with a running app.** A committed
+  `.env.test` puts the test profile on logical database 1, which nothing drains,
+  and each test that starts a worker takes a database of its own, 2 to 8, from
+  `features::testing::RedisDatabase`. The worker's e2e boots on a throwaway
+  Postgres: it used to run whatever a developer's `api` or another suite had
+  queued, against the main database, and a push-only suite's jobs were run by a
+  developer's `nestrs run dev` worker against real data. Redis's sixteen logical
+  databases are split between the two workspaces' suites — 0 the developer's, 1
+  to 8 the demo's, 9 to 15 the framework's — and a database outside 9 to 15
+  declared by `nest-rs-redis`'s e2e suite does not compile.
 
 ### Also
 
@@ -931,7 +1200,21 @@ future handlebars that restores the default flips it back.
   subject — while in a product crate, an app's or a library's, it is refused with a
   sentence: an edge adapter belongs to a module folder, and the app's name stops at
   `<App>Module`. The grammars join now reaches `#[every]`, `#[cron]`, `#[after]`
-  and `#[api]`, whose refusals were pinned by snapshots but joined to nothing.
+  and `#[api]`, whose refusals were pinned by snapshots but joined to nothing, and
+  reads a decorator through an import alias and a local `macro_rules!`.
+- **And more, each closing a blind spot a review found:** no `#[config]` decodes a
+  structured value itself (`decodes`); a path rooted at an optional dependency sits
+  under a feature that enables it (`dependencies`); the doctor answers every shape
+  of a variable as the loader does (`mirrors`); no namespace of either workspace is
+  a near miss of another (`naming`); a compile-fail snapshot pins no
+  name-resolution error its fixture does not declare (`snapshots`); every type a
+  `module.rs` declares shares its stem, whatever its visibility, and a module lives
+  nowhere else (`naming`); no framework code spells an apalis structure by hand,
+  and a concern whose keys put a member before the structure is one the key rule
+  states (`keys`); a crate constructing a queue backend owes an e2e test for every
+  capability it names, however it builds the set (`queue_capabilities`); and every
+  `nest_rs…::` path a rule, a docs page or a README names resolves to a public item
+  (`paths`), which found a pagination example calling a private module.
 - **`unreachable_pub` is a workspace lint**, so the three crates that opt out of
   `[lints] workspace = true` state what they take, and an item no caller outside
   its crate reaches is `pub(crate)`.
@@ -942,7 +1225,9 @@ future handlebars that restores the default flips it back.
   and in the queue section *Delivery on Redis*, *Concurrency and scaling* and
   *Upgrading queues from 6.x*; the environment reference documents every variable
   above and what the boot says about one nothing reads; and every queue page's
-  output is pasted from a 7.0 run.
+  output is pasted from a 7.0 run. The schedule page no longer says a successful
+  tick is silent, or that a tick opens a `scheduled job` span: it files one
+  `schedule.tick` line on `nest_rs::operation`, in a span of that name.
 
 ## [6.1.0] - 2026-08-29
 

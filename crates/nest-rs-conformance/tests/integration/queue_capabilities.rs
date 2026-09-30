@@ -10,8 +10,9 @@
 //!   is the cell that keeps the sentence from silently becoming a no-op;
 //! - **the behaviour**, proved on every first-party backend that declares the
 //!   member — a test under that crate's `tests/e2e/` whose name spells it. What a
-//!   backend declares is read off the `QueueBackend` it constructs, so a capability
-//!   claimed without an e2e is a hole, and one never claimed owes nothing there;
+//!   backend declares is every `Capability::<Member>` its crate spells, once the
+//!   crate constructs a `QueueBackend` anywhere — so a capability claimed without
+//!   an e2e is a hole, and one never named owes nothing there;
 //! - **the page**, a docs page naming the member the way a backend declares it,
 //!   `Capability::<Member>`.
 //!
@@ -24,7 +25,8 @@ use std::path::Path;
 
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    crate_dirs, files_with_extension, flatten, parsed, read, relative, repo_root, rust_files,
+    crate_dirs, files_with_extension, flatten, is_cfg_test, parsed, read, relative, repo_root,
+    rust_files,
 };
 use proc_macro2::TokenTree;
 use quote::ToTokens;
@@ -43,7 +45,7 @@ fn every_queue_capability_is_refused_by_the_port_proved_on_its_backends_and_docu
     baseline::floor(members.len(), FLOOR, "queue capabilities");
 
     let port_tests = test_names(&root.join("crates/nest-rs-queue/tests"));
-    let backends = declared_backends(&root);
+    let backends = declared_backends(&root, &crate_dirs());
     let pages: Vec<String> = files_with_extension(&root.join("docs/src/content/docs"), "mdx")
         .iter()
         .filter_map(|page| read(page).ok())
@@ -109,41 +111,83 @@ fn capability_variants(file: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Every crate other than the port whose `src/` holds a `static` or `const`
-/// `QueueBackend`, with the capabilities its initializer names.
-fn declared_backends(root: &Path) -> Vec<Backend> {
+/// Every crate other than the port that constructs a `QueueBackend`, with every
+/// capability its source names.
+///
+/// **The crate, not the initializer.** Reading only a top-level `static` or
+/// `const` typed `QueueBackend` and the `Capability::X` tokens inside it missed a
+/// set named through a constant (`QueueBackend::new("zz", CAPS)`), and a backend
+/// built in a function, an impl's `const` or an inline module: the claim was
+/// real and the crate owed no e2e. A crate constructing one anywhere now owes
+/// the behaviour for every capability it spells anywhere outside its tests —
+/// the direction that over-asks rather than lets a claim through.
+fn declared_backends(root: &Path, dirs: &[std::path::PathBuf]) -> Vec<Backend> {
     let mut backends = Vec::new();
-    for dir in crate_dirs() {
+    for dir in dirs {
         if dir.ends_with("nest-rs-queue") {
             continue;
         }
+        let mut constructs = false;
         let mut declares = BTreeSet::new();
         for file in rust_files(&dir.join("src")) {
             let Some(ast) = parsed(&file) else {
                 continue;
             };
-            for item in &ast.items {
-                let (ty, expr) = match item {
-                    Item::Static(declared) => (&declared.ty, &declared.expr),
-                    Item::Const(declared) => (&declared.ty, &declared.expr),
-                    _ => continue,
-                };
-                if !ty.to_token_stream().to_string().ends_with("QueueBackend") {
-                    continue;
-                }
-                declares.extend(capability_paths(expr.to_token_stream()));
-            }
+            let tokens: proc_macro2::TokenStream = ast
+                .items
+                .iter()
+                .filter(|item| !item_is_cfg_test(item))
+                .map(ToTokens::to_token_stream)
+                .collect();
+            constructs |= constructs_a_backend(&tokens);
+            declares.extend(capability_paths(tokens));
         }
-        if declares.is_empty() {
+        if !constructs || declares.is_empty() {
             continue;
         }
         backends.push(Backend {
-            crate_path: relative(&dir, root),
+            crate_path: relative(dir, root),
             declares,
             e2e_tests: test_names(&dir.join("tests/e2e")),
         });
     }
     backends
+}
+
+/// Whether an item sits behind `#[cfg(test)]` — the only items a crate compiles
+/// for its unit tests alone.
+fn item_is_cfg_test(item: &Item) -> bool {
+    match item {
+        Item::Mod(i) => is_cfg_test(&i.attrs),
+        Item::Fn(i) => is_cfg_test(&i.attrs),
+        Item::Const(i) => is_cfg_test(&i.attrs),
+        Item::Static(i) => is_cfg_test(&i.attrs),
+        Item::Impl(i) => is_cfg_test(&i.attrs),
+        _ => false,
+    }
+}
+
+/// `QueueBackend::new(…)` or a `QueueBackend { … }` literal, anywhere.
+fn constructs_a_backend(tokens: &proc_macro2::TokenStream) -> bool {
+    let mut flat = Vec::new();
+    flatten(tokens.clone(), &mut flat);
+    flat.windows(4).any(|window| match window {
+        [
+            TokenTree::Ident(ty),
+            TokenTree::Punct(first),
+            TokenTree::Punct(second),
+            TokenTree::Ident(ctor),
+        ] => {
+            ty == "QueueBackend"
+                && first.as_char() == ':'
+                && second.as_char() == ':'
+                && ctor == "new"
+        }
+        [TokenTree::Ident(ty), TokenTree::Group(body), ..] => {
+            ty == "QueueBackend" && body.delimiter() == proc_macro2::Delimiter::Brace
+        }
+        _ => false,
+    })
 }
 
 /// Every `Capability::<Variant>` a token stream spells.
@@ -216,4 +260,52 @@ fn snake_case(variant: &str) -> String {
         }
     }
     spelled
+}
+
+/// The backend read on a planted tree: a capability set named through a
+/// constant and a backend built in a function are both claims, and a crate that
+/// constructs no backend claims nothing whatever it names.
+#[test]
+fn a_backend_claims_what_its_crate_names_however_it_builds_the_set() {
+    const TREE: [(&str, &str); 3] = [
+        (
+            "crates/nest-rs-alpha/src/backend.rs",
+            "const CAPS: Capabilities = Capabilities::NONE.with(Capability::Throttle);\n\
+             static BACKEND: QueueBackend = QueueBackend::new(\"alpha\", CAPS);\n\
+             #[cfg(test)] mod tests { const X: Capability = Capability::Checkpoint; }\n",
+        ),
+        (
+            "crates/nest-rs-beta/src/lib.rs",
+            "pub fn backend() -> QueueBackend {\n\
+                 QueueBackend::new(\"beta\", Capabilities::NONE.with(Capability::DelayedPush))\n\
+             }\n",
+        ),
+        (
+            "crates/nest-rs-gamma/src/lib.rs",
+            "pub fn refuses(c: Capability) -> bool { c == Capability::UniquePush }\n",
+        ),
+    ];
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("queue-capabilities-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    crate::plant(&root, &TREE);
+    let dirs = ["alpha", "beta", "gamma"].map(|name| root.join(format!("crates/nest-rs-{name}")));
+    let read: Vec<(String, Vec<String>)> = declared_backends(&root, &dirs)
+        .into_iter()
+        .map(|backend| (backend.crate_path, backend.declares.into_iter().collect()))
+        .collect();
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(
+        read,
+        [
+            (
+                "crates/nest-rs-alpha".to_owned(),
+                vec!["Throttle".to_owned()]
+            ),
+            (
+                "crates/nest-rs-beta".to_owned(),
+                vec!["DelayedPush".to_owned()]
+            ),
+        ],
+    );
 }

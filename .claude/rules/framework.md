@@ -268,7 +268,7 @@ worked case, and its table is closed: every family key is built at a member, or
 refused there with the fact that makes it meaningless (``#[every] takes no
 `retries`: a tick's retry is the next occurrence``); a key no member takes keeps
 the unknown-key sentence, listing that member's column. **The table is declared
-once, in `nest_rs_codegen::job`** — the members (`JobDecorator`), the keys
+once, in `crates/nest-rs-codegen/src/job.rs`** — the members (`JobDecorator`), the keys
 (`JobKey`), and `cell(key, member)` placing every key at every member — and it is
 a `match` with no wildcard arm, so a key or a member added without a cell at every
 crossing does not compile, and a cell written twice is an unreachable pattern. A
@@ -354,8 +354,9 @@ the config crate itself rather than a configurable module. Its
 primitives every other module's seam is *built from*, and
 `provide_feature` is public API a third-party driver calls
 (`docs/…/database/writing-a-driver.mdx`). Nothing else gets that
-exemption: `nest_rs_throttler::provide_guard` / `resolve` are the same
-kind of cross-crate seam and they are `#[doc(hidden)]`.
+exemption: a seam one framework crate needs from another is
+`#[doc(hidden)]`, and one only its own crate needs stays private, as the
+throttler's `resolve` in its `module.rs` does.
 
 Two shapes for `x`, and only two:
 
@@ -846,8 +847,8 @@ the one this framework uses most.**
   `nest_rs_throttler::BACKEND_REMEDY` is that shape already built. It does not
   name the two bindings; whether it should is the owner question *Swapping or
   adding a backend* records in `architecture.md`. A port carrying a `BACKEND_REMEDY` declares it **in
-  the file holding what a backend supplies** — `nest_rs_queue::backend`,
-  `nest_rs_schedule::occurrence`, `nest_rs_throttler::store` — never in a
+  the file holding what a backend supplies** — `nest-rs-queue/src/backend.rs`,
+  `nest-rs-schedule/src/occurrence.rs`, `nest-rs-throttler/src/store.rs` — never in a
   `module.rs`, because the contract is what a backend author opens and the module
   only passes the sentence on. The sentence may name the first-party binding as
   the remedy: it is advice a reader acts on, and *a port's dependencies name no

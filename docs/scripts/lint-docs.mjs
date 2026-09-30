@@ -260,7 +260,7 @@ function setDrift(canon, page, what) {
 
 /// `/queue/writing-a-driver/` publishes the wire envelope a third-party driver
 /// has to produce, so its JSON block is diffed against the keys
-/// `nest_rs_queue::envelope` actually seals rather than trusted. A key the
+/// the port actually seals into a `nest_rs_queue::Envelope` rather than trusted. A key the
 /// framework adds and the page omits is a driver that compiles, runs, and drops
 /// that key across the one hop the framework crosses as a *process*.
 function envelopeDrift(src) {

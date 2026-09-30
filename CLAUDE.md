@@ -211,7 +211,7 @@ to require it, **stop and ask**.
   The wrong shape is a **compile error naming the sibling**, never "expected
   struct". Testable form, both halves checkable: **both halves parse through one
   `DecoratorPair` const** (`rg 'DecoratorPair' crates/*-macros/src/` names every
-  pair, and `nest_rs_codegen::pair` is the only place either sentence is worded),
+  pair, and `crates/nest-rs-codegen/src/pair.rs` is the only place either sentence is worded),
   and **each pair ships a trybuild snapshot per wrong shape**. An impl-half
   decorator whose struct half is the generic `#[injectable]` — `#[processor]`,
   `#[scheduled]`, `#[listeners]`, `#[indicators]`, `#[hooks]` — uses
@@ -632,7 +632,7 @@ process, and response.**
   found at MCP, WS and the GraphQL dataloader, and presumed at any new one until
   checked.
 - A queue crosses a *process*, so `traceparent` and `tracestate` travel in the
-  wire envelope (`nest_rs_queue::envelope`) and the consumer continues from them,
+  wire envelope (`nest_rs_queue::Envelope`) and the consumer continues from them,
   making the job a **child of the enqueue**. A value carrying none is a legacy or
   foreign payload and starts a trace, never a refusal.
 - **A unit of work ends when its answer ends, not when its handler returns.** A

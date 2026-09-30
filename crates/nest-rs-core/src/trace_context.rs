@@ -730,8 +730,8 @@ pub fn current_actor_id() -> Option<String> {
 /// There are exactly two: [`set_actor_id`], which the authentication guard calls
 /// mid-request, and [`Correlation::open`], which fills the slot up front from a
 /// value that arrived with the work. The second is the one that matters here —
-/// `nest_rs_queue::envelope::open` reads an actor out of a job envelope and hands
-/// it to [`Correlation::continued`] — or to [`Correlation::minted`], when the
+/// the queue port opens a job's `nest_rs_queue::Envelope`, reads the actor out
+/// of it and hands it to [`Correlation::continued`] — or to [`Correlation::minted`], when the
 /// trace context beside it is missing or unusable — so an empty one reaches this
 /// slot on a path where *nothing downstream can re-derive the actor*: a worker holds no
 /// credential to re-authenticate with. Guarding only the guard's side would have

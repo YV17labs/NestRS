@@ -97,7 +97,8 @@ after)`.
 ## A custom paginated query
 
 When the auto-emitted `page` does not match — say you want only one
-author's posts — call `Repo::scoped` and the same cursor helpers:
+author's posts — call `Repo::scoped`, clamp the page size with
+`clamp_page_size`, and fetch one row past it to learn whether there is more:
 
 ```rust title="crates/features/src/posts/service.rs"
 impl PostsService {
@@ -108,7 +109,7 @@ impl PostsService {
         after: Option<Uuid>,
     ) -> Result<Page<Post>, ServiceError> {
         let conn = Repo::<Posts>::conn()?;
-        let limit = nest_rs::seaorm::page::clamp_page_size(first);
+        let limit = nest_rs::seaorm::clamp_page_size(first);
 
         let mut cursor = Repo::<Posts>::scoped(Action::Read)
             .filter(entity::Column::AuthorId.eq(author_id))
@@ -118,9 +119,10 @@ impl PostsService {
         }
         cursor.first(limit + 1);
 
-        let rows = cursor.all(&conn).await?;
-        let (rows, has_more) = nest_rs::seaorm::page::split_overfetched(rows, limit);
-        let next_cursor = has_more.then(|| rows.last()?.id);
+        let mut rows = cursor.all(&conn).await?;
+        let has_more = rows.len() as u64 > limit;
+        rows.truncate(limit as usize);
+        let next_cursor = if has_more { rows.last().map(|row| row.id) } else { None };
 
         Ok(Page {
             items: rows.iter().map(Post::from).collect(),

@@ -167,7 +167,7 @@ struct Canon {
     version_req: String,
     /// The binding `nest-rs-opentelemetry`'s boot panic tells a reader to write.
     otel_binding: String,
-    /// The keys `nest_rs_queue::envelope` seals onto the wire.
+    /// The keys the port seals into a `nest_rs_queue::Envelope` on the wire.
     envelope_keys: Vec<String>,
     /// Every `#[config]` struct, keyed by type name.
     configs: BTreeMap<String, ConfigFacts>,
@@ -525,7 +525,7 @@ fn otel_binding(root: &Path) -> String {
         .to_owned()
 }
 
-/// The keys `nest_rs_queue::envelope` seals onto the wire.
+/// The keys the port seals into a `nest_rs_queue::Envelope` on the wire.
 ///
 /// A page publishing the envelope shape teaches a third-party driver what to
 /// produce, and a key the framework adds and the page omits is a driver that

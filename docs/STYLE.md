@@ -326,7 +326,7 @@ outside `docs/`.
   framework ships, so every name in the canon's decorator list owes a row. Derived, because a
   hand-kept index is wrong the day a decorator lands and nothing says so.
 - **`envelope-drift`** — `/queue/writing-a-driver/` publishes the wire envelope a third-party
-  driver has to produce, diffed against the keys `nest_rs_queue::envelope` actually seals. A key
+  driver has to produce, diffed against the keys the port actually seals into a `nest_rs_queue::Envelope`. A key
   the framework adds and the page omits is a driver that compiles, runs, and drops it across the
   one hop the framework crosses as a *process*.
 - **`trait-surface`** — a page may abridge a `pub trait`, it may never invent a method.

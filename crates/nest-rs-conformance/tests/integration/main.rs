@@ -20,6 +20,7 @@ mod keys;
 mod mirrors;
 mod naming;
 mod panics;
+mod paths;
 mod queue_capabilities;
 mod seams;
 mod shapes;

@@ -4,7 +4,7 @@
 //! is enough. A queue crosses a **process**: the producer is an API pod, the
 //! consumer is a worker pod, and the only thing that reaches from one to the
 //! other is the payload. So the `traceparent` rides the wire envelope
-//! (`nest_rs_queue::envelope`), and this is where that is measured rather than
+//! (`nest_rs_queue::Envelope`), and this is where that is measured rather than
 //! asserted about.
 //!
 //! What it buys, concretely: "show me everything this request caused" answers

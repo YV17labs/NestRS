@@ -22,7 +22,9 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigError, ConfigService, Result, config};
+use nest_rs_config::{
+    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
+};
 
 /// Default drain window on shutdown: 30s, Kubernetes' default
 /// `terminationGracePeriodSeconds`. Attempts run for all but its last five
@@ -49,17 +51,17 @@ const HEARTBEATS_PER_THRESHOLD: u32 = 10;
 const MIN_HEARTBEAT: Duration = Duration::from_secs(1);
 
 /// The drain window's bounds, the variable that sets it, and why.
-const SHUTDOWN_TIMEOUT: Bounds = Bounds {
+const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds {
     key: "SHUTDOWN_TIMEOUT_SECS",
-    field: "shutdown_timeout",
-    unit: Unit::Seconds,
-    least: Limit {
+    field: "RedisWorkerConfig::shutdown_timeout",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound {
         count: 1,
         why: "the drain keeps half its window, up to five seconds, to hand interrupted jobs \
               back, and with none a job running at shutdown stays in flight until a peer's sweep \
               takes it, the orphan threshold later",
-    },
-    most: Some(Limit {
+    }),
+    most: Some(Bound {
         count: 60 * 60,
         why: "a stopping replica holds its rollout for as long as it drains, and a job still \
               running an hour into a shutdown is one to hand back and resume from its \
@@ -68,15 +70,15 @@ const SHUTDOWN_TIMEOUT: Bounds = Bounds {
 };
 
 /// The orphan threshold's bounds, the variable that sets it, and why.
-const ORPHAN_AFTER: Bounds = Bounds {
+const ORPHAN_AFTER: DurationBounds = DurationBounds {
     key: "ORPHAN_AFTER_SECS",
-    field: "orphan_after",
-    unit: Unit::Seconds,
-    least: Limit {
+    field: "RedisWorkerConfig::orphan_after",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound {
         count: 5,
         why: "five heartbeats of one second each — anything shorter reads a slow answer as a death",
-    },
-    most: Some(Limit {
+    }),
+    most: Some(Bound {
         count: 24 * 60 * 60,
         why: "the threshold is how long a crashed replica's jobs wait for a peer to take them, \
               and past a day that wait is a typo rather than a choice",
@@ -85,14 +87,14 @@ const ORPHAN_AFTER: Bounds = Bounds {
 
 /// The lease's floor, the variable that sets it, and why. Its ceiling is half
 /// the orphan threshold, checked once both are read.
-const LEASE: Bounds = Bounds {
+const LEASE: DurationBounds = DurationBounds {
     key: "LEASE_SECS",
-    field: "lease",
-    unit: Unit::Seconds,
-    least: Limit {
+    field: "RedisWorkerConfig::lease",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound {
         count: 1,
         why: "a lease renewed every third of it needs at least a second to renew in",
-    },
+    }),
     most: None,
 };
 
@@ -101,15 +103,15 @@ const LEASE: Bounds = Bounds {
 /// ten milliseconds already spends up to two hundred scripts a second on a
 /// method with nothing to do. Its ceiling is the orphan threshold, checked once
 /// both are read.
-const POLL_INTERVAL: Bounds = Bounds {
+const POLL_INTERVAL: DurationBounds = DurationBounds {
     key: "POLL_INTERVAL_MS",
-    field: "poll_interval",
-    unit: Unit::Millis,
-    least: Limit {
+    field: "RedisWorkerConfig::poll_interval",
+    unit: DurationUnit::Millis,
+    least: Floor::Units(Bound {
         count: 10,
         why: "every poll costs Redis a fetch and a sweep per method per replica, jobs or none — \
               up to two hundred scripts a second at the floor",
-    },
+    }),
     most: None,
 };
 
@@ -228,120 +230,6 @@ impl Config for RedisWorkerConfig {
     }
 }
 
-/// The whole-number unit a duration's variable is written in.
-#[derive(Clone, Copy)]
-enum Unit {
-    Seconds,
-    Millis,
-}
-
-impl Unit {
-    fn duration(self, count: u64) -> Duration {
-        match self {
-            Self::Seconds => Duration::from_secs(count),
-            Self::Millis => Duration::from_millis(count),
-        }
-    }
-}
-
-/// One end of a duration setting's range, in its variable's unit, and why
-/// nothing past it holds.
-struct Limit {
-    count: u64,
-    why: &'static str,
-}
-
-/// The range a duration setting accepts, and what refuses a value outside it —
-/// the same whichever side set it, since a value out of bounds breaks the worker
-/// the same way from code as from the environment.
-struct Bounds {
-    /// The variable's key in the namespace.
-    key: &'static str,
-    /// The field the value is pinned through in code.
-    field: &'static str,
-    unit: Unit,
-    least: Limit,
-    /// `None` when the ceiling is another setting's, checked once both are
-    /// read.
-    most: Option<Limit>,
-}
-
-impl Bounds {
-    /// The setting's value — the variable's when it is set, `base` when it is
-    /// not — refused outside its bounds, never clamped in silence: under the
-    /// spelling that supplied it, so a value given as a file is refused under
-    /// `_FILE`, or, for a value pinned in code, under the variable that would
-    /// override it, naming the field.
-    fn read(&self, env: &ConfigService, base: Duration) -> Result<Given> {
-        let Some(setting) = env.setting(self.key)? else {
-            return self.pinned(env, base);
-        };
-        let count = setting.parse::<u64>()?;
-        if count < self.least.count {
-            return Err(setting.refuse(format!(
-                "must be at least {} — {}",
-                self.least.count, self.least.why
-            )));
-        }
-        if let Some(most) = &self.most
-            && count > most.count
-        {
-            return Err(setting.refuse(format!("must be at most {} — {}", most.count, most.why)));
-        }
-        Ok(Given {
-            value: self.unit.duration(count),
-            var: setting.var().to_owned(),
-        })
-    }
-
-    /// `base`, the value pinned in code (or the default), held to the same
-    /// bounds as the variable that would override it.
-    fn pinned(&self, env: &ConfigService, base: Duration) -> Result<Given> {
-        let var = env.var_name(self.key);
-        let refuse = |reason: String| {
-            ConfigError::parse(
-                var.clone(),
-                format!(
-                    "is not set, and `RedisWorkerConfig::{}` pinned in code is {base:?}, {reason}",
-                    self.field
-                ),
-            )
-        };
-        let least = self.unit.duration(self.least.count);
-        if base < least {
-            return Err(refuse(format!(
-                "below the {least:?} it must be at least — {}",
-                self.least.why
-            )));
-        }
-        if let Some(most) = &self.most {
-            let most_value = self.unit.duration(most.count);
-            if base > most_value {
-                return Err(refuse(format!(
-                    "above the {most_value:?} it must be at most — {}",
-                    most.why
-                )));
-            }
-        }
-        Ok(Given { value: base, var })
-    }
-}
-
-/// A duration setting as read, and the variable a refusal names it by: the
-/// spelling that supplied it, or the one that would override the value pinned
-/// in code.
-struct Given {
-    value: Duration,
-    var: String,
-}
-
-impl Given {
-    /// The boot error refusing this value against another setting's.
-    fn refuse(&self, reason: String) -> ConfigError {
-        ConfigError::parse(self.var.clone(), reason)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,8 +289,11 @@ mod tests {
         assert_eq!(cfg.lease, Duration::from_secs(4));
         assert_eq!(cfg.heartbeat(), Duration::from_secs(6));
 
+        let Floor::Units(least) = ORPHAN_AFTER.least else {
+            panic!("the orphan threshold's floor is a count of seconds");
+        };
         let floor = RedisWorkerConfig {
-            orphan_after: Duration::from_secs(ORPHAN_AFTER.least.count),
+            orphan_after: Duration::from_secs(least.count),
             lease: Duration::from_secs(1),
             ..Default::default()
         };
@@ -584,7 +475,7 @@ mod tests {
         ] {
             let refused = refused_pinned(pinned);
             assert!(
-                refused.contains(&format!("`RedisWorkerConfig::{field}` pinned in code")),
+                refused.contains(&format!("`RedisWorkerConfig::{field}` set in code")),
                 "{refused}"
             );
             assert!(refused.contains(&var(key)), "{refused}");

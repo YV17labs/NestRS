@@ -153,7 +153,7 @@ struct Window {
     start: Instant,
     count: u32,
     /// The window duration this bucket was opened under. Eviction and reset
-    /// compare against **this**, not the current caller's `limit.window`, so a
+    /// compare against **this**, not the current caller's `limit.window()`, so a
     /// short-window route can't expire a long-window route's counter.
     window: Duration,
     /// The request cap this bucket was last opened/reset under. Stored so the
@@ -235,7 +235,7 @@ impl InMemoryThrottler {
     /// `u32::MAX` requests in one window neither panics in debug nor wraps
     /// to zero in release. **Saturation is treated as denial** (fail-closed
     /// overload defense): once the counter reaches `u32::MAX` the decision
-    /// is `denied` until the window elapses, even if `limit.limit` is
+    /// is `denied` until the window elapses, even if `limit.limit()` is
     /// itself `u32::MAX`.
     pub fn hit(&self, key: &str, limit: Throttle) -> Decision {
         let now = Instant::now();
@@ -272,29 +272,29 @@ impl InMemoryThrottler {
                     windows.remove(&oldest);
                 }
                 None => {
-                    return Decision::denied(limit.window);
+                    return Decision::denied(limit.window());
                 }
             }
         }
         let window = windows.entry(key.to_owned()).or_insert(Window {
             start: now,
             count: 0,
-            window: limit.window,
-            limit: limit.limit,
+            window: limit.window(),
+            limit: limit.limit(),
         });
         if now.duration_since(window.start) >= window.window {
             window.start = now;
             window.count = 0;
             // Adopt the current limit's window/cap in case the route's limit
             // changed since this bucket was opened.
-            window.window = limit.window;
-            window.limit = limit.limit;
+            window.window = limit.window();
+            window.limit = limit.limit();
         }
         window.count = window.count.saturating_add(1);
-        if window.count > limit.limit || window.count == u32::MAX {
+        if window.count > limit.limit() || window.count == u32::MAX {
             Decision::denied(
                 limit
-                    .window
+                    .window()
                     .saturating_sub(now.duration_since(window.start)),
             )
         } else {
@@ -389,7 +389,7 @@ mod tests {
         // against ITS OWN window, not the current caller's. Otherwise a client
         // exhausts a strict long-window limit (e.g. /login 2/min), then pings a
         // lenient short-window route once *its* window elapses — under the old
-        // code that hit's short `limit.window` purged EVERY bucket, silently
+        // code that hit's short `limit.window()` purged EVERY bucket, silently
         // resetting the strict counter.
         let throttler = InMemoryThrottler::new();
         let long = Throttle::new(2, Duration::from_secs(60));

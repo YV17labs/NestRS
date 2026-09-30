@@ -136,6 +136,13 @@ inherits the module default. Forms:
 | `Throttle::per_minute(n)`           | `n` requests per minute          |
 | `Throttle::new(n, Duration::from_secs(s))` | `n` requests per `s` seconds |
 
+A window must count something: `Throttle::new` refuses one under a
+millisecond — the Redis store's resolution — which in a `const` is a compile
+error and in `#[meta]` fails the boot at the route. A zero window reset every
+bucket on every hit, so the limiter let everything through at any limit.
+`NESTRS_THROTTLER__WINDOW_SECS=0`, or a pinned `window_secs: Some(0)`, fails the
+boot naming the variable for the same reason.
+
 ## What "per client" means
 
 The client key is the **direct peer IP** by default — every request

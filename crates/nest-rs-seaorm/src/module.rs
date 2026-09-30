@@ -80,6 +80,15 @@ async fn connect(config: &SeaOrmConfig) -> anyhow::Result<DatabaseConnection> {
             )
         );
     }
+    // A config seeded on the builder skips `from_env`, and with it the floor
+    // the variable is held to: checked again where the budget is spent.
+    if let Some(secs) = config.connect_timeout_secs {
+        crate::config::CONNECT_TIMEOUT.check(
+            <SeaOrmConfig as nest_rs_config::Namespaced>::NAMESPACE,
+            "SeaOrmConfig::connect_timeout_secs",
+            std::time::Duration::from_secs(secs),
+        )?;
+    }
     tracing::info!(
         target: crate::TARGET,
         max_connections = ?config.max_connections,

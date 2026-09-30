@@ -8,7 +8,10 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigError, ConfigService, Environment, Namespaced, Result, config};
+use nest_rs_config::{
+    Config, ConfigError, ConfigService, DurationBounds, DurationUnit, Environment, Floor,
+    Namespaced, Result, config,
+};
 
 use crate::RedisTls;
 
@@ -18,6 +21,22 @@ const DEFAULT_URL: &str = "redis://127.0.0.1/";
 /// cold DNS lookup or a sidecar still starting, short enough that a
 /// misconfigured URL fails the container's startup probe instead of parking it.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// The connect budget's floor, the variable that sets it, and why. Above zero
+/// rather than a whole second: the budget also bounds every command, and a
+/// sub-second one set in code is a fail-fast choice, not a mistake. Its ceiling
+/// is an owner question: a budget of hours is legal, and the boot's deadline
+/// saturates rather than panics on one the clock cannot hold.
+pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds {
+    key: "CONNECT_TIMEOUT_SECS",
+    field: "RedisConfig::connect_timeout",
+    unit: DurationUnit::Seconds,
+    least: Floor::AboveZero(
+        "the budget bounds the boot's connect and every command after it, and a zero one gives \
+         up before the first attempt and fails every command at once",
+    ),
+    most: None,
+};
 
 /// Redis settings, settable via `NESTRS_REDIS__*` or pinned through
 /// [`RedisModule::for_root`](crate::RedisModule::for_root). The URL and the
@@ -85,21 +104,7 @@ impl Config for RedisConfig {
     }
 
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-        // A zero budget would restore the unbounded hang this knob exists to
-        // prevent, so it is rejected rather than silently normalized.
-        // The refusal names the spelling that supplied the value, so a zero given
-        // as a file is refused under `_FILE`.
-        let connect_timeout = match env.setting("CONNECT_TIMEOUT_SECS")? {
-            Some(setting) => match setting.parse::<u64>()? {
-                0 => {
-                    return Err(setting.refuse(
-                        "must be at least 1 second — a zero budget cannot bound the connect",
-                    ));
-                }
-                secs => Duration::from_secs(secs),
-            },
-            None => base.connect_timeout,
-        };
+        let connect_timeout = CONNECT_TIMEOUT.read(env, base.connect_timeout)?.value;
         Ok(Self {
             url: resolve_url(env.get("URL")?.or(Some(base.url)), Environment::from_env())?,
             connect_timeout,
@@ -201,6 +206,26 @@ mod tests {
                 "{}:",
                 nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS_FILE")
             )),
+            "{err}"
+        );
+    }
+
+    /// A budget pinned in code is held to the floor the variable is: a zero one
+    /// resolved and then gave up before its first attempt, blaming the URL.
+    #[test]
+    fn a_zero_connect_timeout_pinned_in_code_is_refused_naming_the_field() {
+        let err = RedisConfig::from_env(
+            &ConfigService::with_vars("redis", []),
+            RedisConfig {
+                connect_timeout: Duration::ZERO,
+                ..RedisConfig::default()
+            },
+        )
+        .expect_err("a pinned zero budget is refused")
+        .to_string();
+        assert!(
+            err.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"))
+                && err.contains("`RedisConfig::connect_timeout` set in code is 0ns"),
             "{err}"
         );
     }

@@ -19,22 +19,22 @@
 //! unbounded probe outliving the kubelet's deadline is exactly what these two
 //! fields exist to prevent — so a `0` cannot mean "no ceiling" without meaning
 //! "restart loop", and it cannot mean "zero milliseconds" either, which would
-//! fail every probe on the first poll. Both fields are plain counts with
-//! `#[validate(range(min = 1))]`, so `0` is a boot error naming the variable,
-//! the same shape [`McpConfig::max_request_body_bytes`][1] and
-//! [`WsConfig::max_message_bytes`][2] already take.
+//! fail every probe on the first poll. Both are read through
+//! [`DurationBounds`](nest_rs_config::DurationBounds) with a floor of one
+//! millisecond, so `0` is a boot error naming the variable — from the
+//! environment or pinned in code alike, in the sentence every bounded duration
+//! of the framework is refused in.
 //!
 //! Dual-path like every `nest-rs-*` config: settable via `NESTRS_HEALTH__*` env
 //! vars **and** via the pinned struct passed to
 //! [`HealthModule::for_root`](crate::HealthModule::for_root), composing per
 //! field.
-//!
-//! [1]: https://docs.rs/nest-rs-mcp
-//! [2]: https://docs.rs/nest-rs-ws
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{
+    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
+};
 
 /// Per-indicator ceiling: 750 ms. Under the probe deadline by a margin, so the
 /// common single-slow-indicator case is reported **by name** (`health indicator
@@ -48,6 +48,36 @@ const DEFAULT_INDICATOR_TIMEOUT_MS: u64 = 750;
 /// not gets a `503` it can read and log, rather than a kubelet timeout it
 /// cannot.
 const DEFAULT_PROBE_DEADLINE_MS: u64 = 900;
+
+/// Why neither ceiling may be zero — the reason both refusals give.
+const NOT_ZERO: &str = "an unbounded probe outlives the kubelet's deadline and a zero one fails \
+                        every probe on the first poll, so neither is a ceiling";
+
+/// The per-indicator ceiling's floor, the variable that sets it, and why. Its
+/// ceiling is an owner question.
+const INDICATOR_TIMEOUT: DurationBounds = DurationBounds {
+    key: "INDICATOR_TIMEOUT_MS",
+    field: "HealthConfig::indicator_timeout_ms",
+    unit: DurationUnit::Millis,
+    least: Floor::Units(Bound {
+        count: 1,
+        why: NOT_ZERO,
+    }),
+    most: None,
+};
+
+/// The probe deadline's floor, the variable that sets it, and why. Its ceiling
+/// is an owner question.
+const PROBE_DEADLINE: DurationBounds = DurationBounds {
+    key: "PROBE_DEADLINE_MS",
+    field: "HealthConfig::probe_deadline_ms",
+    unit: DurationUnit::Millis,
+    least: Floor::Units(Bound {
+        count: 1,
+        why: NOT_ZERO,
+    }),
+    most: None,
+};
 
 /// Health probe options resolved at boot (namespace `health`). See the module
 /// docs for why the unit is milliseconds and why `0` is refused.
@@ -63,14 +93,12 @@ pub struct HealthConfig {
     /// the sum. Setting it at or above
     /// [`probe_deadline_ms`](Self::probe_deadline_ms) is legal and costs the
     /// per-indicator diagnostic: the probe deadline then always fires first.
-    #[validate(range(min = 1, message = "must be at least 1 millisecond"))]
     pub indicator_timeout_ms: u64,
     /// Wall-clock ceiling on the **whole** probe response, whatever the
     /// indicator count. Indicators that have answered by then are reported as
     /// they answered; the rest are `down` with an opaque reason, and the probe
     /// is `down` overall. Read from `NESTRS_HEALTH__PROBE_DEADLINE_MS`;
     /// defaults to 900 ms.
-    #[validate(range(min = 1, message = "must be at least 1 millisecond"))]
     pub probe_deadline_ms: u64,
 }
 
@@ -117,12 +145,10 @@ fn as_millis(d: Duration) -> u64 {
 impl Config for HealthConfig {
     fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
         Ok(Self {
-            indicator_timeout_ms: env
-                .parse::<u64>("INDICATOR_TIMEOUT_MS")?
-                .unwrap_or(base.indicator_timeout_ms),
-            probe_deadline_ms: env
-                .parse::<u64>("PROBE_DEADLINE_MS")?
-                .unwrap_or(base.probe_deadline_ms),
+            indicator_timeout_ms: as_millis(
+                INDICATOR_TIMEOUT.read(env, base.indicator_timeout())?.value,
+            ),
+            probe_deadline_ms: as_millis(PROBE_DEADLINE.read(env, base.probe_deadline())?.value),
         })
     }
 }
@@ -130,7 +156,6 @@ impl Config for HealthConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nest_rs_config::validator::Validate;
 
     #[test]
     fn defaults_fit_inside_the_kubelet_default_deadline() {
@@ -192,18 +217,40 @@ mod tests {
     /// prevent, and a zero-millisecond one fails every probe on the first poll.
     #[test]
     fn zero_is_refused_on_both_ceilings() {
-        for zeroed in [
-            HealthConfig {
-                indicator_timeout_ms: 0,
-                ..Default::default()
-            },
-            HealthConfig {
-                probe_deadline_ms: 0,
-                ..Default::default()
-            },
+        for (zeroed, key) in [
+            (
+                HealthConfig {
+                    indicator_timeout_ms: 0,
+                    ..Default::default()
+                },
+                "INDICATOR_TIMEOUT_MS",
+            ),
+            (
+                HealthConfig {
+                    probe_deadline_ms: 0,
+                    ..Default::default()
+                },
+                "PROBE_DEADLINE_MS",
+            ),
         ] {
-            assert!(zeroed.validate().is_err(), "{zeroed:?} must fail the boot");
+            let pinned = HealthConfig::from_env(&ConfigService::with_vars("health", []), zeroed)
+                .expect_err("a pinned zero fails the boot")
+                .to_string();
+            assert!(
+                pinned.contains(&nest_rs_config::var_name("health", key))
+                    && pinned.contains("set in code is 0ns"),
+                "{pinned}"
+            );
+            let from_env = HealthConfig::from_env(
+                &ConfigService::with_vars("health", [(key, "0")]),
+                HealthConfig::default(),
+            )
+            .expect_err("a zero from the environment fails the boot")
+            .to_string();
+            assert!(
+                from_env.contains("must be at least 1 millisecond"),
+                "{from_env}"
+            );
         }
-        assert!(HealthConfig::default().validate().is_ok());
     }
 }

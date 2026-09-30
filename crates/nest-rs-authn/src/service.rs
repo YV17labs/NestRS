@@ -226,6 +226,21 @@ impl JwtService {
     /// under 256 bits, and on the
     /// [`allow_any_audience`](JwtOptions::allow_any_audience) contradiction.
     pub fn new(options: JwtOptions) -> Result<Self, AuthError> {
+        // The ranges the variables are held to, held again here: a `JwtOptions`
+        // built in code reaches this constructor without a config read, and an
+        // unbounded lifetime or leeway overflows the arithmetic below it.
+        for (bounds, field, value) in [
+            (
+                crate::config::EXPIRES_IN,
+                "JwtOptions::expires_in",
+                options.expires_in,
+            ),
+            (crate::config::LEEWAY, "JwtOptions::leeway", options.leeway),
+        ] {
+            bounds
+                .check(JwtConfig::NAMESPACE, field, value)
+                .map_err(|refused| AuthError::Failed(refused.to_string()))?;
+        }
         // A key and an algorithm that cannot work together fail here, at
         // construction, instead of at the first sign or verify — which on a
         // verifier is the first request.
@@ -518,14 +533,18 @@ impl JwtService {
     /// Absolute `exp` for a token minted now with the default TTL — the value
     /// callers put in a claims struct's `exp` field.
     pub fn expiry(&self) -> u64 {
-        get_current_timestamp() + self.expires_in.as_secs()
+        self.expiry_in(self.expires_in.as_secs())
     }
 
     /// Absolute `exp` for a token that should live exactly `secs` seconds —
     /// used for short-lived handshake tokens (e.g. the OAuth transaction) that
     /// must not inherit the full access-token TTL.
+    ///
+    /// Saturates rather than wrapping: a lifetime past the end of `u64` seconds
+    /// is one that never ends, where a wrapped sum would mint a token already
+    /// expired — and panic in a debug build.
     pub fn expiry_in(&self, secs: u64) -> u64 {
-        get_current_timestamp() + secs
+        get_current_timestamp().saturating_add(secs)
     }
 
     /// The configured default token lifetime, in seconds — e.g. to report a

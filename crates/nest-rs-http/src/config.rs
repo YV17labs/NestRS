@@ -1,7 +1,9 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{
+    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
+};
 use poem::http::HeaderName;
 
 use crate::cors::HttpCors;
@@ -28,17 +30,22 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// The variable the shutdown window is read from, and the range it must fall in.
-const SHUTDOWN_TIMEOUT: SecondsWithin = SecondsWithin {
+const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds {
     key: "SHUTDOWN_TIMEOUT_SECS",
-    field: "shutdown_timeout",
-    least: 1,
-    least_why: "a shorter window cuts every request in flight at the signal, and `0` is not the \
-                off switch it is for `REQUEST_TIMEOUT_SECS`: a shutdown that waits without a \
-                bound is what this window exists to prevent",
-    most: 3600,
-    most_why: "a window past an hour is a unit slip more often than a choice (`25000` meant as \
-               milliseconds is seven hours), and it outlasts the grace period an orchestrator \
-               gives a replica, whose kill then cuts what the window held without a word",
+    field: "HttpConfig::shutdown_timeout",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound {
+        count: 1,
+        why: "a shorter window cuts every request in flight at the signal, and `0` is not the \
+              off switch it is for `REQUEST_TIMEOUT_SECS`: a shutdown that waits without a bound \
+              is what this window exists to prevent",
+    }),
+    most: Some(Bound {
+        count: 3600,
+        why: "a window past an hour is a unit slip more often than a choice (`25000` meant as \
+              milliseconds is seven hours), and it outlasts the grace period an orchestrator \
+              gives a replica, whose kill then cuts what the window held without a word",
+    }),
 };
 
 /// HTTP transport options resolved at boot. Every field is settable both via
@@ -300,75 +307,8 @@ impl Config for HttpConfig {
             trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
             sse_max_connection: env.seconds("SSE_MAX_CONNECTION_SECS", base.sse_max_connection)?,
             sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,
-            shutdown_timeout: SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?,
+            shutdown_timeout: SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?.value,
         })
-    }
-}
-
-/// A duration read in whole seconds that must fall in `[least, most]`, and why
-/// each end holds.
-struct SecondsWithin {
-    /// The variable's key in the namespace.
-    key: &'static str,
-    /// The field the value is pinned through in code.
-    field: &'static str,
-    /// The floor, in seconds.
-    least: u64,
-    least_why: &'static str,
-    /// The ceiling, in seconds.
-    most: u64,
-    most_why: &'static str,
-}
-
-impl SecondsWithin {
-    /// The value — the variable's when it is set, `base` when it is not —
-    /// refused outside the range, never clamped in silence: under the spelling
-    /// that supplied it, so a value given as a file is refused under `_FILE`,
-    /// or, for a value pinned in code, under the variable that would override
-    /// it, naming the field.
-    fn read(&self, env: &ConfigService, base: Duration) -> Result<Duration> {
-        let (least, most) = (
-            Duration::from_secs(self.least),
-            Duration::from_secs(self.most),
-        );
-        let Some(setting) = env.setting(self.key)? else {
-            return match base {
-                base if base < least => Err(self.pinned(env, base, "least", least, self.least_why)),
-                base if base > most => Err(self.pinned(env, base, "most", most, self.most_why)),
-                base => Ok(base),
-            };
-        };
-        match setting.parse::<u64>()? {
-            secs if secs < self.least => Err(setting.refuse(format_args!(
-                "must be at least {} — {}",
-                self.least, self.least_why
-            ))),
-            secs if secs > self.most => Err(setting.refuse(format_args!(
-                "must be at most {} — {}",
-                self.most, self.most_why
-            ))),
-            secs => Ok(Duration::from_secs(secs)),
-        }
-    }
-
-    /// The refusal of a value pinned in code, which has no spelling of its own
-    /// to be refused under.
-    fn pinned(
-        &self,
-        env: &ConfigService,
-        base: Duration,
-        end: &str,
-        limit: Duration,
-        why: &str,
-    ) -> nest_rs_config::ConfigError {
-        nest_rs_config::ConfigError::parse(
-            env.var_name(self.key),
-            format!(
-                "is not set, and `HttpConfig::{}` pinned in code is {base:?} where it must be at \
-                 {end} {limit:?} — {why}",
-                self.field
-            ),
-        )
     }
 }
 

@@ -7,8 +7,24 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{
+    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
+};
 use sea_orm::ConnectOptions;
+
+/// The acquire budget's floor, the variable that sets it, and why. Its ceiling
+/// is an owner question.
+pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds {
+    key: "CONNECT_TIMEOUT_SECS",
+    field: "SeaOrmConfig::connect_timeout_secs",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound {
+        count: 1,
+        why: "the pool gives up on a zero budget before any connection opens, so the boot fails \
+              as a pool timeout against a database that answers",
+    }),
+    most: None,
+};
 
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
 /// settable via a `NESTRS_SEAORM__*` env var (see `from_env`) or pinned through
@@ -22,7 +38,8 @@ pub struct SeaOrmConfig {
     pub max_connections: Option<u32>,
     /// Lower bound on idle pooled connections; `None` uses SeaORM's default.
     pub min_connections: Option<u32>,
-    /// How long to wait for a connection before failing; `None` uses the default.
+    /// How long to wait for a connection before failing, in whole seconds, at
+    /// least 1; `None` uses the default.
     pub connect_timeout_secs: Option<u64>,
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
     /// query shapes into logs.
@@ -48,9 +65,9 @@ impl Config for SeaOrmConfig {
             url: env.get("URL")?.unwrap_or(base.url), //                NESTRS_SEAORM__URL
             max_connections: env.parse("MAX_CONNECTIONS")?.or(base.max_connections), // NESTRS_SEAORM__MAX_CONNECTIONS
             min_connections: env.parse("MIN_CONNECTIONS")?.or(base.min_connections), // NESTRS_SEAORM__MIN_CONNECTIONS
-            connect_timeout_secs: env
-                .parse("CONNECT_TIMEOUT_SECS")?
-                .or(base.connect_timeout_secs), //                     NESTRS_SEAORM__CONNECT_TIMEOUT_SECS
+            connect_timeout_secs: CONNECT_TIMEOUT
+                .read_optional(env, base.connect_timeout_secs.map(Duration::from_secs))?
+                .map(|read| read.value.as_secs()), //            NESTRS_SEAORM__CONNECT_TIMEOUT_SECS
             sqlx_logging: env.flag("SQLX_LOGGING", base.sqlx_logging)?, // NESTRS_SEAORM__SQLX_LOGGING
             observe_serialization_conflicts: env.flag(
                 "OBSERVE_SERIALIZATION_CONFLICTS",
@@ -188,6 +205,42 @@ mod tests {
         assert_eq!(cfg.connect_timeout_secs, Some(12));
         assert!(cfg.sqlx_logging);
         assert!(cfg.observe_serialization_conflicts);
+    }
+
+    /// A zero budget reached the pool as a literal zero, so every acquire timed
+    /// out at once and the boot blamed the pool; it is refused naming the
+    /// variable, from the environment or pinned in code, and unset stays unset.
+    #[test]
+    fn a_zero_connect_timeout_is_refused_from_either_side() {
+        let var = nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS");
+        let from_env = SeaOrmConfig::from_env(
+            &ConfigService::with_vars("seaorm", [("CONNECT_TIMEOUT_SECS", "0")]),
+            Default::default(),
+        )
+        .expect_err("a zero budget is refused")
+        .to_string();
+        assert!(
+            from_env.contains(&var) && from_env.contains("must be at least 1 second"),
+            "{from_env}"
+        );
+        let pinned = SeaOrmConfig::from_env(
+            &ConfigService::with_vars("seaorm", []),
+            SeaOrmConfig {
+                connect_timeout_secs: Some(0),
+                ..pinned("postgres://localhost/app")
+            },
+        )
+        .expect_err("a pinned zero budget is refused")
+        .to_string();
+        assert!(
+            pinned.contains(&var)
+                && pinned.contains("`SeaOrmConfig::connect_timeout_secs` set in code is 0ns"),
+            "{pinned}"
+        );
+        let unset =
+            SeaOrmConfig::from_env(&ConfigService::with_vars("seaorm", []), Default::default())
+                .expect("unset is the library's default");
+        assert_eq!(unset.connect_timeout_secs, None);
     }
 
     #[test]

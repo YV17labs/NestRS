@@ -68,7 +68,7 @@ async fn allows_up_to_the_limit_then_denies_with_a_retry_after() {
     let denied = store.hit(&key, limit).await;
     assert!(!denied.allowed, "the 4th hit must be denied");
     assert!(
-        denied.retry_after > Duration::ZERO && denied.retry_after <= limit.window,
+        denied.retry_after > Duration::ZERO && denied.retry_after <= limit.window(),
         "Retry-After must be the true remaining window, got {:?}",
         denied.retry_after,
     );

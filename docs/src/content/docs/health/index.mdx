@@ -142,9 +142,9 @@ probe, that is a restart.
 | `PROBE_DEADLINE_MS` | ceiling on the **whole** response, whatever the indicator count; what answered is reported, the rest are `down` — default `900` |
 
 Milliseconds, not seconds: the only interval that matters here is one
-*inside* the orchestrator's second. `0` is refused at boot on both — an
-unbounded probe is what these fields exist to prevent, and a zero one
-fails every poll.
+*inside* the orchestrator's second. `0` is refused at boot on both, from the
+environment or pinned in code — an unbounded probe is what these fields exist
+to prevent, and a zero one fails every poll.
 
 Indicators run **concurrently**, so a probe costs the slowest check
 rather than their sum, and adding a fifth indicator does not move the

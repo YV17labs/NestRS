@@ -2,12 +2,48 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Namespaced, config};
+use nest_rs_config::{
+    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Namespaced, config,
+};
 
 use crate::JwtOptions;
 use crate::error::AuthError;
 // Single source of truth: the min-secret rule is enforced in `JwtService::new`;
 // the config path checks it too only to surface an env-var-named message.
+
+/// The token lifetime's range, the variable that sets it, and why.
+pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds {
+    key: "EXPIRES_IN_SECS",
+    field: "JwtConfig::expires_in_secs",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound {
+        count: 1,
+        why: "a token that expires as it is minted is refused by every verifier, so every \
+              sign-in would succeed and hand out nothing usable",
+    }),
+    most: Some(Bound {
+        count: 30 * 24 * 60 * 60,
+        why: "an access token is a bearer credential until it expires and nothing revokes it \
+              sooner, so a lifetime past thirty days is a unit slip or a credential that never \
+              ends — a long session is a refresh flow, not a long token",
+    }),
+};
+
+/// The clock-skew leeway's range, the variable that sets it, and why.
+pub(crate) const LEEWAY: DurationBounds = DurationBounds {
+    key: "LEEWAY_SECS",
+    field: "JwtConfig::leeway_secs",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound {
+        count: 0,
+        why: "no leeway is a leeway",
+    }),
+    most: Some(Bound {
+        count: 5 * 60,
+        why: "RFC 7519 §4.1.4 allows \"no more than a few minutes\" for clock skew, and every \
+              second past it is a second an expired token still verifies",
+    }),
+};
 
 // No `Debug`: secrets must not leak through a derived format.
 /// Env-driven JWT key material (namespace `authn`). The combination of keys
@@ -27,7 +63,8 @@ pub struct JwtConfig {
     /// `PUBLIC_KEY_FILE`). A resource server holds only this — it can verify
     /// but not sign.
     pub public_key: Option<String>,
-    /// Clock skew leeway in seconds (key `LEEWAY_SECS`, default 30).
+    /// Clock skew leeway in seconds (key `LEEWAY_SECS`, default 30), at most
+    /// 300 — RFC 7519 §4.1.4's "a few minutes".
     pub leeway_secs: Option<u64>,
     /// Expected `aud` claim (key `AUDIENCE`). Set ⇒ the claim is **mandatory**
     /// and must name this service.
@@ -43,7 +80,8 @@ pub struct JwtConfig {
     pub audience: Option<String>,
     /// Expected `iss` claim (key `ISSUER`). Omitted ⇒ no issuer check.
     pub issuer: Option<String>,
-    /// Token lifetime in seconds (key `EXPIRES_IN_SECS`, default 3600).
+    /// Token lifetime in seconds (key `EXPIRES_IN_SECS`, default 3600), at
+    /// least 1 and at most thirty days.
     pub expires_in_secs: Option<u64>,
     /// Opt out of RFC 7519 §4.1.3 (key `ALLOW_ANY_AUDIENCE`, default `false`):
     /// accept a token whose `aud` names a service this one is not.
@@ -69,10 +107,12 @@ impl Config for JwtConfig {
             secret: env.get("SECRET")?.or(base.secret),
             private_key: pem_text(env, "PRIVATE_KEY")?.or(base.private_key),
             public_key: pem_text(env, "PUBLIC_KEY")?.or(base.public_key),
-            leeway_secs: env.parse("LEEWAY_SECS")?.or(base.leeway_secs),
+            leeway_secs: seconds(LEEWAY.read_optional(env, base.leeway_secs.map(secs))?),
             audience: env.get("AUDIENCE")?.or(base.audience),
             issuer: env.get("ISSUER")?.or(base.issuer),
-            expires_in_secs: env.parse("EXPIRES_IN_SECS")?.or(base.expires_in_secs),
+            expires_in_secs: seconds(
+                EXPIRES_IN.read_optional(env, base.expires_in_secs.map(secs))?,
+            ),
             allow_any_audience: env.flag("ALLOW_ANY_AUDIENCE", base.allow_any_audience)?,
             explicit_typing: match env
                 .flag("EXPLICIT_TYPING", base.explicit_typing.unwrap_or(true))?
@@ -84,6 +124,15 @@ impl Config for JwtConfig {
             },
         })
     }
+}
+
+fn secs(count: u64) -> Duration {
+    Duration::from_secs(count)
+}
+
+/// A bounded read back in the whole seconds the field holds.
+fn seconds(read: Option<nest_rs_config::BoundedDuration>) -> Option<u64> {
+    read.map(|read| read.value.as_secs())
 }
 
 /// EdDSA key material for `key` — inline, or read from the file `<KEY>_FILE`

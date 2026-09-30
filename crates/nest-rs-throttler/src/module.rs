@@ -85,11 +85,11 @@ impl DynamicModule for ThrottlerSetup {
 /// Resolve a [`ThrottlerConfig`] into the default [`Throttle`] the guard applies
 /// to routes that pin none.
 fn resolve(config: &ThrottlerConfig) -> Throttle {
-    let limit = config.limit.unwrap_or(DEFAULT_THROTTLE.limit);
+    let limit = config.limit.unwrap_or(DEFAULT_THROTTLE.limit());
     let window = config
         .window_secs
         .map(Duration::from_secs)
-        .unwrap_or(DEFAULT_THROTTLE.window);
+        .unwrap_or(DEFAULT_THROTTLE.window());
     Throttle::new(limit, window)
 }
 
@@ -104,7 +104,7 @@ mod tests {
             window_secs: None,
         };
         let t = resolve(&cfg);
-        assert_eq!(t.limit, 5);
-        assert_eq!(t.window, DEFAULT_THROTTLE.window);
+        assert_eq!(t.limit(), 5);
+        assert_eq!(t.window(), DEFAULT_THROTTLE.window());
     }
 }

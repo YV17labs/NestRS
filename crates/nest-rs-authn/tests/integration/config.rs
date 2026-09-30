@@ -440,3 +440,68 @@ fn a_secret_is_held_to_the_size_of_its_algorithms_hash() {
         JwtService::new(long).expect("a secret of the hash's size is accepted");
     }
 }
+
+/// `EXPIRES_IN_SECS` and `LEEWAY_SECS` were read with no bound, so a value the
+/// boot accepted overflowed on every mint or every verify — a panic in a debug
+/// build, a token minted already expired in a release one. Each is refused
+/// past its range, naming the variable, from the environment and from a value
+/// pinned in code alike; each end of the range is accepted.
+#[test]
+fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
+    use nest_rs_config::{Config, ConfigService, var_name};
+
+    let read = |vars: &[(&str, &str)], base: JwtConfig| {
+        JwtConfig::from_env(
+            &ConfigService::with_vars("authn", vars.iter().copied()),
+            base,
+        )
+    };
+    let max = u64::MAX.to_string();
+    for (key, value) in [
+        ("EXPIRES_IN_SECS", "0"),
+        ("EXPIRES_IN_SECS", "2592001"),
+        ("EXPIRES_IN_SECS", max.as_str()),
+        ("LEEWAY_SECS", "301"),
+        ("LEEWAY_SECS", max.as_str()),
+    ] {
+        let refused = read(&[(key, value)], JwtConfig::default())
+            .err()
+            .unwrap_or_else(|| panic!("{key}={value} must fail the boot"))
+            .to_string();
+        assert!(refused.contains(&var_name("authn", key)), "{refused}");
+    }
+    for (pinned, key) in [
+        (
+            JwtConfig {
+                expires_in_secs: Some(u64::MAX),
+                ..Default::default()
+            },
+            "EXPIRES_IN_SECS",
+        ),
+        (
+            JwtConfig {
+                leeway_secs: Some(u64::MAX),
+                ..Default::default()
+            },
+            "LEEWAY_SECS",
+        ),
+    ] {
+        let refused = read(&[], pinned)
+            .err()
+            .unwrap_or_else(|| panic!("a pinned {key} out of range must fail the boot"))
+            .to_string();
+        assert!(
+            refused.contains(&var_name("authn", key)) && refused.contains("set in code"),
+            "{refused}"
+        );
+    }
+    let edges = read(
+        &[("EXPIRES_IN_SECS", "2592000"), ("LEEWAY_SECS", "0")],
+        JwtConfig::default(),
+    )
+    .expect("each end of the range is inside it");
+    assert_eq!(edges.expires_in_secs, Some(30 * 24 * 60 * 60));
+    assert_eq!(edges.leeway_secs, Some(0));
+    let unset = read(&[], JwtConfig::default()).expect("unset keeps the defaults");
+    assert_eq!((unset.expires_in_secs, unset.leeway_secs), (None, None));
+}

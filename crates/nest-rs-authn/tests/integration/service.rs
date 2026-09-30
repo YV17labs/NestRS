@@ -1,5 +1,7 @@
 //! Covers `src/service.rs` — `JwtService` sign/verify and decode error mapping.
 
+use std::time::Duration;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, get_current_timestamp};
@@ -517,4 +519,53 @@ fn explicit_typing_can_be_turned_off_for_a_legacy_issuer() {
     )
     .expect("encode");
     assert!(jwt.verify::<TestClaims>(&token).is_ok());
+}
+
+/// A `JwtOptions` built in code reaches the constructor without a config
+/// read, so the constructor holds it to the ranges the variables are held to:
+/// an unbounded lifetime overflowed `expiry()` on every mint, an unbounded
+/// leeway overflowed the verifier's `now - leeway` on every verify.
+#[test]
+fn a_lifetime_or_a_leeway_built_in_code_outside_its_range_is_refused_at_construction() {
+    let secret = "this-is-a-32-byte-test-secret!!!";
+    for (expires_in, leeway, field) in [
+        (
+            Duration::ZERO,
+            Duration::from_secs(30),
+            "JwtOptions::expires_in",
+        ),
+        (
+            Duration::from_secs(u64::MAX),
+            Duration::from_secs(30),
+            "JwtOptions::expires_in",
+        ),
+        (
+            Duration::from_secs(3600),
+            Duration::from_secs(301),
+            "JwtOptions::leeway",
+        ),
+        (
+            Duration::from_secs(3600),
+            Duration::from_secs(u64::MAX),
+            "JwtOptions::leeway",
+        ),
+    ] {
+        let mut options = JwtOptions::new(secret);
+        options.expires_in = expires_in;
+        options.leeway = leeway;
+        let Err(AuthError::Failed(refused)) = JwtService::new(options) else {
+            panic!("{field} out of range must be refused");
+        };
+        assert!(refused.contains(field), "{refused}");
+    }
+}
+
+/// The one arithmetic a caller controls saturates instead of wrapping: a
+/// lifetime past the end of `u64` seconds never ends, where a wrapped sum
+/// minted a token already expired.
+#[test]
+fn an_expiry_past_the_end_of_time_saturates() {
+    let jwt = service("saturate");
+    assert_eq!(jwt.expiry_in(u64::MAX), u64::MAX);
+    assert!(jwt.expiry() > get_current_timestamp());
 }

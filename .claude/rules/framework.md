@@ -481,24 +481,43 @@ variables inside the loader was tried and removed.
 them fails the boot naming the variable — pinned in code or read from the
 environment alike, since it breaks the module the same way from either side, and
 never clamped in silence. The floor is where the thing stops working: a lease too
-short to renew, a poll that spends Redis hundreds of scripts a second. The ceiling
-is where a typo stops being a setting: an orphan threshold in the millions delays
-crash recovery by weeks, and past a few hundred thousand years apalis panics in
-its heartbeat. **No value the boot accepts may panic a library below it**, and
-the ceiling is what makes that true. Built: `RedisWorkerConfig`'s `orphan_after`
-(5 s to a day), `lease` (1 s to half the orphan threshold), `poll_interval` (10 ms
-to the orphan threshold) and `shutdown_timeout` (1 s to an hour), and
-`HttpConfig::shutdown_timeout` (1 s to an hour). Every other duration a framework
-`#[config]` reads has a floor at best and no ceiling yet, and each is an owner
-question until it is decided: HTTP's `REQUEST_TIMEOUT_SECS`,
-`SSE_MAX_CONNECTION_SECS` and `SSE_KEEP_ALIVE_SECS`, `WS__MAX_CONNECTION_SECS`,
-`GRAPHQL__MAX_CONNECTION_SECS` and MCP's `SSE_KEEP_ALIVE_SECS` / `SSE_RETRY_SECS`
-(all read through `ConfigService::seconds`, where `0` means off, so their floor is
-a second); `HTTP__TLS_RELOAD_SECS`; `REDIS__CONNECT_TIMEOUT_SECS` (at least 1);
-`SEAORM__CONNECT_TIMEOUT_SECS`; `HEALTH__INDICATOR_TIMEOUT_MS` /
-`PROBE_DEADLINE_MS`; `THROTTLER__WINDOW_SECS`; `AUTHN__LEEWAY_SECS` /
-`EXPIRES_IN_SECS`; and `OPENTELEMETRY__METRIC_INTERVAL_SECS` (`0` keeps the
-SDK's default).
+short to renew, a poll that spends Redis hundreds of scripts a second, a zero
+budget that gives up before its first attempt. The ceiling is where a typo stops
+being a setting: an orphan threshold in the millions delays crash recovery by
+weeks, and past a few hundred thousand years apalis panics in its heartbeat. **No
+value the boot accepts may panic a library below it**, and the ceiling is what
+makes that true. **One reader, one sentence:** every bounded duration is read
+through `nest_rs_config::DurationBounds` — key, the field that pins it, unit,
+floor and ceiling each with its reason — so the environment and the pin are
+refused by the same code in the same words; a constructor a hand-built value
+reaches without a config read (`RedisConnection::connect`, `JwtService::new`,
+SeaORM's connect) holds it to the same range through `DurationBounds::check`.
+Three shapes were written by hand before it, and the one that skipped the pin
+booted a zero Redis budget into "could not reach Redis … within 0ns". Built:
+`RedisWorkerConfig`'s `orphan_after` (5 s to a day), `lease` (1 s to half the
+orphan threshold), `poll_interval` (10 ms to the orphan threshold) and
+`shutdown_timeout` (1 s to an hour); `HttpConfig::shutdown_timeout` (1 s to an
+hour); `AUTHN__EXPIRES_IN_SECS` (1 s to thirty days) and `AUTHN__LEEWAY_SECS` (0
+to 300 s, RFC 7519 §4.1.4's "a few minutes"); and, floor only,
+`SEAORM__CONNECT_TIMEOUT_SECS` and `THROTTLER__WINDOW_SECS` (1 s),
+`HEALTH__INDICATOR_TIMEOUT_MS` / `PROBE_DEADLINE_MS` (1 ms) and
+`REDIS__CONNECT_TIMEOUT_SECS` — a whole second from the environment and anything
+above zero in code (`Floor::AboveZero`), since that budget also bounds every
+command and a sub-second one set in code is a fail-fast choice. A floor is
+`Floor::Units` when it is a property of the thing bounded — a lease needs a
+second to renew in — and `AboveZero` when zero is the only value that fails.
+**The ceilings still missing are owner questions**, each a one-line change once
+decided: those five floors' ceilings; HTTP's
+`REQUEST_TIMEOUT_SECS`, `SSE_MAX_CONNECTION_SECS` and `SSE_KEEP_ALIVE_SECS`,
+`WS__MAX_CONNECTION_SECS`, `GRAPHQL__MAX_CONNECTION_SECS` and MCP's
+`SSE_KEEP_ALIVE_SECS` / `SSE_RETRY_SECS` (all read through
+`ConfigService::seconds`, where `0` means off, so their floor is a second and they
+stay outside `DurationBounds`, which has no off switch: every setting it reads
+has a floor because *off* is the defect it bounds); `HTTP__TLS_RELOAD_SECS`; and
+`OPENTELEMETRY__METRIC_INTERVAL_SECS` (`0` keeps the SDK's default). A throttle
+written in code — `Throttle::new` — refuses a window under a millisecond, the
+Redis store's resolution: a zero window reset every bucket on every hit and let
+every request through at any limit.
 
 **A variable no config claims is reported, never ignored.** A deployment that
 misspells a variable, or keeps a name a release renamed, gets the default — and

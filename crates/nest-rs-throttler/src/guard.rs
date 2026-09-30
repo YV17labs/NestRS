@@ -178,7 +178,7 @@ impl ThrottlerGuard {
                     "throttler store did not answer within the guard's timeout; denying \
                      (fail-closed)",
                 );
-                Decision::denied(limit.window)
+                Decision::denied(limit.window())
             }
         }
     }

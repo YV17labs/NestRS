@@ -105,12 +105,12 @@ impl ThrottlerStore for RedisThrottler {
     async fn hit(&self, key: &str, limit: Throttle) -> Decision {
         // `as u64` is saturating-safe here: a `Duration` window never exceeds
         // `u64::MAX` ms in any real config, and Redis PEXPIRE takes an i64 ms.
-        let window_ms = limit.window.as_millis().min(u64::MAX as u128) as u64;
+        let window_ms = limit.window().as_millis().min(u64::MAX as u128) as u64;
         match self.run(key, window_ms).await {
             Ok((count, ttl_ms)) => {
                 // Denied when the count has passed the limit — identical rule to
-                // the in-memory store (`count > limit.limit`).
-                let allowed = count <= i64::from(limit.limit);
+                // the in-memory store (`count > limit.limit()`).
+                let allowed = count <= i64::from(limit.limit());
                 if allowed {
                     Decision::allowed()
                 } else {
@@ -119,7 +119,7 @@ impl ThrottlerStore for RedisThrottler {
                     let retry_after = if ttl_ms > 0 {
                         Duration::from_millis(ttl_ms as u64)
                     } else {
-                        limit.window
+                        limit.window()
                     };
                     Decision::denied(retry_after)
                 }
@@ -134,7 +134,7 @@ impl ThrottlerStore for RedisThrottler {
                     error = %nest_rs_core::error_message(&error),
                     "redis throttler unavailable; denying (fail-closed)",
                 );
-                Decision::denied(limit.window)
+                Decision::denied(limit.window())
             }
         }
     }

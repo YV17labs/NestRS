@@ -231,12 +231,15 @@ DEBUG features::audio: enqueued transcode job file="track-1787069801760.mp3" tra
  INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="each" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
 ```
 
-The scheduler logs one line per job at boot, then stays quiet on a
-successful tick — the service logs are what you see running. A failed run
-adds one `scheduled job failed` line at `error`; the schedule keeps
-ticking.
+The scheduler logs one line per job at boot, then one `schedule.tick` line at
+`info` on `nest_rs::operation` for every tick it fires, whatever the tick came
+to — its `provider`, `method`, `replicas`, `outcome` and `duration_ms`, and the
+`occurrence` a job firing once claimed. It is the same operation line every edge
+files once per unit of work, so `nest_rs::operation=off` in the log filter
+silences it with the others. A failed run adds one `scheduled job failed` line
+at `error`; the schedule keeps ticking.
 
-Every tick opens its own `scheduled job` span, so the lines your task
+Every tick opens its own `schedule.tick` span, so the lines your task
 writes are already correlated: a **fresh** `trace_id` each time (a clock
 has nothing upstream to continue) and no `actor_id` (nobody is being
 served). See [Correlation](/fundamentals/correlation/).

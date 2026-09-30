@@ -203,11 +203,23 @@ so you don't have to think about them separately:
 ## Wire-format mismatch
 
 A processor reads only payloads it understands. The wire envelope carries a
-version; the macro-emitted handler validates it. A future release that bumps
-`WIRE_FORMAT_VERSION` to `2` makes a `v: 1` worker refuse to decode
-`v: 2` jobs — fails closed with a clear error rather than
-misinterpreting bytes. During a rolling deploy this means jobs queue
-up; afterward the new worker drains them.
+version, and the port checks it in `consume::attempt`, before the handler runs.
+A future release that bumps `WIRE_FORMAT_VERSION` to `2` makes a `v: 1` worker
+leave `v: 2` jobs unread rather than misinterpret them: the job goes back to the
+queue exactly as it was stored, due again in a minute, with no attempt spent,
+and the worker files one line per delivery at `warn`:
+
+```text
+WARN nest_rs::queue: job sealed by a newer release handed back unread queue=audio job_id=01a0… version=2 supported=1 retry_after_ms=60000 hint="a newer release sealed this job; it waits on the queue for a consumer of that release — finish rolling the consumers forward, or roll the producer back"
+```
+
+So during a rolling deploy jobs from the new producers wait, and the new
+workers run them as they come up — under the id their push returned, which the
+line names. Rolled back for good, those jobs keep waiting and the line keeps
+coming: that is the signal to roll the producers back too. An **older** version
+— a `v: 1` job met by a `v: 2` worker — is dead-lettered naming the direction
+of the gap, since a newer consumer reading an older shape is a decision the
+release that bumps the version makes, not a default.
 
 An envelope with no `id` or `attempt` — what 6.x sealed — still runs, as
 attempt 1 under an id minted for its delivery. **Unversioned legacy payloads**

@@ -39,6 +39,23 @@ const ATTEMPT: &str = "attempt";
 /// The unique key the push declared, so whoever settles the job can release it
 /// without a lookup of its own.
 const UNIQUE_KEY: &str = "unique_key";
+/// `true` when `traceparent` is the trace a consumer minted at the job's first
+/// attempt, because the push's could not be continued — so a later attempt joins
+/// that trace without reading as traceable back to what enqueued it. Never
+/// written by a push, and absent means the `traceparent` is the producer's.
+const TRACE_MINTED: &str = "trace_minted";
+/// Every key an envelope may carry: an object with any other is no envelope.
+const KEYS: [&str; 9] = [
+    VERSION,
+    ID,
+    ATTEMPT,
+    PAYLOAD,
+    TRACEPARENT,
+    TRACESTATE,
+    ACTOR_ID,
+    UNIQUE_KEY,
+    TRACE_MINTED,
+];
 
 /// A sealed job: the developer's payload in the wire envelope, stamped with the
 /// ambient trace context.
@@ -70,6 +87,12 @@ const UNIQUE_KEY: &str = "unique_key";
 /// hands it, which carries the next number. `unique_key` is present when the push
 /// declared one. A record without `id` or `attempt` is still an envelope: it
 /// runs under an id minted for its delivery, as attempt 1.
+///
+/// `trace_minted` is written only on a record re-filed for a later attempt, and
+/// only as `true`: its `traceparent` is then the trace the first attempt minted
+/// because the push's was missing or unusable, so the later attempts join that
+/// trace as children of the first — and say `continued_trace=false`, since
+/// nothing links them to what enqueued the job.
 ///
 /// `traceparent` is the standard's own field, verbatim, because this is a
 /// *context propagation* boundary and the standard exists for exactly this: the
@@ -178,21 +201,38 @@ pub(crate) struct Identity {
     pub(crate) unique_key: Option<String>,
 }
 
-/// Read what `value` says about its job. Only a current envelope says anything:
-/// a value that is no envelope has no keys of ours, and one of another version
-/// is refused before its keys could mean what this release means by them.
+/// Read what `value` says about its job. A current envelope says everything; a
+/// newer release's says its id, when it spells one as this release does — the
+/// id its push returned, which is what the job is found by while it waits for a
+/// consumer that reads it — and nothing else, since its other keys may mean what
+/// this release does not. A value that is no envelope, or an older one, says
+/// nothing.
 pub(crate) fn identify(value: &Value) -> Identity {
     let Value::Object(map) = value else {
         return Identity::default();
     };
-    if envelope_version(map) != Some(u64::from(WIRE_FORMAT_VERSION)) {
-        return Identity::default();
+    let current = u64::from(WIRE_FORMAT_VERSION);
+    match envelope_version(map) {
+        Some(version) if version == current => Identity {
+            id: map.get(ID).and_then(usable_id),
+            attempt: map.get(ATTEMPT).and_then(usable_attempt),
+            unique_key: map.get(UNIQUE_KEY).and_then(usable_unique_key),
+        },
+        Some(version) if version > current => Identity {
+            id: map.get(ID).and_then(usable_id),
+            ..Identity::default()
+        },
+        _ => Identity::default(),
     }
-    Identity {
-        id: map.get(ID).and_then(usable_id),
-        attempt: map.get(ATTEMPT).and_then(usable_attempt),
-        unique_key: map.get(UNIQUE_KEY).and_then(usable_unique_key),
-    }
+}
+
+/// The version of `value` when it is an envelope from a newer release than this
+/// one — a job this consumer cannot read, and must hand back rather than end.
+pub(crate) fn newer_version(value: &Value) -> Option<u64> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+    envelope_version(map).filter(|version| *version > u64::from(WIRE_FORMAT_VERSION))
 }
 
 fn usable_id(value: &Value) -> Option<JobId> {
@@ -215,29 +255,67 @@ fn usable_unique_key(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// An actor that names somebody: an empty one names nobody, and the kernel
+/// refuses to record one.
+fn usable_actor(value: &Value) -> Option<&str> {
+    value.as_str().filter(|actor| !actor.is_empty())
+}
+
+/// Whether a `tracestate` beside a usable `traceparent` is lost: a list naming a
+/// member that cannot be adopted. A list naming no member is a valid one saying
+/// nothing — W3C Trace Context has vendors accept an empty `tracestate`.
+fn unusable_tracestate(value: &Value) -> bool {
+    let names_a_member = value
+        .as_str()
+        .is_none_or(|list| list.contains(|c: char| !matches!(c, ' ' | '\t' | ',')));
+    names_a_member
+        && value
+            .as_str()
+            .map(TraceState::adopt)
+            .unwrap_or_default()
+            .as_str()
+            .is_none()
+}
+
 /// The record a backend re-files for attempt number `attempt` of the job
 /// delivered as `message`: the same envelope, stamped with the job's `id` and
 /// the new attempt number.
 ///
 /// Every key the push wrote travels unchanged — the trace context above all, so
 /// each attempt stays a child of the enqueue. A record whose trace the delivery
-/// could not continue carries `minted`, the trace its first attempt ran in, so
-/// the attempts after it join that trace rather than each starting one. A value
-/// that was no envelope is sealed into one, keeping it whole as the payload.
+/// could not continue carries `minted`, the trace its first attempt ran in,
+/// marked as minted, so the attempts after it join that trace rather than each
+/// starting one, and never read as continued from the producer. A value that was
+/// no envelope is sealed into one, keeping it whole as the payload.
+///
+/// Once the delivery has `announced` the keys it could not use, they are left
+/// out: the warn naming them is filed once per job, not once per attempt. Before
+/// that — a record handed back unopened — they travel as they came, for the
+/// delivery that opens it to name.
+///
+/// **A newer release's envelope travels exactly as it came.** This consumer
+/// cannot read it, so it cannot re-seal it: the record goes back for a consumer
+/// that can.
 pub(crate) fn retry(
     message: &Value,
     id: &JobId,
     attempt: u32,
     minted: Option<&Correlation>,
+    announced: bool,
 ) -> Envelope {
     let current = u64::from(WIRE_FORMAT_VERSION);
     let mut map = match message {
-        Value::Object(map) if envelope_version(map) == Some(current) => map.clone(),
-        other => {
-            let mut map = Map::new();
-            map.insert(PAYLOAD.to_owned(), other.clone());
-            map
-        }
+        Value::Object(map) => match envelope_version(map) {
+            Some(version) if version == current => map.clone(),
+            Some(version) if version > current => {
+                return Envelope {
+                    json: message.clone(),
+                    id: id.clone(),
+                };
+            }
+            _ => sealed_whole(message),
+        },
+        other => sealed_whole(other),
     };
     map.insert(VERSION.to_owned(), json!(WIRE_FORMAT_VERSION));
     map.insert(ID.to_owned(), Value::String(id.to_string()));
@@ -247,21 +325,54 @@ pub(crate) fn retry(
         .and_then(Value::as_str)
         .and_then(TraceParent::parse)
         .is_some();
+    if announced {
+        // What the delivery said it ran without is not filed again.
+        if map
+            .get(ACTOR_ID)
+            .is_some_and(|actor| usable_actor(actor).is_none())
+        {
+            map.remove(ACTOR_ID);
+        }
+        if map
+            .get(UNIQUE_KEY)
+            .is_some_and(|key| usable_unique_key(key).is_none())
+        {
+            map.remove(UNIQUE_KEY);
+        }
+        if continued && map.get(TRACESTATE).is_some_and(unusable_tracestate) {
+            map.remove(TRACESTATE);
+        }
+    }
     if !continued && let Some(minted) = minted {
         map.insert(
             TRACEPARENT.to_owned(),
             Value::String(minted.traceparent().to_string()),
         );
+        map.insert(TRACE_MINTED.to_owned(), Value::Bool(true));
         // Vendor state belongs to the trace it rode with, and there was none.
         map.remove(TRACESTATE);
-        if let Some(actor_id) = minted.actor_id() {
-            map.insert(ACTOR_ID.to_owned(), Value::String(actor_id.to_owned()));
+        match minted.actor_id() {
+            Some(actor_id) => {
+                map.insert(ACTOR_ID.to_owned(), Value::String(actor_id.to_owned()));
+            }
+            // The first attempt ran for nobody: an actor key left here named
+            // nobody usable, and was said.
+            None => {
+                map.remove(ACTOR_ID);
+            }
         }
     }
     Envelope {
         json: Value::Object(map),
         id: id.clone(),
     }
+}
+
+/// A value that was no envelope, sealed whole as the payload of one.
+fn sealed_whole(value: &Value) -> Map<String, Value> {
+    let mut map = Map::new();
+    map.insert(PAYLOAD.to_owned(), value.clone());
+    map
 }
 
 /// What a stored value turned out to be.
@@ -274,6 +385,10 @@ pub(crate) enum Opened {
     Sealed {
         payload: Value,
         correlation: Option<Correlation>,
+        /// The trace carried is the one a consumer minted at the job's first
+        /// attempt, not the producer's: continuing it joins the job's own trace
+        /// and links nothing to the enqueue.
+        minted: bool,
         /// The keys the envelope carried and this consumer could not use — a
         /// `traceparent` that does not parse, a `tracestate` beside a usable one
         /// that names a member and cannot be adopted, an `actor_id` that is not a
@@ -355,6 +470,10 @@ impl Unusable {
 /// that is no envelope, or a non-retryable refusal for an envelope of another
 /// version — worded for the direction the release gap runs.
 ///
+/// A newer release's envelope never reaches here from an attempt, which hands it
+/// back unread ([`newer_version`]); the refusal is for a caller settling a record
+/// it cannot deliver.
+///
 /// The producer is trusted here, and only here: an envelope was written by *our
 /// own* push into infrastructure the deployment owns, which is what makes
 /// continuing its trace sound where an arbitrary HTTP caller's header is not.
@@ -369,7 +488,7 @@ pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
     if version > current {
         return Err(JobError::abort(format!(
             "unsupported job wire-format version {version} on queue `{queue}`; the producer is \
-             from a newer release; either roll back this consumer or wait for the producer to drain",
+             from a newer release, which this consumer cannot read",
         )));
     }
     if version < current {
@@ -398,20 +517,9 @@ pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
         .and_then(Value::as_str)
         .map(TraceState::adopt)
         .unwrap_or_default();
-    // A vendor state means something only beside the trace it rides with, and a
-    // list naming no member is a valid one saying nothing: W3C Trace Context has
-    // vendors accept an empty `tracestate`.
-    let names_a_member = tracestate.as_ref().is_some_and(|value| {
-        value
-            .as_str()
-            .is_none_or(|list| list.contains(|c: char| !matches!(c, ' ' | '\t' | ',')))
-    });
+    let minted = map.remove(TRACE_MINTED) == Some(Value::Bool(true)) && parent.is_some();
     let actor = map.remove(ACTOR_ID);
-    // An empty actor names nobody, and the kernel refuses to record one.
-    let actor_id = actor
-        .as_ref()
-        .and_then(Value::as_str)
-        .filter(|actor| !actor.is_empty());
+    let actor_id = actor.as_ref().and_then(usable_actor);
     // The job's identity was read by `identify` when the delivery was made; it
     // is looked at here only to say which of its keys the delivery did without.
     let unusable = Unusable {
@@ -420,7 +528,8 @@ pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
             .remove(ATTEMPT)
             .is_some_and(|attempt| usable_attempt(&attempt).is_none()),
         traceparent: traceparent.is_some() && parent.is_none(),
-        tracestate: parent.is_some() && names_a_member && state.as_str().is_none(),
+        // A vendor state means something only beside the trace it rides with.
+        tracestate: parent.is_some() && tracestate.as_ref().is_some_and(unusable_tracestate),
         actor_id: actor.is_some() && actor_id.is_none(),
         unique_key: map
             .remove(UNIQUE_KEY)
@@ -439,6 +548,7 @@ pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
     Ok(Opened::Sealed {
         payload,
         correlation,
+        minted,
         unusable,
     })
 }
@@ -451,32 +561,23 @@ pub(crate) fn open(value: Value, queue: &str) -> Result<Opened, JobError> {
 /// and nothing may sit beside them but the envelope's own keys.
 ///
 /// **The job's identity keys must hold what the push writes** — `id` and
-/// `unique_key` a string, `attempt` a number — because `id` is a name a
+/// `unique_key` a string, `attempt` a number, `trace_minted` a boolean — because `id` is a name a
 /// developer's own payload uses as often as any: `{"v": 2, "payload": …, "id":
 /// 42}` is someone's record, and reading it as a newer release's envelope would
 /// refuse a job that is perfectly good. A string that is no job id, or a number
 /// that is no attempt, is still ours, and is flagged rather than guessed at.
 fn envelope_version(map: &Map<String, Value>) -> Option<u64> {
-    if !map.contains_key(PAYLOAD)
-        || !map.keys().all(|key| {
-            [
-                VERSION,
-                ID,
-                ATTEMPT,
-                PAYLOAD,
-                TRACEPARENT,
-                TRACESTATE,
-                ACTOR_ID,
-                UNIQUE_KEY,
-            ]
-            .contains(&key.as_str())
-        })
-    {
+    /// 2^64, the first whole number a `u64` cannot hold — exactly representable
+    /// as an `f64`.
+    const TWO_TO_THE_64: f64 = 18_446_744_073_709_551_616.0;
+
+    if !map.contains_key(PAYLOAD) || !map.keys().all(|key| KEYS.contains(&key.as_str())) {
         return None;
     }
     let ours = map.get(ID).is_none_or(Value::is_string)
         && map.get(ATTEMPT).is_none_or(Value::is_number)
-        && map.get(UNIQUE_KEY).is_none_or(Value::is_string);
+        && map.get(UNIQUE_KEY).is_none_or(Value::is_string)
+        && map.get(TRACE_MINTED).is_none_or(Value::is_boolean);
     if !ours {
         return None;
     }
@@ -492,8 +593,10 @@ fn envelope_version(map: &Map<String, Value>) -> Option<u64> {
                     && float.fract() == 0.0
                     // Past what a version can be: a foreign value, not an
                     // envelope — saturating would read `1e300` as a release
-                    // newer than every consumer.
-                    && *float <= u64::MAX as f64
+                    // newer than every consumer. Strictly below 2^64, which is
+                    // exact as a float: `u64::MAX as f64` rounds *up* to it, so
+                    // `<=` let 2^64 itself through to saturate.
+                    && *float < TWO_TO_THE_64
             })
             .map(|float| float as u64)
     })
@@ -635,6 +738,11 @@ mod tests {
             json!({ "v": 1, "payload": { "n": 1 }, "attempt": "3" }),
             json!({ "v": "1", "payload": { "n": 1 } }),
             json!({ "v": -1, "payload": { "n": 1 } }),
+            // 2^64 is past what a version can be; it used to saturate into a
+            // release newer than every consumer.
+            json!({ "v": 18_446_744_073_709_551_616.0_f64, "payload": { "n": 1 } }),
+            json!({ "v": 1e300, "payload": { "n": 1 } }),
+            json!({ "v": 1, "payload": { "n": 1 }, "trace_minted": "yes" }),
             json!({ "v": 1 }),
         ] {
             let Opened::Unversioned(value) = opened(bare.clone()) else {
@@ -678,7 +786,7 @@ mod tests {
         assert!(!newer.retryable, "a version never changes on retry");
         let newer = newer.to_string();
         assert!(
-            newer.contains("newer release") && newer.contains("roll back"),
+            newer.contains("newer release") && newer.contains("cannot read"),
             "{newer}"
         );
         assert!(newer.contains("`audio`"), "{newer}");
@@ -766,14 +874,16 @@ mod tests {
         );
     }
 
-    /// A value that is no envelope, or an envelope of another version, says
-    /// nothing about its job: the delivery mints what it needs.
+    /// A value that is no envelope, or an envelope of an older version, says
+    /// nothing about its job: the delivery mints what it needs. A newer
+    /// release's names its id alone — what its push returned — and nothing whose
+    /// meaning may have moved.
     #[test]
-    fn only_a_current_envelope_names_its_job() {
+    fn only_a_current_envelope_names_its_job_and_a_newer_one_its_id_alone() {
         let id = JobId::mint().to_string();
         for silent in [
             json!({ "id": id, "attempt": 3 }),
-            json!({ "v": 2, "id": id, "attempt": 3, "payload": {} }),
+            json!({ "v": 0, "id": id, "attempt": 3, "payload": {} }),
             json!("a string"),
         ] {
             let identity = identify(&silent);
@@ -784,6 +894,17 @@ mod tests {
         }
         let legacy = identify(&json!({ "v": 1, "payload": {} }));
         assert!(legacy.id.is_none() && legacy.attempt.is_none());
+
+        let newer =
+            identify(&json!({ "v": 2, "id": id, "attempt": 3, "unique_key": "k", "payload": {} }));
+        assert_eq!(newer.id.map(|id| id.to_string()), Some(id));
+        assert!(newer.attempt.is_none() && newer.unique_key.is_none());
+        assert_eq!(
+            newer_version(&json!({ "v": 2, "payload": {} })),
+            Some(2),
+            "and it is known as newer"
+        );
+        assert_eq!(newer_version(&json!({ "v": 1, "payload": {} })), None);
     }
 
     /// An identity key present and unusable is flagged, and the delivery runs
@@ -827,7 +948,7 @@ mod tests {
         .await
         .into_json();
 
-        let retried = retry(&sealed, &id, 2, None);
+        let retried = retry(&sealed, &id, 2, None, true);
         assert_eq!(retried.id(), &id);
         let json = retried.into_json();
         assert_eq!(json[ATTEMPT], json!(2));
@@ -847,7 +968,7 @@ mod tests {
             json!({ "clip": 1 }),
             json!({ "v": 1, "payload": { "clip": 1 } }),
         ] {
-            let json = retry(&stored, &id, 2, Some(&first)).into_json();
+            let json = retry(&stored, &id, 2, Some(&first), true).into_json();
             assert_eq!(
                 json[TRACEPARENT],
                 json!(first.traceparent().to_string()),

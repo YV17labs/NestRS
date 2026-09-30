@@ -145,6 +145,8 @@ enum Why {
     Shutdown,
     /// Its lease could not be asked for.
     Unguarded,
+    /// A newer release sealed it, and this consumer cannot read it.
+    NewerRelease,
 }
 
 impl Why {
@@ -155,6 +157,7 @@ impl Why {
             Self::Throttled => "throttled",
             Self::Shutdown => "shutdown",
             Self::Unguarded => "guard unavailable",
+            Self::NewerRelease => "newer release",
         }
     }
 }
@@ -300,6 +303,15 @@ impl Deliveries {
                     .hand_back(&delivery, &task, next, after, Why::Retry)
                     .await;
                 self.release(&lease, &delivery, after, false).await;
+                answer
+            }
+            // Nothing ran: the record goes back as it was stored, and the start
+            // the admission counted is taken back, as for a drain.
+            AttemptOutcome::Defer { after } => {
+                let answer = self
+                    .hand_back(&delivery, &task, resting, after, Why::NewerRelease)
+                    .await;
+                self.release(&lease, &delivery, after, true).await;
                 answer
             }
         }
@@ -559,6 +571,18 @@ where
                 attempt = delivery.attempt(),
                 due_in_ms = millis(wait),
                 "job filed for its next attempt",
+            );
+            Ok(())
+        }
+        // The port said why at `warn`, naming both releases; the filing is
+        // detail, like a retry's.
+        HandBack::Whole if why == Why::NewerRelease => {
+            tracing::debug!(
+                target: nest_rs_queue::TARGET,
+                queue = %queue,
+                job_id = %job,
+                due_in_ms = millis(wait),
+                "job handed back for a consumer of a newer release",
             );
             Ok(())
         }

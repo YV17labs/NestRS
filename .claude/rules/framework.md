@@ -1500,7 +1500,7 @@ the kubelet's 30 s rather than at it.
   **The port owns the attempt; the adapter owns the transport.** What a job
   attempt *is* — opening the envelope, continuing or minting the trace, the
   `queue.job` span and the ambient scope, catching a panic, classifying the
-  outcome into ok / retry / dead-letter within the method's retry budget and
+  outcome into ok / retry / dead-letter / defer within the method's retry budget and
   timing the wait before a retry, the events saying why an attempt failed and the
   `nest_rs::operation` line — is `nest_rs_queue::consume::attempt`, written once
   and tested once in the port. An adapter's consumer is a fetch loop that builds a
@@ -1512,6 +1512,17 @@ the kubelet's 30 s rather than at it.
   refused by the port before the backend sees it. A second adapter therefore
   copies nothing — and an adapter that opens a `queue.job` span of its own, or
   keeps a retry budget of its own, has taken semantics it does not own.
+
+  **A newer wire version is handed back, never dead-lettered.** An older worker
+  meeting an envelope a newer release sealed cannot read it and cannot re-seal
+  it, so `attempt` answers `AttemptOutcome::Defer` — no attempt spent, the record
+  re-filed as stored, due again after `NEWER_RELEASE_WAIT` — and warns once per
+  delivery naming both versions, under the id the newer envelope spells when it
+  spells it as this release does. A rolling deploy, where old replicas meet new
+  producers for minutes, must not lose a job; an older version is still refused,
+  since reading an older shape is the bumping release's decision. The outcome
+  enum is exhaustive on purpose, so a variant added later is a compile error in
+  every driver rather than a job one of them drops.
 
   **A job is named by the port.** The push mints a `JobId` — a UUID v7 — and
   seals it in the envelope, and that id keys everything kept about the job: its

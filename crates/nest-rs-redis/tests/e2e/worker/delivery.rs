@@ -25,6 +25,10 @@
 //! answers apalis with the plain error, and the job still runs; and a job whose
 //! budget is spent is dead-lettered by the port, once.
 //!
+//! **A job a newer release sealed is handed back, never dead-lettered.** An
+//! older replica meeting it during a rolling deploy runs nothing, spends no
+//! attempt, and files the record back as it was stored.
+//!
 //! **An attempt that never returns spends the budget too.** The envelope counts
 //! the attempts that answered; the adapter counts the ones that started, so a
 //! job whose attempt takes its replica down is dead-lettered once those spend
@@ -836,4 +840,122 @@ async fn a_job_whose_attempts_never_return_is_dead_lettered_once_they_spend_its_
         &receipt.id().to_string(),
     );
     assert_eq!(crate::read(&mark).await.as_deref(), Some("dead-lettered"));
+}
+
+// --- a job a newer release sealed -------------------------------------------------
+
+const NEWER_QUEUE: &str = "nestrs-e2e-delivery-newer";
+
+/// The id a newer release's push returned, spelled as this release spells one.
+const NEWER_JOB: &str = "01890a5d-ac96-774b-bcce-b302099a8057";
+
+static NEWER: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-delivery-newer", job = RetryCommand)]
+struct NewerQueue;
+
+#[injectable]
+#[derive(Default)]
+struct NewerProcessor;
+
+#[processor]
+impl NewerProcessor {
+    #[process(queue = NewerQueue)]
+    async fn run(&self, job: RetryCommand) -> anyhow::Result<()> {
+        NEWER.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [NewerProcessor],
+)]
+struct NewerModule;
+
+/// A replica of this release meets a job a newer one sealed: nothing runs, no
+/// attempt is counted, the record goes back to the schedule as it was stored,
+/// and the line names the job by the id its push returned. It was dead-lettered,
+/// under an id minted for the delivery: a rolling deploy lost every such job an
+/// old replica fetched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_a_newer_release_sealed_is_handed_back_as_stored_and_never_dead_lettered() {
+    use apalis::prelude::{Request, Storage};
+
+    let logs = LogCapture::install_global();
+    crate::forget(NEWER_QUEUE).await;
+    let run = crate::this_run();
+    let newer = u64::from(nest_rs_queue::WIRE_FORMAT_VERSION) + 1;
+    let apalis = apalis_redis::Config::default().set_namespace(&crate::namespace(NEWER_QUEUE));
+    let mut storage: apalis_redis::RedisStorage<serde_json::Value, RedisConnection> =
+        apalis_redis::RedisStorage::new_with_config(crate::connect().await, apalis.clone());
+    storage
+        .push_request(Request::new(serde_json::json!({
+            "v": newer,
+            "id": NEWER_JOB,
+            "attempt": 1,
+            "payload": { "run": run },
+        })))
+        .await
+        .expect("a newer producer's job, filed as apalis files one");
+
+    let replica = crate::replica::<NewerModule>().await;
+    let job = JobId::parse(NEWER_JOB).expect("a job id");
+    crate::wait_until(Duration::from_secs(15), || {
+        logs.find(
+            nest_rs_queue::TARGET,
+            "job handed back for a consumer of a newer release",
+        )
+        .iter()
+        .any(|event| crate::names(event, &job))
+    })
+    .await;
+    replica
+        .worker
+        .shutdown()
+        .await
+        .expect("clean worker shutdown");
+
+    let warned: Vec<_> = logs
+        .find(
+            nest_rs_queue::TARGET,
+            "job sealed by a newer release handed back unread",
+        )
+        .into_iter()
+        .filter(|event| crate::names(event, &job))
+        .collect();
+    assert_eq!(warned.len(), 1, "one delivery, one line: {warned:#?}");
+    assert_eq!(warned[0].field("version"), Some(newer.to_string()));
+    assert!(NEWER.of(run).is_empty(), "nothing ran");
+    assert_eq!(dead(NEWER_QUEUE).await, 0, "nothing was dead-lettered");
+    let started: Option<i64> = redis::cmd("GET")
+        .arg(crate::key_of(NEWER_QUEUE, "attempts", NEWER_JOB))
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("GET");
+    assert!(
+        started.unwrap_or(0) == 0,
+        "no attempt is counted: {started:?}"
+    );
+    let scheduled: Vec<String> = redis::cmd("ZRANGE")
+        .arg(apalis.scheduled_jobs_set())
+        .arg(0)
+        .arg(-1)
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("ZRANGE");
+    assert_eq!(scheduled.len(), 1, "the job waits on the schedule");
+    let stored: Option<String> = redis::cmd("HGET")
+        .arg(apalis.job_data_hash())
+        .arg(&scheduled[0])
+        .query_async(&mut crate::connect().await)
+        .await
+        .expect("HGET");
+    let stored = stored.expect("its record is kept");
+    assert!(
+        stored.contains(&format!("\"v\":{newer}")) && stored.contains(NEWER_JOB),
+        "the record is the newer release's, as stored: {stored}"
+    );
+
+    crate::forget(NEWER_QUEUE).await;
 }

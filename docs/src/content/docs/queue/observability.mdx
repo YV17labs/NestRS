@@ -43,8 +43,8 @@ the attempt. Its attributes speak the messaging conventions:
 | `backend_id` | The backend's own id for the stored record — apalis's, on Redis. |
 | `processor` | The method, e.g. `AudioProcessor::transcode`. |
 | `attempt` | Which attempt this is, from `1`, counted by the queue port across retries. |
-| `continued_trace` | `true` when the envelope carried a `traceparent`, `false` when this job started a trace of its own. |
-| `trace_id`, `span_id`, `parent_span_id` | This attempt's [W3C trace context](/fundamentals/correlation/); the parent is the span that enqueued the job. |
+| `continued_trace` | `true` when the attempt continues the producer's `traceparent`, `false` when this job started a trace of its own — on every attempt of it, however the backend files retries. |
+| `trace_id`, `span_id`, `parent_span_id` | This attempt's [W3C trace context](/fundamentals/correlation/). The parent is the span that enqueued the job; for a job that started a trace of its own, the first attempt has none and every later attempt's is the first attempt's span. |
 | `actor_id` | Who the *enqueue* was served for. Absent when nobody was authenticated — a job pushed by a scheduled tick has none. |
 
 A log line renders none of those: it carries the ids of the trace it ran in,
@@ -106,7 +106,7 @@ either `job_id` or `worker`:
 | `job delivered while another delivery runs it; handing it back` | `info` | A second delivery the lease sent back. |
 | `job delivered again after it settled; acknowledged without running` | `info` | A redelivery the settled mark absorbed. |
 | `job delivered after it was cancelled; acknowledged without running` | `info` | A delivery that met a cancel's tombstone. |
-| `job filed for its next attempt`, `job deferred to its throttle's next window` | `debug` | A retry on the schedule, and an attempt over its throttle. |
+| `job filed for its next attempt`, `job deferred to its throttle's next window`, `job handed back for a consumer of a newer release` | `debug` | A retry on the schedule, an attempt over its throttle, and a job a newer release sealed — which the port says at `warn`, naming both versions. |
 | `job lease not asked for; …`, `job lease not renewed; retrying`, `job settled mark not written; …` | `warn` | Redis refused a guard call — see [Delivery on Redis](/queue/delivery/#when-redis-is-slow-or-gone). |
 | `queue fetch failed; …`, `queue worker heartbeat failed; …`, `scheduled jobs not moved onto the queue; …` | `warn` | One of apalis's own calls failed, and it makes it again; a fetch whose connection failed under it may have claimed jobs, which wait in flight until a replica starts. |
 | `due jobs not moved onto the queue; retrying` | `warn` | Redis refused the worker's scan of the schedule; `retry_in_ms` says when it runs again. |

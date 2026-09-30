@@ -618,6 +618,185 @@ async fn an_unusable_tracestate_beside_a_usable_trace_is_dropped_and_said() {
     );
 }
 
+/// Two attempts at `value` the way a backend declaring `DelayedPush` runs them:
+/// the first on the stored value, the second on the record the first re-filed —
+/// each a delivery of its own, as Redis makes them.
+async fn two_refiled_attempts(
+    value: serde_json::Value,
+) -> (nest_rs_testing::LogCapture, serde_json::Value) {
+    let logs = nest_rs_testing::LogCapture::install();
+    let container = Container::builder().provide(FlakyProcessor).build();
+    let flaky = method("FlakyProcessor::flaky");
+    let queue = || QueueName::new("transcode").expect("a valid name");
+    let mut first = Delivery::new(&FULL, queue(), value);
+    let outcome = consume::attempt(flaky, &mut first, container.clone()).await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Retry { .. }),
+        "{outcome:?}"
+    );
+    let refiled = first.retry_envelope().into_json();
+    let mut second = Delivery::new(&FULL, queue(), refiled.clone());
+    let outcome = consume::attempt(flaky, &mut second, container).await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Retry { .. }),
+        "{outcome:?}"
+    );
+    (logs, refiled)
+}
+
+/// A job whose trace its first attempt minted keeps that trace on a backend
+/// that re-files every attempt — and the later attempts still say they were not
+/// continued from the producer, and are children of the first attempt, exactly
+/// as on a backend running the budget inside one delivery. They said
+/// `continued_trace=true` from attempt 2: the re-filed `traceparent` could not be
+/// told from a producer's.
+#[tokio::test]
+async fn a_minted_trace_refiled_for_a_later_attempt_is_never_read_as_the_producers() {
+    for (case, value) in [
+        ("no envelope", json!({ "file": "x.wav" })),
+        (
+            "a corrupt traceparent",
+            json!({ "v": WIRE_FORMAT_VERSION, "payload": { "file": "x.wav" }, "traceparent": "00-zz" }),
+        ),
+    ] {
+        let (logs, refiled) = two_refiled_attempts(value).await;
+        assert_eq!(refiled["trace_minted"], json!(true), "{case}: {refiled}");
+        let spans = job_spans(&logs);
+        assert_eq!(spans.len(), 2, "{case}: {spans:#?}");
+        let (first, second) = (&spans[0], &spans[1]);
+        assert_eq!(
+            first.field("trace_id"),
+            second.field("trace_id"),
+            "{case}: one trace per job"
+        );
+        assert_eq!(
+            second.field("parent_span_id"),
+            first.field("span_id"),
+            "{case}: a later attempt is a child of the first",
+        );
+        for span in &spans {
+            assert_eq!(
+                span.field("continued_trace").as_deref(),
+                Some("false"),
+                "{case}: nothing was continued from the producer: {span:#?}",
+            );
+        }
+    }
+
+    // The contrast: a producer's trace re-filed stays the producer's.
+    let enqueue = nest_rs_core::Correlation::minted(None);
+    let (logs, refiled) = two_refiled_attempts(json!({
+        "v": WIRE_FORMAT_VERSION,
+        "payload": { "file": "x.wav" },
+        "traceparent": enqueue.traceparent().to_string(),
+    }))
+    .await;
+    assert!(refiled.get("trace_minted").is_none(), "{refiled}");
+    for span in job_spans(&logs) {
+        assert_eq!(span.field("continued_trace").as_deref(), Some("true"));
+        assert_eq!(
+            span.field("parent_span_id"),
+            Some(enqueue.span_id().to_string())
+        );
+    }
+}
+
+/// The keys a delivery said it could not use are not re-filed for the next
+/// attempt, so the warn naming them is filed once per job — on a backend that
+/// makes each attempt a delivery of its own, it was filed at every attempt.
+#[tokio::test]
+async fn the_keys_a_delivery_could_not_use_are_said_once_per_job_not_per_attempt() {
+    let enqueue = nest_rs_core::Correlation::minted(None);
+    let (logs, refiled) = two_refiled_attempts(json!({
+        "v": WIRE_FORMAT_VERSION,
+        "id": JOB_ID,
+        "payload": { "file": "x.wav" },
+        "traceparent": enqueue.traceparent().to_string(),
+        "tracestate": 7,
+        "actor_id": 7,
+        "unique_key": "a\nb",
+    }))
+    .await;
+
+    let warned = logs.find(
+        nest_rs_queue::TARGET,
+        "job envelope carries keys this consumer cannot use",
+    );
+    assert_eq!(warned.len(), 1, "{warned:#?}");
+    assert_eq!(
+        warned[0].field("unusable").as_deref(),
+        Some("tracestate, actor_id, unique_key")
+    );
+    for dropped in ["tracestate", "actor_id", "unique_key"] {
+        assert!(refiled.get(dropped).is_none(), "`{dropped}`: {refiled}");
+    }
+    assert_eq!(
+        refiled["traceparent"],
+        json!(enqueue.traceparent().to_string()),
+        "what was usable travels on",
+    );
+}
+
+/// A job a newer release sealed runs nothing here and spends no attempt: it is
+/// handed back as it was stored, for a consumer of that release, under the id
+/// its push returned — and the delivery says so once, naming both versions. It
+/// used to be dead-lettered, under an id minted for the delivery, so a rolling
+/// deploy lost every such job an old replica fetched.
+#[tokio::test]
+async fn a_job_a_newer_release_sealed_is_handed_back_unread_and_never_dead_lettered() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let newer = u64::from(WIRE_FORMAT_VERSION) + 1;
+    let stored = json!({ "v": newer, "id": JOB_ID, "attempt": 3, "payload": { "file": "x.wav" } });
+    let mut delivery = Delivery::new(
+        &FULL,
+        QueueName::new("transcode").expect("a valid name"),
+        stored.clone(),
+    );
+    assert_eq!(
+        delivery.id().to_string(),
+        JOB_ID,
+        "the id the push returned finds the job"
+    );
+
+    let container = Container::builder().provide(FlakyProcessor).build();
+    let runs = FLAKY_RUNS.load(Ordering::SeqCst);
+    for _ in 1..=2 {
+        let outcome = consume::attempt(
+            method("FlakyProcessor::flaky"),
+            &mut delivery,
+            container.clone(),
+        )
+        .await;
+        let AttemptOutcome::Defer { after } = outcome else {
+            panic!("a job this release cannot read is handed back: {outcome:?}");
+        };
+        assert_eq!(after, consume::NEWER_RELEASE_WAIT);
+    }
+    assert_eq!(FLAKY_RUNS.load(Ordering::SeqCst), runs, "nothing ran");
+    assert_eq!(delivery.attempt(), 1, "no attempt is spent");
+    assert_eq!(
+        delivery.retry_envelope().into_json(),
+        stored,
+        "the record goes back as it was stored",
+    );
+
+    let warned = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job sealed by a newer release handed back unread",
+    );
+    assert_eq!(warned.level, "warn");
+    assert_eq!(warned.field("job_id").as_deref(), Some(JOB_ID));
+    assert_eq!(warned.field("version"), Some(newer.to_string()));
+    assert_eq!(
+        warned.field("supported"),
+        Some(WIRE_FORMAT_VERSION.to_string())
+    );
+    assert!(
+        job_spans(&logs).is_empty(),
+        "no attempt ran, so none is reported"
+    );
+}
+
 // --- discovery -----------------------------------------------------------------
 
 type Handled = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;

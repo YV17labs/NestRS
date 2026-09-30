@@ -46,8 +46,8 @@ need. An app picks a driver by importing its module instead of
 
 ## The wire envelope
 
-The one binding rule across backends — the producer wraps, the
-macro-emitted consumer unwraps, the storage in between only moves
+The one binding rule across backends — the port seals it at the push,
+the port opens it in `consume::attempt`, the storage in between only moves
 JSON.
 
 ```json
@@ -67,7 +67,9 @@ JSON.
 attempt; key your backend's records by it, never by an id of your own.
 `attempt` is the attempt the record is for, and a record the port hands back
 for a retry carries the next one. `unique_key` is present only when the push
-declared one.
+declared one. A record re-filed for a later attempt of a job whose trace its
+first attempt had to mint also carries `"trace_minted": true`, so the attempts
+after it join that trace without claiming a link to the enqueue.
 
 You never write that shape, nor read it: the port seals it at the push — the
 id, the trace context, the unique key — and hands your producer sealed
@@ -76,9 +78,13 @@ that crosses a **process**, so a hand-rolled wrapper would silently cost every
 job its link back to the request that enqueued it — see
 [Correlation](/fundamentals/correlation/).
 
-The macro on the `#[process]` side validates the version and fails closed
-with a clear error on mismatch, so a producer that wraps a different
-shape surfaces immediately.
+`consume::attempt` checks the version before anything runs — not the handler
+`#[process]` emits, which only ever sees an opened payload — so the one step a
+driver must not skip is the one it cannot: every attempt goes through the port.
+An **older** version is refused and dead-lettered, naming which way the release
+gap runs. A **newer** one is never read: the attempt answers
+`AttemptOutcome::Defer`, and the record goes back to your storage unchanged for
+a consumer of that release.
 
 ## Step 1 — The backend and the producer
 
@@ -224,6 +230,9 @@ impl Transport for YourWorker {
                                     /* re-file delivery.retry_envelope() for `after`, then ack */
                                 }
                                 AttemptOutcome::DeadLetter(error) => { /* dead-letter */ let _ = error; }
+                                AttemptOutcome::Defer { after } => {
+                                    /* re-file delivery.retry_envelope() — the record as stored — for `after`, then ack */
+                                }
                             }
                         }
                     }
@@ -242,7 +251,13 @@ budget holds another attempt and how long to wait before it, and the
 acknowledges this delivery; one without it waits `after` itself — giving up
 the wait, never the job, at shutdown — and calls `attempt` again with the same
 delivery. `DeadLetter` is final: a deterministic failure, or the last attempt
-of the budget.
+of the budget. `Defer { after }` is a job a newer release sealed, which this
+consumer cannot read: nothing ran, no attempt is spent, and
+`delivery.retry_envelope()` is the stored record unchanged — re-file it for
+`after`, a minute, and acknowledge this delivery, so a rolling deploy leaves
+the job for a replica of the newer release instead of losing it. The match is
+exhaustive on purpose: an outcome added later is a compile error in your loop,
+not a job your driver drops.
 
 The envelope counts the attempts that answered, never one whose process died
 under it — an abort, an OOM kill, a pod killed mid-job — so a job that takes
@@ -251,8 +266,8 @@ storage can count the attempts it starts per job, pass the count:
 `Delivery::with_attempts_started(n)`, this delivery's start included. The port
 runs the later of the two, and dead-letters a job whose count is past the
 budget without running it. Count a start when the attempt is admitted, and take
-it back when you hand the job back unrun — a drain — since that attempt never
-ran to anything. A storage that cannot count leaves the loop open, and its
+it back when you hand the job back unrun — a drain, a `Defer` — since that
+attempt never ran to anything. A storage that cannot count leaves the loop open, and its
 page says so. A record your storage cannot route to any method goes through
 `consume::refuse`, which files the dead-letter the way an attempt would — a
 record *your* code holds: one it fetched and could not decode, or one naming a

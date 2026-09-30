@@ -42,6 +42,15 @@ use crate::{
 /// `process`.
 const PROCESS: &str = "process";
 
+/// How long a job sealed by a newer release waits before it is delivered again,
+/// when a consumer of this release hands it back — [`AttemptOutcome::Defer`].
+///
+/// Long enough that a backlog of such jobs is not fetched and handed back
+/// continuously while old replicas outnumber new ones; short enough that, once a
+/// rolling deploy has put a consumer of the newer release in place, the jobs
+/// reach it within a minute.
+pub const NEWER_RELEASE_WAIT: Duration = Duration::from_secs(60);
+
 /// The `#[process]` methods this app serves on `backend`: every entry whose
 /// provider is reachable from the running app's root, with a boot `warn` for
 /// each that is linked but unreachable.
@@ -186,8 +195,23 @@ pub enum AttemptOutcome {
     },
     /// The job is done failing — deterministically (an undeserializable
     /// payload, a pipe rejection, a missing provider, a panic, an envelope of
-    /// another version), or retryably on its last attempt: dead-letter it.
+    /// an older version), or retryably on its last attempt: dead-letter it.
     DeadLetter(JobError),
+    /// The job was sealed by a newer release than this consumer's, which cannot
+    /// read it: nothing ran and no attempt is spent. Hand the stored record
+    /// back **as it was stored** — [`Delivery::retry_envelope`] answers it
+    /// unchanged — to be delivered again once `after` has passed, and
+    /// acknowledge this delivery; a backend that counted an attempt start for
+    /// it takes the start back, as for any delivery handed back unrun.
+    ///
+    /// A rolling deploy is the case: an older replica meets a newer producer's
+    /// job, and the job waits for a replica of the newer release instead of
+    /// being dead-lettered by one that is leaving. `after` is
+    /// [`NEWER_RELEASE_WAIT`].
+    Defer {
+        /// How long the job waits before it is delivered again.
+        after: Duration,
+    },
 }
 
 /// One job as its backend delivered it — what every attempt at it reads.
@@ -302,8 +326,17 @@ impl Delivery {
     /// The record to re-file for the attempt an [`AttemptOutcome::Retry`]
     /// announced: the stored envelope, stamped with the job's id and the next
     /// attempt's number, carrying the trace every attempt at the job shares.
+    ///
+    /// For a job a newer release sealed — [`AttemptOutcome::Defer`] — it is the
+    /// stored record unchanged, which this consumer cannot re-seal.
     pub fn retry_envelope(&self) -> Envelope {
-        envelope::retry(&self.message, &self.id, self.attempt, self.minted.as_ref())
+        envelope::retry(
+            &self.message,
+            &self.id,
+            self.attempt,
+            self.minted.as_ref(),
+            self.announced,
+        )
     }
 }
 
@@ -319,11 +352,17 @@ impl Delivery {
 /// past its last attempt — the backend saw attempts start that never returned
 /// ([`Delivery::with_attempts_started`]) — is dead-lettered without running.
 /// When the job reaches its terminal outcome, its checkpoint is cleared.
+///
+/// A job sealed by a newer release runs nothing: the delivery says so once, at
+/// `warn`, naming both versions, and the answer is [`AttemptOutcome::Defer`].
 pub async fn attempt(
     method: &'static ProcessMethod,
     delivery: &mut Delivery,
     container: Container,
 ) -> AttemptOutcome {
+    if let Some(version) = envelope::newer_version(&delivery.message) {
+        return defer_newer(delivery, version);
+    }
     let attempt = delivery.attempt;
     let retries = method.options().retries();
     let last = attempt > retries;
@@ -336,15 +375,16 @@ pub async fn attempt(
     } else {
         delivery.message.clone()
     };
-    let (payload, inherited, unversioned, unusable) =
+    let (payload, inherited, minted_trace, unversioned, unusable) =
         match envelope::open(message, delivery.queue.as_str()) {
             Ok(Opened::Sealed {
                 payload,
                 correlation,
+                minted,
                 unusable,
-            }) => (Ok(payload), correlation, false, unusable),
-            Ok(Opened::Unversioned(value)) => (Ok(value), None, true, Unusable::default()),
-            Err(refused) => (Err(refused), None, false, Unusable::default()),
+            }) => (Ok(payload), correlation, minted, false, unusable),
+            Ok(Opened::Unversioned(value)) => (Ok(value), None, false, true, Unusable::default()),
+            Err(refused) => (Err(refused), None, false, false, Unusable::default()),
         };
     let input = match payload {
         _ if spent => Input::Spent {
@@ -363,10 +403,13 @@ pub async fn attempt(
     // names one), and every later attempt runs as a child of that first one:
     // one trace per delivery either way — and a driver runs every attempt of a
     // budget inside its delivery — which is what an operator following a retried
-    // job by its `trace_id` is promised.
-    let continued_trace = inherited
-        .as_ref()
-        .is_some_and(Correlation::parent_is_remote);
+    // job by its `trace_id` is promised. A backend re-filing each attempt carries
+    // the first attempt's trace in the record, marked as minted: continued, it
+    // joins the job's own trace and is still not the producer's.
+    let continued_trace = !minted_trace
+        && inherited
+            .as_ref()
+            .is_some_and(Correlation::parent_is_remote);
     let correlation = match (inherited, &delivery.minted) {
         (Some(continued), _) if continued.parent_is_remote() => continued,
         (_, Some(first)) => first.child(),
@@ -467,6 +510,29 @@ pub async fn attempt(
         delivery.attempt = attempt.saturating_add(1);
     }
     outcome
+}
+
+/// Hand back a job a newer release sealed: nothing runs, and the delivery says
+/// once, at `warn`, which release sealed it and which this one reads.
+fn defer_newer(delivery: &mut Delivery, version: u64) -> AttemptOutcome {
+    if !delivery.announced {
+        delivery.announced = true;
+        tracing::warn!(
+            target: TARGET,
+            queue = %delivery.queue,
+            job_id = %delivery.id,
+            version,
+            supported = crate::WIRE_FORMAT_VERSION,
+            retry_after_ms = NEWER_RELEASE_WAIT.as_millis() as u64,
+            hint = "a newer release sealed this job; it waits on the queue for a consumer of \
+                    that release — finish rolling the consumers forward, or roll the producer \
+                    back",
+            "job sealed by a newer release handed back unread",
+        );
+    }
+    AttemptOutcome::Defer {
+        after: NEWER_RELEASE_WAIT,
+    }
 }
 
 /// Clear the checkpoint of a job that reached its terminal outcome. A failure

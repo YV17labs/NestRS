@@ -663,6 +663,25 @@ nestrs:<concern>:<structure>[:<member>]
   bucket. A queue name holds no `:`, so a queue is one level.
 
 **It is the fourth column of a table that had three.** The crate's subject, its
+**One concern puts its member first, and it is the queue:**
+
+```
+nestrs:queue:<queue>[:<structure>[:<job>]]
+```
+
+apalis derives every structure it keeps from the one namespace it is handed per
+queue — `<namespace>:active`, `<namespace>:inflight:<worker>` — so the queue has
+to be the level above those structures, and the framework's own records follow
+the same shape rather than a second one beside it. That is what makes one queue
+one prefix: `SCAN nestrs:queue:audio:*` returns everything the queue holds, and an
+ACL scoped to `~nestrs:queue:audio:*` runs it. Read by the three-level grammar,
+the queue's waiting list would be `nestrs:queue:active:audio`, a list nobody
+fills. A concern whose members each own several structures takes this shape; one
+whose structures each hold many members — the throttler's buckets, the
+schedule's claims and leases — keeps `<structure>` third. The `keys` join's
+`a_member_first_key_is_the_shape_the_rule_states` holds every declared key to
+one of the two, and a member-first concern to this paragraph.
+
 span target and its `#[config]` namespace are one derivation, and a datastore key
 is the same derivation reaching one more surface — so from a key a reader names
 the port crate that owns it, and from that crate derives the key:
@@ -672,7 +691,7 @@ the port crate that owns it, and from that crate derives the key:
 | crate | the subject | `nest-rs-throttler` |
 | span target | `nest_rs::<concern>` | `nest_rs::throttler` |
 | env namespace | `<PREFIX>_<CONCERN>__*` | `<PREFIX>_THROTTLER__*` |
-| datastore key | `nestrs:<concern>:<structure>` | `nestrs:throttler:buckets` |
+| datastore key | `nestrs:<concern>:<structure>`, or `nestrs:queue:<queue>:<structure>` | `nestrs:throttler:buckets` |
 
 Three obligations, each for a mechanical reason. The `keys` join in
 `nest-rs-conformance` executes as much of them as a literal can show — every

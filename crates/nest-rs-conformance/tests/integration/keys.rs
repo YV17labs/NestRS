@@ -5,7 +5,9 @@
 //! pattern during an incident, in a dashboard — so it obeys the naming law like
 //! any other name, and gets the derivation the crate, the span target and the
 //! `#[config]` namespace already share: `nestrs:<concern>:<structure>`, the
-//! concern read off the owning crate's target rather than chosen.
+//! concern read off the owning crate's target rather than chosen — or, for the
+//! queue, whose members each own several structures, `nestrs:queue:<queue>:<structure>`,
+//! a shape the rule has to state before a concern may take it.
 //!
 //! Two obligations, and the second is why this is a join rather than a
 //! paragraph. `SCAN` and `KEYS` match by glob, so `<ns>:queue` beside
@@ -778,4 +780,95 @@ fn a_root_structure_is_read_where_it_is_written_and_nowhere_else() {
             key(&["{}", "scheduled"]),
         ]),
     );
+}
+
+/// Where `framework.md` states the datastore-key grammar, including the one
+/// shape that puts a member ahead of the structure.
+const KEY_RULE: &str = ".claude/rules/framework.md";
+
+/// The level a declared key holds right after its concern, and the concern —
+/// `nestrs:queue:{}:open:{}` is `("queue", "{}")`, `nestrs:throttler:buckets` is
+/// `("throttler", "buckets")`. The longest declared concern wins, so a family
+/// member's key reads its member's concern rather than the family's.
+fn after_the_concern<'k>(key: &'k str, concerns: &BTreeSet<String>) -> Option<(String, &'k str)> {
+    let rest = key.strip_prefix(PREFIX)?;
+    let concern = concerns
+        .iter()
+        .filter(|concern| {
+            rest.strip_prefix(concern.as_str())
+                .is_some_and(|after| after.is_empty() || after.starts_with(SEP))
+        })
+        .max_by_key(|concern| concern.len())?;
+    let after = rest[concern.len()..].strip_prefix(SEP)?;
+    let level = after.split(SEP).next()?;
+    Some((concern.clone(), level))
+}
+
+/// Every key the framework writes reads `nestrs:<concern>:<structure>…`, or —
+/// for a concern whose members each own several structures — puts the member
+/// first, `nestrs:<concern>:<member>:<structure>…`, and the rule has to say
+/// which concerns those are.
+///
+/// **The second shape is the one the grammar left unstated**, and it is every
+/// queue key: apalis derives its structures from one namespace per queue, so a
+/// reader deriving `nestrs:queue:active:audio` from the three-level grammar
+/// names a list nobody fills. So a concern whose running code puts a member
+/// third owes a line in [`KEY_RULE`] spelling its shape — `nestrs:<concern>:<`
+/// followed on that line by `:<structure>` — and, once it is member-first, every
+/// key of it is: one concern, one shape, or a `SCAN` of the concern's member
+/// finds half its keys.
+#[test]
+fn a_member_first_key_is_the_shape_the_rule_states() {
+    let root: &Path = &repo_root();
+    let concerns = concerns();
+    let running = declared_in_rust(root).running;
+    let rule = read(&root.join(KEY_RULE)).expect("the key rule reads");
+
+    let mut shapes: BTreeMap<String, (BTreeSet<&str>, BTreeSet<&str>)> = BTreeMap::new();
+    for key in &running {
+        let Some((concern, level)) = after_the_concern(key, &concerns) else {
+            continue;
+        };
+        let (member_first, structure_first) = shapes.entry(concern).or_default();
+        if level == "{}" {
+            member_first.insert(key);
+        } else {
+            structure_first.insert(key);
+        }
+    }
+    assert!(
+        shapes.len() >= FLOOR,
+        "found keys under {} concern(s) — the walk is reading the wrong tree",
+        shapes.len(),
+    );
+
+    let mut holes = Vec::new();
+    for (concern, (member_first, structure_first)) in &shapes {
+        if member_first.is_empty() {
+            continue;
+        }
+        let opening = format!("{PREFIX}{concern}{SEP}<");
+        let stated = rule.lines().any(|line| {
+            line.find(&opening)
+                .is_some_and(|at| line[at..].contains(":<structure>"))
+        });
+        if !stated {
+            holes.push(format!(
+                "`{concern}` puts a member before its structure ({}) and {KEY_RULE} states no \
+                 `{opening}…>:<structure>` shape for it",
+                member_first.iter().copied().collect::<Vec<_>>().join(", "),
+            ));
+        }
+        if !structure_first.is_empty() {
+            holes.push(format!(
+                "`{concern}` is member-first, yet {} put(s) a structure where its member goes",
+                structure_first
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+        }
+    }
+    assert!(holes.is_empty(), "\n{}", holes.join("\n"));
 }

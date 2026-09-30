@@ -53,7 +53,7 @@ use poem::{Body, Endpoint, IntoResponse, PathPattern, Request, Response, Result}
 
 use tracing::Instrument;
 
-use crate::access_log::AccessLog;
+use crate::access_log::{AccessLog, Unanswered};
 use crate::client_ip::{ClientIp, ClientOrigin};
 use crate::location::CallerUri;
 use crate::{response_body, trace_context};
@@ -467,6 +467,10 @@ where
             None => Arc::new(RequestScope::new(self.container.clone())),
         };
         let continuation = RequestContinuation::new(Some(scope), correlation.clone());
+        // Held across every await below: a request dropped at one — its connection
+        // cut by the shutdown window, or closed by its client — files its line
+        // `cancelled` instead of none at all.
+        let unanswered = Unanswered::hold(log, &continuation);
 
         // The configured cap is installed *inside* the continuation and is not
         // part of it: a whole-body cap is this transport's, and its two readers
@@ -495,6 +499,8 @@ where
         } else {
             result
         };
+        // Past the last await: from here the request has an answer to file.
+        let log = unanswered.answered();
 
         match result {
             Ok(mut resp) => {
@@ -602,6 +608,37 @@ mod tests {
         Response::builder()
             .header("x-content-type-options", "handler-value")
             .body("ok")
+    }
+
+    #[handler]
+    async fn panics_after_waiting() -> &'static str {
+        tokio::task::yield_now().await;
+        panic!("the handler panicked");
+    }
+
+    /// A handler that panics past an await unwinds through the edge's state
+    /// rather than being dropped from outside, and its line says so.
+    #[tokio::test]
+    async fn a_handler_that_panics_files_its_line_panic() {
+        use futures_util::FutureExt;
+
+        let logs = nest_rs_testing::LogCapture::install();
+        let ep = edge(panics_after_waiting, None, None, Vec::new());
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let unwound = std::panic::AssertUnwindSafe(TestClient::new(ep).get("/").send())
+            .catch_unwind()
+            .await;
+        std::panic::set_hook(previous);
+        assert!(unwound.is_err(), "the panic reached the caller");
+
+        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::REQUEST);
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::PANIC),
+            "{line:#?}"
+        );
+        assert_eq!(line.field("status"), None);
     }
 
     #[tokio::test]

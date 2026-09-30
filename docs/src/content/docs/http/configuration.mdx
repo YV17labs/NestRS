@@ -294,7 +294,10 @@ What the window does depends on what the connection is doing:
   the answer. If the window closes first, the connection is dropped, the client
   gets no answer and the handler is cancelled where it waits — over HTTP/1.1
   and over HTTP/2 alike: closing an HTTP/2 connection resets every stream on
-  it, and hyper drops a reset stream's handler.
+  it, and hyper drops a reset stream's handler. Its `http.request` line is
+  still filed, with `outcome="cancelled"` and the time it ran in place of a
+  `status` and `bytes`, since nothing was answered — the same line a request
+  whose client hung up before the answer files.
 - **An MCP operation still running** — runs on a task of rmcp's rather than on
   the connection that asked for it, so the transport stops it itself once the
   window has closed: it is dropped where it waits, files its `mcp.operation`
@@ -304,7 +307,9 @@ What the window does depends on what the connection is doing:
 - **A stream** — an [`#[sse]` stream](/http/streaming/) or an MCP stream never
   finishes on its own, so it holds the window to its end and is cut there; the
   client's `EventSource` reconnects, to another replica once this one has left
-  the load balancer.
+  the load balancer. Its head was answered, so its `http.request` line is filed
+  as the body ends — at the cut — with the head's `status` and the `bytes`
+  written before it, not as `cancelled`.
 - **A WebSocket** — is not the window's. poem hands an upgraded connection to
   its handler and stops tracking it, so the transport neither waits for it nor
   closes it: it ends when its handler ends it, or with the process.

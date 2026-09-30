@@ -1360,8 +1360,11 @@ own bound:
      default; 1 s to an hour). A connection still open at the bound — a streaming
      body such as an SSE stream or an MCP session — is closed, with one `warn`
      saying how many were, and a handler on it is dropped, over HTTP/1.1 and
-     HTTP/2 alike. The request timeout bounds a handler, never a streaming body,
-     which is why this bound is the transport's own.
+     HTTP/2 alike, filing its `http.request` line `outcome = cancelled` with no
+     `status` (a stream's head was answered, so a cut stream files its line with
+     that status and the bytes written, as its body ends). The request timeout
+     bounds a handler, never a streaming body, which is why this bound is the
+     transport's own.
    - **Work a connection only carries stops with the transport.** A self-mount
      that runs its units off the connection that asked for them — rmcp runs each
      MCP operation on a task of its own — declares an

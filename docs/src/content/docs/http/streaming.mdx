@@ -113,7 +113,9 @@ stream never finishes on its own, so a stopping process keeps it open for the
 whole shutdown window (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s by default)
 and then closes it with every other connection still open — a peer that stopped
 reading included. The client's `EventSource` reconnects, to another replica once
-this one has left the load balancer. See [Shutdown](/http/configuration/#shutdown).
+this one has left the load balancer. The stream's `http.request` line is filed
+as its body ends, at the cut, with the head's `status` and the `bytes` written
+before it: the head is what the client received. See [Shutdown](/http/configuration/#shutdown).
 
 Gate a stream with a **capability-only guard**
 (`#[use_guards(TranscodeGuard)]`), never `#[authorize]`: the posture masks

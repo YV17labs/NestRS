@@ -33,9 +33,31 @@
 //! for that and for the larger reason that a streaming response is still the
 //! request running. This module owns the *line*; that one owns the *body*, and
 //! the split is deliberate: the body is carried whether or not the line is on.
+//!
+//! # A request dropped before it answers
+//!
+//! A handler still running when the shutdown window closes is dropped where it
+//! waits — poem closes its connection, and hyper drops the request with it — and
+//! so is one whose client goes away first. That request is still a unit of work
+//! the edge accepted, so it still files its line: [`Unanswered`] holds the line
+//! while the request runs and files it [`CANCELLED`] if the request is dropped
+//! before a response exists, with the duration it ran for. It carries no
+//! `status` and no `bytes`, because nothing was answered and nothing was
+//! written — the `outcome` is how the line says so, in the word every other
+//! edge files a stopped unit with. A handler that panics unwinds through the
+//! same guard and takes its connection down: that line says
+//! [`PANIC`](nest_rs_core::operation_log::PANIC) instead.
+//!
+//! A *streaming* response cut mid-flow is not that case: its head was answered,
+//! so its line is filed as the body ends — at the cut — with the head's status
+//! and the bytes written before it. The status is what the client received, and
+//! the count is what says the body was shorter than it would have been.
+//!
+//! [`CANCELLED`]: nest_rs_core::operation_log::CANCELLED
 
 use std::time::Instant;
 
+use nest_rs_core::RequestContinuation;
 use poem::Request;
 use poem::http::{Method, Uri};
 
@@ -109,5 +131,113 @@ impl AccessLog {
     /// answer with.
     pub(crate) fn abandoned(self, status: u16) {
         self.emit(status, 0);
+    }
+
+    /// File a request that ended before it answered — dropped
+    /// ([`CANCELLED`](nest_rs_core::operation_log::CANCELLED)) or unwinding
+    /// ([`PANIC`](nest_rs_core::operation_log::PANIC)), see the module doc. No
+    /// `status` and no `bytes`: neither exists, and a `0` in either would be a
+    /// claim about a response nobody sent.
+    fn unanswered(self, outcome: &'static str) {
+        tracing::info!(
+            name: crate::unit::REQUEST,
+            target: nest_rs_core::operation_log::TARGET,
+            message = crate::unit::REQUEST,
+            method = %self.method,
+            path = self.uri.path(),
+            outcome,
+            duration_ms = nest_rs_core::operation_log::duration_ms(self.start),
+            client_ip = %self.client.ip,
+            forwarded = self.client.forwarded,
+            user_agent = self.user_agent.as_deref(),
+        );
+    }
+}
+
+/// A request's line, held while the request runs and filed
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) if the request is
+/// dropped before it answers — [`PANIC`](nest_rs_core::operation_log::PANIC)
+/// if it unwinds instead.
+///
+/// Borrowing the continuation rather than cloning it costs the path nothing: it
+/// is declared after the continuation, so a dropped request drops it first, and
+/// the line is filed inside the request's own context — the same ids every other
+/// line of that request carries.
+pub(crate) struct Unanswered<'a> {
+    log: Option<AccessLog>,
+    continuation: &'a RequestContinuation,
+}
+
+impl<'a> Unanswered<'a> {
+    pub(crate) fn hold(log: Option<AccessLog>, continuation: &'a RequestContinuation) -> Self {
+        Self { log, continuation }
+    }
+
+    /// The request produced an answer: its line is the answer's to file.
+    pub(crate) fn answered(mut self) -> Option<AccessLog> {
+        self.log.take()
+    }
+}
+
+impl Drop for Unanswered<'_> {
+    fn drop(&mut self) {
+        if let Some(log) = self.log.take() {
+            // Unwinding rather than dropped: a handler that panicked takes its
+            // connection down with it, and the unit still ended in a panic.
+            let outcome = if std::thread::panicking() {
+                nest_rs_core::operation_log::PANIC
+            } else {
+                nest_rs_core::operation_log::CANCELLED
+            };
+            self.continuation.enter(|| log.unanswered(outcome));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nest_rs_core::Correlation;
+    use nest_rs_testing::LogCapture;
+
+    use super::*;
+
+    fn held() -> (AccessLog, RequestContinuation) {
+        let req = Request::builder().uri_str("/reports").finish();
+        let log = AccessLog::open(&req, ClientIp::unknown(), Some("curl/8"));
+        let continuation = RequestContinuation::new(None, Correlation::minted(None));
+        (log, continuation)
+    }
+
+    fn the_line(logs: &LogCapture) -> nest_rs_testing::CapturedEvent {
+        logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::REQUEST)
+    }
+
+    /// A request dropped before it answered files its line once, `cancelled`,
+    /// with no `status` and no `bytes`, in its own trace.
+    #[test]
+    fn a_request_dropped_unanswered_files_its_line_cancelled() {
+        let logs = LogCapture::install();
+        let (log, continuation) = held();
+        drop(Unanswered::hold(Some(log), &continuation));
+
+        let line = the_line(&logs);
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::CANCELLED)
+        );
+        assert_eq!(line.field("status"), None);
+        assert_eq!(line.field("bytes"), None);
+        assert_eq!(line.field("path").as_deref(), Some("/reports"));
+        assert!(line.trace_id.is_some(), "{line:#?}");
+    }
+
+    /// An answered request's line is the answer's to file; the guard files none.
+    #[test]
+    fn an_answered_request_is_not_filed_by_the_guard() {
+        let logs = LogCapture::install();
+        let (log, continuation) = held();
+        let answered = Unanswered::hold(Some(log), &continuation).answered();
+        assert!(answered.is_some());
+        logs.expect_none(nest_rs_core::operation_log::TARGET, crate::unit::REQUEST);
     }
 }

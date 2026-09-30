@@ -159,6 +159,20 @@ impl Serving {
     }
 }
 
+/// The one `http.request` line filed for `path`.
+fn operation_line(logs: &LogCapture, path: &str) -> nest_rs_testing::CapturedEvent {
+    let mut lines: Vec<_> = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_http::unit::REQUEST,
+        )
+        .into_iter()
+        .filter(|line| line.field("path").as_deref() == Some(path))
+        .collect();
+    assert_eq!(lines.len(), 1, "one line for {path}, got {lines:?}");
+    lines.remove(0)
+}
+
 fn free_port() -> u16 {
     let listener = StdTcpListener::bind(("127.0.0.1", 0)).expect("bind an ephemeral port");
     listener.local_addr().expect("the bound port").port()
@@ -265,6 +279,12 @@ async fn a_stream_and_a_websocket_held_open_hold_the_shutdown_no_longer_than_its
 
     read_to_end(&mut stream).await;
 
+    // The stream's head was answered, so its line is filed as the body ends — at
+    // the cut — with the status the client received, never as `cancelled`.
+    let line = operation_line(&logs, "/shutdown/stream");
+    assert_eq!(line.field("status").as_deref(), Some("200"));
+    assert_eq!(line.field("outcome"), None);
+
     websocket
         .send(Message::text("still here"))
         .await
@@ -331,6 +351,21 @@ async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
     let cut = logs.expect_one(nest_rs_http::target::HTTP, CUT);
     assert_eq!(cut.field("cut").as_deref(), Some("1"));
     assert_eq!(cut.field("upgraded_open").as_deref(), Some("0"));
+
+    let line = operation_line(&logs, "/shutdown/stuck");
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "the request dropped at the window still files its line, and says it was stopped",
+    );
+    assert_eq!(line.field("status"), None, "nothing was answered");
+    assert_eq!(line.field("bytes"), None, "nothing was written");
+    // Measured on the wall clock, which the paused test clock does not move, so
+    // only its presence is asserted here.
+    line.field("duration_ms")
+        .expect("the line says how long the request ran")
+        .parse::<f64>()
+        .expect("a number of milliseconds");
 }
 
 /// An idle kept-alive connection has nothing in flight, so it is closed at the

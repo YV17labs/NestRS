@@ -75,7 +75,9 @@ fn redis_config() -> RedisConfig {
 
 /// The logical databases a test selects when its keys or its connections must
 /// not meet another test's — one per test, all declared here so that no two
-/// collide. Every other test shares database 0.
+/// collide. Every other test shares database 0, on queue names of its own.
+/// The framework's are 9 to 15: the demo's suites run on the same Redis and
+/// hold 1 to 8, so a `FLUSHDB` here never reaches a job one of theirs filed.
 const DB_CONNECTION_DROP: u8 = 11;
 const DB_CONNECTION_RESET_MID_ATTEMPT: u8 = 10;
 const DB_CONFINED_TO_THE_PREFIX: u8 = 9;
@@ -86,8 +88,9 @@ const DB_TLS_REFUSED_REOPEN: u8 = 13;
 const DB_SCHEDULE: u8 = 14;
 const DB_UNIQUE_REFUSED: u8 = 15;
 
-// Two tests sharing a database meet each other's keys and connections, and
-// Redis ships sixteen: both facts are checked where the list is written.
+// Two tests sharing a database meet each other's keys and connections, Redis
+// ships sixteen, and the demo holds the lower half: all three facts are checked
+// where the list is written.
 const _: () = {
     let dbs = [
         DB_CONFINED_TO_THE_PREFIX,
@@ -100,7 +103,10 @@ const _: () = {
     ];
     let mut i = 0;
     while i < dbs.len() {
-        assert!(dbs[i] != 0 && dbs[i] < 16, "an e2e database is 1 to 15");
+        assert!(
+            dbs[i] >= 9 && dbs[i] < 16,
+            "a framework e2e database is 9 to 15; 1 to 8 are the demo's",
+        );
         let mut j = i + 1;
         while j < dbs.len() {
             assert!(dbs[i] != dbs[j], "two e2e tests share a logical database");

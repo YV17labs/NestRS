@@ -15,6 +15,7 @@ mod filters;
 mod grammars;
 mod guards;
 mod keys;
+mod mirrors;
 mod naming;
 mod panics;
 mod queue_capabilities;

@@ -99,6 +99,10 @@ pub(crate) fn write_fake_migrations_crate(root: &Path) {
     fs::write(dir.join("m20260101_000000_init.rs"), "// init\n").unwrap();
 }
 
+/// The bootstrap variable that renames every other — `context::ENV_PREFIX_VAR`,
+/// spelled once for this suite because it is the one name no prefix renames.
+pub(crate) const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
+
 /// The framework variable name the *generated* project will carry, built the
 /// way the CLI builds it.
 ///
@@ -112,7 +116,7 @@ pub(crate) fn write_fake_migrations_crate(root: &Path) {
 /// reported as such — `context::ENV_PREFIX_VAR` is spelled here because it is
 /// the one name no prefix renames, which `CLAUDE.md` sanctions per crate.
 pub(crate) fn scaffolded_var(namespace: &str, key: &str) -> String {
-    let prefix = std::env::var("NESTRS_ENV_PREFIX")
+    let prefix = std::env::var(ENV_PREFIX_VAR)
         .ok()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "NESTRS".to_owned());

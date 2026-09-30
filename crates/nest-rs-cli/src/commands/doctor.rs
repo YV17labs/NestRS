@@ -75,7 +75,7 @@ impl DoctorReport {
 #[derive(Debug)]
 pub(crate) struct EnvVar {
     pub name: String,
-    pub present: bool,
+    pub resolution: Resolution,
     /// Listed even when unset — the two backends an app is most likely to be
     /// missing. The rest are only worth a line when they *are* set.
     always_reported: bool,
@@ -120,7 +120,7 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
         .map(|&(namespace, key, always_reported)| {
             let name = crate::context::var_name(report.env_prefix(), namespace, key);
             EnvVar {
-                present: env_present(&cascade, &name),
+                resolution: resolve_variable(process_env, &cascade, &name),
                 name,
                 always_reported,
             }
@@ -130,9 +130,15 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
     print_report(&report);
 
     // An unusable prefix blocks like a missing toolchain does: every app in
-    // this environment aborts on the first name it builds.
+    // this environment aborts on the first name it builds. So does a variable
+    // the loader would refuse — a `_FILE` it cannot read, a value given twice:
+    // every app that reads it aborts its boot on it.
     let prefix_ok = !matches!(report.env_prefix_source, EnvPrefixSource::Invalid(_));
-    if !report.rustc_ok() || !report.cargo_ok || !prefix_ok {
+    let variables_ok = report
+        .env_vars
+        .iter()
+        .all(|var| !matches!(var.resolution, Resolution::Refused(_)));
+    if !report.rustc_ok() || !report.cargo_ok || !prefix_ok || !variables_ok {
         return Err(CliError::Anyhow(anyhow::anyhow!(
             "doctor found blocking issues — fix them before continuing"
         )));
@@ -201,13 +207,23 @@ fn print_report(report: &DoctorReport) {
         }
     }
     for var in &report.env_vars {
-        if var.present {
-            println!("  {}: set", var.name);
-        } else if var.always_reported {
-            println!("  {}: not set", var.name);
+        match &var.resolution {
+            Resolution::Set => println!("  {}: set", var.name),
+            Resolution::Unset if var.always_reported => println!("  {}: not set", var.name),
+            Resolution::Unset => {}
+            Resolution::Refused(reason) => {
+                println!(
+                    "  {}: an app started here fails its boot — {reason}",
+                    var.name
+                );
+            }
         }
     }
-    if report.env_vars.iter().all(|var| !var.present) {
+    if report
+        .env_vars
+        .iter()
+        .all(|var| var.resolution == Resolution::Unset)
+    {
         println!("  (none set — fine for bare HTTP apps on defaults)");
     }
     println!();
@@ -218,43 +234,100 @@ fn status_line(label: &str, ok: bool, detail: &str) {
     println!("  [{mark}] {label}: {detail}");
 }
 
-/// Whether an app started here would resolve `name` — the real process
-/// environment **or** the `.env` cascade.
-///
-/// Reading only `std::env` is the exact mistake `/database/migrations/` warns
-/// tool authors against, and it made doctor report `not set` for a variable the
-/// workspace's own generated `.env` defines — then reassure the reader that
-/// "none set" was fine.
-///
-/// The cascade is re-read here rather than borrowed from `nest-rs-config`: the
-/// CLI deliberately depends on no framework crate, so that `cargo install
-/// nest-rs-cli` stays independent of the version a project pins. Only presence
-/// is answered, so this stays a scan for the key, not a second value parser.
-fn env_present(cascade: &str, name: &str) -> bool {
-    present(process_env, cascade, name)
+/// What an app started here makes of one variable, as the loader's
+/// `ConfigService::setting` answers it: a value, nothing, or a boot error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// A value the app reads.
+    Set,
+    /// Nothing — the variable is unset, empty, or names a file holding only
+    /// line breaks.
+    Unset,
+    /// A boot error, and why — naming variables, never a value or what a file
+    /// holds.
+    Refused(String),
 }
 
-/// The process environment, as [`present`] and [`cascade_text`] read it — the
-/// one place doctor consults the shell it runs in, so every helper below takes
-/// its environment as an argument and a test hands it one.
+/// The process environment, as [`resolve_variable`] and [`cascade_text`] read
+/// it — the one place doctor consults the shell it runs in, so every helper
+/// below takes its environment as an argument and a test hands it one.
 fn process_env(var: &str) -> Option<OsString> {
     std::env::var_os(var)
 }
 
-/// [`env_present`] over a supplied process environment, answered as the loader
-/// answers it. `name` is set under either of its spellings — inline, or as the
-/// `<NAME>_FILE` path the loader reads it from — and **the deployment chooses
-/// the spelling**: when the process environment holds either, empty included,
-/// both are read from the process alone and the cascade is shadowed. An empty
-/// value is unset in either tier, and nothing is trimmed that the loader keeps.
-fn present(real: impl Fn(&str) -> Option<OsString>, cascade: &str, name: &str) -> bool {
-    let spellings = [name.to_owned(), format!("{name}_FILE")];
-    if spellings.iter().any(|var| real(var).is_some()) {
-        return spellings
-            .iter()
-            .any(|var| real(var).is_some_and(|value| !value.is_empty()));
+/// The most a `<NAME>_FILE` is read for — the loader's `read_material` bound.
+const MAX_MATERIAL_BYTES: u64 = 1024 * 1024;
+
+/// What an app started here makes of `name` — the real process environment
+/// (`real`) **or** the `.env` cascade (`cascade`), inline or through the file
+/// `<NAME>_FILE` names — answered as the loader answers it.
+///
+/// **The deployment chooses the spelling**: when the process environment holds
+/// either, empty included, both are read from the process alone and the
+/// cascade is shadowed; a value that is not UTF-8 there is unset, as the loader
+/// reads it. An empty value is unset in either tier, and nothing is trimmed
+/// that the loader keeps. Both spellings set is refused; a `_FILE` path has its
+/// surrounding whitespace trimmed and must name a regular file of at most a
+/// mebibyte holding UTF-8 text — a file holding only line breaks is unset.
+///
+/// **A mirror, not a borrow, and held to its original by execution.** The CLI
+/// depends on no framework crate, so that `cargo install nest-rs-cli` stays
+/// independent of the version a project pins; the conformance suite runs this
+/// function beside the loader over every shape a deployment can give, which is
+/// what keeps the two from drifting. It answered `set` for a `_FILE` naming an
+/// empty or missing file, for a value given twice, and for a shell value that
+/// is not UTF-8 — four answers the loader contradicts. Reading only `std::env`
+/// is the mistake `/database/migrations/` warns tool authors against: it made
+/// doctor report `not set` for a variable the workspace's own `.env` defines.
+pub fn resolve_variable(
+    real: impl Fn(&str) -> Option<OsString>,
+    cascade: &str,
+    name: &str,
+) -> Resolution {
+    let file_name = format!("{name}_FILE");
+    let deployment = real(name).is_some() || real(&file_name).is_some();
+    let read = |var: &str| {
+        let value = if deployment {
+            real(var).and_then(|value| value.into_string().ok())
+        } else {
+            cascade_value(cascade, var)
+        };
+        value.filter(|value| !value.is_empty())
+    };
+    match (read(name), read(&file_name)) {
+        (None, None) => Resolution::Unset,
+        (Some(_), None) => Resolution::Set,
+        (Some(_), Some(_)) => Resolution::Refused(format!(
+            "{name} is set together with {file_name}: give the value once, inline or as a path"
+        )),
+        (None, Some(path)) => file_resolution(
+            &file_name,
+            Path::new(path.trim_matches(|c: char| c.is_ascii_whitespace())),
+        ),
     }
-    spellings.iter().any(|var| file_defines(cascade, var))
+}
+
+/// The file `file_name` names, read as the loader reads it.
+fn file_resolution(file_name: &str, path: &Path) -> Resolution {
+    let unreadable = |why: &str| Resolution::Refused(format!("{file_name} names {why}"));
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return unreadable("a file that cannot be read"),
+    };
+    if !metadata.is_file() {
+        return unreadable("something other than a regular file");
+    }
+    if metadata.len() > MAX_MATERIAL_BYTES {
+        return unreadable("a file larger than a mebibyte, which no configuration value is");
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return unreadable("a file that cannot be read");
+    };
+    match String::from_utf8(bytes) {
+        Err(_) => unreadable("a file that is not UTF-8 text"),
+        Ok(text) if text.trim_end_matches(['\n', '\r']).is_empty() => Resolution::Unset,
+        Ok(_) => Resolution::Set,
+    }
 }
 
 /// Every cascade file rooted at `dir`, concatenated. Mirrors
@@ -296,12 +369,13 @@ fn cascade_environment(declared: Option<&str>) -> &'static str {
     }
 }
 
-/// The cascade's answer, split out so the line grammar (`export` prefix,
-/// comments, `KEY=` counting as unset) is unit-testable. The first assignment
-/// wins, as the loader's set-if-absent merge does — `cascade_text` concatenates
-/// the files most specific first — so an empty assignment in a more specific
-/// file unsets the key for every file after it.
-fn file_defines(contents: &str, name: &str) -> bool {
+/// The cascade's value for `name`, split out so the line grammar (`export`
+/// prefix, comments, quotes) is unit-testable. The first assignment wins, as
+/// the loader's set-if-absent merge does — `cascade_text` concatenates the files
+/// most specific first — so an empty assignment in a more specific file unsets
+/// the key for every file after it. A quoted value is unquoted as the loader
+/// unquotes it, since a `_FILE` path read from here is opened.
+fn cascade_value(contents: &str, name: &str) -> Option<String> {
     contents
         .lines()
         .filter_map(|line| {
@@ -312,10 +386,47 @@ fn file_defines(contents: &str, name: &str) -> bool {
             let line = line.strip_prefix("export ").unwrap_or(line);
             line.split_once('=')
                 .filter(|(key, _)| key.trim() == name)
-                .map(|(_, value)| value.trim())
+                .map(|(_, value)| unquote(value.trim()))
         })
         .next()
-        .is_some_and(|value| !matches!(value, "" | "\"\"" | "''"))
+}
+
+/// A `.env` value as the loader's `parse_value` reads it: single quotes taken
+/// literally, double quotes with `\n`, `\t`, `\r`, `\\` and `\"` expanded
+/// and any other escape kept verbatim, anything else as written.
+fn unquote(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let quoted = bytes.len() >= 2
+        && (bytes[0] == b'"' || bytes[0] == b'\'')
+        && bytes[bytes.len() - 1] == bytes[0];
+    if !quoted {
+        return value.to_owned();
+    }
+    let inner = &value[1..value.len() - 1];
+    if bytes[0] == b'\'' {
+        return inner.to_owned();
+    }
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 /// What asking `rustc` for its version produced.
@@ -451,6 +562,16 @@ mod tests {
     // B9: doctor read only `std::env`, so it answered `not set` for a variable
     // the workspace's own generated `.env` defines — and then reassured the
     // reader that "none set" was fine for their DB-backed app.
+    /// Whether the cascade text alone sets `name`.
+    fn file_defines(contents: &str, name: &str) -> bool {
+        cascade_value(contents, name).is_some_and(|value| !value.is_empty())
+    }
+
+    /// Whether an app reads a value for `name`.
+    fn present(real: impl Fn(&str) -> Option<OsString>, cascade: &str, name: &str) -> bool {
+        resolve_variable(real, cascade, name) == Resolution::Set
+    }
+
     #[test]
     fn a_cascade_file_counts_as_set() {
         assert!(file_defines(
@@ -539,15 +660,69 @@ mod tests {
     }
 
     /// A variable given as a file is set: the loader reads `<NAME>_FILE` as the
-    /// same variable, so doctor must not report it missing.
+    /// same variable, so doctor must not report it missing — when the file
+    /// holds a value, as the loader reads it.
     #[test]
     fn a_variable_given_as_a_file_is_reported_set() {
-        let cascade = "NESTRS_REDIS__URL_FILE=/run/secrets/redis-url\n";
-        assert!(present(real(&[]), cascade, "NESTRS_REDIS__URL"));
+        let dir = scratch("file-set");
+        let secret = dir.join("redis-url");
+        std::fs::write(&secret, "redis://x\n").expect("write");
+        let cascade = format!("NESTRS_REDIS__URL_FILE=\"{}\"\n", secret.display());
+        assert!(present(real(&[]), &cascade, "NESTRS_REDIS__URL"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A process environment holding `vars`, for [`present`].
-    fn real(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+    /// The four answers the audit found doctor giving against the loader: a
+    /// `_FILE` naming an empty file is unset, one naming a missing file is a
+    /// boot error, a value given twice is a boot error, and a shell value that
+    /// is not UTF-8 is unset.
+    #[test]
+    fn a_variable_is_answered_as_the_loader_reads_it() {
+        let dir = scratch("loader");
+        let empty = dir.join("empty");
+        std::fs::write(&empty, "\n\r\n").expect("write");
+        let missing = dir.join("missing");
+        let name = "NESTRS_SEAORM__URL";
+        let file = "NESTRS_SEAORM__URL_FILE";
+        let as_file = |path: &Path| real(&[(file, path.to_str().expect("a UTF-8 path"))]);
+
+        assert_eq!(
+            resolve_variable(as_file(&empty), "", name),
+            Resolution::Unset
+        );
+        let Resolution::Refused(reason) = resolve_variable(as_file(&missing), "", name) else {
+            panic!("a missing file fails the boot");
+        };
+        assert!(
+            reason.contains(file) && !reason.contains("missing"),
+            "{reason}"
+        );
+        assert!(matches!(
+            resolve_variable(real(&[(name, "postgres://x"), (file, "/run/x")]), "", name),
+            Resolution::Refused(reason) if reason.contains(name) && reason.contains(file)
+        ));
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let not_utf8 = |var: &str| (var == name).then(|| OsString::from_vec(vec![0xff, 0xfe]));
+            assert_eq!(
+                resolve_variable(not_utf8, "NESTRS_SEAORM__URL=postgres://x\n", name),
+                Resolution::Unset,
+                "the shell value shadows the cascade and reads as unset",
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A scratch directory unique to this process and `tag`.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nestrs-doctor-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    /// A process environment holding `vars`, for [`resolve_variable`].
+    fn real(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + use<> {
         let vars: Vec<(String, String)> = vars
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -564,12 +739,18 @@ mod tests {
     #[test]
     fn an_empty_shell_variable_shadows_the_cascade_file_spelling() {
         let cascade = "NESTRS_SEAORM__URL_FILE=/nonexistent\n";
-        assert!(!present(
-            real(&[("NESTRS_SEAORM__URL", "")]),
-            cascade,
-            "NESTRS_SEAORM__URL"
+        assert_eq!(
+            resolve_variable(
+                real(&[("NESTRS_SEAORM__URL", "")]),
+                cascade,
+                "NESTRS_SEAORM__URL"
+            ),
+            Resolution::Unset,
+        );
+        assert!(matches!(
+            resolve_variable(real(&[]), cascade, "NESTRS_SEAORM__URL"),
+            Resolution::Refused(_)
         ));
-        assert!(present(real(&[]), cascade, "NESTRS_SEAORM__URL"));
     }
 
     /// Emptiness is the loader's: a blank shell value is set, since the loader
@@ -586,10 +767,13 @@ mod tests {
             "",
             "NESTRS_REDIS__URL"
         ));
-        assert!(present(
-            real(&[("NESTRS_REDIS__URL_FILE", "/run/secrets/url")]),
-            "",
-            "NESTRS_REDIS__URL"
+        assert!(matches!(
+            resolve_variable(
+                real(&[("NESTRS_REDIS__URL_FILE", "/run/secrets/url")]),
+                "",
+                "NESTRS_REDIS__URL"
+            ),
+            Resolution::Refused(_)
         ));
     }
 

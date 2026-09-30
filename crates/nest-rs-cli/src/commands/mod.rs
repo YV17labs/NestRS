@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-mod doctor;
+pub(crate) mod doctor;
 mod generate;
 mod info;
 mod lint;

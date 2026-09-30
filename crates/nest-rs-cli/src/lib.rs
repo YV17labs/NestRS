@@ -7,13 +7,19 @@
 //! is the failure that matters, and a second implementation in the suite is how
 //! the two come to disagree without anyone noticing.
 //!
+//! The same holds for a mirror: `nestrs doctor` answers what an app makes of a
+//! variable without linking the loader, and the suite runs
+//! [`resolve_variable`] beside the loader it mirrors, so the two cannot drift
+//! apart unseen.
+//!
 //! Nothing here is an install surface: `nestrs` is reached with
 //! `cargo install --locked nest-rs-cli`, never with `cargo add`. So the seam is
-//! only what a second caller needs — [`lint`] and [`reserved_words`]; the rest
-//! is the binary's own and hidden from the docs.
+//! only what a second caller needs — [`lint`], [`reserved_words`] and
+//! [`resolve_variable`]; the rest is the binary's own and hidden from the docs.
 
 pub mod lint;
 
+pub use commands::doctor::{Resolution, resolve_variable};
 pub use naming::reserved_words;
 
 // The binary's own entry points. `pub` because `main.rs` is a separate target,

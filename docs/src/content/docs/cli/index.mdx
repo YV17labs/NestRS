@@ -349,7 +349,12 @@ Checks:
 
 - `rustc` ≥ 1.97 and `cargo` on `PATH`
 - whether the current directory sits inside a nestrs workspace
-- optional env vars (`NESTRS_SEAORM__URL`, `NESTRS_REDIS__URL`, …)
+- optional env vars (`NESTRS_SEAORM__URL`, `NESTRS_REDIS__URL`, …), read as an
+  app started in the same shell and directory would read them — the real
+  environment over the `.env` cascade, inline or through `<NAME>_FILE`. A value
+  the app would refuse at boot — a `_FILE` naming a file it cannot read, a
+  variable given both ways — is a blocking issue, and a `_FILE` naming a file
+  that holds nothing is `not set`.
 
 Use it after install and before running DB- or Redis-backed apps.
 

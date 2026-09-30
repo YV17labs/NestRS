@@ -83,6 +83,21 @@ impl WitnessTool {
         Ok(format!("hello {}", args.into_inner().name))
     }
 
+    /// Look up one person.
+    #[doc = concat!("Only ", "an admin may widen the search.")]
+    #[tool]
+    #[public]
+    async fn look_up_person(&self) -> Result<String, McpError> {
+        Ok("found".to_owned())
+    }
+
+    #[doc = concat!("Audit ", "the directory.")]
+    #[tool]
+    #[public]
+    async fn audit_directory(&self) -> Result<String, McpError> {
+        Ok("audited".to_owned())
+    }
+
     #[tool(
         description = "Report how the directory is stored. Stated on the attribute, with no \
                        doc comment above it."
@@ -145,10 +160,12 @@ async fn the_boot_checks_still_read_the_tool_names() {
     assert_eq!(
         names,
         [
+            "audit_directory",
             "count_people",
             "describe_storage",
             "greet_person",
-            "list_people"
+            "list_people",
+            "look_up_person",
         ],
         "static discovery survives the move into a private module — and the wire \
          name is the authored one, not the wrapper ident the expansion routes \
@@ -243,6 +260,26 @@ async fn the_doc_comment_becomes_the_description_a_model_reads() {
     assert!(
         body.contains("Count people"),
         "…and what that attribute stated survives the walk untouched: {body}",
+    );
+}
+
+/// A doc line written as a macro — `concat!`, `include_str!` — is part of the
+/// sentence. It was dropped for not being a string literal, so the model read
+/// half the prose in silence, and an operation documented only that way was
+/// refused as having no doc comment at all.
+#[tokio::test]
+async fn a_macro_valued_doc_line_is_part_of_the_description() {
+    let app = boot().await;
+    let session = open_session(app.http(), PATH, None).await;
+
+    let body = call_method(app.http(), PATH, &session, None, "tools/list", json!({})).await;
+    assert!(
+        body.contains("Look up one person. Only an admin may widen the search."),
+        "the macro-valued line joins the literal one: {body}",
+    );
+    assert!(
+        body.contains("Audit the directory."),
+        "a doc written only as a macro is a doc: {body}",
     );
 }
 

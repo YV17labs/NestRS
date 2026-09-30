@@ -83,8 +83,8 @@ use nest_rs_codegen::{
     Collision, Conditional, DispatchKeys, HostBorrow, PipeWrapper, Posture, PostureRules,
     await_if_async, cfg_attrs, force_guard_typeids, forwarded_arg_idents, generic_args,
     guard_capability_bounds, impl_self_ident, layer_deps, normalize_forwarded_args,
-    nth_generic_type, pipe_wrapper, reject_http_only_layers, require_str_lit, scoped_specs,
-    shared_receiver, snake_case, take_path_list, type_label,
+    nth_generic_type, pipe_wrapper, reject_http_only_layers, scoped_specs, shared_receiver,
+    snake_case, take_path_list, type_label,
 };
 
 /// The decorated methods of one authored `impl`, already partitioned by the
@@ -895,23 +895,56 @@ fn stated_keys(attr: &Attribute) -> syn::Result<Vec<String>> {
         .collect())
 }
 
-/// The method's doc comment, joined into the one sentence rmcp sends.
-fn doc_comment(attrs: &[Attribute]) -> Option<String> {
-    let lines: Vec<String> = attrs
+/// The method's doc comment, joined into the one sentence rmcp sends — as an
+/// expression, because rmcp takes one for `description`.
+///
+/// A literal when every line is one, which is the common case and the same
+/// sentence as ever. **A `#[doc = include_str!(…)]` or `#[doc = concat!(…)]`
+/// line is kept**, the whole sentence then emitted through `concat!`: it was
+/// dropped for not being a string literal, so a model was sent half the prose
+/// in silence — and a doc written only that way was refused as absent, telling
+/// the developer to write the doc comment they had written.
+fn doc_comment(attrs: &[Attribute]) -> Option<TokenStream2> {
+    let lines: Vec<&syn::Expr> = attrs
         .iter()
         .filter(|attr| attr.path().is_ident("doc"))
         .filter_map(|attr| match &attr.meta {
-            Meta::NameValue(value) => {
-                require_str_lit(&value.value, "tool", "description", "…").ok()
-            }
+            Meta::NameValue(value) => Some(&value.value),
             _ => None,
         })
-        .map(|literal| literal.value().trim().to_owned())
         .collect();
-
-    let joined = lines.join(" ");
-    let trimmed = joined.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    let literal = |line: &syn::Expr| match nest_rs_codegen::ungrouped_expr(line) {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(text),
+            ..
+        }) => Some(text.value().trim().to_owned()),
+        _ => None,
+    };
+    if lines.iter().all(|line| literal(line).is_some()) {
+        let joined = lines
+            .iter()
+            .filter_map(|line| literal(line))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let trimmed = joined.trim();
+        return (!trimmed.is_empty()).then(|| quote!(#trimmed));
+    }
+    let pieces: Vec<TokenStream2> = lines
+        .iter()
+        .filter_map(|line| match literal(line) {
+            Some(text) if text.is_empty() => None,
+            Some(text) => Some(quote!(#text)),
+            None => Some(quote!(#line)),
+        })
+        .collect();
+    let mut spaced = Vec::with_capacity(pieces.len() * 2);
+    for (index, piece) in pieces.into_iter().enumerate() {
+        if index > 0 {
+            spaced.push(quote!(" "));
+        }
+        spaced.push(piece);
+    }
+    Some(quote!(::core::concat!(#(#spaced),*)))
 }
 
 /// MCP's half of the shared posture grammar, per operation role so the refusal

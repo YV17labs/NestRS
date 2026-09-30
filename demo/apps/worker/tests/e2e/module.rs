@@ -1,124 +1,105 @@
-use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use nest_rs::core::{injectable, module};
-use nest_rs::queue::{JobProducerExt, processor, queue};
-use nest_rs::redis::{RedisConfig, RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker};
+use features::notifications::{Column, Entity, NotifyCommand, NotifyQueue};
+use features::testing::RedisDatabase;
+use nest_rs::core::module;
+use nest_rs::queue::JobProducerExt;
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisQueueProducer, RedisWorker};
 use nest_rs::schedule::Scheduler;
-use nest_rs::testing::TestApp;
-use serde::{Deserialize, Serialize};
+use nest_rs::testing::{EphemeralDatabase, HeadlessApp, TestApp};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
+use uuid::Uuid;
 use worker::WorkerModule;
 
-fn redis_url() -> String {
-    nest_rs::config::ConfigService::for_namespace("redis")
-        .get("URL")
-        .expect("a readable Redis URL")
-        .unwrap_or_else(|| "redis://127.0.0.1/".into())
+#[module(imports = [RedisModule::for_root(None), RedisQueueModule])]
+struct SuitesProducer;
+
+async fn notify(app: &HeadlessApp, org_id: Uuid) {
+    app.container()
+        .get::<RedisQueueProducer>()
+        .expect("RedisQueueModule bound the producer")
+        .push(
+            NotifyQueue,
+            NotifyCommand {
+                org_id,
+                message: format!("for {org_id}"),
+            },
+            None,
+        )
+        .await
+        .expect("enqueue a notification");
 }
 
-fn unique_tag() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("probe-{}-{}", std::process::id(), nanos)
+async fn notifications(conn: &DatabaseConnection, org_id: Uuid) -> u64 {
+    Entity::find()
+        .filter(Column::OrgId.eq(org_id))
+        .count(conn)
+        .await
+        .expect("count the org's notifications")
 }
-
-#[derive(Clone, Serialize, Deserialize)]
-struct ProbeCommand {
-    tag: String,
-}
-
-#[queue(name = "nestrs-e2e-probe", job = ProbeCommand)]
-struct ProbeQueue;
-
-static PROBE_TX: OnceLock<tokio::sync::mpsc::UnboundedSender<String>> = OnceLock::new();
-
-#[injectable]
-#[derive(Default)]
-struct ProbeConsumer;
-
-#[processor]
-impl ProbeConsumer {
-    #[process(queue = ProbeQueue, retries = 0)]
-    async fn handle(&self, job: ProbeCommand) -> anyhow::Result<()> {
-        if let Some(tx) = PROBE_TX.get() {
-            let _ = tx.send(job.tag);
-        }
-        Ok(())
-    }
-}
-
-#[module(
-    imports = [RedisModule::for_root(RedisConfig { url: redis_url(), ..Default::default() }), RedisQueueModule],
-    providers = [ProbeConsumer],
-)]
-struct ProbeModule;
 
 #[tokio::test]
-async fn worker_app_boots_and_processes_an_enqueued_job_through_real_redis() {
+async fn the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suites() {
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("create + migrate a throwaway database");
     let worker = TestApp::builder()
         .module::<WorkerModule>()
+        .provide_arc(db.connection())
+        .provide(RedisDatabase::WorkerRuns.config())
         .build_headless()
         .await
-        .expect("WorkerModule boots and connects to Redis");
-    let worker_queue = worker
+        .expect("WorkerModule boots against the throwaway database and its own Redis database");
+    let queue = worker
         .spawn_transport(RedisWorker::new())
         .await
         .expect("WorkerModule's RedisWorker configures against Redis");
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let _ = PROBE_TX.set(tx);
-
-    let app = TestApp::builder()
-        .module::<ProbeModule>()
+    let suites = TestApp::builder()
+        .module::<SuitesProducer>()
         .build_headless()
         .await
-        .expect("ProbeModule boots and connects to Redis");
+        .expect("a producer boots on the suites' Redis database");
+    let foreign = Uuid::now_v7();
+    notify(&suites, foreign).await;
+    let ours = Uuid::now_v7();
+    notify(&worker, ours).await;
 
-    let queue = app
-        .spawn_transport(RedisWorker::new())
-        .await
-        .expect("RedisWorker configures");
-
-    let tag = unique_tag();
-    let conn = app
-        .container()
-        .get::<RedisQueueProducer>()
-        .expect("RedisQueueModule bound the producer over the shared connection");
-    conn.push(ProbeQueue, ProbeCommand { tag: tag.clone() }, None)
-        .await
-        .expect("enqueue onto the probe queue");
-
-    let saw_our_job = tokio::time::timeout(Duration::from_secs(15), async {
-        while let Some(received) = rx.recv().await {
-            if received == tag {
-                return true;
-            }
+    let conn = db.connection();
+    let mut ran = false;
+    for _ in 0..60 {
+        if notifications(&conn, ours).await == 1 {
+            ran = true;
+            break;
         }
-        false
-    })
-    .await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let stolen = notifications(&conn, foreign).await;
 
-    queue.shutdown().await.expect("RedisWorker stops cleanly");
-    worker_queue
+    queue
         .shutdown()
         .await
         .expect("WorkerModule's RedisWorker stops cleanly");
 
-    assert!(
-        matches!(saw_our_job, Ok(true)),
-        "the enqueued job was consumed end-to-end via Redis",
+    assert!(ran, "the worker ran the job enqueued on its own database");
+    assert_eq!(
+        stolen, 0,
+        "the worker ran a job enqueued on the suites' database"
     );
 }
 
 #[tokio::test]
 async fn worker_app_binds_the_lock_its_one_replica_purge_claims_through() {
+    let db = EphemeralDatabase::create::<migrations::Migrator>()
+        .await
+        .expect("create + migrate a throwaway database");
     let worker = TestApp::builder()
         .module::<WorkerModule>()
+        .provide_arc(db.connection())
         .build_headless()
         .await
-        .expect("WorkerModule boots against Postgres and Redis");
+        .expect("WorkerModule boots against the throwaway database and Redis");
     let scheduler = worker
         .spawn_transport(Scheduler::new())
         .await

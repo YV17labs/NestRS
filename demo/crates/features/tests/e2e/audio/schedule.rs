@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use features::audio::{AudioQueue, AudioScheduleModule, TranscodeCommand};
+use features::testing::RedisDatabase;
 use nest_rs::core::{injectable, module};
 use nest_rs::queue::processor;
 use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule};
@@ -60,6 +61,7 @@ async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
 
     let worker = TestApp::builder()
         .module::<CountingWorkerHarness>()
+        .provide(RedisDatabase::AudioSchedule.config())
         .build_headless()
         .await
         .expect("the counting worker boots against Redis");
@@ -70,6 +72,7 @@ async fn the_every_5s_audio_task_fires_and_lands_on_the_queue() {
 
     let schedule = TestApp::builder()
         .module::<ScheduleHarness>()
+        .provide(RedisDatabase::AudioSchedule.config())
         .build_headless()
         .await
         .expect("the schedule harness boots against Redis + storage");

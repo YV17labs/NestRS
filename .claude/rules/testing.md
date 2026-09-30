@@ -156,14 +156,36 @@ section does not bind it.
   named for that test alone, since a worker in one process takes another
   test's jobs; a test that pushes where no worker drains uses a name or a
   key unique to its run, and deletes what it filed.
+- **Redis's sixteen databases are split between the two workspaces, because
+  both suites run on one Redis.** 0 is the developer's — what `nestrs run dev`
+  and a running app drain — and the framework suite's shared one, on queue
+  names of its own; 1 is the demo suites' shared one, named by the committed
+  `demo/.env.test`, and nothing drains it; 2 to 8 are the demo's per-test
+  databases; 9 to 15 the framework's. Each half is checked where its list is
+  written — the framework's at compile time, the demo's by `config()` before
+  anything connects — so a test taking the other half's database never runs,
+  and a `FLUSHDB` in one never reaches a job the other filed.
+- **A demo test cannot name its own queue, so its database is the isolation.**
+  `audio` and `notifications` are the product's names, fixed by its
+  `#[queue]`s, and every worker booted over a product module drains them. So a
+  demo test that starts a worker, or a scheduler whose tasks enqueue, takes a
+  database of its own from `features::testing::RedisDatabase` — an enum with
+  one entry per test, named for it, so two entries on one database is a
+  duplicate-discriminant error — and seeds it
+  (`.provide(RedisDatabase::X.config())`) into every app of the test that must
+  meet: the producer and the worker alike. A test that only pushes stays on the
+  suites' database, where nothing takes its job; what it filed stays there,
+  since deleting it would mean writing apalis's keys outside its API. Until
+  7.0 the worker's e2e booted `WorkerModule` on the database `.env` names, and
+  ran whatever a developer's api or another suite had queued, against the main
+  Postgres (`module::the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suites`).
 - **A suite that boots over SeaORM runs on an `EphemeralDatabase`**, never on
   the database `<PREFIX>_SEAORM__URL` names: it creates one, seeds its
   connection (`provide_arc(db.connection())`), which short-circuits the pool
   `SeaOrmModule` would open, and drops it with the guard. The live suite's users
   test seeded the main database until 7.0 — it failed on an unmigrated one, and
-  left rows behind whenever it failed before its own cleanup. The demo worker's
-  e2e still boots `WorkerModule` over the main database's pool, writing nothing
-  there: the one open member.
+  left rows behind whenever it failed before its own cleanup, and the worker's
+  e2e booted `WorkerModule` over the main database's pool; no member is open.
 - **A test that needs its own database or user seeds its config**
   (`TestApp::provide`) rather than pinning a `for_root` base: the suite's
   own `<PREFIX>_REDIS__URL` outranks a pin, field by field, and would move

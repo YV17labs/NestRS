@@ -189,11 +189,12 @@ struct NotificationsWorkerHarness;
 
 #[tokio::test]
 async fn publishing_a_post_notifies_the_org_through_the_worker() {
-    let (db, app) = boot().await;
+    let (db, app) = boot_on(RedisDatabase::PostsNotify).await;
 
     let worker = TestApp::builder()
         .module::<NotificationsWorkerHarness>()
         .provide_arc(db.connection())
+        .provide(RedisDatabase::PostsNotify.config())
         .build_headless()
         .await
         .expect("the notifications worker boots against the ephemeral DB and Redis");

@@ -6528,9 +6528,11 @@ version = "7.0.0"
 dependencies = [
  "anyhow",
  "features",
+ "migrations",
  "nest-rs",
- "serde",
+ "sea-orm",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

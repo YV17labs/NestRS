@@ -11,19 +11,27 @@ mod users;
 
 use api::ApiModule;
 use nest_rs::authn::JwtConfig;
-use nest_rs::testing::{EphemeralDatabase, TestApp};
+use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
 use poem::http::{StatusCode, header};
 use poem::test::TestResponse;
 use serde_json::json;
 use uuid::Uuid;
 
-pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID};
+pub(crate) use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, ORG_ID, RedisDatabase};
 
 pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
+    boot_with(TestApp::builder()).await
+}
+
+pub(crate) async fn boot_on(redis: RedisDatabase) -> (EphemeralDatabase, TestApp) {
+    boot_with(TestApp::builder().provide(redis.config())).await
+}
+
+async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
     let db = EphemeralDatabase::create::<migrations::Migrator>()
         .await
         .expect("create + migrate a throwaway database");
-    let app = TestApp::builder()
+    let app = builder
         .module::<ApiModule>()
         .provide_arc(db.connection())
         .provide(JwtConfig {

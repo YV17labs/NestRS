@@ -290,6 +290,47 @@ let app = TestApp::builder()
 
 Drive non-HTTP transports through `HeadlessApp::spawn_transport`.
 
+### A worker drains its whole Redis database
+
+A `RedisWorker` takes every job on the queues its module declares, from
+whoever filed it on the logical database its Redis URL names — your running
+`nestrs run dev`, another test's process, a job a previous run left behind.
+The queue names are your `#[queue]`s, so a test cannot rename them; what it
+can own is the database. Two settings keep a suite apart:
+
+- **The suites' default is not your app's.** A committed `.env.test`,
+  loaded only under the test profile, points every suite at a database
+  nothing drains, so what a test enqueues never reaches the app you are
+  running:
+
+  ```bash title=".env.test"
+  NESTRS_REDIS__URL=redis://redis:6379/1
+  ```
+
+- **A test that starts a worker takes a database of its own**, and seeds it
+  into every app of the test that must meet — the one that enqueues and the
+  one that drains. A seeded `RedisConfig` outranks the environment, so both
+  land on it whatever the suite's URL says:
+
+  ```rust title="apps/worker/tests/e2e/module.rs (from the demo, abridged)"
+  let worker = TestApp::builder()
+      .module::<WorkerModule>()
+      .provide_arc(db.connection())
+      .provide(RedisDatabase::WorkerRuns.config())
+      .build_headless()
+      .await
+      .expect("WorkerModule boots against the throwaway database and its own Redis database");
+  let queue = worker
+      .spawn_transport(RedisWorker::new())
+      .await
+      .expect("WorkerModule's RedisWorker configures against Redis");
+  ```
+
+  `RedisDatabase` is the demo's list, in `features::testing`: an enum with one
+  entry per such test, so two entries on one database is a compile error, and
+  `config()` rewrites the suite's URL to that index. Redis ships sixteen, so the list is short: one
+  database per test that starts a worker, not one per test.
+
 ## Test telemetry
 
 `with_test_telemetry()` calls `OpenTelemetry::init_for_tests` — a

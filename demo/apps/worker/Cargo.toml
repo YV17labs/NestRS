@@ -12,9 +12,10 @@ anyhow.workspace = true
 
 [dev-dependencies]
 nest-rs.workspace = true
-# The e2e test declares a probe `#[queue]` of its own; `serde` derives the
-# payload it pushes onto it.
-serde.workspace = true
+features = { workspace = true, features = ["test-support"] }
+migrations.workspace = true
+sea-orm.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

@@ -90,12 +90,13 @@ async fn ensure_bucket(http: &reqwest::Client) {
 
 #[tokio::test]
 async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
-    let (_db, app) = boot().await;
+    let (_db, app) = boot_on(RedisDatabase::AudioUpload).await;
     let http = reqwest::Client::new();
     ensure_bucket(&http).await;
 
     let worker = TestApp::builder()
         .module::<AudioWorkerHarness>()
+        .provide(RedisDatabase::AudioUpload.config())
         .build_headless()
         .await
         .expect("the audio worker boots against Redis and storage");
@@ -196,12 +197,13 @@ async fn audio_upload_transcode_and_result_round_trips_through_real_storage() {
 
 #[tokio::test]
 async fn audio_multipart_upload_and_streamed_download_round_trip() {
-    let (_db, app) = boot().await;
+    let (_db, app) = boot_on(RedisDatabase::AudioMultipart).await;
     let http = reqwest::Client::new();
     ensure_bucket(&http).await;
 
     let worker = TestApp::builder()
         .module::<AudioWorkerHarness>()
+        .provide(RedisDatabase::AudioMultipart.config())
         .build_headless()
         .await
         .expect("the audio worker boots against Redis and storage");

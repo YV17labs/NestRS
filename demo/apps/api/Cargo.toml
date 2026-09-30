@@ -16,7 +16,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 nest-rs.workspace = true
-# Enables `features::testing` (dev keypair, org id, token minting) for e2e.
+# Enables `features::testing` (dev keypair, org id, tokens, Redis databases) for e2e.
 features = { workspace = true, features = ["test-support"] }
 poem = { workspace = true, features = ["test"] }
 migrations = { workspace = true }

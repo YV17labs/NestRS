@@ -1,5 +1,0 @@
-error: #[queue] takes no `prefix`: one queue per runtime key is not offered — the Redis backend drains every queue from a list of its own, polled by each worker replica, so a queue per key would cost Redis a poller per key and leave an autoscaler no single list to read. Declare one queue with `name` and carry the key in the job
- --> tests/integration/diagnostics/queue_takes_no_prefix.rs:7:9
-  |
-7 | #[queue(prefix = "tenant", job = String)]
-  |         ^^^^^^

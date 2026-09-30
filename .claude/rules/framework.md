@@ -1661,8 +1661,10 @@ the kubelet's 30 s rather than at it.
   replica one fetch of refusals; a checkpoint is one key per job, cleared at its
   terminal outcome.
 
-  **One queue per runtime key is refused on this backend, not deferred.**
-  `#[queue(prefix = …)]` is a compile error naming why: apalis 0.7 binds one
+  **One queue per runtime key is not offered on this backend, not deferred.**
+  `#[queue]` takes `name` and `job` and nothing else — `prefix` never shipped in a
+  release, so it gets the unknown-key refusal every other stray key gets, and the
+  reason lives here: apalis 0.7 binds one
   storage to one namespace and one worker to one storage, an idle worker still
   polls Redis on every interval — about 58 commands a second each at the default
   interval, measured, so a thousand tenants would cost Redis some 58 000 a second
@@ -1670,8 +1672,8 @@ the kubelet's 30 s rather than at it.
   instance would fill its own. The key rides in the job. A backend whose consumer
   reads many keys through one fetch, with one aggregate signal for an autoscaler
   — Redis streams with consumer groups, a later apalis — could offer it: an owner
-  question, which is why the sentence names the Redis backend's facts rather than
-  an impossibility.
+  question, which is why this paragraph names the Redis backend's facts rather
+  than an impossibility.
 
   **`#[input]` stays re-exported at the queue edge and stays off the queue
   scaffolds — both on purpose.** Unknown-key rejection is the right default

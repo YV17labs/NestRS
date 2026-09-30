@@ -8,8 +8,9 @@
 //! compile error rather than a job that never drains.
 //!
 //! **One queue per declaration.** A queue per runtime key — a prefix every key
-//! extends into a queue of its own — is not offered: the attribute refuses
-//! `prefix`, naming why, and a key that varies at runtime rides in the job.
+//! extends into a queue of its own — is not offered: the attribute takes a name
+//! and a job type and nothing else, and a key that varies at runtime rides in
+//! the job.
 
 use crate::Job;
 

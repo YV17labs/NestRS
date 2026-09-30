@@ -223,9 +223,6 @@ rolls out (step 7).
   the value came from the environment or was pinned in code; the poll's refusal
   is quoted under
   [Concurrency and scaling](/queue/scaling/#what-fails-if-you-get-it-wrong).
-- **A queue per runtime key** — `#[queue(prefix = ..)]` — does not compile: 7.0
-  offers none, since each queue is a list every worker replica polls. Declare one
-  queue and carry the key in the job.
 - **A Redis URL ending in `#insecure`** fails the boot — it
   ``asks to skip certificate verification (`#insecure`), which is refused`` —
   where 6.x never spoke TLS to Redis at all. Trust the authority that signed

@@ -16,17 +16,6 @@ use syn::{Expr, Ident, Item, LitStr, Token, Type, parse_macro_input};
 /// Every key `#[queue]` takes, in the order its unknown-key refusal lists them.
 const KEYS: [&str; 2] = ["name", "job"];
 
-/// The key 6.x offered for a queue per runtime key, refused by name rather than
-/// as unknown: a developer writing it is owed the reason it is gone and what to
-/// write instead.
-const PREFIX: &str = "prefix";
-
-/// Why `#[queue]` takes no `prefix`, in the facts a reader can check.
-const NO_PREFIX: &str = "#[queue] takes no `prefix`: one queue per runtime key is not offered — the \
-     Redis backend drains every queue from a list of its own, polled by each worker replica, so a \
-     queue per key would cost Redis a poller per key and leave an autoscaler no single list to \
-     read. Declare one queue with `name` and carry the key in the job";
-
 pub(crate) fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as QueueArgs);
     let item = match parse_macro_input!(input as Item) {
@@ -121,9 +110,6 @@ impl Parse for QueueArgs {
             // the key rather than dying on syn's `` expected `=` `` — and a bare
             // *unknown* key still reads as unknown rather than as missing a value.
             let spelled = key.to_string();
-            if spelled == PREFIX {
-                return Err(syn::Error::new(key.span(), NO_PREFIX));
-            }
             if !KEYS.contains(&spelled.as_str()) {
                 return Err(syn::Error::new(
                     key.span(),

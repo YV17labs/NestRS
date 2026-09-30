@@ -131,7 +131,10 @@ impl CrudDeclaration {
 
 /// A write op that carries an input type generates only when that type is
 /// present — its absence (when the op was explicitly requested) is a hard
-/// error, not a silently dropped op.
+/// error, not a silently dropped op. **And the mirror image**: an input type
+/// declared for an op `ops` leaves out is two declarations disagreeing, and
+/// discarding one of them is the ignored argument the rules call silence — so
+/// it is refused at the type, naming both remedies.
 fn resolve_write_op<'a>(
     wanted: bool,
     ty: Option<&'a Path>,
@@ -149,7 +152,17 @@ fn resolve_write_op<'a>(
             ),
         ));
     }
-    Ok(if wanted { ty } else { None })
+    if let (false, Some(ty)) = (wanted, ty) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            format!(
+                "{} names the input of an op `ops` leaves out — list `{key}` in `ops` to \
+                 generate it, or drop `{key} = …`",
+                crate::args::site("crud", Some(key)),
+            ),
+        ));
+    }
+    Ok(ty)
 }
 
 /// Every key `#[crud]` takes, in declaration order — the list the unknown-key
@@ -457,6 +470,25 @@ mod tests {
         // Single-word entities are unchanged — no schema churn for `users` &co.
         let single: syn::Path = syn::parse_quote!(User);
         assert_eq!(singular_of(&single), "user");
+    }
+
+    // The mirror of an op listed without its input: an input declared for an op
+    // `ops` excludes was dropped without a word — two declarations disagreeing,
+    // one ignored.
+    #[test]
+    fn an_input_type_for_an_excluded_op_is_refused() {
+        let cfg = parse(quote! {
+            service = svc, entity = E, output = O, create = C, update = U, ops = [list, get]
+        })
+        .expect("the arguments parse");
+        let Err(refusal) = cfg.generated_ops() else {
+            panic!("an input type for an excluded op is refused");
+        };
+        let refusal = refusal.to_string();
+        assert!(
+            refusal.contains("`create`") && refusal.contains("an op `ops` leaves out"),
+            "{refusal}",
+        );
     }
 
     // No `ops` ⇒ back-compatible auto mode: with both input types present every

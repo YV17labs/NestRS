@@ -319,6 +319,25 @@ mod tests {
         assert!(err.to_string().contains("update"), "names the op: {}", err);
     }
 
+    // The mirror image at this site too: an input type for an op `ops`
+    // excludes is refused, never dropped.
+    #[test]
+    fn an_input_type_for_an_excluded_op_fails_to_expand() {
+        let item: ItemImpl = parse_quote! { impl Things {} };
+        let err = crud(
+            quote! {
+                service = svc, entity = E, output = Thing, update = UpdateThing, ops = [list]
+            },
+            item,
+        )
+        .expect_err("an input type for an excluded op must fail to expand");
+        assert!(
+            err.to_string().contains("`update`"),
+            "names the op: {}",
+            err
+        );
+    }
+
     // The valid form — a write op paired with its input type — expands and
     // emits the operation.
     #[test]

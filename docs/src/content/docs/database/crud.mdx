@@ -118,7 +118,9 @@ impl OrgsController {}
   generated input types (bare `CreateOrg` / `UpdateOrg`, not `…Dto`). List only
   the operations a resource has with `ops = [list, get]`; omit `ops` for all
   five. A create/update op requires its input type **and** the service's
-  `Creatable`/`Updatable` impl, or the build fails — never a silent no-op.
+  `Creatable`/`Updatable` impl, or the build fails — never a silent no-op. The
+  mirror holds too: an input type for an op `ops` leaves out fails the build
+  rather than being dropped, since the two declarations disagree.
 - `paginate` defaults to `cursor` — every generated list is keyset-paginated
   (next cursor in `x-next-cursor` on REST, `first`/`after` arguments on
   GraphQL). `paginate = none` opts out into the full collection (backstopped

@@ -178,33 +178,96 @@ where
     }
 }
 
+/// How long the final telemetry flush may hold the exit, every provider at once.
+///
+/// The last of the three bounded steps on the way down, after the transports'
+/// window and the shutdown hooks' budget (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`,
+/// which tabulates the sum): 20 + 5 + 3 seconds by default, under the 30 a
+/// Kubernetes pod is given before `SIGKILL`. Three seconds is ample for a
+/// collector that answers — a final batch is one request per signal — and a
+/// collector that does not answer is the case the bound exists for.
+///
+/// **The providers flush concurrently, each on a thread of its own**, because
+/// the SDK's `shutdown` blocks and bounds itself at five seconds per provider:
+/// in turn, a silent collector held the exit for fifteen. What is still
+/// exporting at the bound is abandoned — its thread ends with the process — and
+/// said on stderr, naming the provider.
+pub const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 impl Drop for OpenTelemetry {
     fn drop(&mut self) {
         #[cfg(feature = "otlp")]
         {
-            // Bounded by the SDK rather than here: each provider's `shutdown()`
-            // waits at most five seconds for its final export (opentelemetry_sdk
-            // 0.32 — `shutdown_with_timeout(5 s)` for traces and logs, a fixed
-            // five in the metrics `PeriodicReader`), so a collector that stopped
-            // answering delays the exit by fifteen seconds at most and never
-            // holds it. `otlp::tests` pins the tracer's.
-            //
-            // A failed final flush loses telemetry. `Drop` can't return, and
-            // tracing may itself be mid-teardown, so report to stderr directly.
-            if let Some(p) = self.tracer_provider.take()
-                && let Err(e) = p.shutdown()
-            {
-                eprintln!("{}: tracer provider shutdown failed: {e}", crate::TARGET);
+            type Shutdown = Box<dyn FnOnce() -> opentelemetry_sdk::error::OTelSdkResult + Send>;
+
+            // `Drop` can't return, and tracing may itself be mid-teardown, so
+            // every failure here goes to stderr directly. A failed or abandoned
+            // final flush loses telemetry, and says so.
+            let deadline = std::time::Instant::now() + FLUSH_TIMEOUT;
+            let mut flushes: Vec<(&'static str, Shutdown)> = Vec::new();
+            if let Some(p) = self.tracer_provider.take() {
+                flushes.push((
+                    "tracer",
+                    Box::new(move || p.shutdown_with_timeout(FLUSH_TIMEOUT)),
+                ));
             }
-            if let Some(p) = self.meter_provider.take()
-                && let Err(e) = p.shutdown()
-            {
-                eprintln!("{}: meter provider shutdown failed: {e}", crate::TARGET);
+            // The metrics provider ignores the timeout it is handed and waits
+            // its reader's fixed five seconds (opentelemetry_sdk 0.32), which is
+            // why the bound is enforced here rather than trusted to the SDK.
+            if let Some(p) = self.meter_provider.take() {
+                flushes.push((
+                    "meter",
+                    Box::new(move || p.shutdown_with_timeout(FLUSH_TIMEOUT)),
+                ));
             }
-            if let Some(p) = self.logger_provider.take()
-                && let Err(e) = p.shutdown()
-            {
-                eprintln!("{}: logger provider shutdown failed: {e}", crate::TARGET);
+            if let Some(p) = self.logger_provider.take() {
+                flushes.push((
+                    "logger",
+                    Box::new(move || p.shutdown_with_timeout(FLUSH_TIMEOUT)),
+                ));
+            }
+
+            let (done, settled) = std::sync::mpsc::channel();
+            let mut pending: Vec<&'static str> = Vec::new();
+            for (provider, shutdown) in flushes {
+                let done = done.clone();
+                let spawned = std::thread::Builder::new()
+                    .name(format!("otel-flush-{provider}"))
+                    .spawn(move || {
+                        let _ = done.send((provider, shutdown()));
+                    });
+                match spawned {
+                    Ok(_) => pending.push(provider),
+                    Err(e) => eprintln!(
+                        "{}: {provider} provider not flushed: no thread to flush it on: {e}",
+                        crate::TARGET,
+                    ),
+                }
+            }
+            drop(done);
+
+            while !pending.is_empty() {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                match settled.recv_timeout(left) {
+                    Ok((provider, outcome)) => {
+                        pending.retain(|p| *p != provider);
+                        if let Err(e) = outcome {
+                            eprintln!(
+                                "{}: {provider} provider shutdown failed: {e}",
+                                crate::TARGET
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "{}: final flush abandoned after {} ms, still exporting: {}",
+                            crate::TARGET,
+                            FLUSH_TIMEOUT.as_millis(),
+                            pending.join(", "),
+                        );
+                        break;
+                    }
+                }
             }
         }
     }
@@ -290,6 +353,85 @@ mod tests {
     fn parse_log_filter_accepts_a_valid_directive() {
         // The unset/default path still works — a valid filter parses cleanly.
         assert!(parse_log_filter("debug,hyper=warn").is_ok());
+    }
+
+    /// A collector that takes the connection and never answers used to hold
+    /// the exit for fifteen seconds — each provider's own five, in turn. The
+    /// three now flush at once, held to [`FLUSH_TIMEOUT`] between them.
+    #[cfg(feature = "otlp")]
+    #[test]
+    fn a_collector_that_never_answers_holds_the_final_flush_to_the_bound_for_all_three_providers() {
+        use opentelemetry::logs::{LogRecord as _, Logger as _, LoggerProvider as _};
+        use opentelemetry::metrics::MeterProvider as _;
+        use opentelemetry::trace::{Tracer as _, TracerProvider as _};
+        use opentelemetry_otlp::{
+            LogExporter, MetricExporter, Protocol, SpanExporter, WithExportConfig,
+        };
+
+        // Bound and never accepted: the kernel completes the handshake, so each
+        // export's request goes out and its answer never comes.
+        let collector = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+        let base = format!("http://{}", collector.local_addr().expect("its address"));
+
+        let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_batch_exporter(
+                SpanExporter::builder()
+                    .with_http()
+                    .with_endpoint(format!("{base}/v1/traces"))
+                    .with_protocol(Protocol::HttpBinary)
+                    .build()
+                    .expect("the span exporter builds"),
+            )
+            .build();
+        tracer_provider.tracer("pin").in_span("queued", |_| {});
+
+        let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+            .with_reader(
+                opentelemetry_sdk::metrics::PeriodicReader::builder(
+                    MetricExporter::builder()
+                        .with_http()
+                        .with_endpoint(format!("{base}/v1/metrics"))
+                        .with_protocol(Protocol::HttpBinary)
+                        .build()
+                        .expect("the metric exporter builds"),
+                )
+                .build(),
+            )
+            .build();
+        meter_provider
+            .meter("pin")
+            .u64_counter("queued")
+            .build()
+            .add(1, &[]);
+
+        let logger_provider = opentelemetry_sdk::logs::SdkLoggerProvider::builder()
+            .with_batch_exporter(
+                LogExporter::builder()
+                    .with_http()
+                    .with_endpoint(format!("{base}/v1/logs"))
+                    .with_protocol(Protocol::HttpBinary)
+                    .build()
+                    .expect("the log exporter builds"),
+            )
+            .build();
+        let logger = logger_provider.logger("pin");
+        let mut record = logger.create_log_record();
+        record.set_body("queued".into());
+        logger.emit(record);
+
+        let guard = OpenTelemetry {
+            tracer_provider: Some(tracer_provider),
+            meter_provider: Some(meter_provider),
+            logger_provider: Some(logger_provider),
+        };
+        let started = std::time::Instant::now();
+        drop(guard);
+        let took = started.elapsed();
+
+        assert!(
+            took >= FLUSH_TIMEOUT && took < FLUSH_TIMEOUT + std::time::Duration::from_secs(1),
+            "the three providers were held to one bound between them, took {took:?}",
+        );
     }
 
     #[test]

@@ -282,11 +282,11 @@ mod tests {
         }
     }
 
-    /// `OpenTelemetry`'s `Drop` trusts each provider's `shutdown()` to stop
-    /// waiting on its final export — five seconds in opentelemetry_sdk 0.32 —
-    /// rather than bounding the flush itself. Pinned against a collector that
-    /// takes the connection and never answers, so an SDK bump that stretches or
-    /// drops that bound fails here instead of holding every stopping replica.
+    /// The SDK's own bound on one provider's final export — five seconds in
+    /// opentelemetry_sdk 0.32. `OpenTelemetry`'s `Drop` no longer relies on it
+    /// (it holds all three to [`crate::FLUSH_TIMEOUT`] itself), but an abandoned
+    /// flush thread still runs until this bound, so an SDK bump that drops it
+    /// fails here rather than leaving such a thread exporting forever.
     #[test]
     fn a_collector_that_never_answers_holds_the_final_flush_no_longer_than_the_sdk_bound() {
         use opentelemetry::trace::Tracer as _;

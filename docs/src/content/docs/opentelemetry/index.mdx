@@ -77,12 +77,16 @@ pub struct AuthModule;
 
 Two pieces, one rule. `OpenTelemetry::init(name)?` installs the global
 subscriber and must run **before** `App::builder()`. The returned guard flushes
-batch exporters on Drop, so it must live until `main` returns. The SDK bounds
-that flush: each of the three providers waits at most five seconds for its
-final export, so a collector that stopped answering delays the exit by fifteen
-seconds at most and never holds it.
-`OpenTelemetryModule` then mounts the per-request HTTP interceptor and exposes
-the meter as a provider.
+batch exporters on Drop, so it must live until `main` returns. That flush is
+bounded: the three providers export at once, and what is still exporting after
+three seconds (`FLUSH_TIMEOUT`) is abandoned with a line on stderr naming it,
+so a collector that stopped answering delays the exit by three seconds and
+never holds it. Three is the last step of the
+[shutdown budget](/fundamentals/lifecycle/#ordering-and-failure), which sums
+under a Kubernetes pod's 30-second grace.
+`OpenTelemetryModule` then exposes the meter as a provider; it mounts no
+per-request layer, since what it adds to a span reaches every edge through
+the framework's span constructor.
 
 ## Configure the exporter
 

@@ -38,7 +38,7 @@ mod otlp;
 
 pub use config::{DEFAULT_METRIC_INTERVAL, LogFormat, OpenTelemetryConfig};
 pub use error::OpenTelemetryError;
-pub use init::OpenTelemetry;
+pub use init::{FLUSH_TIMEOUT, OpenTelemetry};
 #[cfg(feature = "otlp")]
 pub use meter::OpenTelemetryMeter;
 pub use module::OpenTelemetryModule;

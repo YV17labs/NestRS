@@ -328,11 +328,17 @@ impl DecoratorPair {
         let Item::Impl(mut item) = item else {
             return quote!(#expansion #input);
         };
+        // By the last segment: an exported marker (`#[nest_rs::http::http_code]`)
+        // is consumed path-qualified as well as bare, and one left on the item
+        // would add its own "unread" refusal to the one being reported.
         let consumed = |attr: &syn::Attribute| {
+            let Some(last) = attr.path().segments.last() else {
+                return false;
+            };
             helpers
                 .iter()
                 .chain(CONSUMED_BY_EVERY_HALF.iter())
-                .any(|name| attr.path().is_ident(name))
+                .any(|name| last.ident == name)
         };
         item.attrs.retain(|attr| !consumed(attr));
         for entry in &mut item.items {

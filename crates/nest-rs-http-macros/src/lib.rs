@@ -214,50 +214,55 @@ pub fn crud(args: TokenStream, input: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(crud::entry(args, input).into()).into()
 }
 
-/// `#[http_code(N)]` — override the response status (`100..=999`). Passthrough
-/// marker consumed by `#[routes]`. Mutually exclusive with `#[redirect]`.
+/// `#[http_code(N)]` — override the response status (`100..=999`). A marker
+/// consumed by `#[routes]`, written bare or path-qualified. Mutually exclusive
+/// with `#[redirect]`.
 ///
 /// # Expands to
 ///
-/// Nothing on its own — the attribute entry returns the item unchanged. The
-/// real effect lives in `#[routes]`, which drains the marker and wraps the
+/// On its own, a compile error: `#[routes]` removes every marker it reads, so
+/// one that reaches this entry sits outside a `#[routes]` impl or under an
+/// alias, and would shape nothing. The real effect lives in `#[routes]`, which drains the marker and wraps the
 /// handler's success path so the emitted wrapper sets the status:
 /// `__response.set_status(StatusCode::from_u16(N)?)` (the `Err` path keeps its
 /// own status).
 #[proc_macro_attribute]
-pub fn http_code(args: TokenStream, item: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
+pub fn http_code(_args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(response::unread("http_code", item).into()).into()
 }
 
 /// `#[response_header("name", "value")]` — append a header to the response.
-/// Stacks with `#[http_code]` and `#[redirect]`; repeatable. Passthrough
-/// marker consumed by `#[routes]`.
+/// Stacks with `#[http_code]` and `#[redirect]`; repeatable. A marker consumed
+/// by `#[routes]`, written bare or path-qualified.
 ///
 /// # Expands to
 ///
-/// Nothing on its own — returns the item unchanged. `#[routes]` drains the
+/// On its own, a compile error naming `#[routes]` (see `#[http_code]`).
+/// `#[routes]` drains the
 /// marker and emits a header write on the handler's success path:
 /// `__response.headers_mut().insert(HeaderName::from_static("name"),
 /// HeaderValue::from_static("value"))` — `set-cookie` uses `.append()` so it
 /// stacks instead of overriding.
 #[proc_macro_attribute]
-pub fn response_header(args: TokenStream, item: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
+pub fn response_header(_args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(response::unread("response_header", item).into()).into()
 }
 
 /// `#[redirect("url"[, code])]` — discard the handler's payload and return a
 /// redirect. Status defaults to `307` and must be in `300..=399`. Mutually
 /// exclusive with `#[http_code]`. The decorated method's body must be empty
-/// — `#[routes]` does not call it. Passthrough marker consumed by `#[routes]`.
+/// — `#[routes]` does not call it. A marker consumed by `#[routes]`, written
+/// bare or path-qualified.
 ///
 /// # Expands to
 ///
-/// Nothing on its own — returns the item unchanged. `#[routes]` drains the
+/// On its own, a compile error naming `#[routes]` (see `#[http_code]`).
+/// `#[routes]` drains the
 /// marker and replaces the handler body entirely (the user method is never
 /// called): it builds a redirect response, e.g.
 /// `Response::builder().status(StatusCode::from_u16(307)?).header(LOCATION,
 /// "url").finish()`, then applies any stacked `#[response_header]`.
 #[proc_macro_attribute]
-pub fn redirect(args: TokenStream, item: TokenStream) -> TokenStream {
-    ::nest_rs_codegen::reroot(response::passthrough(args, item).into()).into()
+pub fn redirect(_args: TokenStream, item: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(response::unread("redirect", item).into()).into()
 }

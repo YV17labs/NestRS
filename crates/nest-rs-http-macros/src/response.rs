@@ -1,7 +1,8 @@
 //! Per-handler response shapers: `#[http_code]`, `#[response_header]`, and
-//! `#[redirect]`. These are **passthrough markers** consumed by `#[routes]` —
-//! the proc-macro entries below expand to nothing, they exist only so rustc
-//! recognizes the attribute name and so they have a documentation home.
+//! `#[redirect]`. These are **markers** consumed by `#[routes]` — the
+//! proc-macro entries exist so rustc recognizes the attribute name, so they
+//! have a documentation home, and so a marker nothing consumed is refused
+//! ([`unread`]) rather than expanding to the item in silence.
 //!
 //! The actual response transformation is emitted by `#[routes]` around the
 //! generated handler wrapper (see [`take_response_shapers`] and
@@ -24,13 +25,42 @@ fn is_multi_value_header(name: &str) -> bool {
     matches!(name, "set-cookie")
 }
 
-/// Empty passthrough shared by every response-shaper attribute entry point.
-/// `#[routes]` consumes the attribute; if one survives to rustc (the
-/// attribute is on something that is not a `#[routes]` method), this
-/// expands to the original item unchanged so the error message blames
-/// the missing `#[routes]`, not an unknown attribute.
-pub(crate) fn passthrough(_args: TokenStream, input: TokenStream) -> TokenStream {
-    input
+/// Whether `attr` is the shaper `name`, written bare (`#[http_code(201)]`) or
+/// path-qualified (`#[nest_rs::http::http_code(201)]`).
+///
+/// The last segment, because the three are exported attribute macros and a
+/// path is a legitimate way to write one. Matching the bare ident alone let a
+/// qualified shaper survive `#[routes]`, expand to nothing, and leave the route
+/// answering `200` with no header and no `Location` — while OpenAPI documented
+/// the same `200`.
+pub(crate) fn is_shaper(attr: &Attribute, name: &str) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == name)
+}
+
+/// The entry point of every shaper — which runs **only** when `#[routes]` did
+/// not consume the marker, since `#[routes]` expands first and removes each one
+/// it reads. So reaching here is the refusal: the marker sits outside a
+/// `#[routes]` impl, or under a name `#[routes]` cannot recognise (an import
+/// alias), and in either case it would shape nothing. It used to return the
+/// item unchanged, accepting any argument list and answering the route with
+/// its default status. The item is kept beside the error so nothing else about
+/// it is reported as missing.
+pub(crate) fn unread(shaper: &str, input: TokenStream) -> TokenStream {
+    let error = syn::Error::new(
+        proc_macro2::Span::call_site(),
+        format!(
+            "`#[{shaper}]` shapes a handler's response and is read by `#[routes]`, which did not \
+             read this one — it sits outside a `#[routes]` impl, or under a name `#[routes]` \
+             cannot recognise (an import alias). Write it on a verb-tagged method of a \
+             `#[routes]` impl as `#[{shaper}(…)]`, bare or path-qualified"
+        ),
+    )
+    .to_compile_error();
+    let input = TokenStream2::from(input);
+    quote!(#error #input).into()
 }
 
 /// Parsed response shapers for one handler. All three are composable
@@ -92,7 +122,7 @@ pub(crate) fn take_response_shapers(
 ) -> syn::Result<ResponseShapers> {
     let mut out = ResponseShapers::default();
 
-    while let Some(idx) = attrs.iter().position(|a| a.path().is_ident("http_code")) {
+    while let Some(idx) = attrs.iter().position(|a| is_shaper(a, "http_code")) {
         if out.http_code.is_some() {
             return Err(syn::Error::new_spanned(
                 &attrs[idx],
@@ -103,10 +133,7 @@ pub(crate) fn take_response_shapers(
         out.http_code = Some(http_code_value(&attr)?);
     }
 
-    while let Some(idx) = attrs
-        .iter()
-        .position(|a| a.path().is_ident("response_header"))
-    {
+    while let Some(idx) = attrs.iter().position(|a| is_shaper(a, "response_header")) {
         let attr = attrs.remove(idx);
         let (name, value) = parse_header_args(&attr)?;
         validate_header_name(&name)?;
@@ -114,7 +141,7 @@ pub(crate) fn take_response_shapers(
         out.headers.push((name, value));
     }
 
-    while let Some(idx) = attrs.iter().position(|a| a.path().is_ident("redirect")) {
+    while let Some(idx) = attrs.iter().position(|a| is_shaper(a, "redirect")) {
         if out.redirect.is_some() {
             return Err(syn::Error::new_spanned(
                 &attrs[idx],

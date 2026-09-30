@@ -37,6 +37,20 @@ impl DecoratorProbeController {
         Err(ForbiddenError)
     }
 
+    /// The shapers written path-qualified, as an exported attribute macro may
+    /// be. `#[routes]` read only the bare spelling, so these survived it,
+    /// expanded to nothing, and the route answered `200` with neither.
+    #[post("/qualified")]
+    #[nest_rs_http::http_code(201)]
+    #[nest_rs_http::response_header("x-probe", "yes")]
+    async fn qualified(&self) -> &'static str {
+        "created"
+    }
+
+    #[get("/qualified-redirect")]
+    #[nest_rs_http::redirect("https://example.com", 301)]
+    async fn qualified_redirect(&self) {}
+
     #[get("/xml-as-json")]
     #[response_header("content-type", "application/json")]
     async fn xml_as_json(&self) -> Response {
@@ -111,4 +125,16 @@ async fn response_header_overrides_a_handler_set_header() {
     let resp = client.get("/xml-as-json").send().await;
     resp.assert_status_is_ok();
     resp.assert_header_all("content-type", ["application/json"]);
+}
+
+#[tokio::test]
+async fn a_path_qualified_shaper_shapes_the_response() {
+    let client = boot().await;
+    let resp = client.post("/qualified").send().await;
+    resp.assert_status(StatusCode::CREATED);
+    resp.assert_header("x-probe", "yes");
+
+    let resp = client.get("/qualified-redirect").send().await;
+    resp.assert_status(StatusCode::MOVED_PERMANENTLY);
+    resp.assert_header(header::LOCATION, "https://example.com");
 }

@@ -1,0 +1,31 @@
+error: `#[http_code]` shapes a handler's response and is read by `#[routes]`, which did not read this one — it sits outside a `#[routes]` impl, or under a name `#[routes]` cannot recognise (an import alias). Write it on a verb-tagged method of a `#[routes]` impl as `#[http_code(…)]`, bare or path-qualified
+  --> tests/integration/diagnostics/response_shaper_left_unread.rs:14:5
+   |
+14 |     #[nest_rs_http::http_code("not a status at all")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `nest_rs_http::http_code` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `#[response_header]` shapes a handler's response and is read by `#[routes]`, which did not read this one — it sits outside a `#[routes]` impl, or under a name `#[routes]` cannot recognise (an import alias). Write it on a verb-tagged method of a `#[routes]` impl as `#[response_header(…)]`, bare or path-qualified
+  --> tests/integration/diagnostics/response_shaper_left_unread.rs:15:5
+   |
+15 |     #[nest_rs_http::response_header(42)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `nest_rs_http::response_header` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `#[redirect]` shapes a handler's response and is read by `#[routes]`, which did not read this one — it sits outside a `#[routes]` impl, or under a name `#[routes]` cannot recognise (an import alias). Write it on a verb-tagged method of a `#[routes]` impl as `#[redirect(…)]`, bare or path-qualified
+  --> tests/integration/diagnostics/response_shaper_left_unread.rs:16:5
+   |
+16 |     #[nest_rs_http::redirect(42, 42, 42)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `nest_rs_http::redirect` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `#[redirect]` shapes a handler's response and is read by `#[routes]`, which did not read this one — it sits outside a `#[routes]` impl, or under a name `#[routes]` cannot recognise (an import alias). Write it on a verb-tagged method of a `#[routes]` impl as `#[redirect(…)]`, bare or path-qualified
+  --> tests/integration/diagnostics/response_shaper_left_unread.rs:27:5
+   |
+27 |     #[moved("https://example.com", 301)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `moved` (in Nightly builds, run with -Z macro-backtrace for more info)

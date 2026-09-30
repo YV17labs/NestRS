@@ -663,7 +663,6 @@ nestrs:<concern>:<structure>[:<member>]
 - **`<member>` is what varies** — a queue, a job's id, an occurrence, a client's
   bucket. A queue name holds no `:`, so a queue is one level.
 
-**It is the fourth column of a table that had three.** The crate's subject, its
 **One concern puts its member first, and it is the queue:**
 
 ```
@@ -683,6 +682,7 @@ schedule's claims and leases — keeps `<structure>` third. The `keys` join's
 `a_member_first_key_is_the_shape_the_rule_states` holds every declared key to
 one of the two, and a member-first concern to this paragraph.
 
+**It is the fourth column of a table that had three.** The crate's subject, its
 span target and its `#[config]` namespace are one derivation, and a datastore key
 is the same derivation reaching one more surface — so from a key a reader names
 the port crate that owns it, and from that crate derives the key:
@@ -747,7 +747,7 @@ in keys of its own and reported upstream.
 | | `…:settled:<job_id>` | how the job ended, so a later delivery is answered as the first was |
 | | `…:cancelled:<job_id>` | a cancel's promise that the job never starts |
 | | `…:checkpoints:<job_id>` | the progress the job saved |
-| | `…:attempts:<job_id>` | the attempts started at the job, less those a drain handed back unrun — how the port counts an attempt whose process died, which the envelope never could |
+| | `…:attempts:<job_id>` | the attempts started at the job, less those handed back without an answer (cut by a drain, or unread) — how the port counts an attempt whose process died, which the envelope never could |
 | | `…:unique:<key>` | the job holding a unique key |
 | | `…:throttle` | the attempts started in the current window, less those handed back unread (a `Defer`, taken back only inside the window that counted it) — one per queue, since one method drains a queue |
 | throttler | `nestrs:throttler:buckets:<subject>` | one client's current window |

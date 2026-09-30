@@ -158,8 +158,8 @@ will catch what you skipped.
 **Every local build is one feature union**, and that is a blind spot of
 its own: `--workspace` unifies every member's features, and the hygiene
 witness enables all of them. A crate that compiles only because a sibling
-turned a feature on passes both — `nest-rs-authz` shipped in 7.0 naming the
-optional `nest-rs-core` from its always-compiled engine, so `authz` alone
+turned a feature on passes both — `nest-rs-authz`'s 7.0 engine, before its
+release, named the optional `nest-rs-core` from always-compiled code, so `authz` alone
 and every headless `seaorm` build failed. The local half of the gate is the
 `dependencies` join in `nest-rs-conformance`: every path rooted at an
 **optional** dependency sits below a `#[cfg(feature = …)]` whose feature

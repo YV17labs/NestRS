@@ -53,16 +53,7 @@ impl Validate for IssuerConfig {
 
 impl Config for IssuerConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
-        let clients = match env.setting("CLIENTS")? {
-            Some(raw) => serde_json::from_str(&raw.value).map_err(|e| {
-                if raw.from_file() {
-                    raw.refuse("does not hold a JSON list of clients")
-                } else {
-                    raw.refuse(e)
-                }
-            })?,
-            None => base.clients,
-        };
+        let clients = env.json("CLIENTS")?.unwrap_or(base.clients);
         let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(base.default_org_id);
         Ok(Self {
             clients,
@@ -76,12 +67,14 @@ impl Config for IssuerConfig {
   `NESTRS_ISSUER__CLIENTS` keeps `base.clients` rather than resetting to an
   empty list, so a deployment can override the org id without also wiping the
   clients a `for_root` pinned in code.
-- **`clients` is a JSON array in a single variable.** `env.setting("CLIENTS")`
-  returns the raw string with the spelling that supplied it, and
-  `serde_json::from_str` does the structured parse — refusing through
-  `raw.refuse(…)`, so the boot error names `NESTRS_ISSUER__CLIENTS` or
-  `NESTRS_ISSUER__CLIENTS_FILE`, whichever was set. serde's reason may quote
-  the input, so it is kept only for an inline value. The element type is the framework's
+- **`clients` is a JSON array in a single variable.** `env.json("CLIENTS")`
+  decodes it as the field's type, inline or through `NESTRS_ISSUER__CLIENTS_FILE`,
+  and a value that does not decode fails the boot with `ConfigError::Decode`,
+  naming whichever spelling was set, where the value failed, the kind of value
+  found and the type expected — never the value, since a mistyped list of
+  clients holds their secrets. Decoding it with `serde_json` in the `from_env`
+  would quote it back, which is why a conformance join refuses that in the
+  framework and the demo. The element type is the framework's
   `RegisteredClient<P>` (from `nest-rs-authn`); the app fills the generic
   `payload` — here `Uuid`, the org each client acts as — so the framework
   owns the credential shape and the app owns only what it authorizes on.

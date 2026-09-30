@@ -249,9 +249,10 @@ lost, but the work done so far is, unless the method keeps a
 that bound this: a scale-down stabilization window at least as long as a job
 runs (`advanced.horizontalPodAutoscalerConfig.behavior.scaleDown.stabilizationWindowSeconds`
 on the `ScaledObject`, and a `cooldownPeriod` for the last replica), and a pod
-`terminationGracePeriodSeconds` above the drain window,
-`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, raised as far as a job's length
-when jobs are long.
+`terminationGracePeriodSeconds` at least eight seconds above the drain window,
+`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` — the shutdown hooks and the
+telemetry flush follow the drain — raised as far as a job's length when jobs are
+long.
 
 <Aside type="caution">
 **Scaling to zero strands work the trigger cannot see.** A job held back — a

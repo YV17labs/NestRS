@@ -98,8 +98,9 @@ apps:
           stabilizationWindowSeconds: 600
 ```
 
-— and keep `terminationGracePeriodSeconds` above
-`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, raising both toward a job's
+— and keep `terminationGracePeriodSeconds` at least 8s above
+`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, for the shutdown hooks and the
+telemetry flush that follow the drain, raising both toward a job's
 length when jobs are long (see [Graceful shutdown](#graceful-shutdown)).
 
 `autoscaling` and `keda` on the same app is a render error: KEDA owns an HPA of

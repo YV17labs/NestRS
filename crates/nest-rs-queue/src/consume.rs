@@ -205,7 +205,8 @@ pub enum AttemptOutcome {
     /// back **as it was stored** — [`Delivery::retry_envelope`] answers it
     /// unchanged — to be delivered again once `after` has passed, and
     /// acknowledge this delivery; a backend that counted an attempt start for
-    /// it takes the start back, as for any delivery handed back unrun.
+    /// it takes the start back, as for any delivery handed back without an
+    /// answer.
     ///
     /// A rolling deploy is the case: an older replica meets a newer producer's
     /// job, and the job waits for a replica of the newer release instead of
@@ -288,8 +289,8 @@ impl Delivery {
     /// attempt that never returned spends the budget as a failed one does, and
     /// a job past it is dead-lettered without running, saying how many never
     /// returned. A backend counts a start when an attempt is admitted, and takes
-    /// it back when it hands the job back unrun — a drain — since that attempt
-    /// never ran to anything.
+    /// it back when it hands the job back without an answer — cut by a drain,
+    /// or unread — since that attempt never returned.
     pub fn with_attempts_started(mut self, started: u32) -> Self {
         self.unfinished = started.saturating_sub(self.attempt);
         self.attempt = self.attempt.max(started);

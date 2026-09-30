@@ -53,7 +53,7 @@ does not use, each keyed by the job id a push returns.
 | `nestrs:queue:<queue>:settled:<job_id>` | That the job reached its outcome, and which one | the framework |
 | `nestrs:queue:<queue>:cancelled:<job_id>` | That a cancel promised the job never starts | the framework |
 | `nestrs:queue:<queue>:checkpoints:<job_id>` | The progress the job saved | the framework |
-| `nestrs:queue:<queue>:attempts:<job_id>` | How many attempts at the job have started, less those a drain handed back unrun | the framework |
+| `nestrs:queue:<queue>:attempts:<job_id>` | How many attempts at the job have started, less those handed back without an answer — cut by a drain, or unread | the framework |
 | `nestrs:queue:<queue>:unique:<key>` | The id of the job holding a unique key | the framework |
 | `nestrs:queue:<queue>:throttle` | How many attempts of the queue's method started in the current window, less those handed back unread | the framework |
 
@@ -182,7 +182,8 @@ start as permits free inside it. What still runs when the window closes is inter
 — its `queue.job` line filed with `outcome="cancelled"` — and its job handed
 back to the queue inside the reserve, so the orchestrator's
 `SIGKILL` never lands on a job the worker still holds — give the pod a grace
-period above the window. A retry's next attempt is already on the schedule, so
+period at least eight seconds above the window, for the shutdown hooks' five and
+the telemetry flush's three that follow it. A retry's next attempt is already on the schedule, so
 it holds nothing up. An attempt that outlives even the reserve is said at
 `error` and left in flight, and runs again elsewhere once its lease lapses.
 

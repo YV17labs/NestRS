@@ -18,7 +18,7 @@
 //! | `…:settled:<job>` | how it ended | its terminal outcome | a second delivery could no longer come |
 //! | `…:cancelled:<job>` | the cancel | a cancel that promised it never starts | its delivery, and past it |
 //! | `…:checkpoints:<job>` | its saved progress | a save | its terminal outcome |
-//! | `…:attempts:<job>` | the attempts started and not handed back unrun | its first attempt | its terminal outcome |
+//! | `…:attempts:<job>` | the attempts started and not handed back without an answer | its first attempt | its terminal outcome |
 //! | `…:unique:<key>` | the job holding the key | its push | it settles, or is cancelled |
 //! | `…:throttle` | the attempts started in the current window | the window's first start | the window ends |
 //!
@@ -90,7 +90,8 @@ pub(crate) const CANCELLED: &str = "nestrs:queue:{queue}:cancelled:{job}";
 /// The progress a job saved through its `Checkpoint`.
 pub(crate) const CHECKPOINTS: &str = "nestrs:queue:{queue}:checkpoints:{job}";
 
-/// How many attempts at a job have started and not been handed back unrun —
+/// How many attempts at a job have started and not been handed back without
+/// an answer —
 /// the count the port reads an attempt that never returned from, since the
 /// envelope only counts the ones that answered.
 pub(crate) const ATTEMPTS: &str = "nestrs:queue:{queue}:attempts:{job}";

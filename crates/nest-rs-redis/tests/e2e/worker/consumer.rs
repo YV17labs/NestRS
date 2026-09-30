@@ -921,11 +921,44 @@ struct StalledModule;
 const STALL_BUDGET: Duration = Duration::from_secs(1);
 const STALL: Duration = Duration::from_secs(3);
 
+/// How long a stalled queue has, once Redis answers at once again, to run what
+/// the stall claimed and to answer every copy of it.
+const SETTLE: Duration = Duration::from_secs(15);
+
+/// What `queue` still holds for a worker, read in one script so no fetch or
+/// sweep moves a job between the two counts: the jobs waiting on `active`, and
+/// the jobs in flight across every consumer apalis knows.
+async fn left_behind(conn: &mut RedisConnection, queue: &str) -> (i64, i64) {
+    redis::Script::new(
+        r"
+local held = 0
+for _, set in ipairs(redis.call('ZRANGE', KEYS[2], 0, -1)) do
+  held = held + redis.call('SCARD', set)
+end
+return {redis.call('LLEN', KEYS[1]), held}
+",
+    )
+    .key(format!("{}:active", crate::namespace(queue)))
+    .key(format!("{}:consumers", crate::namespace(queue)))
+    .invoke_async(conn)
+    .await
+    .expect("the queue's waiting and in-flight counts")
+}
+
 /// Redis answers a replica's fetch three budgets late. The fetch has already
 /// claimed the job into the replica's flight when it runs, so a wait cut at the
 /// budget would leave the job there — never run, never swept while the replica
 /// lives, gone from the list an autoscaler reads. The fetch waits for its answer
 /// instead, and the job runs, once, as soon as Redis answers again.
+///
+/// The same wait holds apalis's heartbeat, which its worker sends from the loop
+/// the fetch runs in: a stall past the orphan threshold lets a sweep — a peer's,
+/// or this replica's own — put the job it claimed back on the queue, beside the
+/// delivery its fetch still makes. That copy is the guard's to answer, from the
+/// settled mark, without running it. So the test waits for the queue to settle
+/// rather than reading it at the instant the job ran: it passes only once the
+/// job has run, nothing of the queue waits or sits in flight, and the job has
+/// still run once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fetch_redis_answers_past_the_budget_still_runs_the_jobs_it_claimed() {
     let proxy = SlowProxy::start(STALL).await;
@@ -958,9 +991,18 @@ async fn a_fetch_redis_answers_past_the_budget_still_runs_the_jobs_it_claimed() 
     tokio::time::sleep(STALL + STALL_BUDGET).await;
     proxy.slow_down(false);
 
-    crate::wait_until(Duration::from_secs(15), || STALLED.finished(run) == 1).await;
-    let waiting = crate::waiting("nestrs-e2e-fetch-stalled").await;
+    let mut admin = crate::connect().await;
+    let deadline = tokio::time::Instant::now() + SETTLE;
+    let (waiting, in_flight) = loop {
+        let left = left_behind(&mut admin, "nestrs-e2e-fetch-stalled").await;
+        if (STALLED.finished(run) == 1 && left == (0, 0)) || tokio::time::Instant::now() > deadline
+        {
+            break left;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     replica.worker.shutdown().await.expect("clean shutdown");
+    crate::forget("nestrs-e2e-fetch-stalled").await;
 
     assert_eq!(
         STALLED.finished(run),
@@ -969,6 +1011,7 @@ async fn a_fetch_redis_answers_past_the_budget_still_runs_the_jobs_it_claimed() 
     );
     assert_eq!(STALLED.of(run).len(), 1, "and ran once");
     assert_eq!(waiting, 0, "nothing waits on the queue behind it");
+    assert_eq!(in_flight, 0, "and nothing is left in flight");
 }
 
 // --- a record apalis cannot decode ----------------------------------------------

@@ -337,7 +337,11 @@ where
 /// the jobs it answers with, so a fetch cut at the budget still runs and leaves
 /// them in this replica's flight, where nothing ever runs them while it lives.
 /// Its heartbeat and its acknowledgements ride the same handle — apalis gives a
-/// storage one connection — and answer late rather than not at all. A
+/// storage one connection — and answer late rather than not at all. They share
+/// its loop too, one call at a time, so a stall past the orphan threshold holds
+/// the heartbeat as long, and a sweep — a peer's, or this replica's own — puts
+/// the jobs in flight back on the queue while the fetch still delivers them:
+/// a second delivery the guard answers, where a cut fetch strands them. A
 /// delivery's own hand-backs go through a storage on the budgeted connection:
 /// each is safe to cut (`hand_back`).
 ///

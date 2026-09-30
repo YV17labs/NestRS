@@ -887,7 +887,12 @@ guard's admission (a lease, a throttle start, an attempt) wait for their answer
 on the same socket through `RedisConnection::without_budget`, and end when the
 socket's liveness — keepalive, and `TCP_USER_TIMEOUT` on Linux, both at the
 budget and never under a second — says Redis is gone rather than slow. Neither is a port call a net sits
-over. So every net sits above the budget of
+over. The price is apalis's, and it is paid on purpose: its worker sends the
+heartbeat from the one loop the fetch waits in, so a stall past `orphan_after`
+holds the heartbeat as long and a sweep — a peer's, or the replica's own — puts
+the replica's in-flight jobs back on the queue while the fetch still delivers
+them. A second delivery is the guard's to answer; a claim cut at the budget is
+nobody's. So every net sits above the budget of
 each adapter the framework ships, and a test pins the order wherever both
 constants are visible: `nest-rs-redis` asserts its default connect budget is
 below `HIT_TIMEOUT` and below the queue port's net. Past a net every member fails
@@ -1633,7 +1638,8 @@ drain.
   **Delivery is at least once, and a redelivery runs once.** apalis delivers a
   job twice in ways no setting of its public API removes — its startup sweep
   reclaims every registered consumer's in-flight jobs, a live peer's included; a
-  replica that misses its heartbeats is swept; an acknowledgement is lost in a
+  replica that misses its heartbeats is swept, by a peer or by its own sweep,
+  which reads its own heartbeat like any other; an acknowledgement is lost in a
   drain — so the worker guards every delivery in keys of its own (*A key a
   datastore holds*, above). An attempt runs only under the job's lease (`SET NX
   PX`, renewed every third of the lease while it runs); its terminal outcome
@@ -1643,7 +1649,7 @@ drain.
   without running, answered as the first was. **The guard may delay a job, never
   lose one**, and each of its steps is one Lua script or one command. Each replica
   consumes under an apalis worker id of its own — the host, then a UUID v7 — and
-  the periodic sweep takes a peer's jobs only once it has missed its heartbeats
+  the periodic sweep takes a replica's jobs only once it has missed its heartbeats
   for `orphan_after` (ten of them, by default): only apalis's startup sweep uses
   *now*, and the guard is what makes that one harmless.
 

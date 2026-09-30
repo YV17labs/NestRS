@@ -67,7 +67,8 @@ Delivery is **at least once**. Two replicas never fetch the same job from
 second delivery three ways — a replica **starting** sweeps up to ten times its
 method's `concurrency` of its peers' in-flight jobs back onto the queue (apalis
 sweeps with a cutoff of *now*, which matches the living too), a replica whose
-heartbeat falls behind the orphan threshold has its jobs swept by a peer, and an
+heartbeat falls behind the orphan threshold has its jobs swept — by a peer, or
+by its own periodic sweep, which reads its heartbeat like any other — and an
 acknowledgement can be lost on its way to Redis.
 
 So each delivery takes the job's **lease** before the attempt runs, and renews
@@ -137,7 +138,11 @@ nobody: fetched jobs in a live replica's flight, never run and never swept. They
 end when Redis answers, or when the socket learns Redis is gone rather than slow:
 keepalive probes after the budget idle and, on Linux, `TCP_USER_TIMEOUT` at the
 budget — each a second at the least. apalis's heartbeat and acknowledgements share the fetch's connection and
-wait the same way. What a delivery does when a call fails:
+wait the same way — and its loop: apalis sends one call at a time, so a stall
+that outlasts the orphan threshold holds the heartbeat as long, and the jobs the
+replica holds in flight are swept back onto the queue while its fetch still
+delivers the ones it claimed. That is a second delivery, which the guard answers,
+and never a job left in flight. What a delivery does when a call fails:
 
 | The call that failed | What happens to the job | The line, on `nest_rs::queue` |
 |---|---|---|
@@ -145,15 +150,16 @@ wait the same way. What a delivery does when a call fails:
 | handing a job back | apalis files its stored record again, due at once — the attempt it was fetched at, or its next one when the filing landed after all — or a sweep does, when Redis refuses apalis too | `job not handed back; …`, `error` |
 | renewing the lease | the attempt runs on, and the renewal is tried again | `job lease not renewed; retrying`, `warn` |
 | writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
-| the acknowledgement | stays in the replica's flight until a replica starts and sweeps it — a live replica's is never taken by the periodic sweep — and is answered by its settled mark without running; the marks of the jobs settled lately are kept a week for it | `job acknowledgement lost; …`, `error` |
+| the acknowledgement | stays in the replica's flight until a replica starts and sweeps it — a live replica's is never taken by the periodic sweep while its heartbeat keeps up — and is answered by its settled mark without running; the marks of the jobs settled lately are kept a week for it | `job acknowledgement lost; …`, `error` |
 
 A fetch that fails is retried at the next poll. When its connection failed
 under it, Redis may have run it all the same, and the jobs it claimed then wait
 in this replica's in-flight set until a replica starts and sweeps them back —
 the `warn` says so. A heartbeat that fails is retried on its next tick, and a
 scan of the schedule after a backoff doubling up to thirty seconds; each is said
-at `warn`. A heartbeat that keeps failing past the orphan threshold lets a peer
-take the replica's jobs — the case the lease exists for.
+at `warn`. A heartbeat that keeps failing, or waits behind a stall, past the
+orphan threshold lets a sweep take the replica's jobs — a peer's, or its own —
+the case the lease exists for.
 
 A push, a cancel and a checkpoint's read or save fail within one budget of Redis
 going silent too: none sends a second command after one that got no answer, so

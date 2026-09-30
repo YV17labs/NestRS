@@ -135,18 +135,35 @@ lifecycle treat failure differently, and deliberately:
   message naming the provider, method, and phase. Nothing is listening
   yet, so a failed warm-up never leaves a half-started server accepting
   traffic.
-- **Shutdown is exhaustive.** The three teardown phases run every hook
-  even if one fails — a failure is logged at `error` on the
-  `nest_rs::lifecycle` target and the next hook still runs, so one
-  provider's botched cleanup can't skip another's.
-- **Shutdown is bounded.** A hook still running after five seconds
-  (`SHUTDOWN_HOOK_TIMEOUT`) is abandoned: it is dropped where it waits, so
-  what it had not done stays undone, a `warn` names its phase, provider,
-  method and module, and the next hook runs. Five is the margin a Kubernetes
-  pod's default 30-second grace leaves after the HTTP transport's 25-second
-  [shutdown window](/http/configuration/#shutdown), so one hook that hangs
-  spends that margin and no more. The bound reaches a hook that awaits; one
-  that blocks its thread is past any timer's reach.
+- **Shutdown is exhaustive.** The three teardown phases start every hook
+  even if one fails or panics — either is logged at `error` on the
+  `nest_rs::lifecycle` target, naming the hook, and the next hook still
+  runs, so one provider's botched cleanup can't skip another's. (At init a
+  panic aborts the boot like an error does, with the same sentence naming
+  the hook.)
+- **Shutdown is bounded — once, for all of it.** The three phases share one
+  five-second budget (`SHUTDOWN_HOOKS_TIMEOUT`), not five seconds each: a
+  hook still waiting when it is spent is abandoned — dropped where it waits,
+  so what it had not done stays undone — and a `warn` names its phase,
+  provider, method and module. Every hook after it still starts, and is
+  polled once: one that finishes without waiting (a count logged, a buffer
+  handed to a channel) finishes, one that waits is abandoned at once, with
+  its own `warn`. The bound reaches a hook that awaits; one that blocks its
+  thread is past any timer's reach.
+
+The budget is one of three bounded steps, and it is sized against their sum.
+Kubernetes gives a pod 30 seconds between `SIGTERM` and `SIGKILL` by default,
+and a process past it dies without a line, skipping every hook still to run
+and the telemetry flush:
+
+| Step | Bound | Default |
+|---|---|---|
+| The transports stop | the HTTP [shutdown window](/http/configuration/#shutdown) | 20 s |
+| The shutdown hooks run | `SHUTDOWN_HOOKS_TIMEOUT`, across all three phases | 5 s |
+| Telemetry flushes | [`FLUSH_TIMEOUT`](/opentelemetry/), every provider at once | 3 s |
+
+28 seconds, two under the kill. A bound per hook could not hold a sum — four
+hooks that hang would spend twenty seconds — which is why it is a budget.
 
 ```text frame="terminal"
 Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migrations
@@ -159,12 +176,12 @@ Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migra
 ```
 build container
 → attach + configure transports
-→ on_module_init            ┐ strict — first error aborts boot
+→ on_module_init            ┐ strict — first error or panic aborts boot
 → on_application_bootstrap  ┘
 → serve (until SIGINT / SIGTERM, or a transport errors)
-→ on_module_destroy            ┐
-→ before_application_shutdown  │ exhaustive — every hook runs, errors logged,
-→ on_application_shutdown      ┘ each abandoned past five seconds
+→ on_module_destroy            ┐ exhaustive — every hook starts, errors and
+→ before_application_shutdown  │ panics logged; five seconds between all of
+→ on_application_shutdown      ┘ them, what still waits then is abandoned
 ```
 
 Shutdown is triggered by `SIGINT` / `SIGTERM` (a shared cancellation
@@ -188,8 +205,9 @@ performs.
   service discovery backend, prime a connection pool, assert an
   external dependency is reachable (fail boot if not).
 - **Shutdown** — flush a buffer, deregister from discovery, emit a final
-  metric or report, each inside the five-second bound. Draining in-flight
-  work belongs to a transport's own window, which a deployment sets.
+  metric or report, all of it inside the five-second budget. Draining
+  in-flight work belongs to a transport's own window, which a deployment
+  sets.
 
 The `UsersService` in the Publish workspace uses
 `#[on_application_shutdown]` to log how many users exist at teardown —

@@ -20,6 +20,7 @@ mod mcp;
 mod pipes;
 mod reflector;
 mod request_scope;
+mod shutdown;
 mod transient_scope;
 mod transport_parity;
 mod versioning_filters;

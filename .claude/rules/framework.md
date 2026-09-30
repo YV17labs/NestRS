@@ -1334,10 +1334,14 @@ elsewhere, and each is its own report.
 `#[hooks]` submits phase-tagged methods (`#[on_module_init]`,
 `#[on_application_bootstrap]`, `#[on_module_destroy]`, …) to `inventory`;
 `App::run` drains per phase. Per-provider, run in `(provider, method)`
-name order; init failure aborts boot. Shutdown is best-effort — a hook that
-fails is logged and the next one runs — **and bounded**: each shutdown hook runs
-under a bound declared beside the phase runner and argued there, and a hook still
-running past it is abandoned with a `warn` naming its module and the hook.
+name order; init failure — an error or a panic — aborts boot with the hook
+named. Shutdown is best-effort — a hook that fails or panics is logged at `error`
+and the next one runs — **and bounded**: the three shutdown phases share one
+budget declared beside the phase runner and argued there, and a hook still
+waiting when it is spent is abandoned with a `warn` naming its module and the
+hook. Every later hook still starts and is polled once, so none is skipped in
+silence. A hook is developer code, so a panic in one is contained where the
+runner awaits it, as a transport's is by its `JoinSet`.
 
 ### Shutdown is bounded end to end
 
@@ -1352,12 +1356,12 @@ own bound:
 1. **The transports stop, together.** The signal cancels the token every `serve`
    shares, and `App::run` joins them all.
    - **HTTP** hands poem a graceful-shutdown timeout, `HttpConfig::shutdown_timeout`
-     (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, pinned or from the environment: 25 s by
-     default, under the kubelet's 30 s; 1 s to an hour). A connection still open
-     at the bound — a streaming body such as an SSE stream or an MCP session — is
-     closed, with one `warn` saying how many were. The request timeout bounds a
-     handler, never a streaming body, which is why this bound is the transport's
-     own.
+     (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, pinned or from the environment: 20 s by
+     default; 1 s to an hour). A connection still open at the bound — a streaming
+     body such as an SSE stream or an MCP session — is closed, with one `warn`
+     saying how many were, and a handler on it is dropped, over HTTP/1.1 and
+     HTTP/2 alike. The request timeout bounds a handler, never a streaming body,
+     which is why this bound is the transport's own.
    - **The Redis worker** stops fetching and drains within
      `RedisWorkerConfig::shutdown_timeout` (*A shutdown stays inside
      `shutdown_timeout`*, in the queue's entry below).
@@ -1368,16 +1372,24 @@ own bound:
      holds the stop, and bounding a running tick — and deciding what it would
      release — is an owner question.
 2. **The shutdown hooks run** — `#[on_module_destroy]`,
-   `#[before_application_shutdown]`, `#[on_application_shutdown]` — each under its
-   bound (*Lifecycle hooks*, above).
+   `#[before_application_shutdown]`, `#[on_application_shutdown]` — all three
+   phases inside **one** budget, `SHUTDOWN_HOOKS_TIMEOUT` (5 s): a deadline they
+   share, never a bound per hook, since `k` stuck hooks under a per-hook bound
+   cost `k` times it and no grace period can be sized against that. A hook that
+   panics is contained and named at `error`, like one that fails.
 3. **Telemetry flushes** when `main` drops the guard `OpenTelemetry::init_with`
-   returned: the tracer, meter and logger providers shut down within the SDK's
-   own export timeouts, which `nest-rs-opentelemetry` cites where it calls them.
+   returned: the tracer, meter and logger providers shut down **concurrently**,
+   each on a thread of its own, held to `nest_rs_opentelemetry::FLUSH_TIMEOUT`
+   (3 s) between them; what still exports then is abandoned and named on stderr.
+   The SDK's own bound is five seconds per provider, in turn, and its metrics
+   provider ignores the timeout it is handed, so the bound is the crate's.
 
 **The steps add up, so the grace period has to hold their sum** — the longest
-transport bound, then every hook's, then the flush. That is why the demo chart
-gives the worker 45 s for its 30 s drain, and why HTTP's default stops short of
-the kubelet's 30 s rather than at it.
+transport bound, then the hooks' budget, then the flush: 20 + 5 + 3 = 28 s by
+default, two under the kubelet's 30. `the_default_shutdown_steps_sum_under_a_kubernetes_grace_period`
+in `nest-rs-testing` reads the three constants and fails the day they stop
+fitting. That is also why the demo chart gives the worker 45 s for its 30 s
+drain.
 
 ## Surface crates — decisions, not mechanics
 

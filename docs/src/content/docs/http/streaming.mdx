@@ -110,7 +110,7 @@ knowing whose bytes are queued.
 
 **At shutdown a stream holds the transport's window, and is cut at its end.** A
 stream never finishes on its own, so a stopping process keeps it open for the
-whole shutdown window (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 25 s by default)
+whole shutdown window (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s by default)
 and then closes it with every other connection still open — a peer that stopped
 reading included. The client's `EventSource` reconnects, to another replica once
 this one has left the load balancer. See [Shutdown](/http/configuration/#shutdown).

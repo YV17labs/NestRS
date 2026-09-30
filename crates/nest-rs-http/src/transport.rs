@@ -335,7 +335,7 @@ impl HttpTransport {
     /// How long [`serve`](Transport::serve) lets open connections finish once
     /// shutdown is asked for. The listener closes at once; a connection still
     /// open when the window closes is closed — a request still running gets no
-    /// answer, a stream is cut — and one `warn` names how many. Defaults to 25
+    /// answer, a stream is cut — and one `warn` names how many. Defaults to 20
     /// seconds; [`HttpModule`](crate::HttpModule) passes
     /// `HttpConfig.shutdown_timeout`, whose range the boot enforces.
     pub fn shutdown_timeout(mut self, window: Duration) -> Self {

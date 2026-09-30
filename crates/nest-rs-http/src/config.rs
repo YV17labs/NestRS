@@ -23,11 +23,14 @@ const DEFAULT_SSE_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 const DEFAULT_SSE_KEEP_ALIVE_SECS: u64 = 15;
 /// Default wall-clock budget for one request.
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
-/// Default shutdown window: 25 seconds, under the 30 a Kubernetes pod is given
-/// by default between `SIGTERM` and `SIGKILL`. What is still open when it closes
-/// is closed by the transport, which says so, rather than by the kill, which
-/// says nothing and leaves the shutdown lifecycle hooks unrun.
-pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(25);
+/// Default shutdown window: 20 seconds — the first of the three bounded steps
+/// on the way down, which `nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT` tabulates: 20
+/// here, then 5 for the shutdown hooks and 3 for the telemetry flush, 28 under
+/// the 30 a Kubernetes pod is given by default between `SIGTERM` and `SIGKILL`.
+/// What is still open when it closes is closed by the transport, which says so,
+/// rather than by the kill, which says nothing and leaves the shutdown hooks and
+/// the flush unrun.
+pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The variable the shutdown window is read from, and the range it must fall in.
 const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds {
@@ -200,8 +203,9 @@ pub struct HttpConfig {
     ///
     /// Read from `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
     /// 3600 — refused outside, from the environment and from the pinned struct
-    /// alike; defaults to 25 seconds. Keep the pod's grace period above it plus
-    /// the shutdown hooks' own bound.
+    /// alike; defaults to 20 seconds. Keep the pod's grace period above it plus
+    /// the shutdown hooks' budget and the telemetry flush — 8 seconds between
+    /// them.
     pub shutdown_timeout: Duration,
 }
 
@@ -677,10 +681,10 @@ mod tests {
     }
 
     #[test]
-    fn the_shutdown_window_defaults_to_25s_and_reads_whole_seconds_over_a_pinned_base() {
+    fn the_shutdown_window_defaults_to_20s_and_reads_whole_seconds_over_a_pinned_base() {
         assert_eq!(
             HttpConfig::default().shutdown_timeout,
-            Duration::from_secs(25)
+            Duration::from_secs(20)
         );
         let pinned = HttpConfig {
             shutdown_timeout: Duration::from_secs(10),

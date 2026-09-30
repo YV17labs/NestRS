@@ -35,9 +35,13 @@
 //! wait cut at the connection's budget would strand them; it waits instead.
 //!
 //! Every test has its own queue and its own counters, since nextest runs them
-//! side by side on one Redis.
+//! side by side on one Redis — and counts the jobs of its own run and no other.
+//! Queue names are compile-time literals, so an earlier run killed mid-job
+//! leaves work a starting replica's sweep hands to this one; each test that
+//! counts starts beside such a job ([`crate::ghost`]), so a count that took it
+//! in fails here rather than on the next unlucky run.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -56,9 +60,11 @@ use serde::{Deserialize, Serialize};
 use crate::Runs;
 
 /// Simultaneous handler bodies, the peak seen, when each started, and the jobs
-/// finished — one set per test. Process-wide statics: the container owns the
-/// provider, and the assertion runs outside it.
+/// finished — one set per test, counting the jobs of the run it began and no
+/// other. Process-wide statics: the container owns the provider, and the
+/// assertion runs outside it.
 struct Gauge {
+    run: AtomicU64,
     in_flight: AtomicUsize,
     peak: AtomicUsize,
     ran: AtomicUsize,
@@ -68,6 +74,7 @@ struct Gauge {
 impl Gauge {
     const fn new() -> Self {
         Self {
+            run: AtomicU64::new(0),
             in_flight: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             ran: AtomicUsize::new(0),
@@ -75,9 +82,19 @@ impl Gauge {
         }
     }
 
-    /// Hold one slot for `hold`: while it is held, a job the bound lets through
-    /// starts beside it and the peak climbs.
-    async fn hold(&self, hold: Duration) {
+    /// Count the jobs of `run` from here on, and only those.
+    fn begin(&self, run: u64) {
+        self.run.store(run, Ordering::SeqCst);
+    }
+
+    /// Hold one slot for `hold` when the job is of the run this gauge counts:
+    /// while it is held, a job the bound lets through starts beside it and the
+    /// peak climbs. A job of any other run — one an earlier run left in flight,
+    /// which a sweep hands this one — returns at once, uncounted.
+    async fn hold(&self, run: u64, hold: Duration) {
+        if run != self.run.load(Ordering::SeqCst) {
+            return;
+        }
         self.started
             .lock()
             .expect("gauge lock")
@@ -106,6 +123,13 @@ impl Gauge {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HoldCommand {
     seq: usize,
+    run: u64,
+}
+
+/// A job an earlier run of the suite left in flight on `queue`, under a
+/// consumer long silent — what every test counting its jobs starts beside.
+async fn ghost_of_an_earlier_run(queue: &str) {
+    crate::ghost(queue, serde_json::json!({ "seq": 0, "run": 0 })).await;
 }
 
 // --- the default: one at a time ------------------------------------------------
@@ -122,8 +146,8 @@ struct SerialProcessor;
 #[processor]
 impl SerialProcessor {
     #[process(queue = SerialQueue, retries = 0)]
-    async fn hold(&self, _job: HoldCommand) -> anyhow::Result<()> {
-        SERIAL.hold(Duration::from_millis(250)).await;
+    async fn hold(&self, job: HoldCommand) -> anyhow::Result<()> {
+        SERIAL.hold(job.run, Duration::from_millis(250)).await;
         Ok(())
     }
 }
@@ -137,11 +161,14 @@ struct SerialModule;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_process_method_runs_one_job_at_a_time_unless_it_declares_more() {
     const JOBS: usize = 6;
+    let run = crate::this_run();
+    SERIAL.begin(run);
+    ghost_of_an_earlier_run("nestrs-e2e-concurrency-default").await;
     let serial = crate::replica::<SerialModule>().await;
     for seq in 0..JOBS {
         serial
             .producer
-            .push(SerialQueue, HoldCommand { seq }, None)
+            .push(SerialQueue, HoldCommand { seq, run }, None)
             .await
             .expect("enqueue");
     }
@@ -175,8 +202,8 @@ struct BoundedProcessor;
 #[processor]
 impl BoundedProcessor {
     #[process(queue = BoundedQueue, retries = 0, concurrency = 3)]
-    async fn hold(&self, _job: HoldCommand) -> anyhow::Result<()> {
-        BOUNDED.hold(Duration::from_millis(800)).await;
+    async fn hold(&self, job: HoldCommand) -> anyhow::Result<()> {
+        BOUNDED.hold(job.run, Duration::from_millis(800)).await;
         Ok(())
     }
 }
@@ -204,10 +231,13 @@ struct BoundedModule;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_declared_concurrency_is_reached_in_one_fetch_and_never_exceeded() {
     const JOBS: usize = 9;
+    let run = crate::this_run();
+    BOUNDED.begin(run);
+    ghost_of_an_earlier_run("nestrs-e2e-concurrency-three").await;
     let producer = crate::producer().await;
     for seq in 0..JOBS {
         producer
-            .push(BoundedQueue, HoldCommand { seq }, None)
+            .push(BoundedQueue, HoldCommand { seq, run }, None)
             .await
             .expect("enqueue");
     }
@@ -257,7 +287,7 @@ impl HeldProcessor {
         // poll then fetches a whole batch for a single free permit — the case
         // that holds the most jobs unstarted.
         let hold = 200 + 150 * (job.seq % HOLDING) as u64;
-        HELD.hold(Duration::from_millis(hold)).await;
+        HELD.hold(job.run, Duration::from_millis(hold)).await;
         Ok(())
     }
 }
@@ -270,14 +300,17 @@ struct HeldModule;
 
 /// How many jobs apalis holds in flight for `queue` right now, across every
 /// replica consuming it — each consumer's in-flight set, summed in one script
-/// so no fetch lands between two reads. Read straight from apalis's keys: the
-/// bound is apalis's to keep, and this is where apalis keeps it.
+/// so no fetch lands between two reads, a ghost's aside. Read straight from
+/// apalis's keys: the bound is apalis's to keep, and this is where apalis keeps
+/// it.
 async fn in_flight(conn: &mut nest_rs_redis::RedisConnection, queue: &str) -> usize {
     redis::Script::new(
         r"
 local total = 0
 for _, set in ipairs(redis.call('ZRANGE', KEYS[1], 0, -1)) do
-  total = total + redis.call('SCARD', set)
+  if not string.find(set, ':ghost-', 1, true) then
+    total = total + redis.call('SCARD', set)
+  end
 end
 return total
 ",
@@ -295,10 +328,13 @@ return total
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_busy_replica_holds_at_most_its_concurrency_in_jobs_it_has_not_started() {
     const JOBS: usize = 16;
+    let run = crate::this_run();
+    HELD.begin(run);
+    ghost_of_an_earlier_run("nestrs-e2e-concurrency-held").await;
     let producer = crate::producer().await;
     for seq in 0..JOBS {
         producer
-            .push(HeldQueue, HoldCommand { seq }, None)
+            .push(HeldQueue, HoldCommand { seq, run }, None)
             .await
             .expect("enqueue");
     }
@@ -379,9 +415,22 @@ const HOLD: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SlowCommand {
     seq: usize,
+    run: u64,
 }
 
-static FETCH_RUNS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// Every job that ran, by the run that pushed it.
+static FETCH_RUNS: Mutex<Vec<(u64, usize)>> = Mutex::new(Vec::new());
+
+/// The jobs of `run` that ran, in the order they did.
+fn fetched_of(run: u64) -> Vec<usize> {
+    FETCH_RUNS
+        .lock()
+        .expect("lock")
+        .iter()
+        .filter(|(of, _)| *of == run)
+        .map(|(_, seq)| *seq)
+        .collect()
+}
 
 #[queue(name = "nestrs-e2e-replicas-fetch", job = SlowCommand)]
 struct FetchQueue;
@@ -394,7 +443,7 @@ struct FetchProcessor;
 impl FetchProcessor {
     #[process(queue = FetchQueue, retries = 0)]
     async fn slow(&self, job: SlowCommand) -> anyhow::Result<()> {
-        FETCH_RUNS.lock().expect("lock").push(job.seq);
+        FETCH_RUNS.lock().expect("lock").push((job.run, job.seq));
         tokio::time::sleep(HOLD).await;
         Ok(())
     }
@@ -414,9 +463,12 @@ struct FetchModule;
 async fn the_fetch_never_hands_one_job_to_two_replicas_and_each_consumes_as_itself() {
     const JOBS: usize = 4;
     let logs = LogCapture::install_global();
+    let run = crate::this_run();
+    ghost_of_an_earlier_run("nestrs-e2e-replicas-fetch").await;
 
-    // Both up before any job exists, so no startup sweep can find work in
-    // flight — this isolates the fetch from the sweep `lease` covers.
+    // Both up before any job of this run exists, so no startup sweep can find
+    // one of them in flight — this isolates the fetch from the sweep `lease`
+    // covers. The ghost an earlier run left is swept, runs, and is not counted.
     let first = crate::replica::<FetchModule>().await;
     let second = crate::replica::<FetchModule>().await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -427,7 +479,7 @@ async fn the_fetch_never_hands_one_job_to_two_replicas_and_each_consumes_as_itse
             .expect("connect"),
     );
     for seq in 0..JOBS {
-        conn.push(FetchQueue, SlowCommand { seq }, None)
+        conn.push(FetchQueue, SlowCommand { seq, run }, None)
             .await
             .expect("enqueue");
     }
@@ -435,14 +487,14 @@ async fn the_fetch_never_hands_one_job_to_two_replicas_and_each_consumes_as_itse
     // Serialized per replica, two replicas ⇒ ceil(JOBS / 2) waves, plus slack.
     crate::wait_until(
         HOLD * (JOBS as u32).div_ceil(2) + Duration::from_secs(5),
-        || FETCH_RUNS.lock().expect("lock").len() >= JOBS,
+        || fetched_of(run).len() >= JOBS,
     )
     .await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     first.worker.shutdown().await.expect("clean shutdown");
     second.worker.shutdown().await.expect("clean shutdown");
 
-    let mut seen = FETCH_RUNS.lock().expect("lock").clone();
+    let mut seen = fetched_of(run);
     seen.sort_unstable();
     assert_eq!(
         seen,

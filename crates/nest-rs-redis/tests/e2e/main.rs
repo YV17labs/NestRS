@@ -358,6 +358,42 @@ fn this_run() -> u64 {
         ^ u64::from(std::process::id())
 }
 
+/// Leave for `queue` what an earlier run of the suite, killed mid-job, leaves
+/// behind: a job of that run in the in-flight set of a consumer that no longer
+/// beats, with no settled mark — the state a starting replica's sweep, or a
+/// running one's once the threshold passes, hands back to this run's replica.
+/// `payload` is the job's, carrying a marker no test of this run chose.
+///
+/// A test that counts every job its queue holds, rather than its own run's,
+/// counts this one too: calling it first is what proves a test does not. Names
+/// are apalis's, read off its `Config`, so the ghost sits where apalis looks.
+async fn ghost(queue: &str, payload: serde_json::Value) {
+    use apalis::prelude::{Request, Storage};
+
+    let apalis = apalis_redis::Config::default().set_namespace(&namespace(queue));
+    let mut storage: apalis_redis::RedisStorage<serde_json::Value, RedisConnection> =
+        apalis_redis::RedisStorage::new_with_config(connect().await, apalis.clone());
+    let filed = storage
+        .push_request(Request::new(serde_json::json!({
+            "v": nest_rs_queue::WIRE_FORMAT_VERSION,
+            "payload": payload,
+        })))
+        .await
+        .expect("an earlier run's job, filed as apalis files one");
+    let id = filed.task_id.to_string();
+    let consumer = format!("{}:ghost-{}", apalis.inflight_jobs_set(), this_run());
+    let _: () = redis::pipe()
+        .lrem(apalis.active_jobs_list(), 0, &id)
+        .ignore()
+        .sadd(&consumer, &id)
+        .ignore()
+        .zadd(apalis.consumers_set(), &consumer, 0)
+        .ignore()
+        .query_async(&mut connect().await)
+        .await
+        .expect("the job in flight under a consumer long silent");
+}
+
 /// When each attempt at a run's job started — and, for the suites that care,
 /// when one finished — one list per test.
 struct Runs {

@@ -99,26 +99,9 @@ pub(crate) fn write_fake_migrations_crate(root: &Path) {
     fs::write(dir.join("m20260101_000000_init.rs"), "// init\n").unwrap();
 }
 
-/// The bootstrap variable that renames every other — `context::ENV_PREFIX_VAR`,
-/// spelled once for this suite because it is the one name no prefix renames.
-pub(crate) const ENV_PREFIX_VAR: &str = "NESTRS_ENV_PREFIX";
+/// The bootstrap variable that renames every other, as the CLI spells it.
+pub(crate) use nest_rs_cli::ENV_PREFIX_VAR;
 
-/// The framework variable name the *generated* project will carry, built the
-/// way the CLI builds it.
-///
-/// **The CLI is a binary crate**, so its suite cannot call
-/// `context::var_name` / `context::env_prefix` the way every other crate here
-/// calls the thing it tests — there is no `[lib]` to import. So the mirror is
-/// mirrored once more, here, rather than at each assertion: a literal
-/// `"NESTRS_AUTHN__SECRET"` in a test asserts the *default* prefix and fails
-/// the moment the suite runs under `NESTRS_ENV_PREFIX=ACME`, which is the run
-/// that proves a rename reaches everything. Third copy of one join, and it is
-/// reported as such — `context::ENV_PREFIX_VAR` is spelled here because it is
-/// the one name no prefix renames, which `CLAUDE.md` sanctions per crate.
-pub(crate) fn scaffolded_var(namespace: &str, key: &str) -> String {
-    let prefix = std::env::var(ENV_PREFIX_VAR)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "NESTRS".to_owned());
-    format!("{prefix}_{}__{key}", namespace.to_uppercase())
-}
+/// The framework variable name the *generated* project will carry — the CLI's
+/// own derivation, read from its library rather than mirrored here.
+pub(crate) use nest_rs_cli::scaffolded_var;

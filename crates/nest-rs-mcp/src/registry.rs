@@ -62,7 +62,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use nest_rs_core::{Container, ContainerBuilder, Discovery};
-use nest_rs_http::{HttpBootCheck, HttpEndpointMeta, normalize_mount_path};
+use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta, normalize_mount_path};
 use poem::Route;
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerConfig, Tool};
 
@@ -241,11 +241,17 @@ pub fn register_host<P: 'static>(
 
     let mount_path = path.clone();
     let check_path = path.clone();
+    // One per endpoint, shared by every host merged onto it: the transport
+    // stops it when it stops serving, and every operation the endpoint runs is
+    // run through it.
+    let detached = DetachedWork::new();
+    let mount_work = detached.clone();
     builder
         .attach_meta::<P, HttpEndpointMeta>(
             HttpEndpointMeta::new(path, MCP_LABEL, move |container, route: Route| {
-                mount(container, route, &mount_path)
+                mount(container, route, &mount_path, &mount_work)
             })
+            .runs_detached(detached)
             // A cross-family collision reports by owner, and "mcp endpoint mcp"
             // is the degenerate message `owned_by` exists to prevent. The
             // claiming host is the honest name: it is the one whose module
@@ -380,7 +386,7 @@ fn declared_names(meta: &McpHostMeta) -> impl Iterator<Item = Cow<'static, str>>
 
 /// Mount the endpoint for `path`: merge every host that contributes to it into
 /// one handler, behind the guard/context/config resolved once for the path.
-fn mount(container: &Container, route: Route, path: &str) -> Route {
+fn mount(container: &Container, route: Route, path: &str, detached: &DetachedWork) -> Route {
     let hosts = hosts_on(container, path);
 
     // Tool name → the position of the host that declares it. Built here, once,
@@ -409,7 +415,7 @@ fn mount(container: &Container, route: Route, path: &str) -> Route {
     // fallback here is unreachable rather than lenient: an endpoint that never
     // booted has no identity to report.
     let identity = Arc::new(resolve_identity(container, path, &hosts).unwrap_or_default());
-    let mount = McpMount::from_container(container);
+    let mount = McpMount::from_container(container).stopped_with(detached.clone());
     let tools = Arc::new(tools);
     let shared_path: Arc<str> = Arc::from(path);
     let container = container.clone();

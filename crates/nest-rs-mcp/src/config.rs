@@ -113,7 +113,8 @@ impl McpConfig {
 
     /// Translate into the SDK's own config. `session_store` and
     /// `cancellation_token` are left at their defaults here — the mount fills
-    /// the store in from the container, and the token is runtime state, not
+    /// the store in from the container and the token from the transport's
+    /// [`DetachedWork`](nest_rs_http::DetachedWork): both are runtime state, not
     /// configuration.
     pub(crate) fn to_server_config(&self) -> StreamableHttpServerConfig {
         // `StreamableHttpServerConfig` is `#[non_exhaustive]`; the builder

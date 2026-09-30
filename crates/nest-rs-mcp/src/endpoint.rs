@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use nest_rs_core::{Container, Correlation, current_request_scope};
+use nest_rs_http::DetachedWork;
 use poem::endpoint::TowerCompatExt;
 use poem::{Endpoint, IntoEndpoint, Request, Response, Result, Route};
 use rmcp::ServerHandler;
@@ -49,6 +50,11 @@ pub struct McpMount {
     context: Option<Arc<dyn McpToolContext>>,
     config: McpConfig,
     session_store: Option<Arc<dyn SessionStore>>,
+    /// Stopped by the HTTP transport when it stops serving. A mount the
+    /// transport did not declare — a hand-built [`endpoint`] — holds one
+    /// nothing stops, so its operations end with their clients' cancellations
+    /// and no sooner.
+    detached: DetachedWork,
 }
 
 impl McpMount {
@@ -61,6 +67,7 @@ impl McpMount {
             context: None,
             config: McpConfig::default(),
             session_store: None,
+            detached: DetachedWork::new(),
         }
     }
 
@@ -111,7 +118,16 @@ impl McpMount {
             context: container.get_dyn::<dyn McpToolContext>(),
             config,
             session_store: container.get_dyn::<dyn SessionStore>(),
+            detached: DetachedWork::new(),
         }
+    }
+
+    /// Run this mount's operations as `work`, which the HTTP transport stops
+    /// when it stops serving — what the `#[mcp]` registration declares on its
+    /// [`HttpEndpointMeta`](nest_rs_http::HttpEndpointMeta).
+    pub(crate) fn stopped_with(mut self, work: DetachedWork) -> Self {
+        self.detached = work;
+        self
     }
 
     /// Replace the operation guard — `AllowAllMcpGuard` for a deliberately
@@ -135,12 +151,19 @@ where
         context,
         config,
         session_store,
+        detached,
     } = mount;
 
     let handler_context = context.clone();
     let handler_guard = guard.clone();
 
-    let mut server_config = config.to_server_config();
+    // rmcp's own token too, so the streams and tasks it keeps per server end
+    // with the transport. It does not reach an operation of a stateful session
+    // (rmcp 3.4 serves each session under a token of its own), which is why the
+    // handler stops those itself, through the same `detached`.
+    let mut server_config = config
+        .to_server_config()
+        .with_cancellation_token(detached.cancellation_token());
     server_config.session_store = session_store;
 
     let service = StreamableHttpService::new(
@@ -149,6 +172,7 @@ where
                 factory(),
                 handler_guard.clone(),
                 handler_context.clone(),
+                detached.clone(),
             ))
         },
         Arc::new(LocalSessionManager::default()),

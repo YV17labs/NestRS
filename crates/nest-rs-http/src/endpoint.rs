@@ -6,6 +6,8 @@ use poem::Response;
 use poem::Route;
 use poem::endpoint::BoxEndpoint;
 
+use crate::detached::DetachedWork;
+
 type MountFn = dyn Fn(&Container, Route) -> Route + Send + Sync;
 
 /// How a self-mounted endpoint relates to the global guard pool.
@@ -41,6 +43,7 @@ pub struct HttpEndpointMeta {
     owner: Option<Cow<'static, str>>,
     posture: EdgePosture,
     self_guarded: bool,
+    detached: Option<DetachedWork>,
     mount: Arc<MountFn>,
 }
 
@@ -69,6 +72,7 @@ impl HttpEndpointMeta {
             owner: None,
             posture: EdgePosture::Guarded,
             self_guarded: false,
+            detached: None,
             mount: Arc::new(mount),
         }
     }
@@ -137,6 +141,21 @@ impl HttpEndpointMeta {
     pub fn self_guarded_if(mut self, yes: bool) -> Self {
         self.self_guarded = yes;
         self
+    }
+
+    /// Declare the work this surface runs off the connections that ask for it
+    /// — an MCP operation, which rmcp runs on a task of its own. The transport
+    /// stops it when it stops serving, so what a cut connection carried does
+    /// not run on through the shutdown hooks. See [`DetachedWork`].
+    pub fn runs_detached(mut self, work: DetachedWork) -> Self {
+        self.detached = Some(work);
+        self
+    }
+
+    /// The work this surface declared through
+    /// [`runs_detached`](Self::runs_detached), if any.
+    pub(crate) fn detached(&self) -> Option<&DetachedWork> {
+        self.detached.as_ref()
     }
 
     /// The path this surface self-mounts at (e.g. `/graphql`, `/ws`).

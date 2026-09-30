@@ -49,6 +49,9 @@ trybuild.workspace = true
 poem = { workspace = true, features = ["test"] }
 # Asserting on the `data` a rejected pipe hands the model.
 serde_json.workspace = true
+# `Transport::serve` takes the token that asks it to stop — what the shutdown
+# suite drives a real transport with.
+tokio-util.workspace = true
 
 [lints]
 workspace = true

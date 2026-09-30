@@ -3009,6 +3009,7 @@ dependencies = [
  "schemars",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "trybuild",
 ]

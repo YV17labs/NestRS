@@ -1,4 +1,5 @@
-//! `src/propagate.rs`: every `ServerHandler` method reaches the wrapped host.
+//! `src/propagate.rs`: every `ServerHandler` method reaches the wrapped host,
+//! and an operation ends when it is stopped as well as when it settles.
 //!
 //! [`PropagatingHandler`](nest_rs_mcp::PropagatingHandler) has to *be* a
 //! `ServerHandler` since rmcp 3.x — the single `Service::handle_request` seam it
@@ -24,7 +25,13 @@
 #![expect(deprecated)]
 
 use std::collections::BTreeSet;
+use std::net::TcpListener as StdTcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use nest_rs_core::{App, Transport, module};
+use nest_rs_http::{DetachedWork, HttpConfig, HttpTransport};
 
 use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams,
@@ -40,10 +47,15 @@ use nest_rs_mcp::rmcp::serde_json::{self, json};
 use nest_rs_mcp::service::{NotificationContext, RequestContext, RoleServer};
 use nest_rs_mcp::{
     AllowAllMcpGuard, McpError, McpMount, McpOperationGuard, PropagatingHandler, ServerHandler,
-    endpoint,
+    endpoint, mcp, tools,
 };
-use nest_rs_testing::mcp::{call_method, notify, open_session_with};
+use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with};
+use nest_rs_testing::{LogCapture, TestApp};
 use poem::test::TestClient;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 /// The set of method names the probe host was asked for.
 type Seen = Arc<Mutex<BTreeSet<&'static str>>>;
@@ -501,4 +513,253 @@ async fn post_modern<E: poem::Endpoint>(
 fn the_wrapper_is_itself_a_server_handler() {
     fn assert_server_handler<T: ServerHandler>() {}
     assert_server_handler::<PropagatingHandler<ProbeHandler>>();
+}
+
+/// Set when `slow`'s future is dropped, finished, and started, in turn.
+static SLOW_DROPPED: AtomicBool = AtomicBool::new(false);
+static SLOW_FINISHED: AtomicBool = AtomicBool::new(false);
+static SLOW_STARTED: Notify = Notify::const_new();
+/// The same three for `held`.
+static HELD_DROPPED: AtomicBool = AtomicBool::new(false);
+static HELD_FINISHED: AtomicBool = AtomicBool::new(false);
+static HELD_STARTED: Notify = Notify::const_new();
+
+/// Sets its flag when dropped — which is what stopping an operation is.
+struct SetOnDrop(&'static AtomicBool);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+const STOPPING: &str = "/mcp/stopping";
+
+#[mcp(path = "/mcp/stopping")]
+#[derive(Clone, Default)]
+struct StoppingTools;
+
+#[tools]
+impl StoppingTools {
+    #[tool(description = "Outlasts the shutdown window it is served under.")]
+    #[public]
+    async fn slow(&self) -> Result<String, McpError> {
+        let _dropped = SetOnDrop(&SLOW_DROPPED);
+        SLOW_STARTED.notify_one();
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        SLOW_FINISHED.store(true, Ordering::SeqCst);
+        Ok("finished".to_owned())
+    }
+
+    #[tool(description = "Waits until its client gives up on it.")]
+    #[public]
+    async fn held(&self) -> Result<String, McpError> {
+        let _dropped = SetOnDrop(&HELD_DROPPED);
+        HELD_STARTED.notify_one();
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        HELD_FINISHED.store(true, Ordering::SeqCst);
+        Ok("finished".to_owned())
+    }
+}
+
+#[module(providers = [StoppingTools, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct StoppingModule;
+
+/// The one `mcp.operation` line filed for `operation`, once it is filed.
+async fn operation_line(logs: &LogCapture, operation: &str) -> nest_rs_testing::CapturedEvent {
+    for _ in 0..200 {
+        let filed: Vec<_> = logs
+            .find(
+                nest_rs_core::operation_log::TARGET,
+                nest_rs_mcp::unit::OPERATION,
+            )
+            .into_iter()
+            .filter(|line| line.field("operation").as_deref() == Some(operation))
+            .collect();
+        match filed.as_slice() {
+            [] => tokio::time::sleep(Duration::from_millis(10)).await,
+            [line] => return line.clone(),
+            _ => panic!("one line per operation, got {filed:?}"),
+        }
+    }
+    panic!("no mcp.operation line was filed for {operation}");
+}
+
+/// POST one JSON-RPC message to the served endpoint over raw HTTP/1.1 and
+/// read the response head, leaving the connection — and any stream it
+/// carries — open.
+async fn post(port: u16, session: Option<&str>, body: &serde_json::Value) -> (TcpStream, String) {
+    let mut stream = None;
+    for _ in 0..100 {
+        if let Ok(connected) = TcpStream::connect(("127.0.0.1", port)).await {
+            stream = Some(connected);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let mut stream = stream.unwrap_or_else(|| panic!("the transport never came up on {port}"));
+    let body = body.to_string();
+    let session = session
+        .map(|id| format!("mcp-session-id: {id}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "POST {STOPPING} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
+         accept: application/json, text/event-stream\r\n{session}content-length: {}\r\n\r\n{body}",
+        body.len(),
+    );
+    stream
+        .write_all(request.as_bytes())
+        .await
+        .expect("the request is sent");
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        let read = stream.read(&mut byte).await.expect("the head is readable");
+        assert!(read > 0, "the connection ended inside the head");
+        head.push(byte[0]);
+    }
+    (stream, String::from_utf8_lossy(&head).into_owned())
+}
+
+/// rmcp runs an operation on a task of its own, so the shutdown window cutting
+/// the connection that asked for it used to leave it running on — through the
+/// shutdown hooks, to an `ok` for an answer nobody received. It is stopped with
+/// the transport now: dropped before `serve` returns, and filed as `cancelled`.
+#[tokio::test]
+async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_cancelled() {
+    let logs = LogCapture::install();
+    let app = App::builder()
+        .module::<StoppingModule>()
+        .build()
+        .await
+        .expect("the module boots");
+    let port = StdTcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .expect("an ephemeral port")
+        .port();
+    let window = Duration::from_secs(1);
+    let mut transport = HttpTransport::from_config(&HttpConfig {
+        host: "127.0.0.1".into(),
+        port,
+        shutdown_timeout: window,
+        ..HttpConfig::default()
+    })
+    .expect("the config builds a transport");
+    transport
+        .configure(app.container())
+        .await
+        .expect("the transport configures");
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn({
+        let cancel = cancel.clone();
+        async move { Box::new(transport).serve(cancel).await }
+    });
+
+    let (_, head) = post(port, None, &nest_rs_testing::mcp::initialize_request()).await;
+    let session = head
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase()
+                .strip_prefix("mcp-session-id: ")
+                .map(|_| line["mcp-session-id: ".len()..].trim().to_owned())
+        })
+        .unwrap_or_else(|| panic!("initialize opens a session: {head}"));
+    post(
+        port,
+        Some(&session),
+        &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+    let (_open, head) = post(
+        port,
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": "slow", "arguments": {} }
+        }),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the call is accepted: {head}"
+    );
+    tokio::time::timeout(Duration::from_secs(5), SLOW_STARTED.notified())
+        .await
+        .expect("the tool starts");
+
+    let asked = std::time::Instant::now();
+    cancel.cancel();
+    serving
+        .await
+        .expect("serve does not panic")
+        .expect("serve stops cleanly");
+    let took = asked.elapsed();
+
+    assert!(
+        SLOW_DROPPED.load(Ordering::SeqCst) && !SLOW_FINISHED.load(Ordering::SeqCst),
+        "the operation was dropped where it waited before the transport returned",
+    );
+    assert!(
+        took >= window && took < window + DetachedWork::SETTLE_TIMEOUT + Duration::from_secs(1),
+        "the transport stopped at its window, took {took:?}",
+    );
+    let line = operation_line(&logs, "slow").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    let stopped = logs.expect_one(
+        nest_rs_http::target::HTTP,
+        "work a self-mount ran off its connections is stopped with the transport; a unit still \
+         running is dropped unanswered",
+    );
+    assert_eq!(stopped.level, "warn");
+    assert_eq!(stopped.field("path").as_deref(), Some(STOPPING));
+    assert_eq!(stopped.field("stopped").as_deref(), Some("1"));
+}
+
+/// A client's `notifications/cancelled` reaches rmcp as a cancelled token that
+/// no handler is obliged to watch, so the operation used to run to its end and
+/// file `ok`. It is dropped where it waits, and filed as `cancelled`.
+#[tokio::test]
+async fn an_operation_its_client_cancels_is_dropped_and_files_cancelled() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<StoppingModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), STOPPING, None).await;
+
+    let call = call_method(
+        app.http(),
+        STOPPING,
+        &session,
+        None,
+        "tools/call",
+        json!({ "name": "held", "arguments": {} }),
+    );
+    tokio::pin!(call);
+    tokio::select! {
+        body = &mut call => panic!("the call answered before it was cancelled: {body}"),
+        () = HELD_STARTED.notified() => {}
+    }
+    // `call_method` sends every request as id 99.
+    notify(
+        app.http(),
+        STOPPING,
+        &session,
+        None,
+        "notifications/cancelled",
+        json!({ "requestId": 99, "reason": "the user gave up" }),
+    )
+    .await;
+
+    let line = operation_line(&logs, "held").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert!(
+        HELD_DROPPED.load(Ordering::SeqCst) && !HELD_FINISHED.load(Ordering::SeqCst),
+        "the operation was dropped where it waited",
+    );
 }

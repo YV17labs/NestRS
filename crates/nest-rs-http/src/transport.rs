@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::boot_check::{GlobalGuardsActive, HttpBootCheck};
 use crate::controller::HttpControllerMeta;
+use crate::detached::DetachedWork;
 use crate::drain::Drain;
 use crate::endpoint::{EdgePosture, HttpEndpointMeta, SelfMountGuardWrap};
 use crate::interceptor::HttpEndpointWrap;
@@ -123,6 +124,9 @@ pub struct HttpTransport {
     security_headers: crate::HttpSecurityHeaders,
     compression: bool,
     version_selector: Option<crate::VersionSelector>,
+    /// What each self-mount runs off its connections, by mount path: stopped
+    /// once `serve` has stopped serving. See [`DetachedWork`](crate::DetachedWork).
+    detached: Vec<(String, DetachedWork)>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -223,6 +227,7 @@ impl HttpTransport {
             // `None` is the URI strategy: the version is already in the path a
             // controller mounts at, so there is nothing to resolve per request.
             version_selector: None,
+            detached: Vec::new(),
             endpoint: None,
         }
     }
@@ -609,6 +614,9 @@ impl Transport for HttpTransport {
                 path = d.meta.path(),
                 "mounted endpoint",
             );
+            if let Some(work) = d.meta.detached() {
+                self.detached.push((d.meta.path().to_owned(), work.clone()));
+            }
             if d.meta.edge_access_is_implicit(global_guards) {
                 unguarded_edges.push(format!("{} ({})", d.meta.path(), d.meta.label()));
             }
@@ -882,10 +890,19 @@ impl Transport for HttpTransport {
                 drain.begin(window);
             }
         };
-        Server::new(listener)
+        let served = Server::new(listener)
             .run_with_graceful_shutdown(endpoint, signal, Some(window))
-            .await?;
-        drain.report(window);
+            .await;
+        if served.is_ok() {
+            drain.report(window);
+        }
+        // Whatever a cut connection carried stops with the transport, never
+        // after it: this is the last thing `serve` does, so nothing it served is
+        // still running when the shutdown hooks start.
+        for (path, work) in &self.detached {
+            work.stop(path).await;
+        }
+        served?;
         Ok(())
     }
 }

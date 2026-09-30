@@ -1362,6 +1362,13 @@ own bound:
      saying how many were, and a handler on it is dropped, over HTTP/1.1 and
      HTTP/2 alike. The request timeout bounds a handler, never a streaming body,
      which is why this bound is the transport's own.
+   - **Work a connection only carries stops with the transport.** A self-mount
+     that runs its units off the connection that asked for them — rmcp runs each
+     MCP operation on a task of its own — declares an
+     `HttpEndpointMeta::runs_detached(DetachedWork)`, and `serve` stops it as the
+     last thing it does, waiting `DetachedWork::SETTLE_TIMEOUT` (500 ms) at most
+     for it to unwind. Without it a cut connection left its operation running
+     through the shutdown hooks. A stopped unit files `outcome = cancelled`.
    - **The Redis worker** stops fetching and drains within
      `RedisWorkerConfig::shutdown_timeout` (*A shutdown stays inside
      `shutdown_timeout`*, in the queue's entry below).

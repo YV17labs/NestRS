@@ -161,8 +161,11 @@ the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.
 
 Every one carries `duration_ms`, and every one but HTTP carries `outcome`
-(`ok` / `error` / `panic`) — a request has `status`, which says how it ended more
-precisely than three words could. So one query answers "what did this deployment
+(`ok` / `error` / `panic` / `cancelled`) — a request has `status`, which says how
+it ended more precisely than four words could. `cancelled` is a unit stopped
+before it settled and dropped where it waited: MCP files it for an operation its
+client cancelled, or that the HTTP transport stopped at the end of its shutdown
+window. So one query answers "what did this deployment
 do", and "what failed" is `outcome != ok` or `status >= 400`.
 
 ```text frame="terminal"

@@ -52,6 +52,7 @@ use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 
+use nest_rs_http::DetachedWork;
 use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CancelTaskMethod,
@@ -89,6 +90,7 @@ pub struct PropagatingHandler<H> {
     inner: H,
     guard: Arc<dyn McpOperationGuard>,
     context: Option<Arc<dyn McpToolContext>>,
+    detached: DetachedWork,
 }
 
 impl<H> PropagatingHandler<H> {
@@ -96,11 +98,13 @@ impl<H> PropagatingHandler<H> {
         inner: H,
         guard: Arc<dyn McpOperationGuard>,
         context: Option<Arc<dyn McpToolContext>>,
+        detached: DetachedWork,
     ) -> Self {
         Self {
             inner,
             guard,
             context,
+            detached,
         }
     }
 
@@ -130,17 +134,29 @@ impl<H> PropagatingHandler<H> {
     /// `ping`, `initialize` — rather than a sentinel: `tracing` drops a `None`
     /// field, so an unaddressed operation files no `operation` key at all, and a
     /// query for one can never match a method that has none.
-    async fn dispatch<T, F>(
+    ///
+    /// **An operation ends when it settles or is stopped, whichever is first.**
+    /// It is stopped when `cancelled` resolves — the client sent
+    /// `notifications/cancelled`, or rmcp cancelled it on a disconnect — or when
+    /// the HTTP transport stops serving ([`DetachedWork`]). rmcp runs it on a
+    /// task of its own and never drops it, and nothing obliges a handler to
+    /// watch its token, so without this a cut connection left the operation
+    /// running on through the shutdown hooks, and a cancelled one to its end.
+    /// Either way it is dropped where it waits and files
+    /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
+    async fn dispatch<T, F, C>(
         &self,
         method: &str,
         addressed: Option<&str>,
         ambient: McpAmbient,
         context: Option<&Arc<dyn McpToolContext>>,
+        cancelled: C,
         inner: F,
     ) -> Result<T, McpError>
     where
         T: Send + 'static,
         F: Future<Output = Result<T, McpError>> + Send,
+        C: Future<Output = ()> + Send,
     {
         let McpAmbient {
             scope,
@@ -202,10 +218,24 @@ impl<H> PropagatingHandler<H> {
                 None => scoped,
             };
 
-            let settled = match (context, &context_captured) {
-                (Some(context), Some(captured)) => context.around(captured, guarded).await,
-                _ => guarded.await,
-            };
+            let settled = self
+                .detached
+                .run(async move {
+                    tokio::select! {
+                        biased;
+                        settled = async move {
+                            match (context, &context_captured) {
+                                (Some(context), Some(captured)) => {
+                                    context.around(captured, guarded).await
+                                }
+                                _ => guarded.await,
+                            }
+                        } => Some(settled),
+                        () = cancelled => None,
+                    }
+                })
+                .await
+                .flatten();
             // One line per operation. rmcp addresses many operations over one
             // request, so without it a tool call is anonymous on the console —
             // the endpoint's HTTP access line names the session, not the work.
@@ -227,15 +257,24 @@ impl<H> PropagatingHandler<H> {
                     // addressed nothing.
                     method = method,
                     operation = addressed,
-                    outcome = if settled.is_ok() {
-                        nest_rs_core::operation_log::OK
-                    } else {
-                        nest_rs_core::operation_log::ERROR
+                    outcome = match &settled {
+                        Some(Ok(_)) => nest_rs_core::operation_log::OK,
+                        Some(Err(_)) => nest_rs_core::operation_log::ERROR,
+                        None => nest_rs_core::operation_log::CANCELLED,
                     },
                     duration_ms = nest_rs_core::operation_log::duration_ms(started),
                 );
             });
-            settled
+            // What rmcp is handed for a stopped operation: it drops the answer to
+            // a request its client cancelled, and a stopped transport has no
+            // connection left to carry one, so the sentence is for the log of a
+            // client that somehow still reads — never a claim the work was done.
+            settled.unwrap_or_else(|| {
+                Err(McpError::internal_error(
+                    "the operation was cancelled before it completed",
+                    None,
+                ))
+            })
         }
         .instrument(operation)
         // Inside the request's span, so the operation stays nested under the
@@ -280,11 +319,13 @@ macro_rules! request_method {
                 let ambient = McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
                 let method: Cow<'_, str> = ($method).into();
                 let addressed: Option<String> = $addressed;
+                let cancelled = context.ct.clone().cancelled_owned();
                 self.dispatch(
                     &method,
                     addressed.as_deref(),
                     ambient,
                     self.context.as_ref(),
+                    cancelled,
                     self.inner.$name($($arg,)* context),
                 )
                 .await
@@ -310,7 +351,11 @@ macro_rules! notification_method {
                 let started = std::time::Instant::now();
                 let method: Cow<'_, str> = ($method).into();
                 nest_rs_core::with_request_scope(scope, correlation, async move {
-                    self.inner.$name($($arg,)* context).await;
+                    // rmcp spawns a notification's handler as it does a
+                    // request's, so it too is stopped with the transport rather
+                    // than left running on through the shutdown hooks. A
+                    // client cannot cancel a notification: it has no id to name.
+                    let settled = self.detached.run(self.inner.$name($($arg,)* context)).await;
                     // A notification is dispatched work, so it files the family's
                     // line like every other unit — the same message as a request
                     // method, discriminated by `method`, because a notification
@@ -320,15 +365,19 @@ macro_rules! notification_method {
                     // resource, and the field is absent rather than empty for the
                     // same reason it is absent on `tools/list`.
                     //
-                    // `outcome` is `ok` and that is honest rather than assumed: a
-                    // notification handler returns `()`, so it has no failure
-                    // channel, and had it unwound this line would not be reached.
+                    // `outcome` is `ok` when it ran to its end, and that is honest
+                    // rather than assumed: a notification handler returns `()`, so
+                    // it has no failure channel, and had it unwound this line
+                    // would not be reached.
                     tracing::info!(
                         name: crate::unit::OPERATION,
                         target: nest_rs_core::operation_log::TARGET,
                         message = crate::unit::OPERATION,
                         method = %method,
-                        outcome = nest_rs_core::operation_log::OK,
+                        outcome = match settled {
+                            Some(()) => nest_rs_core::operation_log::OK,
+                            None => nest_rs_core::operation_log::CANCELLED,
+                        },
                         duration_ms = nest_rs_core::operation_log::duration_ms(started),
                     );
                 })
@@ -476,6 +525,10 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
     /// cancelled, so it takes the request scope and the guard's ability but
     /// **not** the data context: a transaction held open for the life of a
     /// subscription would pin a pooled connection for the same duration.
+    ///
+    /// For the same reason its client's cancellation is how it ends rather than
+    /// a cut, so only the transport stopping stops it: the host's own `listen`
+    /// answers the cancellation, and files the `ok` it is.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         let ambient =
             McpAmbient::from_extensions(&context.request_context().extensions).unwrap_or_default();
@@ -484,6 +537,7 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
             None,
             ambient,
             None,
+            std::future::pending(),
             self.inner.listen(context),
         )
         .await
@@ -567,7 +621,12 @@ mod tests {
     /// one.
     #[test]
     fn the_wrapper_asks_the_inner_host_to_negotiate() {
-        let wrapper = PropagatingHandler::new(NegotiatingHost, Arc::new(AllowAllMcpGuard), None);
+        let wrapper = PropagatingHandler::new(
+            NegotiatingHost,
+            Arc::new(AllowAllMcpGuard),
+            None,
+            DetachedWork::new(),
+        );
         let mut request = InitializeRequestParams::default();
         request.protocol_version = THE_CALLER_ASKS_FOR;
 

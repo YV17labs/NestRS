@@ -14,7 +14,10 @@ fn the_default_shutdown_steps_sum_under_a_kubernetes_grace_period() {
     /// `terminationGracePeriodSeconds`' default: Kubernetes' number, not ours.
     const KUBERNETES_DEFAULT_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
+    // The settle wait is the transport's too: `serve` spends it after the
+    // window, stopping what its self-mounts ran off their connections.
     let steps = nest_rs_http::HttpConfig::default().shutdown_timeout
+        + nest_rs_http::DetachedWork::SETTLE_TIMEOUT
         + nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT
         + nest_rs_opentelemetry::FLUSH_TIMEOUT;
     assert!(

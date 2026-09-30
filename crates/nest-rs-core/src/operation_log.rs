@@ -88,7 +88,7 @@ use std::time::Instant;
 /// that emits it; this one is the only one naming a *category of line* that
 /// crosses all of them, so a subsystem-shaped word here reads as a subsystem and
 /// hides what the target is. What distinguishes the line is that there is
-/// exactly one per unit of work and it carries an [`OK`]/[`ERROR`]/[`PANIC`] and
+/// exactly one per unit of work and it carries an [`OK`]/[`ERROR`]/[`PANIC`]/[`CANCELLED`] and
 /// a [`DURATION_MS`] — an operation, which is the word the operation span and
 /// this module already use, and the word the MCP edge's line took when
 /// `operation served` was retired for it. Through 5.1 it was
@@ -139,6 +139,16 @@ pub const ERROR: &str = "error";
 /// Developer code unwound. Distinct from [`ERROR`] because the two are read
 /// differently under incident: one is a handled path, the other is not.
 pub const PANIC: &str = "panic";
+/// It was stopped before it settled — its caller cancelled it, or the transport
+/// carrying it stopped serving — and dropped where it waited. Distinct from
+/// [`ERROR`] because nothing answered: the unit neither completed nor failed,
+/// and what it had not yet done stays undone.
+///
+/// Filed by an edge that can see its unit stopped. MCP is that edge: an
+/// operation runs on a task of rmcp's rather than on the connection that asked
+/// for it, so the edge stops it itself, and says so here rather than filing an
+/// `ok` for an answer nobody received.
+pub const CANCELLED: &str = "cancelled";
 
 /// The field name every edge files [`duration_ms`] under.
 ///

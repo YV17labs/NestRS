@@ -295,6 +295,12 @@ What the window does depends on what the connection is doing:
   gets no answer and the handler is cancelled where it waits — over HTTP/1.1
   and over HTTP/2 alike: closing an HTTP/2 connection resets every stream on
   it, and hyper drops a reset stream's handler.
+- **An MCP operation still running** — runs on a task of rmcp's rather than on
+  the connection that asked for it, so the transport stops it itself once the
+  window has closed: it is dropped where it waits, files its `mcp.operation`
+  line with `outcome="cancelled"`, and one `warn` names how many were stopped.
+  `serve` waits half a second at most for them to unwind, so none is still
+  running when the shutdown hooks start.
 - **A stream** — an [`#[sse]` stream](/http/streaming/) or an MCP stream never
   finishes on its own, so it holds the window to its end and is cut there; the
   client's `EventSource` reconnects, to another replica once this one has left

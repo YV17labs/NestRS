@@ -1,10 +1,18 @@
 //! The shared connection against a live Redis — the branches a local listener
 //! cannot reach, because they need a server that answers: one that refuses
-//! (credentials, a database index, an ACL), one that holds a command, one that
-//! vanishes behind a network still accepting the dial, and one that drops every
-//! connection the app holds.
+//! (credentials, a database index, an ACL), one that answers with what may
+//! clear (busy, loading, failing over) and then serves, one with a single
+//! client slot left, one that holds a command, one that vanishes behind a
+//! network still accepting the dial, and one that drops every connection the
+//! app holds.
 
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 use nest_rs_redis::{RedisConfig, RedisConnection, RedisError, RedisThrottler};
 use nest_rs_throttler::{Throttle, ThrottlerStore};
@@ -145,6 +153,217 @@ async fn an_acl_denying_the_proof_fails_the_boot_at_once() {
         !format!("{error} {}", answer(&error)).contains(SECRET),
         "and neither shows the password: {error}",
     );
+}
+
+/// A proxy in front of the dev container Redis that plays the server's side of
+/// two states the boot must tell apart from a refusal: while an answer is set,
+/// every connection it accepts is answered with that error line for every
+/// command — Redis busy running a script, loading its dataset, failing over —
+/// and with `slots`, a connection past that many forwarded at once is refused
+/// the way Redis refuses one past `maxclients`. Anything else is forwarded.
+struct ScriptedRedis {
+    addr: SocketAddr,
+    answer: Arc<Mutex<Option<&'static str>>>,
+}
+
+impl ScriptedRedis {
+    async fn start(slots: Option<usize>) -> Self {
+        let upstream = crate::redis_address();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the proxy");
+        let addr = listener.local_addr().expect("the proxy's address");
+        let answer: Arc<Mutex<Option<&'static str>>> = Arc::new(Mutex::new(None));
+        let answering = Arc::clone(&answer);
+        let open = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            while let Ok((mut client, _)) = listener.accept().await {
+                let scripted = *answering.lock().expect("answer lock");
+                if let Some(line) = scripted {
+                    tokio::spawn(answer_every_command(client, line));
+                    continue;
+                }
+                if slots.is_some_and(|slots| open.load(Ordering::SeqCst) >= slots) {
+                    tokio::spawn(async move {
+                        let _ = client
+                            .write_all(b"-ERR max number of clients reached\r\n")
+                            .await;
+                    });
+                    continue;
+                }
+                open.fetch_add(1, Ordering::SeqCst);
+                let open = Arc::clone(&open);
+                let upstream = upstream.clone();
+                tokio::spawn(async move {
+                    if let Ok(mut server) = TcpStream::connect(&upstream).await {
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+                    }
+                    open.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+        });
+        Self { addr, answer }
+    }
+
+    fn url(&self) -> String {
+        format!("redis://{}/", self.addr)
+    }
+
+    /// Answer every command on connections accepted from now with `line`, or
+    /// forward them again with `None`.
+    fn answer_with(&self, line: Option<&'static str>) {
+        *self.answer.lock().expect("answer lock") = line;
+    }
+}
+
+/// Answer each command `client` sends with the error `line`, until it hangs up.
+async fn answer_every_command(mut client: TcpStream, line: &'static str) {
+    let reply = format!("-{line}\r\n");
+    let mut received = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        while let Some(length) = command_length(&received) {
+            received.drain(..length);
+            if client.write_all(reply.as_bytes()).await.is_err() {
+                return;
+            }
+        }
+        match client.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(read) => received.extend_from_slice(&chunk[..read]),
+        }
+    }
+}
+
+/// The length of the first whole command in `bytes` — an array of bulk
+/// strings, the only form the client sends — or `None` until it has arrived.
+fn command_length(bytes: &[u8]) -> Option<usize> {
+    let header = |from: usize, marker: u8| -> Option<(usize, usize)> {
+        if bytes.get(from) != Some(&marker) {
+            return None;
+        }
+        let end = from
+            + bytes
+                .get(from..)?
+                .windows(2)
+                .position(|pair| pair == b"\r\n")?;
+        let number = std::str::from_utf8(&bytes[from + 1..end])
+            .ok()?
+            .parse()
+            .ok()?;
+        Some((end + 2, number))
+    };
+    let (mut at, arguments) = header(0, b'*')?;
+    for _ in 0..arguments {
+        let (body, length) = header(at, b'$')?;
+        at = body + length + 2;
+    }
+    (at <= bytes.len()).then_some(at)
+}
+
+/// What a Redis answers while it is not ready yet — the transient codes the
+/// client knows, and one it does not.
+const NOT_READY: [&str; 5] = [
+    "BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.",
+    "LOADING Redis is loading the dataset in memory",
+    "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.",
+    "TRYAGAIN Multiple keys request during rehashing of slot",
+    "SOMEDAYCODE an answer this client has never heard of",
+];
+
+/// A Redis that answers but is not ready — busy running a script past its
+/// threshold, loading its dataset, failing over, or answering a code the client
+/// does not know — is retried until it is, within the budget. `BUSY` and an
+/// unknown code used to fail the boot in milliseconds as a refusal, telling the
+/// operator to check the URL.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_redis_not_ready_yet_is_retried_until_it_serves() {
+    for line in NOT_READY {
+        let proxy = ScriptedRedis::start(None).await;
+        proxy.answer_with(Some(line));
+        let ready = tokio::spawn({
+            let answer = Arc::clone(&proxy.answer);
+            async move {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                *answer.lock().expect("answer lock") = None;
+            }
+        });
+        let started = Instant::now();
+        let outcome = RedisConnection::connect(&RedisConfig {
+            url: proxy.url(),
+            connect_timeout: Duration::from_secs(10),
+            ..RedisConfig::default()
+        })
+        .await;
+        let took = started.elapsed();
+        ready.await.expect("the proxy is made ready");
+        let mut conn = outcome.unwrap_or_else(|error| panic!("{line}: {error:#}"));
+        assert!(
+            took >= Duration::from_millis(500),
+            "{line}: the boot waited for Redis rather than connecting past it, took {took:?}"
+        );
+        redis::cmd("PING")
+            .query_async::<()>(&mut conn)
+            .await
+            .expect("the kept connection serves");
+    }
+}
+
+/// A Redis that stays not ready spends the budget and fails as one that
+/// answered — its last answer as the source, the budget to widen — never as an
+/// unreachable one sent to check its URL.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_redis_that_stays_busy_fails_at_the_budget_naming_its_answer() {
+    let proxy = ScriptedRedis::start(None).await;
+    proxy.answer_with(Some(NOT_READY[0]));
+    let budget = Duration::from_millis(1500);
+    let started = Instant::now();
+    let Err(error) = RedisConnection::connect(&RedisConfig {
+        url: proxy.url(),
+        connect_timeout: budget,
+        ..RedisConfig::default()
+    })
+    .await
+    else {
+        panic!("a Redis that never serves must not connect")
+    };
+    let took = started.elapsed();
+
+    assert!(
+        took >= budget && took < budget * 3,
+        "at the budget, took {took:?}"
+    );
+    assert!(matches!(error, RedisError::Unready { .. }), "{error}");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"))
+            && !rendered.contains(&nest_rs_config::var_name("redis", "URL")),
+        "the budget is what to widen, not the URL to check: {rendered}"
+    );
+    assert!(
+        answer(&error).contains("busy running a script"),
+        "the source is Redis's last answer: {}",
+        answer(&error)
+    );
+}
+
+/// A Redis with one client slot left boots: the proof is closed before the
+/// connection the app keeps is opened. Held across it, every attempt needed two
+/// slots, and the boot spent its whole budget before blaming the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_redis_with_one_client_slot_left_boots() {
+    let proxy = ScriptedRedis::start(Some(1)).await;
+    let mut conn = RedisConnection::connect(&RedisConfig {
+        url: proxy.url(),
+        connect_timeout: Duration::from_secs(5),
+        ..RedisConfig::default()
+    })
+    .await
+    .unwrap_or_else(|error| panic!("one free slot is enough to boot: {error:#}"));
+    redis::cmd("PING")
+        .query_async::<()>(&mut conn)
+        .await
+        .expect("the kept connection serves");
 }
 
 /// A command Redis holds fails at the budget, as a timeout — and the connection

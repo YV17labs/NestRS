@@ -38,6 +38,15 @@ pub enum RedisError {
         source: redis::RedisError,
     },
 
+    /// The connect budget is outside the range its variable is held to — a
+    /// [`RedisConfig`](crate::RedisConfig) built in code and handed to
+    /// [`RedisConnection::connect`](crate::RedisConnection::connect) without a
+    /// config read. A zero budget would give up before the first attempt and
+    /// then blame the URL, so it is refused before anything is dialled, in the
+    /// words the variable is refused in.
+    #[error(transparent)]
+    Budget(nest_rs_config::ConfigError),
+
     /// A `rediss://` URL carrying `#insecure`, which asks the client to accept
     /// whatever certificate it is shown. Encryption nobody verified is open to
     /// whoever sits between the app and Redis, so it is refused rather than
@@ -95,10 +104,11 @@ pub enum RedisError {
     },
 
     /// Redis answered, and refused in a way every attempt would repeat —
-    /// credentials, an ACL denying the proof, a database index out of range.
-    /// That is not an outage, and retrying it would only tell the operator to
-    /// look at the network — so it fails at once, naming the variable that
-    /// holds the URL, with Redis's answer as the source.
+    /// credentials, an ACL denying the proof, a database index out of range, a
+    /// protocol it does not speak. That is not an outage, and retrying it would
+    /// only tell the operator to look at the network — so it fails at once,
+    /// naming the variable that holds the URL, with Redis's answer as the
+    /// source.
     #[error(
         "Redis at {endpoint} refused the connection: check {url_var}",
         url_var = ::nest_rs_config::spellings("redis", "URL"),
@@ -107,6 +117,30 @@ pub enum RedisError {
         /// The address the client dials, never the URL.
         endpoint: String,
         /// What Redis answered.
+        #[source]
+        source: redis::RedisError,
+    },
+
+    /// The connect budget elapsed with Redis answering every attempt, last with
+    /// an answer that may clear — a dataset still loading, a script past its
+    /// threshold, a failover in progress, a code this client does not know.
+    /// Redis was reached, so the sentence does not send the operator to the
+    /// URL: the answer travels as the source, and the budget is what to widen
+    /// if it clears on its own.
+    #[error(
+        "Redis at {endpoint} answered but was not ready within {budget:?} ({attempts} \
+         attempt(s)) — its last answer follows; widen the budget with {timeout_var} if it \
+         clears on its own",
+        timeout_var = ::nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"),
+    )]
+    Unready {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The budget that elapsed.
+        budget: std::time::Duration,
+        /// How many connect attempts were made inside it.
+        attempts: u32,
+        /// Redis's last answer.
         #[source]
         source: redis::RedisError,
     },

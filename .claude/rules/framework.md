@@ -1472,11 +1472,19 @@ the kubelet's 30 s rather than at it.
   runs on and used as it is by the rate limiter and the schedule lock. **The boot
   proves it with a `PING`** — a Redis that accepts the dial and answers nothing
   would otherwise boot cleanly and fail on the first job — and **what fails the
-  same way every time fails at once**: a URL the client cannot parse, TLS
-  settings it will not use, refused credentials, an ACL denying the proof, a
-  database index out of range. What may clear — a refused or reset TCP
-  connection, a server still loading — is retried within `connect_timeout`, then
-  fails naming the endpoint, never the URL, which may carry a password. Every
+  same way every time fails at once**: a zero budget, a URL the client cannot
+  parse, TLS settings it will not use, and an answer naming the deployment's own
+  settings — refused credentials, an ACL denying the proof, a database index out
+  of range, a protocol the server lacks. **That list is an allow-list, and every
+  other answer is retried**: `redis` marks every code it does not know as not
+  worth retrying, which failed the boot in milliseconds on a Redis busy running
+  a script, telling the operator to check the URL. What may clear — a refused or
+  reset TCP connection, `LOADING`, `BUSY`, `MASTERDOWN`, `TRYAGAIN`, a code this
+  client has never seen — is retried within `connect_timeout`, then fails naming
+  the endpoint, never the URL, which may carry a password: as `Unready` with
+  Redis's last answer as the source when Redis answered, as `Unreachable` when
+  it did not. The proof's own connection is closed before the kept one opens, so
+  a Redis with one client slot left boots. Every
   command a caller waits on afterwards answers or fails within that budget, end
   to end — the wait for a reopened connection included — so an outage fails a
   command instead of holding every loop. **Certificate verification is never an

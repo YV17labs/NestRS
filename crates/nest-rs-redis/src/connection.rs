@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use nest_rs_config::Namespaced;
 use redis::aio::{ConnectionLike, ConnectionManager, ConnectionManagerConfig};
 use redis::io::tcp::TcpSettings;
 use redis::io::tcp::socket2::TcpKeepalive;
@@ -209,19 +210,30 @@ impl RedisConnection {
     ///
     /// What fails the same way on every attempt fails at once instead of
     /// spending the budget on retries that cannot succeed, saying what to
-    /// change: a URL the client cannot parse; TLS settings it will not use —
-    /// `#insecure`, material beside a plaintext URL, material no handshake
-    /// could use; a handshake that fails the same way every time; and an answer
-    /// Redis gives every time — refused credentials, an ACL denying the proof, a
-    /// database index out of range. What may clear — a refused or reset TCP
-    /// connection, a server still loading its dataset — is retried within the
-    /// budget.
+    /// change: a budget under the floor its variable is held to; a URL the
+    /// client cannot parse; TLS settings it will not use — `#insecure`,
+    /// material beside a plaintext URL, material no handshake could use; a
+    /// handshake that fails the same way every time; and an answer naming the
+    /// deployment's own settings — refused credentials, an ACL denying the
+    /// proof, a database index out of range, a protocol the server does not
+    /// speak. **Every other answer may clear and is retried within the budget**
+    /// — a server loading its dataset, busy running a script, failing over, or
+    /// answering with a code this client does not know — as is a refused or
+    /// reset TCP connection. A budget spent on answers fails naming the last
+    /// one, as a server that is not ready rather than one that cannot be
+    /// reached.
     ///
     /// A handshake nobody answers is not among them, because it cannot be told
     /// apart from a network that drops it: a `rediss://` URL pointed at a
     /// plaintext Redis runs out the budget as an unreachable one does.
     pub async fn connect(config: &RedisConfig) -> Result<Self, RedisError> {
-        let budget = config.connect_timeout;
+        let budget = crate::config::CONNECT_TIMEOUT
+            .check(
+                RedisConfig::NAMESPACE,
+                "RedisConfig::connect_timeout",
+                config.connect_timeout,
+            )
+            .map_err(RedisError::Budget)?;
         let endpoint = address(&config.url);
         let client = client(config, &endpoint)?;
         let deadline = deadline_after(budget);
@@ -305,11 +317,19 @@ impl RedisConnection {
             backoff = (backoff * 2).min(MAX_RETRY_BACKOFF);
         }
 
-        Err(RedisError::Unreachable {
-            endpoint,
-            budget,
-            attempts,
-            source: last_error,
+        Err(match last_error {
+            Some(source) if source.code().is_some() => RedisError::Unready {
+                endpoint,
+                budget,
+                attempts,
+                source,
+            },
+            source => RedisError::Unreachable {
+                endpoint,
+                budget,
+                attempts,
+                source,
+            },
         })
     }
 }
@@ -415,14 +435,46 @@ fn deadline_after(budget: Duration) -> Instant {
     now.checked_add(budget).unwrap_or_else(|| now + FAR)
 }
 
-/// Whether Redis answered in a way every attempt will repeat: what redis itself
-/// marks as not worth retrying — a refused `SELECT`, an ACL `NOPERM`, an error
-/// reply to the proof, a socket the process may not open — and refused
-/// credentials, which it retries only on a new connection. A transport failure,
-/// or a server still loading its dataset, is worth the budget and stays in it.
+/// Whether an attempt failed in a way every attempt will repeat.
+///
+/// **An answer from Redis repeats only when it names the deployment's own
+/// settings**: credentials refused (`WRONGPASS`, `NOAUTH`, or the client's own
+/// authentication failure), an ACL denying the proof (`NOPERM`), a database
+/// index the server does not have, a protocol it does not speak. Every other
+/// answer may clear — `LOADING`, `BUSY` from a script past its threshold,
+/// `MASTERDOWN` and `TRYAGAIN` during a failover — and so does a code this
+/// client does not know. `redis` marks every unknown code as not worth
+/// retrying, which made a Redis running one long script fail the boot in
+/// milliseconds with a sentence pointing at the URL; the allow-list is the other
+/// way round on purpose, so a code a later server invents is retried within the
+/// budget and named as the failure's source, never mistaken for a refusal.
+///
+/// **What is not an answer** — the client refusing before or around the dial, a
+/// socket the process may not open — keeps `redis`'s own verdict.
 fn refused(error: &redis::RedisError) -> bool {
-    error.kind() == redis::ErrorKind::AuthenticationFailed
-        || matches!(error.retry_method(), redis::RetryMethod::NoRetry)
+    if matches!(
+        error.kind(),
+        redis::ErrorKind::AuthenticationFailed | redis::ErrorKind::RESP3NotSupported
+    ) {
+        return true;
+    }
+    match error.code() {
+        Some(code) => {
+            matches!(code, "WRONGPASS" | "NOAUTH" | "NOPERM") || selects_no_database(error)
+        }
+        None => matches!(error.retry_method(), redis::RetryMethod::NoRetry),
+    }
+}
+
+/// Whether Redis refused the `SELECT` of the URL's database index for the
+/// index itself — out of range, or invalid — rather than for being busy or
+/// loading, which `redis` reports under the same kind with the server's reason
+/// as the detail.
+fn selects_no_database(error: &redis::RedisError) -> bool {
+    error.kind() == redis::ErrorKind::ResponseError
+        && error
+            .detail()
+            .is_some_and(|detail| detail.contains("DB index"))
 }
 
 /// The client the connection is opened from, and reopened from, so the URL's
@@ -481,12 +533,22 @@ fn client(config: &RedisConfig, endpoint: &str) -> Result<redis::Client, RedisEr
 /// that cannot change and then report it as the network. The kept connection is
 /// opened only once the proof has answered, so its own retries are left the one
 /// case they serve: a Redis gone between the two.
+///
+/// **The proof is closed before the kept connection opens.** Held across it,
+/// every attempt needed two of the server's client slots, so a Redis with one
+/// left — `maxclients` nearly reached by a leak elsewhere, a shared managed
+/// instance — answered the proof, refused the kept connection, and the boot
+/// spent its whole budget in the client's silent retries before blaming the
+/// network. The slot is released as the closed socket reaches the server, so
+/// the kept connection may still meet it taken once; its own retry is then the
+/// case it serves, and it lands inside the budget.
 async fn prove(
     client: &redis::Client,
     budget: Duration,
 ) -> Result<ConnectionManager, redis::RedisError> {
     let mut proof = client.get_multiplexed_async_connection().await?;
     redis::cmd("PING").query_async::<()>(&mut proof).await?;
+    drop(proof);
     ConnectionManager::new_with_config(client.clone(), manager_config(budget)).await
 }
 
@@ -725,6 +787,109 @@ mod tests {
         assert!(logs.find(crate::TARGET, REFUSED).is_empty());
     }
 
+    /// An answer as Redis sends it, parsed as the client parses one.
+    fn answer(line: &str) -> redis::RedisError {
+        let (code, detail) = line.split_once(' ').unwrap_or((line, ""));
+        match code {
+            "ERR" => redis::RedisError::from((
+                redis::ErrorKind::ResponseError,
+                "An error was signalled by the server",
+                detail.to_owned(),
+            )),
+            "LOADING" => redis::RedisError::from((
+                redis::ErrorKind::BusyLoadingError,
+                "An error was signalled by the server",
+                detail.to_owned(),
+            )),
+            "MASTERDOWN" => redis::RedisError::from((
+                redis::ErrorKind::MasterDown,
+                "An error was signalled by the server",
+                detail.to_owned(),
+            )),
+            "TRYAGAIN" => redis::RedisError::from((
+                redis::ErrorKind::TryAgain,
+                "An error was signalled by the server",
+                detail.to_owned(),
+            )),
+            code => redis::make_extension_error(code.to_owned(), Some(detail.to_owned())),
+        }
+    }
+
+    /// Only an answer naming the deployment's own settings is a refusal; every
+    /// other answer — the transient ones `redis` knows, and every code it does
+    /// not — is retried within the budget. Every retry costs the boot a backoff
+    /// and the operator a line telling them to widen the budget, so what repeats
+    /// must not get one; but `BUSY` failed the boot in milliseconds, sending the
+    /// operator to the URL, so what may clear must.
+    #[test]
+    fn only_an_answer_naming_the_deployments_settings_refuses_the_boot() {
+        for refusing in [
+            redis::RedisError::from((
+                redis::ErrorKind::AuthenticationFailed,
+                "Password authentication failed",
+            )),
+            answer("WRONGPASS invalid username-password pair or user is disabled."),
+            answer("NOAUTH Authentication required."),
+            answer("NOPERM User alice has no permissions to run the 'ping' command"),
+            redis::RedisError::from((
+                redis::ErrorKind::ResponseError,
+                "Redis server refused to switch database",
+                "DB index is out of range".to_owned(),
+            )),
+            redis::RedisError::from((
+                redis::ErrorKind::RESP3NotSupported,
+                "Redis Server doesn't support HELLO command therefore resp3 cannot be used",
+            )),
+            redis::RedisError::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        ] {
+            assert!(refused(&refusing), "{refusing:?} repeats on every attempt");
+        }
+        for clearing in [
+            answer(
+                "BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.",
+            ),
+            answer("LOADING Redis is loading the dataset in memory"),
+            answer(
+                "MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.",
+            ),
+            answer("TRYAGAIN Multiple keys request during rehashing of slot"),
+            answer("SOMEDAYCODE a code this client has never heard of"),
+            answer("ERR max number of clients reached"),
+            redis::RedisError::from((
+                redis::ErrorKind::ResponseError,
+                "Redis server refused to switch database",
+                "Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE."
+                    .to_owned(),
+            )),
+            redis::RedisError::from(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)),
+        ] {
+            assert!(
+                !refused(&clearing),
+                "{clearing:?} may clear, so it is retried"
+            );
+        }
+    }
+
+    /// A zero budget handed to `connect` directly — no config read held it to
+    /// the variable's floor — is refused before anything is dialled, naming the
+    /// field, instead of giving up after no attempt and blaming the URL.
+    #[tokio::test]
+    async fn a_zero_budget_built_in_code_is_refused_before_anything_is_dialled() {
+        let Err(error) =
+            RedisConnection::connect(&config("redis://127.0.0.1:9/", Duration::ZERO)).await
+        else {
+            panic!("a zero budget must not connect")
+        };
+        assert!(matches!(error, RedisError::Budget(_)), "{error}");
+        let text = error.to_string();
+        assert!(
+            text.contains(
+                "`RedisConfig::connect_timeout` set in code is 0ns, and it must be above zero"
+            ) && text.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS")),
+            "{text}",
+        );
+    }
+
     /// Skipping certificate verification is refused before anything is
     /// dialled, naming the setting that trusts a private authority instead.
     #[tokio::test]
@@ -890,40 +1055,6 @@ mod tests {
     fn a_budget_too_large_for_the_clock_still_yields_a_deadline() {
         let deadline = deadline_after(Duration::MAX);
         assert!(deadline > Instant::now() + Duration::from_secs(300 * 24 * 60 * 60));
-    }
-
-    /// Every retry costs the boot a backoff and the operator a line telling
-    /// them to widen the budget, so an answer that repeats must not get one —
-    /// and what may clear must.
-    #[test]
-    fn an_answer_redis_repeats_is_refused_and_what_may_clear_is_retried() {
-        let credentials = redis::RedisError::from((
-            redis::ErrorKind::AuthenticationFailed,
-            "Password authentication failed",
-        ));
-        let database = redis::RedisError::from((
-            redis::ErrorKind::ResponseError,
-            "Redis server refused to switch database",
-        ));
-        let acl = redis::RedisError::from((
-            redis::ErrorKind::ExtensionError,
-            "NOPERM",
-            "User default has no permissions to run the 'ping' command".to_owned(),
-        ));
-        let transport =
-            redis::RedisError::from(std::io::Error::from(std::io::ErrorKind::ConnectionRefused));
-        let loading = redis::RedisError::from((
-            redis::ErrorKind::BusyLoadingError,
-            "Redis is loading the dataset in memory",
-        ));
-        assert!(refused(&credentials), "refused credentials fail at once");
-        assert!(
-            refused(&database),
-            "a database index out of range fails at once"
-        );
-        assert!(refused(&acl), "an ACL denying the proof fails at once");
-        assert!(!refused(&transport), "a refused TCP connection may clear");
-        assert!(!refused(&loading), "a server still loading may clear");
     }
 
     /// C6: an unreachable backend used to park the process forever with zero

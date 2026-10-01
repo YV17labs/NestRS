@@ -102,7 +102,7 @@ section. Builders extend the body:
 | `.with_instance("/posts/17")` | URI of the specific occurrence |
 | `.with_type("urn:problem:post-invalid")` | Override the type URI |
 | `.with_title("Post invalid")` | Override the title |
-| `ProblemDetails::from_error(status, title, err)` | Build from any `Display`-impl |
+| `ProblemDetails::from_error(status, title, &err)` | Build from an error: its sentence, a decode failure in it said without the value |
 
 The response carries `Content-Type: application/problem+json`
 automatically; an absent `detail` or `instance` is omitted from the body

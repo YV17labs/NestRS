@@ -31,7 +31,9 @@
 //! [`Valid`](crate::Valid)'s rejection reports the failing field without
 //! echoing what was submitted. serde's own constructors do quote it
 //! (`unknown variant \`…\``), so [`HeaderError`] overrides every one of them
-//! that does.
+//! that does — and a type's own `custom` message, which may quote anything, is
+//! said as the header not holding a value its type accepts, the reading
+//! `nest_rs_core::DecodeError` gives a message of no known shape.
 //!
 //! **A header sent twice binds its first value**, on both the typed and the
 //! untyped path — see [`FromHeaders::deserialize_map`].
@@ -44,8 +46,9 @@ use std::ops::Deref;
 
 use poem::http::HeaderMap;
 use poem::{Error, FromRequest, Request, RequestBody, Result};
-use serde::de::value::MapDeserializer;
-use serde::de::{DeserializeOwned, Deserializer, IntoDeserializer, Visitor};
+use serde::de::{
+    DeserializeOwned, DeserializeSeed, Deserializer, IntoDeserializer, MapAccess, Visitor,
+};
 use serde::forward_to_deserialize_any;
 
 use crate::ProblemDetails;
@@ -123,7 +126,7 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
         fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, HeaderError> {
-        let mut pairs: Vec<(String, Part)> = Vec::with_capacity(fields.len());
+        let mut parts: Vec<Part> = Vec::with_capacity(fields.len());
         for field in fields {
             let Some(raw) = self.headers.get(*field) else {
                 // Absent — or not a header name at all. `http` implements
@@ -144,9 +147,9 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
             let value = raw
                 .to_str()
                 .map_err(|_| HeaderError::malformed(field, "valid UTF-8"))?;
-            pairs.push(((*field).to_owned(), Part::new(field, value)));
+            parts.push(Part::new(field, value));
         }
-        visitor.visit_map(MapDeserializer::new(pairs.into_iter()))
+        visitor.visit_map(Headers::new(parts))
     }
 
     /// The untyped form (`HashMap<String, String>`). A header whose value is
@@ -158,15 +161,15 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
     /// entries the last one would have won instead, and one extractor answering
     /// "which value wins" two ways is a difference nobody would look for.
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, HeaderError> {
-        let pairs: Vec<(String, Part)> = self
+        let parts: Vec<Part> = self
             .headers
             .keys()
             .filter_map(|name| {
                 let value = self.headers.get(name)?.to_str().ok()?;
-                Some((name.as_str().to_owned(), Part::new(name.as_str(), value)))
+                Some(Part::new(name.as_str(), value))
             })
             .collect();
-        visitor.visit_map(MapDeserializer::new(pairs.into_iter()))
+        visitor.visit_map(Headers::new(parts))
     }
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, HeaderError> {
@@ -177,6 +180,61 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
         bytes byte_buf option unit unit_struct newtype_struct seq tuple
         tuple_struct enum identifier ignored_any
+    }
+}
+
+/// The headers a visitor asked for, handed to it one by one, each keyed by its
+/// name — and each value's refusal named against the header it was read from.
+///
+/// serde's own `MapDeserializer` cannot name it: a type refusing a header in its
+/// own words (`custom`) does so after the header's deserializer has returned, so
+/// only the map, which knows which value it handed out, can say whose it was.
+struct Headers {
+    parts: std::vec::IntoIter<Part>,
+    value: Option<Part>,
+}
+
+impl Headers {
+    fn new(parts: Vec<Part>) -> Self {
+        Self {
+            parts: parts.into_iter(),
+            value: None,
+        }
+    }
+}
+
+impl<'de> MapAccess<'de> for Headers {
+    type Error = HeaderError;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(
+        &mut self,
+        seed: K,
+    ) -> Result<Option<K::Value>, HeaderError> {
+        let Some(part) = self.parts.next() else {
+            return Ok(None);
+        };
+        let key = seed.deserialize(IntoDeserializer::<HeaderError>::into_deserializer(
+            part.name.as_str(),
+        ))?;
+        self.value = Some(part);
+        Ok(Some(key))
+    }
+
+    fn next_value_seed<V: DeserializeSeed<'de>>(
+        &mut self,
+        seed: V,
+    ) -> Result<V::Value, HeaderError> {
+        // serde's contract asks for a value only after its key; a visitor
+        // breaking it is refused rather than handed nothing.
+        let Some(part) = self.value.take() else {
+            return Err(HeaderError::Refused);
+        };
+        let name = part.name.clone();
+        seed.deserialize(part).map_err(|err| err.against(&name))
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.parts.len())
     }
 }
 
@@ -320,13 +378,6 @@ impl<'de> Deserializer<'de> for Part {
     }
 }
 
-impl<'de> IntoDeserializer<'de, HeaderError> for Part {
-    type Deserializer = Self;
-    fn into_deserializer(self) -> Self {
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -398,6 +449,35 @@ mod tests {
         .expect("the typed headers bind");
         assert_eq!(h.retry, Some(7));
         assert_eq!(h.debug, Some(true));
+    }
+
+    /// A type refusing a header in its own words — `custom`, from a
+    /// `deserialize_with` or a hand-written `Deserialize` — may quote it. The
+    /// header is named, its value never.
+    #[tokio::test]
+    async fn a_type_s_own_refusal_names_the_header_and_never_quotes_it() {
+        #[derive(Debug)]
+        struct ApiKey;
+        impl<'de> Deserialize<'de> for ApiKey {
+            fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let raw = String::deserialize(d)?;
+                Err(serde::de::Error::custom(format!("bad key {raw}")))
+            }
+        }
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct Keyed {
+            #[serde(rename = "X-Api-Key")]
+            key: ApiKey,
+        }
+        let err = extract::<Keyed>(&[("X-Api-Key", value("sk_live_51HsecretTOKEN"))])
+            .await
+            .err()
+            .expect("the type refuses it");
+        assert_eq!(
+            detail_of(err).await,
+            "header `X-Api-Key` is not a value its type accepts",
+        );
     }
 
     #[tokio::test]

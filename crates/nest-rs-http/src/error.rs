@@ -5,6 +5,9 @@ use std::fmt;
 
 use crate::header::one_of;
 
+/// What a header a type refused in its own words is said not to be.
+const ACCEPTED: &str = "a value its type accepts";
+
 /// What a header binding can fail on. Each variant names the header; none
 /// carries its value.
 #[derive(Debug)]
@@ -22,9 +25,12 @@ pub(crate) enum HeaderError {
     /// put back by [`against`](Self::against), which is the one place that
     /// knows it.
     Unexpected(Cow<'static, str>),
-    /// Anything serde itself reports — a `deserialize_with` function, a custom
-    /// `Deserialize` impl.
-    Custom(String),
+    /// A type's own refusal — a `deserialize_with` function, a custom
+    /// `Deserialize` impl calling `custom`. Its message may quote anything, the
+    /// value included, so it is carried as the fact alone — the reading
+    /// `nest_rs_core::DecodeError` gives the same message — and named against
+    /// its header like [`Unexpected`](Self::Unexpected).
+    Refused,
     /// A field naming something that cannot be a header name. The developer's
     /// mistake, not the caller's — but it surfaces on a request, so it is
     /// reported the same way and says whose it is.
@@ -53,6 +59,7 @@ impl HeaderError {
     pub(crate) fn against(self, name: &str) -> Self {
         match self {
             Self::Unexpected(expected) => Self::malformed(name, expected),
+            Self::Refused => Self::malformed(name, ACCEPTED),
             named => named,
         }
     }
@@ -66,7 +73,7 @@ impl fmt::Display for HeaderError {
                 write!(f, "header `{name}` is not {expected}")
             }
             Self::Unexpected(expected) => write!(f, "header value is not {expected}"),
-            Self::Custom(msg) => f.write_str(msg),
+            Self::Refused => write!(f, "header value is not {ACCEPTED}"),
             Self::NotAHeaderName(field) => write!(
                 f,
                 "`{field}` is not a valid header name, so no request can carry it — fix the \
@@ -77,8 +84,10 @@ impl fmt::Display for HeaderError {
 }
 
 impl serde::de::Error for HeaderError {
-    fn custom<T: fmt::Display>(msg: T) -> Self {
-        Self::Custom(msg.to_string())
+    /// The message is dropped unread: it is the type's, and may quote the
+    /// header it refused.
+    fn custom<T: fmt::Display>(_msg: T) -> Self {
+        Self::Refused
     }
 
     /// serde's derive routes an absent field here, which is what turns

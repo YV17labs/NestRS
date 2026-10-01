@@ -753,9 +753,9 @@ impl Transport for HttpTransport {
         // single RFC-9457 `application/problem+json` envelope; a response
         // already in `problem+json` (a `ServiceError`, a `ProblemDetails`, a
         // guard denial, a domain exception filter) passes through untouched.
-        // `map_to_response` on the route tree collapses handler/extractor
-        // `Err`s into `Ok` responses before here, so the seam inspects the
-        // response, not `Err`. Without CORS / compression the edge is the
+        // A still-unhandled `Err` is rendered by `problem::render_error` before
+        // it is lifted — at the `ERROR_RESOLVE` band when a wrap is registered,
+        // at the edge otherwise. Without CORS / compression the edge is the
         // outermost layer and runs the normalizer itself; with them the
         // boundary stays a separate wrap outside both.
         let fuse_normalize = !self.compression && self.cors.is_none();
@@ -783,10 +783,11 @@ impl Transport for HttpTransport {
             // global filter pool has had its turn, so the interceptor bands
             // above genuinely see 404s and 405s (the router answers an
             // unmatched path with `Err`, which short-circuits the documented
-            // `next.run(req).await?` body).
+            // `next.run(req).await?` body) — through `render_error`, the one
+            // rendering that still holds the error a decode failure is read off.
             //
             // `metas` is sorted ascending, so the insertion point is a
-            // partition — and `to_response` subsumes `map_to_response`, so when
+            // partition — and `ResolvedErrors` subsumes `map_to_response`, so when
             // nothing sits below the band (the common case: an app with only
             // the interceptor pool and infra wraps) the resolution is *free*,
             // folded into the base layer instead of stacked on top of it.
@@ -795,13 +796,13 @@ impl Transport for HttpTransport {
                 .partition_point(|m| m.priority() < crate::endpoint_wrap_priority::ERROR_RESOLVE);
             let (below, above) = metas.split_at(split);
             let mut endpoint: BoxEndpoint<'static, Response> = if below.is_empty() {
-                route.to_response().boxed()
+                crate::problem::ResolvedErrors(route).boxed()
             } else {
                 let mut inner: BoxEndpoint<'static, Response> = route.map_to_response().boxed();
                 for meta in below {
                     inner = meta.wrap(container, inner);
                 }
-                inner.to_response().boxed()
+                crate::problem::ResolvedErrors(inner).boxed()
             };
             for meta in above {
                 endpoint = meta.wrap(container, endpoint);
@@ -838,11 +839,15 @@ impl Transport for HttpTransport {
             } else {
                 endpoint
                     .around(|ep, req| async move {
-                        let resp = match ep.call(req).await {
-                            Ok(resp) => resp,
-                            Err(err) => err.into_response(),
-                        };
-                        Ok(crate::problem::normalize_error_response(resp).await)
+                        Ok(match ep.call(req).await {
+                            Ok(resp) => crate::problem::normalize_error_response(resp).await,
+                            Err(err) => {
+                                crate::problem::normalize_error_response(
+                                    crate::problem::render_error(err),
+                                )
+                                .await
+                            }
+                        })
                     })
                     .map_to_response()
                     .boxed()

@@ -13,7 +13,8 @@
 //! extension members (e.g. field-level errors under `errors`) ride via
 //! [`ProblemDetails::with_extension`].
 
-use poem::error::ResponseError;
+use nest_rs_core::DecodeError;
+use poem::error::{ParseQueryError, ResponseError};
 use poem::http::{StatusCode, header};
 use poem::{IntoResponse, Response};
 use serde::Serialize;
@@ -61,14 +62,21 @@ fn serialize_status<S: serde::Serializer>(
 }
 
 impl ProblemDetails {
-    /// Convert a `Display` value to the problem `detail` field. Chainable
-    /// shorthand for `.with_detail(err.to_string())`.
-    pub fn from_error(status: StatusCode, title: impl Into<String>, err: impl ToString) -> Self {
+    /// A problem whose `detail` is `err`'s own sentence — with any decode failure
+    /// its chain holds said without its value ([`DecodeError::redact`]), since a
+    /// reply is read, logged and cached by more parties than the payload ever
+    /// was. For a sentence that is not an error's, write
+    /// [`with_detail`](Self::with_detail).
+    pub fn from_error(
+        status: StatusCode,
+        title: impl Into<String>,
+        err: &(dyn std::error::Error + 'static),
+    ) -> Self {
         Self {
             type_uri: "about:blank".into(),
             title: title.into(),
             status,
-            detail: Some(err.to_string()),
+            detail: Some(DecodeError::redact(&err.to_string(), Some(err)).into_owned()),
             instance: None,
             extensions: serde_json::Map::new(),
         }
@@ -221,9 +229,11 @@ impl ProblemDetails {
 /// unmounted-route `404`, a `413`, a `405`, a bad-path-id `400` an extractor
 /// rejected — is rebuilt as `problem+json` keyed on its status, **preserving
 /// the original headers** (`WWW-Authenticate`, `Retry-After`, …). A
-/// client-error (`4xx`) body rides through as `detail`; a server-error (`5xx`)
-/// body is dropped so a driver or panic message never reaches the wire. A
-/// deliberately-typed body (`application/json`, `text/html`, …) is left alone.
+/// client-error (`4xx`) body rides through as `detail`, any of serde's
+/// sentences quoting a value said without it ([`DecodeError::redact`]); a
+/// server-error (`5xx`) body is dropped so a driver or panic message never
+/// reaches the wire. A deliberately-typed body (`application/json`,
+/// `text/html`, …) is left alone.
 pub async fn normalize_error_response(resp: Response) -> Response {
     let status = resp.status();
     if !(status.is_client_error() || status.is_server_error()) {
@@ -236,31 +246,23 @@ pub async fn normalize_error_response(resp: Response) -> Response {
     if resp.extensions().get::<crate::MappedError>().is_some() {
         return resp;
     }
-    let content_type = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let already_problem = content_type
-        .as_deref()
-        .is_some_and(|ct| ct.starts_with("application/problem+json"));
     // Only poem's default plain-text (or a bodyless) error is a raw transport
-    // error; anything a handler deliberately typed is left untouched.
-    let is_raw_transport_error = content_type
-        .as_deref()
-        .is_none_or(|ct| ct.starts_with("text/plain"));
-    if already_problem || !is_raw_transport_error {
+    // error; a problem, or anything a handler deliberately typed, is left
+    // untouched.
+    if !is_raw_text(&resp) {
         return resp;
     }
 
     let (parts, body) = resp.into_parts();
     let mut problem = ProblemDetails::from_status(status);
+    // A body rendered from an `Err` has been through `render_error`; one a
+    // handler or a layer wrote as text is read by serde's wording alone.
     if status.is_client_error()
         && let Ok(bytes) = body.into_bytes().await
         && let Ok(text) = std::str::from_utf8(&bytes)
         && !text.trim().is_empty()
     {
-        problem = problem.with_detail(text.trim().to_owned());
+        problem = problem.with_detail(DecodeError::redact(text.trim(), None).into_owned());
     }
     let mut response = problem.as_response();
     // Carry the original response's headers across — the new body owns
@@ -294,6 +296,64 @@ pub async fn normalize_error_response(resp: Response) -> Response {
         }
     }
     response
+}
+
+/// Whether `resp` is poem's default rendering of an error — `text/plain`, or no
+/// body type at all — rather than a problem or a body somebody typed.
+fn is_raw_text(resp: &Response) -> bool {
+    resp.headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_none_or(|ct| ct.starts_with("text/plain"))
+}
+
+/// An `Err` as the response it renders: poem's own rendering, except that a raw
+/// text body says each decode failure in the error's chain without its value.
+///
+/// The transport renders a still-unhandled `Err` at one of two places — the
+/// [`ERROR_RESOLVE`](crate::interceptor::priority::ERROR_RESOLVE) band when any
+/// wrap is registered, which is every app with an interceptor pool or a global
+/// guard, and the edge otherwise — and both render through this, because the
+/// rendered body has lost the error and with it the exact reading of a decode
+/// failure. poem's extractors answer `parse error: <serde's sentence>`, which
+/// quotes the value the client sent — a `Json<T>` field, a `Form<T>` field, a
+/// query parameter — into a `400` that proxies log and caches keep, and which
+/// every band above the render point reads. `Query<T>`'s rejection is
+/// transparent over its serde error, so that one is read off the type.
+pub(crate) fn render_error(err: poem::Error) -> Response {
+    let sentence = err.to_string();
+    let mut said = DecodeError::redact(&sentence, Some(&err)).into_owned();
+    if let Some(query) = err.downcast_ref::<ParseQueryError>() {
+        said = DecodeError::redact(&said, Some(&query.0)).into_owned();
+    }
+    let redacted = (said != sentence).then_some(said);
+    let resp = err.into_response();
+    match redacted {
+        // The error's own sentence, which differs from the body only for an
+        // error rendering its own text — and is then the one that cannot quote
+        // a decode failure's value.
+        Some(said) if is_raw_text(&resp) => {
+            let (parts, _) = resp.into_parts();
+            Response::from_parts(parts, poem::Body::from_string(said))
+        }
+        _ => resp,
+    }
+}
+
+/// The [`ERROR_RESOLVE`](crate::interceptor::priority::ERROR_RESOLVE) band: the
+/// route tree, with a still-unhandled `Err` rendered by [`render_error`] so every
+/// band above observes a response.
+pub(crate) struct ResolvedErrors<E>(pub(crate) E);
+
+impl<E: poem::Endpoint> poem::Endpoint for ResolvedErrors<E> {
+    type Output = Response;
+
+    async fn call(&self, req: poem::Request) -> poem::Result<Response> {
+        Ok(match self.0.call(req).await {
+            Ok(out) => out.into_response(),
+            Err(err) => render_error(err),
+        })
+    }
 }
 
 impl std::fmt::Display for ProblemDetails {

@@ -12,6 +12,7 @@ mod global_prefix;
 mod header;
 mod input;
 mod opaque;
+mod problem;
 mod response_body;
 mod route_decorators;
 mod security_headers;

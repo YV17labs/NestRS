@@ -177,7 +177,13 @@ async fn shout(&self, Valid(input): Valid<Json<GreetInput>>) -> Result<Json<Gree
   next to `#[input]` is a conflicting impl (`E0119`), not an addition. Need a
   custom `Deserialize` shape (e.g. untagged enums)? Skip `#[input]` and derive
   all four by hand.
-- **`Json<T>`** parses the request body into `T`. Malformed JSON is `400`.
+- **`Json<T>`** parses the request body into `T`. A body that does not decode
+  is `400`, and its `detail` says where and what kind — `parse error: invalid
+  type: a string, expected u64 at line 1 column 12` — never the value refused,
+  nor a key the client sent: serde's own sentence quotes both, and a body field
+  is where a password or a card number travels. `Form<T>`, `Query<T>`,
+  `Path<T>` and `Header<T>` refuse the same way, and so does a handler's own
+  decode returned as a `400` (`poem::error::BadRequest(e)`).
 - **`Valid<E>`** runs [validator](https://docs.rs/validator) on the
   extracted value. A failure returns `400` with the structured error list
   — no manual checks in the handler. `Valid` is the ergonomic form of the

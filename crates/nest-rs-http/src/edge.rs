@@ -30,9 +30,10 @@
 //! The problem normalizer itself follows the same fusion logic: when neither
 //! CORS nor compression is configured the edge is the outermost layer, so it
 //! runs [`normalize_error_response`](crate::problem::normalize_error_response)
-//! as its own tail (`normalize = true`) instead of mounting the `.around`
-//! wrap that used to carry it — one boxed layer less on every request. With
-//! CORS / compression the wrap stays outermost, unchanged.
+//! as its own tail (`normalize = true`), an `Err` rendered first by
+//! [`render_error`](crate::problem::render_error), instead of mounting the
+//! `.around` wrap that used to carry it — one boxed layer less on every
+//! request. With CORS / compression the wrap stays outermost, unchanged.
 
 use std::future::{Future, poll_fn};
 use std::net::IpAddr;
@@ -491,11 +492,13 @@ where
             // outermost layer: an `Err` escaping the inner tree renders without
             // the header stamp (exactly as the standalone `.around` wrap saw it),
             // then any raw transport error is lifted onto `problem+json`.
-            let resp = match result {
-                Ok(resp) => resp,
-                Err(err) => err.into_response(),
-            };
-            Ok(crate::problem::normalize_error_response(resp).await)
+            Ok(match result {
+                Ok(resp) => crate::problem::normalize_error_response(resp).await,
+                Err(err) => {
+                    crate::problem::normalize_error_response(crate::problem::render_error(err))
+                        .await
+                }
+            })
         } else {
             result
         };

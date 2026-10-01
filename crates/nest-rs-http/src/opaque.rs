@@ -30,9 +30,11 @@ use crate::problem::ProblemDetails;
 /// Turn a failure the client must not read into one it may.
 ///
 /// Implemented for every `Result` whose error converts into a boxed error, so
-/// the whole cause chain reaches the operator's line. It covers a
-/// `DbErr`, a storage error, an `anyhow::Error` and a feature's own type without
-/// any of them having to know HTTP exists.
+/// the whole cause chain reaches the operator's line — boxed by
+/// [`nest_rs_core::boxed_error`], so an `anyhow::Error` keeps every link and a
+/// decode failure inside it is said without its value. It covers a `DbErr`, a
+/// storage error, an `anyhow::Error` and a feature's own type without any of
+/// them having to know HTTP exists.
 ///
 /// The twin traits on MCP, GraphQL and WS are deliberately separate types rather
 /// than one trait generic over the error: the output is what lets `.opaque()?`
@@ -44,11 +46,11 @@ pub trait Opaque<T> {
 
 impl<T, E> Opaque<T> for Result<T, E>
 where
-    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
 {
     fn opaque(self) -> Result<T, Error> {
         self.map_err(|err| {
-            let err: Box<dyn std::error::Error + Send + Sync> = err.into();
+            let err = nest_rs_core::boxed_error(err);
             tracing::error!(
                 target: crate::target::HTTP,
                 error = %nest_rs_core::error_message(&*err),

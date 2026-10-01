@@ -16,6 +16,8 @@
 //! validators: the descriptors the `#[module]` macro submits, the reachability
 //! set, and the passes themselves.
 
+use std::borrow::Cow;
+
 use serde_json::error::Category;
 use thiserror::Error;
 
@@ -247,21 +249,29 @@ pub struct KeyedDependencyError {
 /// failure, the line and column when the payload was text, the kind of value
 /// found and the type expected — never the value.
 ///
-/// serde's own sentences quote the value they refused: ``invalid type: string
-/// "sk_live_…", expected u64``, ``unknown variant `4242…`, expected `Visa` ``. A
-/// payload is somebody's data, and every edge that reports a failure to decode
-/// one puts that sentence where it is read by more people, and kept longer, than
-/// the payload ever was — a log line, a dead-letter record, an error frame. So
-/// the framework reports it the way `Valid` and `Header<T>` already do.
+/// serde's own sentences quote what the payload held: ``invalid type: string
+/// "sk_live_…", expected u64``, ``unknown variant `4242…`, expected `Visa` ``,
+/// ``unknown field `sk_live_…`, expected `amount` ``. A payload is somebody's data,
+/// and every edge that reports a failure to decode one puts that sentence where it
+/// is read by more people, and kept longer, than the payload ever was — a log
+/// line, a dead-letter record, a reply. So the framework reports it the way
+/// `Valid` and `Header<T>` already do.
 ///
 /// **Fail-secure by construction.** The sentence is rebuilt from the shapes serde
-/// and serde_json are known to word; any other — a type's own `custom` message,
-/// which may quote anything — is reported by its category alone.
+/// words; any other — a type's own `custom` message, which may quote anything — is
+/// reported by its category alone. What a rebuilt sentence keeps is the type's
+/// own: its expected description, a field it requires, a count. A key or a
+/// variant the payload spelled is the payload's, and is dropped like a value. What
+/// is kept is bounded ([`MAX_LEN`](Self::MAX_LEN)), since a visitor's `expecting`
+/// may describe itself at any length.
 ///
-/// Built from the [`serde_json::Error`] a decode returned
-/// (`DecodeError::new(&error)`, or `.map_err(DecodeError::from)`), and carried
-/// where that error would have been: as the `source` of the edge's own error, or
-/// displayed in its sentence.
+/// Built from the error a decode returned — serde_json's, or serde's own
+/// [`value::Error`](serde::de::value::Error), which `serde_urlencoded` and every
+/// `IntoDeserializer` reader return: `DecodeError::from(&error)`. Carried where
+/// that error would have been: as the `source` of the edge's own error, or
+/// displayed in its sentence. A text already rendered *from* an error — a reply's
+/// detail, a wrapper's sentence — is said without the values it quotes by
+/// [`redact`](Self::redact).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{sentence}")]
 pub struct DecodeError {
@@ -269,6 +279,12 @@ pub struct DecodeError {
 }
 
 impl DecodeError {
+    /// The longest a report runs before its position, in bytes. What a rebuilt
+    /// sentence keeps is the type's — an `expected` description, a field name —
+    /// and a hand-written visitor's `expecting` may describe itself at any length;
+    /// past this the sentence is cut at a character boundary and ends in `…`.
+    pub const MAX_LEN: usize = 512;
+
     /// The report of `error`, without the value it quoted.
     pub fn new(error: &serde_json::Error) -> Self {
         let rendered = error.to_string();
@@ -280,16 +296,50 @@ impl DecodeError {
             .as_deref()
             .and_then(|position| rendered.strip_suffix(position))
             .unwrap_or(&rendered);
-        let mut sentence = match error.classify() {
+        let sentence = match error.classify() {
             Category::Data => data(message),
             // serde_json's own wording: one fixed sentence per fault of the text
             // or the reader, naming no byte of the input.
             Category::Syntax | Category::Eof | Category::Io => message.to_owned(),
         };
+        let mut sentence = bounded(&sentence).into_owned();
         if let Some(position) = position {
             sentence.push_str(&position);
         }
         Self { sentence }
+    }
+
+    /// `link` as the report it is, when it is a decode failure — serde_json's
+    /// error, or serde's own value error.
+    pub(crate) fn of(link: &(dyn std::error::Error + 'static)) -> Option<Self> {
+        if let Some(error) = link.downcast_ref::<serde_json::Error>() {
+            return Some(Self::new(error));
+        }
+        link.downcast_ref::<serde::de::value::Error>()
+            .map(Self::from)
+    }
+
+    /// `text` said without the values a decode failure quotes in it — a reply's
+    /// detail, a frame, any sentence rendered from an error before the edge that
+    /// reports it held it.
+    ///
+    /// Two readings, both applied. Each decode failure in `error`'s chain is said
+    /// as its report wherever `text` spells it — the exact reading, and the only
+    /// one that reaches a type's `custom` message. Then any sentence still in one
+    /// of serde's quoting shapes (`invalid type:`, `invalid value:`, ``unknown
+    /// variant ` ``, ``unknown field ` ``) is rebuilt without its value: those are
+    /// `serde::de::Error`'s own defaults, worded alike by every format, and they
+    /// survive a wrapper that hides its cause from `source()` — thiserror's
+    /// `#[error(transparent)]`, anyhow's own box, a library that kept only the
+    /// text. From the first such sentence to the end of `text` is the failure's,
+    /// since nothing marks where it ends, and is bounded like a report.
+    ///
+    /// Borrowed when nothing in `text` was a decode failure's.
+    pub fn redact<'t>(
+        text: &'t str,
+        error: Option<&(dyn std::error::Error + 'static)>,
+    ) -> Cow<'t, str> {
+        DecodeFailures::of(error).redact(text)
     }
 }
 
@@ -305,33 +355,99 @@ impl From<&serde_json::Error> for DecodeError {
     }
 }
 
+/// serde's own error for a value read through `IntoDeserializer` — the one
+/// `serde_urlencoded` returns for a query string or a form. Every message it
+/// carries is a data error, with no position: the reader has no text to point
+/// into.
+impl From<&serde::de::value::Error> for DecodeError {
+    fn from(error: &serde::de::value::Error) -> Self {
+        Self {
+            sentence: bounded(&data(&error.to_string())).into_owned(),
+        }
+    }
+}
+
+impl From<serde::de::value::Error> for DecodeError {
+    fn from(error: serde::de::value::Error) -> Self {
+        Self::from(&error)
+    }
+}
+
+/// The decode failures an error's chain holds, each as the text it displays and
+/// the report it is said as — gathered once, so every text rendered from the
+/// chain is redacted against the same pairs.
+pub(crate) struct DecodeFailures(Vec<(String, String)>);
+
+impl DecodeFailures {
+    /// Every link of `error`'s chain that is a decode failure saying something
+    /// its report does not.
+    pub(crate) fn of(error: Option<&(dyn std::error::Error + 'static)>) -> Self {
+        let mut pairs = Vec::new();
+        let mut link = error;
+        while let Some(current) = link {
+            if let Some(report) = DecodeError::of(current) {
+                let displayed = current.to_string();
+                if !displayed.is_empty() && displayed != report.sentence {
+                    pairs.push((displayed, report.sentence));
+                }
+            }
+            link = current.source();
+        }
+        Self(pairs)
+    }
+
+    /// `text`, with each failure it spells said as its report, and any sentence
+    /// left in serde's quoting shapes rebuilt without its value.
+    pub(crate) fn redact<'t>(&self, text: &'t str) -> Cow<'t, str> {
+        let mut text = Cow::Borrowed(text);
+        for (displayed, report) in &self.0 {
+            if text.contains(displayed.as_str()) {
+                text = Cow::Owned(text.replace(displayed.as_str(), report));
+            }
+        }
+        let rebuilt = match quoting_sentences(&text) {
+            Cow::Owned(rebuilt) => Some(rebuilt),
+            Cow::Borrowed(_) => None,
+        };
+        rebuilt.map_or(text, Cow::Owned)
+    }
+}
+
+/// `text` within [`DecodeError::MAX_LEN`] bytes, cut at a character boundary,
+/// and whether it was cut.
+fn within_bound(text: &str) -> (&str, bool) {
+    if text.len() <= DecodeError::MAX_LEN {
+        return (text, false);
+    }
+    let mut end = DecodeError::MAX_LEN;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
+}
+
+/// `text` within [`DecodeError::MAX_LEN`] bytes, ending in `…` when it was cut.
+fn bounded(text: &str) -> Cow<'_, str> {
+    match within_bound(text) {
+        (kept, true) => Cow::Owned(format!("{kept}…")),
+        (kept, false) => Cow::Borrowed(kept),
+    }
+}
+
 /// What a data error — a value that is valid JSON and not the type — is reported
 /// as, rebuilt from the shapes serde words.
 fn data(message: &str) -> String {
-    if let Some(rest) = message.strip_prefix("invalid type: ") {
-        return found("invalid type", rest);
-    }
-    if let Some(rest) = message.strip_prefix("invalid value: ") {
-        return found("invalid value", rest);
-    }
-    // The variant is a value, spelled by whoever wrote the payload; the list of
-    // variants is the type's.
-    if let Some(rest) = message.strip_prefix("unknown variant ") {
-        return match expected(rest) {
-            Some(expected) => format!("unknown variant, {expected}"),
-            None if rest.ends_with(", there are no variants") => {
-                "unknown variant, there are no variants".to_owned()
-            }
-            None => "unknown variant".to_owned(),
-        };
+    if let Some(rebuilt) = quoting(message) {
+        return rebuilt;
     }
     // Sentences naming a count, or a field of the type's own, and nothing the
-    // payload holds as a value.
-    const KEPT: [&str; 6] = [
+    // payload holds as a value. `missing field` and `duplicate field` name a
+    // field the derive spelled (`&'static str`); `unknown field` names the
+    // payload's key, and is a quoting shape above.
+    const KEPT: [&str; 5] = [
         "invalid length ",
         "missing field `",
         "duplicate field `",
-        "unknown field `",
         "data did not match any variant of untagged enum ",
         "no variant of enum ",
     ];
@@ -341,13 +457,107 @@ fn data(message: &str) -> String {
     "a value its type does not accept".to_owned()
 }
 
+/// A sentence in one of serde's quoting shapes, rebuilt without what the payload
+/// spelled; `None` for any other.
+fn quoting(sentence: &str) -> Option<String> {
+    if let Some(rest) = sentence.strip_prefix("invalid type: ") {
+        return Some(found("invalid type", rest));
+    }
+    if let Some(rest) = sentence.strip_prefix("invalid value: ") {
+        return Some(found("invalid value", rest));
+    }
+    // The variant and the key are spelled by whoever wrote the payload; the list
+    // the type expected is the type's.
+    if let Some(rest) = sentence.strip_prefix("unknown variant ") {
+        return Some(unknown("unknown variant", rest, ", there are no variants"));
+    }
+    if let Some(rest) = sentence.strip_prefix("unknown field ") {
+        return Some(unknown("unknown field", rest, ", there are no fields"));
+    }
+    None
+}
+
+/// The kinds serde's `Unexpected` quotes a value after, and what each is said as
+/// — a string's opening quote also as `Debug` escapes it, which is how a wrapper
+/// formatting its cause with `{:?}` spells it.
+const QUOTING_KINDS: [(&str, &str); 6] = [
+    ("boolean `", "a boolean"),
+    ("integer `", "an integer"),
+    ("floating point `", "a floating point number"),
+    ("character `", "a character"),
+    ("string \"", "a string"),
+    ("string \\\"", "a string"),
+];
+
+/// Where one of serde's quoting sentences opens in `text`, read by serde's own
+/// wording: `invalid type:` or `invalid value:` then a kind that quotes a value,
+/// or `` unknown variant ` `` / `` unknown field ` ``, each closed later by the
+/// tail serde always writes. Anything else — `invalid value: must be positive`,
+/// a sentence this module already rebuilt — is somebody's own words, and read as
+/// they are.
+fn quoting_opens_at(text: &str) -> Option<usize> {
+    const FOUND: [&str; 2] = ["invalid type: ", "invalid value: "];
+    const UNKNOWN: [&str; 2] = ["unknown variant `", "unknown field `"];
+    // Where the last tail opens, found once: an opening is closed when a tail
+    // follows it, which is when the last one does. Asking each opening whether
+    // its rest held one was quadratic in a text a client can fill with openings.
+    let expected = text.rfind(", expected ");
+    let closed = expected.max(text.rfind(", there are no "));
+    let found = FOUND.iter().filter_map(|open| {
+        text.match_indices(open)
+            .map(|(at, _)| at)
+            .take_while(|at| expected.is_some_and(|tail| tail >= at + open.len()))
+            .find(|at| {
+                let rest = &text[at + open.len()..];
+                QUOTING_KINDS.iter().any(|(head, _)| rest.starts_with(head))
+            })
+    });
+    let unknown = UNKNOWN.iter().filter_map(|open| {
+        text.find(open)
+            .filter(|at| closed.is_some_and(|tail| tail >= *at))
+    });
+    found.chain(unknown).min()
+}
+
+/// `text` with each of serde's quoting sentences in it rebuilt, from the first
+/// one to the end of `text` — nothing marks where a failure ends in free text,
+/// so all that follows it is the failure's. Bounded before it is read, so the
+/// walk over the `expected` tails it recurses into is bounded too.
+fn quoting_sentences(text: &str) -> Cow<'_, str> {
+    let Some(at) = quoting_opens_at(text) else {
+        return Cow::Borrowed(text);
+    };
+    let (failure, cut) = within_bound(&text[at..]);
+    // Every opening `quoting_opens_at` finds is one `quoting` rebuilds; the
+    // fallback is the report for a shape it does not know, which says nothing
+    // the payload held.
+    let rebuilt = quoting(failure).unwrap_or_else(|| "a value its type does not accept".to_owned());
+    let mut redacted = String::with_capacity(at + rebuilt.len() + '…'.len_utf8());
+    redacted.push_str(&text[..at]);
+    redacted.push_str(&bounded(&rebuilt));
+    if cut && !redacted.ends_with('…') {
+        redacted.push('…');
+    }
+    Cow::Owned(redacted)
+}
+
 /// `invalid type` or `invalid value`, said with the kind of value found and the
 /// type expected.
 fn found(what: &str, rest: &str) -> String {
     let kind = kind(rest);
     match expected(rest) {
-        Some(expected) => format!("{what}: {kind}, {expected}"),
+        Some(expected) => format!("{what}: {kind}, {}", quoting_sentences(expected)),
         None => format!("{what}: {kind}"),
+    }
+}
+
+/// `unknown variant` or `unknown field`, said with what the type expected and
+/// without what the payload spelled.
+fn unknown(what: &str, rest: &str, none_expected: &str) -> String {
+    match expected(rest) {
+        Some(expected) => format!("{what}, {}", quoting_sentences(expected)),
+        None if rest.ends_with(none_expected) => format!("{what}{none_expected}"),
+        None => what.to_owned(),
     }
 }
 
@@ -361,13 +571,7 @@ fn expected(rest: &str) -> Option<&str> {
 /// The kind of value serde's `Unexpected` names at the head of `rest`, without
 /// the value it quotes after the kind.
 fn kind(rest: &str) -> &'static str {
-    const QUOTING: [(&str, &str); 5] = [
-        ("boolean `", "a boolean"),
-        ("integer `", "an integer"),
-        ("floating point `", "a floating point number"),
-        ("character `", "a character"),
-        ("string \"", "a string"),
-    ];
+    // The kinds that quote nothing.
     const BARE: [(&str, &str); 12] = [
         ("unit value", "null"),
         ("byte array", "a byte array"),
@@ -382,7 +586,10 @@ fn kind(rest: &str) -> &'static str {
         ("struct variant", "a struct variant"),
         ("null", "null"),
     ];
-    if let Some((_, kind)) = QUOTING.iter().find(|(head, _)| rest.starts_with(head)) {
+    if let Some((_, kind)) = QUOTING_KINDS
+        .iter()
+        .find(|(head, _)| rest.starts_with(head))
+    {
         return kind;
     }
     BARE.iter()
@@ -485,6 +692,209 @@ mod decode_error_tests {
             from_value(json!({ "card": "Visa" })),
             "missing field `amount`"
         );
+    }
+
+    /// `unknown field` names the key the *payload* spelled, so it is dropped like
+    /// a variant: what is kept is the list the type expected.
+    #[test]
+    fn an_unknown_key_is_the_payload_s_and_is_dropped() {
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Strict {
+            amount: u64,
+        }
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Pair {
+            amount: u64,
+            currency: String,
+        }
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Empty {}
+
+        let text = serde_json::from_str::<Strict>(r#"{"amount":1,"sk_live_KEY":1}"#)
+            .expect_err("an unknown key");
+        assert_eq!(
+            DecodeError::new(&text).to_string(),
+            "unknown field, expected `amount` at line 1 column 25"
+        );
+        let value = serde_json::from_value::<Strict>(json!({ "amount": 1, "sk_live_KEY": 1 }))
+            .expect_err("an unknown key");
+        assert_eq!(
+            DecodeError::new(&value).to_string(),
+            "unknown field, expected `amount`"
+        );
+        let pair = serde_json::from_value::<Pair>(json!({ "sk_live_KEY": 1 }))
+            .expect_err("an unknown key");
+        assert_eq!(
+            DecodeError::new(&pair).to_string(),
+            "unknown field, expected `amount` or `currency`"
+        );
+        let empty =
+            serde_json::from_value::<Empty>(json!({ "sk_live_KEY": 1 })).expect_err("no fields");
+        assert_eq!(
+            DecodeError::new(&empty).to_string(),
+            "unknown field, there are no fields"
+        );
+    }
+
+    /// What a report keeps is the type's, and a hand-written visitor describes
+    /// itself at whatever length it likes: the report stops at the bound, at a
+    /// character boundary, and still carries its position.
+    #[test]
+    fn what_a_report_keeps_is_bounded() {
+        #[derive(Debug)]
+        struct Verbose;
+        impl<'de> Deserialize<'de> for Verbose {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                struct Visitor;
+                impl serde::de::Visitor<'_> for Visitor {
+                    type Value = Verbose;
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str(&"é".repeat(2 * DecodeError::MAX_LEN))
+                    }
+                }
+                d.deserialize_u64(Visitor)
+            }
+        }
+        let error = serde_json::from_str::<Verbose>("true").expect_err("not a number");
+        let report = DecodeError::new(&error).to_string();
+        let (sentence, position) = report
+            .rsplit_once('…')
+            .expect("a report past the bound says it was cut");
+        assert!(sentence.len() <= DecodeError::MAX_LEN, "{}", sentence.len());
+        assert!(sentence.starts_with("invalid type: a boolean, expected é"));
+        assert_eq!(position, " at line 1 column 4");
+    }
+
+    /// serde's own value error — `serde_urlencoded`'s, for a query string or a
+    /// form — carries the same sentences, with no position, and is reported the
+    /// same way.
+    #[test]
+    fn serde_s_value_error_is_reported_like_serde_json_s() {
+        use serde::de::IntoDeserializer;
+        use serde::de::value::Error as ValueError;
+
+        let quoted = u64::deserialize(IntoDeserializer::<ValueError>::into_deserializer(
+            "sk_live_51HsecretTOKEN",
+        ))
+        .expect_err("not a number");
+        assert!(
+            quoted.to_string().contains("sk_live"),
+            "serde quotes it: {quoted}"
+        );
+        assert_eq!(
+            DecodeError::from(&quoted).to_string(),
+            "invalid type: a string, expected u64"
+        );
+        let custom = <ValueError as serde::de::Error>::custom("token ya29.secret refused");
+        assert_eq!(
+            DecodeError::from(custom).to_string(),
+            "a value its type does not accept"
+        );
+    }
+
+    /// A text rendered from an error before the edge held it — a reply, a
+    /// wrapper's sentence — is said without the values it quotes, by both
+    /// readings: the chain's failures exactly, and serde's quoting shapes
+    /// wherever they appear.
+    #[test]
+    fn a_rendered_text_is_redacted_by_the_chain_and_by_serde_s_wording() {
+        let secret =
+            serde_json::from_str::<u64>(r#""sk_live_51HsecretTOKEN""#).expect_err("not a number");
+        let detail = format!("parse error: {secret}");
+        assert_eq!(
+            DecodeError::redact(&detail, Some(&secret)),
+            "parse error: invalid type: a string, expected u64 at line 1 column 24"
+        );
+        assert_eq!(
+            DecodeError::redact(&detail, None),
+            "parse error: invalid type: a string, expected u64 at line 1 column 24",
+            "serde's wording is read without the chain too",
+        );
+        assert!(
+            matches!(
+                DecodeError::redact("not found", Some(&secret)),
+                Cow::Borrowed(_)
+            ),
+            "a text quoting nothing is handed back as it was",
+        );
+
+        // A type's `custom` message has no shape to read; only the chain knows it.
+        let custom = <serde_json::Error as serde::de::Error>::custom("bad token sk_live_51H");
+        let detail = format!("could not read: {custom}");
+        assert_eq!(
+            DecodeError::redact(&detail, Some(&custom)),
+            "could not read: a value its type does not accept"
+        );
+
+        // The quoted value may spell anything, the separator and a second
+        // sentence included; every shape after the first is rebuilt as well.
+        let text = r#"x: invalid type: string "a, expected u64, b", expected u64; unknown field `sk_live`, there are no fields"#;
+        let redacted = DecodeError::redact(text, None);
+        assert!(
+            !redacted.contains("sk_live") && !redacted.contains("\"a"),
+            "{redacted}"
+        );
+        assert_eq!(
+            redacted,
+            "x: invalid type: a string, expected u64; unknown field, there are no fields"
+        );
+
+        // Somebody's own words in serde's vocabulary are not serde's sentence.
+        for own in [
+            "invalid value: must be positive",
+            "invalid type: expected an admin token",
+            "unknown field `limit` in the request",
+        ] {
+            assert_eq!(DecodeError::redact(own, None), own);
+        }
+
+        // A report read again reads the same, so the two readings compose.
+        for report in [
+            "invalid type: a string, expected u64 at line 1 column 24",
+            "invalid value: an integer, expected u64",
+            "unknown variant, expected `Visa`",
+            "unknown field, there are no fields",
+        ] {
+            assert_eq!(DecodeError::redact(report, None), report);
+        }
+
+        // A client can fill a text with openings; reading them is linear.
+        let crowded = format!(
+            "{}, expected u64",
+            "invalid type: string \"".repeat(200_000)
+        );
+        let started = std::time::Instant::now();
+        let redacted = DecodeError::redact(&crowded, None);
+        assert!(
+            redacted.len() < 2 * DecodeError::MAX_LEN,
+            "{}",
+            redacted.len()
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?} for {} bytes",
+            started.elapsed(),
+            crowded.len(),
+        );
+
+        // Nothing marks where a failure ends in free text, so what follows the
+        // first one is the failure's, and bounded like a report.
+        let long = format!(
+            "x: invalid type: string \"{}\", expected u64",
+            "s".repeat(10_000)
+        );
+        let redacted = DecodeError::redact(&long, None);
+        assert!(
+            redacted.len() < 2 * DecodeError::MAX_LEN,
+            "{}",
+            redacted.len()
+        );
+        assert!(!redacted.contains("sss"), "{redacted}");
     }
 
     /// A type's own `custom` message may quote anything, so it is reported by

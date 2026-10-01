@@ -23,16 +23,21 @@ use std::any::Any;
 pub const FIELD: &str = "panic";
 
 /// Best-effort message from a caught panic payload — the common `&str` /
-/// `String` shapes `panic!` / `unwrap` / `expect` produce.
+/// `String` shapes `panic!` / `unwrap` / `expect` produce — with any of serde's
+/// sentences in it said without the value
+/// ([`DecodeError::redact`](crate::DecodeError::redact)): `.unwrap()` on a
+/// failed decode formats serde's error, value included, into the payload, and
+/// the payload is the one text of a panic the framework files.
 ///
 /// Log it under [`FIELD`], so one query reaches a contained panic whichever
 /// transport caught it.
-pub fn panic_message(payload: &(dyn Any + Send)) -> &str {
-    payload
+pub fn panic_message(payload: &(dyn Any + Send)) -> String {
+    let message = payload
         .downcast_ref::<&'static str>()
         .copied()
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("<non-string panic payload>")
+        .unwrap_or("<non-string panic payload>");
+    crate::DecodeError::redact(message, None).into_owned()
 }
 
 #[cfg(test)]
@@ -51,5 +56,22 @@ mod tests {
         // the event.
         let opaque: Box<dyn Any + Send> = Box::new(42u8);
         assert_eq!(panic_message(opaque.as_ref()), "<non-string panic payload>");
+    }
+
+    /// `.unwrap()` on a failed decode panics with serde's error in `Debug` form,
+    /// the value inside it; the message files without it.
+    #[test]
+    fn a_panic_over_a_decode_failure_is_said_without_its_value() {
+        let payload = std::panic::catch_unwind(|| {
+            serde_json::from_str::<u64>(r#""sk_live_51HsecretTOKEN""#).unwrap()
+        })
+        .expect_err("a secret is not a number");
+        let message = panic_message(payload.as_ref());
+        assert!(!message.contains("sk_live"), "{message}");
+        assert_eq!(
+            message,
+            "called `Result::unwrap()` on an `Err` value: Error(\"invalid type: a string, \
+             expected u64\", line: 1, column: 24)"
+        );
     }
 }

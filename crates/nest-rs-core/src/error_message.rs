@@ -6,8 +6,18 @@
 //! own source (`pool timed out: timed out`), so a line appending every source
 //! says one thing twice. Two crates had written the walk, one with the second
 //! defect and one without; one home keeps the rendering uniform.
+//!
+//! The walk can only read the links a chain exposes, so the box an edge carries
+//! a handler's error in is built here too ([`boxed_error`]): the conversion every
+//! edge reached for first hid the error an `anyhow::Error` held.
 
+use std::any::Any;
 use std::error::Error;
+
+use crate::error::{DecodeError, DecodeFailures};
+
+/// What a chain saying nothing at all is said as.
+const NO_MESSAGE: &str = "an error with no message";
 
 /// `error`'s message, followed by each cause beneath it that the sentence so
 /// far does not already end with — a cause a parent inlined as `…: <cause>` is
@@ -16,15 +26,21 @@ use std::error::Error;
 /// as an empty field: its `Debug` would say as little — `""` for a string error —
 /// or more than a log should, a field its `Display` left out.
 ///
-/// **A decode failure anywhere in the chain is said without its value.** A
-/// [`serde_json::Error`] — the error itself or any cause beneath it — is rendered
-/// as its [`DecodeError`](crate::DecodeError), naming where and what kind: serde
-/// quotes the value it refused, and the value is a payload's, which the line an
-/// operator reads is no place for. A wrapper that spells its cause into its own
-/// sentence is its author's to word.
+/// **A decode failure anywhere in the chain is said without its value.** A link
+/// that is one — serde_json's error, or serde's value error — is rendered as its
+/// [`DecodeError`], naming where and what kind: serde quotes the value it
+/// refused, and the value is a payload's, which the line an operator reads is no
+/// place for. Every other link is said as [`DecodeError::redact`] says its
+/// sentence, so a wrapper that spells its cause — `#[error("…: {0}")]`,
+/// `#[error(transparent)]`, anyhow's own box — spells the report rather than the
+/// value. Where a wrapper words the value its own way (`{0:?}`, a `format!` of
+/// the field), nothing in the chain says so, and the sentence is its author's.
 pub fn error_message(error: &(dyn Error + 'static)) -> String {
-    const NO_MESSAGE: &str = "an error with no message";
-
+    let failures = DecodeFailures::of(Some(error));
+    let said = |link: &(dyn Error + 'static)| match DecodeError::of(link) {
+        Some(report) => report.to_string(),
+        None => failures.redact(&link.to_string()).into_owned(),
+    };
     let mut sentence = said(error);
     if sentence.trim().is_empty() {
         sentence.clear();
@@ -54,13 +70,37 @@ pub fn error_message(error: &(dyn Error + 'static)) -> String {
     sentence
 }
 
-/// One link of the chain, as it is said: its own sentence, or a decode
-/// failure's without the value.
-fn said(error: &(dyn Error + 'static)) -> String {
-    match error.downcast_ref::<serde_json::Error>() {
-        Some(decode) => crate::DecodeError::new(decode).to_string(),
-        None => error.to_string(),
+/// `error` boxed as the framework carries a developer's failure — every link of
+/// its chain kept as the type it is, so [`error_message`] reads each one.
+///
+/// `Into<Box<dyn Error + Send + Sync>>` is the bound an edge takes a handler's
+/// error by, and an `anyhow::Error` meets it through anyhow's own conversion,
+/// which boxes anyhow's private wrapper rather than the error inside it: the box
+/// displays that error, and its `source()` skips it. A decode failure there is no
+/// link of the chain at all, so neither a `downcast` nor [`error_message`] can
+/// find it — the documented handler shape, `anyhow::Result` and `?`, was exactly
+/// the one whose value reached the line. An `anyhow::Error` is therefore moved out
+/// of its wrapper instead (anyhow's
+/// `reallocate_into_boxed_dyn_error_without_backtrace`): the outermost error is
+/// the box, a `.context(…)` stays a link above its cause, and anyhow's captured
+/// backtrace — which no framework line renders — is dropped.
+///
+/// Every other error converts as it would through `.into()`. `'static` because a
+/// type is told apart at run time, by [`Any`].
+pub fn boxed_error<E>(error: E) -> Box<dyn Error + Send + Sync>
+where
+    E: Into<Box<dyn Error + Send + Sync>> + 'static,
+{
+    let mut slot = Some(error);
+    if let Some(anyhow) = (&mut slot as &mut dyn Any)
+        .downcast_mut::<Option<anyhow::Error>>()
+        .and_then(Option::take)
+    {
+        return anyhow.reallocate_into_boxed_dyn_error_without_backtrace();
     }
+    // `slot` is emptied only by the `take` above, which returned: this is `Some`
+    // for every error but an `anyhow::Error`, and the fallback is never reached.
+    slot.map_or_else(|| Box::from(NO_MESSAGE), Into::into)
 }
 
 #[cfg(test)]
@@ -199,5 +239,110 @@ mod tests {
             "the queue value could not be converted: invalid type: a string, expected u64 at \
              line 1 column 16"
         );
+    }
+
+    fn secret() -> serde_json::Error {
+        serde_json::from_str::<u64>(r#""sk_live_51HsecretTOKEN""#).expect_err("not a number")
+    }
+
+    const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
+
+    /// The documented handler shape — `anyhow::Result` and `?` — through the box
+    /// every edge carries a handler's error in. anyhow's own conversion hid the
+    /// serde error behind a wrapper that displays it and skips it as a source,
+    /// so the line carried the value; `.context(…)` stays a link above it.
+    #[test]
+    fn a_decode_failure_inside_an_anyhow_error_is_said_without_its_value() {
+        let bare = boxed_error(anyhow::Error::from(secret()));
+        assert!(
+            bare.downcast_ref::<serde_json::Error>().is_some(),
+            "the box holds the error anyhow held, not anyhow's wrapper",
+        );
+        assert_eq!(error_message(&*bare), REPORT);
+
+        let context = boxed_error(anyhow::Error::from(secret()).context("upstream reply"));
+        assert_eq!(
+            error_message(&*context),
+            format!("upstream reply: {REPORT}")
+        );
+
+        // anyhow's own box, built without `boxed_error`: the error is no link of
+        // the chain, and serde's wording is what is left to read.
+        let hidden: Box<dyn Error + Send + Sync> = anyhow::Error::from(secret()).into();
+        assert!(hidden.downcast_ref::<serde_json::Error>().is_none());
+        assert_eq!(error_message(&*hidden), REPORT);
+    }
+
+    /// Every other error converts as `.into()` would.
+    #[test]
+    fn boxed_error_converts_any_other_error_as_into_does() {
+        let message = boxed_error("the queue backend failed");
+        assert_eq!(message.to_string(), "the queue backend failed");
+        let io = boxed_error(std::io::Error::other("timed out"));
+        assert!(io.downcast_ref::<std::io::Error>().is_some());
+    }
+
+    /// A wrapper spelling its cause spells the report: one inlining it with
+    /// `{0}`, one transparent — whose `source()` skips the decode failure, so only
+    /// serde's wording finds it — and one returning its cause as a source while
+    /// displaying it whole, which is what the queue's `JobError` does.
+    #[test]
+    fn a_wrapper_spelling_its_decode_failure_spells_the_report() {
+        #[derive(Debug, thiserror::Error)]
+        enum Feature {
+            #[error("could not read the profile: {0}")]
+            Inlined(#[source] serde_json::Error),
+            #[error(transparent)]
+            Transparent(serde_json::Error),
+            #[error("{0:?}")]
+            Debugged(serde_json::Error),
+        }
+        assert_eq!(
+            error_message(&Feature::Inlined(secret())),
+            format!("could not read the profile: {REPORT}")
+        );
+        assert_eq!(error_message(&Feature::Transparent(secret())), REPORT);
+        let debugged = error_message(&Feature::Debugged(secret()));
+        assert!(!debugged.contains("sk_live"), "{debugged}");
+
+        let whole = Wrapped {
+            message: "",
+            cause: Some(Box::new(secret())),
+        };
+        assert_eq!(error_message(&whole), REPORT);
+        let displays_its_cause = Displays(Box::new(secret()));
+        assert_eq!(error_message(&displays_its_cause), REPORT);
+    }
+
+    /// A type's `custom` message has no shape to recognise; a wrapper inlining it
+    /// is redacted by the chain, which knows the text.
+    #[test]
+    fn a_custom_decode_message_a_wrapper_inlines_is_said_as_the_report() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("could not read the token: {0}")]
+        struct Token(#[source] serde_json::Error);
+
+        let custom = <serde_json::Error as serde::de::Error>::custom("bad token sk_live_51H");
+        assert_eq!(
+            error_message(&Token(custom)),
+            "could not read the token: a value its type does not accept"
+        );
+    }
+
+    /// Displays its cause whole and returns it as its source — the queue's
+    /// `JobError`.
+    #[derive(Debug)]
+    struct Displays(Box<dyn Error + Send + Sync>);
+
+    impl fmt::Display for Displays {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(&self.0, f)
+        }
+    }
+
+    impl Error for Displays {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            Some(&*self.0)
+        }
     }
 }

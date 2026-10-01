@@ -113,7 +113,7 @@ pub use error::{
     FactoryCycleError, KeyedDependencyError, MissingDependencyError, ScopeViolationError,
     UnresolvedFactoryError,
 };
-pub use error_message::error_message;
+pub use error_message::{boxed_error, error_message};
 pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;

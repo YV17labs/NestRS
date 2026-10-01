@@ -27,11 +27,11 @@
 //! every replica: an attempt over the limit waits for the window to end, neither
 //! counted as an attempt nor dropped.
 //!
-//! A settled mark also has to outlive the acknowledgement it stands for, which
-//! apalis may drop — every one still queued when a worker stops, and one Redis
-//! refuses — leaving the job in flight for whichever replica starts next: a
-//! job settled just before a drain, or beside a lost acknowledgement, keeps its
-//! mark a week.
+//! The guard is a filter, not a promise of exactly once: a settled mark is kept
+//! for one fixed span, whatever happened around it, so a redelivery later than
+//! that — an acknowledgement apalis dropped, then a long quiet — runs the job
+//! again, as at least once allows. A lost acknowledgement is said, and changes
+//! nothing about the mark.
 //!
 //! Replicas here run [`brisk`](crate::brisk) settings: a two-second lease, so a
 //! lease a dead replica held is free again within the test.
@@ -868,81 +868,21 @@ async fn a_throttle_caps_attempt_starts_per_window_across_replicas_and_defers_th
     );
 }
 
-// --- a settled mark outlives a lost acknowledgement --------------------------------
+// --- a lost acknowledgement ----------------------------------------------------------
 
-/// A day, in milliseconds: a mark kept past a lost acknowledgement is kept a
-/// week, and the usual one an hour, so the line between them is anywhere in
-/// between.
-const PAST_A_DAY_MS: i64 = 24 * 60 * 60 * 1000;
+/// The one span every settled mark is kept for under [`brisk`](crate::brisk)
+/// settings: the hour floor, since two orphan thresholds and a lease are seconds.
+const SETTLED_FOR_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AckCommand {
     run: u64,
-    /// Whether the attempt waits for the test to let it end.
-    waits: bool,
 }
 
 static ACKED: Runs = Runs::new();
 
-/// Let a waiting attempt end.
+/// Let the waiting attempt end.
 static LET_GO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-const DRAINED_QUEUE: &str = "nestrs-e2e-lease-ack-drained";
-
-#[queue(name = "nestrs-e2e-lease-ack-drained", job = AckCommand)]
-struct DrainedQueue;
-
-#[injectable]
-#[derive(Default)]
-struct DrainedProcessor;
-
-#[processor]
-impl DrainedProcessor {
-    #[process(queue = DrainedQueue, retries = 0)]
-    async fn run(&self, job: AckCommand) -> anyhow::Result<()> {
-        ACKED.start(job.run);
-        ACKED.finish(job.run);
-        Ok(())
-    }
-}
-
-#[module(
-    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
-    providers = [DrainedProcessor],
-)]
-struct DrainedModule;
-
-/// A job that completes just before its replica drains may never have its
-/// acknowledgement reach Redis — apalis drops what is still queued once the
-/// worker stops — and then waits in the stopped replica's flight for whichever
-/// replica starts next, a weekend later if the deployment scaled to zero. Its
-/// settled mark is what keeps that delivery from running it again, so it is kept
-/// a week, as a mark written during the drain is, not the usual hour: round
-/// after round, whichever side of the drain the settle landed on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_job_settled_just_before_a_drain_keeps_its_mark_as_long_as_one_settled_during_it() {
-    for round in 0..5u64 {
-        let run = crate::this_run();
-        let replica = crate::replica::<DrainedModule>().await;
-        let receipt = replica
-            .producer
-            .push(DrainedQueue, AckCommand { run, waits: false }, None)
-            .await
-            .expect("enqueue");
-        crate::wait_until(Duration::from_secs(10), || ACKED.finished(run) == 1).await;
-        tokio::time::sleep(Duration::from_millis(round * 3)).await;
-        replica.worker.shutdown().await.expect("clean shutdown");
-
-        assert_eq!(ACKED.finished(run), 1, "round {round}: the job ran");
-        let mark = crate::key_of(DRAINED_QUEUE, "settled", &receipt.id().to_string());
-        let left = crate::pttl(&mark).await;
-        assert!(
-            left > PAST_A_DAY_MS,
-            "round {round}: the mark of a job settled just before the drain is kept a week, not \
-             {left} ms",
-        );
-    }
-}
 
 const UNACKED_QUEUE: &str = "nestrs-e2e-lease-ack-lost";
 
@@ -958,7 +898,7 @@ impl UnackedProcessor {
     #[process(queue = UnackedQueue, retries = 0)]
     async fn run(&self, job: AckCommand) -> anyhow::Result<()> {
         ACKED.start(job.run);
-        while job.waits && !LET_GO.load(std::sync::atomic::Ordering::SeqCst) {
+        while !LET_GO.load(std::sync::atomic::Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         ACKED.finish(job.run);
@@ -974,18 +914,19 @@ struct UnackedModule;
 
 /// apalis loses an acknowledgement while the replica runs on — here because the
 /// record it reads back to acknowledge is gone — and the job then stays in the
-/// flight of a live replica, which no periodic sweep takes, until some replica
-/// starts. The line says so at `error`, and the worker keeps the marks of the
-/// jobs it settled lately a week, so that start does not run the job again.
+/// flight of a live replica, which no periodic sweep takes, until a replica
+/// sweeps it. The line says so at `error`, and the job's settled mark keeps the
+/// one span every mark is kept for: nothing extends it, so a redelivery after
+/// it lapses runs the job again, which at least once allows.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_lost_acknowledgement_keeps_the_marks_of_the_jobs_settled_lately_a_week() {
+async fn a_lost_acknowledgement_is_said_and_the_settled_mark_keeps_its_one_span() {
     crate::forget(UNACKED_QUEUE).await;
     let logs = LogCapture::install_global();
     let run = crate::this_run();
     let replica = crate::replica::<UnackedModule>().await;
     let receipt = replica
         .producer
-        .push(UnackedQueue, AckCommand { run, waits: true }, None)
+        .push(UnackedQueue, AckCommand { run }, None)
         .await
         .expect("enqueue");
     crate::wait_until(Duration::from_secs(10), || !ACKED.of(run).is_empty()).await;
@@ -998,31 +939,31 @@ async fn a_lost_acknowledgement_keeps_the_marks_of_the_jobs_settled_lately_a_wee
         .expect("take away the record apalis acknowledges by");
     LET_GO.store(true, std::sync::atomic::Ordering::SeqCst);
 
-    let lost = "job acknowledgement lost; the job stays in flight until a replica starts, and \
-                the worker's recently settled jobs keep their marks a week so it does not run \
-                twice";
+    let lost = "job acknowledgement lost; the job stays in flight until a replica sweeps it, and \
+                runs again then if its settled mark has lapsed";
+    let said_for_this_queue = || {
+        logs.find(nest_rs_queue::TARGET, lost)
+            .into_iter()
+            .filter(|event| event.field("queue").as_deref() == Some(UNACKED_QUEUE))
+            .collect::<Vec<_>>()
+    };
+    crate::wait_until(Duration::from_secs(10), || {
+        !said_for_this_queue().is_empty()
+    })
+    .await;
     let mark = crate::key_of(UNACKED_QUEUE, "settled", &receipt.id().to_string());
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut left = crate::pttl(&mark).await;
-    while Instant::now() < deadline && left <= PAST_A_DAY_MS {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        left = crate::pttl(&mark).await;
-    }
-    let said: Vec<_> = logs
-        .find(nest_rs_queue::TARGET, lost)
-        .into_iter()
-        .filter(|event| event.field("queue").as_deref() == Some(UNACKED_QUEUE))
-        .collect();
+    let left = crate::pttl(&mark).await;
+    let said = said_for_this_queue();
     replica.worker.shutdown().await.expect("clean shutdown");
     crate::forget(UNACKED_QUEUE).await;
 
     assert_eq!(ACKED.finished(run), 1, "the job completed");
+    assert!(
+        left > 0 && left <= SETTLED_FOR_MS,
+        "the mark keeps the one span every mark is kept for, not {left} ms",
+    );
     assert_eq!(said.len(), 1, "the lost acknowledgement is said: {said:#?}");
     assert_eq!(said[0].level, "error");
-    assert!(
-        left > PAST_A_DAY_MS,
-        "while the replica runs on, the mark is kept a week, not {left} ms",
-    );
 }
 
 // --- a throttled method stops fetching until its window ends -----------------------

@@ -431,10 +431,11 @@ No tradeoff is hidden. Both shapes plug into the same `JobProducer` and
 The framework gives you the contract — the envelope, the attempt, the retry
 budget and its backoff, the capability refusals, the `Transport` slot, the
 `JobContext` ambient executor for handlers that touch a DB. **How your storage
-delivers — at least once or at most once, how it holds a job back, how a
-redelivery is kept from running twice, where a dead letter goes, how long
-anything you keep for a job lives** — is your driver's contract with its
-storage. Decide it deliberately, and write it on the driver's own page, the
+delivers — at least once or at most once, how it holds a job back, which
+redeliveries it answers without running and for how long, where a dead letter
+goes, how long anything you keep for a job lives** — is your driver's contract
+with its storage. A handler is written for at least once whichever you choose:
+the framework promises no more. Decide it deliberately, and write it on the driver's own page, the
 way [Delivery on Redis](/queue/delivery/) does for `nest-rs-redis`.
 
 ## Reference

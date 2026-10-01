@@ -234,9 +234,10 @@ producers always seal.
 - **A retry replays the whole body.** The transaction bounds what an attempt
   leaves behind in the database, never an email sent or an API called before
   the failure — keep those behind an idempotency key.
-- **Delivery is at least once.** A job apalis delivers twice still runs once
-  — the delivery guard sees to that — but a replica cut off from Redis for
-  longer than its lease can lose the guarantee. See
+- **Delivery is at least once, so a handler is idempotent.** The delivery guard
+  answers the common second delivery without running it, for a fixed span; a
+  redelivery after that span, or one taken by a replica cut off from Redis for
+  longer than its lease, runs the job again. See
   [Delivery on Redis](/queue/delivery/).
 
 ## Reference

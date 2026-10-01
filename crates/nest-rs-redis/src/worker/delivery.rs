@@ -44,12 +44,12 @@
 //! the acknowledgement of a task ending during the drain never reaches Redis,
 //! nor that of one answered just before it that was still queued. A hand-back
 //! therefore takes the task out of flight itself, through apalis's own
-//! `reschedule`; and a job settled while the worker drains, or within the span
-//! an acknowledgement can take before it, keeps its settled mark for
-//! [`SETTLED_WHILE_DRAINING`] ([`Leases`]), since whichever replica starts next
-//! delivers it again, whenever that is.
+//! `reschedule`. A job that settled is answered by its settled mark if it is
+//! delivered again while the mark lasts, and runs again after — at least once,
+//! which a handler is written for ([`Leases`]).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use apalis::prelude::{Attempt, Request, Storage, TaskId};
@@ -66,12 +66,6 @@ use super::lease::{Admission, Lease, Leases, Settlement, Unsettled};
 use crate::RedisConnection;
 use crate::backend::{BACKEND, due_second};
 
-/// How long the settled mark of a job settled during a drain is kept: a week.
-/// Its acknowledgement may never reach Redis, and the job is then delivered again
-/// by whichever replica starts next — after a weekend scaled to zero, say — so
-/// the mark has to outlive the quiet, not only a sweep.
-pub(crate) const SETTLED_WHILE_DRAINING: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-
 /// The shortest a job is handed back for — apalis schedules on whole seconds.
 const SHORTEST_HAND_BACK: Duration = Duration::from_secs(1);
 
@@ -80,7 +74,7 @@ pub(crate) type BoxDynError = Box<dyn std::error::Error + Send + Sync>;
 
 /// What every delivery of one `#[process]` method shares: the method, its queue,
 /// its connection and storage, its guard, the container its attempts resolve
-/// from, and the two signals of a shutdown.
+/// from, and the signal that the drain window closed.
 pub(crate) struct Deliveries {
     pub(crate) method: &'static ProcessMethod,
     pub(crate) queue: QueueName,
@@ -100,12 +94,30 @@ pub(crate) struct Deliveries {
     pub(crate) leases: Arc<Leases>,
     /// The method's fetch, shut while its throttle's window is full.
     pub(crate) gate: Arc<ThrottleGate>,
-    /// The shutdown began: no job is fetched any more, and a job settled from
-    /// here on may lose its acknowledgement.
-    pub(crate) draining: CancellationToken,
     /// The drain window closed: attempts still running are interrupted and
-    /// their jobs handed back.
+    /// their jobs handed back, and a delivery that has not started is handed
+    /// back without being admitted.
     pub(crate) interrupt: CancellationToken,
+    /// How many deliveries of the worker are under way, every method's — what a
+    /// drain that stops waiting reports it cut.
+    pub(crate) underway: Arc<AtomicUsize>,
+}
+
+/// One delivery under way, counted in its worker's tally until it ends — or is
+/// dropped with the worker.
+struct Underway(Arc<AtomicUsize>);
+
+impl Underway {
+    fn enter(tally: &Arc<AtomicUsize>) -> Self {
+        tally.fetch_add(1, Ordering::Relaxed);
+        Self(Arc::clone(tally))
+    }
+}
+
+impl Drop for Underway {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// The apalis task a delivery arrived as — what a hand-back rewrites in place.
@@ -150,6 +162,16 @@ enum Why {
 }
 
 impl Why {
+    /// Why an admitted attempt that did not settle goes back: what it gives back
+    /// says what ended it.
+    fn of(unsettled: Unsettled) -> Self {
+        match unsettled {
+            Unsettled::Answered => Self::Retry,
+            Unsettled::Cut => Self::Shutdown,
+            Unsettled::Unread => Self::NewerRelease,
+        }
+    }
+
     fn as_str(self) -> &'static str {
         match self {
             Self::Retry => "retry",
@@ -192,6 +214,7 @@ impl Deliveries {
         }
         let job = delivery.id().clone();
         let queue = self.queue.clone();
+        let _underway = Underway::enter(&self.underway);
         let running = AbortOnDropHandle::new(tokio::spawn(self.run(delivery, task)));
         match running.await {
             Ok(answer) => answer,
@@ -205,6 +228,13 @@ impl Deliveries {
         // without an outcome. Taken before the attempt, which may consume the
         // stored value on the job's last attempt.
         let resting = delivery.retry_envelope();
+        // The drain window closed before this delivery began: nothing is
+        // admitted, counted or run, and the job goes back as it was fetched.
+        if self.interrupt.is_cancelled() {
+            return self
+                .hand_back(&delivery, &task, resting, Duration::ZERO, Why::Shutdown)
+                .await;
+        }
         let holder = format!("{}/{}", self.worker, uuid::Uuid::now_v7());
         let admission = self
             .leases
@@ -216,7 +246,7 @@ impl Deliveries {
                 lease
             }
             Ok(Admission::Settled(settlement)) => {
-                return self.acknowledge_settled(&delivery, settlement).await;
+                return self.acknowledge_settled(&delivery, settlement);
             }
             Ok(Admission::Cancelled) => {
                 // What the job held was let go by the step that met the
@@ -279,13 +309,18 @@ impl Deliveries {
         drop(renewal);
         let Some(outcome) = finished else {
             // The drain window closed on the attempt, which is dropped where it
-            // stood: the job goes back as it was fetched, for another replica.
-            let answer = self
-                .hand_back(&delivery, &task, resting, Duration::ZERO, Why::Shutdown)
+            // stood: the job goes back as it was fetched, for another replica,
+            // and the start the attempt never answered for is given back.
+            return self
+                .send_back(
+                    &lease,
+                    &delivery,
+                    &task,
+                    resting,
+                    Duration::ZERO,
+                    Unsettled::Cut,
+                )
                 .await;
-            self.release(&lease, &delivery, Duration::ZERO, Unsettled::Cut)
-                .await;
-            return answer;
         };
 
         match outcome {
@@ -300,31 +335,22 @@ impl Deliveries {
             }
             AttemptOutcome::Retry { after } => {
                 let next = delivery.retry_envelope();
-                let answer = self
-                    .hand_back(&delivery, &task, next, after, Why::Retry)
-                    .await;
-                self.release(&lease, &delivery, after, Unsettled::Answered)
-                    .await;
-                answer
+                self.send_back(&lease, &delivery, &task, next, after, Unsettled::Answered)
+                    .await
             }
             // Nothing ran: the record goes back as it was stored, and every
             // start the admission counted is taken back — the throttle's too,
             // since the method was never called.
             AttemptOutcome::Defer { after } => {
-                let answer = self
-                    .hand_back(&delivery, &task, resting, after, Why::NewerRelease)
-                    .await;
-                self.release(&lease, &delivery, after, Unsettled::Unread)
-                    .await;
-                answer
+                self.send_back(&lease, &delivery, &task, resting, after, Unsettled::Unread)
+                    .await
             }
         }
     }
 
     /// A job an earlier delivery already settled: answered as that delivery
-    /// answered, without running it. While the worker drains, that answer may
-    /// never reach Redis, so the mark is kept as long as a drain's own.
-    async fn acknowledge_settled(
+    /// answered, without running it.
+    fn acknowledge_settled(
         &self,
         delivery: &Delivery,
         settlement: Settlement,
@@ -336,16 +362,6 @@ impl Deliveries {
             settled = settlement.as_str(),
             "job delivered again after it settled; acknowledged without running",
         );
-        // This answer's acknowledgement can be lost like the first one's.
-        self.leases.settled_lately(delivery.id());
-        if self.draining.is_cancelled()
-            && let Err(error) = self
-                .leases
-                .remember(delivery.id(), SETTLED_WHILE_DRAINING)
-                .await
-        {
-            report_guard(Guard::NotExtended, &self.queue, delivery.id(), &error);
-        }
         match settlement {
             Settlement::Completed => Ok(()),
             Settlement::DeadLettered => Err(dead_letter(JobError::abort(
@@ -356,50 +372,50 @@ impl Deliveries {
 
     /// Record the job's terminal outcome, and drop its lease. A mark Redis
     /// refused is said and survived: the outcome stands, and only a second
-    /// delivery of the job — which the mark exists to stop — could run it again.
-    ///
-    /// The job is noted among those settled lately before the drain is read
-    /// again: a drain that began meanwhile either finds it noted, and keeps its
-    /// mark with the rest, or is seen here, and the mark is kept now.
+    /// delivery of the job — which the mark exists to answer — could run it
+    /// again.
     async fn settle(&self, lease: &Lease, delivery: &Delivery, outcome: Settlement) {
-        let draining = self.draining.is_cancelled();
-        let remember = draining.then_some(SETTLED_WHILE_DRAINING);
-        if let Err(error) = lease.settle(outcome, remember).await {
+        if let Err(error) = lease.settle(outcome).await {
             report_guard(
                 Guard::NotSettled(outcome),
                 &self.queue,
                 delivery.id(),
                 &error,
             );
-            return;
-        }
-        self.leases.settled_lately(delivery.id());
-        if !draining
-            && self.draining.is_cancelled()
-            && let Err(error) = self
-                .leases
-                .remember(delivery.id(), SETTLED_WHILE_DRAINING)
-                .await
-        {
-            report_guard(Guard::NotExtended, &self.queue, delivery.id(), &error);
         }
     }
 
-    /// Drop the lease of a job that goes back to the queue, due again after
-    /// `next`, taking back what `unsettled` says its attempt did not spend. One
-    /// Redis refused lapses on its own, and until then delays the job's next
-    /// delivery; an attempt it did not take back counts against the budget as
-    /// one that never returned, and a start against the throttle's window.
-    async fn release(
+    /// Send a job that did not settle back to the queue as `record`, due again
+    /// after `wait`: its lease dropped and what `unsettled` says its attempt did
+    /// not spend given back, then the job filed and taken out of flight.
+    ///
+    /// **The give-back goes first.** It is the one write whose loss costs the
+    /// job something — an attempt cut by the drain, or one that never read the
+    /// job, left counted spends the retry budget of a job that never failed —
+    /// and the drain stops waiting on Redis at the end of its window: sent
+    /// first, it reaches Redis before the hand-back's calls, whichever of them
+    /// the drain then cuts. A job whose lease is gone before it is filed is one
+    /// a sweep could deliver a moment sooner, which at least once allows; its
+    /// attempt is no longer running either way.
+    async fn send_back(
         &self,
         lease: &Lease,
         delivery: &Delivery,
-        next: Duration,
+        task: &Task,
+        record: Envelope,
+        wait: Duration,
         unsettled: Unsettled,
-    ) {
-        if let Err(error) = lease.release(next, unsettled).await {
-            report_guard(Guard::NotDropped, &self.queue, delivery.id(), &error);
+    ) -> Result<(), BoxDynError> {
+        if let Err(error) = lease.release(wait, unsettled).await {
+            report_guard(
+                Guard::NotDropped(unsettled),
+                &self.queue,
+                delivery.id(),
+                &error,
+            );
         }
+        self.hand_back(delivery, task, record, wait, Why::of(unsettled))
+            .await
     }
 
     /// File `record` as the task's next delivery, due after `wait`, and take the
@@ -485,10 +501,9 @@ enum Guard {
     /// still open once its lease lapsed, and its unique key stays held until the
     /// week its records are kept runs out.
     NotSettled(Settlement),
-    /// Keeping a settled mark past a drain.
-    NotExtended,
-    /// Dropping the lease: the next delivery waits for it to lapse.
-    NotDropped,
+    /// Dropping the lease: the next delivery waits for it to lapse, and what
+    /// the attempt was to give back stays counted.
+    NotDropped(Unsettled),
 }
 
 /// The line a refused guard call files — every one a `warn`, since each leaves
@@ -512,20 +527,14 @@ fn report_guard(guard: Guard, queue: &QueueName, job: &JobId, error: &redis::Red
             "job settled mark not written; a second delivery would run it again, a cancel could \
              still answer true, and its unique key stays held until it lapses",
         ),
-        Guard::NotExtended => tracing::warn!(
+        Guard::NotDropped(unsettled) => tracing::warn!(
             target: nest_rs_queue::TARGET,
             queue = %queue,
             job_id = %job,
+            gives_back = unsettled.gives_back_in_words(),
             error = %error,
-            "job settled mark not extended; if this acknowledgement is lost, the job runs again \
-             once the mark lapses",
-        ),
-        Guard::NotDropped => tracing::warn!(
-            target: nest_rs_queue::TARGET,
-            queue = %queue,
-            job_id = %job,
-            error = %error,
-            "job lease not dropped; its next delivery waits for it to lapse",
+            "job lease not dropped; its next delivery waits for it to lapse, and what the attempt \
+             was to give back stays counted",
         ),
     }
 }
@@ -555,10 +564,10 @@ fn wait_until(at: i64) -> Duration {
 /// apalis's attempt cap, so no count of earlier deliveries turns the failure
 /// into a kill. Acknowledging it would drop the job, and dead-lettering it
 /// would bury a job over a failure that was never its own. A task scheduled and
-/// still in flight is acknowledged: when the
-/// acknowledgement lands it takes the task out of flight, and when it does not,
-/// the job is delivered twice — which the line says — and the lease and the
-/// settled mark keep the second delivery from running it twice.
+/// still in flight is acknowledged: when the acknowledgement lands it takes the
+/// task out of flight, and when it does not, the job is delivered twice — which
+/// the line says — and the guard answers the second delivery as it answers any:
+/// handed back while the lease is held, acknowledged once the job settled.
 fn handed_back<E>(
     queue: &QueueName,
     delivery: &Delivery,
@@ -826,8 +835,7 @@ mod tests {
         for guard in [
             Guard::Unasked,
             Guard::NotSettled(Settlement::Completed),
-            Guard::NotExtended,
-            Guard::NotDropped,
+            Guard::NotDropped(Unsettled::Cut),
         ] {
             report_guard(guard, &audio(), delivery.id(), &refused);
         }
@@ -840,17 +848,18 @@ mod tests {
             "job settled mark not written; a second delivery would run it again, a cancel could \
              still answer true, and its unique key stays held until it lapses",
         );
-        let unextended = logs.expect_one(
-            nest_rs_queue::TARGET,
-            "job settled mark not extended; if this acknowledgement is lost, the job runs again \
-             once the mark lapses",
-        );
         let undropped = logs.expect_one(
             nest_rs_queue::TARGET,
-            "job lease not dropped; its next delivery waits for it to lapse",
+            "job lease not dropped; its next delivery waits for it to lapse, and what the attempt \
+             was to give back stays counted",
         );
         assert_eq!(unsettled.field("settled").as_deref(), Some("completed"));
-        for event in [unasked, unsettled, unextended, undropped] {
+        assert_eq!(
+            undropped.field("gives_back").as_deref(),
+            Some("its attempt"),
+            "a cut attempt's start is what stays counted",
+        );
+        for event in [unasked, unsettled, undropped] {
             assert_eq!(event.level, "warn", "{event:?}");
             assert_eq!(event.field("job_id"), Some(delivery.id().to_string()));
             assert_eq!(event.field("error").as_deref(), Some("connection reset"));

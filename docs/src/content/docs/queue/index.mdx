@@ -142,12 +142,13 @@ limit. Both, the pool they draw on, and scaling replicas on queue depth, are on
 [Concurrency and scaling](/queue/scaling/).
 
 <Aside type="caution">
-**Delivery is at least once.** Two replicas never receive the same job from
-the queue, and a job apalis delivers twice — a replica starting mid-flight
-sweeps its peers' jobs back onto the queue — still runs once: each attempt
-holds a lease on its job and leaves a settled mark behind it. A replica cut off
-from Redis for longer than its lease can lose that guarantee, so a handler
-whose effects leave the process keeps its own idempotency key. See
+**Delivery is at least once, so a handler is idempotent.** Two replicas never
+receive the same job from the queue, and the common second delivery — a replica
+starting mid-flight sweeps its peers' jobs back onto the queue — is answered
+without running: each attempt holds a lease on its job and leaves a settled
+mark behind it for a fixed span. Past that span, or from a replica cut off from
+Redis for longer than its lease, a job can run again, so a handler whose
+effects leave the process keeps its own idempotency key. See
 [Delivery on Redis](/queue/delivery/).
 </Aside>
 
@@ -189,7 +190,8 @@ own idempotency.
 
 The transaction bounds what a **retry** repeats, never what a
 **redelivery** does: a worker that dies between the commit and the mark that
-settles the job runs it again, and its writes already landed. See
+settles the job runs it again, and its writes already landed — and so does a
+redelivery that comes after the mark lapsed. See
 [Repo and the executor](/database/repo-and-executor/) and
 [Retries and failure](/queue/retries-and-failure/).
 

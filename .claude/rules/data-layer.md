@@ -283,8 +283,9 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   **The promise is per attempt, and stops at the queue.** A durable backend
   delivers at least once, so a worker that dies between `COMMIT` and recording the
   outcome — the ack, or on Redis the settled mark its delivery guard writes first,
-  after which a redelivery is acknowledged without running — redelivers a job
-  whose writes already landed. The transaction bounds what a *retry* repeats,
+  after which a redelivery is acknowledged without running for as long as the
+  mark lasts — redelivers a job whose writes already landed, and a redelivery
+  after the mark lapsed runs a job that settled. The transaction bounds what a *retry* repeats,
   never what a *redelivery* does. So the default removes the
   need for an idempotency key against the framework's own retry and not against
   the backend's redelivery; `transactional = false` needs one against both.

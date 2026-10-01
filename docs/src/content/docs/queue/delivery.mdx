@@ -8,11 +8,13 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Everything a queue holds lives under one prefix, and a job apalis delivers
-twice still runs once. This page is the contract behind that sentence: the keys,
-the guard that keeps the promise, what a crash, a Redis timeout and a shutdown
-do to a job in flight, and what each capability the backend declares keeps
-beside the queue.
+Everything a queue holds lives under one prefix, and every job is delivered **at
+least once**: the common second delivery is answered without running, and a
+handler is written so that running it twice is harmless. This page is the
+contract behind that sentence: the keys, the guard that filters duplicates and
+what it does not cover, what a crash, a Redis timeout and a shutdown do to a job
+in flight, and what each capability the backend declares keeps beside the
+queue.
 
 The backend runs on [apalis-redis](https://docs.rs/apalis-redis/0.7.4) 0.7.4,
 which fetches, schedules and acknowledges jobs. What a job attempt *is* — its
@@ -83,21 +85,22 @@ script. A second delivery then does one of two things, and neither runs the job:
   completed or dead-lettered, without running.
 
 A settled mark lasts an hour, or two orphan thresholds plus a lease when that
-is longer — and a week when its acknowledgement may never reach Redis. apalis
-acknowledges a job from its worker's own loop after the delivery answers, and
-drops what is still queued when the worker stops, or what Redis refuses; the
-job then waits in flight until a replica starts, which may be days later. So a
-mark written while the worker drains lasts a week, and so does the mark of every
-job settled within a poll and a heartbeat before the drain began, or before
-apalis reported an acknowledgement lost. A replica that stays down longer than a
-week, or whose acknowledgements lag further behind than that span, can still
-see such a job run twice.
+is longer, however it was written — past the latest a sweep could hand the job
+to a second delivery, and no longer. A delivery after it lapsed runs the job
+again. That is the case of a lost acknowledgement: apalis acknowledges a job
+from its worker's own loop after the delivery answers, and drops what is still
+queued when the worker stops, or what Redis refuses; the job then waits in that
+replica's flight until a replica starts and sweeps it, which may be days later,
+and runs once more if its mark is gone by then.
 
 <Aside type="caution">
-The guard covers apalis's redeliveries. It cannot make a lease outlive its
-holder's silence: a replica cut off from Redis for longer than the lease, and
-still running, can see another replica take the job. A handler whose effects
-leave the process — an email, a charge — keeps its own idempotency key.
+**Delivery is at least once, so a handler is idempotent.** The guard
+answers the common second delivery — a sweep, a job filed twice — and nothing
+past it: a delivery after the settled mark lapsed runs the job again, and a
+replica cut off from Redis for longer than its lease, still running, can see
+another replica take the job. A handler whose effects leave the process — an
+email, a charge — keeps its own idempotency key; one that writes only through
+its transaction is covered for retries, not for redeliveries.
 </Aside>
 
 ## Replicas, heartbeats and crashes
@@ -120,9 +123,10 @@ kill, a hang until the pod is killed — runs `retries + 1` times, then is
 dead-lettered without running, as
 `job dead-lettered: retry budget spent by attempts that never returned`, its
 `unfinished` field saying how many never did. A drain's hand-back takes its start
-back. The job runs again from the start of its body, so a crash between a
-database commit and the settled mark writes twice — the transaction bounds a
-retry, never a redelivery.
+back, in the first call it makes once the window closes on the attempt — see
+[Shutdown](#shutdown). The job runs again from the start of its body, so a crash
+between a database commit and the settled mark writes twice — the transaction
+bounds a retry, never a redelivery.
 
 ## When Redis is slow or gone
 
@@ -150,7 +154,8 @@ and never a job left in flight. What a delivery does when a call fails:
 | handing a job back | apalis files its stored record again, due at once — the attempt it was fetched at, or its next one when the filing landed after all — or a sweep does, when Redis refuses apalis too | `job not handed back; …`, `error` |
 | renewing the lease | the attempt runs on, and the renewal is tried again | `job lease not renewed; retrying`, `warn` |
 | writing the settled mark | the outcome stands; a second delivery could run the job again, and its unique key stays held until its records lapse | `job settled mark not written; …`, `warn` |
-| the acknowledgement | stays in the replica's flight until a replica starts and sweeps it — a live replica's is never taken by the periodic sweep while its heartbeat keeps up — and is answered by its settled mark without running; the marks of the jobs settled lately are kept a week for it | `job acknowledgement lost; …`, `error` |
+| dropping the lease, or giving back a start | the next delivery waits for the lease to lapse, and a start the attempt was to give back stays counted | `job lease not dropped; …`, `warn`, with `gives_back` |
+| the acknowledgement | stays in the replica's flight until a replica sweeps it — a live replica's is never taken by the periodic sweep while its heartbeat keeps up — and is answered by its settled mark without running while the mark lasts, run again after | `job acknowledgement lost; …`, `error` |
 
 A fetch that fails is retried at the next poll. When its connection failed
 under it, Redis may have run it all the same, and the jobs it claimed then wait
@@ -176,16 +181,29 @@ the `Err` the retry budget decides on.
 ## Shutdown
 
 A shutdown stops fetching at once. Running attempts get the shutdown window,
-less a reserve of five seconds (half the window when that is shorter), to
-finish where they run, and jobs the replica fetched but had not started still
-start as permits free inside it. What still runs when the window closes is interrupted
-— its `queue.job` line filed with `outcome="cancelled"` — and its job handed
-back to the queue inside the reserve, so the orchestrator's
-`SIGKILL` never lands on a job the worker still holds — give the pod a grace
-period at least eight seconds above the window, for the shutdown hooks' five and
-the telemetry flush's three that follow it. A retry's next attempt is already on the schedule, so
-it holds nothing up. An attempt that outlives even the reserve is said at
-`error` and left in flight, and runs again elsewhere once its lease lapses.
+less a reserve, to finish where they run, and jobs the replica fetched but had
+not started still start as permits free inside it. What still runs when the
+window closes is interrupted — its `queue.job` line filed with
+`outcome="cancelled"` — and its job handed back to the queue inside the
+reserve, so the orchestrator's `SIGKILL` never lands on a job the worker still
+holds — give the pod a grace period at least eight seconds above the window, for
+the shutdown hooks' five and the telemetry flush's three that follow it. A job
+that reaches its permit after the window closed is handed back without
+starting. A retry's next attempt is already on the schedule, so it holds
+nothing up.
+
+**The reserve is one Redis call long**: the connection's budget,
+`NESTRS_REDIS__CONNECT_TIMEOUT_SECS` — ten seconds by default — or five seconds
+when that is shorter, and never more than half the window. An interrupted
+attempt gives its start back in the first call it makes, before it hands its
+job back: left counted, that start would spend the retry budget of a job that
+never failed, and a job with no retry left would be dead-lettered on its next
+delivery without running. A Redis that answers within its budget takes the
+give-back whatever happens next. A worker the drain still waits on once the
+whole window has passed — Redis stalled past the reserve — is said at `error`
+with how many deliveries it cut (`cut`), and left: each of those jobs stays in
+flight until a replica sweeps it, its attempt spent unless the give-back reached
+Redis.
 
 ## Delayed jobs
 
@@ -294,7 +312,7 @@ that kept it.
 
 | Variable | Default | What it bounds |
 |---|---|---|
-| `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `30` | The drain window, hand-backs included; at least `1`, at most `3600` |
+| `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `30` | The drain window, hand-backs included — attempts get all of it but the reserve, one connection budget or five seconds, at most half; at least `1`, at most `3600` |
 | `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS` | `300` | How long a silent replica keeps its jobs; at least `5`, at most `86400` — a day |
 | `NESTRS_REDIS__WORKER__LEASE_SECS` | `30` | How long a claim outlives its last renewal; at least `1`, and at most half the orphan threshold, so a crashed replica's lease has lapsed by the time a peer takes its jobs |
 | `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` | `100` | How often a method asks for jobs while a permit is free — its ceiling, and its idle cost; at least `10`, and at most the orphan threshold, since the sweep of silent replicas runs on it |
@@ -367,9 +385,10 @@ that.
 - `crates/nest-rs-redis/src/worker/delivery.rs` — one delivery, and every hand-back.
 - `crates/nest-rs-redis/src/worker/consumer.rs` — each replica's id, what apalis
   reports, and the drain.
-- `crates/nest-rs-redis/tests/e2e/worker/` — each redelivery, run twice and
-  counted once; a connection dropped under a running attempt; a cancel met by a
-  delivery; a unique key let go; a throttle across replicas; the drain.
+- `crates/nest-rs-redis/tests/e2e/worker/` — each redelivery the guard answers;
+  a connection dropped under a running attempt; a cancel met by a delivery; a
+  unique key let go; a throttle across replicas; the drain, a stalled Redis
+  included.
 
 ## Going further
 

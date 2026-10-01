@@ -27,10 +27,12 @@ use nest_rs_config::{
 };
 
 /// Default drain window on shutdown: 30s, Kubernetes' default
-/// `terminationGracePeriodSeconds`. Attempts run for all but its last five
-/// seconds, and what still runs then is handed back in those, which takes
-/// milliseconds; the queue documentation still asks for a grace period above
-/// the window, so SIGKILL never cuts the reserve short.
+/// `terminationGracePeriodSeconds`. Attempts run for all but its reserve — one
+/// connection budget, ten seconds by default, or five when the budget is
+/// shorter, and never more than half the window — and what still runs then is
+/// handed back in it, which takes milliseconds on a Redis that answers; the
+/// queue documentation still asks for a grace period above the window, so
+/// SIGKILL never cuts the reserve short.
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 
 /// Default orphan threshold: five minutes, apalis's own — ten of the heartbeats a
@@ -57,9 +59,9 @@ const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds {
     unit: DurationUnit::Seconds,
     least: Floor::Units(Bound {
         count: 1,
-        why: "the drain keeps half its window, up to five seconds, to hand interrupted jobs \
-              back, and with none a job running at shutdown stays in flight until a peer's sweep \
-              takes it, the orphan threshold later",
+        why: "the drain keeps up to half its window to hand interrupted jobs back, and with \
+              none a job running at shutdown stays in flight until a peer's sweep takes it, the \
+              orphan threshold later",
     }),
     most: Some(Bound {
         count: 60 * 60,
@@ -121,18 +123,20 @@ const POLL_INTERVAL: DurationBounds = DurationBounds {
 #[derive(Clone, Debug)]
 pub struct RedisWorkerConfig {
     /// How long the worker lets running attempts finish after a shutdown signal.
-    /// An attempt still running when the window closes is interrupted and its
-    /// job handed back to the queue for another replica, inside the window — so
-    /// SIGTERM never blocks past it, and the orchestrator's SIGKILL never takes a
-    /// job with it. Read from `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, at
-    /// least 1 and at most 3600 (an hour); defaults to 30s.
+    /// An attempt still running when the window closes, less a reserve — one
+    /// connection budget, or five seconds when that is shorter, at most half the
+    /// window — is interrupted and its job handed back to the queue for another
+    /// replica inside the reserve, so SIGTERM never blocks past the window and
+    /// the orchestrator's SIGKILL never takes a job with it. Read from
+    /// `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, at least 1 and at most 3600
+    /// (an hour); defaults to 30s.
     pub shutdown_timeout: Duration,
     /// How long a replica may go without proving it is alive before the others
     /// take the jobs it was running and run them again. A replica proves it
     /// every tenth of this (never more often than once a second), so a live one
     /// is never taken for dead by a slow answer or two. Shorter recovers a
-    /// crashed replica's jobs sooner; the delivery lease keeps a job a live
-    /// replica still runs from running twice either way. Read from
+    /// crashed replica's jobs sooner; either way, a job a live replica still
+    /// runs is handed back by its second delivery until the lease lapses. Read from
     /// `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS`, at least 5 and at most 86400
     /// (a day); defaults to 300s.
     pub orphan_after: Duration,
@@ -160,20 +164,6 @@ impl RedisWorkerConfig {
     /// orphan threshold, and never more often than once a second.
     pub(crate) fn heartbeat(&self) -> Duration {
         (self.orphan_after / HEARTBEATS_PER_THRESHOLD).max(MIN_HEARTBEAT)
-    }
-
-    /// How long after a delivery answers its acknowledgement may still be on
-    /// its way to Redis: a poll, then a heartbeat.
-    ///
-    /// apalis-redis 0.7 acknowledges from the loop that also fetches, beats and
-    /// sweeps, one call at a time, so an answer waits behind whatever that loop
-    /// is doing and the answers queued before it. A loop further behind than a
-    /// heartbeat has let its own heartbeat slip as well — a replica that far
-    /// behind is one its peers are on their way to sweeping, and a job it held
-    /// that is redelivered by a sweep is what a settled mark's usual span
-    /// already covers.
-    pub(crate) fn acknowledged_within(&self) -> Duration {
-        self.poll_interval.saturating_add(self.heartbeat())
     }
 }
 

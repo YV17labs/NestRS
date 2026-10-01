@@ -350,6 +350,12 @@ impl RedisConnection {
             ..self.clone()
         }
     }
+
+    /// How long a command on this handle waits for its answer — `None` on the
+    /// one [`without_budget`](Self::without_budget) returns.
+    pub(crate) fn budget(&self) -> Option<Duration> {
+        self.budget
+    }
 }
 
 impl ConnectionLike for RedisConnection {

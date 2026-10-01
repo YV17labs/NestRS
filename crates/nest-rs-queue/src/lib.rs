@@ -53,6 +53,12 @@
 //!    and opens no span of its own: the attempt, its span, its events, its budget
 //!    and its backoff are the port's.
 //!
+//! **Delivery is at least once, on every backend.** A storage that loses no job
+//! delivers some twice — a sweep after a crash, an acknowledgement lost — and a
+//! backend may answer the common second delivery without running it, as the
+//! Redis backend's delivery guard does for a fixed span, but none promises more:
+//! a `#[process]` handler is idempotent.
+//!
 //! A value the backend's storage cannot hold — a name its own rules refuse, a
 //! window finer than it keeps — is refused by the backend, naming that fact.
 //! The walkthrough is the docs' *Writing a queue driver*.

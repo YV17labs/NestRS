@@ -28,19 +28,15 @@
 //! Lua script, so no cancel, no second delivery and no other replica's start ever
 //! sees the lease between a check and a write.
 //!
-//! **A settled mark outlives the acknowledgement it stands for.** apalis-redis
-//! 0.7 acknowledges a job from its worker's own loop, after the delivery has
-//! answered, and drops every acknowledgement still queued when the worker stops;
-//! one Redis refuses is dropped too. The job then stays in the stopped (or
-//! failing) replica's flight until a replica starts and sweeps it — tomorrow,
-//! after a weekend scaled to zero — and only its settled mark stops it running
-//! again. So the guard remembers the jobs it settled within the span an
-//! acknowledgement can take ([`RedisWorkerConfig::acknowledged_within`]), and
-//! when the drain begins, or apalis reports an acknowledgement lost, it keeps
-//! every one of those marks for [`SETTLED_WHILE_DRAINING`].
-//!
-//! [`RedisWorkerConfig::acknowledged_within`]: crate::RedisWorkerConfig
-//! [`SETTLED_WHILE_DRAINING`]: super::delivery::SETTLED_WHILE_DRAINING
+//! **The guard filters duplicates; it does not make delivery exactly once.** The
+//! queue's contract is at least once, so a handler is idempotent. A settled mark
+//! lasts one fixed span — past the latest a sweep could hand the job to a second
+//! delivery ([`settled_for`]) — and a delivery arriving after it lapsed runs the
+//! job again. apalis-redis 0.7 acknowledges a job from its worker's own loop,
+//! after the delivery has answered, and drops every acknowledgement still queued
+//! when the worker stops, and one Redis refuses: the job then waits in that
+//! replica's flight until a replica starts and sweeps it, which may be after its
+//! mark is gone.
 //!
 //! **What it does not make exclusive** is a replica that stops renewing — a
 //! network partition, a process frozen longer than the lease — while it goes on
@@ -48,10 +44,8 @@
 //! promise about time, and this one is kept for as long as its holder can reach
 //! Redis. The line saying the holder lost it is an `error`.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use nest_rs_queue::{JobId, QueueName, Throttle};
 use redis::Script;
@@ -177,14 +171,6 @@ end
 return 1
 ";
 
-/// Keep a settled mark for longer, if it is still there: `1` extended, `0` gone.
-const REMEMBER: &str = r"
-if redis.call('EXISTS', KEYS[1]) == 1 then
-  return redis.call('PEXPIRE', KEYS[1], ARGV[1])
-end
-return 0
-";
-
 /// Drop the lease if this delivery still holds it — an attempt that ends
 /// without settling the job: a retry filed for later, a job handed back — and
 /// renew what the job holds until its next delivery and past it. What the
@@ -240,19 +226,10 @@ pub(crate) struct Leases {
     lease: Duration,
     settled_for: Duration,
     throttle: Option<Throttle>,
-    /// The jobs whose marks this guard wrote, or a delivery of a settled job
-    /// answered, within [`acknowledged_within`](Self::acknowledged_within) —
-    /// oldest first: the ones whose acknowledgement may still be on its way.
-    settled_lately: Mutex<VecDeque<(Instant, JobId)>>,
-    acknowledged_within: Duration,
-    /// Whether a pass keeping those marks is under way, so a burst of lost
-    /// acknowledgements runs one at a time.
-    remembering: AtomicBool,
     admit: Script,
     renew: Script,
     settle: Script,
     release: Script,
-    remember: Script,
 }
 
 /// What a delivery may do with its job.
@@ -307,6 +284,15 @@ impl Unsettled {
             Self::Unread => 2,
         }
     }
+
+    /// What it gives back, for a line saying it was not.
+    pub(crate) fn gives_back_in_words(self) -> &'static str {
+        match self {
+            Self::Answered => "nothing",
+            Self::Cut => "its attempt",
+            Self::Unread => "its attempt and its throttle start",
+        }
+    }
 }
 
 /// How a job ended, as its settled mark records it.
@@ -348,7 +334,6 @@ impl Leases {
         queue: QueueName,
         lease: Duration,
         orphan_after: Duration,
-        acknowledged_within: Duration,
         throttle: Option<Throttle>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -358,14 +343,10 @@ impl Leases {
             lease,
             settled_for: settled_for(orphan_after, lease),
             throttle,
-            settled_lately: Mutex::default(),
-            acknowledged_within,
-            remembering: AtomicBool::new(false),
             admit: Script::new(ADMIT),
             renew: Script::new(RENEW),
             settle: Script::new(SETTLE),
             release: Script::new(RELEASE),
-            remember: Script::new(REMEMBER),
         })
     }
 
@@ -424,91 +405,6 @@ impl Leases {
             },
         })
     }
-
-    /// The queue this guard keeps.
-    pub(crate) fn queue(&self) -> &QueueName {
-        &self.queue
-    }
-
-    /// Note that `job` was answered as settled just now: its acknowledgement is
-    /// on its way, and may not arrive.
-    pub(crate) fn settled_lately(&self, job: &JobId) {
-        let now = Instant::now();
-        let mut lately = self
-            .settled_lately
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        forget_older(&mut lately, now, self.acknowledged_within);
-        lately.push_back((now, job.clone()));
-    }
-
-    /// Keep the mark of every job settled within the span an acknowledgement
-    /// can take for `longer` from now — the drain began, or apalis dropped an
-    /// acknowledgement, and any of theirs may be the one lost. How many marks
-    /// were kept, or the refusal.
-    ///
-    /// One `PEXPIRE` per job, pipelined a thousand at a time: a mark that lapsed
-    /// meanwhile is not written again, and `longer` is never shorter than a mark
-    /// this guard writes, so none is shortened.
-    pub(crate) async fn remember_settled_lately(
-        &self,
-        longer: Duration,
-    ) -> Result<usize, redis::RedisError> {
-        let jobs: Vec<JobId> = {
-            let mut lately = self
-                .settled_lately
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            forget_older(&mut lately, Instant::now(), self.acknowledged_within);
-            lately.iter().map(|(_, job)| job.clone()).collect()
-        };
-        let kept = i64::try_from(millis(longer.max(self.settled_for))).unwrap_or(i64::MAX);
-        for batch in jobs.chunks(REMEMBERED_PER_PIPELINE) {
-            let mut pipeline = redis::pipe();
-            for job in batch {
-                pipeline
-                    .pexpire(job_key(SETTLED, &self.queue, job), kept)
-                    .ignore();
-            }
-            pipeline.query_async::<()>(&mut self.conn.clone()).await?;
-        }
-        Ok(jobs.len())
-    }
-
-    /// [`remember_settled_lately`](Self::remember_settled_lately) for `longer`,
-    /// on a task of its own, and said: apalis reported an acknowledgement lost,
-    /// from a loop that must not wait on Redis. A pass already under way covers
-    /// this one.
-    pub(crate) fn keep_settled_lately(self: &Arc<Self>, longer: Duration) {
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        if self.remembering.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let leases = Arc::clone(self);
-        runtime.spawn(async move {
-            let kept = leases.remember_settled_lately(longer).await;
-            leases.remembering.store(false, Ordering::Release);
-            report_kept(&leases.queue, Keeping::AcknowledgementLost, kept);
-        });
-    }
-
-    /// Keep `job`'s settled mark for `longer` from now — a second delivery of a
-    /// settled job, acknowledged while the worker drains, may lose that
-    /// acknowledgement and come back after the mark would have lapsed.
-    pub(crate) async fn remember(
-        &self,
-        job: &JobId,
-        longer: Duration,
-    ) -> Result<(), redis::RedisError> {
-        self.remember
-            .key(job_key(SETTLED, &self.queue, job))
-            .arg(millis(longer.max(self.settled_for)))
-            .invoke_async::<i64>(&mut self.conn.clone())
-            .await
-            .map(drop)
-    }
 }
 
 /// A lease a delivery holds on its job while an attempt runs.
@@ -563,16 +459,9 @@ impl Lease {
     }
 
     /// Record that the job reached `outcome`, drop the lease, and close what the
-    /// job held. The mark is kept for the guard's usual span, or for `remember`
-    /// when the caller knows a second delivery may come later than any sweep
-    /// would bring it.
-    pub(crate) async fn settle(
-        &self,
-        outcome: Settlement,
-        remember: Option<Duration>,
-    ) -> Result<(), redis::RedisError> {
+    /// job held. The mark is kept for the guard's one span ([`settled_for`]).
+    pub(crate) async fn settle(&self, outcome: Settlement) -> Result<(), redis::RedisError> {
         let leases = &self.leases;
-        let remember = remember.map_or(leases.settled_for, |longer| longer.max(leases.settled_for));
         let mut invocation = leases
             .settle
             .key(job_key(SETTLED, &leases.queue, &self.job));
@@ -586,7 +475,7 @@ impl Lease {
         invocation
             .arg(&self.holder)
             .arg(outcome.as_str())
-            .arg(millis(remember))
+            .arg(millis(leases.settled_for))
             .arg(self.job.to_string())
             .invoke_async::<i64>(&mut leases.conn.clone())
             .await
@@ -674,70 +563,12 @@ fn same_window_within(throttle: Option<Throttle>) -> u64 {
     })
 }
 
-/// How many marks one pipeline keeps: a thousand `PEXPIRE`s, so a busy queue's
-/// drain never sends Redis one command of unbounded size.
-const REMEMBERED_PER_PIPELINE: usize = 1_000;
-
-/// Drop from `lately` the jobs settled longer than `within` before `now`.
-fn forget_older(lately: &mut VecDeque<(Instant, JobId)>, now: Instant, within: Duration) {
-    while lately
-        .front()
-        .is_some_and(|(at, _)| now.saturating_duration_since(*at) > within)
-    {
-        lately.pop_front();
-    }
-}
-
-/// Why the marks of the jobs settled lately are kept longer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Keeping {
-    /// The worker is stopping, and apalis drops what it has not acknowledged.
-    Drain,
-    /// apalis reported an acknowledgement it could not write.
-    AcknowledgementLost,
-}
-
-impl Keeping {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Drain => "drain",
-            Self::AcknowledgementLost => "acknowledgement lost",
-        }
-    }
-}
-
-/// What a pass keeping the recently settled marks did, and why it ran: detail
-/// when it kept them, a `warn` when Redis refused — each of those jobs then
-/// runs again if its acknowledgement was lost and no replica starts before its
-/// mark lapses.
-pub(crate) fn report_kept(
-    queue: &QueueName,
-    keeping: Keeping,
-    kept: Result<usize, redis::RedisError>,
-) {
-    match kept {
-        Ok(0) => {}
-        Ok(kept) => tracing::debug!(
-            target: nest_rs_queue::TARGET,
-            queue = %queue,
-            reason = keeping.as_str(),
-            kept,
-            "settled marks kept a week",
-        ),
-        Err(error) => tracing::warn!(
-            target: nest_rs_queue::TARGET,
-            queue = %queue,
-            reason = keeping.as_str(),
-            error = %nest_rs_core::error_message(&error),
-            "settled marks not kept a week; a job settled lately runs again if its \
-             acknowledgement was lost and no replica starts before its mark lapses",
-        ),
-    }
-}
-
 /// How long a settled mark is kept: at least [`SETTLED_FLOOR`], and always past
 /// the latest a sweep could hand the job to a second delivery — the orphan
-/// threshold, then a lease left by the replica that was swept.
+/// threshold, then a lease left by the replica that was swept. One span for
+/// every mark, whenever it is written: a redelivery later than it — an
+/// acknowledgement apalis dropped, then a quiet longer than the span before a
+/// replica starts — runs the job again, which at least once allows.
 fn settled_for(orphan_after: Duration, lease: Duration) -> Duration {
     SETTLED_FLOOR.max(orphan_after.saturating_mul(2).saturating_add(lease))
 }
@@ -763,9 +594,9 @@ mod tests {
         assert!(long >= hour * 2 + Duration::from_secs(30), "{long:?}");
     }
 
-    /// A renewal that finds the lease gone is the one guard failure that can run
-    /// a job twice, so it is an `error` and ends the renewals; one Redis refused
-    /// is a `warn`, and the next beat tries again.
+    /// A renewal that finds the lease gone means another delivery may run the
+    /// job beside this attempt, so it is an `error` and ends the renewals; one
+    /// Redis refused is a `warn`, and the next beat tries again.
     #[test]
     fn a_lease_found_taken_is_an_error_and_a_refused_renewal_is_retried() {
         let logs = nest_rs_testing::LogCapture::install();
@@ -791,60 +622,6 @@ mod tests {
         assert_eq!(lost.level, "error");
         assert_eq!(lost.field("holder").as_deref(), Some("host:01/a"));
         assert_eq!(lost.field("lease_ms").as_deref(), Some("30000"));
-    }
-
-    /// The jobs settled lately are the ones within the span an acknowledgement
-    /// can take, and nothing older: the record a drain extends stays as long
-    /// as that span's worth of jobs, however long the worker has run.
-    #[test]
-    fn only_the_jobs_settled_within_the_acknowledgement_span_are_kept_in_mind() {
-        let job =
-            |n: u64| JobId::parse(&format!("01890a5d-ac96-774b-bcce-{n:012}")).expect("a job id");
-        let start = Instant::now();
-        let within = Duration::from_secs(30);
-        let mut lately: VecDeque<(Instant, JobId)> = [0u64, 10, 20, 40]
-            .into_iter()
-            .map(|at| (start + Duration::from_secs(at), job(at)))
-            .collect();
-        forget_older(&mut lately, start + Duration::from_secs(45), within);
-        let kept: Vec<JobId> = lately.iter().map(|(_, job)| job.clone()).collect();
-        assert_eq!(kept, [job(20), job(40)], "settled within 30 s of now");
-        forget_older(&mut lately, start + Duration::from_secs(70), within);
-        assert_eq!(
-            lately.len(),
-            1,
-            "the last one, settled 30 s ago, is still owed"
-        );
-    }
-
-    /// A pass keeping those marks is said as detail when Redis kept them, and
-    /// at `warn` when it refused, since a job among them may then run again —
-    /// each naming why it ran.
-    #[test]
-    fn keeping_the_recent_marks_is_detail_and_a_refusal_is_a_warn() {
-        let logs = nest_rs_testing::LogCapture::install();
-        report_kept(&audio(), Keeping::Drain, Ok(0));
-        report_kept(&audio(), Keeping::Drain, Ok(3));
-        report_kept(
-            &audio(),
-            Keeping::AcknowledgementLost,
-            Err(redis::RedisError::from(std::io::Error::other("timed out"))),
-        );
-        let kept = logs.expect_one(nest_rs_queue::TARGET, "settled marks kept a week");
-        assert_eq!(kept.level, "debug");
-        assert_eq!(kept.field("kept").as_deref(), Some("3"));
-        assert_eq!(kept.field("reason").as_deref(), Some("drain"));
-        let refused = logs.expect_one(
-            nest_rs_queue::TARGET,
-            "settled marks not kept a week; a job settled lately runs again if its \
-             acknowledgement was lost and no replica starts before its mark lapses",
-        );
-        assert_eq!(refused.level, "warn");
-        assert_eq!(refused.field("error").as_deref(), Some("timed out"));
-        assert_eq!(
-            refused.field("reason").as_deref(),
-            Some("acknowledgement lost")
-        );
     }
 
     /// A mark reads back as the outcome it recorded, and only the dead-letter

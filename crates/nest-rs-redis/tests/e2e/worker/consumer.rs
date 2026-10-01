@@ -691,6 +691,172 @@ async fn an_attempt_outlasting_the_shutdown_window_is_handed_back_within_it() {
     assert_eq!(OUTLASTED.finished(run), 1, "and completed exactly once");
 }
 
+// --- a shutdown while Redis stalls ----------------------------------------------
+
+/// How long the stalled tests' proxy holds every answer back: past the brisk
+/// drain's whole window, so the drain stops waiting before Redis answers.
+const DRAIN_STALL: Duration = Duration::from_secs(4);
+
+static CUT_STALLED: Runs = Runs::new();
+
+const CUT_STALLED_QUEUE: &str = "nestrs-e2e-drain-stalled-cut";
+
+#[queue(name = "nestrs-e2e-drain-stalled-cut", job = DrainCommand)]
+struct CutStalledQueue;
+
+#[injectable]
+#[derive(Default)]
+struct CutStalledProcessor;
+
+#[processor]
+impl CutStalledProcessor {
+    /// No retry: an attempt left counted would be the job's last.
+    #[process(queue = CutStalledQueue, retries = 0)]
+    async fn hold(&self, job: DrainCommand) -> anyhow::Result<()> {
+        hold(&CUT_STALLED, job).await;
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(None), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [CutStalledProcessor],
+)]
+struct CutStalledModule;
+
+/// The drain window closes on a running attempt while Redis holds every answer
+/// back past the reserve, so the drain stops waiting before any call of the
+/// attempt's hand-back answers. The start the attempt never answered for is
+/// given back all the same — sent first, the moment the window closes on it —
+/// so the job is not one whose attempts never returned: with no retry left, the
+/// next replica runs it again rather than dead-lettering it unrun. And the
+/// drain's line says what it cut.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_attempt_cut_while_redis_stalls_gives_its_start_back_and_runs_again() {
+    crate::forget(CUT_STALLED_QUEUE).await;
+    let logs = LogCapture::install_global();
+    let proxy = SlowProxy::start(DRAIN_STALL).await;
+    let first = crate::replica_on::<CutStalledModule>(RedisConfig {
+        url: proxy.url(),
+        ..Default::default()
+    })
+    .await;
+    let run = crate::this_run();
+    let receipt = first
+        .producer
+        .push(
+            CutStalledQueue,
+            DrainCommand {
+                run,
+                hold_ms: 60_000,
+            },
+            None,
+        )
+        .await
+        .expect("enqueue");
+    crate::wait_until(Duration::from_secs(10), || CUT_STALLED.of(run).len() == 1).await;
+    assert_eq!(CUT_STALLED.of(run).len(), 1, "the first attempt started");
+
+    proxy.slow_down(true);
+    first.worker.shutdown().await.expect("clean shutdown");
+    let attempts = crate::key_of(CUT_STALLED_QUEUE, "attempts", &receipt.id().to_string());
+    let counted = crate::read(&attempts).await;
+    let cut = logs.find(
+        nest_rs_queue::TARGET,
+        "queue workers did not stop within the shutdown window; a delivery cut here leaves its \
+         job in flight until a replica sweeps it, its attempt spent unless the give-back reached \
+         Redis",
+    );
+
+    let second = crate::replica::<CutStalledModule>().await;
+    crate::wait_until(Duration::from_secs(15), || CUT_STALLED.finished(run) == 1).await;
+    second.worker.shutdown().await.expect("clean shutdown");
+    crate::forget(CUT_STALLED_QUEUE).await;
+
+    assert!(
+        counted.as_deref().is_none_or(|count| count == "0"),
+        "the cut attempt's start was given back, not left counted: {counted:?}",
+    );
+    assert_eq!(cut.len(), 1, "the drain said it stopped waiting: {cut:#?}");
+    assert_eq!(
+        cut[0].field("cut").as_deref(),
+        Some("1"),
+        "one delivery cut"
+    );
+    assert_eq!(
+        CUT_STALLED.of(run).len(),
+        2,
+        "cut once, then run again by the next replica rather than dead-lettered unrun",
+    );
+    assert_eq!(CUT_STALLED.finished(run), 1, "and completed");
+}
+
+static SETTLED_STALLED: Runs = Runs::new();
+
+const SETTLED_STALLED_QUEUE: &str = "nestrs-e2e-drain-stalled-settled";
+
+#[queue(name = "nestrs-e2e-drain-stalled-settled", job = DrainCommand)]
+struct SettledStalledQueue;
+
+#[injectable]
+#[derive(Default)]
+struct SettledStalledProcessor;
+
+#[processor]
+impl SettledStalledProcessor {
+    #[process(queue = SettledStalledQueue, retries = 0)]
+    async fn hold(&self, job: DrainCommand) -> anyhow::Result<()> {
+        hold(&SETTLED_STALLED, job).await;
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(None), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [SettledStalledProcessor],
+)]
+struct SettledStalledModule;
+
+/// A replica that settled a job a moment ago stops while Redis holds every
+/// answer back, longer than the connection's budget of ten seconds: the stop
+/// stays inside its two-second window. Nothing it owes Redis is left to run after the drain — a settled
+/// mark is written once, when its job settles, and no pass over the jobs
+/// settled lately waits out a budget past the window the operator set.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_while_redis_stalls_after_a_settle_stays_inside_its_window() {
+    crate::forget(SETTLED_STALLED_QUEUE).await;
+    let config = RedisConfig::default();
+    let proxy = SlowProxy::start(config.connect_timeout + DRAIN_STALL).await;
+    let replica = crate::replica_on::<SettledStalledModule>(RedisConfig {
+        url: proxy.url(),
+        ..config
+    })
+    .await;
+    let run = crate::this_run();
+    replica
+        .producer
+        .push(SettledStalledQueue, DrainCommand { run, hold_ms: 0 }, None)
+        .await
+        .expect("enqueue");
+    crate::wait_until(Duration::from_secs(10), || {
+        SETTLED_STALLED.finished(run) == 1
+    })
+    .await;
+    assert_eq!(SETTLED_STALLED.finished(run), 1, "the job ran and settled");
+
+    proxy.slow_down(true);
+    let stopping = Instant::now();
+    replica.worker.shutdown().await.expect("clean shutdown");
+    let took = stopping.elapsed();
+    crate::forget(SETTLED_STALLED_QUEUE).await;
+
+    let window = crate::brisk().shutdown_timeout;
+    assert!(
+        took < window + Duration::from_millis(500),
+        "the stop kept inside its {window:?} window, not {took:?}",
+    );
+}
+
 // --- due records reach the queue at the fetch's pace ---------------------------
 
 /// How many records fall due at once: past a promotion's hundred, so reaching

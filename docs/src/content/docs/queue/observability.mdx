@@ -111,15 +111,14 @@ either `job_id` or `worker`:
 | `job delivered again after it settled; acknowledged without running` | `info` | A redelivery the settled mark absorbed. |
 | `job delivered after it was cancelled; acknowledged without running` | `info` | A delivery that met a cancel's tombstone. |
 | `job filed for its next attempt`, `job deferred to its throttle's next window`, `job handed back for a consumer of a newer release` | `debug` | A retry on the schedule, an attempt over its throttle, and a job a newer release sealed — which the port says at `warn`, naming both versions. |
-| `job lease not asked for; …`, `job lease not renewed; retrying`, `job settled mark not written; …` | `warn` | Redis refused a guard call — see [Delivery on Redis](/queue/delivery/#when-redis-is-slow-or-gone). |
+| `job lease not asked for; …`, `job lease not renewed; retrying`, `job settled mark not written; …`, `job lease not dropped; …` | `warn` | Redis refused a guard call — see [Delivery on Redis](/queue/delivery/#when-redis-is-slow-or-gone); the last says, in `gives_back`, what the attempt was to give back and did not. |
 | `queue fetch failed; …`, `queue worker heartbeat failed; …`, `scheduled jobs not moved onto the queue; …` | `warn` | One of apalis's own calls failed, and it makes it again; a fetch whose connection failed under it may have claimed jobs, which wait in flight until a replica starts. |
 | `due jobs not moved onto the queue; retrying` | `warn` | Redis refused the worker's scan of the schedule; `retry_in_ms` says when it runs again. |
-| `settled marks kept a week` / `settled marks not kept a week; …` | `debug` / `warn` | The worker kept — or Redis refused to keep — the marks of the jobs settled just before a drain or a lost acknowledgement; `reason` says which. |
 | `job lease lost while its attempt runs; another delivery may run it too` | `error` | The attempt's lease lapsed under it. |
 | `job not handed back; …` | `error` | Redis refused a hand-back: apalis files the job's stored record again, due at once, and it runs again. |
-| `job acknowledgement lost; …` | `error` | A job stays in flight until a replica starts; the worker keeps the marks of the jobs it settled lately a week, so that delivery does not run it again. |
+| `job acknowledgement lost; …` | `error` | A job stays in flight until a replica sweeps it, and runs again then if its settled mark has lapsed — delivery is at least once. |
 | `queue fetch met a record apalis cannot decode; …` | `error` | A fetch claimed a record apalis cannot read, and dropped its whole batch in flight — see [Delivery on Redis](/queue/delivery/#limits). |
-| `queue workers did not stop within the shutdown window; …` | `error` | An attempt outlived the drain and its reserve. |
+| `queue workers did not stop within the shutdown window; …` | `error` | The drain waited past its reserve — a Redis that stalled — and `cut` deliveries were left: each job stays in flight until a replica sweeps it, its attempt spent unless the give-back reached Redis. |
 
 At boot, a key at a 6.x queue name holding something other than the structure
 6.x kept there is said at `warn`, its `keys` naming each with what it holds —

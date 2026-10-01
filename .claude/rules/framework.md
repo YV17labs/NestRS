@@ -774,14 +774,17 @@ in the name of a job that was never filed; it says so at `warn`, naming the step
 and errs toward at-least-once. The week is a constant: a knob would need the
 queue binding's first `#[config]` and its `for_root`, an owner question rather than
 a default. A settled mark lives past the latest a sweep could hand the job to a
-second delivery, `max(1 h, 2 × orphan_after + lease)` — and a week when its
-acknowledgement may be lost, since a job whose acknowledgement apalis dropped
-stays in flight until *some* replica starts, however much later: a job settled
-during a drain, and every job settled within the span an acknowledgement takes
-(`acknowledged_within`, a poll and a heartbeat) before the drain began or before
-apalis reported one lost. A quiet longer than that week, or an acknowledgement
-loop further behind than the span, is the residual, and stated as such. At about
-120 bytes a job that is a documented cost, not a setting.
+second delivery, `max(1 h, 2 × orphan_after + lease)`, and that one span is the
+whole of it, whenever the mark is written. A job whose acknowledgement apalis
+dropped — every one still queued when a worker stops, and one Redis refuses —
+stays in flight until *some* replica sweeps it, and if that is later than its
+mark, it runs again: **delivery is at least once, and a handler is idempotent**
+(`CLAUDE.md`). Round one kept the marks of the jobs settled around a drain or a
+lost acknowledgement a week, which grew a set per method with the orphan
+threshold, ran passes the stop waited out past its window, and still missed the
+acknowledgement lost during a pass — machinery that bought a promise the queue
+does not make, removed by decision. At about 120 bytes a job, the span is a
+documented cost, not a setting.
 
 **The 6.x layout is refused, and read typed and read-only.** 6.x handed apalis
 the queue's bare name, so its jobs sit at the root of the keyspace, where a 7.0
@@ -1666,18 +1669,21 @@ drain.
   holds fetched jobs an idle peer cannot take and KEDA does not count: possible,
   unbuilt, and an owner question until it is decided.
 
-  **Delivery is at least once, and a redelivery runs once.** apalis delivers a
-  job twice in ways no setting of its public API removes — its startup sweep
-  reclaims every registered consumer's in-flight jobs, a live peer's included; a
-  replica that misses its heartbeats is swept, by a peer or by its own sweep,
-  which reads its own heartbeat like any other; an acknowledgement is lost in a
-  drain — so the worker guards every delivery in keys of its own (*A key a
-  datastore holds*, above). An attempt runs only under the job's lease (`SET NX
-  PX`, renewed every third of the lease while it runs); its terminal outcome
-  writes the settled mark and drops the lease in one script; a delivery arriving
-  while the lease is held is **handed back, never acknowledged**, for when that
-  lease would lapse; and one arriving after the job settled is acknowledged
-  without running, answered as the first was. **The guard may delay a job, never
+  **Delivery is at least once, and the guard filters the common duplicate.**
+  apalis delivers a job twice in ways no setting of its public API removes — its
+  startup sweep reclaims every registered consumer's in-flight jobs, a live
+  peer's included; a replica that misses its heartbeats is swept, by a peer or by
+  its own sweep, which reads its own heartbeat like any other; an acknowledgement
+  is lost in a drain — so the worker guards every delivery in keys of its own (*A
+  key a datastore holds*, above). An attempt runs only under the job's lease
+  (`SET NX PX`, renewed every third of the lease while it runs); its terminal
+  outcome writes the settled mark and drops the lease in one script; a delivery
+  arriving while the lease is held is **handed back, never acknowledged**, for
+  when that lease would lapse; and one arriving after the job settled is
+  acknowledged without running, answered as the first was — **while the mark
+  lasts**, its one fixed span. A redelivery after it, or a lease outlived by a
+  replica cut off from Redis, runs the job again: the contract is at least once,
+  and the handler is idempotent (`CLAUDE.md`). **The guard may delay a job, never
   lose one**, and each of its steps is one Lua script or one command. Each replica
   consumes under an apalis worker id of its own — the host, then a UUID v7 — and
   the periodic sweep takes a replica's jobs only once it has missed its heartbeats
@@ -1706,15 +1712,24 @@ drain.
   times, and a test decodes the stored cap as 32 bits wide.
 
   **A shutdown stays inside `shutdown_timeout`.** The worker stops fetching at
-  once, lets running attempts finish for the window less a reserve (five seconds,
-  or half the window), then interrupts what still runs and hands each job back,
-  due at once for another replica, within the reserve; anything still running
-  past the whole window is said at `error` and left to its lease. The drain is the
+  once, lets running attempts finish for the window less a reserve, then
+  interrupts what still runs and hands each job back, due at once for another
+  replica, within the reserve. **The reserve is one budgeted call** — the
+  connection's budget, or five seconds when that is shorter, never more than half
+  the window — because an interrupted attempt **gives its start back first**, in
+  one call, before the hand-back's own: the give-back is the one write whose loss
+  costs the job something (an attempt left counted spends the budget of a job that
+  never failed), and a drain that stops waiting sooner than one budget gives up on
+  a Redis that is only slow. Every unsettled attempt releases before it hands back,
+  so the order is one. A delivery that reaches its permit after the window closed
+  is handed back without being admitted, so nothing starts past the window.
+  Anything the drain still waits on past the whole window is said at `error`
+  with how many deliveries it cut, each job left in flight until a replica sweeps
+  it and its attempt spent unless the give-back reached Redis. The drain is the
   worker's own rather than apalis's, because apalis-redis 0.7.4 drops the
   acknowledgement of a task that ends while its worker drains: a hand-back takes
-  the task out of flight itself, and a job settled during a drain — or within
-  the span an acknowledgement takes before it — keeps its settled mark for a
-  week, since whichever replica starts next delivers it again.
+  the task out of flight itself; a job that settled is answered by its mark if it
+  comes back while the mark lasts, and runs again after.
   What an interrupted attempt's transaction holds is `data-layer.md`'s, under *An
   abandoned attempt*.
 

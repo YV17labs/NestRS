@@ -54,11 +54,12 @@
 //! attempts running get [`RedisWorkerConfig::shutdown_timeout`] less a reserve to
 //! finish, and whatever still runs when that closes is interrupted and handed
 //! back to the queue inside the reserve — so the orchestrator's SIGKILL never
-//! lands on a job the worker still holds. Beside it, the jobs settled just before
-//! it keep their marks a week, since apalis drops the acknowledgements it has
-//! not written yet ([`Leases`]).
+//! lands on a job the worker still holds. The reserve is one of the connection's
+//! budgets, the time Redis is given to answer a call, so the start an interrupted
+//! attempt gives back is waited for as any call is (`hand_back_reserve`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -75,9 +76,9 @@ use nest_rs_queue::{ProcessMethod, QueueName};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-use super::delivery::{Deliveries, SETTLED_WHILE_DRAINING, Task};
+use super::delivery::{Deliveries, Task};
 use super::gate::ThrottleGate;
-use super::lease::{Keeping, Leases, report_kept};
+use super::lease::Leases;
 use crate::backend::{BACKEND, uncapped_context};
 use crate::connection::CONNECTION_REMEDY;
 use crate::error::LegacyLayoutError;
@@ -91,8 +92,9 @@ use crate::{RedisConnection, RedisWorkerConfig, layout};
 /// it up.
 const APALIS_SCAN: Duration = Duration::from_secs(30);
 
-/// What a drain keeps back from its window to hand interrupted jobs back in:
-/// five seconds, or half the window when that is shorter.
+/// The least a drain keeps back from its window to hand interrupted jobs back
+/// in, when the connection's budget is shorter: five seconds, which a healthy
+/// Redis spends in milliseconds.
 const HAND_BACK_RESERVE: Duration = Duration::from_secs(5);
 
 /// The consumer-side transport: drains the `#[processor]` inventory and runs
@@ -161,6 +163,7 @@ impl Transport for RedisWorker {
             .unwrap_or_default();
 
         let interrupt = CancellationToken::new();
+        let underway = Arc::new(AtomicUsize::new(0));
         // Each method's promotion, for as long as `serve` runs — the drain
         // included, where a job handed back is due at once.
         let mut promoting = Vec::new();
@@ -194,12 +197,11 @@ impl Transport for RedisWorker {
                     queue,
                     config.lease,
                     config.orphan_after,
-                    config.acknowledged_within(),
                     method.options().throttle(),
                 ),
                 gate: ThrottleGate::new(cancel.clone()),
-                draining: cancel.clone(),
                 interrupt: interrupt.clone(),
+                underway: Arc::clone(&underway),
             });
             let fetching = storage(
                 &connection.without_budget(),
@@ -207,18 +209,10 @@ impl Transport for RedisWorker {
                 &config,
                 concurrency(method),
             );
-            workers.insert(
-                id.clone(),
-                (deliveries.queue.clone(), Arc::clone(&deliveries.leases)),
-            );
+            workers.insert(id.clone(), deliveries.queue.clone());
             monitor = register(monitor, &id, method, fetching, deliveries);
         }
         let reporter = Reporter::new(workers);
-        let guards: Vec<Arc<Leases>> = reporter
-            .workers
-            .values()
-            .map(|(_, leases)| Arc::clone(leases))
-            .collect();
         let monitor = monitor.on_event(move |event| reporter.report(&event));
 
         let signal = cancel.clone();
@@ -231,24 +225,14 @@ impl Transport for RedisWorker {
             finished = &mut run => Some(finished),
             () = cancel.cancelled() => None,
         };
-        // apalis drops every acknowledgement still queued once its workers
-        // stop, so the jobs answered just before the stop keep their marks as
-        // long as the ones settled during the drain — beside the drain, not
-        // before it, which has its own window to keep, and whether the workers
-        // stopped before this loop saw the signal or after.
-        let mut remembering = tokio::task::JoinSet::new();
-        for leases in guards {
-            remembering.spawn(async move {
-                let kept = leases.remember_settled_lately(SETTLED_WHILE_DRAINING).await;
-                report_kept(leases.queue(), Keeping::Drain, kept);
-            });
-        }
-        let drained = match stopped {
+        match stopped {
             Some(finished) => finished.map_err(anyhow::Error::from),
-            None => drain(run, &interrupt, config.shutdown_timeout).await,
-        };
-        while remembering.join_next().await.is_some() {}
-        drained
+            None => {
+                let window = config.shutdown_timeout;
+                let reserve = hand_back_reserve(window, connection.budget());
+                drain(run, &interrupt, window, reserve, &underway).await
+            }
+        }
     }
 }
 
@@ -293,19 +277,33 @@ async fn refuse_legacy_jobs(conn: &RedisConnection, methods: &[&ProcessMethod]) 
     }
 }
 
+/// What a drain keeps back from its `window` to hand interrupted jobs back in:
+/// one of the connection's `budget`s — an interrupted attempt gives its start
+/// back in one call, and a reserve shorter than the time Redis is given to
+/// answer one gives up on a Redis that is only slow — or [`HAND_BACK_RESERVE`]
+/// when the budget is shorter, and never more than half the window, which the
+/// running attempts keep.
+fn hand_back_reserve(window: Duration, budget: Option<Duration>) -> Duration {
+    HAND_BACK_RESERVE
+        .max(budget.unwrap_or_default())
+        .min(window / 2)
+}
+
 /// Let the running attempts finish within the window, then interrupt the rest
-/// and give them the reserve to hand their jobs back. What still runs past the
-/// whole window is said, and left: its job stays in flight, and runs again
-/// elsewhere once its lease lapses.
+/// and give them the reserve to hand their jobs back. A worker still not
+/// stopped once the whole window has passed is said, with how many deliveries
+/// it cut — `underway`, every method's — and left: each of those jobs stays in
+/// flight until a replica sweeps it.
 async fn drain<F>(
     mut run: std::pin::Pin<&mut F>,
     interrupt: &CancellationToken,
     window: Duration,
+    reserve: Duration,
+    underway: &AtomicUsize,
 ) -> Result<()>
 where
     F: std::future::Future<Output = std::io::Result<()>>,
 {
-    let reserve = HAND_BACK_RESERVE.min(window / 2);
     let patience = window.saturating_sub(reserve);
     if let Ok(finished) = tokio::time::timeout(patience, run.as_mut()).await {
         return Ok(finished?);
@@ -324,8 +322,11 @@ where
             tracing::error!(
                 target: nest_rs_queue::TARGET,
                 shutdown_timeout_ms = millis(window),
-                "queue workers did not stop within the shutdown window; a job still running stays \
-                 in flight and runs again elsewhere once its lease lapses",
+                reserve_ms = millis(reserve),
+                cut = underway.load(Ordering::Relaxed),
+                "queue workers did not stop within the shutdown window; a delivery cut here leaves \
+                 its job in flight until a replica sweeps it, its attempt spent unless the \
+                 give-back reached Redis",
             );
             Ok(())
         }
@@ -509,18 +510,17 @@ fn worker_id() -> String {
 const UNREGISTERED_REPEAT: Duration = Duration::from_secs(30);
 
 /// Says what apalis says about the workers of one replica, at the level each
-/// event deserves — and keeps the recent settled marks of a worker whose
-/// acknowledgement apalis lost. apalis logs nothing through `tracing` itself,
-/// so an event dropped here is a failure nobody hears of.
+/// event deserves. apalis logs nothing through `tracing` itself, so an event
+/// dropped here is a failure nobody hears of.
 struct Reporter {
-    /// Each worker's queue and delivery guard, by the id apalis names it with.
-    workers: HashMap<String, (QueueName, Arc<Leases>)>,
+    /// Each worker's queue, by the id apalis names it with.
+    workers: HashMap<String, QueueName>,
     /// When each worker was last said to be unregistered.
     unregistered: Mutex<HashMap<String, Instant>>,
 }
 
 impl Reporter {
-    fn new(workers: HashMap<String, (QueueName, Arc<Leases>)>) -> Self {
+    fn new(workers: HashMap<String, QueueName>) -> Self {
         Self {
             workers,
             unregistered: Mutex::default(),
@@ -529,8 +529,11 @@ impl Reporter {
 
     fn report(&self, event: &Worker<Event>) {
         let worker = event.id().name();
-        let guarded = self.workers.get(worker);
-        let queue = guarded.map(|(queue, _)| queue.as_str()).unwrap_or_default();
+        let queue = self
+            .workers
+            .get(worker)
+            .map(QueueName::as_str)
+            .unwrap_or_default();
         match event.inner() {
             Event::Start => tracing::info!(
                 target: nest_rs_queue::TARGET,
@@ -548,14 +551,7 @@ impl Reporter {
             Event::Error(error) if unregistered(error.as_ref()) => {
                 self.report_unregistered(queue, worker);
             }
-            Event::Error(error) => {
-                if acknowledgement_lost(error.as_ref())
-                    && let Some((_, leases)) = guarded
-                {
-                    leases.keep_settled_lately(SETTLED_WHILE_DRAINING);
-                }
-                report_error(queue, worker, error.as_ref());
-            }
+            Event::Error(error) => report_error(queue, worker, error.as_ref()),
         }
     }
 
@@ -589,14 +585,6 @@ impl Reporter {
             );
         }
     }
-}
-
-/// Whether `error` is apalis's report of an acknowledgement it could not write.
-fn acknowledgement_lost(error: &(dyn std::error::Error + 'static)) -> bool {
-    matches!(
-        error.downcast_ref::<RedisPollError>(),
-        Some(RedisPollError::AckError(_))
-    )
 }
 
 /// Whether `error` is a fetch refused because a peer's sweep unregistered the
@@ -740,8 +728,8 @@ fn report_trouble(trouble: Trouble, queue: &str, worker: &str, error: &str) {
             queue,
             worker,
             error,
-            "job acknowledgement lost; the job stays in flight until a replica starts, and the \
-             worker's recently settled jobs keep their marks a week so it does not run twice",
+            "job acknowledgement lost; the job stays in flight until a replica sweeps it, and runs \
+             again then if its settled mark has lapsed",
         ),
     }
 }
@@ -818,9 +806,10 @@ mod tests {
     }
 
     /// apalis's failures reach the log at `warn` or above with the queue, the
-    /// worker and the cause — a lost acknowledgement at `error`, since it is the
-    /// one that makes a job run again — while a delivery's own answer, reported
-    /// where it was decided, is not said twice.
+    /// worker and the cause — a lost acknowledgement at `error`, since its job
+    /// then waits in flight with nothing to run it while the replica lives, and
+    /// runs again once swept if its settled mark has lapsed — while a delivery's
+    /// own answer, reported where it was decided, is not said twice.
     #[test]
     fn apalis_failures_are_reported_with_fields_and_a_deliverys_answer_is_not_repeated() {
         let logs = LogCapture::install();
@@ -846,15 +835,11 @@ mod tests {
         ] {
             assert_eq!(Trouble::of(&error), trouble);
         }
-        assert!(acknowledgement_lost(&RedisPollError::AckError(failure())));
-        assert!(!acknowledgement_lost(&RedisPollError::PollNextError(
-            failure()
-        )));
         report_error("audio", "host:01", &RedisPollError::AckError(failure()));
         let lost = logs.expect_one(
             nest_rs_queue::TARGET,
-            "job acknowledgement lost; the job stays in flight until a replica starts, and the \
-             worker's recently settled jobs keep their marks a week so it does not run twice",
+            "job acknowledgement lost; the job stays in flight until a replica sweeps it, and runs \
+             again then if its settled mark has lapsed",
         );
         assert_eq!(lost.level, "error");
         assert_eq!(lost.field("queue").as_deref(), Some("audio"));
@@ -971,14 +956,17 @@ mod tests {
     }
 
     /// A worker still running once the whole window has passed is left to the
-    /// process's end, and said at `error`: its job stays in flight.
+    /// process's end, and said at `error`, with how many deliveries it cut:
+    /// each of their jobs stays in flight, its attempt spent unless given back.
     #[tokio::test]
-    async fn a_worker_outlasting_the_whole_window_is_said_and_left() {
+    async fn a_worker_outlasting_the_whole_window_is_said_with_what_it_cut_and_left() {
         let logs = LogCapture::install();
         let interrupt = CancellationToken::new();
         let run = std::future::pending::<std::io::Result<()>>();
         tokio::pin!(run);
-        drain(run, &interrupt, Duration::from_millis(200))
+        let window = Duration::from_millis(200);
+        let underway = AtomicUsize::new(2);
+        drain(run, &interrupt, window, window / 2, &underway)
             .await
             .expect("the drain returns");
         assert!(
@@ -987,15 +975,38 @@ mod tests {
         );
         let left = logs.expect_one(
             nest_rs_queue::TARGET,
-            "queue workers did not stop within the shutdown window; a job still running stays \
-             in flight and runs again elsewhere once its lease lapses",
+            "queue workers did not stop within the shutdown window; a delivery cut here leaves \
+             its job in flight until a replica sweeps it, its attempt spent unless the give-back \
+             reached Redis",
         );
         assert_eq!(left.level, "error");
+        assert_eq!(left.field("cut").as_deref(), Some("2"));
+        assert_eq!(left.field("reserve_ms").as_deref(), Some("100"));
     }
 
-    /// A drain keeps back a reserve to hand interrupted jobs back in, never more
-    /// than half its window, and interrupts what still runs once the rest has
-    /// passed.
+    /// The reserve is one connection budget — the time an interrupted
+    /// attempt's give-back is owed — or five seconds when the budget is
+    /// shorter, and never more than half the window.
+    #[test]
+    fn the_reserve_covers_one_budgeted_call_within_half_the_window() {
+        let secs = Duration::from_secs;
+        for (window, budget, reserve) in [
+            (secs(30), Some(secs(10)), secs(10)),
+            (secs(30), Some(secs(1)), secs(5)),
+            (secs(30), None, secs(5)),
+            (secs(30), Some(secs(60)), secs(15)),
+            (secs(2), Some(secs(10)), secs(1)),
+        ] {
+            assert_eq!(
+                hand_back_reserve(window, budget),
+                reserve,
+                "window {window:?}, budget {budget:?}"
+            );
+        }
+    }
+
+    /// A drain keeps back a reserve to hand interrupted jobs back in, and
+    /// interrupts what still runs once the rest of its window has passed.
     #[tokio::test]
     async fn a_drain_interrupts_what_still_runs_and_keeps_within_its_window() {
         let logs = LogCapture::install();
@@ -1008,7 +1019,9 @@ mod tests {
             Ok(())
         };
         tokio::pin!(run);
-        drain(run, &interrupt, window).await.expect("drained");
+        drain(run, &interrupt, window, window / 2, &AtomicUsize::new(0))
+            .await
+            .expect("drained");
         let took = started.elapsed();
         assert!(
             took >= window / 2 && took < window,

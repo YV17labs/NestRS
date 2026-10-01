@@ -126,6 +126,12 @@ to require it, **stop and ask**.
   there are no others.
 - **No silent failure.** Never return `[]`/`None` when the DB errored —
   batch and loader methods return `Result`. Never log-and-pretend-success.
+- **No queue promise stronger than at least once.** A job may run more than
+  once — a redelivery after its settled mark lapsed, a lease outlived by a
+  replica cut off from Redis — so a handler is idempotent, and no rustdoc, log
+  line, rule or page says a job never runs twice. The delivery guard filters
+  the common duplicate for a fixed span and claims nothing past it; machinery
+  that stretches it toward exactly once is the defect, not the remedy.
 - **No read or write of apalis's structures outside apalis's public API**, with
   one written exception: the 6.x boot check
   (`nest-rs-redis/src/legacy_layout.rs`) reads the 6.x names apalis's `Config`

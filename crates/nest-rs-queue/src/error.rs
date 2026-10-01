@@ -175,20 +175,26 @@ pub struct JobError {
 
 impl JobError {
     /// A **retryable** failure: a transient fault worth another attempt.
-    pub fn retry(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+    ///
+    /// Boxed by [`nest_rs_core::boxed_error`], so an `anyhow::Error` — what a
+    /// `#[process]` method returns — keeps every link of its chain readable, and
+    /// a decode failure inside it reaches the line and the dead-letter record as
+    /// its report rather than as serde's sentence quoting the value.
+    pub fn retry(source: impl Into<Box<dyn std::error::Error + Send + Sync>> + 'static) -> Self {
         Self {
             retryable: true,
-            source: source.into(),
+            source: nest_rs_core::boxed_error(source),
             details: None,
         }
     }
 
     /// A **non-retryable** failure: deterministic, so another attempt would fail
-    /// identically — the attempt dead-letters at once.
-    pub fn abort(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+    /// identically — the attempt dead-letters at once. Boxed as
+    /// [`retry`](Self::retry) boxes.
+    pub fn abort(source: impl Into<Box<dyn std::error::Error + Send + Sync>> + 'static) -> Self {
         Self {
             retryable: false,
-            source: source.into(),
+            source: nest_rs_core::boxed_error(source),
             details: None,
         }
     }

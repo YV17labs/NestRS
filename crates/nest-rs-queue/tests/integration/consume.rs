@@ -214,6 +214,136 @@ async fn an_undecodable_payload_is_dead_lettered_without_its_values() {
     }
 }
 
+/// What every receipt handler below decodes its body as: a number, sent a secret.
+const SECRET_BODY: &str = r#""sk_live_51HsecretTOKEN""#;
+
+/// serde's sentence for that body, as the report every line and record carries.
+const BODY_REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
+
+#[queue(name = "receipts-anyhow", job = String)]
+struct ReceiptsAnyhowQueue;
+
+#[queue(name = "receipts-serde", job = String)]
+struct ReceiptsSerdeQueue;
+
+#[queue(name = "receipts-context", job = String)]
+struct ReceiptsContextQueue;
+
+struct ReceiptProcessor;
+
+impl nest_rs_core::ProviderResidency for ReceiptProcessor {
+    const SINGLETON: bool = true;
+}
+
+/// A body decoding something of its own, in the three shapes a handler returns
+/// it: the documented `anyhow::Result` with `?`, serde's error itself, and a
+/// `.context(…)` over it.
+#[processor]
+impl ReceiptProcessor {
+    #[process(queue = ReceiptsAnyhowQueue)]
+    async fn with_question_mark(&self, body: String) -> anyhow::Result<()> {
+        let _amount: u64 = serde_json::from_str(&body)?;
+        Ok(())
+    }
+
+    #[process(queue = ReceiptsSerdeQueue, retries = 1)]
+    async fn returning_serde(&self, body: String) -> Result<(), serde_json::Error> {
+        serde_json::from_str::<u64>(&body).map(drop)
+    }
+
+    #[process(queue = ReceiptsContextQueue)]
+    async fn with_context(&self, body: String) -> anyhow::Result<()> {
+        use anyhow::Context;
+        let _amount: u64 = serde_json::from_str(&body).context("upstream reply")?;
+        Ok(())
+    }
+}
+
+/// No event this capture holds carries `needle` in any field.
+fn assert_never_quoted(logs: &nest_rs_testing::LogCapture, needle: &str) {
+    let quoting: Vec<String> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.fields.values().any(|value| value.contains(needle)))
+        .map(|event| format!("{} {:?}", event.message, event.fields))
+        .collect();
+    assert!(quoting.is_empty(), "lines quoting the value: {quoting:#?}");
+}
+
+async fn receipt_attempt(
+    method_name: &str,
+    queue: &str,
+) -> (AttemptOutcome, nest_rs_testing::LogCapture) {
+    let logs = nest_rs_testing::LogCapture::install();
+    let mut delivery = Delivery::new(
+        &BARE,
+        QueueName::new(queue.to_owned()).expect("a valid name"),
+        json!({ "v": WIRE_FORMAT_VERSION, "payload": SECRET_BODY }),
+    );
+    let outcome = consume::attempt(
+        method(method_name),
+        &mut delivery,
+        Container::builder().provide(ReceiptProcessor).build(),
+    )
+    .await;
+    (outcome, logs)
+}
+
+/// A decode the *body* does — not the one the decorator does for the job — is
+/// said without its value on every line and in the dead-letter record, whichever
+/// shape the handler returns it in. anyhow's own box hid serde's error from the
+/// chain, so the dead-letter line and record quoted the secret; serde's error
+/// returned directly was said twice, raw and then reported; and the record of a
+/// `.context(…)` kept the context alone.
+#[tokio::test]
+async fn a_decode_failure_a_handler_returns_is_said_without_its_value_in_every_shape() {
+    for (method_name, queue, said) in [
+        (
+            "ReceiptProcessor::with_question_mark",
+            "receipts-anyhow",
+            BODY_REPORT.to_owned(),
+        ),
+        (
+            "ReceiptProcessor::with_context",
+            "receipts-context",
+            format!("upstream reply: {BODY_REPORT}"),
+        ),
+    ] {
+        let (outcome, logs) = receipt_attempt(method_name, queue).await;
+        let AttemptOutcome::DeadLetter(error) = outcome else {
+            panic!("no retry is declared, so the failure dead-letters: {outcome:?}");
+        };
+        assert_eq!(
+            nest_rs_core::error_message(&error),
+            said,
+            "the record an adapter keeps"
+        );
+        let line = logs.expect_one(
+            nest_rs_queue::TARGET,
+            "job dead-lettered: retry budget spent",
+        );
+        assert_eq!(line.field("error").as_deref(), Some(said.as_str()));
+        assert_never_quoted(&logs, "sk_live");
+    }
+
+    let (outcome, logs) =
+        receipt_attempt("ReceiptProcessor::returning_serde", "receipts-serde").await;
+    assert!(
+        matches!(outcome, AttemptOutcome::Retry { .. }),
+        "{outcome:?}"
+    );
+    let warned = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job failed; will retry within the budget",
+    );
+    assert_eq!(
+        warned.field("error").as_deref(),
+        Some(BODY_REPORT),
+        "said once, as its report — not serde's sentence and then the report",
+    );
+    assert_never_quoted(&logs, "sk_live");
+}
+
 static TRIMMED: Mutex<Option<String>> = Mutex::new(None);
 
 // The pipe carrier is the handler's type; the queue's `job` is the wire payload

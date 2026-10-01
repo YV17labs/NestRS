@@ -663,8 +663,16 @@ where
 /// the task onto the dead set at once. A plain error would read as apalis's
 /// `Failed`, which its acknowledgement re-queues under apalis's own attempt
 /// count — a second budget, invisible to the method's.
+///
+/// apalis stores the error's sentence verbatim as the record, so what it is
+/// handed is the failure as the dead-letter line renders it
+/// ([`error_message`](fn@nest_rs_core::error_message)) — the port's contract for a
+/// dead record. Handing it `error.source` stored serde's sentence quoting the
+/// value whenever a `#[process]` body's own decode failed, and only the context
+/// of a `.context(…)`.
 fn dead_letter(error: JobError) -> BoxDynError {
-    Box::new(apalis::prelude::Error::Abort(Arc::new(error.source)))
+    let record: BoxDynError = nest_rs_core::error_message(&error).into();
+    Box::new(apalis::prelude::Error::Abort(Arc::new(record)))
 }
 
 /// `duration` in whole milliseconds, for a line's field.
@@ -963,6 +971,23 @@ mod tests {
         assert!(
             dead.to_string().contains("bad payload"),
             "and it keeps the port's sentence for the dead set: {dead}",
+        );
+    }
+
+    /// The record is the line's rendering: every cause a `.context(…)` wrapped,
+    /// and a decode failure a `#[process]` body returned said without its value.
+    #[test]
+    fn a_dead_letter_record_is_the_failure_as_its_line_renders_it() {
+        let decode =
+            serde_json::from_str::<u64>(r#""sk_live_51HsecretTOKEN""#).expect_err("not a number");
+        let failure = JobError::retry(anyhow::Error::from(decode).context("upstream reply"));
+        let line = nest_rs_core::error_message(&failure);
+        let dead = dead_letter(failure);
+        let record = dead.to_string();
+        assert!(!record.contains("sk_live"), "{record}");
+        assert!(
+            record.ends_with(&line) && line.starts_with("upstream reply: invalid type: a string"),
+            "the record carries the line's sentence whole: {record}",
         );
     }
 }

@@ -1121,3 +1121,116 @@ async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_pas
     );
     crate::forget(PATIENCE_QUEUE).await;
 }
+
+// --- a dead-letter record is the failure as its line renders it -------------------
+
+static RECORDED: Runs = Runs::new();
+
+/// The queue whose job reads a reply it cannot decode.
+const RECORDED_QUEUE: &str = "nestrs-e2e-dead-record";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplyCommand {
+    run: u64,
+    reply: String,
+}
+
+#[queue(name = "nestrs-e2e-dead-record", job = ReplyCommand)]
+struct RecordedQueue;
+
+#[injectable]
+#[derive(Default)]
+struct RecordedProcessor;
+
+#[processor]
+impl RecordedProcessor {
+    #[process(queue = RecordedQueue)]
+    async fn run(&self, job: ReplyCommand) -> anyhow::Result<()> {
+        use anyhow::Context;
+        RECORDED.start(job.run);
+        let _amount: u64 =
+            serde_json::from_str(&job.reply).context("reading the upstream reply")?;
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    providers = [RecordedProcessor],
+)]
+struct RecordedModule;
+
+/// What apalis keeps as the reason of a job it killed onto the dead set is the
+/// sentence the dead-letter line carries: every cause a `.context(…)` wrapped,
+/// and a decode failure the body returned said without the value. It was the
+/// error's source, verbatim — the context alone, or serde's sentence quoting a
+/// secret into Redis for as long as the record is kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dead_letter_record_says_a_decode_failure_as_its_line_does() {
+    const SAID: &str =
+        "reading the upstream reply: invalid type: a string, expected u64 at line 1 column 24";
+    let logs = LogCapture::install_global();
+    let run = crate::this_run();
+    let replica = crate::replica::<RecordedModule>().await;
+    let receipt = replica
+        .producer
+        .push(
+            RecordedQueue,
+            ReplyCommand {
+                run,
+                reply: r#""sk_live_51HsecretTOKEN""#.to_owned(),
+            },
+            None,
+        )
+        .await
+        .expect("enqueue");
+
+    // apalis keeps the reason under its own id for the record, which the job's
+    // line carries as `backend_id`; read that record and no other.
+    let id = receipt.id().to_string();
+    let backend_id = || {
+        logs.find(operation_log::TARGET, unit::JOB)
+            .into_iter()
+            .find(|line| line.field("job_id").as_deref() == Some(id.as_str()))
+            .and_then(|line| line.field("backend_id"))
+    };
+    crate::wait_until(Duration::from_secs(15), || backend_id().is_some()).await;
+    let backend_id = backend_id().expect("the job filed its line");
+    let results = format!("{}:data::result", crate::namespace(RECORDED_QUEUE));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut record: Option<String> = None;
+    while record.is_none() && tokio::time::Instant::now() < deadline {
+        record = redis::cmd("HGET")
+            .arg(&results)
+            .arg(&backend_id)
+            .query_async(&mut crate::connect().await)
+            .await
+            .expect("HGET");
+        if record.is_none() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    replica
+        .worker
+        .shutdown()
+        .await
+        .expect("clean worker shutdown");
+
+    assert_eq!(RECORDED.of(run).len(), 1, "the job ran once");
+    let record = record.expect("the dead-lettered job's reason is kept");
+    assert!(record.contains(SAID), "{record}");
+    assert!(!record.contains("sk_live"), "{record}");
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: retry budget spent",
+    );
+    assert_eq!(said.field("error").as_deref(), Some(SAID));
+    assert!(
+        logs.events()
+            .iter()
+            .all(|line| !line.fields.values().any(|value| value.contains("sk_live"))),
+        "no line quotes the value",
+    );
+
+    crate::forget(RECORDED_QUEUE).await;
+}

@@ -212,6 +212,13 @@ pub enum AttemptOutcome {
     /// The job is done failing — deterministically (an undeserializable
     /// payload, a pipe rejection, a missing provider, a panic, an envelope of
     /// an older version), or retryably on its last attempt: dead-letter it.
+    ///
+    /// The record an adapter keeps of the failure is
+    /// [`error_message`](fn@nest_rs_core::error_message)'s rendering — the sentence
+    /// the dead-letter line carries, every cause and each decode failure said
+    /// without its value — never the error's own `Display` or its `source`
+    /// alone: the first may spell a decode failure in serde's words, and the
+    /// second drops what a `.context(…)` wrapped.
     DeadLetter(JobError),
     /// The job was sealed by a newer release than this consumer's, which cannot
     /// read it: nothing ran and no attempt is spent. Hand the stored record
@@ -969,7 +976,7 @@ async fn run(
             )
         }
         Ok(Err(panic)) => {
-            let detail = panic_message(panic.as_ref()).to_owned();
+            let detail = panic_message(panic.as_ref());
             tracing::error!(
                 target: TARGET,
                 panic = %detail,

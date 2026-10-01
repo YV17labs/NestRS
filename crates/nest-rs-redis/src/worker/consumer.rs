@@ -81,6 +81,7 @@ use super::lease::{Keeping, Leases, report_kept};
 use crate::backend::{BACKEND, uncapped_context};
 use crate::connection::CONNECTION_REMEDY;
 use crate::error::LegacyLayoutError;
+use crate::legacy_layout::{self, LegacyLayout};
 use crate::promotion::{self, Promotion};
 use crate::{RedisConnection, RedisWorkerConfig, layout};
 
@@ -258,12 +259,12 @@ async fn refuse_legacy_jobs(conn: &RedisConnection, methods: &[&ProcessMethod]) 
     let mut refused = Vec::new();
     for method in methods {
         let queue = QueueName::new(method.queue())?;
-        match layout::legacy_jobs(conn, &queue).await {
-            Ok(keys) if keys.is_empty() => {}
-            Ok(keys) => refused.push(
+        match LegacyLayout::read(conn, &queue).await {
+            Ok(found) if found.is_empty() => {}
+            Ok(found) => refused.push(
                 LegacyLayoutError {
                     queue: queue.to_string(),
-                    keys: keys.join(", "),
+                    keys: found.held().join(", "),
                     namespace: layout::namespace(&queue),
                 }
                 .to_string(),
@@ -271,7 +272,7 @@ async fn refuse_legacy_jobs(conn: &RedisConnection, methods: &[&ProcessMethod]) 
             // A user scoped to the framework's prefix cannot read the root, and
             // could not have written the 6.x layout either — but another could
             // have, so the gap is said rather than passed over.
-            Err(error) if layout::outside_the_acl(&error) => tracing::warn!(
+            Err(error) if legacy_layout::outside_the_acl(&error) => tracing::warn!(
                 target: nest_rs_queue::TARGET,
                 queue = %queue,
                 error = %nest_rs_core::error_message(&error),

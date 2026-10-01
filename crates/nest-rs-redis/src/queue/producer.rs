@@ -69,6 +69,7 @@ use super::promoter::Promoter;
 use crate::RedisConnection;
 use crate::backend::{BACKEND, due_second, uncapped_context};
 use crate::layout::{self, CANCELLED, CHECKPOINTS, KEPT_PAST_DUE, LEASES, OPEN, job_key, millis};
+use crate::legacy_layout::{self, LegacyLayout};
 
 /// How long a unique key is claimed before its job is confirmed queued: twice
 /// the port's net. Every call the port makes is dropped at the net
@@ -199,7 +200,8 @@ impl RedisQueueProducer {
         if !first {
             return;
         }
-        report_legacy_check(queue, layout::legacy_jobs(&self.conn, queue).await);
+        let found = LegacyLayout::read(&self.conn, queue).await;
+        report_legacy_check(queue, found.map(|found| found.held()));
     }
 
     /// File `envelopes` on `queue` as `options` say: open their records, then
@@ -478,7 +480,7 @@ fn report_legacy_check(queue: &QueueName, outcome: Result<Vec<String>, redis::Re
             "jobs wait under the 6.x key layout; a 7.0 worker does not run them — drain them \
              with a 6.x worker, or move them under the queue's namespace",
         ),
-        Err(error) if layout::outside_the_acl(&error) => tracing::debug!(
+        Err(error) if legacy_layout::outside_the_acl(&error) => tracing::debug!(
             target: nest_rs_queue::TARGET,
             queue = %queue,
             error = %nest_rs_core::error_message(&error),

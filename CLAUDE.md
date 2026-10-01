@@ -126,6 +126,12 @@ to require it, **stop and ask**.
   there are no others.
 - **No silent failure.** Never return `[]`/`None` when the DB errored —
   batch and loader methods return `Result`. Never log-and-pretend-success.
+- **No read or write of apalis's structures outside apalis's public API**, with
+  one written exception: the 6.x boot check
+  (`nest-rs-redis/src/legacy_layout.rs`) reads the 6.x names apalis's `Config`
+  getters derive, and the in-flight sets its consumers set lists, with `TYPE`
+  then `LLEN`/`ZCARD`/`ZRANGE`/`SCARD` — never a write, never another name. The
+  keys join in `nest-rs-conformance` holds both halves to that file.
 - **No external DI library.** Ours is internal by decision. Extend it.
 - **Four NestJS surfaces are refused by design**, not deferred. They were
   recorded in a roadmap that no longer exists, and each is a defect if it

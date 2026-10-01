@@ -736,8 +736,16 @@ never names one by hand: a name it needs is read off `apalis_redis::Config`'s
 getters, so it moves when apalis's derivation does (the keys join's
 `no_framework_code_spells_an_apalis_structure_by_hand` fails on a literal that
 spells one under `crates/*/src/`) — and files its own records beside them, one
-structure per fact, under words apalis does not use. An apalis behaviour the framework cannot live with is worked around
-in keys of its own and reported upstream.
+structure per fact, under words apalis does not use. An apalis behaviour the
+framework cannot live with is worked around in keys of its own and reported
+upstream. **One exception is written, and it is held to one file**: the 6.x
+boot check reads the 6.x layout itself (*The 6.x layout is refused*, below), so
+the keys join admits a `Config` getter in `nest-rs-redis/src/legacy_layout.rs`
+and in no other running code
+(`apalis_structures_are_named_only_by_the_6x_check`), and admits there only
+`redis::cmd` with a literal read — `TYPE`, `LLEN`, `ZCARD`, `ZRANGE`, `SCARD` —
+and no script, pipeline, command object or typed command
+(`the_6x_check_only_reads`).
 
 | concern | key | holds |
 |---|---|---|
@@ -775,27 +783,30 @@ apalis reported one lost. A quiet longer than that week, or an acknowledgement
 loop further behind than the span, is the residual, and stated as such. At about
 120 bytes a job that is a documented cost, not a setting.
 
-**The 6.x layout is refused, never read.** 6.x handed apalis the queue's bare
-name, so its jobs sit at the root of the keyspace, where a 7.0 worker never looks,
-and jobs left there would wait forever without a word. So the worker **refuses to
-start** while one holds a job, naming the keys and both ways out — drain with 6.x
-workers, or move with `RENAMENX` (never `RENAME`, which would overwrite what 7.0
-already filed) — and the producer **warns** once per queue instead, because
-refusing there would block the drain-first rollout, which upgrades producers
-first. The check is apalis's own `stats`, on a storage opened under the queue's
-bare name — the rule above holds for 6.x's structures too, so the names are
-apalis's getters' and the read is apalis's script, never a command of the
-framework's — and it counts the waiting list and the registered in-flight sets.
-A key of another type at one of those names is refused by Redis (`WRONGTYPE`)
-and read as not 6.x's, said at `info`, never counted as jobs nor printed as a
-`RENAMENX` into apalis's list. **The 6.x schedule is not counted**: no public
-apalis call counts a schedule, so the upgrading page has the operator count it,
-and whether a read of it is worth an exception to the rule above is an owner
-question. Never a `SCAN`, which costs the whole keyspace and which an ACL
+**The 6.x layout is refused, and read typed and read-only.** 6.x handed apalis
+the queue's bare name, so its jobs sit at the root of the keyspace, where a 7.0
+worker never looks, and jobs left there would wait forever without a word. So the
+worker **refuses to start** while one holds a job, naming each structure and how
+many jobs wait there and both ways out — drain with 6.x workers, or move with
+`RENAMENX` (never `RENAME`, which would overwrite what 7.0 already filed) — and the
+producer **warns** once per queue instead, because refusing there would block the
+drain-first rollout, which upgrades producers first. **The check is the written
+exception to the rule above** (`LegacyLayout`, `nest-rs-redis/src/legacy_layout.rs`),
+because no public call of apalis's answers exactly: none counts a schedule, and
+`stats` reads five names in one script that a key of another type at any of them
+fails whole, which let an application's counter at `<queue>:failed` hide every 6.x
+job. So the check reads, under the 6.x namespace, the names apalis's getters derive
+— the waiting list, the schedule, the consumers set — and the in-flight sets the
+consumers set lists under apalis's in-flight prefix: `TYPE` first, then `LLEN`,
+`ZCARD`, `ZRANGE` or `SCARD` for the type found, never a write, never another
+name. The answer is exact, the schedule included. A key of another type at one of
+those names is not 6.x's: left alone, not counted, never printed as a `RENAMENX`
+into apalis's list, and named in one `warn` with what it holds, since a structure
+the check cannot read is one it cannot vouch for — and it hides nothing at the
+other names. Never a `SCAN`, which costs the whole keyspace and which an ACL
 confined to `nestrs:*` refuses; a `NOPERM` answer is said, never taken for an
-empty layout. The move the docs print
-is the one `layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once`
-runs.
+empty layout. The move the docs print is the one
+`layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once` runs.
 
 ### A swappable concern ships an extension contract
 

@@ -39,9 +39,27 @@
 //! which the 6.x layout hands it as the queue's bare name, at the root of the
 //! keyspace. [`APALIS_STRUCTURES`] is what lets the join read them, and every one
 //! it finds is a hole: no concern, no constant, nothing that moves them.
+//!
+//! **apalis's structures are reached through apalis's public API, with one
+//! written exception, and the exception is held to its file.** The 6.x boot
+//! check reads the 6.x layout itself — apalis's calls count no schedule, and its
+//! one counting script fails whole on any key of another type — so
+//! `apalis_structures_are_named_only_by_the_6x_check` admits a name of apalis's,
+//! read off its `Config` getters, in [`LEGACY_CHECK`] and nowhere else, and
+//! `the_6x_check_only_reads` admits there a command sent through `redis::cmd`
+//! with a literal name from [`LEGACY_READS`] and no other way to Redis at all.
+//! Both read tokens rather than expressions, so a call inside a macro body —
+//! `format!`, `tokio::try_join!` — is read as one outside it. What they cannot
+//! see is a name or a command that reaches the file through another item — a
+//! helper in another file returning a `Cmd`, an alias of `cmd` declared
+//! elsewhere — which is why the file may spell no `Cmd` and every `cmd` in it
+//! must be called with a literal, and the review owes the rest.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use quote::ToTokens;
 
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
@@ -754,6 +772,293 @@ fn a_hand_spelled_apalis_name_is_one_of_its_words_under_any_namespace() {
     ] {
         assert!(!names_an_apalis_structure(&not_one), "{not_one}");
     }
+}
+
+// --- the one exception: the 6.x check reads apalis's structures itself -------------
+
+/// The one file whose running code reads apalis's structures by itself: the
+/// 6.x boot check, the written exception to "apalis's structures are apalis's"
+/// (`CLAUDE.md`'s hard "no" list, and `framework.md`'s *A key a datastore
+/// holds*).
+const LEGACY_CHECK: &str = "crates/nest-rs-redis/src/legacy_layout.rs";
+
+/// The getters `apalis_redis::Config` names its structures by — one per
+/// structure of [`APALIS_STRUCTURES`], so the only way a name of one reaches
+/// running code once a literal is refused. Pinned with that list.
+const APALIS_GETTERS: [&str; 9] = [
+    "active_jobs_list",
+    "consumers_set",
+    "dead_jobs_set",
+    "done_jobs_set",
+    "failed_jobs_set",
+    "inflight_jobs_set",
+    "job_data_hash",
+    "scheduled_jobs_set",
+    "signal_list",
+];
+
+/// The commands the 6.x check may send: `TYPE`, then the counting read of the
+/// type it found. None writes.
+const LEGACY_READS: [&str; 5] = ["TYPE", "LLEN", "ZCARD", "ZRANGE", "SCARD"];
+
+/// Every way `redis` 0.32 reaches Redis other than `redis::cmd(<name>)`: a
+/// script, a pipeline, a command object built by a constructor or a typed
+/// method of `Cmd` or `Pipeline`, a typed command method on a connection —
+/// which needs one of these traits in scope, or spelled in a qualified call —
+/// and a packed command sent by hand. Read off the release [`REDIS_PIN`] names.
+const OTHER_WAYS_TO_REDIS: [&str; 14] = [
+    "Cmd",
+    "Script",
+    "ScriptInvocation",
+    "Pipeline",
+    "pipe",
+    "Commands",
+    "AsyncCommands",
+    "TypedCommands",
+    "AsyncTypedCommands",
+    "invoke_async",
+    "req_packed_command",
+    "req_packed_commands",
+    "send_packed_command",
+    "send_packed_commands",
+];
+
+/// The `redis` requirement [`OTHER_WAYS_TO_REDIS`] was read off.
+const REDIS_PIN: &str = "0.32";
+
+/// What one stretch of running code does with apalis's structures and with
+/// Redis.
+#[derive(Debug, Default)]
+struct RedisReach {
+    /// The `Config` getters it names.
+    getters: BTreeSet<String>,
+    /// Every command it sends through `cmd`, or `None` for a `cmd` whose
+    /// command is not one literal — a variable, or a `cmd` not called at all,
+    /// which is how an alias of it is declared.
+    commands: Vec<Option<String>>,
+    /// Every other way to Redis it spells.
+    other_ways: BTreeSet<String>,
+}
+
+impl RedisReach {
+    /// Read `tokens` at every depth, each identifier against the token that
+    /// follows it at its own level — so a call inside a macro body is read as
+    /// one outside it.
+    fn read(&mut self, tokens: TokenStream) {
+        let trees: Vec<TokenTree> = tokens.into_iter().collect();
+        for (at, tree) in trees.iter().enumerate() {
+            match tree {
+                TokenTree::Group(group) => self.read(group.stream()),
+                TokenTree::Ident(ident) => {
+                    let name = ident.to_string();
+                    if APALIS_GETTERS.contains(&name.as_str()) {
+                        self.getters.insert(name.clone());
+                    }
+                    if OTHER_WAYS_TO_REDIS.contains(&name.as_str()) {
+                        self.other_ways.insert(name.clone());
+                    }
+                    if name == "cmd" {
+                        self.commands.push(called_with_a_literal(trees.get(at + 1)));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// The literal a call's parentheses hold when they hold one literal and
+/// nothing else.
+fn called_with_a_literal(next: Option<&TokenTree>) -> Option<String> {
+    let Some(TokenTree::Group(group)) = next else {
+        return None;
+    };
+    if group.delimiter() != Delimiter::Parenthesis {
+        return None;
+    }
+    let inside: Vec<TokenTree> = group.stream().into_iter().collect();
+    match inside.as_slice() {
+        [TokenTree::Literal(literal)] => syn::parse_str::<LitStr>(&literal.to_string())
+            .ok()
+            .map(|literal| literal.value()),
+        _ => None,
+    }
+}
+
+/// The items of `file` its build runs — every item but a `#[cfg(test)]` one or
+/// a test function, a module's own items read the same way.
+fn running_items(items: &[syn::Item], out: &mut Vec<TokenStream>) {
+    for item in items {
+        let attrs = match item {
+            syn::Item::Fn(item) => &item.attrs,
+            syn::Item::Mod(item) => &item.attrs,
+            syn::Item::Impl(item) => &item.attrs,
+            syn::Item::Const(item) => &item.attrs,
+            syn::Item::Static(item) => &item.attrs,
+            syn::Item::Struct(item) => &item.attrs,
+            syn::Item::Enum(item) => &item.attrs,
+            syn::Item::Trait(item) => &item.attrs,
+            syn::Item::Use(item) => &item.attrs,
+            syn::Item::Macro(item) => &item.attrs,
+            _ => {
+                out.push(item.to_token_stream());
+                continue;
+            }
+        };
+        if is_test(attrs) {
+            continue;
+        }
+        match item {
+            syn::Item::Mod(module) => {
+                if let Some((_, inner)) = &module.content {
+                    running_items(inner, out);
+                }
+            }
+            other => out.push(other.to_token_stream()),
+        }
+    }
+}
+
+/// What each running source of both workspaces reaches, by file.
+fn reach_by_file(root: &Path) -> BTreeMap<String, RedisReach> {
+    let mut by_file = BTreeMap::new();
+    each_source(root, |rel, ast| {
+        if !rel.contains("/src/") || rel.contains("/tests/") {
+            return;
+        }
+        let mut running = Vec::new();
+        running_items(&ast.items, &mut running);
+        let mut reach = RedisReach::default();
+        for tokens in running {
+            reach.read(tokens);
+        }
+        by_file.insert(rel.to_owned(), reach);
+    });
+    by_file
+}
+
+/// A name of apalis's reaches the running code of both workspaces in one file:
+/// the 6.x check. Anywhere else it is a read or a write of apalis's structures
+/// around apalis's API — the rule's whole point — or a copy of a name that
+/// moves when apalis's derivation does.
+#[test]
+fn apalis_structures_are_named_only_by_the_6x_check() {
+    let by_file = reach_by_file(&repo_root());
+    let check = by_file
+        .get(LEGACY_CHECK)
+        .unwrap_or_else(|| panic!("{LEGACY_CHECK} is the 6.x check; the walk did not find it"));
+    assert!(
+        !check.getters.is_empty(),
+        "{LEGACY_CHECK} names none of apalis's structures — the walk is reading the wrong file",
+    );
+    let holes: Vec<String> = by_file
+        .iter()
+        .filter(|(file, reach)| file.as_str() != LEGACY_CHECK && !reach.getters.is_empty())
+        .map(|(file, reach)| {
+            format!(
+                "{file} names apalis's {} — apalis's structures are reached through its public \
+                 API, and the one file that reads them itself is {LEGACY_CHECK}",
+                reach.getters.iter().cloned().collect::<Vec<_>>().join(", "),
+            )
+        })
+        .collect();
+    assert!(holes.is_empty(), "{}", holes.join("\n"));
+}
+
+/// The 6.x check only reads: every command it sends goes through `redis::cmd`
+/// with a literal name from [`LEGACY_READS`], and it spells no other way to
+/// Redis — no script, no pipeline, no command object, no typed method.
+#[test]
+fn the_6x_check_only_reads() {
+    let by_file = reach_by_file(&repo_root());
+    let check = by_file
+        .get(LEGACY_CHECK)
+        .unwrap_or_else(|| panic!("{LEGACY_CHECK} is the 6.x check; the walk did not find it"));
+    assert!(
+        !check.commands.is_empty(),
+        "{LEGACY_CHECK} sends no command — the walk is reading the wrong file",
+    );
+    let mut holes = Vec::new();
+    for command in &check.commands {
+        match command {
+            Some(name) if LEGACY_READS.contains(&name.as_str()) => {}
+            Some(name) => holes.push(format!(
+                "{LEGACY_CHECK} sends `{name}`; the 6.x check sends {} and nothing else",
+                LEGACY_READS.join(", "),
+            )),
+            None => holes.push(format!(
+                "{LEGACY_CHECK} spells a `cmd` that is not called with one literal name — a \
+                 command the join cannot read, or an alias of `cmd`",
+            )),
+        }
+    }
+    for other in &check.other_ways {
+        holes.push(format!(
+            "{LEGACY_CHECK} spells `{other}`, a way to Redis other than `redis::cmd` with a read's \
+             literal name",
+        ));
+    }
+    assert!(holes.is_empty(), "{}", holes.join("\n"));
+}
+
+/// The reader sees a call inside a macro body as one outside it, reads a
+/// command only when it is one literal, and names every other way to Redis.
+#[test]
+fn the_reach_of_code_is_read_through_macros_and_refuses_what_it_cannot_read() {
+    let reach = |code: &str| {
+        let mut reach = RedisReach::default();
+        reach.read(code.parse().expect("tokens"));
+        reach
+    };
+    let read = reach(r#"redis::cmd("TYPE").arg(&key).query_async(&mut conn).await"#);
+    assert_eq!(read.commands, [Some("TYPE".to_owned())]);
+    assert!(read.other_ways.is_empty());
+
+    let in_a_macro = reach(r#"tokio::try_join!(redis::cmd("DEL").arg(&key).query_async(&mut c))"#);
+    assert_eq!(in_a_macro.commands, [Some("DEL".to_owned())]);
+
+    for unreadable in ["redis::cmd(name).arg(&key)", "use redis::cmd as read;"] {
+        assert_eq!(reach(unreadable).commands, [None], "{unreadable}");
+    }
+    for (code, way) in [
+        ("redis::pipe().del(&key)", "pipe"),
+        ("Script::new(TEXT).invoke_async(&mut conn)", "Script"),
+        ("redis::Cmd::del(&key)", "Cmd"),
+        ("use redis::AsyncCommands;", "AsyncCommands"),
+    ] {
+        assert!(reach(code).other_ways.contains(way), "{code}");
+    }
+    let named = reach(r#"format!("{}", layout.consumers_set())"#);
+    assert_eq!(
+        named.getters.into_iter().collect::<Vec<_>>(),
+        ["consumers_set"]
+    );
+}
+
+/// [`OTHER_WAYS_TO_REDIS`] is `redis` 0.32's surface, so the requirement it was
+/// read off is asserted where the list is used, as [`APALIS_STRUCTURES`]'s is.
+#[test]
+fn the_redis_surface_read_here_is_the_pinned_releases() {
+    let manifest = read(&repo_root().join("Cargo.toml")).expect("the root manifest reads");
+    let parsed: toml_edit::DocumentMut = manifest.parse().expect("the root manifest parses");
+    let requirement = parsed
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(|dependencies| dependencies.get("redis"))
+        .and_then(|dependency| {
+            dependency.as_str().or_else(|| {
+                dependency
+                    .get("version")
+                    .and_then(|version| version.as_str())
+            })
+        });
+    assert_eq!(
+        requirement,
+        Some(REDIS_PIN),
+        "redis moved off the release OTHER_WAYS_TO_REDIS was read from — re-read how it \
+         reaches Redis (`Cmd`, `Pipeline`, `Script`, the command traits, `ConnectionLike`) \
+         into the list, then move REDIS_PIN",
+    );
 }
 
 /// The recogniser reads apalis's root layout wherever a page or a chart writes

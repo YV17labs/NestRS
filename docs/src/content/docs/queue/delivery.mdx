@@ -358,7 +358,9 @@ that.
 ## Reference
 
 - `crates/nest-rs-redis/src/layout.rs` — the namespace, every key the
-  framework keeps beside it, the week they are kept, and the 6.x check.
+  framework keeps beside it, and the week they are kept.
+- `crates/nest-rs-redis/src/legacy_layout.rs` — the 6.x check, and the one read
+  of apalis's structures the framework makes itself.
 - `crates/nest-rs-redis/src/queue/producer.rs` — the unique claim, and the cancel.
 - `crates/nest-rs-redis/src/worker/lease.rs` — the lease, the settled mark, the
   tombstone a delivery meets, and the throttle.

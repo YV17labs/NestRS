@@ -188,8 +188,9 @@ rolls out (step 7).
    - **An ACL** confined to `~nestrs:*` now runs every Redis binding — the queue,
      the rate limiter under `nestrs:throttler:buckets:*`, a schedule's claims and
      run leases, which it sends as scripts: allow `EVALSHA`, `SCRIPT LOAD` and
-     `EXISTS` on `nestrs:schedule:*` beside the queue's commands. The 6.x check in step 7 reads the root, so run the upgrade with a user that
-     reaches it. A dashboard or an ACL written for the rate limiter's 6.x keys
+     `EXISTS` on `nestrs:schedule:*` beside the queue's commands. The 6.x check in step 7 reads the root — `TYPE`, `LLEN`, `ZCARD`,
+     `ZRANGE` and `SCARD` on the queue's bare name — so run the upgrade with a
+     user that reaches it. A dashboard or an ACL written for the rate limiter's 6.x keys
      follows it to `nestrs:throttler:buckets:*`.
    - **TLS**: `rediss://` is verified against the URL's host.
      `NESTRS_REDIS__TLS_CA_CERT` names a private authority, `TLS_CERT` and

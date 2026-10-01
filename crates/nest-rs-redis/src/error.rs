@@ -190,8 +190,8 @@ pub enum RedisError {
 pub(crate) struct LegacyLayoutError {
     /// The queue whose jobs wait under the old layout.
     pub(crate) queue: String,
-    /// What the old layout holds, as apalis counted it: each structure, and how
-    /// many jobs — comma-separated.
+    /// What the old layout holds: each structure, and how many jobs wait there
+    /// — comma-separated.
     pub(crate) keys: String,
     /// Where the queue lives now.
     pub(crate) namespace: String,

@@ -1,9 +1,11 @@
 //! Where a queue lives, against a live Redis.
 //!
 //! - **The 6.x layout is never ignored.** Jobs a 6.x release left at the root of
-//!   the keyspace, under the queue's bare name, are where a 7.0 worker never
-//!   reads, so a worker serving that queue refuses to start and names the way
-//!   out, and a producer pushing to it says once that they wait there.
+//!   the keyspace, under the queue's bare name — waiting, held back for later, or
+//!   in flight — are where a 7.0 worker never reads, so a worker serving that
+//!   queue refuses to start and names the way out, and a producer pushing to it
+//!   says once that they wait there. A key of another type at one of those names
+//!   is an application's, named and left alone, and hides no 6.x job beside it.
 //! - **The way out the documentation prescribes is run, not described.** The move
 //!   the queue pages publish — every structure renamed under the namespace, the
 //!   in-flight set registered as a consumer — is played on a layout written the
@@ -78,14 +80,63 @@ async fn leave_a_6x_job(admin: &mut RedisConnection, queue: &str) -> String {
     waiting
 }
 
+/// A job id a 6.x producer held back for later, under the queue's bare name.
+async fn leave_a_6x_job_scheduled(admin: &mut RedisConnection, queue: &str) -> String {
+    let scheduled = format!("{queue}:scheduled");
+    let _: i64 = redis::cmd("ZADD")
+        .arg(&scheduled)
+        .arg(4_102_444_800_i64)
+        .arg("01KYQ7RH444ZAHA2JP8JBJVRA2")
+        .query_async(admin)
+        .await
+        .expect("ZADD");
+    scheduled
+}
+
+/// Remove what an earlier run of a test left for `queue` at the root, so a
+/// count starts from the jobs this run leaves.
+async fn clear_the_root(admin: &mut RedisConnection, queue: &str) {
+    let stale = left_at_the_root(admin, queue).await;
+    if !stale.is_empty() {
+        let _: i64 = redis::cmd("DEL")
+            .arg(&stale)
+            .query_async(admin)
+            .await
+            .expect("DEL");
+    }
+}
+
+/// Whether the worker of `M`'s app refuses to start, and with what — `None`
+/// when it starts, in which case it is stopped again.
+async fn worker_refusal<M: nest_rs_core::Module + 'static>() -> Option<String> {
+    let app = TestApp::builder()
+        .module::<M>()
+        .build_headless()
+        .await
+        .expect("the app boots; the worker is what refuses");
+    app.init().await.expect("init phases");
+    let started = app.spawn_transport(RedisWorker::default()).await;
+    Box::leak(Box::new(app));
+    match started {
+        Ok(worker) => {
+            worker.shutdown().await.expect("clean shutdown");
+            None
+        }
+        Err(refused) => Some(refused.to_string()),
+    }
+}
+
 /// A worker serving a queue whose jobs wait under the 6.x layout does not start:
-/// the boot names the queue, the key holding them and both ways out. Once they
-/// are gone it starts. A producer pushing to the queue meanwhile says so once.
+/// the boot names the queue, each key holding them with how many, and both ways
+/// out — the jobs held back for later as much as the ones waiting. Once they are
+/// gone it starts. A producer pushing to the queue meanwhile says so once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn jobs_left_under_the_6x_layout_refuse_the_worker_and_warn_the_producer_once() {
     let logs = LogCapture::install_global();
     let mut admin = crate::connect().await;
+    clear_the_root(&mut admin, LEGACY_QUEUE).await;
     let waiting = leave_a_6x_job(&mut admin, LEGACY_QUEUE).await;
+    let scheduled = leave_a_6x_job_scheduled(&mut admin, LEGACY_QUEUE).await;
 
     let app = TestApp::builder()
         .module::<LegacyModule>()
@@ -101,7 +152,8 @@ async fn jobs_left_under_the_6x_layout_refuse_the_worker_and_warn_the_producer_o
         .to_string();
     for expected in [
         LEGACY_QUEUE,
-        waiting.as_str(),
+        &format!("1 waiting on {waiting}"),
+        &format!("1 held for later on {scheduled}"),
         "6.x key layout",
         "run a 6.x worker until those keys are gone",
         "RENAMENX",
@@ -137,6 +189,22 @@ async fn jobs_left_under_the_6x_layout_refuse_the_worker_and_warn_the_producer_o
         .query_async(&mut admin)
         .await
         .expect("DEL");
+    let refused = app
+        .spawn_transport(RedisWorker::default())
+        .await
+        .err()
+        .expect("a job held back for later is a 6.x job too")
+        .to_string();
+    assert!(
+        refused.contains(&format!("1 held for later on {scheduled}")),
+        "{refused}"
+    );
+
+    let _: i64 = redis::cmd("DEL")
+        .arg(&scheduled)
+        .query_async(&mut admin)
+        .await
+        .expect("DEL");
     let worker = app
         .spawn_transport(RedisWorker::default())
         .await
@@ -169,12 +237,17 @@ impl CollidingProcessor {
 )]
 struct CollidingModule;
 
+/// The line naming the keys at a 6.x name that hold something else.
+const FOREIGN: &str = "a key at a 6.x queue name holds what 6.x never kept there; left alone, and not counted as \
+     jobs";
+
 /// An application's own key that happens to sit at the name 6.x kept a queue's
-/// waiting list under — a string, here — holds no job: the check asks apalis,
-/// which counts lists and sets and refuses a string, so the worker starts, the
-/// key is left as it was, and the boot says why it was not counted. Counted by
-/// name, it refused the boot and printed a `RENAMENX` that would have put a
-/// string where apalis pushes, failing every push and fetch after it.
+/// waiting list under — a string, here — holds no job: the check reads each
+/// name's type before it counts, so the worker starts, the key is left as it
+/// was, and the boot names it at `warn`, since a structure the check cannot
+/// read is one it cannot vouch for. Counted by name, it refused the boot and
+/// printed a `RENAMENX` that would have put a string where apalis pushes,
+/// failing every push and fetch after it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_applications_key_at_a_6x_name_is_not_taken_for_jobs() {
     let logs = LogCapture::install_global();
@@ -206,16 +279,90 @@ async fn an_applications_key_at_a_6x_name_is_not_taken_for_jobs() {
         "left as it was"
     );
     let said: Vec<_> = logs
-        .find(
-            nest_rs_queue::TARGET,
-            "a key at a 6.x queue name is not the structure 6.x kept there; left alone, and not \
-             counted as jobs",
-        )
+        .find(nest_rs_queue::TARGET, FOREIGN)
         .into_iter()
         .filter(|event| event.field("queue").as_deref() == Some(COLLIDING_QUEUE))
         .collect();
     assert_eq!(said.len(), 1, "the boot says why: {said:#?}");
-    assert_eq!(said[0].level, "info");
+    assert_eq!(said[0].level, "warn");
+    assert_eq!(
+        said[0].field("keys"),
+        Some(format!("{flag} (string)")),
+        "naming the key and what it holds",
+    );
+}
+
+const BESIDE_QUEUE: &str = "nestrs-e2e-layout-beside";
+
+#[queue(name = "nestrs-e2e-layout-beside", job = LayoutCommand)]
+struct BesideQueue;
+
+#[injectable]
+#[derive(Default)]
+struct BesideProcessor;
+
+#[processor]
+impl BesideProcessor {
+    #[process(queue = BesideQueue, retries = 0)]
+    async fn run(&self, _job: LayoutCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    providers = [BesideProcessor],
+)]
+struct BesideModule;
+
+/// An application's keys at 6.x names beside a real 6.x job — a counter at the
+/// name apalis kept failed jobs under, a flag at the consumers name — hide
+/// nothing: each name is read on its own, so the job waiting is still found and
+/// the worker still refuses to start beside it, while the keys that are not
+/// 6.x's are named and left alone. Read through one script of apalis's, a single
+/// such key failed the whole count, and the worker started beside the job.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_applications_key_beside_6x_jobs_hides_none_of_them() {
+    let logs = LogCapture::install_global();
+    let mut admin = crate::connect().await;
+    clear_the_root(&mut admin, BESIDE_QUEUE).await;
+    let waiting = leave_a_6x_job(&mut admin, BESIDE_QUEUE).await;
+    let counter = format!("{BESIDE_QUEUE}:failed");
+    let flag = format!("{BESIDE_QUEUE}:consumers");
+    for key in [&counter, &flag] {
+        let _: () = redis::cmd("SET")
+            .arg(key)
+            .arg("3")
+            .query_async(&mut admin)
+            .await
+            .expect("SET");
+    }
+
+    let refused = worker_refusal::<BesideModule>().await;
+    let _: i64 = redis::cmd("DEL")
+        .arg(&waiting)
+        .arg(&counter)
+        .arg(&flag)
+        .query_async(&mut admin)
+        .await
+        .expect("DEL");
+
+    let refused = refused.expect("the worker refuses to start beside the 6.x job");
+    assert!(
+        refused.contains(&format!("1 waiting on {waiting}")),
+        "{refused}"
+    );
+    let said: Vec<_> = logs
+        .find(nest_rs_queue::TARGET, FOREIGN)
+        .into_iter()
+        .filter(|event| event.field("queue").as_deref() == Some(BESIDE_QUEUE))
+        .collect();
+    assert_eq!(said.len(), 1, "{said:#?}");
+    assert_eq!(
+        said[0].field("keys"),
+        Some(format!("{flag} (string)")),
+        "the consumers name is read and named; the failed one holds no job and is never read",
+    );
 }
 
 // --- moving a queue out of the 6.x layout ------------------------------------------
@@ -368,20 +515,14 @@ async fn left_at_the_root(admin: &mut RedisConnection, queue: &str) -> Vec<Strin
 }
 
 /// A queue a 6.x release left jobs in — one waiting, one held back, one in
-/// flight on a replica that died — moved the way the upgrade page says: nothing
-/// is left at the root, the 7.0 worker starts, and each of the three jobs runs
-/// exactly once — the held-back one no sooner than its due second.
+/// flight on a replica that died — refuses the 7.0 worker, counting each, and
+/// once moved the way the upgrade page says, nothing is left at the root, the
+/// worker starts, and each of the three jobs runs exactly once — the held-back
+/// one no sooner than its due second.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once() {
     let mut admin = crate::connect().await;
-    let stale = left_at_the_root(&mut admin, MOVED_QUEUE).await;
-    if !stale.is_empty() {
-        let _: i64 = redis::cmd("DEL")
-            .arg(&stale)
-            .query_async(&mut admin)
-            .await
-            .expect("DEL");
-    }
+    clear_the_root(&mut admin, MOVED_QUEUE).await;
     crate::forget(MOVED_QUEUE).await;
 
     let run = crate::this_run();
@@ -408,6 +549,18 @@ async fn a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once() {
         )
         .await
         .expect("a 6.x job held back");
+
+    // The boot counts exactly what 6.x left — waiting, held back and in flight.
+    let refused = worker_refusal::<MovedModule>()
+        .await
+        .expect("the worker refuses to start beside the 6.x jobs");
+    for held in [
+        format!("1 waiting on {MOVED_QUEUE}:active"),
+        format!("1 held for later on {MOVED_QUEUE}:scheduled"),
+        format!("1 in flight in {MOVED_QUEUE}:inflight:{MOVED_QUEUE}"),
+    ] {
+        assert!(refused.contains(&held), "{held:?} in {refused}");
+    }
 
     // The page's first step: nothing under the namespace yet, or no move at all.
     let under_the_namespace: Vec<String> = redis::cmd("KEYS")

@@ -20,19 +20,19 @@ $ nestrs run dev worker
 Error: queue `audio` still holds jobs under the 6.x key layout (…), which this worker never reads, so it does not start beside them. Drain them first: run a 6.x worker until those keys are gone. Or move them, with every worker of the queue stopped and before anything is pushed under `nestrs:queue:audio`: …
 ```
 
-The parenthesis says what apalis counts there — the jobs waiting on the queue's
-list, and those in flight in the sets its 6.x workers registered — each with
-the key it sits under. A 7.0 producer pushing to the queue says the same once,
-at `warn`, and pushes where 7.0 reads. A key of another type at one of those
-names, an application's own, is not taken for jobs: the boot says so at `info`
-and leaves it alone.
+The parenthesis counts every 6.x job left, by the key it sits under: waiting on
+the queue's list, held back for later on its schedule — a delayed push, a
+retry's next attempt — and in flight in the sets its 6.x workers registered. A
+7.0 producer pushing to the queue says the same once, at `warn`, and pushes
+where 7.0 reads.
 
-**The check cannot see the 6.x schedule** — jobs held back for later, a retry's
-next attempt. The framework reads apalis's structures only through apalis's own
-calls, and none of them counts a schedule, so count it yourself before the first
-7.0 worker starts: `ZCARD` on the sorted set apalis kept beside the queue's
-waiting list, under the queue's bare name, must answer `0`, or those jobs are
-drained or moved with the rest.
+The check is the one place the framework reads apalis's structures itself,
+because apalis's own calls count no schedule: under the queue's bare name it
+reads each name's type, then counts what a structure of that type holds —
+`TYPE`, then `LLEN`, `ZCARD`, `ZRANGE` or `SCARD` — and never writes. A key of
+another type at one of those names, an application's own, is not taken for
+jobs and hides none beside it: the boot names it at `warn`, with what it holds,
+and leaves it alone.
 
 There are two ways out, chosen per queue. **Drain** keeps the queue running and
 delays what is pushed meanwhile. **Move** takes a short stop and leaves nothing
@@ -53,8 +53,7 @@ up around them.
    waiting until it is due.
 
 3. **Replace the 6.x workers with 7.0 workers.** The boot is the check: a 7.0
-   worker starts once nothing is left, and refuses, naming what is, otherwise —
-   all but the schedule, which you count yourself, as above.
+   worker starts once nothing is left, and refuses, naming what is, otherwise.
 
 </Steps>
 
@@ -158,8 +157,8 @@ The `None` is a `PushOptions`: a delay, a unique key — see
 
 ## Reference
 
-- `crates/nest-rs-redis/src/layout.rs` — the namespace, and the 6.x check,
-  which asks apalis's own `stats` under the queue's bare name.
+- `crates/nest-rs-redis/src/legacy_layout.rs` — the 6.x check, which reads the
+  structures apalis kept under the queue's bare name, typed and read-only.
 - `crates/nest-rs-redis/src/error.rs` — the boot's refusal.
 - `crates/nest-rs-redis/tests/e2e/layout.rs` — the refusal, and this page's Move
   run against a layout written the way 6.x wrote it: a job waiting, one held

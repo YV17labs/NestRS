@@ -20,6 +20,7 @@
 //! | `…:cancelled:<job>` | the cancel | a cancel that promised it never starts | its delivery, and past it |
 //! | `…:checkpoints:<job>` | its saved progress | a save | its terminal outcome |
 //! | `…:attempts:<job>` | the attempts started and not handed back without an answer | its first attempt | its terminal outcome |
+//! | `…:deferred:<job>` | when it was first handed back unread for a newer release | that hand-back | a delivery that reads it, or its terminal outcome |
 //! | `…:unique:<key>` | the job holding the key | its push | it settles, or is cancelled |
 //! | `…:throttle` | the attempts started in the current window | the window's first start | the window ends |
 //!
@@ -84,6 +85,12 @@ pub(crate) const CHECKPOINTS: &str = "nestrs:queue:{queue}:checkpoints:{job}";
 /// envelope only counts the ones that answered.
 pub(crate) const ATTEMPTS: &str = "nestrs:queue:{queue}:attempts:{job}";
 
+/// When a job was first handed back unread because a newer release sealed it —
+/// Redis's own millisecond — for as long as every delivery since has handed it
+/// back so: how long it has waited for a consumer of that release, which the
+/// port bounds, counted without charging a delayed push for its delay.
+pub(crate) const DEFERRED: &str = "nestrs:queue:{queue}:deferred:{job}";
+
 /// The job holding a unique key on the queue.
 const UNIQUE: &str = "nestrs:queue:{queue}:unique:{key}";
 
@@ -105,7 +112,7 @@ pub(crate) fn namespace(queue: &QueueName) -> String {
 }
 
 /// The key `template` names for `job` on `queue` — one of [`OPEN`], [`LEASES`],
-/// [`SETTLED`], [`CANCELLED`], [`CHECKPOINTS`] or [`ATTEMPTS`].
+/// [`SETTLED`], [`CANCELLED`], [`CHECKPOINTS`], [`ATTEMPTS`] or [`DEFERRED`].
 pub(crate) fn job_key(template: &str, queue: &QueueName, job: &JobId) -> String {
     template
         .replace(QUEUE_SLOT, queue.as_str())
@@ -193,6 +200,7 @@ mod tests {
             (CANCELLED, "cancelled"),
             (CHECKPOINTS, "checkpoints"),
             (ATTEMPTS, "attempts"),
+            (DEFERRED, "deferred"),
         ] {
             assert_eq!(
                 job_key(template, &audio(), &job),

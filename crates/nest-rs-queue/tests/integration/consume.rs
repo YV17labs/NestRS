@@ -801,36 +801,61 @@ async fn the_keys_a_delivery_could_not_use_are_said_once_per_job_not_per_attempt
     );
 }
 
-/// A job a newer release sealed runs nothing here and spends no attempt: it is
-/// handed back as it was stored, for a consumer of that release, under the id
-/// its push returned — and the delivery says so once, naming both versions. It
-/// used to be dead-lettered, under an id minted for the delivery, so a rolling
-/// deploy lost every such job an old replica fetched.
-#[tokio::test]
-async fn a_job_a_newer_release_sealed_is_handed_back_unread_and_never_dead_lettered() {
-    let logs = nest_rs_testing::LogCapture::install();
+/// A W3C `traceparent` a newer release's producer sealed, spelled as this
+/// release spells it.
+const NEWER_TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+/// What a newer release's push stored: an envelope of the next version, under
+/// `id`, carrying the producer's trace.
+fn sealed_by_a_newer_release(id: &str) -> serde_json::Value {
     let newer = u64::from(WIRE_FORMAT_VERSION) + 1;
-    let stored = json!({ "v": newer, "id": JOB_ID, "attempt": 3, "payload": { "file": "x.wav" } });
+    json!({
+        "v": newer,
+        "id": id,
+        "attempt": 3,
+        "traceparent": NEWER_TRACEPARENT,
+        "payload": { "file": "x.wav" },
+    })
+}
+
+/// A UUID v7 minted now — a job pushed a moment ago.
+fn fresh_job_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
+/// One attempt at `delivery` of the flaky method, which a newer release's job
+/// never reaches.
+async fn attempt_newer(delivery: &mut Delivery) -> AttemptOutcome {
+    let container = Container::builder().provide(FlakyProcessor).build();
+    consume::attempt(method("FlakyProcessor::flaky"), delivery, container).await
+}
+
+/// A job a newer release sealed runs nothing here and spends no attempt while
+/// it is within the patience: it is handed back as it was stored, for a
+/// consumer of that release, under the id its push returned — and the delivery
+/// says so once, naming both versions and how long the job has waited, in the
+/// trace the newer producer sealed. It used to be dead-lettered under an id
+/// minted for the delivery, so a rolling deploy lost every such job an old
+/// replica fetched; and its line used to carry no trace at all.
+#[tokio::test]
+async fn a_job_a_newer_release_sealed_is_handed_back_unread_within_the_patience() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let stored = sealed_by_a_newer_release(JOB_ID);
     let mut delivery = Delivery::new(
         &FULL,
         QueueName::new("transcode").expect("a valid name"),
         stored.clone(),
-    );
+    )
+    .with_deferred_for(Duration::from_secs(60 * 60));
     assert_eq!(
         delivery.id().to_string(),
         JOB_ID,
         "the id the push returned finds the job"
     );
 
-    let container = Container::builder().provide(FlakyProcessor).build();
     let runs = FLAKY_RUNS.load(Ordering::SeqCst);
     for _ in 1..=2 {
-        let outcome = consume::attempt(
-            method("FlakyProcessor::flaky"),
-            &mut delivery,
-            container.clone(),
-        )
-        .await;
+        let outcome = attempt_newer(&mut delivery).await;
         let AttemptOutcome::Defer { after } = outcome else {
             panic!("a job this release cannot read is handed back: {outcome:?}");
         };
@@ -850,15 +875,143 @@ async fn a_job_a_newer_release_sealed_is_handed_back_unread_and_never_dead_lette
     );
     assert_eq!(warned.level, "warn");
     assert_eq!(warned.field("job_id").as_deref(), Some(JOB_ID));
-    assert_eq!(warned.field("version"), Some(newer.to_string()));
+    assert_eq!(
+        warned.field("version"),
+        Some((u64::from(WIRE_FORMAT_VERSION) + 1).to_string())
+    );
     assert_eq!(
         warned.field("supported"),
         Some(WIRE_FORMAT_VERSION.to_string())
+    );
+    assert_eq!(warned.field("waited_ms").as_deref(), Some("3600000"));
+    assert_eq!(
+        warned.field("patience_ms"),
+        Some(consume::NEWER_RELEASE_PATIENCE.as_millis().to_string())
+    );
+    assert_eq!(
+        warned.trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736"),
+        "the line is filed in the trace the newer producer sealed",
     );
     assert!(
         job_spans(&logs).is_empty(),
         "no attempt ran, so none is reported"
     );
+}
+
+/// A newer release's job that has waited unread past the patience — its
+/// rollout stopped, its producers rolled back — is dead-lettered rather than
+/// handed back forever: said once at `error`, naming both versions and the
+/// wait, with its unit line, in the job's own trace — and the dead letter's
+/// sentence names both versions too, for whoever reads the dead set.
+#[tokio::test]
+async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_past_the_patience() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let mut delivery = Delivery::new(
+        &FULL,
+        QueueName::new("transcode").expect("a valid name"),
+        sealed_by_a_newer_release(&fresh_job_id()),
+    )
+    .with_deferred_for(consume::NEWER_RELEASE_PATIENCE);
+
+    let runs = FLAKY_RUNS.load(Ordering::SeqCst);
+    let outcome = attempt_newer(&mut delivery).await;
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("past the patience, a newer release's job is dead-lettered: {outcome:?}");
+    };
+    assert_eq!(FLAKY_RUNS.load(Ordering::SeqCst), runs, "nothing ran");
+    assert!(!error.retryable);
+    let newer = (u64::from(WIRE_FORMAT_VERSION) + 1).to_string();
+    let sentence = error.to_string();
+    for named in [
+        format!("wire-format version {newer}"),
+        format!("(version {WIRE_FORMAT_VERSION})"),
+        "dead set".to_owned(),
+    ] {
+        assert!(sentence.contains(&named), "{named:?} in {sentence}");
+    }
+
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: a newer release sealed it, and none of its consumers ran it in time",
+    );
+    assert_eq!(said.level, "error");
+    assert_eq!(said.field("version"), Some(newer));
+    assert_eq!(
+        said.field("waited_ms"),
+        Some(consume::NEWER_RELEASE_PATIENCE.as_millis().to_string())
+    );
+    assert_eq!(
+        said.trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+    assert!(
+        logs.find(
+            nest_rs_queue::TARGET,
+            "job sealed by a newer release handed back unread"
+        )
+        .is_empty()
+    );
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_queue::unit::JOB,
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR)
+    );
+    assert_eq!(
+        line.trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+}
+
+/// A backend that keeps no record of how long it handed a job back has the port
+/// count from the job's push, read off its id: a job pushed a moment ago is
+/// handed back, one pushed in 2023 is dead-lettered.
+#[tokio::test]
+async fn a_newer_release_job_on_a_backend_keeping_no_record_is_aged_from_its_push() {
+    let queue = || QueueName::new("transcode").expect("a valid name");
+    let mut fresh = Delivery::new(&FULL, queue(), sealed_by_a_newer_release(&fresh_job_id()));
+    assert!(matches!(
+        attempt_newer(&mut fresh).await,
+        AttemptOutcome::Defer { .. }
+    ));
+    let mut old = Delivery::new(&FULL, queue(), sealed_by_a_newer_release(JOB_ID));
+    assert!(matches!(
+        attempt_newer(&mut old).await,
+        AttemptOutcome::DeadLetter(_)
+    ));
+}
+
+/// A newer release's job naming no id this release reads cannot be followed
+/// from one delivery to the next — every delivery runs under an id of its own —
+/// so no wait for it can be counted, and handing it back would hand it back
+/// forever: it is dead-lettered at once, saying why.
+#[tokio::test]
+async fn a_newer_release_job_naming_no_id_is_dead_lettered_at_once() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let mut stored = sealed_by_a_newer_release("not-a-job-id");
+    stored
+        .as_object_mut()
+        .expect("an envelope")
+        .remove("traceparent");
+    let mut delivery = Delivery::new(
+        &FULL,
+        QueueName::new("transcode").expect("a valid name"),
+        stored,
+    )
+    .with_deferred_for(Duration::ZERO);
+    let outcome = attempt_newer(&mut delivery).await;
+    let AttemptOutcome::DeadLetter(error) = outcome else {
+        panic!("a job no wait can be counted for is dead-lettered: {outcome:?}");
+    };
+    assert!(error.to_string().contains("names no id"), "{error}");
+    let said = logs.expect_one(
+        nest_rs_queue::TARGET,
+        "job dead-lettered: a newer release sealed it, and none of its consumers ran it in time",
+    );
+    assert_eq!(said.field("waited_ms"), None, "no wait was counted");
 }
 
 // --- discovery -----------------------------------------------------------------

@@ -84,7 +84,9 @@ driver must not skip is the one it cannot: every attempt goes through the port.
 An **older** version is refused and dead-lettered, naming which way the release
 gap runs. A **newer** one is never read: the attempt answers
 `AttemptOutcome::Defer`, and the record goes back to your storage unchanged for
-a consumer of that release.
+a consumer of that release — for a day after its first hand-back at the most
+(`consume::NEWER_RELEASE_PATIENCE`), past which the port dead-letters it naming
+both versions.
 
 ## Step 1 — The backend and the producer
 
@@ -261,6 +263,17 @@ consumer cannot read: nothing ran, no attempt is spent, and
 the job for a replica of the newer release instead of losing it. The match is
 exhaustive on purpose: an outcome added later is a compile error in your loop,
 not a job your driver drops.
+
+How long a newer release's job may wait is the port's to bound, and the wait is
+the driver's to keep. When your storage can keep one instant per job, record the
+first hand-back answering `Defer` — and only the first of an unbroken run —
+clear it when a delivery reads the job or the job settles, and pass how long ago
+it was: `Delivery::with_deferred_for(waited)`, zero when there is none. A storage
+that keeps none leaves the port to count from the job's push, read off its id,
+which charges a job pushed with a delay for its delay: one falling due during a
+rolling deploy a day after its push is then dead-lettered on its first meeting
+with an older consumer. The Redis driver keeps the instant in Redis's own
+milliseconds, so no two hosts' clocks are compared.
 
 The envelope counts the attempts that answered, never one whose process died
 under it — an abort, an OOM kill, a pod killed mid-job — so a job that takes

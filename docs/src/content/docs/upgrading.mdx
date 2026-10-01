@@ -103,7 +103,9 @@ rolls out (step 7).
    - **A job a newer release pushed is handed back, not failed.** During a
      rolling deploy, a 7.0 worker meeting a job sealed by a later wire format
      runs nothing, spends no attempt and puts it back as stored, due a minute
-     later, with a `warn`; 6.x failed such a job and spent its retries.
+     later, with a `warn`; 6.x failed such a job and spent its retries. A job
+     still unread a day after its first hand-back — a rollout that stopped — is
+     dead-lettered, naming both versions.
    - `concurrency = N` is accepted again, per method and per replica, and so are
      `throttle(limit, window)` and a `Checkpoint<S>` parameter; see
      [Concurrency and scaling](/queue/scaling/).

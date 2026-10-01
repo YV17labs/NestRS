@@ -49,9 +49,12 @@
 //!    into the next attempt once `after` has passed — re-filing
 //!    [`Delivery::retry_envelope`](consume::Delivery::retry_envelope) when it
 //!    declares [`Capability::DelayedPush`], waiting in process and calling
-//!    `attempt` again when it does not. It honours each method's `concurrency`,
-//!    and opens no span of its own: the attempt, its span, its events, its budget
-//!    and its backoff are the port's.
+//!    `attempt` again when it does not — and `Defer { after }`, a job a newer
+//!    release sealed, into the stored record filed back unchanged, passing how
+//!    long it has waited unread when the storage can keep that
+//!    ([`Delivery::with_deferred_for`](consume::Delivery::with_deferred_for)).
+//!    It honours each method's `concurrency`, and opens no span of its own: the
+//!    attempt, its span, its events, its budget and its backoff are the port's.
 //!
 //! **Delivery is at least once, on every backend.** A storage that loses no job
 //! delivers some twice — a sweep after a crash, an acknowledgement lost — and a

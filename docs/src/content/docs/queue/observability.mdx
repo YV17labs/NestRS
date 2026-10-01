@@ -93,6 +93,16 @@ the budget dead-letters the job without running it, as
 `error` with `unfinished` counting them, beside a `queue.job` line at the next
 attempt's number.
 
+A job a newer release sealed runs nothing and files no `queue.job` line while it
+is handed back: the port says so once per delivery at `warn`,
+`job sealed by a newer release handed back unread`, with `version`,
+`supported`, `waited_ms` and the remedy, in the trace the newer producer sealed
+when its envelope spells one as this release does. Unread a day after its first
+hand-back, it is dead-lettered as
+`job dead-lettered: a newer release sealed it, and none of its consumers ran it in time`
+at `error`, naming both versions, beside its `queue.job` line with
+`outcome="error"`.
+
 See [Retries and failure](/queue/retries-and-failure/) for the policy behind
 `attempt`.
 

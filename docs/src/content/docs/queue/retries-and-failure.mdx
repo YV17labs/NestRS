@@ -207,19 +207,33 @@ version, and the port checks it in `consume::attempt`, before the handler runs.
 A future release that bumps `WIRE_FORMAT_VERSION` to `2` makes a `v: 1` worker
 leave `v: 2` jobs unread rather than misinterpret them: the job goes back to the
 queue exactly as it was stored, due again in a minute, with no attempt spent,
-and the worker files one line per delivery at `warn`:
+and the worker files one line per delivery at `warn`, in the trace the newer
+producer sealed:
 
 ```text
-WARN nest_rs::queue: job sealed by a newer release handed back unread queue=audio job_id=01a0… version=2 supported=1 retry_after_ms=60000 hint="a newer release sealed this job; it waits on the queue for a consumer of that release — finish rolling the consumers forward, or roll the producer back"
+WARN nest_rs::queue: job sealed by a newer release handed back unread queue=audio job_id=01a0… version=2 supported=1 retry_after_ms=60000 waited_ms=0 patience_ms=86400000 hint="a newer release sealed this job and only its consumers can run it: finish rolling them forward, or, rolling back, keep one running until the queue holds none of its jobs — a job still unread a day after it was first handed back is dead-lettered, naming both versions, and stays in the dead set for a consumer of that release" trace_id=4bf9… span_id=…
 ```
 
 So during a rolling deploy jobs from the new producers wait, and the new
 workers run them as they come up — under the id their push returned, which the
-line names. Rolled back for good, those jobs keep waiting and the line keeps
-coming: that is the signal to roll the producers back too. An **older** version
-— a `v: 1` job met by a `v: 2` worker — is dead-lettered naming the direction
-of the gap, since a newer consumer reading an older shape is a decision the
-release that bumps the version makes, not a default.
+line names. **A rollout that stopped does not hand its jobs back forever.**
+`waited_ms` counts from the job's first hand-back — never from its push, so a
+job pushed with a delay is not charged for the delay — and a job still unread a
+day later (`consume::NEWER_RELEASE_PATIENCE`) is dead-lettered, once, at
+`error`:
+
+```text
+ERROR nest_rs::queue: job dead-lettered: a newer release sealed it, and none of its consumers ran it in time version=2 supported=1 waited_ms=86400412 patience_ms=86400000 hint="…"
+```
+
+Rolling the producers back stops new such jobs and recovers none already
+sealed: those need a consumer of the release that sealed them. Keep one
+running until the queue holds none of them — a job it runs is cleared of its
+wait — or let them reach the dead set, where each keeps its record, naming both
+versions, for a consumer of that release. An **older** version — a `v: 1` job
+met by a `v: 2` worker — is dead-lettered naming the direction of the gap,
+since a newer consumer reading an older shape is a decision the release that
+bumps the version makes, not a default.
 
 An envelope with no `id` or `attempt` — what 6.x sealed — still runs, as
 attempt 1 under an id minted for its delivery. **Unversioned legacy payloads**

@@ -56,6 +56,7 @@ does not use, each keyed by the job id a push returns.
 | `nestrs:queue:<queue>:cancelled:<job_id>` | That a cancel promised the job never starts | the framework |
 | `nestrs:queue:<queue>:checkpoints:<job_id>` | The progress the job saved | the framework |
 | `nestrs:queue:<queue>:attempts:<job_id>` | How many attempts at the job have started, less those handed back without an answer — cut by a drain, or unread | the framework |
+| `nestrs:queue:<queue>:deferred:<job_id>` | When a job a newer release sealed was first handed back unread, in Redis's milliseconds — cleared once a delivery reads it | the framework |
 | `nestrs:queue:<queue>:unique:<key>` | The id of the job holding a unique key | the framework |
 | `nestrs:queue:<queue>:throttle` | How many attempts of the queue's method started in the current window, less those handed back unread | the framework |
 
@@ -291,10 +292,11 @@ what it allows at its edges, is on
 
 ## What a job keeps, and for how long
 
-Every record the framework keeps for a job — its open record, its unique key,
-its checkpoint, a cancel's tombstone — lives **a week past the instant the job
-is due**, renewed each time a delivery admits the job, files its next attempt
-or hands it back. A job that is delivered stays well inside it; the bound is
+Every record the framework keeps for a job while it waits — its open record, its
+unique key, its checkpoint, its count of attempts started, the instant it was
+first handed back unread, a cancel's tombstone — lives **a week past the instant
+the job is due**, renewed each time a delivery admits the job, files its next
+attempt or hands it back. A job that is delivered stays well inside it; the bound is
 for a job that never is.
 
 A job can vanish without reaching an outcome a worker sees: one filed and then

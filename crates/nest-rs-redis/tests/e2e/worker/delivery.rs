@@ -540,6 +540,7 @@ async fn grant(admin: &mut RedisConnection, schedule: bool) {
             "cancelled:*",
             "checkpoints:*",
             "attempts:*",
+            "deferred:*",
             "unique:*",
             "throttle",
         ] {
@@ -854,8 +855,34 @@ async fn a_job_whose_attempts_never_return_is_dead_lettered_once_they_spend_its_
 
 const NEWER_QUEUE: &str = "nestrs-e2e-delivery-newer";
 
-/// The id a newer release's push returned, spelled as this release spells one.
+/// The id a newer release's push returned, spelled as this release spells one
+/// — minted in 2023, so a wait counted from the push would be years long.
 const NEWER_JOB: &str = "01890a5d-ac96-774b-bcce-b302099a8057";
+
+/// The trace a newer release's producer sealed, spelled as this release spells
+/// one.
+const NEWER_TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+/// File, as a newer release's push files it, a job under `id` on `queue`.
+async fn file_a_newer_releases_job(queue: &str, id: &str, run: u64) -> apalis_redis::Config {
+    use apalis::prelude::{Request, Storage};
+
+    let newer = u64::from(nest_rs_queue::WIRE_FORMAT_VERSION) + 1;
+    let apalis = apalis_redis::Config::default().set_namespace(&crate::namespace(queue));
+    let mut storage: apalis_redis::RedisStorage<serde_json::Value, RedisConnection> =
+        apalis_redis::RedisStorage::new_with_config(crate::connect().await, apalis.clone());
+    storage
+        .push_request(Request::new(serde_json::json!({
+            "v": newer,
+            "id": id,
+            "attempt": 1,
+            "traceparent": NEWER_TRACEPARENT,
+            "payload": { "run": run },
+        })))
+        .await
+        .expect("a newer producer's job, filed as apalis files one");
+    apalis
+}
 
 static NEWER: Runs = Runs::new();
 
@@ -883,31 +910,21 @@ struct NewerModule;
 
 /// A replica of this release meets a job a newer one sealed: nothing runs, no
 /// attempt is counted, the record goes back to the schedule as it was stored,
-/// and the line names the job by the id its push returned. It was dead-lettered,
-/// under an id minted for the delivery: a rolling deploy lost every such job an
-/// old replica fetched. Nor does it keep a start against its method's throttle:
-/// every deferral of a newer job used to, so a rolling deploy shrank the window
-/// the jobs this release can run were left.
+/// and the line names the job by the id its push returned, in the trace its
+/// producer sealed. It was dead-lettered, under an id minted for the delivery:
+/// a rolling deploy lost every such job an old replica fetched. Nor does it keep
+/// a start against its method's throttle: every deferral of a newer job used
+/// to, so a rolling deploy shrank the window the jobs this release can run were
+/// left. Its wait is counted from this first hand-back, in Redis's own record —
+/// never from its push, which is years old, so a job pushed with a delay is
+/// not charged for the delay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_job_a_newer_release_sealed_is_handed_back_as_stored_and_never_dead_lettered() {
-    use apalis::prelude::{Request, Storage};
-
+async fn a_job_a_newer_release_sealed_is_handed_back_as_stored_within_the_patience() {
     let logs = LogCapture::install_global();
     crate::forget(NEWER_QUEUE).await;
     let run = crate::this_run();
     let newer = u64::from(nest_rs_queue::WIRE_FORMAT_VERSION) + 1;
-    let apalis = apalis_redis::Config::default().set_namespace(&crate::namespace(NEWER_QUEUE));
-    let mut storage: apalis_redis::RedisStorage<serde_json::Value, RedisConnection> =
-        apalis_redis::RedisStorage::new_with_config(crate::connect().await, apalis.clone());
-    storage
-        .push_request(Request::new(serde_json::json!({
-            "v": newer,
-            "id": NEWER_JOB,
-            "attempt": 1,
-            "payload": { "run": run },
-        })))
-        .await
-        .expect("a newer producer's job, filed as apalis files one");
+    let apalis = file_a_newer_releases_job(NEWER_QUEUE, NEWER_JOB, run).await;
 
     let replica = crate::replica::<NewerModule>().await;
     let job = JobId::parse(NEWER_JOB).expect("a job id");
@@ -936,8 +953,29 @@ async fn a_job_a_newer_release_sealed_is_handed_back_as_stored_and_never_dead_le
         .collect();
     assert_eq!(warned.len(), 1, "one delivery, one line: {warned:#?}");
     assert_eq!(warned[0].field("version"), Some(newer.to_string()));
+    assert_eq!(
+        warned[0].trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736"),
+        "in the trace the newer producer sealed",
+    );
+    assert!(
+        warned[0]
+            .field("waited_ms")
+            .and_then(|waited| waited.parse::<u64>().ok())
+            .is_some_and(|waited| waited < 60_000),
+        "the wait is counted from the first hand-back, not the push: {:?}",
+        warned[0].field("waited_ms"),
+    );
     assert!(NEWER.of(run).is_empty(), "nothing ran");
     assert_eq!(dead(NEWER_QUEUE).await, 0, "nothing was dead-lettered");
+    let first_handed_back = crate::read(&crate::key_of(NEWER_QUEUE, "deferred", NEWER_JOB)).await;
+    assert!(
+        first_handed_back
+            .as_deref()
+            .and_then(|at| at.parse::<u64>().ok())
+            .is_some(),
+        "the first hand-back is recorded, in Redis's milliseconds: {first_handed_back:?}",
+    );
     let started: Option<i64> = redis::cmd("GET")
         .arg(crate::key_of(NEWER_QUEUE, "attempts", NEWER_JOB))
         .query_async(&mut crate::connect().await)
@@ -978,4 +1016,108 @@ async fn a_job_a_newer_release_sealed_is_handed_back_as_stored_and_never_dead_le
     );
 
     crate::forget(NEWER_QUEUE).await;
+}
+
+const PATIENCE_QUEUE: &str = "nestrs-e2e-delivery-newer-patience";
+
+static PATIENCE: Runs = Runs::new();
+
+#[queue(name = "nestrs-e2e-delivery-newer-patience", job = RetryCommand)]
+struct PatienceQueue;
+
+#[injectable]
+#[derive(Default)]
+struct PatienceProcessor;
+
+#[processor]
+impl PatienceProcessor {
+    #[process(queue = PatienceQueue)]
+    async fn run(&self, job: RetryCommand) -> anyhow::Result<()> {
+        PATIENCE.start(job.run);
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(crate::redis_config()), RedisQueueModule, RedisWorkerModule::for_root(crate::brisk())],
+    providers = [PatienceProcessor],
+)]
+struct PatienceModule;
+
+/// A newer release's job handed back unread for longer than the patience — its
+/// first hand-back recorded a day and an hour ago — is dead-lettered by the
+/// next replica of this release that meets it rather than handed back forever:
+/// said at `error` naming both versions, its unit line filed, its record kept in
+/// the dead set for a consumer of that release, and nothing it held left behind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_a_newer_release_sealed_is_dead_lettered_once_it_waited_unread_past_the_patience() {
+    let logs = LogCapture::install_global();
+    crate::forget(PATIENCE_QUEUE).await;
+    let run = crate::this_run();
+    let id = uuid::Uuid::now_v7().to_string();
+    let apalis = file_a_newer_releases_job(PATIENCE_QUEUE, &id, run).await;
+    let mut admin = crate::connect().await;
+    let (secs, micros): (u64, u64) = redis::cmd("TIME")
+        .query_async(&mut admin)
+        .await
+        .expect("TIME");
+    let waited = nest_rs_queue::consume::NEWER_RELEASE_PATIENCE + Duration::from_secs(3600);
+    let first_handed_back =
+        secs * 1000 + micros / 1000 - u64::try_from(waited.as_millis()).expect("milliseconds");
+    let deferred = crate::key_of(PATIENCE_QUEUE, "deferred", &id);
+    let _: () = redis::cmd("SET")
+        .arg(&deferred)
+        .arg(first_handed_back)
+        .query_async(&mut admin)
+        .await
+        .expect("a first hand-back a day and an hour ago");
+
+    let replica = crate::replica::<PatienceModule>().await;
+    let said = "job dead-lettered: a newer release sealed it, and none of its consumers ran it in \
+                time";
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while dead(PATIENCE_QUEUE).await == 0 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    replica
+        .worker
+        .shutdown()
+        .await
+        .expect("clean worker shutdown");
+
+    let dead_lettered = logs.find(nest_rs_queue::TARGET, said);
+    assert_eq!(dead_lettered.len(), 1, "{dead_lettered:#?}");
+    assert_eq!(dead_lettered[0].level, "error");
+    assert_eq!(
+        dead_lettered[0].field("version"),
+        Some((u64::from(nest_rs_queue::WIRE_FORMAT_VERSION) + 1).to_string())
+    );
+    assert!(PATIENCE.of(run).is_empty(), "nothing ran");
+    assert_eq!(dead(PATIENCE_QUEUE).await, 1, "the job is in the dead set");
+    let kept: Option<String> = redis::cmd("HGET")
+        .arg(apalis.job_data_hash())
+        .arg(
+            redis::cmd("ZRANGE")
+                .arg(apalis.dead_jobs_set())
+                .arg(0)
+                .arg(0)
+                .query_async::<Vec<String>>(&mut admin)
+                .await
+                .expect("ZRANGE")
+                .first()
+                .expect("the dead job's task"),
+        )
+        .query_async(&mut admin)
+        .await
+        .expect("HGET");
+    assert!(
+        kept.is_some_and(|record| record.contains(&id)),
+        "the newer release's record is kept for a consumer of that release",
+    );
+    assert_eq!(
+        crate::read(&deferred).await,
+        None,
+        "the record of its wait went with it"
+    );
+    crate::forget(PATIENCE_QUEUE).await;
 }

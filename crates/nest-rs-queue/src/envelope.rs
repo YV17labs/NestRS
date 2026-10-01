@@ -122,6 +122,17 @@ const KEYS: [&str; 9] = [
 /// second wrapper around it: nesting one envelope inside another gives two
 /// things to strip, in an order every reader would have to get right.
 ///
+/// # What a later version keeps
+///
+/// A consumer meeting a version newer than its own reads three keys of it and
+/// nothing else: `id`, and `traceparent` with the `tracestate` beside it, when
+/// they are spelled as this version spells them. It hands the job back unread
+/// under that id, files its lines in that trace, and counts the job's wait
+/// unread against that id — dead-lettering it a day after its first hand-back
+/// ([`NEWER_RELEASE_PATIENCE`](crate::consume::NEWER_RELEASE_PATIENCE)), and at
+/// once when it names no id it can read. So a later version keeps those three
+/// keys and their spelling, whatever else it changes.
+///
 /// # A value that is no envelope is normal, not an error
 ///
 /// A queue is shared infrastructure. A job may predate the envelope, or come from
@@ -233,6 +244,26 @@ pub(crate) fn newer_version(value: &Value) -> Option<u64> {
         return None;
     };
     envelope_version(map).filter(|version| *version > u64::from(WIRE_FORMAT_VERSION))
+}
+
+/// The trace a newer release's envelope carries, when it spells `traceparent`
+/// — and the `tracestate` beside it — as this release does: what a line about
+/// the job is filed in, so the producer's trace shows the job waiting unread.
+/// Nothing else of a newer envelope is read, the actor included: its keys may
+/// mean what this release does not, and an audit identity is not one to guess.
+pub(crate) fn newer_trace(value: &Value) -> Option<Correlation> {
+    newer_version(value)?;
+    let map = value.as_object()?;
+    let parent = map
+        .get(TRACEPARENT)
+        .and_then(Value::as_str)
+        .and_then(TraceParent::parse)?;
+    let state = map
+        .get(TRACESTATE)
+        .and_then(Value::as_str)
+        .map(TraceState::adopt)
+        .unwrap_or_default();
+    Some(Correlation::continued(parent, state, None))
 }
 
 fn usable_id(value: &Value) -> Option<JobId> {
@@ -905,6 +936,46 @@ mod tests {
             "and it is known as newer"
         );
         assert_eq!(newer_version(&json!({ "v": 1, "payload": {} })), None);
+    }
+
+    /// A newer envelope's trace is read when it is spelled as this release
+    /// spells it, with the vendor state beside it and never the actor; a
+    /// current envelope's is `open`'s to read, and a newer one with no usable
+    /// `traceparent` carries none.
+    #[test]
+    fn a_newer_envelope_lends_its_trace_and_nothing_else() {
+        let parent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        let newer = json!({
+            "v": 2,
+            "traceparent": parent,
+            "tracestate": "rojo=00f067aa0ba902b7",
+            "actor_id": "user-7",
+            "payload": {},
+        });
+        let trace = newer_trace(&newer).expect("the newer envelope's trace");
+        assert_eq!(
+            trace.trace_id().to_string(),
+            "4bf92f3577b34da6a3ce929d0e0e4736"
+        );
+        assert_eq!(
+            trace.parent_id().map(|span| span.to_string()).as_deref(),
+            Some("00f067aa0ba902b7")
+        );
+        assert!(trace.parent_is_remote());
+        assert_eq!(trace.tracestate().as_str(), Some("rojo=00f067aa0ba902b7"));
+        assert_eq!(
+            trace.actor_id(),
+            None,
+            "an audit identity is not guessed at"
+        );
+
+        for none in [
+            json!({ "v": 1, "traceparent": parent, "payload": {} }),
+            json!({ "v": 2, "traceparent": "not a traceparent", "payload": {} }),
+            json!({ "v": 2, "payload": {} }),
+        ] {
+            assert!(newer_trace(&none).is_none(), "{none}");
+        }
     }
 
     /// An identity key present and unusable is flagged, and the delivery runs

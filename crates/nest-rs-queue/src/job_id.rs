@@ -1,6 +1,7 @@
 //! [`JobId`] — the port's name for one job, minted when the job is pushed.
 
 use std::fmt;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
@@ -46,6 +47,17 @@ impl JobId {
     pub(crate) fn as_bytes(&self) -> &[u8; 16] {
         self.0.as_bytes()
     }
+
+    /// How long ago the id was minted — its job pushed — on this host's clock,
+    /// read off the millisecond a UUID v7 carries; zero for an id minted ahead
+    /// of the clock reading it.
+    pub(crate) fn age(&self) -> Duration {
+        let minted = self.0.get_timestamp().map_or(UNIX_EPOCH, |timestamp| {
+            let (secs, nanos) = timestamp.to_unix();
+            UNIX_EPOCH + Duration::new(secs, nanos)
+        });
+        SystemTime::now().duration_since(minted).unwrap_or_default()
+    }
 }
 
 impl fmt::Display for JobId {
@@ -83,6 +95,24 @@ mod tests {
         let written = id.to_string();
         assert_eq!(written.len(), 36, "the hyphenated form: {written}");
         assert_eq!(JobId::parse(&written).expect("a minted id parses"), id);
+    }
+
+    /// An id says how long ago its job was pushed, read off its own
+    /// millisecond: a fresh one is no older than the test, one minted in 2023
+    /// is years old, and one minted ahead of the clock is no age at all.
+    #[test]
+    fn an_id_says_how_long_ago_it_was_minted() {
+        assert!(JobId::mint().age() < Duration::from_secs(60));
+        let old = JobId::parse("01890a5d-ac96-774b-bcce-b302099a8057").expect("a v7 id");
+        assert!(old.age() > Duration::from_secs(365 * 24 * 60 * 60));
+        let ahead = SystemTime::now() + Duration::from_secs(3600);
+        let ahead = ahead.duration_since(UNIX_EPOCH).expect("after the epoch");
+        let ahead = uuid::Uuid::new_v7(uuid::Timestamp::from_unix(
+            uuid::NoContext,
+            ahead.as_secs(),
+            ahead.subsec_nanos(),
+        ));
+        assert_eq!(JobId(ahead).age(), Duration::ZERO);
     }
 
     #[test]

@@ -756,6 +756,7 @@ and no script, pipeline, command object or typed command
 | | `…:cancelled:<job_id>` | a cancel's promise that the job never starts |
 | | `…:checkpoints:<job_id>` | the progress the job saved |
 | | `…:attempts:<job_id>` | the attempts started at the job, less those handed back without an answer (cut by a drain, or unread) — how the port counts an attempt whose process died, which the envelope never could |
+| | `…:deferred:<job_id>` | the instant, in Redis's milliseconds, a job a newer release sealed was first handed back unread — kept while every delivery since has handed it back so, cleared by one that reads it or by its outcome; how the port bounds the wait without charging a delayed push for its delay |
 | | `…:unique:<key>` | the job holding a unique key |
 | | `…:throttle` | the attempts started in the current window, less those handed back unread (a `Defer`, taken back only inside the window that counted it) — one per queue, since one method drains a queue |
 | throttler | `nestrs:throttler:buckets:<subject>` | one client's current window |
@@ -1608,16 +1609,29 @@ drain.
   copies nothing — and an adapter that opens a `queue.job` span of its own, or
   keeps a retry budget of its own, has taken semantics it does not own.
 
-  **A newer wire version is handed back, never dead-lettered.** An older worker
+  **A newer wire version is handed back, for a day at most.** An older worker
   meeting an envelope a newer release sealed cannot read it and cannot re-seal
   it, so `attempt` answers `AttemptOutcome::Defer` — no attempt spent, the record
   re-filed as stored, due again after `NEWER_RELEASE_WAIT` — and warns once per
-  delivery naming both versions, under the id the newer envelope spells when it
-  spells it as this release does. A rolling deploy, where old replicas meet new
-  producers for minutes, must not lose a job; an older version is still refused,
-  since reading an older shape is the bumping release's decision. The outcome
-  enum is exhaustive on purpose, so a variant added later is a compile error in
-  every driver rather than a job one of them drops.
+  delivery naming both versions and how long the job has waited, under the id the
+  newer envelope spells and in the trace it carries when it spells them as this
+  release does. A rolling deploy, where old replicas meet new producers for
+  minutes, must not lose a job; a rollout that stopped must not hand its jobs back
+  forever either, so a job unread past `NEWER_RELEASE_PATIENCE` (a day) is
+  dead-lettered — once, at `error`, naming both versions, with its unit line —
+  and its record stays in the dead set for a consumer of that release. **The wait
+  is counted from the first hand-back**, which the backend keeps per job
+  (`Delivery::with_deferred_for`; on Redis, `…:deferred:<job_id>` in Redis's own
+  milliseconds), never from the push: a job pushed with a delay falls due long
+  after its id was minted, and counting from the push dead-lettered it on its
+  first meeting with an older consumer, during exactly the rolling deploy the
+  deferral exists for. A backend that keeps no record leaves the port the push's
+  age, read off the id, and says so to its driver authors. A newer envelope naming
+  no id this release reads cannot be followed between deliveries, so it is
+  dead-lettered at once. An older version is still refused, since reading an
+  older shape is the bumping release's decision. The outcome enum is exhaustive
+  on purpose, so a variant added later is a compile error in every driver rather
+  than a job one of them drops.
 
   **A job is named by the port.** The push mints a `JobId` — a UUID v7 — and
   seals it in the envelope, and that id keys everything kept about the job: its

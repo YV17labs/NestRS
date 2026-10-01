@@ -51,6 +51,19 @@ const PROCESS: &str = "process";
 /// reach it within a minute.
 pub const NEWER_RELEASE_WAIT: Duration = Duration::from_secs(60);
 
+/// How long a job sealed by a newer release may go unread before a consumer of
+/// this release dead-letters it: a day, counted from the first time it was
+/// handed back unread ([`Delivery::with_deferred_for`]) — or from its push, on a
+/// backend that keeps no such record.
+///
+/// A rolling deploy mixes releases for minutes. A day of a newer release's jobs
+/// handed back every minute is a rollout that stopped — its producers rolled
+/// back, its consumers never coming — and without a bound those jobs would wait
+/// forever, each warned about once a minute. Dead-lettered, each is said once,
+/// naming both versions, and its record stays in the dead set for a consumer of
+/// that release.
+pub const NEWER_RELEASE_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// The `#[process]` methods this app serves on `backend`: every entry whose
 /// provider is reachable from the running app's root, with a boot `warn` for
 /// each that is linked but unreachable.
@@ -206,11 +219,13 @@ pub enum AttemptOutcome {
     /// unchanged — to be delivered again once `after` has passed, and
     /// acknowledge this delivery; a backend that counted an attempt start for
     /// it takes the start back, as for any delivery handed back without an
-    /// answer.
+    /// answer, and one that keeps how long a job has waited unread records the
+    /// first such hand-back ([`Delivery::with_deferred_for`]).
     ///
     /// A rolling deploy is the case: an older replica meets a newer producer's
     /// job, and the job waits for a replica of the newer release instead of
-    /// being dead-lettered by one that is leaving. `after` is
+    /// being dead-lettered by one that is leaving — for
+    /// [`NEWER_RELEASE_PATIENCE`] at the most. `after` is
     /// [`NEWER_RELEASE_WAIT`].
     Defer {
         /// How long the job waits before it is delivered again.
@@ -234,6 +249,9 @@ pub struct Delivery {
     /// How many attempts the backend saw start that never returned an answer —
     /// see [`Delivery::with_attempts_started`].
     unfinished: u32,
+    /// How long the backend has handed the job back unread, when it keeps that
+    /// — see [`Delivery::with_deferred_for`].
+    deferred_for: Option<Duration>,
     unique_key: Option<String>,
     backend_id: Option<String>,
     message: Value,
@@ -262,6 +280,7 @@ impl Delivery {
             id: identity.id.unwrap_or_else(JobId::mint),
             attempt: identity.attempt.unwrap_or(1),
             unfinished: 0,
+            deferred_for: None,
             unique_key: identity.unique_key,
             backend_id: None,
             message,
@@ -294,6 +313,23 @@ impl Delivery {
     pub fn with_attempts_started(mut self, started: u32) -> Self {
         self.unfinished = started.saturating_sub(self.attempt);
         self.attempt = self.attempt.max(started);
+        self
+    }
+
+    /// How long the backend has handed this job back unread for a newer release
+    /// — since the first of an unbroken run of [`AttemptOutcome::Defer`]
+    /// answers, zero when there is none — for a backend that can keep it per
+    /// job.
+    ///
+    /// A job a newer release sealed is dead-lettered once it has waited unread
+    /// past [`NEWER_RELEASE_PATIENCE`]. Counted from its first hand-back, a job
+    /// pushed with a delay is not charged for the delay; without this, the port
+    /// counts from the job's push — the instant its id was minted — which
+    /// charges a delayed job its delay too. A backend keeps the instant of the
+    /// first hand-back answering `Defer`, clears it once a delivery reads the job
+    /// or the job settles, and passes how long ago that was.
+    pub fn with_deferred_for(mut self, waited: Duration) -> Self {
+        self.deferred_for = Some(waited);
         self
     }
 
@@ -358,7 +394,12 @@ impl Delivery {
 /// When the job reaches its terminal outcome, its checkpoint is cleared.
 ///
 /// A job sealed by a newer release runs nothing: the delivery says so once, at
-/// `warn`, naming both versions, and the answer is [`AttemptOutcome::Defer`].
+/// `warn`, naming both versions, and the answer is [`AttemptOutcome::Defer`] —
+/// until the job has waited unread past [`NEWER_RELEASE_PATIENCE`], or at once
+/// when it names no id this release reads, since nothing can then follow it
+/// from one delivery to the next: it is then dead-lettered, as a unit of work
+/// with its line. Both are filed in the newer envelope's trace when it spells
+/// one as this release does.
 ///
 /// **An attempt its driver drops still files its line.** A driver stops an
 /// attempt by dropping this future — a drain whose window closed on it, a
@@ -372,8 +413,12 @@ pub async fn attempt(
     delivery: &mut Delivery,
     container: Container,
 ) -> AttemptOutcome {
-    if let Some(version) = envelope::newer_version(&delivery.message) {
-        return defer_newer(delivery, version);
+    let newer = envelope::newer_version(&delivery.message);
+    if let Some(version) = newer
+        && let Some(waited) = waited_unread(delivery)
+        && waited < NEWER_RELEASE_PATIENCE
+    {
+        return defer_newer(delivery, version, waited).await;
     }
     let attempt = delivery.attempt;
     let retries = method.options().retries();
@@ -387,8 +432,17 @@ pub async fn attempt(
     } else {
         delivery.message.clone()
     };
-    let (payload, inherited, minted_trace, unversioned, unusable) =
-        match envelope::open(message, delivery.queue.as_str()) {
+    let (payload, inherited, minted_trace, unversioned, unusable) = match newer {
+        // Past its patience: nothing is opened, and the job's own trace is
+        // what its dead letter is filed in.
+        Some(_) => (
+            Ok(Value::Null),
+            envelope::newer_trace(&message),
+            false,
+            false,
+            Unusable::default(),
+        ),
+        None => match envelope::open(message, delivery.queue.as_str()) {
             Ok(Opened::Sealed {
                 payload,
                 correlation,
@@ -397,13 +451,18 @@ pub async fn attempt(
             }) => (Ok(payload), correlation, minted, false, unusable),
             Ok(Opened::Unversioned(value)) => (Ok(value), None, false, true, Unusable::default()),
             Err(refused) => (Err(refused), None, false, false, Unusable::default()),
-        };
-    let input = match payload {
+        },
+    };
+    let input = match (newer, payload) {
+        (Some(version), _) => Input::Unread {
+            version,
+            waited: waited_unread(delivery),
+        },
         _ if spent => Input::Spent {
             unfinished: delivery.unfinished,
         },
-        Ok(payload) => Input::Payload(payload),
-        Err(refused) => Input::Refused(refused),
+        (None, Ok(payload)) => Input::Payload(payload),
+        (None, Err(refused)) => Input::Refused(refused),
     };
     // The producer sealed its W3C trace context into the envelope, because a
     // queue is the one hop the framework crosses that is a *process* boundary
@@ -524,27 +583,56 @@ pub async fn attempt(
     outcome
 }
 
+/// How long a job a newer release sealed has waited unread: the backend's
+/// record when it keeps one, its push's age otherwise — and `None` when it
+/// names no id this release reads, since nothing then follows it from one
+/// delivery to the next and no wait can be counted.
+fn waited_unread(delivery: &Delivery) -> Option<Duration> {
+    let id = envelope::identify(&delivery.message).id?;
+    Some(delivery.deferred_for.unwrap_or_else(|| id.age()))
+}
+
+/// What to do about a job a newer release sealed that this release keeps
+/// handing back — the remedy every line about one names.
+const NEWER_RELEASE_REMEDY: &str = "a newer release sealed this job and only its consumers can \
+     run it: finish rolling them forward, or, rolling back, keep one running until the queue \
+     holds none of its jobs — a job still unread a day after it was first handed back is \
+     dead-lettered, naming both versions, and stays in the dead set for a consumer of that release";
+
 /// Hand back a job a newer release sealed: nothing runs, and the delivery says
-/// once, at `warn`, which release sealed it and which this one reads.
-fn defer_newer(delivery: &mut Delivery, version: u64) -> AttemptOutcome {
+/// once, at `warn` and in the job's own trace when its envelope spells one as
+/// this release does, which release sealed it, which this one reads, and how
+/// long it has waited.
+async fn defer_newer(delivery: &mut Delivery, version: u64, waited: Duration) -> AttemptOutcome {
     if !delivery.announced {
         delivery.announced = true;
-        tracing::warn!(
-            target: TARGET,
-            queue = %delivery.queue,
-            job_id = %delivery.id,
-            version,
-            supported = crate::WIRE_FORMAT_VERSION,
-            retry_after_ms = NEWER_RELEASE_WAIT.as_millis() as u64,
-            hint = "a newer release sealed this job; it waits on the queue for a consumer of \
-                    that release — finish rolling the consumers forward, or roll the producer \
-                    back",
-            "job sealed by a newer release handed back unread",
-        );
+        let correlation =
+            envelope::newer_trace(&delivery.message).unwrap_or_else(|| Correlation::minted(None));
+        let (queue, job_id) = (&delivery.queue, &delivery.id);
+        with_request_scope(None, correlation, async {
+            tracing::warn!(
+                target: TARGET,
+                queue = %queue,
+                job_id = %job_id,
+                version,
+                supported = crate::WIRE_FORMAT_VERSION,
+                retry_after_ms = millis(NEWER_RELEASE_WAIT),
+                waited_ms = millis(waited),
+                patience_ms = millis(NEWER_RELEASE_PATIENCE),
+                hint = NEWER_RELEASE_REMEDY,
+                "job sealed by a newer release handed back unread",
+            );
+        })
+        .await;
     }
     AttemptOutcome::Defer {
         after: NEWER_RELEASE_WAIT,
     }
+}
+
+/// `duration` in whole milliseconds, for a line's field.
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Clear the checkpoint of a job that reached its terminal outcome. A failure
@@ -655,6 +743,26 @@ enum Input {
         /// How many attempts ended without an answer.
         unfinished: u32,
     },
+    /// Nothing: a newer release sealed the job, and it has waited unread past
+    /// [`NEWER_RELEASE_PATIENCE`] — or names no id, so no wait can be counted.
+    Unread {
+        /// The wire-format version that sealed it.
+        version: u64,
+        /// How long it waited unread, when that can be counted.
+        waited: Option<Duration>,
+    },
+}
+
+/// Why an attempt ran nothing.
+enum Unrun {
+    /// The attempts the backend saw start spent the budget, `unfinished` of
+    /// them without an answer.
+    Spent { unfinished: u32 },
+    /// A newer release sealed the job and it was not read in time.
+    Unread {
+        version: u64,
+        waited: Option<Duration>,
+    },
 }
 
 /// What one job attempt is, for the line that reports it ran.
@@ -744,6 +852,7 @@ impl Drop for JobLine {
 /// | retryable `Err`, last attempt | `job dead-lettered: retry budget spent` (`error`) | `DeadLetter` |
 /// | **panic** | `job dead-lettered: handler panicked` (`error`) | `DeadLetter` |
 /// | budget spent by attempts that never returned | `job dead-lettered: retry budget spent by attempts that never returned` (`error`) | `DeadLetter` |
+/// | a newer release's, unread past the patience | `job dead-lettered: a newer release sealed it, and none of its consumers ran it in time` (`error`) | `DeadLetter` |
 ///
 /// The panic is caught **here** rather than left to a backend's panic layer,
 /// which would contain it correctly and unwind past this function — skipping the
@@ -758,8 +867,7 @@ async fn run(
 ) -> AttemptOutcome {
     let attempt = identity.attempt;
     let line = JobLine::open(identity);
-    // `Err` when nothing ran: attempts that never returned spent the budget
-    // before this one, `Err`'s count of them.
+    // `Err` when nothing ran, saying why.
     let outcome = match input {
         Input::Payload(payload) => Ok(AssertUnwindSafe(handler(payload, context))
             .catch_unwind()
@@ -767,13 +875,39 @@ async fn run(
         // An envelope of another version never reaches the handler: the refusal
         // is the attempt's outcome.
         Input::Refused(refused) => Ok(Ok(Err(refused))),
-        Input::Spent { unfinished } => Err(unfinished),
+        Input::Spent { unfinished } => Err(Unrun::Spent { unfinished }),
+        Input::Unread { version, waited } => Err(Unrun::Unread { version, waited }),
     };
     // Every terminal state, one detail event and one line. The detail says
     // *why* and stays on `nest_rs::queue`; the line says the job ran, and is the
     // family's. Neither restates the other's fields.
     let (settled, result) = match outcome {
-        Err(unfinished) => {
+        Err(Unrun::Unread { version, waited }) => {
+            let supported = crate::WIRE_FORMAT_VERSION;
+            tracing::error!(
+                target: TARGET,
+                version,
+                supported,
+                waited_ms = waited.map(millis),
+                patience_ms = millis(NEWER_RELEASE_PATIENCE),
+                hint = NEWER_RELEASE_REMEDY,
+                "job dead-lettered: a newer release sealed it, and none of its consumers ran it \
+                 in time",
+            );
+            let why = match waited {
+                Some(_) => "waited unread past the day this release gives a newer one's job",
+                None => "names no id this release reads, so no wait for it can be counted",
+            };
+            (
+                nest_rs_core::operation_log::ERROR,
+                AttemptOutcome::DeadLetter(JobError::abort(format!(
+                    "job sealed by wire-format version {version}, which this consumer (version \
+                     {supported}) cannot read, {why}; its record stays in the dead set for a \
+                     consumer of that release"
+                ))),
+            )
+        }
+        Err(Unrun::Spent { unfinished }) => {
             let spent = attempt.saturating_sub(1);
             tracing::error!(
                 target: TARGET,

@@ -53,7 +53,8 @@ use tokio_util::task::AbortOnDropHandle;
 
 use crate::RedisConnection;
 use crate::layout::{
-    self, ATTEMPTS, CANCELLED, CHECKPOINTS, KEPT_PAST_DUE, LEASES, OPEN, SETTLED, job_key, millis,
+    self, ATTEMPTS, CANCELLED, CHECKPOINTS, DEFERRED, KEPT_PAST_DUE, LEASES, OPEN, SETTLED,
+    job_key, millis,
 };
 
 /// How long a settled job is remembered at the least: an hour, which covers a
@@ -65,18 +66,21 @@ const SETTLED_FLOOR: Duration = Duration::from_secs(60 * 60);
 ///
 /// | answer | reply |
 /// | --- | --- |
-/// | settled | `{0, 0, how it settled}` |
-/// | the lease taken | `{1, attempts started with this one, the throttle window's end or ''}` |
-/// | held by another delivery | `{2, ms until it lapses, its holder}` |
-/// | cancelled | `{3, 0, ''}` |
-/// | over its throttle | `{4, ms until the window ends, ''}` |
+/// | settled | `{0, 0, how it settled, ''}` |
+/// | the lease taken | `{1, attempts started with this one, the throttle window's end or '', ms it has waited unread or ''}` |
+/// | held by another delivery | `{2, ms until it lapses, its holder, ''}` |
+/// | cancelled | `{3, 0, '', ''}` |
+/// | over its throttle | `{4, ms until the window ends, '', ''}` |
 ///
-/// Always three members: a Lua table ends at its first `nil`.
+/// Always four members: a Lua table ends at its first `nil`.
 ///
 /// `KEYS`: settled, lease, cancelled, open, checkpoints, throttle, attempts,
-/// then the unique claim when the job holds one. `ARGV`: the holder, the
-/// lease's length, how long the job's records are kept, the job's id, the
+/// deferred, then the unique claim when the job holds one. `ARGV`: the holder,
+/// the lease's length, how long the job's records are kept, the job's id, the
 /// throttle's limit (`0` for none) and its window.
+///
+/// How long a job granted has waited unread is read off its deferred record,
+/// both instants Redis's own, so no two hosts' clocks are compared.
 ///
 /// A job met cancelled lets go of what it held and keeps its tombstone for as
 /// long as a delivery of it could come again. A job granted counts the attempt
@@ -90,19 +94,19 @@ const SETTLED_FLOOR: Duration = Duration::from_secs(60 * 60);
 const ADMIT: &str = r"
 local settled = redis.call('GET', KEYS[1])
 if settled then
-  return {0, 0, settled}
+  return {0, 0, settled, ''}
 end
 if redis.call('EXISTS', KEYS[3]) == 1 then
   redis.call('PEXPIRE', KEYS[3], ARGV[3])
-  redis.call('DEL', KEYS[4], KEYS[5], KEYS[7])
-  if KEYS[8] and redis.call('GET', KEYS[8]) == ARGV[4] then
-    redis.call('DEL', KEYS[8])
+  redis.call('DEL', KEYS[4], KEYS[5], KEYS[7], KEYS[8])
+  if KEYS[9] and redis.call('GET', KEYS[9]) == ARGV[4] then
+    redis.call('DEL', KEYS[9])
   end
-  return {3, 0, ''}
+  return {3, 0, '', ''}
 end
 local holder = redis.call('GET', KEYS[2])
 if holder then
-  return {2, redis.call('PTTL', KEYS[2]), holder}
+  return {2, redis.call('PTTL', KEYS[2]), holder, ''}
 end
 local limit = tonumber(ARGV[5])
 if limit > 0 then
@@ -117,10 +121,11 @@ if limit > 0 then
     redis.call('PEXPIRE', KEYS[4], kept)
     redis.call('PEXPIRE', KEYS[5], kept)
     redis.call('PEXPIRE', KEYS[7], kept)
-    if KEYS[8] and redis.call('GET', KEYS[8]) == ARGV[4] then
-      redis.call('PEXPIRE', KEYS[8], kept)
+    redis.call('PEXPIRE', KEYS[8], kept)
+    if KEYS[9] and redis.call('GET', KEYS[9]) == ARGV[4] then
+      redis.call('PEXPIRE', KEYS[9], kept)
     end
-    return {4, ends, ''}
+    return {4, ends, '', ''}
   end
   redis.call('INCR', KEYS[6])
   if ends < 0 then
@@ -132,16 +137,22 @@ local started = redis.call('INCR', KEYS[7])
 redis.call('PEXPIRE', KEYS[7], ARGV[3])
 redis.call('PEXPIRE', KEYS[4], ARGV[3])
 redis.call('PEXPIRE', KEYS[5], ARGV[3])
-if KEYS[8] and redis.call('GET', KEYS[8]) == ARGV[4] then
-  redis.call('PEXPIRE', KEYS[8], ARGV[3])
+redis.call('PEXPIRE', KEYS[8], ARGV[3])
+if KEYS[9] and redis.call('GET', KEYS[9]) == ARGV[4] then
+  redis.call('PEXPIRE', KEYS[9], ARGV[3])
 end
+local now = redis.call('TIME')
+now = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
 local window = ''
 if limit > 0 then
-  local now = redis.call('TIME')
-  window = tostring(tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
-    + redis.call('PTTL', KEYS[6]))
+  window = tostring(now + redis.call('PTTL', KEYS[6]))
 end
-return {1, started, window}
+local waited = ''
+local since = tonumber(redis.call('GET', KEYS[8]) or '')
+if since then
+  waited = tostring(math.max(0, now - since))
+end
+return {1, started, window, waited}
 ";
 
 /// Extend the lease while its holder still holds it: `1` renewed, `0` lost.
@@ -153,20 +164,20 @@ return 0
 ";
 
 /// Mark the job settled, drop the lease if this delivery still holds it, and
-/// close what the job held: its open record, its count of attempts, and its
-/// unique key if it is still the job's.
+/// close what the job held: its open record, its count of attempts, its
+/// deferral record, and its unique key if it is still the job's.
 ///
-/// `KEYS`: settled, lease, open, attempts, then the unique claim when the job
-/// holds one. `ARGV`: the holder, the outcome, how long the mark is kept, the
-/// job's id.
+/// `KEYS`: settled, lease, open, attempts, deferred, then the unique claim when
+/// the job holds one. `ARGV`: the holder, the outcome, how long the mark is
+/// kept, the job's id.
 const SETTLE: &str = r"
 redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
 if redis.call('GET', KEYS[2]) == ARGV[1] then
   redis.call('DEL', KEYS[2])
 end
-redis.call('DEL', KEYS[3], KEYS[4])
-if KEYS[5] and redis.call('GET', KEYS[5]) == ARGV[4] then
-  redis.call('DEL', KEYS[5])
+redis.call('DEL', KEYS[3], KEYS[4], KEYS[5])
+if KEYS[6] and redis.call('GET', KEYS[6]) == ARGV[4] then
+  redis.call('DEL', KEYS[6])
 end
 return 1
 ";
@@ -178,14 +189,18 @@ return 1
 /// own: past that, the count may be another delivery's. The throttle's start is
 /// taken back only inside the window that counted it — the one ending at the
 /// instant [`ADMIT`] answered, give or take the millisecond two clock readings
-/// can differ by.
+/// can differ by. The job's deferral record is the unread attempt's to start —
+/// at the first of an unbroken run of hand-backs unread, in Redis's own
+/// millisecond — and any other attempt's to clear, since a delivery that ran
+/// the job could read it.
 ///
-/// `KEYS`: lease, open, checkpoints, attempts, throttle, then the unique claim
-/// when the job holds one. `ARGV`: the holder, how long the job's records are
-/// kept from now, the job's id, what the attempt gives back (`0` nothing, `1`
-/// its attempt, `2` its attempt and its throttle start), the end of the window
-/// its throttle start was counted in (`''` for none), and how far apart two
-/// readings of that end may be and still name one window.
+/// `KEYS`: lease, open, checkpoints, attempts, throttle, deferred, then the
+/// unique claim when the job holds one. `ARGV`: the holder, how long the job's
+/// records are kept from now, the job's id, what the attempt gives back (`0`
+/// nothing, `1` its attempt, `2` its attempt and its throttle start — the
+/// attempt that did not read the job), the end of the window its throttle start
+/// was counted in (`''` for none), and how far apart two readings of that end
+/// may be and still name one window.
 const RELEASE: &str = r"
 local released = 0
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -193,22 +208,30 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then
   if ARGV[4] ~= '0' and tonumber(redis.call('GET', KEYS[4]) or '0') > 0 then
     redis.call('DECR', KEYS[4])
   end
+  local now = redis.call('TIME')
+  now = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
   if ARGV[4] == '2' and ARGV[5] ~= '' then
     local left = redis.call('PTTL', KEYS[5])
     if left > 0 and tonumber(redis.call('GET', KEYS[5]) or '0') > 0 then
-      local now = redis.call('TIME')
-      local ends = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000) + left
-      if math.abs(ends - tonumber(ARGV[5])) <= tonumber(ARGV[6]) then
+      if math.abs(now + left - tonumber(ARGV[5])) <= tonumber(ARGV[6]) then
         redis.call('DECR', KEYS[5])
       end
     end
+  end
+  if ARGV[4] == '2' then
+    if redis.call('EXISTS', KEYS[6]) == 0 then
+      redis.call('SET', KEYS[6], tostring(now))
+    end
+  else
+    redis.call('DEL', KEYS[6])
   end
 end
 redis.call('PEXPIRE', KEYS[2], ARGV[2])
 redis.call('PEXPIRE', KEYS[3], ARGV[2])
 redis.call('PEXPIRE', KEYS[4], ARGV[2])
-if KEYS[6] and redis.call('GET', KEYS[6]) == ARGV[3] then
-  redis.call('PEXPIRE', KEYS[6], ARGV[2])
+redis.call('PEXPIRE', KEYS[6], ARGV[2])
+if KEYS[7] and redis.call('GET', KEYS[7]) == ARGV[3] then
+  redis.call('PEXPIRE', KEYS[7], ARGV[2])
 end
 return released
 ";
@@ -371,11 +394,12 @@ impl Leases {
             .key(job_key(OPEN, &self.queue, job))
             .key(job_key(CHECKPOINTS, &self.queue, job))
             .key(layout::throttle_key(&self.queue))
-            .key(job_key(ATTEMPTS, &self.queue, job));
+            .key(job_key(ATTEMPTS, &self.queue, job))
+            .key(job_key(DEFERRED, &self.queue, job));
         if let Some(claim) = &claim {
             invocation.key(claim);
         }
-        let answer: (i64, i64, String) = invocation
+        let answer: (i64, i64, String, String) = invocation
             .arg(&holder)
             .arg(millis(self.lease))
             .arg(millis(KEPT_PAST_DUE))
@@ -385,8 +409,8 @@ impl Leases {
             .invoke_async(&mut self.admitting.clone())
             .await?;
         Ok(match answer {
-            (0, _, mark) => Admission::Settled(Settlement::read(&mark)),
-            (1, started, window) => Admission::Granted(Lease {
+            (0, _, mark, _) => Admission::Settled(Settlement::read(&mark)),
+            (1, started, window, waited) => Admission::Granted(Lease {
                 leases: Arc::clone(self),
                 key: lease,
                 claim,
@@ -394,12 +418,13 @@ impl Leases {
                 holder,
                 started: u32::try_from(started).unwrap_or(u32::MAX),
                 window,
+                deferred_for: Duration::from_millis(waited.parse().unwrap_or(0)),
             }),
             (3, ..) => Admission::Cancelled,
-            (4, ends_in, _) => Admission::Throttled {
+            (4, ends_in, ..) => Admission::Throttled {
                 ends_in: Duration::from_millis(u64::try_from(ends_in).unwrap_or(0)),
             },
-            (_, lapses_in, holder) => Admission::Held {
+            (_, lapses_in, holder, _) => Admission::Held {
                 holder,
                 lapses_in: Duration::from_millis(u64::try_from(lapses_in).unwrap_or(0)),
             },
@@ -421,6 +446,9 @@ pub(crate) struct Lease {
     /// Redis's milliseconds as [`ADMIT`] answered it — `""` when the method
     /// declares no throttle. Handed back to [`RELEASE`] as it came.
     window: String,
+    /// How long the job has been handed back unread for a newer release, since
+    /// the first of an unbroken run of such hand-backs — zero for none.
+    deferred_for: Duration,
 }
 
 impl Lease {
@@ -428,6 +456,12 @@ impl Lease {
     /// included — the port reads an attempt that never returned from it.
     pub(crate) fn started(&self) -> u32 {
         self.started
+    }
+
+    /// How long the job has waited handed back unread for a newer release —
+    /// the wait the port bounds.
+    pub(crate) fn deferred_for(&self) -> Duration {
+        self.deferred_for
     }
 
     /// Keep the lease renewed until the handle is dropped: every third of its
@@ -468,7 +502,8 @@ impl Lease {
         invocation
             .key(&self.key)
             .key(job_key(OPEN, &leases.queue, &self.job))
-            .key(job_key(ATTEMPTS, &leases.queue, &self.job));
+            .key(job_key(ATTEMPTS, &leases.queue, &self.job))
+            .key(job_key(DEFERRED, &leases.queue, &self.job));
         if let Some(claim) = &self.claim {
             invocation.key(claim);
         }
@@ -497,7 +532,8 @@ impl Lease {
             .key(job_key(OPEN, &leases.queue, &self.job))
             .key(job_key(CHECKPOINTS, &leases.queue, &self.job))
             .key(job_key(ATTEMPTS, &leases.queue, &self.job))
-            .key(layout::throttle_key(&leases.queue));
+            .key(layout::throttle_key(&leases.queue))
+            .key(job_key(DEFERRED, &leases.queue, &self.job));
         if let Some(claim) = &self.claim {
             invocation.key(claim);
         }

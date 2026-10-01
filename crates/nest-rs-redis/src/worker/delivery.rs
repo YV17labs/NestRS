@@ -242,7 +242,9 @@ impl Deliveries {
             .await;
         let lease = match admission {
             Ok(Admission::Granted(lease)) => {
-                delivery = delivery.with_attempts_started(lease.started());
+                delivery = delivery
+                    .with_attempts_started(lease.started())
+                    .with_deferred_for(lease.deferred_for());
                 lease
             }
             Ok(Admission::Settled(settlement)) => {

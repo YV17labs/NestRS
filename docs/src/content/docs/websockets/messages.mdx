@@ -174,7 +174,10 @@ The error frame is shaped like any other envelope:
 ```
 
 The string comes from `e.to_string()` — i.e. the `Display` impl of your
-error type. A rejection that carries **structured** detail adds an `errors`
+error type — with one rewrite the framework makes for you: a decode failure
+in the error, whose serde sentence quotes the value it refused, is said without
+it (`invalid type: a string, expected u64 at line 1 column 24`). What a handler
+failed to decode need not even be this client's. A rejection that carries **structured** detail adds an `errors`
 member beside it — a `Valid<T>` payload names the offending fields, the same way
 the HTTP body does:
 

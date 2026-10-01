@@ -189,14 +189,18 @@ impl WsReply {
     /// on what a failed handler puts on the wire.
     ///
     /// The operator's line carries the whole cause chain; the client's frame
-    /// carries the error's own sentence, as it always has. Any error converting
-    /// into a boxed one qualifies — `anyhow::Error` keeps its context chain
-    /// through that conversion.
+    /// carries the error's own sentence, as it always has — with any decode
+    /// failure in its chain said without its value
+    /// ([`DecodeError::redact`](nest_rs_core::DecodeError::redact)), since the
+    /// value a handler failed to decode need not even be this client's. Any
+    /// error converting into a boxed one qualifies, boxed by
+    /// [`nest_rs_core::boxed_error`]: an `anyhow::Error` keeps every link, and a
+    /// [`WsError`] it carries is still found and sent whole.
     pub fn from_handler_error<E>(event: &str, error: E) -> WsReply
     where
-        E: Into<Box<dyn std::error::Error + Send + Sync>>,
+        E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
     {
-        let error: Box<dyn std::error::Error + Send + Sync> = error.into();
+        let error = nest_rs_core::boxed_error(error);
         tracing::warn!(
             target: crate::TARGET,
             event,
@@ -205,7 +209,7 @@ impl WsReply {
         );
         match error.downcast::<WsError>() {
             Ok(frame) => WsReply::Error(*frame),
-            Err(error) => WsReply::Error(WsError::new(error.to_string())),
+            Err(error) => WsReply::Error(WsError::new(handler_sentence(&*error))),
         }
     }
 }
@@ -278,21 +282,24 @@ impl<T> ReplyValueFallback for ReplyValue<T> {
 /// operator reads — **by type**, resolved where the expansion names it, in three
 /// tiers, each taken only when the one above does not apply:
 ///
-/// 1. An error converting into a boxed `Send + Sync` one takes the inherent
-///    method: its whole cause chain is logged, and a [`WsError`] is sent whole
+/// 1. An error converting into a boxed `Send + Sync` one — and `'static`, which
+///    an error borrowing nothing is — takes the inherent method: its whole cause
+///    chain is logged, and a [`WsError`] is sent whole
 ///    ([`WsReply::from_handler_error`]).
 /// 2. Any other error — one holding an `Rc`, a `Box<dyn Error>` — takes
 ///    [`ErrorReportChain`]: it cannot cross threads, but it has causes, and they
 ///    are logged. It used to fall to the third tier and lose them.
 /// 3. Any other `Display` type takes [`ErrorReportFallback`]: it has no causes to
-///    walk, so its sentence is its whole chain.
+///    walk, so its sentence is its whole chain, read by serde's wording alone.
+///
+/// In every tier the frame says a decode failure without its value.
 ///
 /// A type that is none of them does not compile.
 pub struct ErrorReport<E>(pub E);
 
 impl<E> ErrorReport<E>
 where
-    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
 {
     /// The error frame, with the whole cause chain on the operator's line.
     pub fn into_frame(self, event: &str) -> WsReply {
@@ -318,7 +325,7 @@ where
             error = %nest_rs_core::error_message(&*error),
             "subscribe_message handler returned Err",
         );
-        WsReply::Error(WsError::new(error.to_string()))
+        WsReply::Error(WsError::new(handler_sentence(&*error)))
     }
 }
 
@@ -329,16 +336,25 @@ pub trait ErrorReportFallback {
     fn into_frame(self, event: &str) -> WsReply;
 }
 
+/// A `Display`-only error has no chain to read a decode failure off, so its
+/// sentence is read by serde's wording alone — on the line and in the frame.
 impl<E: std::fmt::Display> ErrorReportFallback for &ErrorReport<E> {
     fn into_frame(self, event: &str) -> WsReply {
+        let sentence = nest_rs_core::DecodeError::redact(&self.0.to_string(), None).into_owned();
         tracing::warn!(
             target: crate::TARGET,
             event,
-            error = %self.0,
+            error = %sentence,
             "subscribe_message handler returned Err",
         );
-        WsReply::Error(WsError::new(self.0.to_string()))
+        WsReply::Error(WsError::new(sentence))
     }
+}
+
+/// The sentence a handler's error puts in its frame: its own, with each decode
+/// failure in its chain said as its report.
+fn handler_sentence(error: &(dyn std::error::Error + 'static)) -> String {
+    nest_rs_core::DecodeError::redact(&error.to_string(), Some(error)).into_owned()
 }
 
 #[cfg(test)]

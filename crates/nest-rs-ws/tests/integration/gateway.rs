@@ -185,6 +185,59 @@ impl TestGateway {
     async fn unsendable_rc_handler(&self) -> Result<String, LocalFailure> {
         Err(LocalFailure::new())
     }
+
+    // A body the handler decodes itself, failing in each tier's shape.
+    #[subscribe_message("decode_anyhow")]
+    #[public]
+    async fn decode_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
+        let amount: u64 = serde_json::from_str(SECRET_BODY)?;
+        Ok(amount.to_string())
+    }
+
+    #[subscribe_message("decode_serde")]
+    #[public]
+    async fn decode_serde_handler(&self) -> Result<String, serde_json::Error> {
+        serde_json::from_str::<u64>(SECRET_BODY).map(|amount| amount.to_string())
+    }
+
+    #[subscribe_message("decode_unsendable")]
+    #[public]
+    async fn decode_unsendable_handler(&self) -> Result<String, Box<dyn std::error::Error>> {
+        Ok(serde_json::from_str::<u64>(SECRET_BODY)?.to_string())
+    }
+
+    #[subscribe_message("decode_display_only")]
+    #[public]
+    async fn decode_display_only_handler(&self) -> Result<String, DecodeDisplayOnly> {
+        serde_json::from_str::<u64>(SECRET_BODY)
+            .map(|amount| amount.to_string())
+            .map_err(DecodeDisplayOnly)
+    }
+
+    /// A deliberate frame, carried through anyhow: it is found and sent whole,
+    /// details included.
+    #[subscribe_message("frame_in_anyhow")]
+    #[public]
+    async fn frame_in_anyhow_handler(&self) -> nest_rs_core::anyhow::Result<String> {
+        Err(nest_rs_ws::WsError::with_details(
+            "pick another name",
+            serde_json::json!({ "name": ["taken"] }),
+        )
+        .into())
+    }
+}
+
+/// What every `decode_*` handler decodes: a number, sent a secret.
+const SECRET_BODY: &str = r#""sk_live_51HsecretTOKEN""#;
+
+/// A `Display`-only error spelling a decode failure — the third tier, which has
+/// no chain to read it off.
+struct DecodeDisplayOnly(serde_json::Error);
+
+impl std::fmt::Display for DecodeDisplayOnly {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "could not read the amount: {}", self.0)
+    }
 }
 
 /// An error holding an `Rc` — neither `Send` nor `Sync` — whose sentence names
@@ -1246,4 +1299,59 @@ async fn a_hook_compiled_in_survives_a_compiled_out_one_declared_after_it() {
         CFG_HOOK_RAN.load(std::sync::atomic::Ordering::SeqCst),
         "the `#[on_connect]` whose `#[cfg]` holds is the one the gateway runs",
     );
+}
+
+/// A decode failure a handler returns reaches neither its frame nor the
+/// operator's line with the value, in every tier a handler's error takes —
+/// `anyhow::Result` with `?`, serde's error itself, an error that is not
+/// `Send`, and a `Display`-only one. The frame carried the error's sentence,
+/// which is serde's, which quotes it; and a value a handler failed to decode
+/// need not even be this client's.
+#[tokio::test]
+async fn a_decode_failure_a_handler_returns_is_framed_and_logged_without_its_value() {
+    const REPORT: &str = "invalid type: a string, expected u64 at line 1 column 24";
+    let logs = nest_rs_testing::LogCapture::install();
+    for (event, framed) in [
+        ("decode_anyhow", REPORT.to_owned()),
+        ("decode_serde", REPORT.to_owned()),
+        ("decode_unsendable", REPORT.to_owned()),
+        (
+            "decode_display_only",
+            format!("could not read the amount: {REPORT}"),
+        ),
+    ] {
+        let reply = TestGateway
+            .dispatch(&WsClient::for_test(), event, serde_json::Value::Null)
+            .await;
+        let WsReply::Error(frame) = reply else {
+            panic!("{event}: a failed handler answers with an error frame");
+        };
+        assert_eq!(frame.error, framed, "{event}");
+    }
+    let quoting: Vec<String> = logs
+        .events()
+        .into_iter()
+        .filter(|event| event.fields.values().any(|value| value.contains("sk_live")))
+        .map(|event| format!("{} {:?}", event.message, event.fields))
+        .collect();
+    assert!(quoting.is_empty(), "lines quoting the value: {quoting:#?}");
+}
+
+/// A [`WsError`](nest_rs_ws::WsError) a handler returns through anyhow is the
+/// handler's deliberate frame, and is sent whole: anyhow's own box hid it from
+/// the downcast, and the per-field detail was lost.
+#[tokio::test]
+async fn a_frame_returned_through_anyhow_is_sent_whole() {
+    let reply = TestGateway
+        .dispatch(
+            &WsClient::for_test(),
+            "frame_in_anyhow",
+            serde_json::Value::Null,
+        )
+        .await;
+    let WsReply::Error(frame) = reply else {
+        panic!("a failed handler answers with an error frame");
+    };
+    assert_eq!(frame.error, "pick another name");
+    assert_eq!(frame.errors, Some(serde_json::json!({ "name": ["taken"] })));
 }

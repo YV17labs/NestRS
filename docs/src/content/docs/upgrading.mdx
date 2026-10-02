@@ -34,7 +34,8 @@ rolls out (step 7).
    The check now fails on the calls steps 3 to 6 change. A refusal beyond them
    names the rule it applies: 7.0 judges every decorated method by one grammar,
    and the [changelog](https://github.com/YV17labs/NestRS/blob/main/CHANGELOG.md)
-   lists what it refuses.
+   lists what it refuses. One change no compiler finds: every binary's `main`
+   moves from `#[tokio::main]` to `#[nest_rs::main]`, in step 8.
 
 2. **Rename the fifteen OAuth variables.** A crate in a family puts the family
    first in its namespace, so the OAuth client and resource server read
@@ -90,7 +91,7 @@ rolls out (step 7).
    queued: a caller that retries the whole batch on any error leaves those out.
 
 4. **Check what each consumer declares.** A `#[process]` method compiles as it
-   did, and five things read differently now:
+   did, and six things read differently now:
 
    - `retries = N` runs a failed attempt again **after a backoff** — one second
      after the first failure, doubling, at most five minutes — where 6.x ran it
@@ -109,18 +110,53 @@ rolls out (step 7).
    - `concurrency = N` is accepted again, per method and per replica, and so are
      `throttle(limit, window)` and a `Checkpoint<S>` parameter; see
      [Concurrency and scaling](/queue/scaling/).
+   - **Delivery is at least once, so a handler stays idempotent.** On Redis a
+     second delivery is handed back while the first runs the job, and
+     acknowledged without running once the job settled — for one fixed span,
+     and nothing past it: a redelivery after that span runs the job again. See
+     [At least once, and the guard](/queue/delivery/#at-least-once-and-the-guard).
    - A queue name is checked: 1 to 128 of `[A-Za-z0-9_.-]`. A name holding `:`
      or whitespace no longer compiles, so that queue takes a new name — and its
      6.x jobs are drained in step 7 rather than moved.
 
    A scheduled job that should fire on one replica rather than all of them can
-   now say so with `replicas = "one"`, beside `RedisScheduleModule` — see
+   now say so with `replicas = "one"`, beside `RedisScheduleModule`: each
+   occurrence fires once across the replicas, and a run that outlasts its period
+   overlaps the next one, fired by another replica. A job is its crate, its type
+   and its method, so renaming one of them starts a new job — two, for the
+   rolling deploy that ships the rename — unless `key = "…"` pins the identity
+   its boot line names. See
    [Firing once across replicas](/schedule/#firing-once-across-replicas).
 
    A GraphQL operation returning a bare value — `i32`, `Vec<T>`, an
    `impl Stream` subscription — now runs its resolver's guards and the app-wide
    ones, where 6.x served it past a deny-all `#[use_guards]`. An operation that
    answered only because of that gap now needs the posture its guards ask for.
+   An operation returning a renamed `Result` — `use async_graphql::Result as
+   GqlResult`, or a type alias — is read as one, so its error is a field error
+   where 6.x served it as data.
+
+   **An event emitted inside a transaction waits for it.** `EventBus::emit` in a
+   mutating request, a GraphQL mutation, a WebSocket message, an MCP operation, a
+   queue attempt or a scheduled tick runs its listeners once the transaction
+   commits — outside it, on the pool, under the emitter's scope and ability —
+   and never when it rolls back; 6.x ran them inline, inside it. A listener that
+   relied on writing inside the emitter's transaction now writes in its own, and
+   code that opens a transaction itself emits after its own commit. A push, a
+   broadcast or a storage write in a service still happens where it is written:
+   to push after the commit, push from a listener. See
+   [What waits for the commit](/database/transactions/#what-waits-for-the-commit).
+
+   **An identity provider or store that does not answer is a `503`**, with the
+   provider's `Retry-After` when it gave one, on every edge — where 6.x answered
+   `401` for an OAuth provider that timed out or failed, and `500` for an
+   unreachable identity store. A dashboard or a client that read those codes as
+   a failed sign-in reads an outage now.
+
+   **A payload that does not decode is answered without the value it sent** — an
+   HTTP `400`'s `detail`, an MCP tool error, a GraphQL error, a WebSocket error
+   frame — and with where it failed and what kind of value was found: a client
+   matching poem's or serde's sentence meets the framework's.
 
 5. **Follow the renamed types and signatures.** Each row is a compile error, so
    the compiler finds every site:
@@ -144,6 +180,14 @@ rolls out (step 7).
    | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
    | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
    | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
+   | `JwtConfig`, from the authn crate | `nest_rs::authn::AuthnConfig`, with the same fields and variables |
+   | `AuthError::Unavailable(detail)` | `AuthError::Unavailable { detail, retry_after }`, rendered `503` |
+   | `env.seconds("KEY", base)` in a `from_env` | a `DurationBounds` declared beside the config, read with `BOUNDS.read(env, base)?` or `read_optional`; see [Configuration](/configuration/#configservice-api) |
+   | rmcp's `Parameters`, named from rmcp in an operation's signature | `nest_rs::mcp::Parameters`, which is the framework's own type now, with rmcp's shape |
+   | `SseSettings::respond(stream)`, answering poem's `SSE` | the same, answering a `Response` marked to end at the shutdown signal |
+   | an `impl McpHost` written by hand | the same with `negotiate_initialize`, which rmcp 3.4 added |
+   | `report_inert_host!(target: …, what: …, origin: …)`, in an edge of your own | the same with `host:` — the host's `TypeId` — and `container:`, so the line names its cause |
+   | a `ContestedDeclarationError { … }` pattern naming every field | the same with `first: _` and `second: _` — the two imports that made it — or ending in `..` |
    | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()`, `replicas: Replicas::Each` and `key: None`, which fire it on every replica as 6.x did |
    | an `HttpConfig { … }` or `RedisWorkerConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout`, `RedisWorkerConfig` gains `orphan_after`, `lease` and `poll_interval` |
 
@@ -153,12 +197,14 @@ rolls out (step 7).
    local becomes an owned `String`. `JobError::retry` / `abort`,
    `WsReply::from_handler_error` and `OccurrenceLockError::new` take the same.
    Do the same for your own `error` fields, through the framework's one walk of
-   a chain:
+   a chain — and name the target by the constant the feature declares, as a
+   7.0 scaffold does (`pub const TARGET: &str = "features::chat";` in
+   `chat/mod.rs`):
 
    ```rust title="crates/features/src/chat/ws/gateway.rs" ins={1,3} del={2}
    use nest_rs::core::error_message;
    tracing::warn!(target: "features::chat", error = %e, "broadcast failed");
-   tracing::warn!(target: "features::chat", error = %error_message(&e), "broadcast failed");
+   tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
    ```
 
    A `from_env` of your own that decodes a structured value with
@@ -166,13 +212,16 @@ rolls out (step 7).
    included. Decode it with `env.json::<T>("KEY")?`, which refuses it naming the
    variable, where it failed and the type it expected, never the value.
 
-6. **If you write decorators on `nest_rs_codegen`**, two signatures changed, one
-   helper left and one type was renamed. `transactional_value` and
+6. **If you write decorators on `nest_rs_codegen`**, two signatures changed, two
+   helpers left and one type was renamed. `transactional_value` and
    `job_argument_needs_a_value` take the `JobDecorator` they word for, so a
    refusal opens with the site as every value refusal now does, and `job_key`
-   reads a key against the job family's one table; `must_be_async` is gone with
-   the rule it worded — a method may be synchronous, and `await_if_async` emits
-   the call either way; `CrudConfig` is `CrudDeclaration`.
+   reads a key against the job family's one table, taking the declaration's
+   `WrittenKeys`; `must_be_async` is gone with the rule it worded — a method may
+   be synchronous, and `await_if_async` emits the call either way;
+   `reject_duplicate_argument` is gone too, since a grammar now takes each key
+   through `WrittenKeys::take_key`, which refuses an unknown key and a repeated
+   one in the same call; `CrudConfig` is `CrudDeclaration`.
 
    ```rust title="nest_rs_codegen::transactional_value" del={1} ins={2}
    let transactional = nest_rs_codegen::transactional_value(&meta.value)?;
@@ -218,7 +267,9 @@ rolls out (step 7).
      upgraded ends with its handler or the process; half a second more lets what
      it stopped unwind. The worker hands back what still runs before
      `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes — **20 by default, down
-     from 30**, which did not fit the grace period with what follows it. A
+     from 30**, which did not fit the grace period with what follows it — and a
+     running attempt gets all of it but a reserve of one connection budget, so
+     10 seconds by default to finish where 6.x let it run the whole 30. A
      scheduled tick still running gets 5 seconds and is then stopped, where 6.x
      waited for it to end. The shutdown hooks — `OnModuleDestroy`,
      `BeforeApplicationShutdown`, `OnApplicationShutdown` — then share one
@@ -285,9 +336,7 @@ rolls out (step 7).
      A value 6.x accepted there — a worker drain window of `0` or above an hour,
      a zero connect timeout or window, a token lifetime past thirty days, a
      connection ceiling past a day — has to move; see the
-     [env-var reference](/configuration/env-reference/). `ConfigService::seconds`
-     is gone: a config of your own reads a duration through `DurationBounds` —
-     see [Configuration](/configuration/#configservice-api).
+     [env-var reference](/configuration/env-reference/).
    - **Redis 6.2 or later, and no Cluster** — the limits of apalis 0.7 the
      [delivery page](/queue/delivery/#limits) states.
 
@@ -298,10 +347,14 @@ rolls out (step 7).
    away; a namespace nowhere near any the app reads is taken for another
    binary's and stays silent, so check the names the app should read against
    the [env-var reference](/configuration/env-reference/). A worker that starts
-   has found no 6.x jobs waiting or in flight under the queues it serves — or
-   said, at `warn`, that its ACL kept it from looking; the jobs 6.x held back
-   for later are yours to count, as
-   [Upgrading queues from 6.x](/queue/upgrading/) shows.
+   has found no 6.x jobs waiting, held back or in flight under the queues it
+   serves — or said, at `warn`, that its ACL kept it from looking, as
+   [Upgrading queues from 6.x](/queue/upgrading/) shows. A host the app links
+   but never reaches — a scheduled method, a `#[process]` method, a listener, a
+   lifecycle hook, a health indicator — is a `warn` naming its `cause` and the
+   remedy when it is this app's own code, and a `debug` line when it belongs to
+   another binary of the workspace: read the edge's target at `debug` when a
+   handler in a shared crate does not run.
 
 </Steps>
 
@@ -332,7 +385,16 @@ rolls out (step 7).
   [Concurrency and scaling](/queue/scaling/#what-fails-if-you-get-it-wrong).
 - **Two `#[config]` structs declaring one namespace** fail the boot at the read
   of either, naming both (`ConfigError::SharedNamespace`), where 6.x let both read
-  it. Give each its own namespace.
+  it. Give each its own namespace. Two imports binding one port, or pinning one
+  config twice, fail it naming both imports and where each sits:
+
+  ```text frame="terminal"
+  contested declaration: `X` is declared twice — by `A::for_root(..)` at `imports[0]` of `AppModule`, and by …
+  ```
+- **A job firing once, renamed without `key`**, is a new job: through the
+  rolling deploy that ships the rename, the old build and the new one claim each
+  occurrence under two identities, and both fire it. Pin the old identity with
+  `key = "…"`, copied from the `key` its boot line names.
 - **A Redis URL ending in `#insecure`** fails the boot — it
   ``asks to skip certificate verification (`#insecure`), which is refused`` —
   where 6.x never spoke TLS to Redis at all. Trust the authority that signed

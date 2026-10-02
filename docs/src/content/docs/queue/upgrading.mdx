@@ -129,7 +129,9 @@ with a receipt, and a consumer's retries follow its budget:
 | `concurrency` refused on `#[process]` | `concurrency = N`, per method and per replica — see [Concurrency and scaling](/queue/scaling/) |
 | a failed attempt re-run at once, in the worker | re-run after the port's backoff, filed on the queue's schedule — see [Retries and failure](/queue/retries-and-failure/) |
 | an attempt whose process died re-run at the same attempt, for free | counted: past `retries + 1` attempts the job is dead-lettered without running, so `retries = 0` is tried once, crash or not |
-| a job a newer release pushed failed by an older worker, spending its retries | handed back as stored, due a minute later, with no attempt spent |
+| a job a newer release pushed failed by an older worker, spending its retries | handed back as stored, due a minute later, with no attempt spent — and dead-lettered once it has waited a day unread, naming both versions |
+| a handler that relied on a job running once | an idempotent one: delivery is at least once, and the [delivery guard](/queue/delivery/#at-least-once-and-the-guard) keeps the common second delivery from running for one fixed span, and nothing past it |
+| a worker draining for 30 seconds | 20 by default, the hand-back reserve included — see [Shutdown](/queue/delivery/#shutdown) |
 | `push_many` failing with the error alone | `QueueError::PartiallyQueued` once the backend accepted part of it, carrying the receipts of the jobs already queued |
 | a driver sealing with `envelope::seal` and opening with `envelope::open` | the port seals before `enqueue` and `consume::attempt` opens — see [Writing a driver](/queue/writing-a-driver/); `Processor`, `check_duplicate_queue_claims` and the `tracing` re-export are gone with them |
 

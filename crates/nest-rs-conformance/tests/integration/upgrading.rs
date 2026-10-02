@@ -32,12 +32,15 @@ use nest_rs_conformance::sources::{each_source, read, repo_root};
 const PAGE: &str = "docs/src/content/docs/upgrading.mdx";
 
 /// The public fields each struct without a `Default` had in 6.1, the release a
-/// 6.x reader upgrades from — `crates/nest-rs-schedule/src/inventory.rs` at
-/// `v6.1.0`.
-const SIX_ONE_FIELDS: [(&str, &[&str]); 1] = [(
-    "CronJobMeta",
-    &["provider", "method", "trigger", "run", "transaction"],
-)];
+/// 6.x reader upgrades from, as `v6.1.0` declares them —
+/// `crates/nest-rs-schedule/src/inventory.rs` and `crates/nest-rs-core/src/error.rs`.
+const SIX_ONE_FIELDS: [(&str, &[&str]); 2] = [
+    (
+        "CronJobMeta",
+        &["provider", "method", "trigger", "run", "transaction"],
+    ),
+    ("ContestedDeclarationError", &["type_name", "remedy"]),
+];
 
 /// What this join reads by its spelling, for the `blinds` join to keep visible.
 pub(crate) fn followed() -> Vec<Followed> {

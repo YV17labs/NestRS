@@ -73,7 +73,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
 use syn::{
     Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Path, Signature, Token, Type,
@@ -178,6 +178,9 @@ struct Operation {
     /// The role attribute as it will sit on the wrapper — description filled in
     /// from the doc comment, `name` pinned to the authored method's own.
     role_attr: TokenStream2,
+    /// A `const` refusing a blank description the expansion could only read as
+    /// an expression — `None` when it was a literal, already checked here.
+    description_check: Option<TokenStream2>,
     /// The wrapper's own ident — never on the wire.
     wrapper: syn::Ident,
     /// The authored signature, with every argument pattern normalized to the
@@ -337,6 +340,14 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     let capability_bounds =
         guard_capability_bounds(operation_guards(), quote!(::nest_rs_guards::McpGuard));
     let layers = layer_deps(operation_guards());
+    // Each under its operation's own conditions: a compiled-out operation sends
+    // no description, so it owes none.
+    let description_checks = operations.all().filter_map(|op| {
+        let cfgs = &op.cfgs;
+        op.description_check
+            .as_ref()
+            .map(|check| quote!(#(#cfgs)* #check))
+    });
     let layer_keys = &layers.keys;
     let layer_labels = &layers.labels;
 
@@ -345,6 +356,8 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
         #item
 
         #capability_bounds
+
+        #(#description_checks)*
 
         #markers
 
@@ -774,7 +787,7 @@ fn take_operation(
     base: &syn::Ident,
 ) -> syn::Result<Operation> {
     let name = method.sig.ident.clone();
-    let role_attr = wrapper_role_attr(method, index, role)?;
+    let (role_attr, description_check) = wrapper_role_attr(method, index, role)?;
     // Removed after `wrapper_role_attr` has read the doc comment off it: the
     // attribute belongs to the wrapper now, and leaving a copy behind would make
     // rmcp route the authored method as a second tool of the same name.
@@ -814,6 +827,7 @@ fn take_operation(
     Ok(Operation {
         role,
         role_attr,
+        description_check,
         wrapper: format_ident!("__nestrs_mcp_{}_{}", snake_case(&base.to_string()), name),
         sig,
         guards,
@@ -824,32 +838,74 @@ fn take_operation(
     })
 }
 
+/// The sentence an operation with no description is refused with — at expansion
+/// when the prose is a literal, and by the compiler when only a constant
+/// evaluation can read it.
+const NEEDS_A_DESCRIPTION: &str = "an MCP operation needs a description — the model reads it to \
+                                   choose between operations. Write a doc comment above it, or \
+                                   state `description = \"…\"` on the attribute";
+
 /// The `#[tool]` / `#[prompt]` attribute as the wrapper will carry it: the
 /// author's own arguments, plus the `name` the protocol must keep addressing
 /// and — only when the attribute states none — a `description` lifted from the
 /// doc comment. An operation with neither is a compile error: the description
 /// is what a model reads to choose between operations, so it is not optional.
-fn wrapper_role_attr(method: &ImplItemFn, index: usize, role: Role) -> syn::Result<TokenStream2> {
+///
+/// **A blank description is no description**, wherever it comes from, and the
+/// family is every way the framework reads one:
+///
+/// - a doc comment of literals, or a stated `description = "…"`, is read here
+///   and refused here when it trims to nothing;
+/// - a doc line that is a macro (`#[doc = include_str!(…)]`, `concat!(…)`) and
+///   a stated `description = <macro or constant>` are values only the compiler
+///   evaluates, so the second element is a `const` refusing them with the same
+///   sentence when they evaluate blank — an empty file was shipped to the model
+///   as the whole description while `#[doc = "   "]` was refused;
+/// - any other stated expression is computed at run time, where no
+///   compile-time check can read it, and is rmcp's to send as written.
+fn wrapper_role_attr(
+    method: &ImplItemFn,
+    index: usize,
+    role: Role,
+) -> syn::Result<(TokenStream2, Option<TokenStream2>)> {
     let attr = &method.attrs[index];
     let stated = stated_keys(attr)?;
     let role_path = attr.path().clone();
 
     let mut extra: Vec<TokenStream2> = Vec::new();
-    if !stated.iter().any(|key| key == "description") {
-        // The attribute is the declared form — the prose is a value the
-        // decorator compiles in, which is what lets a codebase that carries no
-        // comments still describe its tools. The doc comment is the fallback
-        // for one that does, so the sentence is never written twice.
-        let Some(doc) = doc_comment(&method.attrs) else {
+    let description = match stated_description(attr)? {
+        Some(stated) => Some(stated),
+        None => {
+            // The attribute is the declared form — the prose is a value the
+            // decorator compiles in, which is what lets a codebase that carries
+            // no comments still describe its tools. The doc comment is the
+            // fallback for one that does, so the sentence is never written
+            // twice.
+            let doc = doc_comment(&method.attrs);
+            if let Some(doc) = &doc {
+                extra.push(quote!(description = #doc));
+            }
+            doc.map(Description::read)
+        }
+    };
+    let description_check = match description {
+        None => {
             return Err(syn::Error::new_spanned(
                 &method.sig.ident,
-                "an MCP operation needs a description — the model reads it to choose \
-                 between operations. Write a doc comment above it, or state \
-                 `description = \"…\"` on the attribute",
+                NEEDS_A_DESCRIPTION,
             ));
-        };
-        extra.push(quote!(description = #doc));
-    }
+        }
+        Some(Description::Read | Description::Runtime) => None,
+        Some(Description::Evaluated(expr)) => {
+            let span = method.sig.ident.span();
+            Some(quote_spanned! {span=>
+                const _: () = ::core::assert!(
+                    !::nest_rs_mcp::description_is_blank(#expr),
+                    #NEEDS_A_DESCRIPTION,
+                );
+            })
+        }
+    };
     if !stated.iter().any(|key| key == "name") {
         // The wrapper's ident is generated, so without this the wire name would
         // be an implementation detail. Pinning it is what keeps the delegation
@@ -875,7 +931,56 @@ fn wrapper_role_attr(method: &ImplItemFn, index: usize, role: Role) -> syn::Resu
     // Left as tokens: its only consumer is a `quote!` interpolation, so parsing
     // it back into an `Attribute` would be a round trip with a fallible step in
     // the middle and nothing on the other side that needs the typed form.
-    Ok(quote!(#[#role_path(#rest #(#extra),*)]))
+    Ok((quote!(#[#role_path(#rest #(#extra),*)]), description_check))
+}
+
+/// A description, as far as the expansion can read it.
+enum Description {
+    /// A literal, read here, holding prose.
+    Read,
+    /// A macro of literals or a constant: a value only the compiler evaluates.
+    Evaluated(TokenStream2),
+    /// An expression computed at run time.
+    Runtime,
+}
+
+impl Description {
+    /// A doc comment as [`doc_comment`] emits it: one literal — never blank,
+    /// [`doc_comment`] answers `None` for that — or a `concat!`.
+    fn read(doc: TokenStream2) -> Self {
+        match syn::parse2::<LitStr>(doc.clone()) {
+            Ok(_) => Self::Read,
+            Err(_) => Self::Evaluated(doc),
+        }
+    }
+}
+
+/// The `description = …` the author stated inside `#[tool(...)]`, read as far
+/// as the compiler can read it. A blank literal is refused at the literal.
+fn stated_description(attr: &Attribute) -> syn::Result<Option<Description>> {
+    let Meta::List(_) = &attr.meta else {
+        return Ok(None);
+    };
+    let args = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
+    let Some(value) = args.iter().find_map(|meta| match meta {
+        Meta::NameValue(pair) if pair.path.is_ident("description") => Some(&pair.value),
+        _ => None,
+    }) else {
+        return Ok(None);
+    };
+    Ok(Some(match nest_rs_codegen::ungrouped_expr(value) {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(text),
+            ..
+        }) => {
+            if text.value().trim().is_empty() {
+                return Err(syn::Error::new_spanned(text, NEEDS_A_DESCRIPTION));
+            }
+            Description::Read
+        }
+        expr @ (syn::Expr::Macro(_) | syn::Expr::Path(_)) => Description::Evaluated(quote!(#expr)),
+        _ => Description::Runtime,
+    }))
 }
 
 /// The top-level keys the author already stated inside `#[tool(...)]`.

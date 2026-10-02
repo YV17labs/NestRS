@@ -119,6 +119,9 @@ Two decorators, one per item shape:
   reads to pick this tool, so it is a value the decorator compiles in rather
   than commentary. Write a doc comment instead and it is used as a fallback, so
   the prose is never written twice; write **neither and it does not compile**.
+  A blank one is none: `description = "  "`, and a doc line or a stated value
+  the compiler evaluates — `include_str!` of an empty file, a `concat!` of
+  spaces, a constant — fails the build with the same sentence.
 
 The struct can take `#[inject]` fields like any other provider — `HelloTool` has
 none, real servers usually do.

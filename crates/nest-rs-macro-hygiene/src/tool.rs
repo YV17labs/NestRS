@@ -54,6 +54,9 @@ impl Guard for HygieneGuard {
 
 impl McpGuard for HygieneGuard {}
 
+/// A description only the compiler evaluates.
+const STAMP: &str = "Answer with this sentence.";
+
 /// A host serving both halves of the decorator surface: tools and prompts, with
 /// a host-scope guard the way a controller or a resolver declares one.
 #[mcp(path = "/hygiene")]
@@ -63,10 +66,12 @@ pub struct HygieneTool;
 
 /// One authored block feeds both of rmcp's routers.
 ///
-/// The two operations also witness the two ways a description is stated: `echo`
+/// The operations also witness the three ways a description is stated: `echo`
 /// declares it as an argument — the form `demo/` and every scaffold use, and the
-/// only one available to a codebase that carries no comments — and `greet` lets
-/// the doc comment fall through. An operation stating neither does not compile.
+/// only one available to a codebase that carries no comments — `greet` lets the
+/// doc comment fall through, and `stamp` states a constant, which the expansion
+/// checks for blankness in a `const` of its own: a seam rooted like any other.
+/// An operation stating neither does not compile, nor one stating a blank.
 #[tools]
 impl HygieneTool {
     #[tool(description = "Echo the argument back.")]
@@ -87,6 +92,12 @@ impl HygieneTool {
             Role::User,
             "hello",
         )]))
+    }
+
+    #[tool(description = STAMP)]
+    #[public]
+    fn stamp(&self) -> Result<String, McpError> {
+        Ok(STAMP.into())
     }
 
     /// A synchronous tool is called without an `.await`; its wrapper still

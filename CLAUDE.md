@@ -301,7 +301,10 @@ The *framework* is one notch wider, and deliberately: `#[tool]` /
 `#[prompt]` fall back to the doc comment when the attribute states no
 `description`, so a consumer who does write comments never authors the
 sentence twice. The attribute always wins, and an operation with
-**neither is a compile error** — a description is not optional. Only
+**neither is a compile error** — a description is not optional, and a blank
+one is none: a literal that trims to nothing is refused at expansion, and a
+doc line or a stated value only the compiler evaluates (`include_str!`,
+`concat!`, a constant) by a `const` assertion the expansion emits. Only
 these two decorators have that fallback; `#[api]` takes the argument or
 nothing.
 

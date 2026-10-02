@@ -120,6 +120,8 @@ pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;
 pub use identity::{McpIdentity, ResolvedIdentity};
 pub use module::{McpModule, McpOptions, McpSetup};
+#[doc(hidden)]
+pub use operation::description_is_blank;
 pub use operation::{McpOperationContext, McpOperationKind, current_container};
 pub use propagate::PropagatingHandler;
 pub use registry::{DEFAULT_PATH, McpHostMeta, endpoint_identity, hosts_on};

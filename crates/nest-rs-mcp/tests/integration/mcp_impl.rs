@@ -30,6 +30,10 @@ const PATH: &str = "/mcp/impl-witness";
 #[derive(Clone)]
 struct Directory(&'static [&'static str]);
 
+/// A description stated through a constant: a value only the compiler
+/// evaluates, so the expansion checks it in a `const` rather than at expansion.
+const RETENTION: &str = "Report how long the directory keeps an entry.";
+
 /// A tool's typed arguments, validated by the pipe the operation declares.
 #[input]
 struct GreetArgs {
@@ -105,6 +109,12 @@ impl WitnessTool {
     #[public]
     async fn describe_storage(&self) -> Result<String, McpError> {
         Ok("in memory".to_owned())
+    }
+
+    #[tool(description = RETENTION)]
+    #[public]
+    async fn describe_retention(&self) -> Result<String, McpError> {
+        Ok("forever".to_owned())
     }
 
     /// Draft a greeting for the directory.
@@ -296,6 +306,10 @@ async fn a_description_stated_on_the_attribute_needs_no_doc_comment() {
     assert!(
         body.contains("Report how the directory is stored."),
         "the attribute's own `description` reaches the model: {body}",
+    );
+    assert!(
+        body.contains(RETENTION),
+        "…and so does one stated through a constant: {body}",
     );
 }
 

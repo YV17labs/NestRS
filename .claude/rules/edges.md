@@ -188,7 +188,10 @@ infrastructure a module import brings (`DbContext`, tracing), off the pool.
   tags it `MappedError`, and `DbContext` rolls back whatever status it maps to.
 - **The global site takes no capability bound**, by decision: a global guard
   legitimately serves whichever edges it implements, and the pool reaches each
-  operation where the operation exists, at all four edges. A guard declaring a
+  operation where the operation exists, at all four edges. The pool dispatches
+  on `dyn Guard`, so a pooled guard runs every `check_*` it overrides whatever
+  marker it declares — a missing marker never opens an edge (held by a test per
+  edge); the marker matters only where a decorator binds the guard. A guard declaring a
   marker without overriding its `check_*` is a visible line, not a gap to close
   (`.claude/decisions/check-http-stays-on-guard.md`).
 - **Only route mounts, the global bucket and a WS upgrade are phase-validated**

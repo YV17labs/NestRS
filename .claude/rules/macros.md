@@ -41,19 +41,20 @@ Two exceptions, neither a licence:
 - **Emitted derives** (`serde`, `validator`, `schemars`) target the call site's
   prelude by construction. The fix is the derive's `crate = ` override through a
   surface re-export; until a derive has one, its path is legal only where the
-  developer's own source writes that derive. The entity-site trio `sea_orm`,
-  `uuid`, `chrono` is the same case: an entity file names them itself.
+  developer's own source writes that derive. sea-orm's own derives emit
+  relative `sea_orm::` paths, which an entity module satisfies with
+  `use nest_rs::seaorm::sea_orm;`.
 - **poem's `#[handler]`**, which `#[routes]` and `#[crud]` wrap, targets the call
   site's `poem`. That is a known defect, stated on the `/http/` page, not a
   design.
 
 Held by the compile witness `nest-rs-macro-hygiene` (one dependency, one
-feature per capability — `CLAUDE.md`, *Shipping a capability*). It cannot hold
-`#[crud]` and `#[expose]`, which need a real entity; their witness is the CLI's
-scaffold e2e, which generates a resource and runs `cargo check`. **A generated
-tree witnesses only what it does not also supply by accident**: the test that
-proves `#[crud]` needs no undeclared crate strips everything else that would
-pull one in, so what compiles rests on the decorator alone.
+feature per capability — `CLAUDE.md`, *Shipping a capability*), which holds a
+real entity, so `#[expose]`, `#[crud]` and `#[authorize(Action, Entity)]` are
+witnessed there like every other decorator. The CLI's scaffold e2e witnesses
+the generated tree, and **a generated tree witnesses only what it does not also
+supply by accident**: the test strips everything else that would pull a crate
+in, so what compiles rests on the decorator alone.
 
 ## Pairs — one decorator, one item shape
 

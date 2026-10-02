@@ -1689,8 +1689,28 @@ rung that can hold it (`CLAUDE.md`, *How a rule is held*; the history is
 `nest-rs-conformance` keeps only structural checks over paths, manifests and
 declared constants — the naming law, the test-target layout, the snapshot
 fixtures, the target-constant prefixes and the `nestrs:` keys written outside
-Rust — with no baseline file: 17,875 lines and 106 tests become 3,583 and 23. The
-few source-reading tests left elsewhere are replaced in the same spirit.
+Rust — with no baseline file: 17,875 lines and 106 tests become 3,583 and 23.
+The four source-reading tests left elsewhere are replaced too:
+
+- **`nest-rs-macro-hygiene` holds a real entity**, so `#[expose]` (both arms),
+  `#[crud]` with every operation and `#[authorize(Action, Entity)]` at HTTP,
+  GraphQL, WS and MCP compile behind the single `nest-rs` dependency — sea-orm's
+  derives emit relative `sea_orm::` paths, which `nest_rs::seaorm::sea_orm`
+  satisfies. Its scan of every `*-macros` source is gone: the `::uuid` that
+  `#[crud]` once emitted now fails this crate's build.
+- **A pooled guard runs every check it overrides, whatever marker it declares.**
+  The pool dispatches on `dyn Guard`, so a missing marker never opens an edge;
+  a test per edge proves it, and the scan for guards overriding a `check_*`
+  without their marker is gone. A marker still matters where a decorator binds
+  the guard, and is refused there at compile time.
+- **`#[mcp]`'s grammar lives in `nest_rs_codegen`** (`MCP_GRAMMAR`,
+  `mcp_answers`), and `nest-rs-mcp` destructures `McpIdentity` without `..`
+  against it, so a field added without an answer in `#[mcp]` fails the build or
+  its test rather than a test reading `identity.rs`.
+- **`CronExpression`'s presets are declared through one macro** that also lists
+  them for the pinned-instants test; the public constants are unchanged. The
+  `#[input]` rustdoc keeps its contract in prose instead of a transcribed
+  expansion a test kept in step.
 
 - **The docs lint runs the canon generator.** `docs/canon.json` and
   `docs/demo-sources.json` are no longer committed: `lint-docs.mjs` runs

@@ -25,13 +25,11 @@
 #![expect(deprecated)]
 
 use std::collections::BTreeSet;
-use std::net::TcpListener as StdTcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{HttpConfig, HttpTransport};
+use nest_rs_core::module;
 
 use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams,
@@ -52,10 +50,7 @@ use nest_rs_mcp::{
 use nest_rs_testing::mcp::{call_method, notify, open_session, open_session_with};
 use nest_rs_testing::{LogCapture, TestApp};
 use poem::test::TestClient;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::Notify;
-use tokio_util::sync::CancellationToken;
 
 /// The set of method names the probe host was asked for.
 type Seen = Arc<Mutex<BTreeSet<&'static str>>>;
@@ -585,42 +580,6 @@ async fn operation_line(logs: &LogCapture, operation: &str) -> nest_rs_testing::
     panic!("no mcp.operation line was filed for {operation}");
 }
 
-/// POST one JSON-RPC message to the served endpoint over raw HTTP/1.1 and
-/// read the response head, leaving the connection — and any stream it
-/// carries — open.
-async fn post(port: u16, session: Option<&str>, body: &serde_json::Value) -> (TcpStream, String) {
-    let mut stream = None;
-    for _ in 0..100 {
-        if let Ok(connected) = TcpStream::connect(("127.0.0.1", port)).await {
-            stream = Some(connected);
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    let mut stream = stream.unwrap_or_else(|| panic!("the transport never came up on {port}"));
-    let body = body.to_string();
-    let session = session
-        .map(|id| format!("mcp-session-id: {id}\r\n"))
-        .unwrap_or_default();
-    let request = format!(
-        "POST {STOPPING} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
-         accept: application/json, text/event-stream\r\n{session}content-length: {}\r\n\r\n{body}",
-        body.len(),
-    );
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .expect("the request is sent");
-    let mut head = Vec::new();
-    let mut byte = [0_u8; 1];
-    while !head.ends_with(b"\r\n\r\n") {
-        let read = stream.read(&mut byte).await.expect("the head is readable");
-        assert!(read > 0, "the connection ended inside the head");
-        head.push(byte[0]);
-    }
-    (stream, String::from_utf8_lossy(&head).into_owned())
-}
-
 /// rmcp runs an operation on a task of its own, so the shutdown window cutting
 /// the connection that asked for it used to leave it running on — through the
 /// shutdown hooks, to an `ok` for an answer nobody received. It is stopped with
@@ -628,50 +587,13 @@ async fn post(port: u16, session: Option<&str>, body: &serde_json::Value) -> (Tc
 #[tokio::test]
 async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_cancelled() {
     let logs = LogCapture::install();
-    let app = App::builder()
-        .module::<StoppingModule>()
-        .build()
-        .await
-        .expect("the module boots");
-    let port = StdTcpListener::bind(("127.0.0.1", 0))
-        .and_then(|listener| listener.local_addr())
-        .expect("an ephemeral port")
-        .port();
     let window = Duration::from_secs(1);
-    let mut transport = HttpTransport::from_config(&HttpConfig {
-        host: "127.0.0.1".into(),
+    let serving = crate::serve_on_loopback::<StoppingModule>(window).await;
+    let port = serving.port;
+    let session = crate::open_raw_session(port, STOPPING).await;
+    let (_open, head) = crate::post(
         port,
-        shutdown_timeout: window,
-        ..HttpConfig::default()
-    })
-    .expect("the config builds a transport");
-    transport
-        .configure(app.container())
-        .await
-        .expect("the transport configures");
-    let cancel = CancellationToken::new();
-    let serving = tokio::spawn({
-        let cancel = cancel.clone();
-        async move { Box::new(transport).serve(cancel).await }
-    });
-
-    let (_, head) = post(port, None, &nest_rs_testing::mcp::initialize_request()).await;
-    let session = head
-        .lines()
-        .find_map(|line| {
-            line.to_ascii_lowercase()
-                .strip_prefix("mcp-session-id: ")
-                .map(|_| line["mcp-session-id: ".len()..].trim().to_owned())
-        })
-        .unwrap_or_else(|| panic!("initialize opens a session: {head}"));
-    post(
-        port,
-        Some(&session),
-        &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
-    )
-    .await;
-    let (_open, head) = post(
-        port,
+        STOPPING,
         Some(&session),
         &json!({
             "jsonrpc": "2.0", "id": 7, "method": "tools/call",
@@ -687,13 +609,7 @@ async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_canc
         .await
         .expect("the tool starts");
 
-    let asked = std::time::Instant::now();
-    cancel.cancel();
-    serving
-        .await
-        .expect("serve does not panic")
-        .expect("serve stops cleanly");
-    let took = asked.elapsed();
+    let took = serving.stop().await;
 
     assert!(
         SLOW_DROPPED.load(Ordering::SeqCst) && !SLOW_FINISHED.load(Ordering::SeqCst),
@@ -762,5 +678,194 @@ async fn an_operation_its_client_cancels_is_dropped_and_files_cancelled() {
     assert!(
         HELD_DROPPED.load(Ordering::SeqCst) && !HELD_FINISHED.load(Ordering::SeqCst),
         "the operation was dropped where it waited",
+    );
+}
+
+const EXPLODING: &str = "/mcp/exploding";
+
+#[mcp(path = "/mcp/exploding")]
+#[derive(Clone, Default)]
+struct ExplodingTools;
+
+#[tools]
+impl ExplodingTools {
+    #[tool(description = "Unwinds instead of answering.")]
+    #[public]
+    async fn boom(&self) -> Result<String, McpError> {
+        tokio::task::yield_now().await;
+        panic!("the tool exploded with sk_live_secret in hand")
+    }
+}
+
+#[module(providers = [ExplodingTools, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct ExplodingModule;
+
+/// rmcp runs a tool on a task of its own, so a tool that panicked took that task
+/// down with nothing answered: the client waited for its own timeout and the
+/// operation filed no line. The panic is contained at the dispatch — the unit
+/// files `panic`, the client is answered with an internal error that says
+/// nothing of what unwound, and the panic's text goes to the operator.
+#[tokio::test]
+async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
+    let logs = LogCapture::install();
+    let app = TestApp::for_module::<ExplodingModule>()
+        .await
+        .expect("the module boots");
+    let session = open_session(app.http(), EXPLODING, None).await;
+
+    let body = tokio::time::timeout(
+        Duration::from_secs(5),
+        call_method(
+            app.http(),
+            EXPLODING,
+            &session,
+            None,
+            "tools/call",
+            json!({ "name": "boom", "arguments": {} }),
+        ),
+    )
+    .await
+    .expect("the client is answered rather than left to its own timeout");
+
+    let answer = nest_rs_testing::mcp::result(&body);
+    assert_eq!(
+        answer["error"]["message"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "an internal error, worded for nobody in particular: {answer}",
+    );
+    assert!(
+        !body.contains("sk_live"),
+        "nothing of the panic reaches the client: {body}"
+    );
+    let line = operation_line(&logs, "boom").await;
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    // The operation's span fails with the line's word.
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_mcp::unit::OPERATION
+                && span.field("mcp.operation.name").as_deref() == Some("boom")
+        })
+        .expect("the operation's span");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    let contained = logs.expect_one(
+        nest_rs_mcp::TARGET,
+        "mcp operation panicked; its client is answered with an internal error",
+    );
+    assert_eq!(contained.level, "error");
+    assert_eq!(contained.field("operation").as_deref(), Some("boom"));
+    assert!(
+        contained
+            .field("panic")
+            .is_some_and(|panic| panic.contains("the tool exploded")),
+        "the operator reads what unwound: {contained:#?}",
+    );
+}
+
+const SUBSCRIBED: &str = "/mcp/subscribed";
+
+/// A host whose subscription only its client ends: `listen` waits for the
+/// cancellation and nothing else, as rmcp's own default does.
+#[mcp(path = "/mcp/subscribed")]
+#[derive(Clone)]
+struct SubscribedHost;
+
+#[nest_rs_mcp::tool_router(allow_empty)]
+impl SubscribedHost {}
+
+#[nest_rs_mcp::tool_handler]
+impl ServerHandler for SubscribedHost {
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(requested.clone())
+    }
+
+    async fn listen(
+        &self,
+        context: nest_rs_mcp::service::SubscriptionContext,
+    ) -> Result<(), McpError> {
+        context.cancelled().await;
+        Ok(())
+    }
+}
+
+#[module(providers = [SubscribedHost, AllowAllMcpGuard as dyn McpOperationGuard])]
+struct SubscribedModule;
+
+/// A subscription has no end of its own, so at the shutdown signal the server
+/// ends it the way the 2026-07-28 schema defines a graceful teardown — the
+/// final `SubscriptionsListenResult` — rather than holding the window open for
+/// a cancellation that is not coming and cutting it at the close. The
+/// subscriber did not end it, so its line says `cancelled`.
+#[tokio::test]
+async fn a_subscription_is_answered_its_final_result_at_the_shutdown_signal() {
+    let logs = LogCapture::install();
+    let window = Duration::from_secs(5);
+    let serving = crate::serve_on_loopback::<SubscribedModule>(window).await;
+    let body = json!({
+        "jsonrpc": "2.0", "id": 42, "method": "subscriptions/listen",
+        "params": { "notifications": {}, "_meta": modern_meta() },
+    })
+    .to_string();
+    let (mut stream, head) = crate::exchange(
+        serving.port,
+        &format!(
+            "POST {SUBSCRIBED} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
+             accept: application/json, text/event-stream\r\nmcp-protocol-version: {MODERN_VERSION}\r\n\
+             mcp-method: subscriptions/listen\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len(),
+        ),
+    )
+    .await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the subscription opened: {head}"
+    );
+    let line = |logs: &LogCapture| {
+        logs.find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_mcp::unit::OPERATION,
+        )
+        .into_iter()
+        .filter(|line| line.field("method").as_deref() == Some("subscriptions/listen"))
+        .collect::<Vec<_>>()
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(line(&logs).is_empty(), "the subscription is running");
+
+    let took = serving.stop().await;
+
+    assert!(
+        took < Duration::from_secs(1),
+        "the subscription did not hold the {window:?} window, took {took:?}",
+    );
+    let rest = crate::read_to_end(&mut stream).await;
+    let last = rest
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+        .find(|message| message["id"] == 42)
+        .unwrap_or_else(|| panic!("the final result reached the subscriber: {rest:?}"));
+    assert!(
+        last.get("result").is_some(),
+        "a result, not an error: {last}"
+    );
+    let filed = line(&logs);
+    assert_eq!(filed.len(), 1, "{filed:#?}");
+    assert_eq!(
+        filed[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
     );
 }

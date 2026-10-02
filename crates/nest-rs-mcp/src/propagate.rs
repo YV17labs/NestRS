@@ -42,6 +42,21 @@
 //! request state, and everything dispatched here runs on a task the request did
 //! not create. A notification carries it too — it commits nothing, but the
 //! events it emits still belong to the request that sent it.
+//!
+//! # Where an operation ends
+//!
+//! rmcp spawns every dispatch and never stops or watches one, so this file is
+//! where an MCP operation's end is decided, and it has four. It **settles** —
+//! `ok` or `error`. It **unwinds** — the panic is contained here, the line
+//! files `panic`, and the client is answered with an internal error, since an
+//! unwinding task answers nobody and the client would wait out its own
+//! timeout. It is **cancelled by its client** — `notifications/cancelled`, or a
+//! stateless disconnect. Or the **transport** ends it: a `subscriptions/listen`
+//! at the shutdown signal, answered with the final result the schema defines
+//! for a graceful server teardown, and anything still running when the window
+//! closes, dropped where it waits. The last two file `cancelled`. The line is
+//! filed by [`OperationLine`], so an end nobody saw — rmcp dropping the task —
+//! still files one.
 
 // `subscribe` / `unsubscribe` are SEP-2575-deprecated in rmcp but still part of
 // the trait for legacy protocol versions; a wrapper must forward them or a
@@ -50,8 +65,11 @@
 
 use std::borrow::Cow;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
+use futures_util::FutureExt;
+use nest_rs_core::{Correlation, RequestContinuation, operation_log};
 use nest_rs_http::DetachedWork;
 use rmcp::ServerHandler;
 use rmcp::model::{
@@ -135,28 +153,28 @@ impl<H> PropagatingHandler<H> {
     /// field, so an unaddressed operation files no `operation` key at all, and a
     /// query for one can never match a method that has none.
     ///
-    /// **An operation ends when it settles or is stopped, whichever is first.**
-    /// It is stopped when `cancelled` resolves — the client sent
-    /// `notifications/cancelled`, or rmcp cancelled it on a disconnect — or when
-    /// the HTTP transport stops serving ([`DetachedWork`]). rmcp runs it on a
-    /// task of its own and never drops it, and nothing obliges a handler to
-    /// watch its token, so without this a cut connection left the operation
-    /// running on through the shutdown hooks, and a cancelled one to its end.
-    /// Either way it is dropped where it waits and files
+    /// # How it ends
+    ///
+    /// See the module doc. `stopped` resolves when the operation is to end
+    /// before it settles — its client cancelled it, or the transport is going
+    /// away from a subscription — and yields what the client is answered then.
+    /// The transport stopping it at the close of its window
+    /// ([`DetachedWork`]) answers a cancellation error. Either way the
+    /// operation is dropped where it waits and files
     /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
-    async fn dispatch<T, F, C>(
+    async fn dispatch<T, F, S>(
         &self,
         method: &str,
         addressed: Option<&str>,
         ambient: McpAmbient,
         context: Option<&Arc<dyn McpToolContext>>,
-        cancelled: C,
+        stopped: S,
         inner: F,
     ) -> Result<T, McpError>
     where
         T: Send + 'static,
         F: Future<Output = Result<T, McpError>> + Send,
-        C: Future<Output = ()> + Send,
+        S: Future<Output = Result<T, McpError>> + Send,
     {
         let McpAmbient {
             scope,
@@ -174,10 +192,6 @@ impl<H> PropagatingHandler<H> {
         // fresh span, the request's span as its parent — the shape `ws.message`
         // already had.
         let correlation = correlation.child();
-        // Held for the line below: the ambient context is installed *inside*
-        // `scoped`, so the outer composition — where the guard's verdict and the
-        // whole duration are known — is outside it.
-        let reported = correlation.clone();
         // The span carries what the line carries, in the conventions' dotted
         // shape — a span field may be dotted where a line's may not. One
         // `mcp.operation.name` where the semantic conventions have three
@@ -192,7 +206,16 @@ impl<H> PropagatingHandler<H> {
             mcp.method.name = method,
             mcp.operation.name = addressed,
         );
-        let recorded = operation.clone();
+        // The line is filed outside the scope `scoped` installs — where the
+        // guard's verdict and the whole duration are known — so it holds the
+        // correlation it reports under rather than reading an ambient one, and
+        // the span it records the same outcome on.
+        let line = OperationLine::open(
+            method,
+            addressed,
+            correlation.clone(),
+            Some(operation.clone()),
+        );
 
         // One box, not two: the type erasure the guard's `around` needs and the
         // scope installation are the same future, and this runs on every MCP
@@ -212,72 +235,52 @@ impl<H> PropagatingHandler<H> {
         // A disabled span (nothing installed a subscriber, or no HTTP span is
         // mounted) costs one branch per poll and no allocation, so this is not
         // gated on anything.
-        let started = std::time::Instant::now();
         async move {
             let guarded = match &guard_captured {
                 Some(captured) => self.guard.around(captured, scoped),
                 None => scoped,
             };
-
-            let settled = self
+            let ran = async move {
+                match (context, &context_captured) {
+                    (Some(context), Some(captured)) => context.around(captured, guarded).await,
+                    _ => guarded.await,
+                }
+            };
+            let ended = self
                 .detached
                 .run(async move {
                     tokio::select! {
                         biased;
-                        settled = async move {
-                            match (context, &context_captured) {
-                                (Some(context), Some(captured)) => {
-                                    context.around(captured, guarded).await
-                                }
-                                _ => guarded.await,
-                            }
-                        } => Some(settled),
-                        () = cancelled => None,
+                        ran = AssertUnwindSafe(ran).catch_unwind() => Ended::Ran(ran),
+                        answer = stopped => Ended::Stopped(answer),
                     }
                 })
-                .await
-                .flatten();
-            // One line per operation. rmcp addresses many operations over one
-            // request, so without it a tool call is anonymous on the console —
-            // the endpoint's HTTP access line names the session, not the work.
-            //
-            // Emitted through the correlation explicitly, because this sits
-            // *outside* the scope `scoped` installs and a line with no ambient
-            // context carries no ids at all — which is exactly what it did until a
-            // capture of real output showed the gap. Outside is still the right
-            // depth: here the guard's verdict and the whole duration are known.
-            let outcome = match &settled {
-                Some(Ok(_)) => nest_rs_core::operation_log::OK,
-                Some(Err(_)) => nest_rs_core::operation_log::ERROR,
-                None => nest_rs_core::operation_log::CANCELLED,
-            };
-            nest_rs_core::operation_log::record_outcome(&recorded, outcome);
-            nest_rs_core::RequestContinuation::new(None, reported).enter(|| {
-                tracing::info!(
-                    name: crate::unit::OPERATION,
-                    target: nest_rs_core::operation_log::TARGET,
-                    message = crate::unit::OPERATION,
-                    // The JSON-RPC method this operation was, and the tool,
-                    // prompt or resource it named. Flat, never dotted: a dotted
-                    // field name is ambiguous to `tracing`'s parser beside a
-                    // path target. `operation` is absent where the protocol
-                    // addressed nothing.
-                    method = method,
-                    operation = addressed,
-                    outcome,
-                    duration_ms = nest_rs_core::operation_log::duration_ms(started),
-                );
-            });
-            // What rmcp is handed for a stopped operation: it drops the answer to
-            // a request its client cancelled, and a stopped transport has no
-            // connection left to carry one, so the sentence is for the log of a
-            // client that somehow still reads — never a claim the work was done.
-            settled.unwrap_or_else(|| {
-                Err(McpError::internal_error(
-                    "the operation was cancelled before it completed",
-                    None,
-                ))
-            })
+                .await;
+            match ended {
+                Some(Ended::Ran(Ok(Ok(value)))) => {
+                    line.file(operation_log::OK);
+                    value.take::<T>()
+                }
+                Some(Ended::Ran(Ok(Err(error)))) => {
+                    line.file(operation_log::ERROR);
+                    Err(error)
+                }
+                Some(Ended::Ran(Err(payload))) => {
+                    line.unwound(&*payload);
+                    Err(McpError::internal_error(
+                        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+                        None,
+                    ))
+                }
+                Some(Ended::Stopped(answer)) => {
+                    line.file(operation_log::CANCELLED);
+                    answer
+                }
+                None => {
+                    line.file(operation_log::CANCELLED);
+                    Err(cancelled_before_completion())
+                }
+            }
         }
         .instrument(operation)
         // Inside the request's span, so the operation stays nested under the
@@ -290,7 +293,119 @@ impl<H> PropagatingHandler<H> {
         // not about what a line shows.
         .instrument(span)
         .await
-        .and_then(OperationValue::take::<T>)
+    }
+}
+
+/// How one dispatched operation ended, before the line names it.
+enum Ended<R, A> {
+    /// It ran to a result, or unwound.
+    Ran(std::thread::Result<R>),
+    /// It was stopped first, with the answer the stop gives.
+    Stopped(A),
+}
+
+/// What rmcp is handed for an operation stopped before it settled: it drops the
+/// answer to a request its client cancelled, and a stopped transport has no
+/// connection left to carry one, so the sentence is for the log of a client
+/// that somehow still reads — never a claim the work was done.
+fn cancelled_before_completion() -> McpError {
+    McpError::internal_error("the operation was cancelled before it completed", None)
+}
+
+/// One operation's `mcp.operation` line, held while the operation runs and
+/// filed exactly once — by the end the dispatch saw, or, when the operation is
+/// dropped before any end was seen, by `Drop`, as
+/// [`CANCELLED`](operation_log::CANCELLED).
+///
+/// One line per operation. rmcp addresses many operations over one request, so
+/// without it a tool call is anonymous on the console — the endpoint's HTTP
+/// access line names the session, not the work.
+struct OperationLine<'a> {
+    method: &'a str,
+    addressed: Option<&'a str>,
+    /// Entered to file the line: it sits outside the scope the operation
+    /// installs, and a line with no ambient context carries no ids at all —
+    /// which is exactly what it did until a capture of real output showed the
+    /// gap.
+    correlation: Correlation,
+    /// The operation's own span, which records the outcome the line files.
+    /// `None` for a notification, which opens no span of its own: the span it
+    /// runs under is the HTTP request's, whose outcome is the request's to
+    /// record.
+    span: Option<tracing::Span>,
+    started: std::time::Instant,
+    filed: bool,
+}
+
+impl<'a> OperationLine<'a> {
+    fn open(
+        method: &'a str,
+        addressed: Option<&'a str>,
+        correlation: Correlation,
+        span: Option<tracing::Span>,
+    ) -> Self {
+        Self {
+            method,
+            addressed,
+            correlation,
+            span,
+            started: std::time::Instant::now(),
+            filed: false,
+        }
+    }
+
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+    }
+
+    /// The operation unwound: file `panic`, and give the operator what the
+    /// client is not told.
+    fn unwound(mut self, payload: &(dyn std::any::Any + Send)) {
+        self.emit(operation_log::PANIC);
+        RequestContinuation::new(None, self.correlation.clone()).enter(|| {
+            tracing::error!(
+                target: crate::TARGET,
+                method = self.method,
+                operation = self.addressed,
+                panic = nest_rs_core::panic_message(payload),
+                "mcp operation panicked; its client is answered with an internal error",
+            );
+        });
+    }
+
+    fn emit(&mut self, outcome: &'static str) {
+        self.filed = true;
+        if let Some(span) = &self.span {
+            operation_log::record_outcome(span, outcome);
+        }
+        RequestContinuation::new(None, self.correlation.clone()).enter(|| {
+            tracing::info!(
+                name: crate::unit::OPERATION,
+                target: nest_rs_core::operation_log::TARGET,
+                message = crate::unit::OPERATION,
+                // The JSON-RPC method this operation was, and the tool,
+                // prompt or resource it named. Flat, never dotted: a dotted
+                // field name is ambiguous to `tracing`'s parser beside a
+                // path target. `operation` is absent where the protocol
+                // addressed nothing — a notification included.
+                method = self.method,
+                operation = self.addressed,
+                outcome,
+                duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
+            );
+        });
+    }
+}
+
+impl Drop for OperationLine<'_> {
+    fn drop(&mut self) {
+        if !self.filed {
+            self.emit(if std::thread::panicking() {
+                operation_log::PANIC
+            } else {
+                operation_log::CANCELLED
+            });
+        }
     }
 }
 
@@ -328,7 +443,10 @@ macro_rules! request_method {
                     addressed.as_deref(),
                     ambient,
                     self.context.as_ref(),
-                    cancelled,
+                    async move {
+                        cancelled.await;
+                        Err(cancelled_before_completion())
+                    },
                     self.inner.$name($($arg,)* context),
                 )
                 .await
@@ -351,42 +469,35 @@ macro_rules! notification_method {
             async move {
                 let McpAmbient { scope, span, correlation, .. } =
                     McpAmbient::from_extensions(&context.extensions).unwrap_or_default();
-                let started = std::time::Instant::now();
                 let method: Cow<'_, str> = ($method).into();
+                // A notification is dispatched work, so it files the family's
+                // line like every other unit — the same message as a request
+                // method, discriminated by `method`, because a notification *is*
+                // an MCP operation and one query should find both. It addresses
+                // no tool, prompt or resource, so its `operation` is absent
+                // rather than empty, for the reason it is absent on `tools/list`.
+                //
+                // Not recorded on a span: a notification opens none of its own,
+                // and the span it runs under is the HTTP request's, whose outcome
+                // is the request's to record.
+                let line = OperationLine::open(&method, None, correlation.clone(), None);
+                let handled =
+                    AssertUnwindSafe(self.inner.$name($($arg,)* context)).catch_unwind();
                 nest_rs_core::with_request_scope(scope, correlation, async move {
                     // rmcp spawns a notification's handler as it does a
                     // request's, so it too is stopped with the transport rather
-                    // than left running on through the shutdown hooks. A
-                    // client cannot cancel a notification: it has no id to name.
-                    let settled = self.detached.run(self.inner.$name($($arg,)* context)).await;
-                    // A notification is dispatched work, so it files the family's
-                    // line like every other unit — the same message as a request
-                    // method, discriminated by `method`, because a notification
-                    // *is* an MCP operation and one query should find both.
+                    // than left running on through the shutdown hooks. A client
+                    // cannot cancel a notification: it has no id to name.
                     //
-                    // No `operation`: a notification addresses no tool, prompt or
-                    // resource, and the field is absent rather than empty for the
-                    // same reason it is absent on `tools/list`.
-                    //
-                    // `outcome` is `ok` when it ran to its end, and that is honest
-                    // rather than assumed: a notification handler returns `()`, so
-                    // it has no failure channel, and had it unwound this line
-                    // would not be reached.
-                    //
-                    // Not recorded on a span: a notification opens none of its
-                    // own, and the span it runs under is the HTTP request's, whose
-                    // outcome is the request's to record.
-                    tracing::info!(
-                        name: crate::unit::OPERATION,
-                        target: nest_rs_core::operation_log::TARGET,
-                        message = crate::unit::OPERATION,
-                        method = %method,
-                        outcome = match settled {
-                            Some(()) => nest_rs_core::operation_log::OK,
-                            None => nest_rs_core::operation_log::CANCELLED,
-                        },
-                        duration_ms = nest_rs_core::operation_log::duration_ms(started),
-                    );
+                    // `ok` when it ran to its end, and that is honest rather than
+                    // assumed: a notification handler returns `()`, so it has no
+                    // failure channel — only an unwind, contained here, since a
+                    // notification has no answer for an unwinding task to lose.
+                    match self.detached.run(handled).await {
+                        Some(Ok(())) => line.file(operation_log::OK),
+                        Some(Err(payload)) => line.unwound(&*payload),
+                        None => line.file(operation_log::CANCELLED),
+                    }
                 })
                 .instrument(span)
                 .await
@@ -533,18 +644,26 @@ impl<H: ServerHandler> ServerHandler for PropagatingHandler<H> {
     /// **not** the data context: a transaction held open for the life of a
     /// subscription would pin a pooled connection for the same duration.
     ///
-    /// For the same reason its client's cancellation is how it ends rather than
-    /// a cut, so only the transport stopping stops it: the host's own `listen`
-    /// answers the cancellation, and files the `ok` it is.
+    /// Its client's cancellation is how it ends normally — the host's own
+    /// `listen` answers it, and files the `ok` it is. The other end is the
+    /// transport going away: a subscription has no end of its own, so at the
+    /// shutdown signal it is answered with `Ok(())`, which rmcp sends as the
+    /// final `SubscriptionsListenResult` the 2026-07-28 schema defines for a
+    /// graceful server teardown, and files `cancelled` — the server, not the
+    /// subscriber, ended it.
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         let ambient =
             McpAmbient::from_extensions(&context.request_context().extensions).unwrap_or_default();
+        let going_away = self.detached.going_away();
         self.dispatch(
             SubscriptionsListenRequestMethod::VALUE,
             None,
             ambient,
             None,
-            std::future::pending(),
+            async move {
+                going_away.await;
+                Ok(())
+            },
             self.inner.listen(context),
         )
         .await

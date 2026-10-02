@@ -70,3 +70,68 @@ async fn a_mount_with_no_allowlist_reports_that_host_validation_is_off() {
         Some("host_validation_disabled"),
     );
 }
+
+const LISTENING: &str = "/mcp/listening";
+
+#[nest_rs_mcp::mcp(path = "/mcp/listening")]
+#[derive(Clone, Default)]
+struct ListeningTools;
+
+#[nest_rs_mcp::tools]
+impl ListeningTools {
+    #[tool(description = "Answers at once.")]
+    #[public]
+    async fn ping(&self) -> Result<String, nest_rs_mcp::McpError> {
+        Ok("pong".to_owned())
+    }
+}
+
+#[module(providers = [
+    ListeningTools,
+    nest_rs_mcp::AllowAllMcpGuard as dyn nest_rs_mcp::McpOperationGuard,
+])]
+struct ListeningModule;
+
+/// A session's standalone `GET` stream carries what the server pushes, so it
+/// has no end of its own, and an idle client holding one kept a stopping replica
+/// for the whole shutdown window before being cut. It ends at the signal now —
+/// cleanly, its last chunk written, so the client reconnects elsewhere — and its
+/// `http.request` line says the transport ended it.
+#[tokio::test]
+async fn the_standalone_stream_ends_at_the_shutdown_signal() {
+    let logs = nest_rs_testing::LogCapture::install();
+    let window = std::time::Duration::from_secs(5);
+    let serving = crate::serve_on_loopback::<ListeningModule>(window).await;
+    let session = crate::open_raw_session(serving.port, LISTENING).await;
+    let (mut stream, head) = crate::get_stream(serving.port, LISTENING, &session).await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the stream opened: {head}"
+    );
+
+    let took = serving.stop().await;
+
+    assert!(
+        took < std::time::Duration::from_secs(1),
+        "an idle client no longer holds the replica for its {window:?} window, took {took:?}",
+    );
+    let rest = crate::read_to_end(&mut stream).await;
+    assert!(
+        rest.ends_with("0\r\n\r\n"),
+        "the stream ended with its last chunk rather than a cut: {rest:?}",
+    );
+    let lines: Vec<_> = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_http::unit::REQUEST,
+        )
+        .into_iter()
+        .filter(|line| line.field("method").as_deref() == Some("GET"))
+        .collect();
+    assert_eq!(lines.len(), 1, "one line for the stream: {lines:#?}");
+    assert_eq!(lines[0].field("status").as_deref(), Some("200"));
+    assert_eq!(
+        lines[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+}

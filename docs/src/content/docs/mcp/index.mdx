@@ -280,6 +280,12 @@ per-operation span; the model gets a constant `internal error`. A *deliberate*
 error is the opposite case — `McpError::invalid_params(...)` exists to be read,
 so return it directly and never route it through `opaque`.
 
+A tool that **panics** is answered the same way: rmcp runs it on a task of its
+own, so the panic is contained where the operation is dispatched, the client
+gets `internal error` instead of waiting out its own timeout, the
+`mcp.operation` line files `outcome="panic"`, and the panic's text goes to
+`nest_rs::mcp` at `error` — never to the model.
+
 ## Trait-based DI
 
 Injecting `Arc<dyn WeatherService>` keeps the concrete provider

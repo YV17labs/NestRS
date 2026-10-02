@@ -2989,6 +2989,7 @@ dependencies = [
 name = "nest-rs-mcp"
 version = "7.0.0"
 dependencies = [
+ "futures-util",
  "nest-rs-config",
  "nest-rs-core",
  "nest-rs-http",

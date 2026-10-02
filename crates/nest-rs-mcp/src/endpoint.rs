@@ -50,10 +50,10 @@ pub struct McpMount {
     context: Option<Arc<dyn McpToolContext>>,
     config: McpConfig,
     session_store: Option<Arc<dyn SessionStore>>,
-    /// Stopped by the HTTP transport when it stops serving. A mount the
-    /// transport did not declare — a hand-built [`endpoint`] — holds one
-    /// nothing stops, so its operations end with their clients' cancellations
-    /// and no sooner.
+    /// Told at the shutdown signal and stopped at the close of the window by
+    /// the HTTP transport. A mount the transport did not declare — a hand-built
+    /// [`endpoint`] — holds one nothing tells or stops, so its subscriptions and
+    /// operations end with their clients' cancellations and no sooner.
     detached: DetachedWork,
 }
 
@@ -161,6 +161,12 @@ where
     // with the transport. It does not reach an operation of a stateful session
     // (rmcp 3.4 serves each session under a token of its own), which is why the
     // handler stops those itself, through the same `detached`.
+    //
+    // The stop, not the signal: rmcp ends *every* stream it serves on this
+    // token, a POST's answer included, so handing it the signal would cut an
+    // operation still answering inside its window. What has no end of its own
+    // is ended at the signal by name instead — the standalone stream below,
+    // and `subscriptions/listen` in `PropagatingHandler`.
     let mut server_config = config
         .to_server_config()
         .with_cancellation_token(detached.cancellation_token());
@@ -232,10 +238,26 @@ where
             correlation: correlation.clone(),
         });
 
+        // A `GET` is the session's standalone stream, or its resumption: what
+        // the server pushes, with no end of its own. Read before the request is
+        // handed over, which consumes it.
+        let standalone = req.method() == poem::http::Method::GET;
+
         // Also install it here, so an operation rmcp happens to resolve inline
         // (rather than on a spawned task) is covered by the same seam. Already
         // ambient from the HTTP edge — re-installing the same id keeps an inline
         // (non-spawned) rmcp resolution on the same footing as a spawned one.
-        nest_rs_core::with_request_scope(scope, correlation, self.inner.call(req)).await
+        let mut response =
+            nest_rs_core::with_request_scope(scope, correlation, self.inner.call(req)).await?;
+        // So the transport ends it at the shutdown signal: an idle client held
+        // every stopping replica for its whole window, and was cut at the end
+        // of it anyway. A POST's stream ends with the answer it carries, and is
+        // left to the window like any request still answering.
+        if standalone && response.status().is_success() {
+            response
+                .extensions_mut()
+                .insert(nest_rs_http::OpenEndedBody);
+        }
+        Ok(response)
     }
 }

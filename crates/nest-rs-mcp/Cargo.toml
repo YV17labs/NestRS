@@ -22,6 +22,9 @@ nest-rs-mcp-macros.workspace = true
 # `Valid<T>` / `Piped<P, T>` on a tool argument: the `#[mcp]` expansion runs the
 # pipe over the wire value and renders a rejection as `invalid_params`.
 nest-rs-pipes.workspace = true
+# `catch_unwind` on a future: rmcp runs every operation on a task of its own, so
+# a tool that panics is contained at the dispatch or its client is never answered.
+futures-util.workspace = true
 poem.workspace = true
 rmcp.workspace = true
 schemars.workspace = true

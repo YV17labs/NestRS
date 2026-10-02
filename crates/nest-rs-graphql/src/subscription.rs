@@ -673,12 +673,12 @@ impl SubscriptionLine {
             Ended::Unwound(payload) => {
                 nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(
                     || {
-                        tracing::error!(
+                        nest_rs_core::contained_panic!(
                             target: crate::TARGET,
-                            panic = nest_rs_core::panic_message(&*payload),
-                            close_code = u16::from(CloseCode::Error),
+                            &*payload,
                             "graphql subscription panicked; the socket is closed with an internal \
                              error",
+                            close_code = u16::from(CloseCode::Error),
                         );
                     },
                 );

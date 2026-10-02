@@ -10,9 +10,7 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use croner::Cron;
 use futures_util::FutureExt;
-use nest_rs_core::{
-    Container, Correlation, Discovery, ReachableProviders, Transport, inventory, panic_message,
-};
+use nest_rs_core::{Container, Correlation, Discovery, ReachableProviders, Transport, inventory};
 use nest_rs_worker::{JobContext, JobTransaction, Unhonoured, run_in_job_context};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep};
@@ -564,12 +562,12 @@ fn loop_ended(
     };
     let id = spawned.remove(&ended.id());
     match ended.try_into_panic() {
-        Ok(payload) => tracing::error!(
+        Ok(payload) => nest_rs_core::contained_panic!(
             target: crate::TARGET,
+            &*payload,
+            "scheduled job stopped: its schedule panicked, and the job will not run again",
             provider = id.map(|id| id.provider),
             method = id.map(|id| id.method),
-            panic = panic_message(&*payload),
-            "scheduled job stopped: its schedule panicked, and the job will not run again",
         ),
         Err(_) if stopping => {}
         Err(cancelled) => tracing::debug!(
@@ -1325,13 +1323,13 @@ impl Runner {
                     // A lock that panics answers nothing: the occurrence is skipped,
                     // the panic named, and the schedule goes on.
                     Bounded::Answered(Err(payload)) => {
-                        tracing::error!(
+                        nest_rs_core::contained_panic!(
                             target: crate::TARGET,
+                            &*payload,
+                            "occurrence skipped: its lock panicked while claiming it",
                             provider = id.provider,
                             method = id.method,
                             occurrence = instant_ms,
-                            panic = panic_message(&*payload),
-                            "occurrence skipped: its lock panicked while claiming it",
                         );
                         return;
                     }
@@ -1461,13 +1459,13 @@ impl Runner {
             Bounded::Answered(Err(payload)) => Some(payload),
             _ => None,
         }) {
-            tracing::error!(
+            nest_rs_core::contained_panic!(
                 target: crate::TARGET,
+                &**payload,
+                "occurrence lock panicked answering whether an overrun occurrence was claimed",
                 provider = id.provider,
                 method = id.method,
                 occurrence = from_ms,
-                panic = panic_message(&**payload),
-                "occurrence lock panicked answering whether an overrun occurrence was claimed",
             );
         }
         // A lock that *answered* with an error counts as unanswered too, and
@@ -1595,16 +1593,16 @@ impl Runner {
                 retryable = err.downcast_ref::<Unhonoured>().map(|why| why.retryable),
                 "scheduled job failed",
             ),
-            Err(panic) => tracing::error!(
+            Err(panic) => nest_rs_core::contained_panic!(
                 target: crate::TARGET,
+                panic.as_ref(),
+                "scheduled job panicked; the schedule continues",
                 provider = id.provider,
                 method = id.method,
                 // `panic.as_ref()`, never `&panic`: a `Box<dyn Any + Send>` is itself
                 // `Any`, so the borrow unsizes to a trait object *of the box* and every
                 // downcast inside `panic_message` misses — the operator reads
                 // `<non-string panic payload>` whatever the job said.
-                panic = panic_message(panic.as_ref()),
-                "scheduled job panicked; the schedule continues",
             ),
         }
     }
@@ -1774,7 +1772,7 @@ mod tests {
         assert_eq!(panicked.len(), 1, "named once: {:#?}", logs.events());
         assert_eq!(panicked[0].level, "error");
         assert_eq!(
-            panicked[0].field("panic").as_deref(),
+            panicked[0].field(nest_rs_core::panic::FIELD).as_deref(),
             Some("the lock store's client panicked")
         );
         let skipped = logs.expect_one(
@@ -2090,7 +2088,7 @@ mod tests {
             "occurrence skipped: its lock panicked while claiming it",
         );
         assert_eq!(
-            claiming.field("panic").as_deref(),
+            claiming.field(nest_rs_core::panic::FIELD).as_deref(),
             Some("the lock panicked before handing back its claim")
         );
         let answering = logs.expect_one(
@@ -2098,7 +2096,7 @@ mod tests {
             "occurrence lock panicked answering whether an overrun occurrence was claimed",
         );
         assert_eq!(
-            answering.field("panic").as_deref(),
+            answering.field(nest_rs_core::panic::FIELD).as_deref(),
             Some("the lock panicked before handing back its answer")
         );
     }

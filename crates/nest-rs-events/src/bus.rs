@@ -6,7 +6,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::FutureExt;
-use nest_rs_core::panic_message;
 use nest_rs_core::tracing::Instrument;
 use parking_lot::RwLock;
 
@@ -197,12 +196,12 @@ async fn dispatch_one(
         Err(payload) => {
             line.file(nest_rs_core::operation_log::PANIC);
             continuation.enter(|| {
-                tracing::error!(
+                nest_rs_core::contained_panic!(
                     target: crate::TARGET,
+                    payload.as_ref(),
+                    "event listener panicked — dispatch continues with the next listener",
                     event = event,
                     listener = listener,
-                    panic = panic_message(payload.as_ref()),
-                    "event listener panicked — dispatch continues with the next listener",
                 );
             });
         }
@@ -447,7 +446,7 @@ mod panic_containment {
         );
         assert_eq!(event.level, "error");
         assert_eq!(
-            event.field("panic").as_deref(),
+            event.field(nest_rs_core::panic::FIELD).as_deref(),
             Some("listener panic for boom"),
         );
     }

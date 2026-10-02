@@ -359,12 +359,12 @@ impl<'a> OperationLine<'a> {
     fn unwound(mut self, payload: &(dyn std::any::Any + Send)) {
         self.emit(operation_log::PANIC);
         RequestContinuation::new(None, self.correlation.clone()).enter(|| {
-            tracing::error!(
+            nest_rs_core::contained_panic!(
                 target: crate::TARGET,
+                payload,
+                "mcp operation panicked; its client is answered with an internal error",
                 method = self.method,
                 operation = self.addressed,
-                panic = nest_rs_core::panic_message(payload),
-                "mcp operation panicked; its client is answered with an internal error",
             );
         });
     }

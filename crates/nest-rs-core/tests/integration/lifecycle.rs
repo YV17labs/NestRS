@@ -520,7 +520,7 @@ async fn a_panicking_shutdown_hook_is_named_at_error_and_the_rest_still_run() {
     assert_eq!(event.field("method").as_deref(), Some("release"));
     assert_eq!(event.field("phase").as_deref(), Some("OnModuleDestroy"));
     assert_eq!(
-        event.field("panic").as_deref(),
+        event.field(nest_rs_core::panic::FIELD).as_deref(),
         Some("the pool was already closed"),
     );
 }
@@ -567,7 +567,7 @@ async fn a_panicking_init_hook_aborts_the_boot_with_an_error_naming_it() {
     assert_eq!(event.field("method").as_deref(), Some("warm"));
     assert_eq!(event.field("phase").as_deref(), Some("OnModuleInit"));
     assert_eq!(
-        event.field("panic").as_deref(),
+        event.field(nest_rs_core::panic::FIELD).as_deref(),
         Some("the cache backend refused the warm-up"),
     );
 }

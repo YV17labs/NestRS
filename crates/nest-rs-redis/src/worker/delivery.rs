@@ -54,7 +54,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use apalis::prelude::{Attempt, Request, Storage, TaskId};
 use apalis_redis::{RedisContext, RedisStorage};
-use nest_rs_core::{Container, panic_message};
+use nest_rs_core::Container;
 use nest_rs_queue::consume::{self, AttemptOutcome, Delivery};
 use nest_rs_queue::{Envelope, JobError, JobId, ProcessMethod, QueueName};
 use tokio_util::sync::CancellationToken;
@@ -475,12 +475,12 @@ fn failed_outside_the_attempt(
 ) -> Result<(), BoxDynError> {
     let answer = std::io::Error::other(failure.to_string());
     match failure.try_into_panic() {
-        Ok(payload) => tracing::error!(
+        Ok(payload) => nest_rs_core::contained_panic!(
             target: nest_rs_queue::TARGET,
+            payload.as_ref(),
+            "job delivery failed outside its attempt; it is delivered again",
             queue = %queue,
             job_id = %job,
-            panic = %panic_message(payload.as_ref()),
-            "job delivery failed outside its attempt; it is delivered again",
         ),
         Err(cancelled) => tracing::error!(
             target: nest_rs_queue::TARGET,
@@ -901,7 +901,7 @@ mod tests {
         );
         assert_eq!(said.level, "error");
         assert_eq!(
-            said.field("panic").as_deref(),
+            said.field(nest_rs_core::panic::FIELD).as_deref(),
             Some("lease bookkeeping broke")
         );
 

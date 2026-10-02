@@ -496,11 +496,11 @@ async fn settle_after_commit(transport: &'static str, held: Vec<Deferred>, commi
     }
     for work in held {
         if let Err(payload) = AssertUnwindSafe(work).catch_unwind().await {
-            tracing::error!(
+            nest_rs_core::contained_panic!(
                 target: crate::TARGET,
-                transport,
-                panic = nest_rs_core::panic_message(payload.as_ref()),
+                payload.as_ref(),
                 "after-commit work panicked; the transaction had already committed",
+                transport,
             );
         }
     }
@@ -1115,7 +1115,10 @@ mod after_commit_tests {
             "after-commit work panicked; the transaction had already committed",
         );
         assert_eq!(line.level, "error");
-        assert_eq!(line.field("panic").as_deref(), Some("after-commit boom"));
+        assert_eq!(
+            line.field(nest_rs_core::panic::FIELD).as_deref(),
+            Some("after-commit boom")
+        );
     }
 
     /// A boundary dropped before it settled — the shutdown window closing on it

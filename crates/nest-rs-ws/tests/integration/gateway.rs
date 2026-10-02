@@ -1609,7 +1609,7 @@ async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() 
     assert_eq!(contained.level, "error");
     assert!(
         contained
-            .field("panic")
+            .field(nest_rs_core::panic::FIELD)
             .is_some_and(|panic| panic.contains("the handler exploded")),
         "{contained:#?}",
     );
@@ -1684,7 +1684,7 @@ async fn a_connect_hook_that_panics_files_panic_and_closes_with_internal_error()
     assert_eq!(contained.level, "error");
     assert!(
         contained
-            .field("panic")
+            .field(nest_rs_core::panic::FIELD)
             .is_some_and(|panic| panic.contains("the connect hook exploded")),
         "{contained:#?}",
     );
@@ -1725,7 +1725,7 @@ async fn a_disconnect_hook_that_panics_files_panic_and_the_close_still_completes
     assert_eq!(contained.level, "error");
     assert!(
         contained
-            .field("panic")
+            .field(nest_rs_core::panic::FIELD)
             .is_some_and(|panic| panic.contains("the disconnect hook exploded")),
         "{contained:#?}",
     );

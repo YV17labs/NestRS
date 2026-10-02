@@ -769,7 +769,7 @@ async fn a_tool_that_panics_files_its_line_panic_and_its_client_is_answered() {
     assert_eq!(contained.field("operation").as_deref(), Some("boom"));
     assert!(
         contained
-            .field("panic")
+            .field(nest_rs_core::panic::FIELD)
             .is_some_and(|panic| panic.contains("the tool exploded")),
         "the operator reads what unwound: {contained:#?}",
     );

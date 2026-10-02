@@ -194,14 +194,14 @@ pub(crate) async fn run_phase(container: &Container, phase: LifecyclePhase) -> a
                 // The message rides the line, under the field every contained
                 // panic is logged with; the error names the hook, as a failed
                 // one's does, and aborts the boot the same way.
-                tracing::error!(
+                crate::contained_panic!(
                     target: crate::target::LIFECYCLE,
+                    payload.as_ref(),
+                    "lifecycle hook panicked; the boot is aborted",
                     ?phase,
                     provider = hook.provider,
                     method = hook.method,
                     origin = hook.origin,
-                    panic = crate::panic_message(payload.as_ref()),
-                    "lifecycle hook panicked; the boot is aborted",
                 );
                 anyhow::bail!(
                     "lifecycle hook {}::{} ({phase:?}) panicked",
@@ -260,14 +260,14 @@ pub(crate) async fn run_phase_lenient(
                 error = %crate::error_message(&*err),
                 "lifecycle hook failed",
             ),
-            Ok(Err(payload)) => tracing::error!(
+            Ok(Err(payload)) => crate::contained_panic!(
                 target: crate::target::LIFECYCLE,
+                payload.as_ref(),
+                "shutdown hook panicked, and the hooks after it still run",
                 ?phase,
                 provider = hook.provider,
                 method = hook.method,
                 origin = hook.origin,
-                panic = crate::panic_message(payload.as_ref()),
-                "shutdown hook panicked, and the hooks after it still run",
             ),
             Err(_) => tracing::warn!(
                 target: crate::target::LIFECYCLE,

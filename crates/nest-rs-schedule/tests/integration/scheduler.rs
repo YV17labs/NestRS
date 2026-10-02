@@ -492,7 +492,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
     assert_eq!(event.level, "error");
     assert_eq!(event.field("provider").as_deref(), Some("NamedPanicHost"));
     assert_eq!(
-        event.field("panic").as_deref(),
+        event.field(nest_rs_core::panic::FIELD).as_deref(),
         Some("boom from a job that names its own failure"),
         "the field carries the payload's own sentence, not the placeholder a \
          borrowed box downcasts to: {event:?}",
@@ -2472,7 +2472,7 @@ async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
         .unwrap_or_else(|| panic!("the panic is reported: {:#?}", logs.events()));
     assert_eq!(event.level, "error");
     assert_eq!(
-        event.field("panic").as_deref(),
+        event.field(nest_rs_core::panic::FIELD).as_deref(),
         Some("the lock store's client panicked")
     );
     logs.expect_none(

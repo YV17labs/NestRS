@@ -978,10 +978,9 @@ async fn run(
             )
         }
         Ok(Err(panic)) => {
-            let detail = panic_message(panic.as_ref());
-            tracing::error!(
+            nest_rs_core::contained_panic!(
                 target: TARGET,
-                panic = %detail,
+                panic.as_ref(),
                 "job dead-lettered: handler panicked",
             );
             // A panic is deterministic as far as the queue can tell — the same
@@ -989,7 +988,7 @@ async fn run(
             // retry budget.
             (
                 nest_rs_core::operation_log::PANIC,
-                AttemptOutcome::DeadLetter(JobError::abort(detail)),
+                AttemptOutcome::DeadLetter(JobError::abort(panic_message(panic.as_ref()))),
             )
         }
     };
@@ -1065,7 +1064,7 @@ mod tests {
             "at the docs' own production filter (`nest_rs::queue=warn`) it has to show",
         );
         assert_eq!(
-            event.field("panic").as_deref(),
+            event.field(nest_rs_core::panic::FIELD).as_deref(),
             Some("deliberate panic for panic-2"),
             "the panic message rides on the shared `panic` field: {event:#?}",
         );

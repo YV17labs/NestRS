@@ -771,25 +771,25 @@ impl<'a> UnitLine<'a> {
         self.emit(operation_log::PANIC);
         let conn_id = self.conn_id;
         RequestContinuation::new(None, self.correlation.clone()).enter(|| match self.unit {
-            Unit::Message { event } => tracing::error!(
+            Unit::Message { event } => nest_rs_core::contained_panic!(
                 target: crate::TARGET,
+                payload,
+                "websocket handler panicked; its client is answered with an internal error",
                 conn_id,
                 event,
-                panic = nest_rs_core::panic_message(payload),
-                "websocket handler panicked; its client is answered with an internal error",
             ),
-            Unit::Connect => tracing::error!(
+            Unit::Connect => nest_rs_core::contained_panic!(
                 target: crate::TARGET,
-                conn_id,
-                panic = nest_rs_core::panic_message(payload),
-                close_code = u16::from(CloseCode::Error),
+                payload,
                 "websocket connect hook panicked; the socket is closed unserved",
-            ),
-            Unit::Disconnect => tracing::error!(
-                target: crate::TARGET,
                 conn_id,
-                panic = nest_rs_core::panic_message(payload),
+                close_code = u16::from(CloseCode::Error),
+            ),
+            Unit::Disconnect => nest_rs_core::contained_panic!(
+                target: crate::TARGET,
+                payload,
                 "websocket disconnect hook panicked; the close goes on",
+                conn_id,
             ),
         });
     }

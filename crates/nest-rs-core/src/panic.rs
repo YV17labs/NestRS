@@ -12,14 +12,13 @@ use std::any::Any;
 
 /// The field name a contained panic is logged under.
 ///
-/// Unusable at the emit site and declared anyway, for the reason
-/// [`operation_log::DURATION_MS`](crate::operation_log::DURATION_MS) is: a field
-/// name is a literal token in `tracing`'s macro grammar, so an edge spells it
-/// rather than referencing this — and the vocabulary of the line still belongs
-/// in one place. This module exists because three crates had written the same
-/// downcast ladder and **had already drifted on the fallback string and on the
-/// field name they logged it under**; the ladder and the fallback were shared
-/// and the name was left in prose, which is the half that drifts silently.
+/// [`contained_panic!`](crate::contained_panic) writes it as `{ FIELD }`, the
+/// constant-name form `tracing` has accepted since 0.1.39, and every test that
+/// asserts the field reads it from here — so the name is spelled once. This
+/// module exists because three crates had written the same downcast ladder and
+/// **had already drifted on the fallback string and on the field name they
+/// logged it under**; sharing the ladder and the fallback while leaving the name
+/// to each site is the half that drifts silently.
 pub const FIELD: &str = "panic";
 
 /// Best-effort message from a caught panic payload — the common `&str` /
@@ -29,8 +28,8 @@ pub const FIELD: &str = "panic";
 /// failed decode formats serde's error, value included, into the payload, and
 /// the payload is the one text of a panic the framework files.
 ///
-/// Log it under [`FIELD`], so one query reaches a contained panic whichever
-/// transport caught it.
+/// Logged under [`FIELD`] by [`contained_panic!`](crate::contained_panic), so
+/// one query reaches a contained panic whichever transport caught it.
 pub fn panic_message(payload: &(dyn Any + Send)) -> String {
     let message = payload
         .downcast_ref::<&'static str>()
@@ -38,6 +37,40 @@ pub fn panic_message(payload: &(dyn Any + Send)) -> String {
         .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("<non-string panic payload>");
     crate::DecodeError::redact(message, None).into_owned()
+}
+
+/// Log a contained panic: at `error`, on `target`, with the payload rendered by
+/// [`panic_message`] under [`FIELD`], then the seam's own fields.
+///
+/// ```
+/// # const TARGET: &str = "nest_rs::fixture";
+/// let payload = std::panic::catch_unwind(|| panic!("boom")).expect_err("it panics");
+/// nest_rs_core::contained_panic!(
+///     target: TARGET,
+///     payload.as_ref(),
+///     "listener panicked — dispatch continues",
+///     listener = "notify",
+/// );
+/// ```
+///
+/// The one way a seam that contains a panic says so. It writes the field as
+/// `{ FIELD }`, so the name is never spelled at a call site, and it writes the
+/// message before it, as `tracing`'s own positional form does: a `{ CONST }`
+/// field written first after `target:` is not parsed by `tracing`'s grammar,
+/// and the error it gives names the message, not the field. Pass the payload as
+/// `payload.as_ref()` or `&*payload`, never `&payload` — a `Box<dyn Any + Send>`
+/// is itself `Any`, so a borrow of the box unsizes to the box and every
+/// downcast misses.
+#[macro_export]
+macro_rules! contained_panic {
+    (target: $target:expr, $payload:expr, $message:literal $(, $($field:tt)*)?) => {
+        $crate::tracing::error!(
+            target: $target,
+            message = ::core::format_args!($message),
+            { $crate::panic::FIELD } = %$crate::panic_message($payload),
+            $($($field)*)?
+        )
+    };
 }
 
 #[cfg(test)]

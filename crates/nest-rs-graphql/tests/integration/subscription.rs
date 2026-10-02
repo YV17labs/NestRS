@@ -573,7 +573,7 @@ async fn a_subscription_that_panics_files_panic_and_closes_with_internal_error()
     assert_eq!(contained.level, "error");
     assert!(
         contained
-            .field("panic")
+            .field(nest_rs_core::panic::FIELD)
             .is_some_and(|panic| panic.contains("the subscription exploded")),
         "{contained:#?}",
     );

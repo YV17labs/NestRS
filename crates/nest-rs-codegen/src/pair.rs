@@ -10,24 +10,21 @@
 //! `expected struct`.
 //!
 //! Two shapes produce that message, and they are the same two sentences with the
-//! halves swapped, so they live here rather than in six macro crates:
+//! halves swapped, so they live here rather than in nine macro crates:
 //!
 //! ```ignore
-//! const PAIR: DecoratorPair = DecoratorPair {
-//!     host: "#[gateway]",
-//!     subject: "gateway struct",
-//!     operations: "#[messages]",
-//!     collects: "#[subscribe_message] / #[on_connect] / #[on_disconnect]",
-//! };
-//!
-//! let item = PAIR.parse_host(input.into())?;       // in `#[gateway]`
-//! let item = PAIR.parse_operations(input.into())?; // in `#[messages]`
+//! let item = nest_rs_codegen::pair::WS.parse_host(input.into())?;       // in `#[gateway]`
+//! let item = nest_rs_codegen::pair::WS.parse_operations(input.into())?; // in `#[messages]`
 //! ```
 //!
+//! **Every pair is declared here, and only here.** The fields are private and
+//! the constructors `pub(crate)`, so a macro crate reads its pair from this
+//! module and cannot declare one beside it: [`ALL`] is the whole population,
+//! and this crate's unit tests run each wrong shape against every member of it.
 //! Both halves read the *same* constant, which is what keeps the two sentences
 //! from drifting into naming decorators that no longer exist. An impl-half
-//! decorator whose struct half is the generic `#[injectable]` uses
-//! [`DecoratorPair::on_provider`] and gets the same treatment.
+//! decorator whose struct half is the generic `#[injectable]` is built with
+//! `on_provider` and gets the same treatment.
 
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -36,20 +33,113 @@ use syn::{Item, ItemImpl, ItemStruct};
 /// One edge's decorator pair: the vocabulary its two wrong-shape diagnostics are
 /// built from.
 ///
-/// Declared as a `const` in the macro crate that owns the pair, so the struct
-/// half and the impl half cannot describe each other differently. A plain struct
-/// literal rather than a builder: Rust already refuses a half-named pair, so
-/// there is nothing for a builder to enforce.
+/// Built only in this module — see the module doc — so the struct half and the
+/// impl half cannot describe each other differently, and no pair exists outside
+/// [`ALL`].
 pub struct DecoratorPair {
     /// The struct half as written, e.g. `"#[controller]"`.
-    pub host: &'static str,
+    host: &'static str,
     /// How to name the struct the host half decorates, e.g. `"controller
     /// struct"`. Read by *both* messages, so the two agree on what the item is.
-    pub subject: &'static str,
+    subject: &'static str,
     /// The impl half as written, e.g. `"#[routes]"`.
-    pub operations: &'static str,
+    operations: &'static str,
     /// What the impl half collects, as written, e.g. `"#[get] / #[post]"`.
-    pub collects: &'static str,
+    collects: &'static str,
+}
+
+/// The HTTP edge: `#[controller]` / `#[routes]`, and `#[crud]` beside them.
+pub const HTTP: DecoratorPair = DecoratorPair::edge(
+    "#[controller]",
+    "controller struct",
+    "#[routes]",
+    "#[get] / #[post] / #[put] / #[patch] / #[delete]",
+);
+
+/// The GraphQL edge: `#[resolver]` / `#[operations]`, and `#[crud]` beside them.
+pub const GRAPHQL: DecoratorPair = DecoratorPair::edge(
+    "#[resolver]",
+    "resolver struct",
+    "#[operations]",
+    "#[query] / #[mutation] / #[subscription] / #[entity] / #[field_resolver]",
+);
+
+/// The WebSocket edge: `#[gateway]` / `#[messages]`.
+pub const WS: DecoratorPair = DecoratorPair::edge(
+    "#[gateway]",
+    "gateway struct",
+    "#[messages]",
+    "#[subscribe_message] / #[on_connect] / #[on_disconnect]",
+);
+
+/// The MCP edge: `#[mcp]` / `#[tools]`.
+pub const MCP: DecoratorPair =
+    DecoratorPair::edge("#[mcp]", "host struct", "#[tools]", "#[tool] / #[prompt]");
+
+/// Lifecycle hooks on a provider.
+pub const HOOKS: DecoratorPair = DecoratorPair::on_provider(
+    "#[hooks]",
+    "#[on_module_init] / #[on_application_bootstrap] / #[on_module_destroy] / \
+     #[before_application_shutdown] / #[on_application_shutdown]",
+);
+
+/// A queue processor.
+pub const PROCESSOR: DecoratorPair = DecoratorPair::on_provider("#[processor]", "#[process]");
+
+/// Health indicators on a provider.
+pub const INDICATORS: DecoratorPair =
+    DecoratorPair::on_provider("#[indicators]", "#[liveness] / #[readiness] / #[startup]");
+
+/// Scheduled tasks on a provider.
+pub const SCHEDULED: DecoratorPair =
+    DecoratorPair::on_provider("#[scheduled]", "#[every] / #[cron] / #[after]");
+
+/// Event listeners on a provider.
+pub const LISTENERS: DecoratorPair = DecoratorPair::on_provider("#[listeners]", "#[on_event]");
+
+/// Every pair the framework declares.
+pub const ALL: [&DecoratorPair; 9] = [
+    &HTTP,
+    &GRAPHQL,
+    &WS,
+    &MCP,
+    &HOOKS,
+    &PROCESSOR,
+    &INDICATORS,
+    &SCHEDULED,
+    &LISTENERS,
+];
+
+impl DecoratorPair {
+    /// An edge's pair: its own struct decorator and the impl half beside it.
+    pub(crate) const fn edge(
+        host: &'static str,
+        subject: &'static str,
+        operations: &'static str,
+        collects: &'static str,
+    ) -> Self {
+        Self {
+            host,
+            subject,
+            operations,
+            collects,
+        }
+    }
+
+    /// The struct half as written, e.g. `"#[controller]"`.
+    pub const fn host(&self) -> &'static str {
+        self.host
+    }
+
+    /// The impl half as written, e.g. `"#[routes]"`.
+    pub const fn operations(&self) -> &'static str {
+        self.operations
+    }
+
+    /// What the impl half collects, as written, e.g. `"#[get] / #[post]"`.
+    pub const fn collects(&self) -> &'static str {
+        self.collects
+    }
 }
 
 impl DecoratorPair {
@@ -100,7 +190,7 @@ impl DecoratorPair {
     /// processor, a scheduled-task host, an event-listener host. There is no
     /// edge-specific struct decorator to name, but reaching for the impl half on
     /// a struct still deserves better than `expected impl`.
-    pub const fn on_provider(operations: &'static str, collects: &'static str) -> Self {
+    pub(crate) const fn on_provider(operations: &'static str, collects: &'static str) -> Self {
         Self {
             host: "#[injectable]",
             subject: "provider struct",
@@ -113,7 +203,7 @@ impl DecoratorPair {
     /// impl half sits on an `impl` block all right, but the container will not
     /// hold the type it collects for.
     ///
-    /// An [`on_provider`](Self::on_provider) half resolves its host with
+    /// An `on_provider` half resolves its host with
     /// `Container::get::<Host>()`, outside any request — which answers only for
     /// a singleton stored under its own type. An edge host registers metadata;
     /// a `scope = request` provider registers a factory; a `scope = transient`
@@ -440,13 +530,6 @@ mod tests {
     use super::*;
     use quote::quote;
 
-    const PAIR: DecoratorPair = DecoratorPair {
-        host: "#[gateway]",
-        subject: "gateway struct",
-        operations: "#[messages]",
-        collects: "#[on_x]",
-    };
-
     /// `syn`'s item types carry no `Debug` (the `extra-traits` feature is off), so
     /// `expect_err` is unavailable; `err().expect(..)` bounds nothing on the `Ok`
     /// type and asserts the same thing.
@@ -454,28 +537,117 @@ mod tests {
         result.err().expect(what).to_string()
     }
 
-    // The whole point of the pair: each half's refusal names the *other* half,
-    // so the compiler tells the reader which decorator it is looking at.
+    fn on_provider(pair: &DecoratorPair) -> bool {
+        pair.host() == "#[injectable]"
+    }
+
+    // The whole point of a pair: each half's refusal names the *other* half, so
+    // the compiler tells the reader which decorator it is looking at. Run over
+    // every pair the framework declares, since `ALL` is the population.
     #[test]
     fn the_host_half_on_an_impl_names_the_operations_half() {
-        let msg = refusal(
-            PAIR.parse_host(quote!(impl Gateway {})),
-            "an impl on #[gateway] must be refused",
-        );
-        assert!(msg.contains("#[messages]"), "{msg}");
-        assert!(msg.contains("#[gateway]"), "{msg}");
+        for pair in ALL.iter().filter(|pair| !on_provider(pair)) {
+            let msg = refusal(pair.parse_host(quote!(impl Host {})), pair.host());
+            assert!(msg.contains(pair.operations()), "{}: {msg}", pair.host());
+            assert!(msg.contains(pair.host()), "{}: {msg}", pair.host());
+        }
+    }
+
+    /// `#[injectable]` owns no pair, so its refusal names the family — every
+    /// impl half whose struct half it is.
+    #[test]
+    fn injectable_on_an_impl_names_every_provider_half() {
+        let msg = refusal(parse_provider_host(quote!(impl Host {})), "#[injectable]");
+        for pair in ALL.iter().filter(|pair| on_provider(pair)) {
+            assert!(
+                msg.contains(pair.operations()),
+                "{}: {msg}",
+                pair.operations()
+            );
+        }
     }
 
     #[test]
     fn the_operations_half_on_a_struct_names_the_host_half() {
-        let msg = refusal(
-            PAIR.parse_operations(quote!(
-                struct Gateway;
-            )),
-            "a struct on #[messages] must be refused",
+        for pair in ALL {
+            let msg = refusal(
+                pair.parse_operations(quote!(
+                    struct Host;
+                )),
+                pair.operations(),
+            );
+            assert!(msg.contains(pair.host()), "{}: {msg}", pair.operations());
+            assert!(msg.contains(pair.subject), "{}: {msg}", pair.operations());
+        }
+    }
+
+    #[test]
+    fn the_operations_half_on_a_trait_impl_names_the_inherent_impl() {
+        for pair in ALL {
+            let msg = refusal(
+                pair.parse_operations(quote!(impl Display for Host {})),
+                pair.operations(),
+            );
+            assert!(
+                msg.contains(pair.operations()),
+                "{}: {msg}",
+                pair.operations()
+            );
+            assert!(msg.contains("impl Host"), "{}: {msg}", pair.operations());
+        }
+    }
+
+    #[test]
+    fn arguments_on_the_operations_half_name_the_host_half() {
+        for pair in ALL {
+            let msg = refusal(
+                pair.reject_args(&quote!(path = "/x"), "declare it on"),
+                pair.operations(),
+            );
+            assert!(
+                msg.contains(pair.operations()),
+                "{}: {msg}",
+                pair.operations()
+            );
+            assert!(msg.contains(pair.host()), "{}: {msg}", pair.operations());
+        }
+    }
+
+    #[test]
+    fn a_host_layer_on_the_operations_half_names_the_host_half() {
+        let attrs: Vec<syn::Attribute> = vec![syn::parse_quote!(#[use_guards(AuthGuard)])];
+        for pair in ALL {
+            let msg = refusal(pair.reject_host_layers(&attrs), pair.operations());
+            assert!(msg.contains(pair.host()), "{}: {msg}", pair.operations());
+        }
+    }
+
+    /// What a macro crate reads off a pair is what the pair declares.
+    #[test]
+    fn the_accessors_read_the_declared_halves() {
+        assert_eq!(
+            (GRAPHQL.host(), GRAPHQL.operations()),
+            ("#[resolver]", "#[operations]")
         );
-        assert!(msg.contains("#[gateway]"), "{msg}");
-        assert!(msg.contains("gateway struct"), "{msg}");
+        for pair in ALL {
+            assert!(pair.collects().starts_with("#["), "{}", pair.collects());
+        }
+    }
+
+    /// One decorator, one pair: an impl half named twice would give two pairs
+    /// one rustdoc page.
+    #[test]
+    fn every_pair_has_its_own_halves() {
+        for (i, pair) in ALL.iter().enumerate() {
+            for other in &ALL[i + 1..] {
+                assert_ne!(pair.operations(), other.operations);
+                assert!(
+                    on_provider(pair) || pair.host() != other.host,
+                    "{}",
+                    pair.host()
+                );
+            }
+        }
     }
 
     // Neither message may swallow a real syntax error: a struct that does not
@@ -484,26 +656,13 @@ mod tests {
     #[test]
     fn a_genuine_syntax_error_is_reported_as_itself() {
         let msg = refusal(
-            PAIR.parse_host(quote!(struct Gateway { : })),
+            WS.parse_host(quote!(struct Gateway { : })),
             "malformed input must fail",
         );
         assert!(
             !msg.contains("#[messages]"),
             "a syntax error must not be reported as a wrong-shape hint: {msg}"
         );
-    }
-
-    #[test]
-    fn a_provider_pair_names_injectable_as_the_struct_half() {
-        const PROCESSOR: DecoratorPair = DecoratorPair::on_provider("#[processor]", "#[process]");
-        let msg = refusal(
-            PROCESSOR.parse_operations(quote!(
-                struct Worker;
-            )),
-            "a struct on #[processor] must be refused",
-        );
-        assert!(msg.contains("#[injectable]"), "{msg}");
-        assert!(msg.contains("#[process]"), "{msg}");
     }
 
     /// A refusal keeps the item, minus what the half consumes; an expansion is
@@ -519,7 +678,7 @@ mod tests {
             }
         };
         let refusal = syn::Error::new(proc_macro2::Span::call_site(), "no").to_compile_error();
-        let kept = PAIR
+        let kept = WS
             .keep_item_on_refusal(
                 input.clone(),
                 refusal.clone(),
@@ -539,7 +698,7 @@ mod tests {
 
         let expansion = quote!(impl Gateway {} const _: () = (););
         assert_eq!(
-            PAIR.keep_item_on_refusal(input, expansion.clone(), &[], |_| quote!())
+            WS.keep_item_on_refusal(input, expansion.clone(), &[], |_| quote!())
                 .to_string(),
             expansion.to_string(),
         );
@@ -547,12 +706,15 @@ mod tests {
 
     #[test]
     fn the_right_shape_parses_through() {
-        assert!(
-            PAIR.parse_host(quote!(
-                struct Gateway;
-            ))
-            .is_ok()
-        );
-        assert!(PAIR.parse_operations(quote!(impl Gateway {})).is_ok());
+        for pair in ALL {
+            assert!(
+                pair.parse_host(quote!(
+                    struct Host;
+                ))
+                .is_ok()
+            );
+            assert!(pair.parse_operations(quote!(impl Host {})).is_ok());
+            assert!(pair.reject_args(&quote!(), "").is_ok());
+        }
     }
 }

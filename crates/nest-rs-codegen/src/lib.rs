@@ -24,7 +24,7 @@ mod identity;
 mod inject;
 mod job;
 mod mount;
-mod pair;
+pub mod pair;
 mod posture;
 mod queue_name;
 mod replicas;

@@ -2,6 +2,7 @@
 //! controller-level interceptor/guard/filter wrapping). `#[routes]` owns the
 //! route table and emits the `Discoverable`/mount.
 
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -10,19 +11,9 @@ use syn::punctuated::Punctuated;
 use syn::{LitStr, Meta, Token};
 
 use nest_rs_codegen::{
-    DecoratorPair, InjectableBody, build_injectable_body, from_container_method,
-    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    require_str_lit, scoped_specs, take_path_list,
-};
-
-/// The HTTP edge's pair. Read by `#[controller]` here and by `#[routes]` /
-/// `#[crud]` next door, so reaching for either half on the wrong shape names the
-/// other one instead of reporting syn's `expected struct`.
-pub(crate) const HTTP_PAIR: DecoratorPair = DecoratorPair {
-    host: "#[controller]",
-    subject: "controller struct",
-    operations: "#[routes]",
-    collects: "#[get] / #[post] / #[put] / #[patch] / #[delete]",
+    InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
+    injected_keys_with_layers, injected_names_with_layers, layer_deps, require_str_lit,
+    scoped_specs, take_path_list,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -31,7 +22,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let versions_slice = quote! { &[#(#versions),*] };
-    let mut item = match HTTP_PAIR.parse_host(input.into()) {
+    let mut item = match pair::HTTP.parse_host(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -120,7 +111,7 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
         quote!(dyn ::nest_rs_exception_filters::ExceptionFilterErased),
     );
 
-    let residency = HTTP_PAIR.host_residency(&name, &item.generics);
+    let residency = pair::HTTP.host_residency(&name, &item.generics);
 
     quote! {
         #item

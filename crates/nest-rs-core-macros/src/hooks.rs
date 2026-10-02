@@ -1,3 +1,4 @@
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -5,17 +6,8 @@ use syn::ImplItem;
 use syn::ext::IdentExt;
 
 use nest_rs_codegen::{
-    DecoratorPair, HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit,
-    shared_receiver,
+    HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit, shared_receiver,
 };
-
-/// A lifecycle host keeps its own `#[injectable]`; this names the shape
-/// `#[hooks]` wants rather than reporting syn's `expected impl`.
-const HOOKS_PAIR: DecoratorPair = DecoratorPair::on_provider(
-    "#[hooks]",
-    "#[on_module_init] / #[on_application_bootstrap] / #[on_module_destroy] / \
-     #[before_application_shutdown] / #[on_application_shutdown]",
-);
 
 const HOOK_ATTRS: [(&str, &str); 5] = [
     ("on_module_init", "OnModuleInit"),
@@ -28,7 +20,7 @@ const HOOK_ATTRS: [(&str, &str); 5] = [
 pub(crate) fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
     let expansion = expand(args, input).into();
-    HOOKS_PAIR
+    pair::HOOKS
         .keep_item_on_refusal(
             written,
             expansion,
@@ -40,11 +32,11 @@ pub(crate) fn hooks(args: TokenStream, input: TokenStream) -> TokenStream {
 
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
-    if let Err(err) = HOOKS_PAIR.reject_args(&args, "the provider's scope is declared by") {
+    if let Err(err) = pair::HOOKS.reject_args(&args, "the provider's scope is declared by") {
         return err.to_compile_error().into();
     }
 
-    let mut item = match HOOKS_PAIR.parse_operations(input.into()) {
+    let mut item = match pair::HOOKS.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -54,7 +46,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
     let provider_lit = base.unraw().to_string();
-    let host_check = HOOKS_PAIR.provider_host_check(&self_ty);
+    let host_check = pair::HOOKS.provider_host_check(&self_ty);
 
     let mut submissions: Vec<TokenStream2> = Vec::new();
     for impl_item in item.items.iter_mut() {

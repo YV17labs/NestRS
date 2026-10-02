@@ -8,20 +8,15 @@
 //! it. Inventory is exactly the seam `#[hooks]`, `#[scheduled]`, and
 //! `#[processor]` use, for the same reason.
 
+use nest_rs_codegen::pair;
 use nest_rs_codegen::{
-    DecoratorPair, HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit,
-    shared_receiver,
+    HostBorrow, await_if_async, cfg_attrs, impl_self_ident, returns_unit, shared_receiver,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::ImplItem;
 use syn::ext::IdentExt;
-
-/// The indicator host keeps its own `#[injectable]`; this names the shape
-/// `#[indicators]` wants rather than reporting syn's `expected impl`.
-const INDICATORS_PAIR: DecoratorPair =
-    DecoratorPair::on_provider("#[indicators]", "#[liveness] / #[readiness] / #[startup]");
 
 const PROBE_ATTRS: [(&str, &str); 3] = [
     ("liveness", "Liveness"),
@@ -32,7 +27,7 @@ const PROBE_ATTRS: [(&str, &str); 3] = [
 pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
     let expansion = expand(args, input).into();
-    INDICATORS_PAIR
+    pair::INDICATORS
         .keep_item_on_refusal(
             written,
             expansion,
@@ -44,16 +39,16 @@ pub(crate) fn indicators(args: TokenStream, input: TokenStream) -> TokenStream {
 
 fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = TokenStream2::from(args);
-    if let Err(err) = INDICATORS_PAIR.reject_args(&args, "the provider's scope is declared by") {
+    if let Err(err) = pair::INDICATORS.reject_args(&args, "the provider's scope is declared by") {
         return err.to_compile_error().into();
     }
 
-    let mut item = match INDICATORS_PAIR.parse_operations(input.into()) {
+    let mut item = match pair::INDICATORS.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = item.self_ty.clone();
-    let host_check = INDICATORS_PAIR.provider_host_check(&self_ty);
+    let host_check = pair::INDICATORS.provider_host_check(&self_ty);
     let provider = match impl_self_ident(&self_ty, "#[indicators]") {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),

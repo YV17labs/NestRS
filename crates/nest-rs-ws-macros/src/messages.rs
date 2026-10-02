@@ -9,6 +9,7 @@
 //! chain is composed **once at gateway mount** and frozen for the rest of
 //! the process — no per-message container lookup.
 
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, quote_spanned};
@@ -81,7 +82,7 @@ fn ws_pipe_binding(ty: &Type) -> (Type, Option<(Option<Path>, Type)>) {
 pub(crate) fn messages(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
     let expansion = expand(args, input).into();
-    crate::gateway::WS_PAIR
+    pair::WS
         .keep_item_on_refusal(written, expansion, &HELPERS, |item| {
             let self_ty = &item.self_ty;
             quote! {
@@ -105,17 +106,17 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // declares the `path` and the `version`, which makes this the likeliest
     // place to reach for either — so an argument list is refused rather than
     // silently dropped.
-    if let Err(err) = crate::gateway::WS_PAIR.reject_args(
+    if let Err(err) = pair::WS.reject_args(
         &TokenStream2::from(args),
         "a gateway's `path`, `version` and `namespace` are declared by",
     ) {
         return err.to_compile_error().into();
     }
-    let mut item = match crate::gateway::WS_PAIR.parse_operations(input.into()) {
+    let mut item = match pair::WS.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
-    if let Err(err) = crate::gateway::WS_PAIR.reject_host_layers(&item.attrs) {
+    if let Err(err) = pair::WS.reject_host_layers(&item.attrs) {
         return err.to_compile_error().into();
     }
     let self_ty = item.self_ty.clone();

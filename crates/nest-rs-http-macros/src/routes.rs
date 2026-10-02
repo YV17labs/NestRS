@@ -2,6 +2,7 @@
 //! HTTP routes; emit `Controller` mount + `Discoverable`; capture per-route
 //! OpenAPI metadata.
 
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
@@ -93,7 +94,7 @@ struct RouteGroup {
 pub(crate) fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
     let expansion = expand(args, input).into();
-    crate::controller::HTTP_PAIR
+    pair::HTTP
         .keep_item_on_refusal(written, expansion, &HELPERS, |item| {
             let self_ty = &item.self_ty;
             quote! {
@@ -130,20 +131,20 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     // dropping it is the defect `#[processor]` and `#[scheduled]` were fixed
     // for, and this is the likeliest place of all to reach for `version` —
     // `#[controller]`, one line up, does declare one.
-    if let Err(err) = crate::controller::HTTP_PAIR.reject_args(
+    if let Err(err) = pair::HTTP.reject_args(
         &TokenStream2::from(args),
         "a controller's `path` and `version` are declared by",
     ) {
         return err.to_compile_error().into();
     }
-    let mut item = match crate::controller::HTTP_PAIR.parse_operations(input.into()) {
+    let mut item = match pair::HTTP.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
     // Silent here until now: `use_guards` is no standalone attribute macro, so
     // it reached rustc as `cannot find attribute` with no transport, reason or
     // remedy named.
-    if let Err(err) = crate::controller::HTTP_PAIR.reject_host_layers(&item.attrs) {
+    if let Err(err) = pair::HTTP.reject_host_layers(&item.attrs) {
         return err.to_compile_error().into();
     }
     let self_ty = item.self_ty.clone();

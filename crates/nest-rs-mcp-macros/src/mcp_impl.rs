@@ -71,6 +71,7 @@
 //! earlier draft grew a second accessor and a second fallback trait to work
 //! around a problem the SDK had already solved.
 
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
@@ -216,7 +217,7 @@ struct PipedArg {
 }
 
 pub(crate) fn mcp_impl(args: TokenStream, item: ItemImpl) -> TokenStream {
-    if let Err(err) = crate::mcp::MCP_PAIR.reject_args(
+    if let Err(err) = pair::MCP.reject_args(
         &TokenStream2::from(args),
         "the endpoint's path and identity are declared by",
     ) {
@@ -235,7 +236,7 @@ fn expand(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // same way; a hand-written `impl ServerHandler` (the escape hatch a host
     // with no `#[tools]` block takes) is what the shared sentence redirects to.
     reject_http_only_layers(&item.attrs, "MCP", "host")?;
-    crate::mcp::MCP_PAIR.reject_host_layers(&item.attrs)?;
+    pair::MCP.reject_host_layers(&item.attrs)?;
 
     let self_ty = item.self_ty.clone();
     // **`#[tools]`, because this file is `#[tools]`' expansion.** The pair

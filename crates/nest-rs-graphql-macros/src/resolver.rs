@@ -9,6 +9,7 @@
 //! attribute whichever half emitted it. See the *one decorator, one item shape*
 //! rule in `CLAUDE.md`.
 
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
@@ -21,21 +22,12 @@ use syn::{
 };
 
 use nest_rs_codegen::{
-    Collision, Conditional, DecoratorPair, DispatchKeys, Edge, HostBorrow, InjectableBody,
-    PipeWrapper, await_if_async, build_injectable_body, cfg_attrs, delegated_attrs,
-    force_guard_typeids, forwarded_arg_idents, forwarded_idents, from_container_method,
-    guard_capability_bounds, impl_self_ident, injected_keys_with_layers,
-    injected_methods_with_layers, injected_names_with_layers, layer_deps, normalize_forwarded_args,
-    pipe_wrapper, reject_http_only_layers, scoped_specs, shared_receiver, take_flag_attr,
-    take_path_list,
-};
-
-/// The GraphQL edge's pair, read by `#[resolver]`, `#[operations]` and `#[crud]`.
-pub(crate) const GRAPHQL_PAIR: DecoratorPair = DecoratorPair {
-    host: "#[resolver]",
-    subject: "resolver struct",
-    operations: "#[operations]",
-    collects: "#[query] / #[mutation] / #[subscription] / #[entity] / #[field_resolver]",
+    Collision, Conditional, DispatchKeys, Edge, HostBorrow, InjectableBody, PipeWrapper,
+    await_if_async, build_injectable_body, cfg_attrs, delegated_attrs, force_guard_typeids,
+    forwarded_arg_idents, forwarded_idents, from_container_method, guard_capability_bounds,
+    impl_self_ident, injected_keys_with_layers, injected_methods_with_layers,
+    injected_names_with_layers, layer_deps, normalize_forwarded_args, pipe_wrapper,
+    reject_http_only_layers, scoped_specs, shared_receiver, take_flag_attr, take_path_list,
 };
 
 pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -55,8 +47,8 @@ pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 
     // Naming the sibling is the whole point of the split: the shape a developer
     // reached for exists, it is just spelled with the other decorator. Both
-    // halves read `GRAPHQL_PAIR`, so the two sentences cannot drift.
-    match GRAPHQL_PAIR.parse_host(input.into()) {
+    // halves read `pair::GRAPHQL`, so the two sentences cannot drift.
+    match pair::GRAPHQL.parse_host(input.into()) {
         Ok(item) => resolver_struct(item),
         Err(err) => err.to_compile_error().into(),
     }
@@ -64,7 +56,7 @@ pub(crate) fn resolver(args: TokenStream, input: TokenStream) -> TokenStream {
 
 pub(crate) fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     // The shared sentence, from the same pair the wrong-shape error reads: the
-    // operation set it names is `GRAPHQL_PAIR.collects`, so adding a role — this
+    // operation set it names is `pair::GRAPHQL.collects()`, so adding a role — this
     // is how `#[entity]` arrived — cannot leave one of the two listing the old
     // set.
     //
@@ -72,17 +64,17 @@ pub(crate) fn operations(args: TokenStream, input: TokenStream) -> TokenStream {
     // early return dropped the whole `impl`, so the one real error arrived under
     // `no method found` at every caller and `Discoverable` at the module.
     let written = TokenStream2::from(input.clone());
-    let expansion: TokenStream = match GRAPHQL_PAIR
+    let expansion: TokenStream = match pair::GRAPHQL
         .reject_args(
             &TokenStream2::from(args),
             "a resolver's construction and provider-scope layers are declared by",
         )
-        .and_then(|()| GRAPHQL_PAIR.parse_operations(input.into()))
+        .and_then(|()| pair::GRAPHQL.parse_operations(input.into()))
     {
         Ok(item) => resolver_impl(item),
         Err(err) => err.to_compile_error().into(),
     };
-    GRAPHQL_PAIR
+    pair::GRAPHQL
         .keep_item_on_refusal(written, expansion.into(), &OPERATIONS_HELPERS, |item| {
             let self_ty = &item.self_ty;
             quote! {
@@ -126,7 +118,9 @@ fn reject_resolver_args(args: &TokenStream2) -> syn::Result<()> {
         args,
         format!(
             "{} takes no arguments; tag methods with {} under {}",
-            GRAPHQL_PAIR.host, GRAPHQL_PAIR.collects, GRAPHQL_PAIR.operations
+            pair::GRAPHQL.host(),
+            pair::GRAPHQL.collects(),
+            pair::GRAPHQL.operations()
         ),
     ))
 }
@@ -195,7 +189,7 @@ fn resolver_struct(mut item: ItemStruct) -> TokenStream {
         quote!()
     };
 
-    let residency = GRAPHQL_PAIR.host_residency(&name, &item.generics);
+    let residency = pair::GRAPHQL.host_residency(&name, &item.generics);
 
     quote! {
         #item
@@ -896,7 +890,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     // placement here with a redirect message — the impl-form has no other
     // role for it (the struct-form parses and exposes it via
     // `__nestrs_resolver_guard_specs()`).
-    GRAPHQL_PAIR.reject_host_layers(&item.attrs)?;
+    pair::GRAPHQL.reject_host_layers(&item.attrs)?;
     reject_http_only_layers(&item.attrs, "GraphQL", "resolver")?;
 
     let query_obj = format_ident!("__{}Query", base);

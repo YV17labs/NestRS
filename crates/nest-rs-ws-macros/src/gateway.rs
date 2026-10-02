@@ -2,6 +2,7 @@
 //! connection-level guard wrapping). `#[messages]` emits the `Discoverable`/mount
 //! + dispatcher, and reads the mount address back from here.
 
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -10,18 +11,9 @@ use syn::punctuated::Punctuated;
 use syn::{LitStr, Meta, Path, Token};
 
 use nest_rs_codegen::{
-    DecoratorPair, InjectableBody, build_injectable_body, from_container_method,
-    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    reject_http_only_layers, require_str_lit, scoped_specs, take_path_list,
-};
-
-/// The WS edge's pair, read by both halves so their wrong-shape diagnostics name
-/// each other rather than reporting syn's `expected struct`.
-pub(crate) const WS_PAIR: DecoratorPair = DecoratorPair {
-    host: "#[gateway]",
-    subject: "gateway struct",
-    operations: "#[messages]",
-    collects: "#[subscribe_message] / #[on_connect] / #[on_disconnect]",
+    InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
+    injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
+    require_str_lit, scoped_specs, take_path_list,
 };
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -38,7 +30,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         Some(v) => quote! { ::core::option::Option::Some(#v) },
         None => quote! { ::core::option::Option::None },
     };
-    let mut item = match WS_PAIR.parse_host(input.into()) {
+    let mut item = match pair::WS.parse_host(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -137,7 +129,7 @@ pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
         None => quote! {},
     };
 
-    let residency = WS_PAIR.host_residency(&name, &item.generics);
+    let residency = pair::WS.host_residency(&name, &item.generics);
 
     quote! {
         #item

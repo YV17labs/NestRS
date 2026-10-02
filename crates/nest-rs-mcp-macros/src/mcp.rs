@@ -1,3 +1,4 @@
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
@@ -6,25 +7,13 @@ use syn::punctuated::Punctuated;
 use syn::{Expr, ItemStruct, LitStr, Meta, Token};
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, InjectableBody, build_injectable_body, from_container_method,
-    guard_capability_bounds, injected_keys_with_layers, injected_names_with_layers, layer_deps,
-    reject_http_only_layers, require_str_lit, scoped_specs, take_path_list,
-};
-
-/// The MCP edge's pair. Naming the sibling is the whole point of the split: the
-/// shape the developer reached for exists, it is just spelled with the other
-/// decorator — and `parse_host` / `parse_operations` parse the item *before*
-/// complaining, which is what keeps a broken `impl` from being reported as
-/// "expected struct".
-pub(crate) const MCP_PAIR: DecoratorPair = DecoratorPair {
-    host: "#[mcp]",
-    subject: "host struct",
-    operations: "#[tools]",
-    collects: "#[tool] / #[prompt]",
+    Edge, InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
+    injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
+    require_str_lit, scoped_specs, take_path_list,
 };
 
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
-    match MCP_PAIR.parse_host(input.into()) {
+    match pair::MCP.parse_host(input.into()) {
         Ok(item) => mcp_struct(args, item),
         Err(err) => err.to_compile_error().into(),
     }
@@ -36,14 +25,14 @@ pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
 /// serves and rmcp routes both through one `ServerHandler`.
 pub(crate) fn tools(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
-    let expansion = match MCP_PAIR.parse_operations(input.into()) {
+    let expansion = match pair::MCP.parse_operations(input.into()) {
         Ok(item) => crate::mcp_impl::mcp_impl(args, item),
         Err(err) => err.to_compile_error().into(),
     };
     // The struct half holds the host to `McpHost`, which `ServerHandler` answers,
     // so a refused block still names one — every method at its default — rather
     // than add an unsatisfied bound to the refusal.
-    MCP_PAIR
+    pair::MCP
         .keep_item_on_refusal(written, expansion.into(), &["tool", "prompt"], |item| {
             let self_ty = &item.self_ty;
             let (impl_generics, _, where_clause) = item.generics.split_for_impl();
@@ -111,7 +100,7 @@ fn mcp_struct(args: TokenStream, mut item: ItemStruct) -> TokenStream {
     let (identity_name, identity_title) =
         (opt_str(args.name.as_ref()), opt_str(args.title.as_ref()));
 
-    let residency = MCP_PAIR.host_residency(&name, &item.generics);
+    let residency = pair::MCP.host_residency(&name, &item.generics);
 
     quote! {
         #item

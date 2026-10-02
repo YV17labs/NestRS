@@ -12,6 +12,7 @@
 //! at least one grant (`Ability::can_class` counts row-scoped rules) and
 //! rejects zero-grant callers one step earlier.
 
+use nest_rs_codegen::pair;
 use std::collections::HashSet;
 
 use proc_macro::TokenStream;
@@ -24,7 +25,7 @@ use nest_rs_codegen::{Paginate, parse_crud_args, singular_of};
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     // The generated spelling of the impl half, so it answers a wrong shape
     // through the edge's one pair constant, exactly as `#[operations]` does.
-    let item = match crate::resolver::GRAPHQL_PAIR.parse_operations(input.into()) {
+    let item = match pair::GRAPHQL.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };

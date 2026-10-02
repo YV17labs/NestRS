@@ -5,6 +5,7 @@
 //! delegate to its opt-in `Creatable`/`Updatable`/`Deletable` impls. A
 //! hand-written method overrides its generated counterpart.
 
+use nest_rs_codegen::pair;
 use std::collections::HashSet;
 
 use proc_macro::TokenStream;
@@ -17,7 +18,7 @@ use nest_rs_codegen::{Paginate, impl_self_ident, parse_crud_args};
 pub(crate) fn entry(args: TokenStream, input: TokenStream) -> TokenStream {
     // `#[crud]` is the generated spelling of the impl half, so it answers a wrong
     // shape exactly as `#[routes]` does — through the edge's one pair constant.
-    let item = match crate::controller::HTTP_PAIR.parse_operations(input.into()) {
+    let item = match pair::HTTP.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };

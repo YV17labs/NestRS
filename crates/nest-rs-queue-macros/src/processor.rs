@@ -13,8 +13,9 @@
 //! `JobContext`. Every path is rooted at `::nest_rs_queue::*`, re-rooted to the
 //! umbrella, so the call site declares nothing but `nest-rs`.
 
+use nest_rs_codegen::pair;
 use nest_rs_codegen::{
-    DecoratorPair, Edge, JobDecorator, JobKey, PipeWrapper, WrittenKeys, await_if_async, cfg_attrs,
+    Edge, JobDecorator, JobKey, PipeWrapper, WrittenKeys, await_if_async, cfg_attrs,
     duration_millis, generic_args, impl_self_ident, job_argument_needs_a_value, job_key,
     job_returns_a_result, job_transaction, missing_argument, payload_arg_type, pipe_wrapper,
     returns_unit, snake_case, takes_value, transactional_value, ungrouped_expr, unread_job_key,
@@ -26,11 +27,6 @@ use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{Expr, ExprLit, FnArg, Ident, ImplItem, Lit, LitStr, Token, Type};
-
-/// A queue processor has no edge struct decorator — the host keeps its own
-/// `#[injectable]` — but reaching for `#[processor]` on the struct still deserves
-/// a sentence naming what to write instead of syn's `expected impl`.
-const PROCESSOR_PAIR: DecoratorPair = DecoratorPair::on_provider("#[processor]", "#[process]");
 
 /// The member of the job family this decorator is — the column of
 /// `nest_rs_codegen`'s job-key table its keys are read against.
@@ -49,7 +45,7 @@ const CHECKPOINT_NEEDS_THE_POOL: &str = "a `Checkpoint<_>` parameter needs `tran
 pub(crate) fn processor(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
     let expansion = expand(args, input).into();
-    PROCESSOR_PAIR
+    pair::PROCESSOR
         .keep_item_on_refusal(written, expansion, &["process"], |_| TokenStream2::new())
         .into()
 }
@@ -59,12 +55,12 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         return err.to_compile_error().into();
     }
 
-    let mut item = match PROCESSOR_PAIR.parse_operations(input.into()) {
+    let mut item = match pair::PROCESSOR.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = item.self_ty.clone();
-    let host_check = PROCESSOR_PAIR.provider_host_check(&self_ty);
+    let host_check = pair::PROCESSOR.provider_host_check(&self_ty);
     let provider_ident = match impl_self_ident(&self_ty, "#[processor]") {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),
@@ -426,7 +422,7 @@ fn checkpoint_parameter(method: &syn::ImplItemFn) -> syn::Result<Option<Checkpoi
 fn reject_args(args: TokenStream) -> syn::Result<()> {
     let args = TokenStream2::from(args);
     Edge::Queue.reject_version(&args)?;
-    PROCESSOR_PAIR.reject_args(&args, "the provider's scope is declared by")
+    pair::PROCESSOR.reject_args(&args, "the provider's scope is declared by")
 }
 
 /// Split a job argument into (type to deserialize, expression yielding what the

@@ -12,6 +12,7 @@
 //! proc-macro attribute, so writing it outside a `#[listeners]` impl block
 //! fails the same way `#[get]` outside `#[routes]` does.
 
+use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -19,18 +20,13 @@ use syn::ImplItem;
 use syn::ext::IdentExt;
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, await_if_async, cfg_attrs, impl_self_ident, payload_arg_type,
-    returns_unit, snake_case,
+    Edge, await_if_async, cfg_attrs, impl_self_ident, payload_arg_type, returns_unit, snake_case,
 };
-
-/// The listener host keeps its own `#[injectable]`; this names the shape
-/// `#[listeners]` wants rather than reporting syn's `expected impl`.
-const LISTENERS_PAIR: DecoratorPair = DecoratorPair::on_provider("#[listeners]", "#[on_event]");
 
 pub(crate) fn listeners(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
     let expansion = expand(args, input).into();
-    LISTENERS_PAIR
+    pair::LISTENERS
         .keep_item_on_refusal(written, expansion, &["on_event"], |_| TokenStream2::new())
         .into()
 }
@@ -44,16 +40,16 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     if let Err(err) = Edge::Events.reject_version(&args) {
         return err.to_compile_error().into();
     }
-    if let Err(err) = LISTENERS_PAIR.reject_args(&args, "the provider's scope is declared by") {
+    if let Err(err) = pair::LISTENERS.reject_args(&args, "the provider's scope is declared by") {
         return err.to_compile_error().into();
     }
 
-    let mut item = match LISTENERS_PAIR.parse_operations(input.into()) {
+    let mut item = match pair::LISTENERS.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
     let self_ty = item.self_ty.clone();
-    let host_check = LISTENERS_PAIR.provider_host_check(&self_ty);
+    let host_check = pair::LISTENERS.provider_host_check(&self_ty);
     let provider_ident = match impl_self_ident(&self_ty, "#[listeners]") {
         Ok(ident) => ident,
         Err(err) => return err.to_compile_error().into(),

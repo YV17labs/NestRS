@@ -9,14 +9,15 @@
 //! it. Inventory is exactly the seam `#[hooks]` uses for lifecycle methods,
 //! for the same reason.
 
+use nest_rs_codegen::pair;
 use std::str::FromStr;
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, HostBorrow, JobDecorator, JobKey, Replicas, await_if_async, cfg_attrs,
-    duration_millis, impl_self_ident, job_argument_needs_a_value, job_key, job_keys,
-    job_returns_a_result, job_transaction, key_value, key_without_replicas_one, replicas_value,
-    require_str_lit, returns_unit, shared_receiver, site, takes_value, transactional_value,
-    ungrouped_expr, unread_job_key,
+    Edge, HostBorrow, JobDecorator, JobKey, Replicas, await_if_async, cfg_attrs, duration_millis,
+    impl_self_ident, job_argument_needs_a_value, job_key, job_keys, job_returns_a_result,
+    job_transaction, key_value, key_without_replicas_one, replicas_value, require_str_lit,
+    returns_unit, shared_receiver, site, takes_value, transactional_value, ungrouped_expr,
+    unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -27,15 +28,10 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, ExprLit, ImplItem, Lit, LitStr, Meta, MetaNameValue, Token};
 
-/// The scheduled-tasks host keeps its own `#[injectable]`; this names the shape
-/// `#[scheduled]` wants rather than reporting syn's `expected impl`.
-const SCHEDULED_PAIR: DecoratorPair =
-    DecoratorPair::on_provider("#[scheduled]", "#[every] / #[cron] / #[after]");
-
 pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
     let expansion = expand(args, input).into();
-    SCHEDULED_PAIR
+    pair::SCHEDULED
         .keep_item_on_refusal(written, expansion, &TRIGGER_ATTRS, |_| TokenStream2::new())
         .into()
 }
@@ -45,7 +41,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         return err.to_compile_error().into();
     }
 
-    let mut item = match SCHEDULED_PAIR.parse_operations(input.into()) {
+    let mut item = match pair::SCHEDULED.parse_operations(input.into()) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -154,7 +150,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     if let Some(refusals) = refusals {
         return refusals.to_compile_error().into();
     }
-    let host_check = SCHEDULED_PAIR.provider_host_check(&self_ty);
+    let host_check = pair::SCHEDULED.provider_host_check(&self_ty);
     let out = quote! {
         #item
         #host_check
@@ -171,7 +167,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 fn reject_args(args: TokenStream) -> syn::Result<()> {
     let args = TokenStream2::from(args);
     Edge::Schedule.reject_version(&args)?;
-    SCHEDULED_PAIR.reject_args(&args, "the provider's scope is declared by")
+    pair::SCHEDULED.reject_args(&args, "the provider's scope is declared by")
 }
 
 /// The closed trigger vocabulary, read by the one-role helper both to find a

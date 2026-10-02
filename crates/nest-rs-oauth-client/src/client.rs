@@ -337,18 +337,20 @@ impl OAuthClient {
         >,
         AuthError,
     > {
-        let parse = |s: &str| AuthError::Failed(format!("invalid OAuth URL: {s}"));
+        let parse = |s: &str, error: oauth2::url::ParseError| {
+            AuthError::Failed(format!("invalid OAuth URL: {s}: {error}"))
+        };
         Ok(BasicClient::new(ClientId::new(config.client_id.clone()))
             .set_client_secret(ClientSecret::new(config.client_secret.clone()))
             .set_auth_uri(
-                AuthUrl::new(config.auth_url.clone()).map_err(|_| parse(&config.auth_url))?,
+                AuthUrl::new(config.auth_url.clone()).map_err(|e| parse(&config.auth_url, e))?,
             )
             .set_token_uri(
-                TokenUrl::new(config.token_url.clone()).map_err(|_| parse(&config.token_url))?,
+                TokenUrl::new(config.token_url.clone()).map_err(|e| parse(&config.token_url, e))?,
             )
             .set_redirect_uri(
                 RedirectUrl::new(config.redirect_url.clone())
-                    .map_err(|_| parse(&config.redirect_url))?,
+                    .map_err(|e| parse(&config.redirect_url, e))?,
             ))
     }
 
@@ -597,6 +599,10 @@ mod tests {
         assert!(
             msg.contains("not a url"),
             "error names the offending value: {msg}"
+        );
+        assert!(
+            msg.contains("relative URL without a base"),
+            "and the parser's reason, which the value alone does not say: {msg}"
         );
     }
 

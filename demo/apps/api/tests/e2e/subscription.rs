@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nest_rs::authn::JwtConfig;
+use nest_rs::authn::AuthnConfig;
 use nest_rs::http::HttpTransport;
 use nest_rs::http::poem::http::header;
 use nest_rs::testing::{EphemeralDatabase, TestApp};
@@ -132,7 +132,7 @@ async fn a_subscriber_reads_only_the_published_posts_its_ability_allows() {
     let served = TestApp::builder()
         .module::<ApiModule>()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             audience: Some(AUDIENCE.into()),
             ..Default::default()

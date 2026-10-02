@@ -9,7 +9,7 @@ use jsonwebtoken::{
 use nest_rs_config::{Namespaced, var_name};
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::JwtConfig;
+use crate::AuthnConfig;
 use crate::error::AuthError;
 
 /// Prove an EdDSA private key and public key are one pair: a signature the
@@ -238,7 +238,7 @@ impl JwtService {
             (crate::config::LEEWAY, "JwtOptions::leeway", options.leeway),
         ] {
             bounds
-                .check(JwtConfig::NAMESPACE, field, value)
+                .check(AuthnConfig::NAMESPACE, field, value)
                 .map_err(|refused| AuthError::Failed(refused.to_string()))?;
         }
         // A key and an algorithm that cannot work together fail here, at
@@ -325,8 +325,8 @@ impl JwtService {
             if options.audience.is_some() {
                 return Err(AuthError::Failed(format!(
                     "{} contradicts {}: an audience-agnostic verifier cannot also require an audience",
-                    var_name(JwtConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
-                    var_name(JwtConfig::NAMESPACE, "AUDIENCE"),
+                    var_name(AuthnConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
+                    var_name(AuthnConfig::NAMESPACE, "AUDIENCE"),
                 )));
             }
             // Not the default, and not silent: an operator who opted out of RFC
@@ -334,7 +334,7 @@ impl JwtService {
             // did it so the line is actionable rather than merely alarming.
             tracing::warn!(
                 target: crate::TARGET,
-                var = %var_name(JwtConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
+                var = %var_name(AuthnConfig::NAMESPACE, "ALLOW_ANY_AUDIENCE"),
                 "audience validation is disabled — a token minted for another service verifies here",
             );
         }

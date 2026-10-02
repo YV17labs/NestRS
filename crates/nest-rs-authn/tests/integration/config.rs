@@ -1,15 +1,15 @@
-//! Covers `src/config.rs` — `JwtConfig::into_options`.
+//! Covers `src/config.rs` — `AuthnConfig::into_options`.
 
 use std::time::Duration;
 
-use nest_rs_authn::{AuthError, JwtConfig, JwtKey, JwtService};
+use nest_rs_authn::{AuthError, AuthnConfig, JwtKey, JwtService};
 
 // HS256 secrets must clear the 32-byte (256-bit) floor.
 const STRONG_SECRET: &str = "this-is-a-32-byte-test-secret!!!";
 
 #[test]
 fn into_options_selects_hmac_from_secret() {
-    let options = JwtConfig {
+    let options = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         ..Default::default()
     }
@@ -22,7 +22,7 @@ fn into_options_selects_hmac_from_secret() {
 /// hands a short secret over as a key, and the service refuses it.
 #[test]
 fn a_short_hmac_secret_from_config_is_refused_by_the_service() {
-    let options = JwtConfig {
+    let options = AuthnConfig {
         secret: Some("too-short".into()),
         ..Default::default()
     }
@@ -36,7 +36,7 @@ fn a_short_hmac_secret_from_config_is_refused_by_the_service() {
 
 #[test]
 fn into_options_selects_eddsa_from_key_pair() {
-    let options = JwtConfig {
+    let options = AuthnConfig {
         private_key: Some(crate::DEV_PRIVATE_KEY.into()),
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         ..Default::default()
@@ -49,7 +49,7 @@ fn into_options_selects_eddsa_from_key_pair() {
 
 #[test]
 fn into_options_verify_only_from_public_key() {
-    let options = JwtConfig {
+    let options = AuthnConfig {
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         ..Default::default()
     }
@@ -67,7 +67,7 @@ fn into_options_verify_only_from_public_key() {
 #[test]
 fn into_options_private_key_without_public_fails() {
     assert!(matches!(
-        JwtConfig {
+        AuthnConfig {
             private_key: Some("pem".into()),
             ..Default::default()
         }
@@ -79,14 +79,14 @@ fn into_options_private_key_without_public_fails() {
 #[test]
 fn into_options_without_any_key_fails() {
     assert!(matches!(
-        JwtConfig::default().into_options(),
+        AuthnConfig::default().into_options(),
         Err(AuthError::Failed(_))
     ));
 }
 
 #[test]
 fn leeway_and_audience_are_applied_from_config() {
-    let options = JwtConfig {
+    let options = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         leeway_secs: Some(45),
         audience: Some("api".into()),
@@ -105,7 +105,7 @@ fn leeway_and_audience_are_applied_from_config() {
 fn a_secret_beside_an_eddsa_pair_is_refused_naming_all_three() {
     use nest_rs_config::{Namespaced, var_name};
 
-    let refused = JwtConfig {
+    let refused = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         private_key: Some(crate::DEV_PRIVATE_KEY.into()),
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
@@ -117,7 +117,7 @@ fn a_secret_beside_an_eddsa_pair_is_refused_naming_all_three() {
     };
     for key in ["SECRET", "PRIVATE_KEY", "PUBLIC_KEY"] {
         assert!(
-            message.contains(&var_name(JwtConfig::NAMESPACE, key)),
+            message.contains(&var_name(AuthnConfig::NAMESPACE, key)),
             "names {key}, built rather than spelled: {message}"
         );
     }
@@ -128,7 +128,7 @@ fn the_audience_opt_out_is_off_by_default_and_carries_through() {
     // The config path's half of RFC 7519 §4.1.3: absence of an audience is not
     // absence of the check, and the only thing that turns it off is the named
     // field.
-    let default = JwtConfig {
+    let default = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         ..Default::default()
     }
@@ -139,7 +139,7 @@ fn the_audience_opt_out_is_off_by_default_and_carries_through() {
         "a bare config still applies the audience clause",
     );
 
-    let opted_out = JwtConfig {
+    let opted_out = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         allow_any_audience: true,
         ..Default::default()
@@ -158,7 +158,7 @@ fn the_audience_opt_out_is_off_by_default_and_carries_through() {
 fn a_private_key_beside_a_secret_is_refused_naming_both() {
     use nest_rs_config::{Namespaced, var_name};
 
-    let refused = JwtConfig {
+    let refused = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         private_key: Some(crate::DEV_PRIVATE_KEY.into()),
         ..Default::default()
@@ -168,8 +168,8 @@ fn a_private_key_beside_a_secret_is_refused_naming_both() {
         panic!("a private key beside a secret must be refused")
     };
     assert!(
-        message.contains(&var_name(JwtConfig::NAMESPACE, "SECRET"))
-            && message.contains(&var_name(JwtConfig::NAMESPACE, "PRIVATE_KEY")),
+        message.contains(&var_name(AuthnConfig::NAMESPACE, "SECRET"))
+            && message.contains(&var_name(AuthnConfig::NAMESPACE, "PRIVATE_KEY")),
         "{message}"
     );
     assert!(
@@ -183,7 +183,7 @@ fn a_private_key_beside_a_secret_is_refused_naming_both() {
 /// wherever it was set — never "unset" a variable that may not exist.
 #[test]
 fn a_secret_beside_keys_is_named_for_the_environment_and_the_pin_alike() {
-    let refused = JwtConfig {
+    let refused = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         private_key: Some(crate::DEV_PRIVATE_KEY.into()),
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
@@ -194,11 +194,11 @@ fn a_secret_beside_keys_is_named_for_the_environment_and_the_pin_alike() {
         panic!("a secret beside keys must be refused")
     };
     assert!(
-        message.contains("`secret` in a JwtConfig or JwtOptions built in code"),
+        message.contains("`secret` in an AuthnConfig or JwtOptions built in code"),
         "{message}"
     );
     assert!(
-        message.contains("`public_key` in a JwtConfig or JwtOptions built in code"),
+        message.contains("`public_key` in an AuthnConfig or JwtOptions built in code"),
         "{message}"
     );
     assert!(
@@ -213,7 +213,7 @@ fn a_secret_beside_keys_is_named_for_the_environment_and_the_pin_alike() {
 /// leaves the key unmentioned.
 #[test]
 fn a_blank_secret_beside_a_public_key_is_refused_as_two_modes() {
-    let refused = JwtConfig {
+    let refused = AuthnConfig {
         secret: Some("   ".into()),
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         ..Default::default()
@@ -232,13 +232,13 @@ fn a_blank_secret_beside_a_public_key_is_refused_as_two_modes() {
 fn eddsa_key_material_that_does_not_parse_names_its_setting() {
     use nest_rs_config::{Namespaced, var_name};
 
-    let public_setting = var_name(JwtConfig::NAMESPACE, "PUBLIC_KEY_FILE");
+    let public_setting = var_name(AuthnConfig::NAMESPACE, "PUBLIC_KEY_FILE");
     for (label, public) in [
         ("an empty file", ""),
         ("whitespace", "  \n"),
         ("a private key in its place", crate::DEV_PRIVATE_KEY),
     ] {
-        let refused = JwtConfig {
+        let refused = AuthnConfig {
             public_key: Some(public.into()),
             ..Default::default()
         }
@@ -250,7 +250,7 @@ fn eddsa_key_material_that_does_not_parse_names_its_setting() {
         assert!(message.contains(&public_setting), "{label}: {message}");
     }
 
-    let refused = JwtConfig {
+    let refused = AuthnConfig {
         private_key: Some(
             "-----BEGIN PRIVATE KEY-----\nnot base64\n-----END PRIVATE KEY-----\n".into(),
         ),
@@ -263,7 +263,7 @@ fn eddsa_key_material_that_does_not_parse_names_its_setting() {
         panic!("a private key that does not parse is refused")
     };
     assert!(
-        message.contains(&var_name(JwtConfig::NAMESPACE, "PRIVATE_KEY_FILE")),
+        message.contains(&var_name(AuthnConfig::NAMESPACE, "PRIVATE_KEY_FILE")),
         "{message}"
     );
 }
@@ -273,7 +273,7 @@ fn eddsa_key_material_that_does_not_parse_names_its_setting() {
 /// two settings that are set and not the private key, which is not.
 #[test]
 fn a_public_key_beside_a_secret_is_refused_naming_both() {
-    let refused = JwtConfig {
+    let refused = AuthnConfig {
         secret: Some(STRONG_SECRET.into()),
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         ..Default::default()
@@ -320,12 +320,12 @@ fn a_secret_and_keys_from_different_tiers_arrive_together_and_are_refused() {
     fn named(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
             .iter()
-            .map(|(key, value)| (var_name(JwtConfig::NAMESPACE, key), (*value).to_owned()))
+            .map(|(key, value)| (var_name(AuthnConfig::NAMESPACE, key), (*value).to_owned()))
             .collect()
     }
     fn reader(deployment: &[(&str, &str)], cascade: &[(&str, &str)]) -> ConfigService {
         ConfigService::with_source(
-            JwtConfig::NAMESPACE,
+            AuthnConfig::NAMESPACE,
             Arc::new(Tiers {
                 deployment: named(deployment),
                 cascade: named(cascade),
@@ -337,11 +337,11 @@ fn a_secret_and_keys_from_different_tiers_arrive_together_and_are_refused() {
         ("PUBLIC_KEY", crate::DEV_PUBLIC_KEY),
     ];
 
-    let secret_var = var_name(JwtConfig::NAMESPACE, "SECRET");
+    let secret_var = var_name(AuthnConfig::NAMESPACE, "SECRET");
 
-    let config = JwtConfig::from_env(
+    let config = AuthnConfig::from_env(
         &reader(&[("SECRET", STRONG_SECRET)], &committed_pair),
-        JwtConfig::default(),
+        AuthnConfig::default(),
     )
     .expect("from_env");
     assert!(
@@ -353,11 +353,11 @@ fn a_secret_and_keys_from_different_tiers_arrive_together_and_are_refused() {
     };
     assert!(message.contains(&secret_var), "{message}");
 
-    let pinned = JwtConfig {
+    let pinned = AuthnConfig {
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         ..Default::default()
     };
-    let config = JwtConfig::from_env(
+    let config = AuthnConfig::from_env(
         &reader(&[("SECRET", STRONG_SECRET)], &[]).over_pinned(),
         pinned,
     )
@@ -386,13 +386,13 @@ fn the_eddsa_keys_are_read_from_the_files_their_file_variables_name() {
     std::fs::write(&private, crate::DEV_PRIVATE_KEY).expect("write the private key");
     std::fs::write(&public, crate::DEV_PUBLIC_KEY).expect("write the public key");
     let env = ConfigService::with_vars(
-        JwtConfig::NAMESPACE,
+        AuthnConfig::NAMESPACE,
         [
             ("PRIVATE_KEY_FILE", private.to_str().expect("a UTF-8 path")),
             ("PUBLIC_KEY_FILE", public.to_str().expect("a UTF-8 path")),
         ],
     );
-    let config = JwtConfig::from_env(&env, JwtConfig::default());
+    let config = AuthnConfig::from_env(&env, AuthnConfig::default());
     let _ = std::fs::remove_dir_all(&dir);
 
     let config = config.expect("from_env");
@@ -406,10 +406,10 @@ fn the_audience_opt_out_reads_its_env_flag() {
 
     // The namespace comes off the config type, not a literal, so the fixture
     // cannot mean a variable the reader does not.
-    let env = ConfigService::with_vars(JwtConfig::NAMESPACE, [("ALLOW_ANY_AUDIENCE", "true")]);
-    let config = JwtConfig::from_env(
+    let env = ConfigService::with_vars(AuthnConfig::NAMESPACE, [("ALLOW_ANY_AUDIENCE", "true")]);
+    let config = AuthnConfig::from_env(
         &env,
-        JwtConfig {
+        AuthnConfig {
             secret: Some(STRONG_SECRET.into()),
             ..Default::default()
         },
@@ -450,8 +450,8 @@ fn a_secret_is_held_to_the_size_of_its_algorithms_hash() {
 fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
     use nest_rs_config::{Config, ConfigService, var_name};
 
-    let read = |vars: &[(&str, &str)], base: JwtConfig| {
-        JwtConfig::from_env(
+    let read = |vars: &[(&str, &str)], base: AuthnConfig| {
+        AuthnConfig::from_env(
             &ConfigService::with_vars("authn", vars.iter().copied()),
             base,
         )
@@ -464,7 +464,7 @@ fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
         ("LEEWAY_SECS", "301"),
         ("LEEWAY_SECS", max.as_str()),
     ] {
-        let refused = read(&[(key, value)], JwtConfig::default())
+        let refused = read(&[(key, value)], AuthnConfig::default())
             .err()
             .unwrap_or_else(|| panic!("{key}={value} must fail the boot"))
             .to_string();
@@ -472,14 +472,14 @@ fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
     }
     for (pinned, key) in [
         (
-            JwtConfig {
+            AuthnConfig {
                 expires_in_secs: Some(u64::MAX),
                 ..Default::default()
             },
             "EXPIRES_IN_SECS",
         ),
         (
-            JwtConfig {
+            AuthnConfig {
                 leeway_secs: Some(u64::MAX),
                 ..Default::default()
             },
@@ -497,11 +497,11 @@ fn a_lifetime_or_a_leeway_outside_its_range_is_refused_naming_the_variable() {
     }
     let edges = read(
         &[("EXPIRES_IN_SECS", "2592000"), ("LEEWAY_SECS", "0")],
-        JwtConfig::default(),
+        AuthnConfig::default(),
     )
     .expect("each end of the range is inside it");
     assert_eq!(edges.expires_in_secs, Some(30 * 24 * 60 * 60));
     assert_eq!(edges.leeway_secs, Some(0));
-    let unset = read(&[], JwtConfig::default()).expect("unset keeps the defaults");
+    let unset = read(&[], AuthnConfig::default()).expect("unset keeps the defaults");
     assert_eq!((unset.expires_in_secs, unset.leeway_secs), (None, None));
 }

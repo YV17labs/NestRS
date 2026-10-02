@@ -15,7 +15,7 @@ categories = ["authentication", "web-programming"]
 # `AuthnGuard` is `#[injectable]` (it resolves the app's `Strategy`); `AuthnModule`
 # is a `DynamicModule` that provides the configured `JwtService` as global infra.
 nest-rs-core.workspace = true
-# `AuthnModule` owns `JwtConfig` (namespace `authn`), loaded from
+# `AuthnModule` owns `AuthnConfig` (namespace `authn`), loaded from
 # `NESTRS_AUTHN__*`. The `#[config]` derive routes through
 # `nest_rs_config::validator`, so this crate declares no `validator` of its own.
 nest-rs-config.workspace = true

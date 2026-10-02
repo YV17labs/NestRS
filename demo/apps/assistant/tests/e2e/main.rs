@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assistant::AssistantModule;
-use nest_rs::authn::JwtConfig;
+use nest_rs::authn::AuthnConfig;
 use nest_rs::config::Config;
 use nest_rs::storage::{Storage, StorageConfig};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
@@ -28,7 +28,7 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
     let app = TestApp::builder()
         .module::<AssistantModule>()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             audience: Some(AUDIENCE.into()),
             ..Default::default()

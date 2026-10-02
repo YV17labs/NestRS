@@ -1,6 +1,6 @@
 use auth::{AuthModule, OAuthConfig, RegisteredClient};
 use base64::Engine as _;
-use nest_rs::authn::{JwtConfig, JwtOptions, JwtService, hash_password};
+use nest_rs::authn::{AuthnConfig, JwtOptions, JwtService, hash_password};
 use nest_rs::social::{GithubSocialConfig, GoogleSocialConfig};
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use sea_orm::sea_query::{OnConflict, Query};
@@ -30,7 +30,7 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
         .module::<AuthModule>()
         .with_test_telemetry()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             private_key: Some(DEV_PRIVATE_KEY.into()),
             public_key: Some(DEV_PUBLIC_KEY.into()),
             ..Default::default()

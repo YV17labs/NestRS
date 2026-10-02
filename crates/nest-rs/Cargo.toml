@@ -171,7 +171,7 @@ oauth-client = ["dep:nest-rs-oauth-client", "authn"]
 # `http` (which brings `guards`) the way every other request-shaped row does.
 oauth-server = ["dep:nest-rs-oauth-server", "http"]
 # RFC 9728 discovery. Mounts a controller and an interceptor, so `http`; the
-# boot check reads `JwtConfig`, so `authn`.
+# boot check reads `AuthnConfig`, so `authn`.
 oauth-resource = ["dep:nest-rs-oauth-resource", "authn", "http"]
 # The `#[authorize]` half: the developer writes the attribute, so they enable
 # the feature named after it. Transport bindings ride the transport features.

@@ -1,5 +1,5 @@
 use api::ApiModule;
-use nest_rs::authn::JwtConfig;
+use nest_rs::authn::AuthnConfig;
 use nest_rs::http::HttpTransport;
 use nest_rs::testing::{EphemeralDatabase, TestApp};
 use poem::http::{StatusCode, header};
@@ -16,7 +16,7 @@ async fn responses_are_gzip_compressed_when_the_client_accepts_it() {
         .module::<ApiModule>()
         .http(HttpTransport::new().compression(true))
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             audience: Some(AUDIENCE.into()),
             ..Default::default()

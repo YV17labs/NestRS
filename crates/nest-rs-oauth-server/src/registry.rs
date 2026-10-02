@@ -19,7 +19,7 @@ use nest_rs_authn::PrincipalIdentity;
 ///
 /// [`Debug`] is hand-written and **redacts `client_secret`** — a registry is
 /// exactly the kind of value that ends up in a `{:?}` of an app config, and the
-/// sibling secret holders in this crate (`OAuthClientConfig`, `JwtConfig`) drop `Debug` entirely for the same reason.
+/// sibling secret holders in this crate (`OAuthClientConfig`, `AuthnConfig`) drop `Debug` entirely for the same reason.
 #[derive(Clone, serde::Deserialize)]
 pub struct RegisteredClient<P> {
     /// The client's public identifier, matched in constant time.

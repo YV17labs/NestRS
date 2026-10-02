@@ -13,7 +13,7 @@ use features::orgs::ActiveModel as OrgActive;
 use features::posts::{PostsHttpModule, publication};
 use features::testing::{AUDIENCE, DEV_PUBLIC_KEY, token};
 use features::users::{ActiveModel as UserActive, UserRole};
-use nest_rs::authn::JwtConfig;
+use nest_rs::authn::AuthnConfig;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 #[module(
@@ -60,7 +60,7 @@ async fn boot() -> (EphemeralDatabase, TestApp, String, Uuid) {
     let app = TestApp::builder()
         .module::<PostsHttpTestModule>()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             audience: Some(AUDIENCE.into()),
             ..Default::default()

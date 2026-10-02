@@ -1,6 +1,6 @@
 use features::Role;
 use live::LiveModule;
-use nest_rs::authn::JwtConfig;
+use nest_rs::authn::AuthnConfig;
 use nest_rs::testing::ws::{WsApp, WsSocket};
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
 use serde_json::Value;
@@ -23,7 +23,7 @@ pub(crate) async fn boot_builder() -> (EphemeralDatabase, TestAppBuilder) {
     let builder = TestApp::builder()
         .module::<LiveModule>()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             audience: Some(AUDIENCE.into()),
             ..Default::default()

@@ -17,7 +17,7 @@
 //! advertise an issuer nobody serves — and the walk stops at that hop.
 
 use crate::AlwaysUnauthorized;
-use nest_rs_authn::{AuthnModule, JwtConfig};
+use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::module;
 use nest_rs_http::{controller, routes};
 use nest_rs_oauth_resource::{OAuthResourceConfig, OAuthResourceModule, WELL_KNOWN_PATH};
@@ -83,14 +83,14 @@ impl StubAuthorizationServer {
 
 // --- the app ---------------------------------------------------------------
 
-fn jwt() -> JwtConfig {
-    JwtConfig {
+fn authn() -> AuthnConfig {
+    AuthnConfig {
         secret: Some(SECRET.into()),
         // The audience `OAuthResourceModule` requires — and requires to be
         // the resource identifier, so a token minted for another service is
         // rejected rather than replayed here.
         audience: Some(RESOURCE.into()),
-        ..JwtConfig::default()
+        ..AuthnConfig::default()
     }
 }
 
@@ -103,7 +103,7 @@ fn resource() -> OAuthResourceConfig {
 
 #[module(
     imports = [
-        AuthnModule::for_root(jwt()),
+        AuthnModule::for_root(authn()),
         OAuthResourceModule::for_root(resource()),
     ],
     providers = [PostsController, StubAuthorizationServer, AlwaysUnauthorized],
@@ -245,7 +245,7 @@ async fn a_deployment_that_cannot_name_itself_fails_boot() {
     // resource identity it has not been given, rather than serving a document
     // that tells a client nothing.
     #[module(imports = [
-        AuthnModule::for_root(jwt()),
+        AuthnModule::for_root(authn()),
         OAuthResourceModule::for_root(OAuthResourceConfig::default()),
     ])]
     struct Incomplete;
@@ -266,7 +266,7 @@ async fn an_unbound_audience_fails_boot() {
     // any token its issuer signed — including one a user granted to a different
     // service, which that service can replay here.
     #[module(imports = [
-        AuthnModule::for_root(JwtConfig { secret: Some(SECRET.into()), ..JwtConfig::default() }),
+        AuthnModule::for_root(AuthnConfig { secret: Some(SECRET.into()), ..AuthnConfig::default() }),
         OAuthResourceModule::for_root(resource()),
     ])]
     struct Unbound;
@@ -275,7 +275,7 @@ async fn an_unbound_audience_fails_boot() {
     let text = format!("{err:#}");
     assert!(
         text.contains(&nest_rs_config::var_name(
-            <JwtConfig as nest_rs_config::Namespaced>::NAMESPACE,
+            <AuthnConfig as nest_rs_config::Namespaced>::NAMESPACE,
             "AUDIENCE",
         )),
         "got: {text}",
@@ -288,7 +288,7 @@ async fn an_unbound_audience_fails_boot() {
 #[tokio::test]
 async fn a_non_https_resource_identifier_is_refused() {
     #[module(imports = [
-        AuthnModule::for_root(jwt()),
+        AuthnModule::for_root(authn()),
         OAuthResourceModule::for_root(OAuthResourceConfig {
             resource: Some("http://api.example.com".into()),
             authorization_servers: vec!["https://auth.example.com".into()],
@@ -309,10 +309,10 @@ async fn a_non_https_resource_identifier_is_refused() {
 #[tokio::test]
 async fn http_on_loopback_is_accepted_for_local_development() {
     #[module(imports = [
-        AuthnModule::for_root(JwtConfig {
+        AuthnModule::for_root(AuthnConfig {
             secret: Some(SECRET.into()),
             audience: Some("http://localhost:3003".into()),
-            ..JwtConfig::default()
+            ..AuthnConfig::default()
         }),
         OAuthResourceModule::for_root(OAuthResourceConfig {
             resource: Some("http://localhost:3003".into()),
@@ -333,7 +333,7 @@ async fn http_on_loopback_is_accepted_for_local_development() {
 #[tokio::test]
 async fn a_bearer_method_the_framework_does_not_honour_is_refused() {
     #[module(imports = [
-        AuthnModule::for_root(jwt()),
+        AuthnModule::for_root(authn()),
         OAuthResourceModule::for_root(OAuthResourceConfig {
             resource: Some("https://api.example.com".into()),
             authorization_servers: vec!["https://auth.example.com".into()],
@@ -348,7 +348,7 @@ async fn a_bearer_method_the_framework_does_not_honour_is_refused() {
     assert!(text.contains("Authorization"), "got: {text}");
 
     #[module(imports = [
-        AuthnModule::for_root(jwt()),
+        AuthnModule::for_root(authn()),
         OAuthResourceModule::for_root(OAuthResourceConfig {
             resource: Some("https://api.example.com".into()),
             authorization_servers: vec!["https://auth.example.com".into()],
@@ -374,10 +374,10 @@ async fn a_bearer_method_the_framework_does_not_honour_is_refused() {
 #[tokio::test]
 async fn a_resource_with_a_query_serves_the_url_its_challenge_advertises() {
     #[module(imports = [
-        AuthnModule::for_root(JwtConfig {
+        AuthnModule::for_root(AuthnConfig {
             secret: Some(SECRET.into()),
             audience: Some("https://api.example.com/mcp?tenant=a".into()),
-            ..JwtConfig::default()
+            ..AuthnConfig::default()
         }),
         OAuthResourceModule::for_root(OAuthResourceConfig {
             resource: Some("https://api.example.com/mcp?tenant=a".into()),

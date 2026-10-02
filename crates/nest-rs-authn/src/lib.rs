@@ -51,7 +51,7 @@ mod service;
 mod strategies;
 mod strategy;
 
-pub use config::JwtConfig;
+pub use config::AuthnConfig;
 pub use credentials::{basic_credentials, bearer_token};
 pub use error::{AuthError, CredentialError, PasswordError};
 pub use guard::AuthnGuard;

@@ -76,11 +76,11 @@ pub fn request(headers: &[(&str, &str)]) -> Request { /* … */ }
 ```
 
 ```rust title="crates/nest-rs-authn/tests/integration/config.rs"
-use nest_rs::authn::{JwtConfig, JwtKey, JwtService};
+use nest_rs::authn::{AuthnConfig, JwtKey, JwtService};
 
 #[test]
 fn into_options_selects_eddsa_from_key_pair() {
-    let options = JwtConfig {
+    let options = AuthnConfig {
         private_key: Some(crate::DEV_PRIVATE_KEY.into()),
         public_key: Some(crate::DEV_PUBLIC_KEY.into()),
         ..Default::default()

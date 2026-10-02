@@ -21,7 +21,7 @@
 //! spec offers as the equal alternative — `controller.rs` covers that path.
 
 use crate::AlwaysUnauthorized;
-use nest_rs_authn::{AuthnModule, JwtConfig};
+use nest_rs_authn::{AuthnConfig, AuthnModule};
 use nest_rs_core::{Layer, injectable, module};
 use nest_rs_guards::{Denial, Guard, HttpGuard, guard};
 use nest_rs_http::{async_trait, controller, routes};
@@ -48,10 +48,10 @@ fn expected() -> String {
 }
 
 fn authn() -> nest_rs_authn::AuthnSetup {
-    AuthnModule::for_root(JwtConfig {
+    AuthnModule::for_root(AuthnConfig {
         secret: Some(SECRET.into()),
         audience: Some(RESOURCE.into()),
-        ..JwtConfig::default()
+        ..AuthnConfig::default()
     })
 }
 

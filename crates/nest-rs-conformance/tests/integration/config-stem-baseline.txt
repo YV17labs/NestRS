@@ -2,8 +2,6 @@
 # line removed is a type renamed to its stem; a line added is a regression
 # argued in review, never absorbed.
 #
-# The one line below is an owner question, raised rather than fixed: `JwtConfig`
-# is `nest-rs-authn`'s public config type, so the rename is a breaking change to
-# the framework's API, and `CLAUDE.md` sends a documented rule that has drifted
-# from the code to the owner rather than editing either side to match.
-`JwtConfig` is declared by crates/nest-rs-authn/src/config.rs under `authn` — its stem names `AuthnConfig`
+# Empty: every `#[config]` of both workspaces is named for the stem its
+# namespace reads. `JwtConfig` stood here until `nest-rs-authn`'s config took
+# the name its namespace `authn` and its path already agreed on, `AuthnConfig`.

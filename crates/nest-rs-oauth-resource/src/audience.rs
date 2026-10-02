@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_authn::JwtConfig;
+use nest_rs_authn::AuthnConfig;
 use nest_rs_config::Namespaced;
 use nest_rs_core::{hooks, injectable};
 
@@ -14,7 +14,7 @@ use crate::metadata::ProtectedResourceMetadata;
 /// Runs the confused-deputy check once wiring is complete.
 ///
 /// It is a lifecycle hook rather than part of the metadata factory because
-/// [`JwtConfig`] is itself a factory output: reading it *during* the factory
+/// [`AuthnConfig`] is itself a factory output: reading it *during* the factory
 /// phase depends on which module was collected first, which is exactly the kind
 /// of ordering a boot check must not rest on. `#[on_module_init]` runs after
 /// every provider is built, so the answer is the same whatever the import order
@@ -28,14 +28,14 @@ pub(crate) struct AudienceBinding {
     #[inject]
     metadata: Arc<ProtectedResourceMetadata>,
     #[inject]
-    jwt: Option<Arc<JwtConfig>>,
+    authn: Option<Arc<AuthnConfig>>,
 }
 
 #[hooks]
 impl AudienceBinding {
     #[on_module_init]
     async fn verify(&self) -> anyhow::Result<()> {
-        require_audience_binding(self.jwt.as_deref(), &self.metadata)
+        require_audience_binding(self.authn.as_deref(), &self.metadata)
     }
 }
 
@@ -48,22 +48,22 @@ impl AudienceBinding {
 /// a refusal because some authorization servers mint an opaque audience string
 /// by policy, and the deployment is entitled to that.
 fn require_audience_binding(
-    jwt: Option<&JwtConfig>,
+    authn: Option<&AuthnConfig>,
     metadata: &ProtectedResourceMetadata,
 ) -> anyhow::Result<()> {
-    let Some(jwt) = jwt else {
+    let Some(authn) = authn else {
         anyhow::bail!(
             "OAuthResourceModule needs the token verifier it protects: import \
              AuthnModule::for_root(..) alongside it"
         );
     };
-    let audience = jwt.audience.as_deref().map(str::trim).unwrap_or_default();
+    let audience = authn.audience.as_deref().map(str::trim).unwrap_or_default();
     if audience.is_empty() {
         anyhow::bail!(
             "{} is required when OAuthResourceModule is imported: \
              without it this server accepts any token its issuer signed, including one minted \
              for another service. Set it to `{}`",
-            nest_rs_config::var_name(JwtConfig::NAMESPACE, "AUDIENCE"),
+            nest_rs_config::var_name(AuthnConfig::NAMESPACE, "AUDIENCE"),
             metadata.resource(),
         );
     }
@@ -92,17 +92,17 @@ mod tests {
             .expect("valid config")
     }
 
-    fn jwt_with_audience(audience: Option<&str>) -> JwtConfig {
-        JwtConfig {
+    fn authn_with_audience(audience: Option<&str>) -> AuthnConfig {
+        AuthnConfig {
             audience: audience.map(str::to_owned),
-            ..JwtConfig::default()
+            ..AuthnConfig::default()
         }
     }
 
     #[test]
     fn a_matching_audience_passes() {
         require_audience_binding(
-            Some(&jwt_with_audience(Some("https://api.example.com"))),
+            Some(&authn_with_audience(Some("https://api.example.com"))),
             &metadata(),
         )
         .expect("audience matches the resource");
@@ -119,7 +119,7 @@ mod tests {
     fn a_mismatched_audience_boots_and_says_which_two_values_disagree() {
         let logs = nest_rs_testing::LogCapture::install();
         require_audience_binding(
-            Some(&jwt_with_audience(Some("some-opaque-audience"))),
+            Some(&authn_with_audience(Some("some-opaque-audience"))),
             &metadata(),
         )
         .expect("a mismatch is tolerated, not refused");
@@ -146,7 +146,7 @@ mod tests {
     fn a_matching_audience_says_nothing() {
         let logs = nest_rs_testing::LogCapture::install();
         require_audience_binding(
-            Some(&jwt_with_audience(Some("https://api.example.com"))),
+            Some(&authn_with_audience(Some("https://api.example.com"))),
             &metadata(),
         )
         .expect("audience matches the resource");
@@ -159,11 +159,14 @@ mod tests {
 
     #[test]
     fn a_missing_audience_fails_boot_and_names_the_variable() {
-        let err = require_audience_binding(Some(&jwt_with_audience(None)), &metadata())
+        let err = require_audience_binding(Some(&authn_with_audience(None)), &metadata())
             .expect_err("no audience");
         let text = err.to_string();
         assert!(
-            text.contains(&nest_rs_config::var_name(JwtConfig::NAMESPACE, "AUDIENCE")),
+            text.contains(&nest_rs_config::var_name(
+                AuthnConfig::NAMESPACE,
+                "AUDIENCE"
+            )),
             "got: {text}",
         );
         assert!(
@@ -177,12 +180,12 @@ mod tests {
         // `NESTRS_AUTHN__AUDIENCE=` in a `.env` reads as `Some("")` — a value
         // that would disable the check while looking configured.
         assert!(
-            require_audience_binding(Some(&jwt_with_audience(Some("  "))), &metadata()).is_err(),
+            require_audience_binding(Some(&authn_with_audience(Some("  "))), &metadata()).is_err(),
         );
     }
 
     #[test]
-    fn no_jwt_config_at_all_fails_boot_naming_the_missing_module() {
+    fn no_authn_config_at_all_fails_boot_naming_the_missing_module() {
         let err = require_audience_binding(None, &metadata()).expect_err("no verifier");
         assert!(
             err.to_string().contains("AuthnModule::for_root"),
@@ -194,7 +197,7 @@ mod tests {
     fn a_differing_audience_is_allowed_but_warned() {
         // Not every authorization server mints the resource URI as `aud`; the
         // deployment keeps the choice, the log keeps the record.
-        require_audience_binding(Some(&jwt_with_audience(Some("api"))), &metadata())
+        require_audience_binding(Some(&authn_with_audience(Some("api"))), &metadata())
             .expect("a differing audience is a warn, not a refusal");
     }
 }

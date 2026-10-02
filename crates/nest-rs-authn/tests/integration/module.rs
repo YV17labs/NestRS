@@ -1,7 +1,7 @@
 //! Covers `src/module.rs` — the `for_root` seam, executed.
 //!
 //! `AuthnModule::for_root` is the only in-code path a consumer has to pin a
-//! `JwtConfig`, and it was the one seam in this crate with no test asserting
+//! `AuthnConfig`, and it was the one seam in this crate with no test asserting
 //! what a caller gets back: the discovery suite booted it, but only ever
 //! read the *config* back through the audience check, never the service the
 //! seam actually queues.
@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use nest_rs_authn::{AuthnModule, AuthnSetup, JwtConfig, JwtService};
+use nest_rs_authn::{AuthnConfig, AuthnModule, AuthnSetup, JwtService};
 use nest_rs_core::{App, module};
 use serde::{Deserialize, Serialize};
 
@@ -31,10 +31,10 @@ struct Claims {
 }
 
 fn pinned() -> AuthnSetup {
-    AuthnModule::for_root(JwtConfig {
+    AuthnModule::for_root(AuthnConfig {
         secret: Some("test-secret-padded-to-thirty-two-b".into()),
         issuer: Some(PINNED_ISSUER.into()),
-        ..JwtConfig::default()
+        ..AuthnConfig::default()
     })
 }
 
@@ -49,10 +49,10 @@ async fn for_root_pins_the_config_and_provides_a_service_built_from_it() {
         .await
         .expect("the pinned-config module boots");
 
-    let config: Arc<JwtConfig> = app
+    let config: Arc<AuthnConfig> = app
         .container()
         .get()
-        .expect("for_root registers the resolved JwtConfig");
+        .expect("for_root registers the resolved AuthnConfig");
     assert_eq!(config.issuer.as_deref(), Some(PINNED_ISSUER));
 
     // The service is the factory output, not the config. Asserting on a token

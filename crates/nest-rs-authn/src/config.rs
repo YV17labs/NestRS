@@ -1,4 +1,4 @@
-//! [`JwtConfig`] — env-driven JWT key material.
+//! [`AuthnConfig`] — env-driven JWT key material.
 
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use crate::error::AuthError;
 /// The token lifetime's range, the variable that sets it, and why.
 pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds {
     key: "EXPIRES_IN_SECS",
-    field: "JwtConfig::expires_in_secs",
+    field: "AuthnConfig::expires_in_secs",
     unit: DurationUnit::Seconds,
     least: Floor::Units(Bound {
         count: 1,
@@ -32,7 +32,7 @@ pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds {
 /// The clock-skew leeway's range, the variable that sets it, and why.
 pub(crate) const LEEWAY: DurationBounds = DurationBounds {
     key: "LEEWAY_SECS",
-    field: "JwtConfig::leeway_secs",
+    field: "AuthnConfig::leeway_secs",
     unit: DurationUnit::Seconds,
     least: Floor::Units(Bound {
         count: 0,
@@ -51,7 +51,7 @@ pub(crate) const LEEWAY: DurationBounds = DurationBounds {
 /// No `Debug` derive: secrets must not leak through a format.
 #[config(namespace = "authn")]
 #[derive(Clone, Default)]
-pub struct JwtConfig {
+pub struct AuthnConfig {
     /// HS256 shared secret (key `SECRET`); must be ≥ 32 bytes. A verifier
     /// holding it can also mint tokens. Refused beside either EdDSA key.
     pub secret: Option<String>,
@@ -101,7 +101,7 @@ pub struct JwtConfig {
     pub explicit_typing: Option<bool>,
 }
 
-impl Config for JwtConfig {
+impl Config for AuthnConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
         Ok(Self {
             secret: env.get("SECRET")?.or(base.secret),
@@ -147,15 +147,15 @@ fn pem_text(env: &ConfigService, key: &str) -> nest_rs_config::Result<Option<Str
     }
 }
 
-/// A PEM key's setting, every way it can be given. By the time a [`JwtConfig`]
+/// A PEM key's setting, every way it can be given. By the time an [`AuthnConfig`]
 /// is judged, which spelling supplied a field — or whether code pinned it — is
 /// no longer known, so the message names the setting rather than claim one
 /// variable that may not exist. A sentence continuing past it sets it off with
 /// commas.
 pub(crate) fn spellings(key: &str, field: &str) -> String {
     format!(
-        "{}, or `{field}` in a JwtConfig or JwtOptions built in code",
-        nest_rs_config::spellings(JwtConfig::NAMESPACE, key),
+        "{}, or `{field}` in an AuthnConfig or JwtOptions built in code",
+        nest_rs_config::spellings(AuthnConfig::NAMESPACE, key),
     )
 }
 
@@ -166,7 +166,7 @@ pub(crate) fn secret_setting() -> String {
     spellings("SECRET", "secret")
 }
 
-impl JwtConfig {
+impl AuthnConfig {
     /// Infer signing mode from the keys present. Fails the boot when no usable
     /// combination exists.
     ///
@@ -226,7 +226,7 @@ impl JwtConfig {
             (None, _, None) => {
                 return Err(AuthError::Failed(format!(
                     "no JWT key configured: set {} for HS256, or {} for EdDSA — or the same \
-                     field in a JwtConfig or JwtOptions built in code",
+                     field in an AuthnConfig or JwtOptions built in code",
                     nest_rs_config::spellings(Self::NAMESPACE, "SECRET"),
                     nest_rs_config::spellings(Self::NAMESPACE, "PUBLIC_KEY"),
                 )));

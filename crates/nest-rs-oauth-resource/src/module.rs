@@ -14,7 +14,7 @@
 //! **And it makes audience validation mandatory.** The MCP authorization spec
 //! requires a server to verify that a token was issued *for it* — the defence
 //! against a confused deputy replaying a token minted for another service.
-//! `NESTRS_AUTHN__AUDIENCE` is optional in [`JwtConfig`](nest_rs_authn::JwtConfig) on its own; under this
+//! `NESTRS_AUTHN__AUDIENCE` is optional in [`AuthnConfig`](nest_rs_authn::AuthnConfig) on its own; under this
 //! module it is required, and boot fails naming it. That is the whole point of
 //! the capability: without it the well-known document advertises a resource
 //! identity the verifier never checks.

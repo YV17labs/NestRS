@@ -101,7 +101,7 @@ Each key also reads from a file: `NESTRS_AUTHN__PUBLIC_KEY_FILE=/run/secrets/jwt
 names the path instead of carrying the PEM, which is the form a mounted secret
 takes.
 
-`JwtConfig::into_options` walks the three key env vars and chooses
+`AuthnConfig::into_options` walks the three key env vars and chooses
 verify-only mode when only the public key is set. `JwtService::sign`
 on a verify-only service returns `AuthError::Failed("this JwtService
 is verify-only — no signing key configured")` — even a buggy resource
@@ -109,9 +109,9 @@ server cannot mint a token.
 
 A misconfiguration (`PRIVATE_KEY` set, `PUBLIC_KEY` missing) fails the
 boot loudly with `"NESTRS_AUTHN__PRIVATE_KEY (or NESTRS_AUTHN__PRIVATE_KEY_FILE),
-or private_key in a JwtConfig or JwtOptions built in code, is set without
-NESTRS_AUTHN__PUBLIC_KEY (or NESTRS_AUTHN__PUBLIC_KEY_FILE), or public_key in a
-JwtConfig or JwtOptions built in code"`,
+or private_key in an AuthnConfig or JwtOptions built in code, is set without
+NESTRS_AUTHN__PUBLIC_KEY (or NESTRS_AUTHN__PUBLIC_KEY_FILE), or public_key in an
+AuthnConfig or JwtOptions built in code"`,
 and so does a private key beside the public key of another pair. A
 `NESTRS_AUTHN__SECRET` left beside either key fails the boot as well, naming
 both — whether both come from the environment, from a `.env` file or from code,
@@ -310,7 +310,7 @@ scope your rules gate on appears in `SCOPES_SUPPORTED`, or you are
 telling clients to request something discovery never names.
 
 **`NESTRS_AUTHN__AUDIENCE` stops being optional.** On its own,
-`JwtConfig` treats it as a nice-to-have; under this module boot fails
+`AuthnConfig` treats it as a nice-to-have; under this module boot fails
 without it, naming the variable. The confused-deputy defence itself is
 not what the module adds — `JwtService` applies RFC 7519 §4.1.3 on every
 path, so a token minted *for another named service* is refused even by an
@@ -322,7 +322,7 @@ framework warns at boot when they drift.
 
 ## Going further
 
-- [JWT](/security/authentication/jwt/) — `JwtConfig`, `JwtKey`,
+- [JWT](/security/authentication/jwt/) — `AuthnConfig`, `JwtKey`,
   EdDSA vs HS256.
 - [OAuth2](/security/authentication/oauth2/) — the flow the issuer
   exposes upstream.

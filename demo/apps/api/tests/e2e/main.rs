@@ -11,7 +11,7 @@ mod subscription;
 mod users;
 
 use api::ApiModule;
-use nest_rs::authn::JwtConfig;
+use nest_rs::authn::AuthnConfig;
 use nest_rs::testing::{EphemeralDatabase, TestApp, TestAppBuilder};
 use poem::http::{StatusCode, header};
 use poem::test::TestResponse;
@@ -35,7 +35,7 @@ async fn boot_with(builder: TestAppBuilder) -> (EphemeralDatabase, TestApp) {
     let app = builder
         .module::<ApiModule>()
         .provide_arc(db.connection())
-        .provide(JwtConfig {
+        .provide(AuthnConfig {
             public_key: Some(DEV_PUBLIC_KEY.into()),
             audience: Some(AUDIENCE.into()),
             ..Default::default()

@@ -24,7 +24,7 @@ nest-rs-interceptors.workspace = true
 # `RequiredScopes` carries the refused operation's scopes to the edge, and
 # `NoBearerChallenge` is how a non-resource `401` opts out of the pointer.
 nest-rs-guards.workspace = true
-# The boot check binds the advertised `resource` to `JwtConfig.audience`
+# The boot check binds the advertised `resource` to `AuthnConfig.audience`
 # (RFC 8707), and a misconfiguration is an `AuthError`.
 nest-rs-authn.workspace = true
 poem.workspace = true

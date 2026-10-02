@@ -1,6 +1,0 @@
-# Edges whose shipped source cannot file a unit stopped before it settled
-# (`cancelled`) or a unit that unwound (`panic`). **It only shrinks.**
-#
-# Empty: every edge files both. `nest-rs-schedule cancelled` stood here until
-# the scheduler stopped a tick still running at its shutdown bound (owner
-# question Q7), which files `schedule.tick` `cancelled`.

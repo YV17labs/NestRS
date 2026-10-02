@@ -1,7 +1,0 @@
-# `#[config]` types named otherwise than their namespace. **It only shrinks.** A
-# line removed is a type renamed to its stem; a line added is a regression
-# argued in review, never absorbed.
-#
-# Empty: every `#[config]` of both workspaces is named for the stem its
-# namespace reads. `JwtConfig` stood here until `nest-rs-authn`'s config took
-# the name its namespace `authn` and its path already agreed on, `AuthnConfig`.

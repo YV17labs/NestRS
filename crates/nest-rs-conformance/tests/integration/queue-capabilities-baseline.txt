@@ -1,7 +1,0 @@
-# Queue capability cells no test or page fills. **It only shrinks.**
-#
-# Empty: every capability the port names is refused by name in the port's own
-# suite against a backend declaring none; `nest-rs-redis` declares all of them,
-# and its e2e suite names each one it proves; and a queue page names each the
-# way a backend declares it, `Capability::<Member>`. A capability the port adds
-# later brings its three cells with it, or fails here.

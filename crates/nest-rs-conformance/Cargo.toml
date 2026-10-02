@@ -6,21 +6,19 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "Joins the framework's own families against the suites that cover them: a member the framework declares and no test names is a failure, not an oversight."
-# Internal proof crate — never published. It ships no capability; the proof is
-# that its suite fails when a family grows a member nobody covers.
+description = "Structural checks over the framework's paths and manifests: the naming law, the test layout, and the names written outside Rust."
+# Internal proof crate — never published. It ships no capability.
 publish = false
 
 [dependencies]
-# A join reads Rust with Rust's own parser rather than with a regex: a
-# `\`-continued message and a `#[cfg(test)]` block are the two things a text
-# scan gets wrong, and both cost a false reading here before this crate existed.
+# Declarations are read with Rust's own parser rather than a regex: a
+# `\`-continued literal and a `#[cfg(test)]` fixture are what a text scan reads
+# wrong.
 syn = { workspace = true, features = ["visit"] }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
-
-# The umbrella's `[features]` table is read with a TOML parser for the reason the
-# rest is read with `syn`: a wrapped list is what a line scan gets wrong.
+# The umbrella's `[features]` table: a wrapped list is what a line scan gets
+# wrong.
 toml_edit = { workspace = true }
 
 # The `canon` binary prints the facts the docs linter checks pages against, so
@@ -29,30 +27,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-# The naming join runs `nestrs lint`'s own code rather than a second copy of it:
-# the rule the framework ships and the rule it is held to are then one symbol.
-# This is the one dependency here that widens the graph — the CLI brings clap
-# and its own tree behind the test binaries, so a CLI edit relinks them. Taken
-# deliberately: a second implementation of the rule is the cost on the other
-# side, and it is paid in silence.
+# The naming checks run `nestrs lint`'s own code and the CLI's reserved
+# vocabulary rather than a second copy of either.
 nest-rs-cli = { path = "../nest-rs-cli" }
-# The grammars join enrols a family of decorators through the table the parsers
-# themselves read — `JobDecorator::ALL` — rather than through a copy of its
-# names, which would be the second list the table exists to replace. Syn,
-# quote and proc-macro2 already sit in this graph, so the edge adds one crate.
-nest-rs-codegen = { path = "../nest-rs-codegen" }
-# The namespaces join judges the tree by the unclaimed-variable report's own
-# near-miss rule rather than a copy of it, and the doctor's parity join runs the
-# loader it mirrors. A workspace crate: the edge adds no third-party dependency.
+# The near-miss check judges namespaces by the unclaimed-variable report's own
+# rule.
 nest-rs-config = { path = "../nest-rs-config" }
-# The mirror join builds the selector and the prefix a cascade may not name from
-# the kernel's own constants, never a literal.
-nest-rs-core = { path = "../nest-rs-core" }
-# The mirror join runs the loader where it reads the process: its working
-# directory, for a relative `_FILE`, and the selectors a cascade may not name.
-# `figment::Jail` sets and restores both, as `nest-rs-config`'s own suite does;
-# already a workspace dependency, so the edge adds no crate to the graph.
-figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

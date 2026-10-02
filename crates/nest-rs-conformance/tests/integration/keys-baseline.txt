@@ -1,8 +1,0 @@
-# Names in the framework's datastore space that this join cannot separate, and
-# keys at the root of the keyspace that the framework's Rust spells.
-# **It only shrinks.** A line removed is a name fixed; a line added is a
-# regression argued in review, never absorbed by a flag.
-#
-# Empty on the day it landed: every key the framework's code spells names the
-# concern of the crate that owns it, the code carries each one's structure
-# level, and no name prefixes another.

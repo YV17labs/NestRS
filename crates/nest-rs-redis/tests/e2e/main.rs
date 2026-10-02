@@ -594,3 +594,135 @@ async fn producer() -> RedisQueueProducer {
     Box::leak(Box::new(app));
     producer
 }
+
+/// The password every ACL user a test creates is given — a fixture, never a
+/// secret.
+const ACL_PASSWORD: &str = "nestrs-e2e-acl";
+
+/// The one Redis ACL rule the docs page `page` prescribes: the line of its
+/// `` ```text title="Redis ACL" `` block, read from the page itself.
+fn documented_acl(page: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/src/content/docs")
+        .join(page);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the page {} reads: {error}", path.display()));
+    let mut blocks = text
+        .lines()
+        .zip(text.lines().skip(1))
+        .filter(|(fence, _)| fence.trim() == "```text title=\"Redis ACL\"")
+        .map(|(_, rule)| rule.trim().to_owned());
+    let rule = blocks
+        .next()
+        .unwrap_or_else(|| panic!("{page} prescribes a Redis ACL in a block titled `Redis ACL`"));
+    assert!(blocks.next().is_none(), "{page} prescribes one Redis ACL");
+    rule
+}
+
+/// Create `user` exactly as the page `page` prescribes — its rule sent as it is
+/// written, the `<user>` and `<password>` placeholders filled and nothing added
+/// — and answer the config that reaches database `db` as that user, so the user
+/// a test runs as is the one the page tells an operator to create.
+async fn documented_user(page: &str, user: &str, db: u8) -> RedisConfig {
+    let rule = documented_acl(page);
+    let tokens: Vec<String> = rule
+        .split_whitespace()
+        .map(|token| {
+            token
+                .replace("<user>", user)
+                .replace("<password>", ACL_PASSWORD)
+        })
+        .collect();
+    assert_eq!(
+        tokens.get(..3),
+        Some(["ACL".to_owned(), "SETUSER".to_owned(), user.to_owned()].as_slice()),
+        "{page}'s rule creates the app's user: {rule}"
+    );
+    forget_user(user).await;
+    let _: () = redis::cmd(&tokens[0])
+        .arg(&tokens[1..])
+        .query_async(&mut connect().await)
+        .await
+        .unwrap_or_else(|error| panic!("Redis takes {page}'s rule `{rule}`: {error}"));
+    RedisConfig {
+        url: redis_url_on(db).replacen("://", &format!("://{user}:{ACL_PASSWORD}@"), 1),
+        ..Default::default()
+    }
+}
+
+/// The user `config` connects as may load a script — the `SCRIPT LOAD` a client
+/// sends the first time Redis has not cached the script it calls.
+///
+/// A run through the user cannot show it: a script some earlier run loaded is
+/// cached, the first `EVALSHA` answers, and no load is sent. Flushing the cache
+/// would show it and break every other test mid-call, so the permission is asked
+/// of a script of its own: the ACL checks the command, and a script's own
+/// commands only when it runs, which the run itself proves.
+async fn assert_may_load_a_script(config: &RedisConfig) {
+    let mut user = RedisConnection::connect(config)
+        .await
+        .expect("the page's user passes the boot's proof");
+    let _: String = redis::cmd("SCRIPT")
+        .arg("LOAD")
+        .arg("return 1")
+        .query_async(&mut user)
+        .await
+        .expect("the page's user may load a script");
+}
+
+/// An ACL user name of this run's own, from `base`: Redis's `ACL LOG` outlives
+/// the user and the run, so a name an earlier run used carries that run's
+/// denials into this one's.
+fn acl_user(base: &str) -> String {
+    format!("{base}-{}", this_run())
+}
+
+/// Remove `user`, if it is there.
+async fn forget_user(user: &str) {
+    let _: i64 = redis::cmd("ACL")
+        .arg("DELUSER")
+        .arg(user)
+        .query_async(&mut connect().await)
+        .await
+        .expect("ACL DELUSER");
+}
+
+/// The one command a documented rule leaves out on purpose: the client
+/// library's `CLIENT SETINFO`, which it sends on every connection and whose
+/// refusal it ignores. Redis 7.0 knows no such subcommand and refuses a rule
+/// naming it, so allowing it would cost the rule every server before 7.2. Its
+/// refusal reaches `ACL LOG` as `client|setinfo` from 7.2 on, and as `client` on
+/// Redis 6, which logs a command without its subcommand.
+const SETINFO: [&str; 2] = ["client|setinfo", "client"];
+
+/// Whether `event` carries Redis's refusal of a command or a key — the answer
+/// an ACL gives.
+fn refused_by_acl(event: &CapturedEvent) -> bool {
+    event
+        .field("error")
+        .is_some_and(|error| error.contains("NOPERM") || error.contains("no permissions"))
+}
+
+/// Redis denied `user` nothing but [`SETINFO`], which a documented rule leaves
+/// out, and the commands `besides` names: its own ACL log holds every denial,
+/// so a refusal the app swallowed shows there even when no line does.
+async fn assert_redis_denied_nothing_but(user: &str, besides: &[&str]) {
+    let entries: Vec<std::collections::HashMap<String, redis::Value>> = redis::cmd("ACL")
+        .arg("LOG")
+        .query_async(&mut connect().await)
+        .await
+        .expect("ACL LOG");
+    let text = |entry: &std::collections::HashMap<String, redis::Value>, field: &str| {
+        entry
+            .get(field)
+            .and_then(|value| redis::from_redis_value::<String>(value).ok())
+            .unwrap_or_default()
+    };
+    let denied: Vec<String> = entries
+        .iter()
+        .filter(|entry| text(entry, "username") == user)
+        .map(|entry| text(entry, "object"))
+        .filter(|object| !SETINFO.contains(&object.as_str()) && !besides.contains(&object.as_str()))
+        .collect();
+    assert!(denied.is_empty(), "Redis denied {user}: {denied:?}");
+}

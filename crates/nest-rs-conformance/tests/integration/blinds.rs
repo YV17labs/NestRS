@@ -85,6 +85,7 @@ type Declares = fn() -> Vec<Followed>;
 /// Every join, with what it reads by its spelling. A join that reads nothing
 /// that way says why in its own `//!`.
 const JOINS: &[(&str, Declares)] = &[
+    ("acls", crate::acls::followed),
     ("canon", crate::canon::followed),
     ("decodes", crate::decodes::followed),
     ("dependencies", crate::dependencies::followed),

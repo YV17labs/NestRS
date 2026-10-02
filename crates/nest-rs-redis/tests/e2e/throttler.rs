@@ -291,3 +291,45 @@ async fn a_store_that_cannot_answer_denies_rather_than_letting_the_caller_throug
         event.fields,
     );
 }
+
+/// The ACL user this test creates from the page, and removes — named for this
+/// run, so no earlier run's denial in `ACL LOG` is read as its own.
+const CONFINED_USER: &str = "nestrs-e2e-throttler";
+
+/// The user the rate-limiting page prescribes counts a window to its limit and
+/// denies past it: Redis checks the script's own `INCR`, `PTTL` and `PEXPIRE`
+/// against the caller, not only the `EVALSHA` that carries them, and refuses
+/// none. The page used to say only that the ACL "has to allow both", and a user
+/// allowed exactly those two failed every hit, closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_user_created_as_the_rate_limiting_page_says_counts_and_denies() {
+    let user = crate::acl_user(CONFINED_USER);
+    let config = crate::documented_user("rate-limiting/index.mdx", &user, 0).await;
+    crate::assert_may_load_a_script(&config).await;
+    let conn = nest_rs_redis::RedisConnection::connect(&config)
+        .await
+        .expect("the page's user passes the boot's proof");
+    let store = RedisThrottler::new(conn);
+    let limit = Throttle::new(2, Duration::from_secs(30));
+    let subject = unique_key("acl");
+
+    let decisions = [
+        store.hit(&subject, limit).await,
+        store.hit(&subject, limit).await,
+        store.hit(&subject, limit).await,
+    ];
+    crate::forget_user(&user).await;
+
+    let allowed = decisions.each_ref().map(|decision| decision.allowed);
+    assert_eq!(
+        allowed,
+        [true, true, false],
+        "two hits counted through the ACL, the third denied by the count"
+    );
+    assert!(
+        decisions[2].retry_after > Duration::ZERO && decisions[2].retry_after <= limit.window(),
+        "denied with the window's remainder: {:?}",
+        decisions[2].retry_after
+    );
+    crate::assert_redis_denied_nothing_but(&user, &[]).await;
+}

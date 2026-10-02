@@ -147,10 +147,12 @@ The `None` is a `PushOptions`: a delay, a unique key — see
   root while the 7.0 producers go on pushing under the namespace.
 - **Scaling out before the moved jobs ran** can run one of them twice — see the
   caution above.
-- **A Redis user confined to `nestrs:*`** cannot read the root, so the check
-  cannot run. The worker says
+- **A Redis user confined to `nestrs:queue:*`**, as the
+  [queue's ACL rule](/queue/delivery/#where-a-queue-lives) confines it, cannot
+  read the root, so the check cannot run. The worker says
   `6.x key layout not checked: the connection's ACL does not reach it; drain any 6.x jobs on this database before relying on this worker`
-  at `warn` and starts: run the upgrade with a user that reaches the root.
+  at `warn` and starts: run the upgrade with a user that reaches the queue's bare
+  name and may send `TYPE`, `LLEN`, `ZCARD`, `ZRANGE` and `SCARD` there.
 - **A KEDA trigger still naming the 6.x list** reads zero forever and holds the
   deployment at `minReplicaCount`. It names `nestrs:queue:<queue>:active` now —
   see [Concurrency and scaling](/queue/scaling/#on-queue-depth-with-keda).

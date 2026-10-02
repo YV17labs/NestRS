@@ -18,7 +18,7 @@
 //! ledger — fired once, or skipped by the shutdown that cut its answer — rather
 //! than to a run counter, which counted that key as a run and flaked.
 //!
-//! Seven questions:
+//! Eight questions:
 //!
 //! 1. **Does the wiring claim in Redis?** Each occurrence fired is one key, laid
 //!    out as the page states and held for the port's hold.
@@ -37,6 +37,8 @@
 //!    answer is skipped with a `warn` — firing unclaimed would fire it on every
 //!    replica — and the schedule claims and fires again once Redis answers.
 //! 7. **What does a lost answer cost?** That occurrence and nothing more.
+//! 8. **Does the ACL the page prescribes run it?** A user created exactly as the
+//!    page says fires the job, and Redis refuses it nothing.
 
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -909,4 +911,60 @@ async fn a_claim_whose_answer_is_lost_costs_that_occurrence_alone() {
         "the next occurrence fires on time once Redis answers, not when a lease lapses: \
          {next_run_after:?}"
     );
+}
+
+// --- 8. the documented ACL --------------------------------------------------------
+
+#[injectable]
+#[derive(Default)]
+struct ConfinedTasks;
+
+#[scheduled]
+impl ConfinedTasks {
+    #[every("250ms", replicas = "one")]
+    async fn sweep(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [ScheduleModule, RedisModule::for_root(None), RedisScheduleModule],
+    providers = [ConfinedTasks],
+)]
+struct ConfinedModule;
+
+/// The ACL user this test creates from the page, and removes — named for this
+/// run, so no earlier run's denial in `ACL LOG` is read as its own.
+const CONFINED_USER: &str = "nestrs-e2e-schedule";
+
+/// The user created exactly as the schedule page prescribes boots a replica and
+/// fires its job: Redis checks every command a scheduler sends — the boot's
+/// proof, the database's selection, each claim and each overrun question — and
+/// refuses none. The ACL the page used to give allowed the scripts and not the
+/// commands inside them, and every occurrence was skipped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scheduler_runs_through_exactly_the_acl_its_page_prescribes() {
+    let logs = LogCapture::install_global();
+    let conn = schedule_connection().await;
+    let user = crate::acl_user(CONFINED_USER);
+    let config = crate::documented_user("schedule/index.mdx", &user, crate::DB_SCHEDULE).await;
+    let started_ms = now_ms();
+    let scheduler = schedule_replica::<ConfinedModule>(config).await;
+    await_claims(&conn, &job("ConfinedTasks:sweep"), started_ms, 3).await;
+    scheduler.shutdown().await.expect("clean shutdown");
+    crate::forget_user(&user).await;
+
+    let claims = claims_since(&conn, &job("ConfinedTasks:sweep"), started_ms).await;
+    assert!(
+        claims.len() >= 3,
+        "the job claimed through the ACL: {claims:?}"
+    );
+    assert_each_claim_fired_once(&claims, &logs, &["ConfinedTasks"]);
+    let refused: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(crate::refused_by_acl)
+        .collect();
+    assert!(refused.is_empty(), "a line carries a refusal: {refused:#?}");
+    crate::assert_redis_denied_nothing_but(&user, &[]).await;
 }

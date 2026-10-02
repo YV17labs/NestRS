@@ -836,6 +836,25 @@ confined to `nestrs:queue:*` refuses; a `NOPERM` answer is said, never taken for
 empty layout. The move the docs print is the one
 `layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once` runs.
 
+**Each Redis binding's page prescribes its ACL rule whole, and the rule is run,
+not described.** Redis checks every command a script calls against the caller's
+ACL, not only the `EVALSHA` carrying it, so a rule naming the scripts and not
+their commands refuses every call — the schedule page and the rate limiter's once
+prescribed exactly that, and a user created by them skipped every occurrence and
+failed every hit. So each binding's page holds one ```` ```text title="Redis ACL" ````
+block, `ACL SETUSER <user> on ><password> resetchannels ~nestrs:<concern>:* +…`:
+the binding's own namespace, the connection's `PING` and `SELECT`, `EVALSHA` and
+`SCRIPT LOAD` when it sends scripts, and every command it sends or a script it
+runs calls — apalis's included — and nothing else. A rule adds to a user, so an
+app running several bindings gives one user each. Two checks hold it, each where
+it can: `nest-rs-redis`'s e2e creates a user from the page's line verbatim
+(`documented_user`), runs the binding through it, and reads Redis's `ACL LOG` for
+any denial; the `acls` join in `nest-rs-conformance` holds the rule to every
+command the binding's sources send and to nothing more, both ways, apalis's
+commands read off its pinned release. The one command no rule names is the client
+library's `CLIENT SETINFO`, whose refusal it ignores, because Redis 7.0 refuses a
+rule naming that subcommand; the 6.x check is the one reader refused on purpose.
+
 ### A swappable concern ships an extension contract
 
 Anything a third party could plug a different implementation into owes a
@@ -1587,7 +1606,8 @@ drain.
   wait does — withholding it would lose an occurrence this replica holds the key
   to, which no other replica can then fire. Work that must not be lost is a queue
   job the tick pushes. The lock's backends: Redis, built — one `SET … NX PX` per
-  claim and one `EXISTS` per overrun question; an in-process one, refused — a lock no other
+  claim and one `EXISTS` per overrun question, so its ACL rule allows those two
+  beside the connection's own; an in-process one, refused — a lock no other
   replica can see decides nothing across replicas, which is why `BACKEND_REMEDY`
   answers with `replicas = "each"`; a database one (an expiring claims table, or
   an advisory lock) is possible and unbuilt — an owner question.

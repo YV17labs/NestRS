@@ -192,10 +192,14 @@ rolls out (step 7).
      reads zero forever. Keep `minReplicaCount: 1` on a queue that takes delayed
      pushes or retries while no producer runs — they wait where no trigger
      looks; see [On queue depth, with KEDA](/queue/scaling/#on-queue-depth-with-keda).
-   - **An ACL** confined to `~nestrs:*` now runs every Redis binding — the queue,
-     the rate limiter under `nestrs:throttler:buckets:*`, a schedule's claims
-     under `nestrs:schedule:claims:*`, each one `SET … NX PX`, with an `EXISTS`
-     per overrun question. The 6.x check in step 7 reads the root — `TYPE`, `LLEN`, `ZCARD`,
+   - **An ACL** confined to the framework's prefix now runs every Redis binding,
+     and each page gives its rule whole — the commands a binding sends, those
+     inside its Lua scripts included, since Redis checks them against the
+     caller's ACL as well: [the queue](/queue/delivery/#where-a-queue-lives)
+     under `~nestrs:queue:*`, [the rate limiter](/rate-limiting/#redis-shipped)
+     under `~nestrs:throttler:*` and [a schedule's claims](/schedule/#the-keys)
+     under `~nestrs:schedule:*`; an app running several gives one user each rule.
+     The 6.x check in step 7 reads the root — `TYPE`, `LLEN`, `ZCARD`,
      `ZRANGE` and `SCARD` on the queue's bare name — so run the upgrade with a
      user that reaches it. A dashboard or an ACL written for the rate limiter's 6.x keys
      follows it to `nestrs:throttler:buckets:*`.

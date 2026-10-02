@@ -61,7 +61,29 @@ does not use, each keyed by the job id a push returns.
 | `nestrs:queue:<queue>:throttle` | How many attempts of the queue's method started in the current window, less those handed back unread | the framework |
 
 Nothing sits at the root of the keyspace, so a Redis user whose ACL reaches
-`~nestrs:*` and nothing else runs a queue end to end.
+`~nestrs:queue:*` and nothing else runs a queue end to end — the producer and the
+worker alike. Most of what they send is Lua — apalis's scripts and the
+framework's, sent as `EVALSHA` with a `SCRIPT LOAD` the first time Redis has not
+cached one — and Redis checks the commands *inside* a script against the caller's
+ACL as well. With the connection's `PING`, which proves it at boot, and the
+`SELECT` of the database its URL names, a Redis user for a queue is this rule and
+nothing more:
+
+```text title="Redis ACL"
+ACL SETUSER <user> on ><password> resetchannels ~nestrs:queue:* +ping +select +evalsha +script|load +get +set +del +exists +incr +decr +pexpire +pttl +time +hget +hset +hsetnx +hmget +hmset +hdel +lpush +rpush +lrange +ltrim +sadd +srem +spop +zadd +zrem +zscore +zrangebyscore +zremrangebyrank
+```
+
+An app that also rate-limits or fires scheduled jobs once gives the same user
+[the rate limiter's](/rate-limiting/#redis-shipped) and
+[the schedule's](/schedule/#the-keys) rules as well. The one check this rule
+refuses is the 6.x one, which reads the queue's bare name at the root of the
+keyspace: the worker says at `warn` that it could not look, and
+[Upgrading queues from 6.x](/queue/upgrading/) runs it with a user that can.
+
+The client library also sends `CLIENT SETINFO` on every connection and ignores
+its refusal; no rule names it, because Redis 7.0 knows no such subcommand and
+would refuse the whole rule. Redis 7.2 and later file that refusal in `ACL LOG` as
+`client|setinfo`, and Redis 6.2 as `client`.
 
 ## At least once, and the guard
 

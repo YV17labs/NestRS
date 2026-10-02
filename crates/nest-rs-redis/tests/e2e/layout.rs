@@ -11,11 +11,13 @@
 //!   in-flight set registered as a consumer — is played on a layout written the
 //!   way 6.x wrote it, and a 7.0 worker then runs every job it held exactly once:
 //!   the one waiting, the one held back, and the one a 6.x replica died running.
-//! - **Everything a queue holds is under the framework's prefix.** A Redis user
-//!   whose ACL reaches `nestrs:*` and nothing else runs a queue end to end — a
-//!   push, a delayed push, a completion, a retry and a dead letter — and the
-//!   database holds no other key afterwards. The ACL is the proof: a single
-//!   command outside the prefix is refused, and the run would not complete.
+//! - **Everything a queue holds is under its namespace, and the queue page's ACL
+//!   runs it.** A Redis user created exactly as the page prescribes — reaching
+//!   `nestrs:queue:*` and nothing else, allowed the commands the page lists and
+//!   nothing else — runs a queue end to end: a push, a delayed push, a
+//!   completion, a retry and a dead letter, with every apalis script the worker
+//!   runs them through. The database holds no other key afterwards, and Redis's
+//!   own ACL log holds no denial but the 6.x check's.
 //!
 //! Every name at the root is built from the queue's, never written whole: this
 //! suite plays the layout the framework left behind, and a literal of it would
@@ -29,7 +31,7 @@ use apalis_redis::{Config, RedisStorage};
 use nest_rs_core::{injectable, module};
 use nest_rs_queue::{JobId, JobProducerExt, PushOptions, processor, queue};
 use nest_rs_redis::{
-    RedisConfig, RedisConnection, RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule,
+    RedisConnection, RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule,
 };
 use nest_rs_testing::{LogCapture, TestApp};
 use serde::{Deserialize, Serialize};
@@ -620,26 +622,11 @@ async fn a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once() {
     crate::forget(MOVED_QUEUE).await;
 }
 
-// --- a user confined to the framework's prefix ---------------------------------------
+// --- a user created as the queue page prescribes --------------------------------------
 
-/// The ACL user this test creates, and removes.
+/// The ACL user this test creates from the page, and removes — named for this
+/// run, so no earlier run's denial in `ACL LOG` is read as its own.
 const CONFINED_USER: &str = "nestrs-e2e-confined";
-
-/// The confined user's password — a test fixture, never a secret.
-const CONFINED_PASSWORD: &str = "confined-to-the-prefix";
-
-/// The URL the confined user reaches its own database with.
-fn confined_config() -> RedisConfig {
-    let url = crate::redis_url_on(DB_CONFINED_TO_THE_PREFIX).replacen(
-        "://",
-        &format!("://{CONFINED_USER}:{CONFINED_PASSWORD}@"),
-        1,
-    );
-    RedisConfig {
-        url,
-        ..Default::default()
-    }
-}
 
 static CONFINED: Runs = Runs::new();
 
@@ -716,13 +703,15 @@ async fn every_key(admin: &mut RedisConnection) -> Vec<String> {
     }
 }
 
-/// A user whose ACL reaches `nestrs:*` and no other key runs a queue from the
-/// push to the dead letter: a completion, a delayed push, a retry filed on the
-/// schedule and a spent budget. Nothing it needs lies outside the prefix — the
-/// ACL refuses anything that does — and the database holds no other key
-/// afterwards. The 6.x check the ACL cannot reach is said, not passed over.
+/// The user the queue page prescribes runs a queue from the push to the dead
+/// letter: a completion, a delayed push, a retry filed on the schedule and a
+/// spent budget — every apalis script a producer and a worker send, and every
+/// one of the framework's. Nothing it needs lies outside the namespace or the
+/// commands the page lists — the ACL refuses anything that does, the scripts'
+/// own commands included — and the database holds no other key afterwards. The
+/// 6.x check the ACL cannot reach is said, not passed over.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_user_confined_to_the_prefix_runs_a_queue_from_push_to_dead_letter() {
+async fn a_user_created_as_the_queue_page_says_runs_a_queue_from_push_to_dead_letter() {
     let logs = LogCapture::install_global();
     let mut admin = RedisConnection::connect(&crate::redis_config_on(DB_CONFINED_TO_THE_PREFIX))
         .await
@@ -731,21 +720,13 @@ async fn a_user_confined_to_the_prefix_runs_a_queue_from_push_to_dead_letter() {
         .query_async(&mut admin)
         .await
         .expect("FLUSHDB");
-    let _: () = redis::cmd("ACL")
-        .arg("SETUSER")
-        .arg(CONFINED_USER)
-        .arg("reset")
-        .arg("on")
-        .arg(format!(">{CONFINED_PASSWORD}"))
-        .arg("~nestrs:*")
-        .arg("+@all")
-        .arg("-@dangerous")
-        .query_async(&mut admin)
-        .await
-        .expect("ACL SETUSER");
+    let user = crate::acl_user(CONFINED_USER);
+    let confined =
+        crate::documented_user("queue/delivery.mdx", &user, DB_CONFINED_TO_THE_PREFIX).await;
+    crate::assert_may_load_a_script(&confined).await;
 
     let run = crate::this_run();
-    let replica = crate::replica_on::<ConfinedModule>(confined_config()).await;
+    let replica = crate::replica_on::<ConfinedModule>(confined).await;
     let completed = replica
         .producer
         .push(ConfinedQueue, LayoutCommand { run, fail: false }, None)
@@ -782,12 +763,7 @@ async fn a_user_confined_to_the_prefix_runs_a_queue_from_push_to_dead_letter() {
     })
     .await;
     replica.worker.shutdown().await.expect("clean shutdown");
-    let _: () = redis::cmd("ACL")
-        .arg("DELUSER")
-        .arg(CONFINED_USER)
-        .query_async(&mut admin)
-        .await
-        .expect("ACL DELUSER");
+    crate::forget_user(&user).await;
 
     let done = COMPLETED.lock().expect("lock").clone();
     assert!(
@@ -814,11 +790,7 @@ async fn a_user_confined_to_the_prefix_runs_a_queue_from_push_to_dead_letter() {
     let refused: Vec<_> = logs
         .events()
         .into_iter()
-        .filter(|event| {
-            event
-                .field("error")
-                .is_some_and(|error| error.contains("NOPERM"))
-        })
+        .filter(crate::refused_by_acl)
         .collect();
     assert!(
         refused
@@ -832,10 +804,18 @@ async fn a_user_confined_to_the_prefix_runs_a_queue_from_push_to_dead_letter() {
         "the worker said, once and at `warn`, that it could not check: {unchecked:#?}",
     );
 
+    // Redis's own record: the 6.x check's reads, refused on purpose, and nothing
+    // else — a refusal some path swallowed would be here even without a line.
+    crate::assert_redis_denied_nothing_but(&user, &["type", "llen", "zcard", "zrange", "scard"])
+        .await;
+
     let outside: Vec<String> = every_key(&mut admin)
         .await
         .into_iter()
-        .filter(|key| !key.starts_with("nestrs:"))
+        .filter(|key| !key.split(':').take(2).eq(["nestrs", "queue"]))
         .collect();
-    assert!(outside.is_empty(), "no key outside the prefix: {outside:?}");
+    assert!(
+        outside.is_empty(),
+        "no key outside the queue's namespace: {outside:?}"
+    );
 }

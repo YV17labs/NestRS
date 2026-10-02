@@ -23,53 +23,67 @@ pub enum Trigger {
 /// a defined second.
 pub struct CronExpression;
 
-impl CronExpression {
+/// Declares each preset as an associated constant of [`CronExpression`] and,
+/// under test, names every one in `PRESETS` — so a preset cannot be added
+/// without the suite seeing it and asking for its pinned instants.
+macro_rules! presets {
+    ($($(#[$doc:meta])* $name:ident = $expr:literal;)+) => {
+        impl CronExpression {
+            $($(#[$doc])* pub const $name: &'static str = $expr;)+
+        }
+
+        #[cfg(test)]
+        const PRESETS: &[&str] = &[$(stringify!($name)),+];
+    };
+}
+
+presets! {
     /// At the top of every second.
-    pub const EVERY_SECOND: &'static str = "* * * * * *";
+    EVERY_SECOND = "* * * * * *";
     /// At second 0, 5, 10, … of every minute.
-    pub const EVERY_5_SECONDS: &'static str = "*/5 * * * * *";
+    EVERY_5_SECONDS = "*/5 * * * * *";
     /// At second 0, 10, 20, … of every minute.
-    pub const EVERY_10_SECONDS: &'static str = "*/10 * * * * *";
+    EVERY_10_SECONDS = "*/10 * * * * *";
     /// At second 0 and 30 of every minute.
-    pub const EVERY_30_SECONDS: &'static str = "*/30 * * * * *";
+    EVERY_30_SECONDS = "*/30 * * * * *";
     /// At second 0 of every minute.
-    pub const EVERY_MINUTE: &'static str = "0 * * * * *";
+    EVERY_MINUTE = "0 * * * * *";
     /// At minute 0, 5, 10, … on the top of the second.
-    pub const EVERY_5_MINUTES: &'static str = "0 */5 * * * *";
+    EVERY_5_MINUTES = "0 */5 * * * *";
     /// At minute 0, 10, 20, ….
-    pub const EVERY_10_MINUTES: &'static str = "0 */10 * * * *";
+    EVERY_10_MINUTES = "0 */10 * * * *";
     /// At minute 0 and 30 of every hour.
-    pub const EVERY_30_MINUTES: &'static str = "0 */30 * * * *";
+    EVERY_30_MINUTES = "0 */30 * * * *";
     /// At the top of every hour.
-    pub const EVERY_HOUR: &'static str = "0 0 * * * *";
+    EVERY_HOUR = "0 0 * * * *";
     /// At the top of every second hour (00:00, 02:00, …).
-    pub const EVERY_2_HOURS: &'static str = "0 0 */2 * * *";
+    EVERY_2_HOURS = "0 0 */2 * * *";
     /// At the top of every third hour (00:00, 03:00, …).
-    pub const EVERY_3_HOURS: &'static str = "0 0 */3 * * *";
+    EVERY_3_HOURS = "0 0 */3 * * *";
     /// At the top of every sixth hour (00:00, 06:00, 12:00, 18:00).
-    pub const EVERY_6_HOURS: &'static str = "0 0 */6 * * *";
+    EVERY_6_HOURS = "0 0 */6 * * *";
     /// At 00:00 and 12:00.
-    pub const EVERY_12_HOURS: &'static str = "0 0 */12 * * *";
+    EVERY_12_HOURS = "0 0 */12 * * *";
     /// Daily at 01:00.
-    pub const EVERY_DAY_AT_1AM: &'static str = "0 0 1 * * *";
+    EVERY_DAY_AT_1AM = "0 0 1 * * *";
     /// Daily at 06:00.
-    pub const EVERY_DAY_AT_6AM: &'static str = "0 0 6 * * *";
+    EVERY_DAY_AT_6AM = "0 0 6 * * *";
     /// Daily at 12:00.
-    pub const EVERY_DAY_AT_NOON: &'static str = "0 0 12 * * *";
+    EVERY_DAY_AT_NOON = "0 0 12 * * *";
     /// Daily at 00:00.
-    pub const EVERY_DAY_AT_MIDNIGHT: &'static str = "0 0 0 * * *";
+    EVERY_DAY_AT_MIDNIGHT = "0 0 0 * * *";
     /// At 00:00 Monday through Friday.
-    pub const EVERY_WEEKDAY: &'static str = "0 0 0 * * 1-5";
+    EVERY_WEEKDAY = "0 0 0 * * 1-5";
     /// At 00:00 on Saturday and Sunday.
-    pub const EVERY_WEEKEND: &'static str = "0 0 0 * * 6,0";
+    EVERY_WEEKEND = "0 0 0 * * 6,0";
     /// At 00:00 every Sunday (start of the week).
-    pub const EVERY_WEEK: &'static str = "0 0 0 * * 0";
+    EVERY_WEEK = "0 0 0 * * 0";
     /// At 00:00 on the first day of every month.
-    pub const EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT: &'static str = "0 0 0 1 * *";
+    EVERY_1ST_DAY_OF_MONTH_AT_MIDNIGHT = "0 0 0 1 * *";
     /// At 00:00 on the first day of every third month (quarter start).
-    pub const EVERY_QUARTER: &'static str = "0 0 0 1 */3 *";
+    EVERY_QUARTER = "0 0 0 1 */3 *";
     /// At 00:00 on January 1st.
-    pub const EVERY_YEAR: &'static str = "0 0 0 1 1 *";
+    EVERY_YEAR = "0 0 0 1 1 *";
 }
 
 #[cfg(test)]
@@ -159,23 +173,19 @@ mod tests {
         );
     }
 
-    /// [`PINNED`] says *every* preset, so no constant may be added without a
-    /// row — counted off this file, because Rust offers no reflection over
-    /// associated constants and a hand-kept count is the drift this suite
-    /// exists to catch.
+    /// [`PINNED`] says *every* preset, and `presets!` lists every one it
+    /// declares, so a preset added without a row fails here by name.
     #[test]
     fn the_pinned_table_covers_every_preset() {
-        let declared = include_str!("trigger.rs")
-            .lines()
-            .filter(|line| line.starts_with("    pub const "))
-            .count();
-        assert_eq!(
-            PINNED.len(),
-            declared,
-            "`CronExpression` declares {declared} presets and the pinned table \
-             holds {}. Add the new preset's row — an unpinned preset is one \
-             whose documentation nothing checks.",
-            PINNED.len(),
+        let unpinned: Vec<&str> = super::PRESETS
+            .iter()
+            .copied()
+            .filter(|preset| !PINNED.iter().any(|(name, _, _)| name == preset))
+            .collect();
+        assert!(
+            unpinned.is_empty(),
+            "{unpinned:?} carry no row in the pinned table — an unpinned preset is one \
+             whose documentation nothing checks",
         );
     }
 }

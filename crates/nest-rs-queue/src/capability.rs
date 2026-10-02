@@ -143,7 +143,115 @@ pub(crate) fn unsupported(capability: Capability, backend: &str, site: Option<&s
 
 #[cfg(test)]
 mod tests {
+    use std::any::TypeId;
+    use std::num::NonZeroU32;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use serde_json::Value;
+
     use super::*;
+    use crate::consume::unsupported_by;
+    use crate::inventory::{HandlerContext, JobHandler};
+    use crate::{
+        Envelope, JobError, JobId, JobProducer, JobProducerExt, ProcessMethod, ProcessOptions,
+        PushOptions, PushReceipt, QueueBackend, QueueError, QueueName, Throttle,
+    };
+
+    /// A backend declaring no optional capability, so every declaration that
+    /// needs one is refused before it is reached.
+    static NOTHING: QueueBackend = QueueBackend::new("nothing", Capabilities::NONE);
+
+    const QUEUE: &str = "audio";
+    const METHOD: &str = "AudioProcessor::transcode";
+
+    struct Producer;
+
+    #[async_trait]
+    impl JobProducer for Producer {
+        fn backend(&self) -> &'static QueueBackend {
+            &NOTHING
+        }
+
+        async fn enqueue(
+            &self,
+            _: &QueueName,
+            _: Vec<Envelope>,
+            _: &PushOptions,
+        ) -> Result<(), QueueError> {
+            unreachable!("a refused push never reaches its backend")
+        }
+    }
+
+    fn handler(
+        _: Value,
+        _: HandlerContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), JobError>> + Send>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// The boot's refusals of a `#[process]` method declaring `options`.
+    fn boot(options: ProcessOptions) -> String {
+        let method = ProcessMethod::new(
+            module_path!(),
+            METHOD,
+            QUEUE,
+            options,
+            TypeId::of::<Producer>,
+            handler as JobHandler,
+        );
+        unsupported_by(&method, &NOTHING)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn refused<T: std::fmt::Debug>(answer: Result<T, QueueError>) -> String {
+        answer.expect_err("refused").to_string()
+    }
+
+    /// What a developer writes that needs `capability`, at the site that meets
+    /// it, against [`NOTHING`]. Exhaustive here whatever `#[non_exhaustive]`
+    /// says, so a capability added to the port does not compile until it names
+    /// the declaration that needs it — and that declaration is refused.
+    async fn refusal(capability: Capability) -> String {
+        let push = |options| Producer.push_json(QUEUE, Value::Null, options);
+        match capability {
+            Capability::DelayedPush => {
+                refused(push(PushOptions::default().with_delay(Duration::from_secs(1))).await)
+            }
+            Capability::UniquePush => {
+                refused(push(PushOptions::default().with_unique("clip")).await)
+            }
+            Capability::Cancellation => {
+                let queue = QueueName::new(QUEUE).expect("a valid name");
+                refused(
+                    Producer
+                        .cancel(&PushReceipt::new(queue, JobId::mint()))
+                        .await,
+                )
+            }
+            Capability::Throttle => boot(
+                ProcessOptions::DEFAULT
+                    .with_throttle(Throttle::new(NonZeroU32::MIN, Duration::from_secs(1))),
+            ),
+            Capability::Checkpoint => boot(ProcessOptions::DEFAULT.with_checkpoint(true)),
+        }
+    }
+
+    /// Every capability is refused where it is declared, on a backend that does
+    /// not declare it, in the one sentence that names it.
+    #[tokio::test]
+    async fn every_capability_is_refused_where_it_is_declared_on_a_backend_without_it() {
+        for capability in Capability::ALL {
+            let sentence = refusal(capability).await;
+            assert!(
+                [None, Some(METHOD)]
+                    .map(|site| unsupported(capability, NOTHING.name(), site))
+                    .contains(&sentence),
+                "{capability:?} refused as {sentence:?}",
+            );
+        }
+    }
 
     #[test]
     fn every_capability_has_a_bit_of_its_own() {

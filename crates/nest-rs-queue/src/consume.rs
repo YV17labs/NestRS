@@ -64,6 +64,19 @@ pub const NEWER_RELEASE_WAIT: Duration = Duration::from_secs(60);
 /// that release.
 pub const NEWER_RELEASE_PATIENCE: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// The boot's refusal of each declaration on `method` that `backend` does not
+/// honour — every one, so a method declaring two is refused once for each.
+pub(crate) fn unsupported_by<'a>(
+    method: &'a ProcessMethod,
+    backend: &'a QueueBackend,
+) -> impl Iterator<Item = String> + 'a {
+    method
+        .required_capabilities()
+        .iter()
+        .filter(|capability| !backend.capabilities().contains(*capability))
+        .map(|capability| unsupported(capability, backend.name(), Some(method.name())))
+}
+
 /// The `#[process]` methods this app serves on `backend`: every entry whose
 /// provider is reachable from the running app's root, with a boot `warn` for
 /// each that is linked but unreachable.
@@ -120,11 +133,7 @@ pub fn discover(
                 Throttle::MIN_WINDOW,
             ));
         }
-        for capability in method.required_capabilities().iter() {
-            if !backend.capabilities().contains(capability) {
-                refusals.push(unsupported(capability, backend.name(), Some(method.name())));
-            }
-        }
+        refusals.extend(unsupported_by(method, backend));
     }
     if !refusals.is_empty() {
         anyhow::bail!("{}", refusals.join("\n"));

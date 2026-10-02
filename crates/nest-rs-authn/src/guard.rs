@@ -92,11 +92,11 @@ impl<S: Strategy> Layer for AuthnGuard<S> {}
 /// continues anonymously — a rejected credential logged at `warn`, a plain
 /// anonymous call at `debug`. Visitor-rule policy belongs in the authorization
 /// layer, not in `AuthnGuard`. The one failure `#[public]` does **not** absorb
-/// is [`AuthError::Unavailable`]: an unreachable identity store means the
-/// credential was never evaluated, so the request fails closed with a 500
-/// rather than being served as anonymous. A strategy that does not answer
-/// within [`AUTHENTICATE_TIMEOUT`] left it unevaluated too, and gets the same
-/// answer.
+/// is [`AuthError::Unavailable`]: an unreachable identity store or provider
+/// means the credential was never evaluated, so the request fails closed with a
+/// 503 — carrying the provider's `Retry-After` when it gave one — rather than
+/// being served as anonymous. A strategy that does not answer within
+/// [`AUTHENTICATE_TIMEOUT`] left it unevaluated too, and gets the same answer.
 #[async_trait]
 impl<S: Strategy> Guard for AuthnGuard<S> {
     async fn check_http(&self, req: &mut Request) -> Result<(), Denial> {
@@ -107,7 +107,7 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
         // unreachable store below, and the same denial on every route. The line
         // naming the strategy was filed where the bound passed.
         let Some(outcome) = self.authenticate(strategy, req).await else {
-            return Err(Denial::internal(UNAVAILABLE));
+            return Err(Denial::unavailable(None, UNAVAILABLE));
         };
         match outcome {
             Ok(principal) => {
@@ -144,15 +144,18 @@ impl<S: Strategy> Guard for AuthnGuard<S> {
             // true answer. Fail closed on every route, `#[public]` included:
             // admitting the caller as anonymous would silently downgrade every
             // authenticated session for the duration of the outage.
-            Err(error @ AuthError::Unavailable(_)) => {
+            Err(error @ AuthError::Unavailable { .. }) => {
                 tracing::error!(
                     target: crate::TARGET,
                     strategy,
                     reason = error.reason(),
                     error = %nest_rs_core::error_message(&error),
-                    "authentication unavailable — identity store unreachable",
+                    "authentication unavailable — what the strategy asks did not answer",
                 );
-                Err(Denial::internal(error.client_message()))
+                Err(Denial::unavailable(
+                    error.retry_after_secs(),
+                    error.client_message(),
+                ))
             }
             // A public route admits the anonymous caller, but a credential that
             // was *presented and rejected* is a security event: a forged or

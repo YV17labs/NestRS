@@ -73,7 +73,7 @@ types with their HTTP mapping already wired:
 | `ServiceError::Db(DbErr)` | `nest_rs::seaorm` | `500` (body: `"database error"`) |
 | `ServiceError::Validation(ValidationErrors)` | `nest_rs::seaorm` | `422` |
 | `AuthError::*` | `nest_rs::authn` | `401` + `WWW-Authenticate: Bearer` |
-| `AuthError::Unavailable` | `nest_rs::authn` | `500`, logged at `error` — an outage is not a credential signal |
+| `AuthError::Unavailable` | `nest_rs::authn` | `503`, a `Retry-After` when the failing party gave one, logged at `error` — an outage is not a credential signal |
 | `CredentialError` | `nest_rs::authn` | `401` (opaque `"invalid credentials"`) |
 | `TokenError::*` | `nest_rs::authn` | RFC 6749 wire codes (`400` / `401` / `500`) |
 

@@ -193,7 +193,7 @@ pub(crate) fn grant_client_credentials_with_jwt(
 }
 
 fn token_error_from_auth(err: AuthError) -> TokenError {
-    if matches!(err, AuthError::Unavailable(_)) {
+    if matches!(err, AuthError::Unavailable { .. }) {
         TokenError::Server(err.into())
     } else {
         TokenError::InvalidClient
@@ -423,10 +423,13 @@ mod tests {
     fn token_error_from_auth_maps_a_store_outage_to_server_error_not_invalid_credentials() {
         assert!(
             matches!(
-                token_error_from_auth(AuthError::Unavailable("store down".into())),
+                token_error_from_auth(AuthError::Unavailable {
+                    detail: "store down".into(),
+                    retry_after: None,
+                }),
                 TokenError::Server(_),
             ),
-            "a store outage during login must be server_error (500), never invalid_credentials (401)",
+            "a store outage during login must be server_error (503), never invalid_credentials (401)",
         );
         assert!(matches!(
             token_error_from_auth(AuthError::Failed("invalid credentials".into())),

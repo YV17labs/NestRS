@@ -196,9 +196,11 @@ async fn an_expired_transaction_cookie_is_reported_the_same_way() {
 // --- the client's bounds -------------------------------------------------------
 //
 // Every call the client makes to a provider is bounded — `CONNECT_TIMEOUT` to
-// reach it, `CALL_TIMEOUT` for the whole call — and a call that ends without a
-// usable answer is the failure every provider problem is, `AuthError::Failed`,
-// in a sentence naming the endpoint. The providers below are local listeners;
+// reach it, `CALL_TIMEOUT` for the whole call — and a call that ends without an
+// answer, or with the provider saying it cannot answer now, is the provider's
+// outage, `AuthError::Unavailable` (a `503`: the caller did nothing wrong);
+// a provider that answers and refuses is `AuthError::Failed`. Both name the
+// endpoint in their sentence. The providers below are local listeners;
 // none of them answers the way a provider would. The connect bound is driven in
 // the unit suite (`src/client.rs`), on the backend `new` builds with a resolver
 // that never answers: no local listener can leave a handshake hanging.
@@ -223,12 +225,26 @@ fn client_for(addr: std::net::SocketAddr) -> OAuthClient {
     .expect("client builds")
 }
 
-/// The sentence a failed call is reported under, and a check that it quotes
-/// none of the call's secrets — `extra` names the ones only this call carried.
+/// The sentence a provider's outage is reported under — no answer, or an answer
+/// saying it cannot answer now — checked to quote none of the call's secrets.
+fn unavailable_sentence_of(error: &AuthError, extra: &[&str]) -> String {
+    let AuthError::Unavailable { detail, .. } = error else {
+        panic!("a provider that gave no answer is unavailable, not a failed sign-in: {error:?}");
+    };
+    secret_free(detail, extra)
+}
+
+/// The sentence a provider's refusal is reported under, checked the same way.
 fn sentence_of(error: &AuthError, extra: &[&str]) -> String {
     let AuthError::Failed(sentence) = error else {
-        panic!("a provider that gave no usable answer is a failed authentication, got {error:?}");
+        panic!("a provider that answered and refused is a failed authentication: {error:?}");
     };
+    secret_free(sentence, extra)
+}
+
+/// `sentence`, once it is shown to quote none of the call's secrets — `extra`
+/// names the ones only this call carried.
+fn secret_free(sentence: &str, extra: &[&str]) -> String {
     for secret in [CLIENT_SECRET, CODE, ACCESS_TOKEN, QUERY_SECRET]
         .iter()
         .chain(extra)
@@ -238,7 +254,7 @@ fn sentence_of(error: &AuthError, extra: &[&str]) -> String {
             "the sentence must not quote {secret:?}: {sentence}"
         );
     }
-    sentence.clone()
+    sentence.to_owned()
 }
 
 /// A provider that accepts every connection and never answers — a process
@@ -309,7 +325,7 @@ async fn an_exchange_the_provider_never_answers_fails_at_the_call_timeout() {
         "failed at the bound, not before: {waited:?}"
     );
     assert_eq!(
-        sentence_of(&error, &[&tx.pkce]),
+        unavailable_sentence_of(&error, &[&tx.pkce]),
         format!(
             "the OAuth provider's token endpoint (http://{addr}/token) did not answer within {:?}",
             OAuthClient::CALL_TIMEOUT
@@ -334,7 +350,7 @@ async fn a_userinfo_read_the_provider_never_answers_fails_at_the_call_timeout() 
 
     assert!(sent.elapsed() >= OAuthClient::CALL_TIMEOUT);
     assert_eq!(
-        sentence_of(&error, &[]),
+        unavailable_sentence_of(&error, &[]),
         format!(
             "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) did not answer within {:?}",
             OAuthClient::CALL_TIMEOUT
@@ -362,7 +378,7 @@ async fn a_fetch_the_provider_never_answers_fails_at_the_call_timeout() {
 
     assert!(sent.elapsed() >= OAuthClient::CALL_TIMEOUT);
     assert_eq!(
-        sentence_of(&error, &[]),
+        unavailable_sentence_of(&error, &[]),
         format!(
             "the OAuth provider's endpoint (http://{addr}/user/emails) did not answer within {:?}",
             OAuthClient::CALL_TIMEOUT
@@ -385,7 +401,7 @@ async fn a_refused_connection_names_the_endpoint_and_the_cause() {
         .userinfo::<serde_json::Value>(ACCESS_TOKEN)
         .await
         .expect_err("nothing listens there");
-    let sentence = sentence_of(&error, &[]);
+    let sentence = unavailable_sentence_of(&error, &[]);
     assert!(
         sentence.starts_with(&format!(
             "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) could not be called: "
@@ -398,8 +414,8 @@ async fn a_refused_connection_names_the_endpoint_and_the_cause() {
     );
 }
 
-/// A provider that answers, and refuses: the status is the cause, after the
-/// endpoint that gave it.
+/// A provider that answers, and refuses the token: the status is the cause,
+/// after the endpoint that gave it.
 #[tokio::test]
 async fn a_read_answered_with_an_error_status_names_the_endpoint_and_the_status() {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -430,6 +446,87 @@ async fn a_read_answered_with_an_error_status_names_the_endpoint_and_the_status(
         format!(
             "the OAuth provider's userinfo endpoint (http://{addr}/userinfo) answered 401 Unauthorized"
         ),
+    );
+}
+
+/// A local provider answering its first request with `status_line`, the
+/// `Retry-After` `retry_after` when given, and an HTML page — the body a
+/// provider's outage page has, which no §5.2 error parses from.
+async fn provider_answering(
+    status_line: &'static str,
+    retry_after: Option<&'static str>,
+) -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a local listener");
+    let addr = listener.local_addr().expect("a bound address");
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accept");
+        let mut request = [0_u8; 4096];
+        let _ = socket.read(&mut request).await;
+        let body = "<html>down for maintenance</html>";
+        let wait = retry_after
+            .map(|wait| format!("retry-after: {wait}\r\n"))
+            .unwrap_or_default();
+        let answer = format!(
+            "HTTP/1.1 {status_line}\r\ncontent-type: text/html\r\n{wait}content-length: {}\r\n\
+             connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(answer.as_bytes()).await.expect("answer");
+    });
+    addr
+}
+
+/// Q12: a provider saying it cannot answer now — a `5xx`, or `429` — is its
+/// outage, never the caller's failed sign-in, on the read and on the exchange
+/// alike; its own `Retry-After` travels when it gave one in seconds. The
+/// exchange's case was a `401`: `oauth2` drops the status, and an outage page
+/// parses as no §5.2 error.
+#[tokio::test]
+async fn a_provider_saying_it_cannot_answer_now_is_unavailable_with_its_wait() {
+    let addr = provider_answering("503 Service Unavailable", Some("7")).await;
+    let error = client_for(addr)
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect_err("an outage returns no profile");
+    assert_eq!(
+        unavailable_sentence_of(&error, &[]),
+        format!("the OAuth provider's userinfo endpoint (http://{addr}/userinfo) answered 503"),
+    );
+    assert_eq!(error.retry_after_secs(), Some(7));
+
+    let addr = provider_answering("429 Too Many Requests", None).await;
+    let error = client_for(addr)
+        .userinfo::<serde_json::Value>(ACCESS_TOKEN)
+        .await
+        .expect_err("a throttled read returns no profile");
+    unavailable_sentence_of(&error, &[]);
+    assert_eq!(error.retry_after_secs(), None, "no wait is invented");
+
+    let addr = provider_answering("502 Bad Gateway", Some("Wed, 21 Oct 2015 07:28:00 GMT")).await;
+    let client = client_for(addr);
+    let jwt = crate::jwt();
+    let auth = client.authorize(&jwt, "acme").expect("authorize");
+    let tx: Transaction = jwt
+        .verify_handshake("oauth-tx", &auth.transaction)
+        .expect("the transaction verifies");
+    let Err(error) = client
+        .exchange(&jwt, "acme", &auth.transaction, &tx.csrf, CODE)
+        .await
+    else {
+        panic!("an outage completes no exchange");
+    };
+    assert_eq!(
+        unavailable_sentence_of(&error, &[&tx.pkce]),
+        format!("the OAuth provider's token endpoint (http://{addr}/token) answered 502"),
+    );
+    assert_eq!(
+        error.retry_after_secs(),
+        None,
+        "an HTTP-date is not converted against this clock"
     );
 }
 

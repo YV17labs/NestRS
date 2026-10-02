@@ -33,6 +33,12 @@ impl TokenController {
     async fn client(&self) -> poem::Result<String> {
         Err(TokenError::InvalidClient.into())
     }
+
+    #[post("/token/outage")]
+    #[public]
+    async fn outage(&self) -> poem::Result<String> {
+        Err(TokenError::Server(anyhow::anyhow!("identity store unreachable")).into())
+    }
 }
 
 #[module(imports = [HttpModule::for_root(None)], providers = [TokenController])]
@@ -79,5 +85,26 @@ async fn a_refused_client_is_a_401_that_is_not_a_resource_challenge() {
     assert!(
         rendered.extensions().get::<NoBearerChallenge>().is_some(),
         "the response opts out of the RFC 9728 pointer",
+    );
+}
+
+/// Q12: a dependency that did not answer while the grant was resolved is no
+/// failure of the client's, nor of this server's code: `503` (RFC 9110
+/// §15.6.4), the opaque code in the body and nothing of the cause.
+#[tokio::test]
+async fn a_dependency_outage_is_a_503_naming_nothing_of_its_cause() {
+    let app = TestApp::for_module::<TokenApp>()
+        .await
+        .expect("the token app boots");
+
+    let response = app.http().post("/token/outage").send().await;
+    response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    response
+        .assert_json(serde_json::json!({ "error": "server_error" }))
+        .await;
+    assert_eq!(
+        TokenError::Sign(anyhow::anyhow!("key unusable")).status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a failure of this server's own stays a 500",
     );
 }

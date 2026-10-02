@@ -27,7 +27,9 @@ The `http` feature turns this on, and `http` is a default — name it explicitly
 
 A guard runs *before* the handler. It sees the request first and either
 lets it through (`Ok(())`) or short-circuits with a typed `Denial` the
-framework maps to 401 / 403 / 429. One trait, four transports — the same
+framework maps to 401 / 403 / 429 — or 503, `Denial::unavailable`, when
+something the guard depends on did not answer and the caller did nothing
+wrong. One trait, four transports — the same
 `#[injectable]` impl is reachable from HTTP, GraphQL, WS and MCP through the
 [the request lifecycle](/fundamentals/request-lifecycle/).
 

@@ -62,18 +62,23 @@ pub enum TokenError {
     #[error("server_error")]
     Sign(#[source] anyhow::Error),
     /// A backend dependency (e.g. the identity store) was unreachable while
-    /// resolving the grant — distinct from a credential rejection. `Display`
-    /// is the opaque RFC 6749 `server_error`; the source stays attached for
-    /// `tracing`.
+    /// resolving the grant — distinct from a credential rejection, and from a
+    /// failure of this server's own: the client did nothing wrong and may come
+    /// back, so it is answered `503` (RFC 9110 §15.6.4), as every
+    /// authentication outage is. `Display` is the opaque `server_error`; the
+    /// source stays attached for `tracing`.
     #[error("server_error")]
     Server(#[source] anyhow::Error),
 }
 
 impl TokenError {
-    /// The HTTP status RFC 6749 §5.2 assigns this condition.
+    /// The HTTP status RFC 6749 §5.2 assigns this condition — and, for the two
+    /// failures §5.2 leaves to HTTP, the one RFC 9110 does: `500` for this
+    /// server's own, `503` for a dependency that did not answer.
     pub fn status(&self) -> StatusCode {
         match self {
-            TokenError::Sign(_) | TokenError::Server(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            TokenError::Sign(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            TokenError::Server(_) => StatusCode::SERVICE_UNAVAILABLE,
             TokenError::InvalidClient => StatusCode::UNAUTHORIZED,
             _ => StatusCode::BAD_REQUEST,
         }

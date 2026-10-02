@@ -1,8 +1,11 @@
-//! Authentication failures, rendered as HTTP 401 challenges.
+//! Authentication failures, rendered as HTTP 401 challenges — and the one that
+//! is no challenge, an identity store or provider that did not answer, as 503.
 //!
 //! The token-endpoint vocabulary an *issuing* app answers with is
 //! `nest-rs-oauth-server`'s: this crate resolves who is calling, and a grant
 //! refusal is not a credential verdict.
+
+use std::time::Duration;
 
 use poem::error::ResponseError;
 use poem::http::{StatusCode, header};
@@ -76,13 +79,21 @@ pub enum AuthError {
     /// Strategy-specific or configuration failures. The message is for logs, not the client body.
     #[error("authentication failed: {0}")]
     Failed(String),
-    /// The identity store was unreachable while authenticating — an
-    /// infrastructure failure, **not** a credential signal. Rendered as
-    /// **500** and logged at `error`; the message is for logs, never the
-    /// client body. Kept distinct from [`Failed`](Self::Failed) so a backend
-    /// outage during login is never reported to the caller as a 401.
-    #[error("authentication unavailable: {0}")]
-    Unavailable(String),
+    /// An identity store or an identity provider could not be reached, or did
+    /// not answer — an infrastructure failure, **not** a credential signal: the
+    /// caller did nothing wrong. Rendered as **503**, with a `Retry-After` when
+    /// `retry_after` is known (RFC 9110 §15.6.4), and logged at `error`; the
+    /// detail is for logs, never the client body. Kept distinct from
+    /// [`Failed`](Self::Failed) so an outage during login is never reported to
+    /// the caller as a 401 they would answer by signing in again.
+    #[error("authentication unavailable: {detail}")]
+    Unavailable {
+        /// What did not answer, and how — for the log.
+        detail: String,
+        /// How long until a retry may succeed, when the party that failed said
+        /// so — an identity provider's own `Retry-After`.
+        retry_after: Option<Duration>,
+    },
 }
 
 /// A credential mismatch is an authentication failure: it folds into
@@ -111,8 +122,8 @@ impl AuthError {
         match self {
             // Nothing was presented, so there is nothing to report on.
             AuthError::MissingCredentials => None,
-            // Not a credential signal at all — a 500 carries no challenge.
-            AuthError::Unavailable(_) => None,
+            // Not a credential signal at all — a 503 carries no challenge.
+            AuthError::Unavailable { .. } => None,
             _ => Some(nest_rs_http::challenge::INVALID_TOKEN),
         }
     }
@@ -130,8 +141,23 @@ impl AuthError {
             Self::NotYetValid => "not_yet_valid",
             Self::Expired => "expired",
             Self::Failed(_) => "failed",
-            Self::Unavailable(_) => "unavailable",
+            Self::Unavailable { .. } => "unavailable",
         }
+    }
+
+    /// The `Retry-After` an [`Unavailable`](Self::Unavailable) failure answers
+    /// with, in whole seconds rounded up — `None` for every other failure, and
+    /// for an unavailable one nobody gave a wait for.
+    pub fn retry_after_secs(&self) -> Option<u32> {
+        let Self::Unavailable {
+            retry_after: Some(wait),
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let whole = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+        Some(u32::try_from(whole).unwrap_or(u32::MAX))
     }
 
     /// Message safe to return in an HTTP 401 body (no strategy/configuration detail).
@@ -139,7 +165,7 @@ impl AuthError {
         match self {
             Self::Failed(_) => "authentication failed",
             Self::MissingCredentials => "missing credentials",
-            Self::Unavailable(_) => UNAVAILABLE,
+            Self::Unavailable { .. } => UNAVAILABLE,
             _ => "invalid token",
         }
     }
@@ -151,13 +177,16 @@ impl AuthError {
     /// it), so both spellings put the same bytes and the same log line out.
     fn render(&self) -> Response {
         let body = self.client_message();
-        // An infrastructure failure is a 500, logged at `error` — not a 401
-        // challenge; the caller cannot fix it by re-authenticating.
-        if let Self::Unavailable(detail) = self {
+        // An infrastructure failure is a 503, logged at `error` — not a 401
+        // challenge; the caller cannot fix it by re-authenticating, only by
+        // coming back, and is told when if anyone said.
+        if let Self::Unavailable { detail, .. } = self {
             tracing::error!(target: crate::TARGET, detail = %detail, "authentication unavailable");
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(body);
+            let mut response = Response::builder().status(StatusCode::SERVICE_UNAVAILABLE);
+            if let Some(secs) = self.retry_after_secs() {
+                response = response.header(header::RETRY_AFTER, secs);
+            }
+            return response.body(body);
         }
         if let Self::Failed(detail) = self {
             tracing::warn!(target: crate::TARGET, detail = %detail, "authentication failed");
@@ -200,7 +229,7 @@ impl IntoResponse for AuthError {
 impl ResponseError for AuthError {
     fn status(&self) -> StatusCode {
         match self {
-            Self::Unavailable(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Unavailable { .. } => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::UNAUTHORIZED,
         }
     }
@@ -240,25 +269,54 @@ mod tests {
         assert_eq!(CredentialError.to_string(), "invalid credentials");
     }
 
+    /// Q12: the caller did nothing wrong, so an outage is RFC 9110 §15.6.4's
+    /// `503`, told when to come back when anyone said — never a `401` sending
+    /// the caller to sign in again, nor a `500` blaming the server's own code.
     #[test]
-    fn unavailable_renders_500_and_no_bearer_challenge() {
+    fn unavailable_renders_503_with_the_known_wait_and_no_bearer_challenge() {
         let logs = nest_rs_testing::LogCapture::install();
-        let resp = AuthError::Unavailable("store unreachable".into()).into_response();
+        let resp = AuthError::Unavailable {
+            detail: "store unreachable".into(),
+            retry_after: None,
+        }
+        .into_response();
         assert_eq!(
             resp.status(),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "an infrastructure failure is a 500, not a 401",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "an infrastructure failure is a 503, not a 401",
+        );
+        assert!(
+            resp.headers().get(header::RETRY_AFTER).is_none(),
+            "no wait is invented when nobody gave one"
         );
         assert!(
             resp.headers().get(header::WWW_AUTHENTICATE).is_none(),
-            "a 500 must not send a Bearer challenge the caller cannot satisfy",
+            "a 503 must not send a Bearer challenge the caller cannot satisfy",
+        );
+        let waited = AuthError::Unavailable {
+            detail: "provider answered 503".into(),
+            retry_after: Some(Duration::from_millis(2500)),
+        }
+        .into_response();
+        assert_eq!(waited.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            waited
+                .headers()
+                .get(header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("3"),
+            "delay-seconds, rounded up",
         );
 
         // The client is told "authentication unavailable" and nothing else, on
         // purpose — which host is down and why is infrastructure detail. So the
         // detail exists in exactly one place, and it is the place an operator
         // looks when every login in the deployment starts answering 500.
-        let event = logs.expect_one("nest_rs::authn", "authentication unavailable");
+        let event = logs
+            .find("nest_rs::authn", "authentication unavailable")
+            .into_iter()
+            .next()
+            .expect("the outage is logged");
         assert_eq!(event.level, "error");
         assert!(
             event
@@ -273,7 +331,7 @@ mod tests {
     fn a_failed_authentication_is_a_warn_and_not_this_line() {
         // The neighbouring branch, and why they are two: a wrong password is a
         // caller problem answered `401`, an unreachable store is the
-        // deployment's answered `500`. Filed under one message, an outage would
+        // deployment's answered `503`. Filed under one message, an outage would
         // be indistinguishable from a brute-force attempt.
         let logs = nest_rs_testing::LogCapture::install();
         let resp = AuthError::Failed("bad password".into()).into_response();
@@ -289,7 +347,11 @@ mod tests {
     #[test]
     fn unavailable_client_message_hides_the_detail() {
         assert_eq!(
-            AuthError::Unavailable("connection refused at 10.0.0.1".into()).client_message(),
+            AuthError::Unavailable {
+                detail: "connection refused at 10.0.0.1".into(),
+                retry_after: None,
+            }
+            .client_message(),
             "authentication unavailable",
         );
     }

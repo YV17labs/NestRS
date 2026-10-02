@@ -270,7 +270,10 @@ fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identit
 
 fn social_store_unavailable(provider: &str, err: DbErr) -> AuthError {
     tracing::error!(target: "features::users", provider, error = %error_message(&err), "social identity store unreachable");
-    AuthError::Unavailable(err.to_string())
+    AuthError::Unavailable {
+        detail: err.to_string(),
+        retry_after: None,
+    }
 }
 
 async fn find_by_email(email: &str, conn: &Executor) -> Result<Option<entity::Model>, DbErr> {
@@ -294,7 +297,10 @@ fn is_unique_violation(err: &DbErr) -> bool {
 
 fn store_unavailable(email: &str, err: DbErr) -> AuthError {
     tracing::error!(target: "features::users", identity = %redact_email(email), error = %error_message(&err), "credential lookup failed");
-    AuthError::Unavailable(err.to_string())
+    AuthError::Unavailable {
+        detail: err.to_string(),
+        retry_after: None,
+    }
 }
 
 pub(crate) fn prepare_new_user(
@@ -633,7 +639,7 @@ mod tests {
             .await
             .expect_err("no executor ⇒ infrastructure failure, not a credential mismatch");
         assert!(
-            matches!(err, AuthError::Unavailable(_)),
+            matches!(err, AuthError::Unavailable { .. }),
             "a store-reach failure must not masquerade as invalid credentials: {err:?}",
         );
     }
@@ -705,7 +711,7 @@ mod tests {
             .resolve_social_identity(&identity, Uuid::now_v7())
             .await
             .expect_err("no executor ⇒ AuthError::Unavailable");
-        assert!(matches!(err, AuthError::Unavailable(_)));
+        assert!(matches!(err, AuthError::Unavailable { .. }));
     }
 
     #[test]

@@ -134,15 +134,17 @@ impl fmt::Display for Endpoint<'_> {
     }
 }
 
-/// What a call to `endpoint` that got no usable answer is reported as: a
-/// [`AuthError::Failed`], the failure every provider problem is, whose sentence
-/// names the endpoint and — when one of this client's bounds ended the call —
-/// which bound.
+/// What a call to `endpoint` that got no answer is reported as: an
+/// [`AuthError::Unavailable`] — the provider could not be reached or did not
+/// answer in time, which the caller did nothing to cause and can only wait out
+/// (RFC 9110 §15.6.4) — whose sentence names the endpoint and, when one of this
+/// client's bounds ended the call, which bound. It was a `Failed`, answered
+/// `401`, which told the person signing in that their sign-in was wrong.
 ///
 /// The rest of the cause is reqwest's own chain with the URL taken out, since
 /// reqwest quotes the URL whole, query included.
 fn call_failed(endpoint: &Endpoint<'_>, error: oauth2::reqwest::Error) -> AuthError {
-    let sentence = if error.is_timeout() && error.is_connect() {
+    let detail = if error.is_timeout() && error.is_connect() {
         format!(
             "{endpoint} could not be connected to within {:?}",
             OAuthClient::CONNECT_TIMEOUT
@@ -158,21 +160,91 @@ fn call_failed(endpoint: &Endpoint<'_>, error: oauth2::reqwest::Error) -> AuthEr
             nest_rs_core::error_message(&error.without_url())
         )
     };
-    AuthError::Failed(sentence)
+    AuthError::Unavailable {
+        detail,
+        retry_after: None,
+    }
 }
 
-/// A code exchange that failed: [`call_failed`] when the provider was never
-/// heard from, and otherwise the provider's own answer — RFC 6749 §5.2's error,
-/// or why its body did not parse — after the endpoint that gave it.
+/// What a provider's answer with `status` says about the provider, if it says
+/// the provider cannot answer now: a status of the 5xx class, or `429`
+/// (RFC 6585 §4), is the provider's state rather than the caller's mistake, so
+/// it is an [`AuthError::Unavailable`] carrying the provider's own `Retry-After`
+/// when it gave one in delay-seconds. An HTTP-date `Retry-After` is not read:
+/// converting it means trusting the provider's clock against this one, and the
+/// caller is still told to come back, without a figure.
+fn provider_unavailable(
+    endpoint: &Endpoint<'_>,
+    status: u16,
+    retry_after: Option<&[u8]>,
+) -> Option<AuthError> {
+    (status == 429 || (500..600).contains(&status)).then(|| AuthError::Unavailable {
+        detail: format!("{endpoint} answered {status}"),
+        retry_after: retry_after
+            .and_then(|value| std::str::from_utf8(value).ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(Duration::from_secs),
+    })
+}
+
+/// A code exchange that failed: [`provider_unavailable`] when the provider
+/// answered that it cannot answer now, [`call_failed`] when it was never heard
+/// from, and otherwise the provider's own answer — RFC 6749 §5.2's error, or
+/// why its body did not parse — after the endpoint that gave it.
 fn exchange_failed(
     endpoint: &Endpoint<'_>,
+    answered: Option<Answered>,
     error: RequestTokenError<HttpClientError<oauth2::reqwest::Error>, BasicErrorResponse>,
 ) -> AuthError {
+    if let Some(unavailable) = answered.and_then(|answered| {
+        provider_unavailable(endpoint, answered.status, answered.retry_after.as_deref())
+    }) {
+        return unavailable;
+    }
     match error {
         RequestTokenError::Request(HttpClientError::Reqwest(error)) => {
             call_failed(endpoint, *error)
         }
         other => AuthError::Failed(format!("{endpoint}: {other}")),
+    }
+}
+
+/// The status and the `Retry-After` of the token endpoint's answer, read off the
+/// response before `oauth2` turns it into an error that keeps neither.
+struct Answered {
+    status: u16,
+    retry_after: Option<Vec<u8>>,
+}
+
+/// The client's HTTP backend, keeping the last answer's [`Answered`] — what the
+/// exchange hands `oauth2` in place of the backend itself.
+struct Observed<'a> {
+    http: &'a oauth2::reqwest::Client,
+    answered: std::sync::Mutex<Option<Answered>>,
+}
+
+impl<'c> oauth2::AsyncHttpClient<'c> for Observed<'_> {
+    type Error = HttpClientError<oauth2::reqwest::Error>;
+    type Future = std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<oauth2::HttpResponse, Self::Error>> + Send + 'c,
+        >,
+    >;
+
+    fn call(&'c self, request: oauth2::HttpRequest) -> Self::Future {
+        Box::pin(async move {
+            let response = oauth2::AsyncHttpClient::call(self.http, request).await?;
+            if let Ok(mut slot) = self.answered.lock() {
+                *slot = Some(Answered {
+                    status: response.status().as_u16(),
+                    retry_after: response
+                        .headers()
+                        .get(oauth2::http::header::RETRY_AFTER)
+                        .map(|value| value.as_bytes().to_vec()),
+                });
+            }
+            Ok(response)
+        })
     }
 }
 
@@ -379,12 +451,26 @@ impl OAuthClient {
             role: TOKEN_ENDPOINT,
             url: &self.config.token_url,
         };
-        let token = Self::basic_client(&self.config)?
+        // The answer's status is read on the way through, because `oauth2`
+        // drops it: a provider's `503` page parses as no §5.2 error, and would
+        // be reported as the caller's failure rather than the provider's.
+        let observed = Observed {
+            http: &self.http,
+            answered: std::sync::Mutex::new(None),
+        };
+        let exchanged = Self::basic_client(&self.config)?
             .exchange_code(AuthorizationCode::new(code.to_string()))
             .set_pkce_verifier(PkceCodeVerifier::new(tx.pkce))
-            .request_async(&self.http)
-            .await
-            .map_err(|error| exchange_failed(&endpoint, error))?;
+            .request_async(&observed)
+            .await;
+        let token = exchanged.map_err(|error| {
+            let answered = observed
+                .answered
+                .lock()
+                .ok()
+                .and_then(|mut slot| slot.take());
+            exchange_failed(&endpoint, answered, error)
+        })?;
         Ok(TokenSet {
             access_token: token.access_token().secret().clone(),
             id_token: None,
@@ -423,7 +509,9 @@ impl OAuthClient {
 
     /// The authenticated `GET` both reads make. Anything but a `2xx` is a
     /// failure — a `3xx` included, since the client follows no redirect — and
-    /// every failure names the endpoint rather than quoting its URL.
+    /// every failure names the endpoint rather than quoting its URL: the
+    /// provider's own unavailability ([`provider_unavailable`]) as such, any
+    /// other status as the token's refusal.
     async fn read<T: DeserializeOwned>(
         &self,
         endpoint: &Endpoint<'_>,
@@ -438,7 +526,15 @@ impl OAuthClient {
             .map_err(|error| call_failed(endpoint, error))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(AuthError::Failed(format!("{endpoint} answered {status}")));
+            return Err(provider_unavailable(
+                endpoint,
+                status.as_u16(),
+                response
+                    .headers()
+                    .get(oauth2::reqwest::header::RETRY_AFTER)
+                    .map(|value| value.as_bytes()),
+            )
+            .unwrap_or_else(|| AuthError::Failed(format!("{endpoint} answered {status}"))));
         }
         let body = response
             .text()
@@ -668,13 +764,17 @@ mod tests {
         // Twice the bound and no longer: a backend that stopped bounding its
         // connections would otherwise wait on this resolver for good.
         let sent = tokio::time::Instant::now();
-        let Err(AuthError::Failed(sentence)) = tokio::time::timeout(
+        let Err(AuthError::Unavailable {
+            detail: sentence,
+            retry_after: None,
+        }) = tokio::time::timeout(
             OAuthClient::CONNECT_TIMEOUT * 2,
             client.userinfo::<serde_json::Value>("never-quoted"),
         )
         .await
-        .expect("no answer within twice CONNECT_TIMEOUT") else {
-            panic!("a provider nobody can reach returns no profile");
+        .expect("no answer within twice CONNECT_TIMEOUT")
+        else {
+            panic!("a provider nobody can reach is unavailable, and returns no profile");
         };
 
         assert_eq!(sent.elapsed(), OAuthClient::CONNECT_TIMEOUT);

@@ -170,7 +170,7 @@ on a handler that calls a service without a single line of conversion code:
 |-------|--------|------------|
 | `nest_rs::seaorm::ServiceError` | Repo, CrudService, dataloader | `problem+json` — `422` validation/invalid, `409` conflict, `403` forbidden, `404` not found, `500` else (validation field errors ride as `errors`) |
 | `nest_rs::oauth::server::TokenError` | OAuth token endpoint | `ResponseError` — `application/json` per RFC 6749 §5.2 — `400` bad grant/scope, `401` `invalid_client`, `500` signing/backend |
-| `nest_rs::authn::AuthError` | Strategy authentication | `IntoResponse` — `401` challenge (`500` when the identity store is unavailable) |
+| `nest_rs::authn::AuthError` | Strategy authentication | `IntoResponse` — `401` challenge (`503`, with a `Retry-After` when known, when the identity store or provider is unavailable) |
 
 Every error the HTTP transport renders — a handler's `ServiceError`, an
 inline `ProblemDetails`, a validation rejection, and even a raw router

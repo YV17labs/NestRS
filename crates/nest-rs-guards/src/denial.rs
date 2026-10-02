@@ -59,6 +59,18 @@ pub enum Denial {
         reason: Cow<'static, str>,
     },
 
+    /// 503 — the request could not be evaluated because something the guard
+    /// depends on did not answer: an identity store, an identity provider. The
+    /// caller did nothing wrong, so it is no `401` (RFC 9110 §15.6.4), and it
+    /// is told when to come back when that is known.
+    Unavailable {
+        /// Seconds until a retry may succeed (the `Retry-After` value), when
+        /// the failing party said so.
+        retry_after_secs: Option<u32>,
+        /// Human-readable reason for the denial.
+        reason: Cow<'static, str>,
+    },
+
     /// 500 — a wiring bug surfaced at request time (e.g. an authz guard ran
     /// before any authn guard attached an identity). Not a security event.
     Internal(Cow<'static, str>),
@@ -93,6 +105,36 @@ impl Denial {
         Self::RateLimited {
             retry_after_secs,
             reason: reason.into(),
+        }
+    }
+
+    /// A `503 Service Unavailable` denial — something the guard depends on did
+    /// not answer — with the `Retry-After` hint when it is known.
+    pub fn unavailable(
+        retry_after_secs: Option<u32>,
+        reason: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        Self::Unavailable {
+            retry_after_secs,
+            reason: reason.into(),
+        }
+    }
+
+    /// The `Retry-After` value this denial carries, in seconds: a rate limit's
+    /// always, an unavailable dependency's when it is known, nothing else's.
+    ///
+    /// One accessor rather than a `match` per transport, for the reason
+    /// [`required_scopes`](Self::required_scopes) is one: every edge reports the
+    /// wait, in one unit.
+    pub fn retry_after_secs(&self) -> Option<u32> {
+        match self {
+            Self::RateLimited {
+                retry_after_secs, ..
+            } => Some(*retry_after_secs),
+            Self::Unavailable {
+                retry_after_secs, ..
+            } => *retry_after_secs,
+            _ => None,
         }
     }
 
@@ -133,6 +175,7 @@ impl Denial {
             Self::Forbidden(_) | Self::InsufficientScope { .. } => 403,
             Self::RateLimited { .. } => 429,
             Self::Internal(_) => 500,
+            Self::Unavailable { .. } => 503,
         }
     }
 
@@ -155,6 +198,7 @@ impl Denial {
         match self {
             Self::Unauthorized(s) | Self::Forbidden(s) | Self::Internal(s) => s.as_ref(),
             Self::RateLimited { reason, .. }
+            | Self::Unavailable { reason, .. }
             | Self::InsufficientScope { reason, .. }
             | Self::InvalidCredential { reason, .. } => reason.as_ref(),
         }

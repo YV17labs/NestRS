@@ -218,18 +218,25 @@ carries two bounds, constants on the client:
 | `OAuthClient::CALL_TIMEOUT` | 5 s | the whole call, from connecting to the last byte of the answer |
 
 An identity provider answers each of these in well under a second, so a
-call past its bound is a provider that is not answering. It fails the
-way every provider problem does — `AuthError::Failed`, which the
-callback's guard answers with a `401` and a `warn` — and its sentence
-names the endpoint and the bound that ended it:
+call past its bound is a provider that is not answering. That is the
+provider's outage, not the caller's failed sign-in, so it fails as
+`AuthError::Unavailable` — a `503` (RFC 9110 §15.6.4), logged at `error`
+— and its sentence names the endpoint and the bound that ended it:
 
 ```text
-authentication failed: the OAuth provider's token endpoint
+authentication unavailable: the OAuth provider's token endpoint
 (https://github.com/login/oauth/access_token) did not answer within 5s
 ```
 
-A refused connection, or a read answered with anything but a `2xx`,
-names the endpoint the same way. The endpoint appears as its origin and
+A provider that answers it cannot answer now — a `5xx`, or `429` — is
+unavailable the same way, on the exchange as on a read, and its own
+`Retry-After` reaches the caller when it gave one in seconds; an HTTP-date
+is not converted against this server's clock. A provider that answers and
+refuses — a §5.2 error on the exchange, any other status on a read — is
+the caller's failure, `AuthError::Failed`, a `401`.
+
+A refused connection, like every failure the client reports, names the
+endpoint the same way. The endpoint appears as its origin and
 path only: a query string or credentials in the URL never reach the
 sentence, and neither does anything the call carried — the client
 secret, the code, the PKCE verifier, the access token.
@@ -273,10 +280,14 @@ A token-issuing controller that fronts the OAuth flow (or its
 | `InvalidScope` | `invalid_scope` | 400 |
 | `InvalidClient` | `invalid_client` | 401 |
 | `Sign(inner)` | `server_error` | 500 |
+| `Server(inner)` | `server_error` | 503 |
 
 The `Sign` variant collapses any internal signing failure to the
 opaque RFC code on the wire; the inner `anyhow::Error` stays attached
-for `tracing`. A rename of these strings breaks every conforming
+for `tracing`. `Server` is a dependency the grant needed — the identity
+store — that did not answer: no failure of the client's nor of this
+server's code, so a `503` (RFC 9110 §15.6.4) the client may retry, and
+the same opaque code. A rename of these strings breaks every conforming
 client — they are wire contracts, not display strings.
 
 <Aside type="caution">

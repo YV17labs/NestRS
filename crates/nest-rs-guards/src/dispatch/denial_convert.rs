@@ -54,6 +54,7 @@ fn problem_response(denial: &Denial) -> Response {
         401 => StatusCode::UNAUTHORIZED,
         403 => StatusCode::FORBIDDEN,
         429 => StatusCode::TOO_MANY_REQUESTS,
+        503 => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     let mut problem = ProblemDetails::from_status(status);
@@ -77,9 +78,9 @@ fn problem_response(denial: &Denial) -> Response {
     if let Some(code) = denial.bearer_error() {
         nest_rs_http::challenge::stamp_bearer_error(&mut response, code);
     }
-    if let Denial::RateLimited {
-        retry_after_secs, ..
-    } = denial
+    // RFC 6585 §4 for a rate limit, RFC 9110 §15.6.4 for an unavailable
+    // dependency: the wait, in delay-seconds, whenever it is known.
+    if let Some(retry_after_secs) = denial.retry_after_secs()
         && let Ok(value) = retry_after_secs.to_string().parse()
     {
         response.headers_mut().insert(header::RETRY_AFTER, value);
@@ -133,6 +134,7 @@ pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
             401 => "UNAUTHENTICATED",
             403 => "FORBIDDEN",
             429 => "RATE_LIMITED",
+            503 => "UNAVAILABLE",
             _ => "INTERNAL",
         },
     };
@@ -142,10 +144,14 @@ pub fn denial_to_graphql_error(denial: Denial) -> GraphqlError {
     };
     let scopes = denial.required_scopes();
     let required = (!scopes.is_empty()).then(|| scopes.to_vec());
+    let retry_after = denial.retry_after_secs();
     GraphqlError::new(message).extend_with(move |_, e| {
         e.set("code", code);
         if let Some(required) = required {
             e.set("requiredScopes", required);
+        }
+        if let Some(retry_after) = retry_after {
+            e.set("retryAfterSeconds", retry_after);
         }
     })
 }
@@ -168,6 +174,15 @@ pub fn denial_to_mcp_error(denial: Denial) -> nest_rs_mcp::McpError {
     if matches!(denial, Denial::Internal(_)) {
         return McpError::internal_error(nest_rs_core::OPAQUE_CLIENT_MESSAGE, None);
     }
+    // Not the caller's request: something the server depends on did not
+    // answer, which JSON-RPC files under its internal error, with the reason
+    // and the wait a client acts on.
+    if matches!(denial, Denial::Unavailable { .. }) {
+        return McpError::internal_error(
+            denial.message().to_owned(),
+            Some(serde_json::Value::Object(structured_reason(&denial))),
+        );
+    }
     McpError::invalid_request(
         denial.message().to_owned(),
         Some(serde_json::Value::Object(structured_reason(&denial))),
@@ -188,6 +203,7 @@ fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Val
         _ => match denial.http_status() {
             401 => "unauthenticated",
             403 => "forbidden",
+            503 => "unavailable",
             _ => "rate_limited",
         },
     };
@@ -209,14 +225,12 @@ fn structured_reason(denial: &Denial) -> serde_json::Map<String, serde_json::Val
     // for every structured refusal detail rather than three.
     //
     // Seconds, matching `Retry-After`'s delay-seconds form, so the four edges
-    // report one number in one unit.
-    if let Denial::RateLimited {
-        retry_after_secs, ..
-    } = denial
-    {
+    // report one number in one unit — a rate limit's wait and an unavailable
+    // dependency's alike.
+    if let Some(retry_after_secs) = denial.retry_after_secs() {
         data.insert(
             "retryAfterSeconds".to_owned(),
-            serde_json::Value::from(*retry_after_secs),
+            serde_json::Value::from(retry_after_secs),
         );
     }
     data
@@ -363,13 +377,48 @@ mod tests {
             "the in-band edges carry the wait: {data:?}",
         );
 
-        // Only a rate limit has one — a 403 carrying `retryAfterSeconds` would
-        // tell a client to retry something that will never succeed.
+        // Only a rate limit and an unavailable dependency have one — a 403
+        // carrying `retryAfterSeconds` would tell a client to retry something
+        // that will never succeed.
         let forbidden = structured_reason(&Denial::forbidden("nope"));
         assert!(
             forbidden.get("retryAfterSeconds").is_none(),
-            "only a rate limit names a wait: {forbidden:?}",
+            "only a denial that may clear names a wait: {forbidden:?}",
         );
+    }
+
+    /// Q12: a dependency that did not answer is a `503` on every edge, its
+    /// reason `unavailable`, and its wait reported in the same unit as a rate
+    /// limit's when the failing party gave one — and never invented when it did
+    /// not.
+    #[cfg(any(feature = "mcp", feature = "ws"))]
+    #[test]
+    fn every_edge_reports_an_unavailable_dependency_and_its_known_wait() {
+        let data = structured_reason(&Denial::unavailable(Some(7), "authentication unavailable"));
+        assert_eq!(data["reason"], "unavailable");
+        assert_eq!(data["retryAfterSeconds"], 7, "{data:?}");
+        let unknown = structured_reason(&Denial::unavailable(None, "authentication unavailable"));
+        assert_eq!(unknown["reason"], "unavailable");
+        assert!(unknown.get("retryAfterSeconds").is_none(), "{unknown:?}");
+    }
+
+    /// The HTTP half: `503` (RFC 9110 §15.6.4), `Retry-After` when known, and
+    /// the generic title of a 5xx rather than the reason.
+    #[tokio::test]
+    async fn an_unavailable_dependency_is_a_503_with_its_known_wait() {
+        let resp =
+            denial_to_http_response(Denial::unavailable(Some(7), "authentication unavailable"));
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp.headers()
+                .get(header::RETRY_AFTER)
+                .map(|v| v.as_bytes()),
+            Some(b"7".as_slice()),
+        );
+        let unknown =
+            denial_to_http_response(Denial::unavailable(None, "authentication unavailable"));
+        assert_eq!(unknown.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(unknown.headers().get(header::RETRY_AFTER).is_none());
     }
 
     /// The HTTP half of the same denial, so the two are pinned together: one

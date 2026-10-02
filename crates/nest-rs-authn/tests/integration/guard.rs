@@ -119,22 +119,33 @@ async fn unreachable_store_fails_closed_even_on_a_public_route() {
     // The credential was never evaluated, so serving the caller as anonymous
     // would silently downgrade every authenticated session during an outage.
     let logs = LogCapture::install();
-    let guard = AuthnGuard::new(Arc::new(RejectWith(|| {
-        AuthError::Unavailable("store unreachable".into())
+    let guard = AuthnGuard::new(Arc::new(RejectWith(|| AuthError::Unavailable {
+        detail: "store unreachable".into(),
+        retry_after: None,
     })));
 
     let denial = guard
         .check_http(&mut public_request())
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
-    assert!(matches!(denial, Denial::Internal { .. }), "{denial:?}");
+    assert!(
+        matches!(
+            denial,
+            Denial::Unavailable {
+                retry_after_secs: None,
+                ..
+            }
+        ),
+        "{denial:?}"
+    );
+    assert_eq!(denial.http_status(), 503, "the caller did nothing wrong");
 
     // The client message is deliberately opaque, so the outage is only ever
     // readable here — and an outage that logs a bare line is the one an
     // operator cannot correlate to a strategy.
     let event = logs.expect_one(
         nest_rs_authn::TARGET,
-        "authentication unavailable — identity store unreachable",
+        "authentication unavailable — what the strategy asks did not answer",
     );
     assert_eq!(event.level, "error");
     assert!(
@@ -289,8 +300,11 @@ async fn a_strategy_that_never_answers_is_denied_at_the_bound() {
     );
     // The answer an unreachable identity store gets, word for word: the caller
     // cannot tell a hang from an outage, and has the same remedy for both.
-    let unavailable = AuthError::Unavailable(String::new());
-    assert!(matches!(denial, Denial::Internal(_)), "{denial:?}");
+    let unavailable = AuthError::Unavailable {
+        detail: String::new(),
+        retry_after: None,
+    };
+    assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
     assert_eq!(denial.message(), unavailable.client_message());
     assert!(
         req.extensions().get::<&'static str>().is_none(),
@@ -312,7 +326,7 @@ async fn a_strategy_that_never_answers_is_denied_on_a_public_route_too() {
         .await
         .expect_err("an unevaluated credential must not pass as anonymous");
 
-    assert!(matches!(denial, Denial::Internal(_)), "{denial:?}");
+    assert!(matches!(denial, Denial::Unavailable { .. }), "{denial:?}");
     assert_the_strategy_was_waited_out(&logs);
     logs.expect_none(nest_rs_authn::TARGET, "anonymous request on a public route");
 }
@@ -408,8 +422,8 @@ impl StalledController {
 struct StalledHttpModule;
 
 /// A route is refused at the bound, a `#[public]` one as much as a guarded one,
-/// with the `500` an unevaluated credential gets — and before the edge's own
-/// request timeout would have answered `503`.
+/// with the `503` an unevaluated credential gets — the caller did nothing wrong
+/// — and before the edge's own request timeout would have answered.
 #[tokio::test(start_paused = true)]
 async fn a_route_is_refused_at_the_bound() {
     let logs = LogCapture::install();
@@ -421,7 +435,7 @@ async fn a_route_is_refused_at_the_bound() {
         let sent = tokio::time::Instant::now();
         let refused = within_twice_the_bound(app.http().get(path).send()).await;
         assert_refused_at_the_bound(sent.elapsed());
-        refused.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         let body = refused.0.into_body().into_string().await.expect("a body");
         assert!(
             !body.contains(REACHED),
@@ -490,7 +504,7 @@ mod graphql {
         )
         .await;
         assert_refused_at_the_bound(sent.elapsed());
-        refused.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         let body = refused.0.into_body().into_string().await.expect("a body");
         assert!(!body.contains(REACHED), "the resolver never ran: {body}");
         assert_the_strategy_was_waited_out(&logs);
@@ -553,7 +567,7 @@ mod mcp {
         )
         .await;
         assert_refused_at_the_bound(sent.elapsed());
-        refused.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         assert_the_strategy_was_waited_out(&logs);
     }
 }
@@ -615,11 +629,11 @@ mod ws {
         )
         .await;
         assert_refused_at_the_bound(sent.elapsed());
-        refused.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        refused.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         assert_the_strategy_was_waited_out(&logs);
 
         let denied = logs.expect_one(nest_rs_core::target::LAYERS, "guard denied the request");
-        assert_eq!(denied.field("status").as_deref(), Some("500"));
+        assert_eq!(denied.field("status").as_deref(), Some("503"));
         assert!(
             denied
                 .field("guard")

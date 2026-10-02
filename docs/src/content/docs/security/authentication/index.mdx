@@ -140,7 +140,7 @@ cause, long before the net. The net sits above every login the framework ships
 (a social login spends at most 15 s on its provider) and below the HTTP edge's
 30-second request timeout, so a strategy that hangs is refused by the guard, on
 every edge — a route, the GraphQL POST, the MCP POST, the WebSocket upgrade —
-with the 500 an unreachable identity store gets, `#[public]` routes included.
+with the 503 an unreachable identity store gets, `#[public]` routes included.
 The guard logs `strategy did not answer within the guard's timeout; denying
 (fail-closed)` at `warn` with the `strategy` (your type's name), the
 `transport` and `waited_ms`.
@@ -186,13 +186,14 @@ anonymously. Visitor-rule policy belongs in the authorization layer,
 not in `AuthnGuard`.
 
 **One failure `#[public]` does not absorb**: `AuthError::Unavailable`.
-An unreachable identity store means the credential was never evaluated,
-so the request fails closed with a 500 rather than being served as
-anonymous — otherwise an outage would silently downgrade every
+An unreachable identity store or identity provider means the credential
+was never evaluated, so the request fails closed with a 503 — carrying
+the provider's `Retry-After` when it gave one — rather than being served
+as anonymous: otherwise an outage would silently downgrade every
 authenticated caller to a visitor, and a `#[public]` route's visitor
 rules would decide what they see. A strategy that does not answer within
 `AUTHENTICATE_TIMEOUT` never evaluated the credential either, and gets
-the same 500 on every route.
+the same 503 on every route.
 
 ```rust title="crates/features/src/users/http/controller.rs"
 #[get("/health")]
@@ -230,19 +231,23 @@ route.
 `AuthError` covers the failure modes a strategy hits:
 `MissingCredentials`, `InvalidToken`, `InvalidSignature`,
 `InvalidAlgorithm`, `NotYetValid`, `Expired`, `Failed(String)` — each
-a **401** — plus `Unavailable(String)`, which is a **500**. `Failed`
-collapses to a generic `"authentication failed"` on the wire so the
-message never leaks configuration detail.
+a **401** — plus `Unavailable { detail, retry_after }`, which is a
+**503**. `Failed` collapses to a generic `"authentication failed"` on the
+wire so the message never leaks configuration detail.
 
-`Unavailable` is the odd one deliberately: it means the identity store
-was unreachable, so the credential was never evaluated. That is an
-infrastructure failure, not a credential signal — reporting it as a 401
-would tell a caller with a perfectly good token to go get another one,
-and would let an outage read as a wave of authentication failures. It is
-logged at `error` and rendered as a 500. The guard answers a strategy
-that outlived `AUTHENTICATE_TIMEOUT` with the same 500 and the same
-`"authentication unavailable"`, and files its own `warn` saying the
-strategy never answered.
+`Unavailable` is the odd one deliberately: it means the identity store or
+the identity provider could not be reached, or answered that it cannot
+answer now, so the credential was never evaluated. The caller did nothing
+wrong (RFC 9110 §15.6.4) — reporting it as a 401 would tell a caller with
+a perfectly good token to go get another one, and would let an outage
+read as a wave of authentication failures. It is logged at `error` and
+rendered as a `503` with a `Retry-After` when `retry_after` is known — an
+identity provider's own, given in seconds — and none invented when it is
+not. The guard answers a strategy that outlived `AUTHENTICATE_TIMEOUT`
+with the same 503 and the same `"authentication unavailable"`, and files
+its own `warn` saying the strategy never answered. On the GraphQL, MCP
+and WebSocket edges, which have no status line, the refusal carries
+`reason: "unavailable"` and, when known, `retryAfterSeconds`.
 
 A rejected credential also names *why* on the challenge, per RFC 6750
 §3.1:

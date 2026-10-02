@@ -384,6 +384,21 @@
     "v"
   ],
   "configs": {
+    "AuthnConfig": {
+      "source": "crates/nest-rs-authn/src/config.rs",
+      "fields": [
+        "secret",
+        "private_key",
+        "public_key",
+        "leeway_secs",
+        "audience",
+        "issuer",
+        "expires_in_secs",
+        "allow_any_audience",
+        "explicit_typing"
+      ],
+      "profile_split": false
+    },
     "GithubSocialConfig": {
       "source": "crates/nest-rs-social/src/providers/github/config.rs",
       "fields": [
@@ -452,21 +467,6 @@
         "sse_max_connection",
         "sse_keep_alive",
         "shutdown_timeout"
-      ],
-      "profile_split": false
-    },
-    "JwtConfig": {
-      "source": "crates/nest-rs-authn/src/config.rs",
-      "fields": [
-        "secret",
-        "private_key",
-        "public_key",
-        "leeway_secs",
-        "audience",
-        "issuer",
-        "expires_in_secs",
-        "allow_any_audience",
-        "explicit_typing"
       ],
       "profile_split": false
     },

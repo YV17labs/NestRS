@@ -1750,13 +1750,21 @@ quotes it. The conformance suite holds its transport rows to the framework's
   runs on and used as it is by the rate limiter and the schedule lock. **The boot
   proves it with a `PING`** — a Redis that accepts the dial and answers nothing
   would otherwise boot cleanly and fail on the first job — and **what fails the
-  same way every time fails at once**: a zero budget, a URL the client cannot
-  parse, TLS settings it will not use, and an answer naming the deployment's own
-  settings — refused credentials, an ACL denying the proof, a database index out
-  of range, a protocol the server lacks. **That list is an allow-list, and every
-  other answer is retried**: `redis` marks every code it does not know as not
-  worth retrying, which failed the boot in milliseconds on a Redis busy running
-  a script, telling the operator to check the URL. What may clear — a refused or
+  same way every time fails at once**: a budget outside its range, a URL the
+  client cannot parse, TLS settings it will not use, and an answer naming the
+  deployment's own settings — refused credentials, an ACL denying the proof, a
+  protocol the server lacks. **That list is an allow-list, and every other answer
+  is retried**: `redis` marks every code it does not know as not worth retrying,
+  which failed the boot in milliseconds on a Redis busy running a script, telling
+  the operator to check the URL. **A refused `SELECT` is read the other way
+  round**, because `redis` drops the server's code from it — `NOPERM`, `ERR`
+  arrive as one sentence — so the allow-list cannot see it: an ACL user without
+  `+select`, a server in cluster mode, an index out of range were retried for the
+  whole budget and reported as a Redis "not ready … if it clears on its own". It
+  never does. `SELECT` runs while a server loads and on a stale replica, so the
+  one answer to it that clears is a server busy running a script, retried; every
+  other refusal fails at once as `DatabaseRefused`, naming the index the URL ends
+  in. What may clear — a refused or
   reset TCP connection, `LOADING`, `BUSY`, `MASTERDOWN`, `TRYAGAIN`, a code this
   client has never seen — is retried within `connect_timeout`, then fails naming
   the endpoint, never the URL, which may carry a password: as `Unready` with

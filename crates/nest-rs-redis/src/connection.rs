@@ -215,8 +215,10 @@ impl RedisConnection {
     /// material beside a plaintext URL, material no handshake could use; a
     /// handshake that fails the same way every time; and an answer naming the
     /// deployment's own settings — refused credentials, an ACL denying the
-    /// proof, a database index out of range, a protocol the server does not
-    /// speak. **Every other answer may clear and is retried within the budget**
+    /// proof, a protocol the server does not speak, and a database the server
+    /// will not select (an index out of range, an ACL without `+select`, a
+    /// server in cluster mode), named by its index. **Every other answer may
+    /// clear and is retried within the budget**
     /// — a server loading its dataset, busy running a script, failing over, or
     /// answering with a code this client does not know — as is a refused or
     /// reset TCP connection. A budget spent on answers fails naming the last
@@ -295,6 +297,13 @@ impl RedisConnection {
                         reason: tls::remedy(&source),
                         endpoint,
                         source: Some(source),
+                    });
+                }
+                Ok(Err(source)) if database_refused(&source) => {
+                    return Err(RedisError::DatabaseRefused {
+                        endpoint,
+                        database: client.get_connection_info().redis.db,
+                        source,
                     });
                 }
                 Ok(Err(source)) if refused(&source) => {
@@ -427,11 +436,11 @@ async fn bounded<F: Future>(budget: Duration, call: F) -> Result<F::Output, redi
 ///
 /// **An answer from Redis repeats only when it names the deployment's own
 /// settings**: credentials refused (`WRONGPASS`, `NOAUTH`, or the client's own
-/// authentication failure), an ACL denying the proof (`NOPERM`), a database
-/// index the server does not have, a protocol it does not speak. Every other
-/// answer may clear — `LOADING`, `BUSY` from a script past its threshold,
-/// `MASTERDOWN` and `TRYAGAIN` during a failover — and so does a code this
-/// client does not know. `redis` marks every unknown code as not worth
+/// authentication failure), an ACL denying the proof (`NOPERM`), a protocol it
+/// does not speak — and a refused `SELECT`, which [`database_refused`] reads
+/// first. Every other answer may clear — `LOADING`, `BUSY` from a script past
+/// its threshold, `MASTERDOWN` and `TRYAGAIN` during a failover — and so does a
+/// code this client does not know. `redis` marks every unknown code as not worth
 /// retrying, which made a Redis running one long script fail the boot in
 /// milliseconds with a sentence pointing at the URL; the allow-list is the other
 /// way round on purpose, so a code a later server invents is retried within the
@@ -447,22 +456,35 @@ fn refused(error: &redis::RedisError) -> bool {
         return true;
     }
     match error.code() {
-        Some(code) => {
-            matches!(code, "WRONGPASS" | "NOAUTH" | "NOPERM") || selects_no_database(error)
-        }
+        Some(code) => matches!(code, "WRONGPASS" | "NOAUTH" | "NOPERM"),
         None => matches!(error.retry_method(), redis::RetryMethod::NoRetry),
     }
 }
 
-/// Whether Redis refused the `SELECT` of the URL's database index for the
-/// index itself — out of range, or invalid — rather than for being busy or
-/// loading, which `redis` reports under the same kind with the server's reason
-/// as the detail.
-fn selects_no_database(error: &redis::RedisError) -> bool {
+/// The sentence `redis` reports a refused `SELECT` under, whatever Redis
+/// answered: the server's code is dropped and its text kept as the detail. The
+/// e2e suite holds it to the client this crate links, against a live server.
+const SELECT_REFUSED: &str = "Redis server refused to switch database";
+
+/// Whether Redis refused the `SELECT` of the URL's database for a reason every
+/// attempt would repeat.
+///
+/// The client drops the server's code from a refused `SELECT`, so the code
+/// allow-list [`refused`] reads cannot see it: an ACL user without `+select`
+/// (`NOPERM`), a server in cluster mode, an index out of range — all `ERR`
+/// here — were retried for the whole budget and reported as a Redis that was
+/// "not ready", told to widen the budget "if it clears on its own". It never
+/// does. So it is read the other way round: `SELECT` runs while a server loads
+/// its dataset and on a stale replica (its command flags admit both), and the
+/// one transient answer it can meet is a server busy running a script or a
+/// module command — retried; anything else repeats, and fails at once.
+fn database_refused(error: &redis::RedisError) -> bool {
     error.kind() == redis::ErrorKind::ResponseError
-        && error
-            .detail()
-            .is_some_and(|detail| detail.contains("DB index"))
+        && error.to_string().starts_with(SELECT_REFUSED)
+        && !error.detail().is_some_and(|detail| {
+            let detail = detail.to_ascii_lowercase();
+            detail.contains("busy") || detail.contains("loading the dataset")
+        })
 }
 
 /// The client the connection is opened from, and reopened from, so the URL's
@@ -843,11 +865,6 @@ mod tests {
             answer("NOAUTH Authentication required."),
             answer("NOPERM User alice has no permissions to run the 'ping' command"),
             redis::RedisError::from((
-                redis::ErrorKind::ResponseError,
-                "Redis server refused to switch database",
-                "DB index is out of range".to_owned(),
-            )),
-            redis::RedisError::from((
                 redis::ErrorKind::RESP3NotSupported,
                 "Redis Server doesn't support HELLO command therefore resp3 cannot be used",
             )),
@@ -879,6 +896,50 @@ mod tests {
                 "{clearing:?} may clear, so it is retried"
             );
         }
+    }
+
+    /// A refused `SELECT` as the client reports it: its own sentence, the
+    /// server's code dropped, the server's text as the detail.
+    fn select_refused(detail: &str) -> redis::RedisError {
+        redis::RedisError::from((
+            redis::ErrorKind::ResponseError,
+            SELECT_REFUSED,
+            detail.to_owned(),
+        ))
+    }
+
+    /// config-1r2: the client drops a refused `SELECT`'s code, so an ACL user
+    /// without `+select` and a server in cluster mode read as an unknown `ERR`,
+    /// were retried for the whole budget and reported as "not ready … widen the
+    /// budget if it clears on its own". Every `SELECT` refusal repeats but a
+    /// server busy running a script, so every other one fails at once.
+    #[test]
+    fn a_refused_select_repeats_unless_the_server_is_busy() {
+        for repeating in [
+            "DB index is out of range",
+            "invalid DB index",
+            "User alice has no permissions to run the 'select' command",
+            "SELECT is not allowed in cluster mode",
+            "an answer no server gives today",
+        ] {
+            assert!(
+                database_refused(&select_refused(repeating)),
+                "{repeating} repeats on every attempt"
+            );
+        }
+        for clearing in [
+            "Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.",
+            "Valkey is busy running a module command.",
+            "Redis is loading the dataset in memory",
+        ] {
+            let error = select_refused(clearing);
+            assert!(!database_refused(&error), "{clearing} may clear");
+            assert!(!refused(&error), "{clearing} is retried within the budget");
+        }
+        assert!(
+            !database_refused(&answer("ERR SELECT is not allowed in cluster mode")),
+            "only the client's `SELECT` refusal is read as one"
+        );
     }
 
     /// A zero budget handed to `connect` directly — no config read held it to

@@ -104,11 +104,10 @@ pub enum RedisError {
     },
 
     /// Redis answered, and refused in a way every attempt would repeat —
-    /// credentials, an ACL denying the proof, a database index out of range, a
-    /// protocol it does not speak. That is not an outage, and retrying it would
-    /// only tell the operator to look at the network — so it fails at once,
-    /// naming the variable that holds the URL, with Redis's answer as the
-    /// source.
+    /// credentials, an ACL denying the proof, a protocol it does not speak.
+    /// That is not an outage, and retrying it would only tell the operator to
+    /// look at the network — so it fails at once, naming the variable that
+    /// holds the URL, with Redis's answer as the source.
     #[error(
         "Redis at {endpoint} refused the connection: check {url_var}",
         url_var = ::nest_rs_config::spellings("redis", "URL"),
@@ -116,6 +115,33 @@ pub enum RedisError {
     Refused {
         /// The address the client dials, never the URL.
         endpoint: String,
+        /// What Redis answered.
+        #[source]
+        source: redis::RedisError,
+    },
+
+    /// Redis refused to select the database the URL names, for a reason every
+    /// attempt would repeat: an index past the server's `databases`, an ACL
+    /// user without `+select`, a server in cluster mode, which serves database 0
+    /// alone. It fails at once naming the index, with Redis's answer as the
+    /// source.
+    ///
+    /// Its own variant rather than [`Refused`](Self::Refused) because the client
+    /// reports every refused `SELECT` under one sentence and drops the server's
+    /// code — `NOPERM`, `ERR` — so the index is the one fact the operator
+    /// cannot read off the answer. The only answer to a `SELECT` that clears is
+    /// a server busy running a script; that one is retried within the budget.
+    #[error(
+        "Redis at {endpoint} refused to select database {database}, the index {url_var} ends \
+         in — its answer follows: the index must be below the server's `databases`, an ACL \
+         user needs `+select`, and a server in cluster mode serves database 0 alone",
+        url_var = ::nest_rs_config::spellings("redis", "URL"),
+    )]
+    DatabaseRefused {
+        /// The address the client dials, never the URL.
+        endpoint: String,
+        /// The database index the URL names.
+        database: i64,
         /// What Redis answered.
         #[source]
         source: redis::RedisError,

@@ -79,6 +79,32 @@ async fn credentials_redis_refuses_fail_the_boot_at_once_naming_them() {
     );
 }
 
+/// Connect to `url`, whose database `index` Redis will not select, and return
+/// the refusal once it is shown to have come at once, naming the index and the
+/// variable that holds it.
+async fn database_refused_at_once(url: String, index: i64, case: &str) -> RedisError {
+    let started = Instant::now();
+    let Err(error) = RedisConnection::connect(&config(url)).await else {
+        panic!("{case} must not connect")
+    };
+    let took = started.elapsed();
+    assert!(
+        took < AT_ONCE,
+        "{case}: a refusal spends none of the budget, took {took:?}"
+    );
+    assert!(
+        matches!(&error, RedisError::DatabaseRefused { database, .. } if *database == index),
+        "{case}: {error}"
+    );
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains(&format!("refused to select database {index}"))
+            && rendered.contains(&nest_rs_config::var_name("redis", "URL")),
+        "{case}: the error names the index and the variable that holds it: {rendered}",
+    );
+    error
+}
+
 /// A database index Redis does not have is refused on every attempt — the
 /// first index past the count the server is configured with, so the test holds
 /// whatever that count is.
@@ -95,11 +121,75 @@ async fn a_database_index_redis_does_not_have_fails_the_boot_at_once() {
         .and_then(|count| count.parse().ok())
         .expect("a dev Redis keeps fewer than 256 databases");
 
-    let error = refused_at_once(crate::redis_url_on(count), "a database index out of range").await;
+    let error = database_refused_at_once(
+        crate::redis_url_on(count),
+        i64::from(count),
+        "a database index out of range",
+    )
+    .await;
     assert!(
         answer(&error).contains("switch database"),
         "the source says what Redis answered: {}",
         answer(&error),
+    );
+}
+
+/// config-1r2: an ACL user without `+select` on a URL naming a database — the
+/// common least-privilege shape — was retried for the whole budget, because the
+/// client drops the `NOPERM` from a refused `SELECT`, and then reported as a
+/// Redis "not ready" told to widen the budget. It is refused at once, naming
+/// the index.
+#[tokio::test]
+async fn an_acl_denying_select_fails_the_boot_at_once_naming_the_index() {
+    const SECRET: &str = "nestrs-e2e-acl-select-secret";
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    let user = format!("nestrs-e2e-no-select-{}-{nanos}", std::process::id());
+    let mut admin = crate::connect().await;
+    redis::cmd("ACL")
+        .arg("SETUSER")
+        .arg(&user)
+        .arg("on")
+        .arg(format!(">{SECRET}"))
+        .arg("+@all")
+        .arg("-select")
+        .arg("~*")
+        .query_async::<()>(&mut admin)
+        .await
+        .expect("ACL SETUSER");
+
+    // Refused at the `SELECT`, so the index reaches no key: any but 0 sends one.
+    let url = crate::redis_url_on(crate::DB_CONFINED_TO_THE_PREFIX).replacen(
+        "://",
+        &format!("://{user}:{SECRET}@"),
+        1,
+    );
+    let outcome = tokio::time::timeout(
+        AT_ONCE * 2,
+        database_refused_at_once(
+            url,
+            i64::from(crate::DB_CONFINED_TO_THE_PREFIX),
+            "an ACL user without +select",
+        ),
+    )
+    .await;
+    redis::cmd("ACL")
+        .arg("DELUSER")
+        .arg(&user)
+        .query_async::<i64>(&mut admin)
+        .await
+        .expect("ACL DELUSER");
+    let error = outcome.expect("refused at once, not retried for the budget");
+    assert!(
+        answer(&error).contains("no permissions"),
+        "the source says what Redis answered: {}",
+        answer(&error),
+    );
+    assert!(
+        !format!("{error} {}", answer(&error)).contains(SECRET),
+        "and neither shows the password: {error}",
     );
 }
 
@@ -345,6 +435,75 @@ async fn a_redis_that_stays_busy_fails_at_the_budget_naming_its_answer() {
         "the source is Redis's last answer: {}",
         answer(&error)
     );
+}
+
+/// config-1r2: a server in cluster mode answers a `SELECT` with an `ERR` the
+/// client reports without its code, so it was retried for the whole budget. It
+/// fails at once, naming the index.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_that_serves_database_zero_alone_fails_the_boot_at_once_naming_the_index() {
+    let proxy = ScriptedRedis::start(None).await;
+    proxy.answer_with(Some("ERR SELECT is not allowed in cluster mode"));
+    let error =
+        database_refused_at_once(format!("{}2", proxy.url()), 2, "a server in cluster mode").await;
+    assert!(
+        answer(&error).contains("not allowed in cluster mode"),
+        "the source says what Redis answered: {}",
+        answer(&error),
+    );
+}
+
+/// The one answer to a `SELECT` that clears — a server busy running a script —
+/// is retried until it serves, as it is at the proof.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_select_met_by_a_busy_server_is_retried_until_it_serves() {
+    let proxy = ScriptedRedis::start(None).await;
+    proxy.answer_with(Some(NOT_READY[0]));
+    let ready = tokio::spawn({
+        let answer = Arc::clone(&proxy.answer);
+        async move {
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            *answer.lock().expect("answer lock") = None;
+        }
+    });
+    let started = Instant::now();
+    let outcome = RedisConnection::connect(&RedisConfig {
+        // Any index but 0 makes the client send a `SELECT`; this one's test
+        // keeps keys under a prefix, and this connection writes none.
+        url: format!("{}{}", proxy.url(), crate::DB_CONFINED_TO_THE_PREFIX),
+        connect_timeout: Duration::from_secs(10),
+        ..RedisConfig::default()
+    })
+    .await;
+    let took = started.elapsed();
+    ready.await.expect("the proxy is made ready");
+    let mut conn = outcome.unwrap_or_else(|error| panic!("{error:#}"));
+    assert!(
+        took >= Duration::from_millis(500),
+        "the boot waited for Redis rather than connecting past it, took {took:?}"
+    );
+    redis::cmd("PING")
+        .query_async::<()>(&mut conn)
+        .await
+        .expect("the kept connection serves");
+}
+
+/// The budget's ceiling is a budget the kernel accepts: the socket's liveness
+/// is set from it, and past the kernel's keepalive limit every dial failed with
+/// `EINVAL` against a Redis that answered.
+#[tokio::test]
+async fn the_ceiling_budget_connects_and_serves() {
+    let mut conn = RedisConnection::connect(&RedisConfig {
+        url: crate::redis_url(),
+        connect_timeout: Duration::from_secs(60 * 60),
+        ..RedisConfig::default()
+    })
+    .await
+    .expect("a budget of an hour dials");
+    redis::cmd("PING")
+        .query_async::<()>(&mut conn)
+        .await
+        .expect("and serves");
 }
 
 /// A Redis with one client slot left boots: the proof is closed before the

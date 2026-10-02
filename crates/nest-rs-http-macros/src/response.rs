@@ -411,24 +411,27 @@ fn redirect_status(written: &Expr) -> syn::Result<LitInt> {
 /// evaluate the user method (e.g. `__ctrl.foo(a, b).await`); `wrapper_args`
 /// lists every wrapper-fn parameter name including `__ctrl`, so a
 /// `#[redirect]` body that skips the user call can still silence any
-/// unused-variable warnings on its extractors. `returns_result` is `true`
-/// when the user method's return type is a `Result<_, _>` — in that case
-/// the emitted code short-circuits on `Err` so the original error status
-/// (set by the error's `ResponseError`) survives and the `#[http_code]` /
-/// `#[response_header]` overrides only touch the success path. The returned
-/// tokens produce a `::nest_rs_http::poem::Result<::nest_rs_http::poem::Response>`.
+/// unused-variable warnings on its extractors. The returned tokens produce a
+/// `::nest_rs_http::poem::Result<::nest_rs_http::poem::Response>`.
+///
+/// **A failure keeps its own status**: the `#[http_code]` / `#[response_header]`
+/// overrides touch the success path only, and the error short-circuits with
+/// the status its `ResponseError` set. Which answers are failures is read by
+/// **type**, through `nest_rs_core::Answer` — the spelling read here once took
+/// `use poem::Result as PoemResult` for a value, built the error's response,
+/// and rewrote its 403 into the shaper's 201. Building the response from the
+/// success value alone also spares the `Result<T, E>: IntoResponse` bound a
+/// handler whose `E` is only a `ResponseError` would fail.
 pub(crate) fn apply_response_shapers(
     shapers: &ResponseShapers,
     call_expr: TokenStream2,
     wrapper_args: &[syn::Ident],
-    returns_result: bool,
 ) -> TokenStream2 {
     // Bound in the same scope as the developer's extractor bindings, so they
     // take the same definition-site hygiene the wrapper's own locals do — see
     // the `mixed_site_ident` note in `routes.rs`. Safe by span, not by the
     // order these statements happen to be emitted in.
     let out = mixed_site_ident("__out");
-    let ok = mixed_site_ident("__ok");
     let response = mixed_site_ident("__response");
 
     if let Some(redirect) = &shapers.redirect {
@@ -471,30 +474,16 @@ pub(crate) fn apply_response_shapers(
     };
     let header_writes = headers_tokens(&shapers.headers, &response);
 
-    // Bug 1 / Bug 5: matching the Result inside the wrapper keeps the
-    // handler's error status (e.g. 403 via `ResponseError`) instead of
-    // letting `#[http_code]` rewrite every response status — and avoids the
-    // `Result<T, E>: IntoResponse` trait-bound when only `E: ResponseError`
-    // (i.e. `From<E> for poem::Error`) is available.
-    let unwrap_ok = if returns_result {
-        quote! {
-            let #ok = match #out {
-                ::core::result::Result::Ok(v) => v,
-                ::core::result::Result::Err(e) => {
-                    return ::core::result::Result::Err(::core::convert::From::from(e));
-                }
-            };
-        }
-    } else {
-        quote! { let #ok = #out; }
-    };
-
     quote! {
         {
             let #out = #call_expr;
-            #unwrap_ok
-            let mut #response: ::nest_rs_http::poem::Response =
-                ::nest_rs_http::poem::IntoResponse::into_response(#ok);
+            let mut #response: ::nest_rs_http::poem::Response = {
+                use ::nest_rs_core::AnswerFallback as _;
+                ::nest_rs_core::Answer(&#out).map::<::nest_rs_http::poem::Error, _, _>()(
+                    #out,
+                    ::nest_rs_http::poem::IntoResponse::into_response,
+                )?
+            };
             #status_apply
             #header_writes
             ::nest_rs_http::poem::Result::<::nest_rs_http::poem::Response>::Ok(#response)

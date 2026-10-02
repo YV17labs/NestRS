@@ -69,6 +69,7 @@
 #![warn(missing_docs)]
 
 pub mod access;
+mod answer;
 pub mod app;
 pub mod container;
 pub(crate) mod cycle_guard;
@@ -100,6 +101,8 @@ pub mod transport;
 // no public signature could hand a caller one. Why the eight below live in
 // `error` rather than beside the pass is that module's own doc.
 pub use access::{ModuleDescriptor, ProviderDescriptor, ProviderOrder, ReachableProviders};
+#[doc(hidden)]
+pub use answer::{Answer, AnswerFallback, ResultAnswer, ValueAnswer};
 pub use app::{App, AppBuilder};
 pub use container::{Container, ContainerBuilder, ContainerId, KeyedDependency, ProviderKey};
 pub use discoverable::{

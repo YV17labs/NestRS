@@ -94,6 +94,40 @@ pub fn unresolvable_chain(label: &'static str) -> McpError {
     McpError::internal_error(OPAQUE, None)
 }
 
+/// What an MCP operation answers: a `Result` whose error takes an [`McpError`],
+/// whatever the type is called.
+///
+/// The guard chain, the access gate and the pipes refuse by returning, so an
+/// operation needs a `Result` to carry the refusal. `#[tools]` used to ask the
+/// return type's **spelling**, which refused `use … as McpResult` and every
+/// alias as "a tool that cannot fail". The wrapper now turns a refusal into the
+/// operation's answer at one site, [`refused`], and this bound is the whole
+/// check — by type, once, at the return type.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "an MCP operation returns `Result<_, McpError>`, and `{Self}` is not one",
+    label = "not a `Result` an `McpError` converts into",
+    note = "its guard chain, its access posture and its pipes refuse by returning, and an \
+            operation that cannot fail has nowhere to report a denial"
+)]
+pub trait OperationAnswer {
+    /// The answer carrying `error`.
+    fn refused(error: McpError) -> Self;
+}
+
+impl<T, E: From<McpError>> OperationAnswer for Result<T, E> {
+    fn refused(error: McpError) -> Self {
+        Err(E::from(error))
+    }
+}
+
+/// A refusal from the wrapper's chain, gate or pipes, as the operation's own
+/// answer — see [`OperationAnswer`].
+#[doc(hidden)]
+pub fn refused<R: OperationAnswer>(error: McpError) -> R {
+    R::refused(error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

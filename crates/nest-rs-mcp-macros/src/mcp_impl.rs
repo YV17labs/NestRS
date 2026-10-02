@@ -75,6 +75,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{
     Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Path, Signature, Token, Type,
 };
@@ -534,12 +535,33 @@ fn wrapper(self_ty: &Type, op: &Operation) -> syn::Result<TokenStream2> {
     // is `async` even where the method it delegates to is not.
     wire_sig.asyncness = Some(syn::token::Async(name.span()));
 
+    // Every step that can refuse runs inside one block answering
+    // `Result<_, McpError>`, and the wrapper turns a refusal into the
+    // operation's own answer at **one** site, typed by `OperationAnswer`: a
+    // `Result` whose error takes an `McpError` is one whatever it is called,
+    // and anything else is refused there once, at the return type — not by a
+    // `?` per step deep inside the expansion. What the block hands back are the
+    // arguments the pipes rebound.
+    let piped: Vec<&syn::Ident> = pipes.iter().map(|arg| &arg.ident).collect();
+    let span = match &sig.output {
+        syn::ReturnType::Type(_, ty) => ty.span(),
+        syn::ReturnType::Default => sig.ident.span(),
+    };
+    let refused = quote_spanned! {span=> ::nest_rs_mcp::refused(__nestrs_refusal) };
     Ok(quote! {
         #role_attr
         #wire_sig {
-            #chain
-            #gate
-            #(#pipe_prelude)*
+            let __nestrs_ready: ::core::result::Result<_, ::nest_rs_mcp::McpError> = async {
+                #chain
+                #gate
+                #(#pipe_prelude)*
+                ::core::result::Result::Ok((#(#piped,)*))
+            }
+            .await;
+            let (#(#piped,)*) = match __nestrs_ready {
+                ::core::result::Result::Ok(__nestrs_ready) => __nestrs_ready,
+                ::core::result::Result::Err(__nestrs_refusal) => return #refused,
+            };
             #body
         }
     })
@@ -633,8 +655,9 @@ fn mask(posture: &Posture, sig: &Signature, call: TokenStream2) -> syn::Result<T
         return Ok(call);
     }
 
-    // `take_operation` already refused a non-`Result` operation, so this is the
-    // shape by construction rather than a second check with its own message.
+    // `take_operation` already refused a masked operation whose return is not
+    // spelled `Result<…>`, so this is the shape by construction rather than a
+    // second check with its own message.
     let Some(ok_ty) = result_ok_type(sig) else {
         return Ok(call);
     };
@@ -794,23 +817,29 @@ fn take_operation(
     method.attrs.remove(index);
 
     reject_http_only_layers(&method.attrs, "MCP", "operation")?;
-    // The guard chain and the access gate both refuse by returning, so there has
-    // to be a channel for a refusal. Named here rather than left to surface as a
-    // `?`-on-a-non-Result deep inside the expansion.
-    if result_ok_type(&method.sig).is_none() {
+    // The guard chain and the access gate both refuse by returning, so the
+    // operation must answer a `Result` — checked by **type**, at the one place
+    // the wrapper refuses (`nest_rs_mcp::refused`), so a `Result` renamed on
+    // import or behind an alias is one, and anything else is told so once.
+    let guards = take_path_list(&mut method.attrs, "use_guards")?;
+    let force_guards = take_path_list(&mut method.attrs, "force_guards")?;
+    let posture = posture_rules(role).take(method)?;
+    // The mask is the one step that reads the answer's *shape* — `Json<T>` to
+    // unwrap, `CallToolResult` to refuse — and a shape inside a `Result` is
+    // visible only through its spelling.
+    if posture.masks() && result_ok_type(&method.sig).is_none() {
         return Err(syn::Error::new_spanned(
-            &method.sig,
+            &method.sig.output,
             format!(
-                "an MCP operation returns `Result<_, McpError>` — its guard chain \
-                 and its access posture both refuse by returning, and a {} that \
-                 cannot fail has nowhere to report a denial",
+                "a masked {} spells its return `Result<…, McpError>`: the mask reads the \
+                 value's shape — `Json<T>` to unwrap, `CallToolResult` to refuse — off \
+                 that spelling, and a `Result` renamed on import or behind an alias hides \
+                 it. Write `Result<…>`, or declare `#[authorize(Action, Entity, unmasked)]` \
+                 and mask in the body",
                 role.attr(),
             ),
         ));
     }
-    let guards = take_path_list(&mut method.attrs, "use_guards")?;
-    let force_guards = take_path_list(&mut method.attrs, "force_guards")?;
-    let posture = posture_rules(role).take(method)?;
 
     // The developer's method keeps its own patterns — this normalizes a clone, so
     // the wrapper has one plain ident per argument to declare and forward by.

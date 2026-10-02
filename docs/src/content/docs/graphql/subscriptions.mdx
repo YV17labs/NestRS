@@ -170,9 +170,12 @@ Everything else is the GraphQL module's own configuration — see
 ## Limits
 
 - **The fallible return is spelled `Result<…>`.** async-graphql reads the last
-  path segment of the return type, so an aliased `Result` is taken for an
-  ordinary value; it is a compile error naming the rule. The method may be `fn`
-  or `async fn`.
+  path segment of the return type and takes any other spelling for the stream
+  itself, so a `Result` under another name — `GqlResult<impl Stream<…>>` from
+  `use async_graphql::Result as GqlResult`, or an alias around a named stream —
+  is a compile error naming the rule, at the return type. A query or a mutation
+  answers such a `Result` by its type; a subscription cannot. The method may be
+  `fn` or `async fn`.
 - **An item that cannot be masked is dropped, not raised.** A stream
   field's type is the item's, not a `Result`, so there is no error channel
   per item: failing closed means the item does not ship. The drop is

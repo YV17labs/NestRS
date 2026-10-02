@@ -11,12 +11,13 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{
-    Attribute, FnArg, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path, Signature, Token, Type,
-    parse_quote,
+    Attribute, FnArg, GenericArgument, Ident, ImplItem, ItemImpl, ItemStruct, LitStr, Path,
+    PathArguments, Signature, Token, Type, parse_quote,
 };
 
 use nest_rs_codegen::{
@@ -487,56 +488,80 @@ fn piped_args(sig: &Signature) -> Vec<PipedArg> {
         .collect()
 }
 
-/// True when the method's return type's last path segment ends with `Result`
-/// (`Result`, `GqlResult`, any `*Result` alias) — the method is then already
-/// fallible, and the wrapper returns its type as written. Anything else is a
-/// bare `T`, which the wrapper answers as `async_graphql::Result<T>`
-/// ([`wrapper_output`]) so the guard chain, the gate, the pipes and the mask
-/// have a failure channel whatever the developer wrote.
-fn sig_returns_result(sig: &Signature) -> bool {
-    match &sig.output {
-        syn::ReturnType::Default => false,
-        syn::ReturnType::Type(_, ty) => match &**ty {
-            Type::Path(tp) => tp
-                .path
-                .segments
-                .last()
-                .is_some_and(|s| s.ident.to_string().ends_with("Result")),
-            _ => false,
-        },
-    }
-}
-
-/// The type an operation's signature declares it returns, whole.
+/// What a method's return type is, read the way async-graphql reads it.
 ///
-/// Handed to `OutputType::type_name()` in the emitted claim rather than
-/// unwrapped here, because unwrapping here is a second implementation of
-/// async-graphql's rule and the two drifted immediately. Upstream unwraps only a
-/// **literal** `Result` / `FieldResult`; anything else — a type alias, a `Result`
-/// with its parameters in the other order — is handed whole to `add_keys`, where
-/// `impl OutputType for Result<T, E>` reports `T`'s name. Naming the whole type
-/// therefore agrees with the registry by construction: an alias resolves through
-/// its own `OutputType`, and there is no shape the claim can miss or misread.
-fn declared_return_type(sig: &Signature) -> Option<&Type> {
-    match &sig.output {
-        syn::ReturnType::Type(_, ty) => Some(ty),
-        syn::ReturnType::Default => None,
+/// **Fallibility is the spelling async-graphql's own derive reads, and nothing
+/// else**: a return is fallible when its last path segment is exactly `Result`
+/// or `FieldResult` and carries a type argument — the first one is the value
+/// (`async-graphql-derive`'s `OutputType::parse`). The wrapper is handed to that
+/// derive, so mirroring its rule is the one reading that cannot disagree with
+/// the registry. The rule this replaced asked whether the segment *ended* with
+/// `Result`, which took `SearchResult` — an ordinary `SimpleObject` — for a
+/// `Result`, emitted the developer's type as the wrapper's and left three rustc
+/// errors on `#[operations]`.
+///
+/// **What the spelling cannot see, the type checker does.** A `Result` under
+/// another name — `use async_graphql::Result as GqlResult`, a type alias —
+/// reads as a value here, and every value answer goes through
+/// `nest_rs_core::Answer` ([`call_as_result`]), which tells a `Result` by its
+/// type and splits its error into the wrapper's.
+enum Returned<'a> {
+    /// Spelled fallible; the value type is the first type argument.
+    Fallible(&'a Type),
+    /// Anything else — `()` for a method that declares no return type. Boxed
+    /// beside its borrowed sibling, which is a pointer.
+    Value(Box<Type>),
+}
+
+impl Returned<'_> {
+    /// The value the wrapper answers with, `T` of its `async_graphql::Result<T>`.
+    fn value(&self) -> Type {
+        match self {
+            Self::Fallible(ty) => (*ty).clone(),
+            Self::Value(ty) => (**ty).clone(),
+        }
     }
 }
 
-/// The return type's last path segment when it *reads* as a `Result` but is not
-/// one of the two spellings async-graphql recognises (`Result` / `FieldResult`).
-/// `None` for a literal `Result`, and for a return type that is not
-/// `Result`-shaped at all — a bare stream is a legitimate `#[public]` shape.
-fn aliased_result_ident(sig: &Signature) -> Option<Ident> {
-    let syn::ReturnType::Type(_, ty) = &sig.output else {
-        return None;
+/// Whether `ty` holds an `impl Trait` anywhere but as the whole of itself — in a
+/// path's arguments, behind a reference, in a tuple or an array.
+fn nests_impl_trait(ty: &Type) -> bool {
+    fn inside(ty: &Type) -> bool {
+        match ty {
+            Type::ImplTrait(_) => true,
+            Type::Path(tp) => tp.path.segments.iter().any(|segment| {
+                matches!(&segment.arguments, PathArguments::AngleBracketed(args)
+                    if args.args.iter().any(|arg| matches!(arg, GenericArgument::Type(ty) if inside(ty))))
+            }),
+            Type::Reference(r) => inside(&r.elem),
+            Type::Paren(p) => inside(&p.elem),
+            Type::Group(g) => inside(&g.elem),
+            Type::Tuple(t) => t.elems.iter().any(inside),
+            Type::Array(a) => inside(&a.elem),
+            Type::Slice(sl) => inside(&sl.elem),
+            _ => false,
+        }
+    }
+    !matches!(ty, Type::ImplTrait(_)) && inside(ty)
+}
+
+fn returned(sig: &Signature) -> Returned<'_> {
+    let ty = match &sig.output {
+        syn::ReturnType::Default => return Returned::Value(Box::new(parse_quote!(()))),
+        syn::ReturnType::Type(_, ty) => &**ty,
     };
-    let Type::Path(tp) = &**ty else { return None };
-    let last = tp.path.segments.last()?;
-    let name = last.ident.to_string();
-    let recognised = name == "Result" || name == "FieldResult";
-    (!recognised && name.ends_with("Result")).then(|| last.ident.clone())
+    if let Type::Path(tp) = ty
+        && let Some(last) = tp.path.segments.last()
+        && (last.ident == "Result" || last.ident == "FieldResult")
+        && let PathArguments::AngleBracketed(args) = &last.arguments
+        && let Some(value) = args.args.iter().find_map(|arg| match arg {
+            GenericArgument::Type(value) => Some(value),
+            _ => None,
+        })
+    {
+        return Returned::Fallible(value);
+    }
+    Returned::Value(Box::new(ty.clone()))
 }
 
 /// The ident of a method's `&Context<'_>` parameter (matched on the last
@@ -689,31 +714,61 @@ fn layered_resolver_chain(
     }
 }
 
-/// The return type of the method the expansion emits: the developer's own when
-/// it is already a `Result`, `async_graphql::Result<T>` around a bare `T`.
+/// The return type of the method the expansion emits: always
+/// `async_graphql::Result<T>`, `T` the value [`returned`] reads.
 ///
-/// Spelled with `Result` as its last segment because async-graphql decides
-/// "fallible?" by that spelling — the alias refusal on a `#[subscription]` is
-/// the same fact read from the other side.
+/// One shape whatever the developer wrote, so every chain step has a failure
+/// channel and the developer's own error type owes nothing to it: the wrapper
+/// returning the developer's `Result<T, MyError>` made every `?` in the chain
+/// require `MyError: From<async_graphql::Error>`, a bound no page stated.
 fn wrapper_output(sig: &Signature) -> syn::ReturnType {
-    if sig_returns_result(sig) {
-        return sig.output.clone();
-    }
-    let ty: Type = match &sig.output {
-        syn::ReturnType::Type(_, ty) => (**ty).clone(),
-        syn::ReturnType::Default => parse_quote!(()),
-    };
-    parse_quote!(-> ::nest_rs_graphql::async_graphql::Result<#ty>)
+    let value = returned(sig).value();
+    parse_quote!(-> ::nest_rs_graphql::async_graphql::Result<#value>)
 }
 
-/// The developer's call as a `Result`, whatever it returns — the value the
-/// wrapper's posture, mask and operation line all read.
-fn call_as_result(sig: &Signature, call: TokenStream2) -> TokenStream2 {
-    if sig_returns_result(sig) {
-        call
-    } else {
-        quote!(::core::result::Result::<_, ::nest_rs_graphql::async_graphql::Error>::Ok(#call))
+/// The developer's call as the wrapper's `async_graphql::Result<T>` — the value
+/// the wrapper's posture, mask and operation line all read.
+///
+/// A fallible return converts its error the way async-graphql would have
+/// (`Into<async_graphql::Error>`). A value return goes through
+/// `nest_rs_core::Answer`, which knows a `Result` by its type: one under another
+/// name has its error split into the wrapper's, so a failure files
+/// `error` and reaches the client as one, whatever the type is called. A
+/// `#[subscription]` cannot be answered that way — async-graphql's derive takes
+/// any value for the stream itself — so there the probe refuses it at compile
+/// time, at the return type, with the fix. Zero-sized and resolved by the
+/// compiler: the request pays nothing for either.
+fn call_as_result(sig: &Signature, call: TokenStream2, root: RootKind) -> TokenStream2 {
+    if let Returned::Fallible(_) = returned(sig) {
+        return quote! {
+            ::core::result::Result::map_err(
+                #call,
+                ::core::convert::Into::<::nest_rs_graphql::async_graphql::Error>::into,
+            )
+        };
     }
+    if root == RootKind::Subscription {
+        let span = match &sig.output {
+            syn::ReturnType::Type(_, ty) => ty.span(),
+            syn::ReturnType::Default => sig.ident.span(),
+        };
+        let probe = quote_spanned! {span=>
+            ::nest_rs_graphql::answers_a_stream(::nest_rs_core::Answer(&__answer).kind());
+        };
+        return quote! {{
+            use ::nest_rs_core::AnswerFallback as _;
+            let __answer = #call;
+            #probe
+            ::core::result::Result::<_, ::nest_rs_graphql::async_graphql::Error>::Ok(__answer)
+        }};
+    }
+    quote! {{
+        use ::nest_rs_core::AnswerFallback as _;
+        let __answer = #call;
+        ::nest_rs_core::Answer(&__answer).split::<::nest_rs_graphql::async_graphql::Error>()(
+            __answer,
+        )
+    }}
 }
 
 /// The closed role vocabulary, read by the verb predicate **and** by the
@@ -1084,24 +1139,24 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             } else {
                 RootKind::Subscription
             };
-            // async-graphql decides "is this fallible?" by the **spelling** of
-            // the return type's last path segment, so an aliased `Result`
-            // (`use async_graphql::Result as GqlResult`) is read as an ordinary
-            // value and the stream type becomes the `Result` itself. On a query
-            // that is harmless; on a subscription it is a wall of trait errors
-            // pointing at the derive. Same syntactic rule `#[messages]` states
-            // for a masked WS reply — named here rather than discovered.
+            // async-graphql's subscription derive builds paths out of the return
+            // type, and Rust refuses an `impl Trait` inside a path (E0562): a
+            // stream nested in another path — `GqlResult<impl Stream<…>>`, the
+            // `use async_graphql::Result as GqlResult` idiom — cannot reach it,
+            // and left to the derive it is a wall of errors. Read off where the
+            // `impl` sits, never off a name; a `Result` alias around a named
+            // stream is refused by its type instead (`call_as_result`).
             if root_kind == RootKind::Subscription
-                && let Some(alias) = aliased_result_ident(&sig)
+                && let Returned::Value(ty) = returned(&sig)
+                && nests_impl_trait(&ty)
             {
                 return Err(syn::Error::new_spanned(
                     &method.sig.output,
-                    format!(
-                        "spell a `#[subscription]`'s fallible return as `Result<...>`, not \
-                         `{alias}<...>`: async-graphql reads the last path segment of the \
-                         return type, so an alias is taken for an ordinary value and the \
-                         stream type becomes the `Result`"
-                    ),
+                    "a `#[subscription]` returns `impl Stream<Item = T>`, a stream type, or one \
+                     of those inside `Result<…>` / `FieldResult<…>`. This return nests an `impl \
+                     Trait` inside another path, and async-graphql's derive builds paths from \
+                     the return type, where Rust refuses one (E0562): if it is a `Result` under \
+                     another name, spell it `Result<…>`",
                 ));
             }
             // `bind = Service`: the operation declares its subject as an
@@ -1214,6 +1269,7 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     &sig,
                     quote! { <#self_ty>::#method_name(&*self.0, #(#call_args),*) },
                 ),
+                root_kind,
             );
             let role_label = if is_entity {
                 ENTITY_ROLE
@@ -1289,13 +1345,22 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                     match root_kind {
                         // A query or a mutation answers once, so the posture's
                         // mask runs once, over the value.
+                        // Through the probe's mapper, so the mask reads the row
+                        // inside a `Result` under another name rather than the
+                        // `Result` around it.
                         RootKind::Query | RootKind::Mutation => quote! {
                             match #call {
-                                ::core::result::Result::Ok(__out) => ::core::result::Result::Ok(
-                                    ::nest_rs_authz::graphql::masked_value_for::<#action, #entity, _>(
-                                        #gctx, __out,
-                                    )?,
-                                ),
+                                ::core::result::Result::Ok(__out) => {
+                                    use ::nest_rs_core::AnswerFallback as _;
+                                    ::nest_rs_core::Answer(&__out).mapper()(
+                                        __out,
+                                        |__value| {
+                                            ::nest_rs_authz::graphql::masked_value_for::<
+                                                #action, #entity, _,
+                                            >(#gctx, __value)
+                                        },
+                                    )
+                                }
                                 ::core::result::Result::Err(__err) =>
                                     ::core::result::Result::Err(__err),
                             }
@@ -1361,13 +1426,18 @@ fn resolver_impl_inner(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             // carrying a `@key` — `add_keys` returns silently for anything that
             // is not an object or an interface, which is how an `#[entity]`
             // returning `Vec<T>` compiled, booted, and registered nothing.
-            if is_entity && let Some(declared) = declared_return_type(&sig) {
+            if is_entity && matches!(sig.output, syn::ReturnType::Type(..)) {
                 let claimed = LitStr::new(&method_name.to_string(), method_name.span());
+                // The value the wrapper registers — `T` of the
+                // `async_graphql::Result<T>` it returns, which is the type
+                // `add_keys` reads — so the claim and the registry name one
+                // type by construction.
+                let value = returned(&sig).value();
                 entity_claims.push(quote! {
                     #(#cfgs)*
                     (
                         #claimed,
-                        <#declared as ::nest_rs_graphql::async_graphql::OutputType>::type_name()
+                        <#value as ::nest_rs_graphql::async_graphql::OutputType>::type_name()
                             .into_owned(),
                     )
                 });
@@ -1674,6 +1744,7 @@ fn field_method(
     // spelling.
     // By path: the resolver is built by value here, and method lookup on a value
     // tries a trait method taking `self` before the `&self` it derefs to.
+    // A field resolver answers once, as a query does.
     let call = call_as_result(
         sig,
         await_if_async(
@@ -1682,6 +1753,7 @@ fn field_method(
                 <#self_ty>::#method_name(&__resolver, self #(, #call_args)*)
             },
         ),
+        RootKind::Query,
     );
     let method = quote! {
         #(#deleg_attrs)*

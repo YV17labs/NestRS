@@ -7,7 +7,7 @@
 //! statement, executed.
 
 use nest_rs_core::module;
-use nest_rs_graphql::async_graphql::{self, Context};
+use nest_rs_graphql::async_graphql::{self, Context, Result as GqlResult};
 use nest_rs_graphql::{GraphqlModule, operations, resolver};
 use nest_rs_testing::{LogCapture, TestApp};
 
@@ -17,6 +17,24 @@ use nest_rs_testing::{LogCapture, TestApp};
 #[graphql(complex)]
 struct Note {
     body: String,
+}
+
+/// A payload whose name ends in `Result` — an ordinary object, which the
+/// wrapper once took for a `Result` and refused to compile.
+#[derive(async_graphql::SimpleObject)]
+struct SearchResult {
+    hits: i32,
+}
+
+/// A developer's own error: `Display`, so async-graphql can carry it, and no
+/// `From<async_graphql::Error>` — which the wrapper's chain once demanded.
+#[derive(Debug)]
+struct LookupError;
+
+impl std::fmt::Display for LookupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("nothing by that name")
+    }
 }
 
 #[resolver]
@@ -39,6 +57,27 @@ impl NoteResolver {
     #[public]
     async fn refused(&self) -> async_graphql::Result<String> {
         Err(async_graphql::Error::new("no"))
+    }
+
+    /// A `Result` under another name — `use async_graphql::Result as
+    /// GqlResult`, the idiom that keeps `std`'s in scope — fails as the spelled
+    /// one does.
+    #[query]
+    #[public]
+    async fn refused_by_alias(&self) -> GqlResult<String> {
+        Err(async_graphql::Error::new("no"))
+    }
+
+    #[query]
+    #[public]
+    async fn search(&self) -> SearchResult {
+        SearchResult { hits: 3 }
+    }
+
+    #[query]
+    #[public]
+    async fn look_up(&self) -> Result<i32, LookupError> {
+        Err(LookupError)
     }
 
     #[mutation]
@@ -153,6 +192,67 @@ async fn a_failing_operation_says_so() {
         "a GraphQL error is answered with a 200, so the HTTP line alone reports \
          a request that failed as one that succeeded: {served:?}",
     );
+}
+
+/// Fallibility is read from what a method returns, never from what its type
+/// is called: a payload named `SearchResult` is a value and answers, a `Result`
+/// renamed on import fails like a spelled one — on the line and to the client —
+/// and a developer's own error type owes the wrapper nothing beyond what
+/// async-graphql asks of it.
+#[tokio::test]
+async fn a_return_is_fallible_by_its_type_never_by_its_name() {
+    let logs = LogCapture::install();
+    let app = boot().await;
+
+    let body: serde_json::Value = serde_json::from_str(
+        &app.http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({
+                "query": "{ search { hits } refusedByAlias lookUp }"
+            }))
+            .send()
+            .await
+            .0
+            .into_body()
+            .into_string()
+            .await
+            .expect("a GraphQL response body"),
+    )
+    .expect("a GraphQL response is JSON");
+    assert_eq!(body["data"]["search"]["hits"], 3, "{body}");
+    let messages: Vec<&str> = body["errors"]
+        .as_array()
+        .map(|errors| {
+            errors
+                .iter()
+                .filter_map(|e| e["message"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        messages.contains(&"no") && messages.contains(&"nothing by that name"),
+        "both failures reach the client in their own words: {body}",
+    );
+
+    let served = lines(&logs);
+    let outcome = |operation: &str| {
+        served
+            .iter()
+            .find(|line| line.field("operation").as_deref() == Some(operation))
+            .unwrap_or_else(|| panic!("`{operation}` files a line: {served:?}"))
+            .field("outcome")
+    };
+    assert_eq!(
+        outcome("search").as_deref(),
+        Some(nest_rs_core::operation_log::OK)
+    );
+    for failed in ["refusedByAlias", "lookUp"] {
+        assert_eq!(
+            outcome(failed).as_deref(),
+            Some(nest_rs_core::operation_log::ERROR),
+            "`{failed}` failed, and its line says so: {served:?}",
+        );
+    }
 }
 
 #[tokio::test]

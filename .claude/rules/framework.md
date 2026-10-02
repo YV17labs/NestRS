@@ -262,6 +262,25 @@ moves between them inside one feature: `#[routes]`, `#[messages]`,
   `cfg_attr`, and nothing else does: a method compiled out is compiled out of its
   wrapper, its registration and its inventory entry.
 
+**What a method answers is read by its type, never by its spelling.** A decorator
+sees tokens and resolves no name, so `use async_graphql::Result as GqlResult`,
+`use poem::Result as PoemResult` and every type alias spell a `Result` it would
+take for a value — and did: `#[operations]` took any type *ending* in `Result`
+(`SearchResult`, an object) for a `Result` and failed to compile, `#[routes]`'
+shapers rewrote a renamed `Result`'s error status, and `#[tools]` refused a
+renamed `Result` as "an operation that cannot fail". Behaviour is decided by type:
+through the kernel's probe `nest_rs_core::Answer` at `#[routes]` (a shaper's
+success-only status, an `#[sse]` open) and `#[operations]` (a value answer's
+error, the mask's row), through `nest_rs_mcp::OperationAnswer` at `#[tools]`' one
+refusal site, and through WS's own `ReplyValue` at `#[messages]`. Spelling decides
+only what no value can tell a macro, and each such reading is stated where it is
+made: the wrapper type async-graphql's derive reads (its own rule —
+`Result`/`FieldResult` — mirrored, so the two cannot disagree; a `#[subscription]`
+cannot take a `Result` under another name at all, and is refused), the shape a
+masked MCP or WS operation's mask unwraps (it spells `Result<…>`, or is refused),
+and what an OpenAPI document infers (`#[api(response = T)]` states what the
+spelling hides). The worker jobs refuse an exact `()`, a type rather than a name.
+
 **A key one member of a decorator family takes is answered at every member.** The
 worker-job family — `#[process]`, `#[every]`, `#[cron]`, `#[after]` — is the
 worked case, and its table is closed: every family key is built at a member, or

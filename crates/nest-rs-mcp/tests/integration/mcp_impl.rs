@@ -34,6 +34,10 @@ struct Directory(&'static [&'static str]);
 /// evaluates, so the expansion checks it in a `const` rather than at expansion.
 const RETENTION: &str = "Report how long the directory keeps an entry.";
 
+/// A `Result` under another name — what `#[tools]` used to refuse as "a tool
+/// that cannot fail", reading its spelling.
+type Answered<T> = Result<T, McpError>;
+
 /// A tool's typed arguments, validated by the pipe the operation declares.
 #[input]
 struct GreetArgs {
@@ -117,6 +121,16 @@ impl WitnessTool {
         Ok("forever".to_owned())
     }
 
+    /// Greet one person by name, through a `Result` renamed by an alias.
+    #[tool]
+    #[public]
+    async fn greet_by_alias(
+        &self,
+        Parameters(args): Parameters<Valid<GreetArgs>>,
+    ) -> Answered<String> {
+        Ok(format!("hi {}", args.into_inner().name))
+    }
+
     /// Draft a greeting for the directory.
     #[prompt]
     #[public]
@@ -172,7 +186,9 @@ async fn the_boot_checks_still_read_the_tool_names() {
         [
             "audit_directory",
             "count_people",
+            "describe_retention",
             "describe_storage",
+            "greet_by_alias",
             "greet_person",
             "list_people",
             "look_up_person",
@@ -219,6 +235,37 @@ async fn a_valid_argument_is_validated_before_the_body_runs() {
     assert!(
         !rejected.contains("hello"),
         "…without the body ever running: {rejected}",
+    );
+}
+
+/// An operation answering a `Result` under another name is an operation like
+/// any other — `#[tools]` refused it as one "that cannot fail" while it read the
+/// spelling — and a refusal from its pipe reaches the model through it.
+#[tokio::test]
+async fn a_result_renamed_by_an_alias_answers_and_refuses_like_a_spelled_one() {
+    let app = boot().await;
+
+    let ok = call_tool_with(
+        app.http(),
+        PATH,
+        "greet_by_alias",
+        None,
+        json!({ "name": "ada" }),
+    )
+    .await;
+    assert!(ok.contains("hi ada"), "the operation answers: {ok}");
+
+    let rejected = call_tool_with(
+        app.http(),
+        PATH,
+        "greet_by_alias",
+        None,
+        json!({ "name": "" }),
+    )
+    .await;
+    assert!(
+        rejected.contains("name must not be empty") && !rejected.contains("hi "),
+        "…and its pipe's refusal is the operation's answer: {rejected}",
     );
 }
 

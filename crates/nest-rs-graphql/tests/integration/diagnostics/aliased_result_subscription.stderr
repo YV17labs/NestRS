@@ -1,5 +1,5 @@
-error: spell a `#[subscription]`'s fallible return as `Result<...>`, not `GqlResult<...>`: async-graphql reads the last path segment of the return type, so an alias is taken for an ordinary value and the stream type becomes the `Result`
-  --> tests/integration/diagnostics/aliased_result_subscription.rs:21:27
+error: a `#[subscription]` returns `impl Stream<Item = T>`, a stream type, or one of those inside `Result<…>` / `FieldResult<…>`. This return nests an `impl Trait` inside another path, and async-graphql's derive builds paths from the return type, where Rust refuses one (E0562): if it is a `Result` under another name, spell it `Result<…>`
+  --> tests/integration/diagnostics/aliased_result_subscription.rs:23:27
    |
-21 |     async fn ticks(&self) -> GqlResult<impl Stream<Item = i32>> {
+23 |     async fn ticks(&self) -> GqlResult<impl Stream<Item = i32>> {
    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

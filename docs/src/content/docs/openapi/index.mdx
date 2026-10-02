@@ -117,7 +117,11 @@ inferred from the handler signature; the macro rejects unknown keys at compile
 time.
 
 `response` is the one escape hatch, for a handler that builds its own
-`Response` and therefore states no payload in its return type. The `#[crud]`
+`Response` and therefore states no payload in its return type — or that
+returns its `Json<T>` inside a `Result` spelled another way: the payload is
+read off the spelling `Json<T>` / `Result<Json<T>, E>`, since a macro resolves
+no name, so `use poem::Result as PoemResult` hides it from the document (never
+from the route, which reads the type). The `#[crud]`
 paginated list is the case in the framework itself: it returns a `Response` so
 it can carry `x-next-cursor`, and declares
 `#[api(response = Vec<Post>)]` so the document still types the collection.

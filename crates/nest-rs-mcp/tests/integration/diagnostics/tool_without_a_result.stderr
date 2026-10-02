@@ -1,0 +1,18 @@
+error[E0277]: an MCP operation returns `Result<_, McpError>`, and `std::string::String` is not one
+  --> tests/integration/diagnostics/tool_without_a_result.rs:17:29
+   |
+17 |     async fn ping(&self) -> String {
+   |                             ^^^^^^ not a `Result` an `McpError` converts into
+   |
+   = help: the trait `nest_rs_mcp::OperationAnswer` is not implemented for `std::string::String`
+   = note: its guard chain, its access posture and its pipes refuse by returning, and an operation that cannot fail has nowhere to report a denial
+help: the trait `nest_rs_mcp::OperationAnswer` is implemented for `Result<T, E>`
+  --> src/error.rs
+   |
+   | impl<T, E: From<McpError>> OperationAnswer for Result<T, E> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `nest_rs_mcp::refused`
+  --> src/error.rs
+   |
+   | pub fn refused<R: OperationAnswer>(error: McpError) -> R {
+   |                   ^^^^^^^^^^^^^^^ required by this bound in `refused`

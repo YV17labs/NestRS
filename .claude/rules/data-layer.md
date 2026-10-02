@@ -160,7 +160,9 @@ filtering rows).
   `nest_rs_authz::mcp::masked_value_for`. It shares GraphQL's fail-closed caveat
   and has **no** selection set to soften it: a mask that strips a key the return
   type requires refuses the operation, because rmcp needs the typed value back for
-  `structuredContent`.
+  `structuredContent`. A masked operation spells its return `Result<…>` — the
+  mask reads `Json<T>` / `CallToolResult` off it — and an unmasked one answers any
+  `Result` an `McpError` converts into, known by its type.
 - **WS**: `#[messages]` emitting `nest_rs_authz::ws::masked_reply_for` — and this
   one masks like **HTTP**, not like MCP. A WS envelope carries JSON and promises no
   schema, so a stripped key is simply omitted from the frame rather than refused,

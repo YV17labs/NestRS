@@ -454,31 +454,27 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             // method of the handler's name implemented for `Arc<T>` ran instead.
             quote! { <#self_ty>::#method_name(&**#ctrl_var, #(#arg_idents),*) },
         );
-        let returns_result = match &method.sig.output {
-            ReturnType::Type(_, ty) => result_inner(ty).is_some(),
-            ReturnType::Default => false,
-        };
         let (wrapper_return_type, wrapper_body) = if is_sse {
             // The handler hands back a stream of `SseEvent`; the decorator owns
             // turning it into the response, applying the keep-alive and arming
             // the connection ceiling — none of which the developer should have
-            // to remember, and the ceiling least of all. `Result::map` covers
-            // the fallible open (`-> Result<impl Stream<…>, E>`) without naming
-            // `E`; a bare stream takes the direct call. The return type is left
-            // to inference: `SSE` and `Result<SSE, E>` are both `IntoResponse`,
-            // and spelling either would mean naming the handler's own `impl
-            // Stream` opaque type, which no macro can.
-            let wrapped = if returns_result {
-                quote! {
-                    ::core::result::Result::map(#call_expr, |__nestrs_stream| {
+            // to remember, and the ceiling least of all. A fallible open
+            // (`-> Result<impl Stream<…>, E>`) is told from a bare stream by its
+            // **type**, through `nest_rs_core::Answer`, so a `Result` under
+            // another name opens or fails like a spelled one. The return type
+            // is left to inference: naming it would mean naming the handler's
+            // own `impl Stream` opaque type, which no macro can.
+            let wrapped = quote! {{
+                use ::nest_rs_core::AnswerFallback as _;
+                let __nestrs_answer = #call_expr;
+                ::nest_rs_core::Answer(&__nestrs_answer)
+                    .map::<::nest_rs_http::poem::Error, _, _>()(
+                    __nestrs_answer,
+                    |__nestrs_stream| {
                         ::nest_rs_http::SseSettings::respond(&__nestrs_sse, __nestrs_stream)
-                    })
-                }
-            } else {
-                quote! {
-                    ::nest_rs_http::SseSettings::respond(&__nestrs_sse, #call_expr)
-                }
-            };
+                    },
+                )
+            }};
             (quote! { _ }, wrapped)
         } else if response_shapers.is_empty() {
             (return_type.clone(), call_expr)
@@ -490,7 +486,6 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 &response_shapers,
                 call_expr,
                 &wrapper_args,
-                returns_result,
             );
             (
                 quote! { ::nest_rs_http::poem::Result<::nest_rs_http::poem::Response> },
@@ -1842,14 +1837,16 @@ fn check_media_type(lit: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
-/// `Some(T)` when `ty` is `Result<T, _>`, `None` otherwise. Detects the
-/// unqualified last-segment ident `Result` — it does not resolve type
-/// aliases (proc-macros have no name resolution), so a feature-local
-/// alias whose last segment is `Result` is matched while a renamed
-/// `type Outcome<T, E> = Result<T, E>;` is not. That limitation is
-/// acceptable: drives both response-payload schema capture and the
-/// `Err` short-circuit in `apply_response_shapers`, and a non-`Result`
-/// caller cannot accidentally match.
+/// `Some(T)` when `ty` is spelled `Result<T, _>`, `None` otherwise — a reading
+/// of the **spelling**, since a proc-macro resolves no name: `use poem::Result
+/// as PoemResult` and `type Outcome<T, E> = Result<T, E>` are not matched.
+///
+/// So it decides only what the route's **document** infers — the payload
+/// schema (`response_payload`) and the `text/event-stream` media type
+/// (`returns_sse`) — and never what the route does. Behaviour is read by type:
+/// a shaper's success-only status and an SSE open both go through
+/// `nest_rs_core::Answer`, which an alias does not fool. A return the spelling
+/// cannot read states its payload with `#[api(response = T)]`.
 pub(crate) fn result_inner(ty: &Type) -> Option<&Type> {
     nth_generic_type(ty, "Result", 0)
 }

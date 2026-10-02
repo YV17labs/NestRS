@@ -78,6 +78,8 @@ pub use operation::GraphqlOperationContext;
 // mutation, entity and field resolver in. A resolver body never calls it.
 #[doc(hidden)]
 pub use operation::run_operation;
+#[doc(hidden)]
+pub use operation::{IsStreamReturn, answers_a_stream};
 pub use resolver::{
     GraphqlResolverKind, GraphqlResolverObject, GraphqlResolverRegistration, GraphqlRootMember,
     GraphqlSubscriptionObject, ResolverDescriptor,

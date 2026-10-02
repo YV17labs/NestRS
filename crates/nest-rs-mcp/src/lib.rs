@@ -115,6 +115,8 @@ pub use config::McpConfig;
 pub use context::{Captured, McpToolContext, OperationOutcome, OperationValue};
 pub use endpoint::{McpMount, endpoint, resolve_operation_guard};
 pub use error::{Opaque, pipe_error, unresolvable_chain};
+#[doc(hidden)]
+pub use error::{OperationAnswer, refused};
 pub use guard::{BoxFuture, FallbackMcpGuard, McpOperationGuard};
 pub use guards::AllowAllMcpGuard;
 pub use host::McpHost;

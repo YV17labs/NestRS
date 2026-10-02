@@ -82,7 +82,9 @@ Overrides the response status on the **success path**. `N` must be in
 `Result` and yields `Err`, the shaper short-circuits: the error's own
 `ResponseError` status stands and `#[http_code]` never touches it — so a
 `201` handler that errors still returns the error's `4xx`/`5xx`, not
-`201`. Mutually exclusive with `#[redirect]` — the two macros cannot both
+`201`. A `Result` is known by its type, not its spelling: `poem::Result<T>`
+renamed on import, or a `type Outcome<T> = Result<T, MyError>`, short-circuits
+the same way. Mutually exclusive with `#[redirect]` — the two macros cannot both
 decorate the same handler.
 
 ### `#[response_header("name", "value")]`

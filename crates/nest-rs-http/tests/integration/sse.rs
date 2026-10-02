@@ -36,6 +36,23 @@ impl FeedController {
         ]))
     }
 
+    /// A fallible open whose `Result` is spelled another way: it fails like a
+    /// spelled one, with its error's status, because the open is read by type.
+    #[sse("/closed")]
+    #[public]
+    async fn closed(&self) -> poem::Result<SseStream> {
+        Err(poem::Error::from_status(
+            poem::http::StatusCode::SERVICE_UNAVAILABLE,
+        ))
+    }
+
+    /// The same alias, opening.
+    #[sse("/open")]
+    #[public]
+    async fn open(&self) -> Opened {
+        Ok(SseStream::new(stream::iter([SseEvent::message("one")])))
+    }
+
     /// A stream that never ends. Without the ceiling this request never
     /// completes, which is precisely the shape the ceiling exists for: the test
     /// below finishes only because the stream is closed for it.
@@ -45,6 +62,9 @@ impl FeedController {
         SseStream::new(stream::pending())
     }
 }
+
+/// A fallible open under another name.
+type Opened = Result<SseStream, poem::Error>;
 
 /// A one-second ceiling, so the endless stream is closed inside the test rather
 /// than four hours later. Pinned on the module, which is how the transport under
@@ -72,6 +92,22 @@ async fn an_sse_route_answers_text_event_stream() {
         content_type.starts_with("text/event-stream"),
         "an `#[sse]` route answers `text/event-stream`, got {content_type:?}",
     );
+}
+
+/// The open is read by type, so a `Result` spelled `poem::Result<…>` or behind
+/// an alias fails with its own status, or streams.
+#[tokio::test]
+async fn a_fallible_open_is_known_by_its_type_whatever_it_is_called() {
+    let client = boot::<FeedModule>().await;
+    client
+        .get("/feed/closed")
+        .send()
+        .await
+        .assert_status(poem::http::StatusCode::SERVICE_UNAVAILABLE);
+    let resp = client.get("/feed/open").send().await;
+    resp.assert_status_is_ok();
+    let body = resp.0.into_body().into_string().await.unwrap_or_default();
+    assert!(body.contains("data: one"), "the stream opens: {body:?}");
 }
 
 #[tokio::test]

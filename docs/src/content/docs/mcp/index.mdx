@@ -114,7 +114,11 @@ Two decorators, one per item shape:
   derived from the roles present — you cannot serve a tool you forgot to
   declare. An operation declares the same request layers a `#[query]` does:
   `#[use_guards(...)]`, `#[authorize(...)]` / `#[public]`, and a pipe on its
-  arguments.
+  arguments. Each of those refuses by returning, so an operation answers a
+  `Result` an `McpError` converts into — known by its type, so
+  `type Answered<T> = Result<T, McpError>` serves as well as the spelled one,
+  and a `String` is refused at the return type. A *masked* operation spells it
+  `Result<…>`: the mask reads `Json<T>` off that spelling.
 - **The description is `#[tool(description = "…")]`** — the sentence the model
   reads to pick this tool, so it is a value the decorator compiles in rather
   than commentary. Write a doc comment instead and it is used as a fallback, so

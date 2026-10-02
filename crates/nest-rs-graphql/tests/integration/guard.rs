@@ -2,7 +2,7 @@
 //! harness.
 
 use nest_rs_core::{Layer, injectable, module};
-use nest_rs_graphql::async_graphql::{Context, Result};
+use nest_rs_graphql::async_graphql::{Context, Result, Result as GqlResult};
 use nest_rs_graphql::{
     GraphqlContextSeed, GraphqlModule, GraphqlOperationContext, SeedLifetime, async_trait,
     operations, resolver,
@@ -264,6 +264,13 @@ struct Vault {
     id: i32,
 }
 
+/// What [`SealedResolver::sealed_search`] answers — named like a `Result`, and
+/// an object.
+#[derive(nest_rs_graphql::async_graphql::SimpleObject)]
+struct SealedSearchResult {
+    hits: i32,
+}
+
 #[resolver]
 struct ShelfResolver;
 
@@ -320,6 +327,20 @@ impl SealedResolver {
     #[query]
     #[public]
     async fn sealed_fallible(&self) -> Result<i32> {
+        Ok(42)
+    }
+
+    /// A payload whose name ends in `Result`: a value, and guarded like one.
+    #[query]
+    #[public]
+    async fn sealed_search(&self) -> SealedSearchResult {
+        SealedSearchResult { hits: 42 }
+    }
+
+    /// A `Result` renamed on import: fallible, and guarded like one.
+    #[query]
+    #[public]
+    async fn sealed_aliased(&self) -> GqlResult<i32> {
         Ok(42)
     }
 
@@ -400,10 +421,13 @@ async fn a_resolver_guard_runs_on_every_operation_whatever_it_returns() {
         "sealedSecrets",
         "sealedSync",
         "sealedFallible",
+        "sealedAliased",
     ] {
         let body = query(&app, &format!("{{ {field} }}")).await;
         assert_denied(&body, field);
     }
+    let body = query(&app, "{ sealedSearch { hits } }").await;
+    assert_denied(&body, "sealedSearch");
     let body = query(&app, "{ vaults { id sealedNote } }").await;
     assert_denied(&body, "sealedNote");
 }

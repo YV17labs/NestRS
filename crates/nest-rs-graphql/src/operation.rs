@@ -225,3 +225,29 @@ where
     .instrument(span)
     .await
 }
+
+/// A `#[subscription]`'s answer, accepted only when it is a value — a stream.
+///
+/// `#[operations]` reads a fallible return the way async-graphql's derive does,
+/// by its spelling, and answers every other return through
+/// `nest_rs_core::Answer`, which knows a `Result` by its type: a query's
+/// `Result` under another name has its error split into the wrapper's. A
+/// subscription cannot be answered that way — async-graphql's subscription
+/// derive reads the same spelling and takes any other for the stream itself —
+/// so there the probe's verdict is checked here, and a `Result` under another
+/// name is refused at the return type with the fix.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "a `#[subscription]` answers a stream, and this one returns a `Result` spelled \
+               another way",
+    label = "a `Result` under another name",
+    note = "write it `Result<impl Stream<Item = T>, E>`: async-graphql reads a fallible return by \
+            its spelling — `Result` or `FieldResult` — and takes any other for the stream itself"
+)]
+pub trait IsStreamReturn {}
+
+impl IsStreamReturn for nest_rs_core::ValueAnswer {}
+
+/// Accept a `#[subscription]`'s answer — see [`IsStreamReturn`].
+#[doc(hidden)]
+pub fn answers_a_stream<K: IsStreamReturn>(_: K) {}

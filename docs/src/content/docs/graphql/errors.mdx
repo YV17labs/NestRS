@@ -7,7 +7,13 @@ sidebar:
 ---
 
 A resolver returns `T` or `async_graphql::Result<T>`; an `Err`
-short-circuits with a GraphQL error envelope alongside `data`. The
+short-circuits with a GraphQL error envelope alongside `data`. A return is
+fallible when it is spelled the way async-graphql reads one — `Result<T, E>` or
+`FieldResult<T>`, `E` anything that converts into `async_graphql::Error` (a
+`Display` error does) — and anything else is a value: a payload named
+`SearchResult` is an object. A `Result` renamed on import (`use
+async_graphql::Result as GqlResult`) or behind an alias is still known by its
+type, and fails like a spelled one — on the operation line and to the client. The
 message goes on `errors[].message`; structured data goes on
 `errors[].extensions`. The framework owns the mapping for its shared
 error types — `ServiceError` from `nest-rs-seaorm`, `CredentialError`

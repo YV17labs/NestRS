@@ -1,0 +1,5 @@
+error: a masked #[tool] spells its return `Result<…, McpError>`: the mask reads the value's shape — `Json<T>` to unwrap, `CallToolResult` to refuse — off that spelling, and a `Result` renamed on import or behind an alias hides it. Write `Result<…>`, or declare `#[authorize(Action, Entity, unmasked)]` and mask in the body
+  --> tests/integration/diagnostics/masked_tool_with_a_renamed_result.rs:23:25
+   |
+23 |     async fn row(&self) -> Answered<Json<String>> {
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^

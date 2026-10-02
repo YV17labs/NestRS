@@ -3,6 +3,7 @@
 
 use nest_rs_core::module;
 use nest_rs_http::{controller, routes};
+use poem::Result as PoemResult;
 use poem::error::ResponseError;
 use poem::http::{StatusCode, header};
 use poem::test::TestClient;
@@ -37,6 +38,31 @@ impl DecoratorProbeController {
         Err(ForbiddenError)
     }
 
+    /// The same refusal through a `Result` renamed on import — the spelling
+    /// the shaper once read took it for a value and rewrote its 403 to 201.
+    #[post("/forbidden-by-import")]
+    #[http_code(201)]
+    #[response_header("x-created", "yes")]
+    async fn forbidden_by_import(&self) -> PoemResult<&'static str> {
+        Err(ForbiddenError.into())
+    }
+
+    /// And through a type alias whose error is only a `ResponseError`: the
+    /// response is built from the success value alone, so no
+    /// `Result<T, E>: IntoResponse` bound is asked of it.
+    #[post("/forbidden-by-alias")]
+    #[http_code(201)]
+    async fn forbidden_by_alias(&self) -> Refusable<&'static str> {
+        Err(ForbiddenError)
+    }
+
+    #[post("/created-by-alias")]
+    #[http_code(201)]
+    #[response_header("x-created", "yes")]
+    async fn created_by_alias(&self) -> Refusable<&'static str> {
+        Ok("created")
+    }
+
     /// The shapers written path-qualified, as an exported attribute macro may
     /// be. `#[routes]` read only the bare spelling, so these survived it,
     /// expanded to nothing, and the route answered `200` with neither.
@@ -62,6 +88,9 @@ impl DecoratorProbeController {
         resp
     }
 }
+
+/// A `Result` under another name.
+type Refusable<T> = Result<T, ForbiddenError>;
 
 #[derive(Debug)]
 struct ForbiddenError;
@@ -117,6 +146,24 @@ async fn http_code_does_not_override_the_status_of_err_responses() {
     let client = boot().await;
     let resp = client.post("/forbidden").send().await;
     resp.assert_status(StatusCode::FORBIDDEN);
+}
+
+/// A failure is known by its type, never by how its type is spelled: renamed
+/// on import or behind an alias, an `Err` keeps the status its
+/// `ResponseError` set and gets none of the success path's headers, while an
+/// `Ok` behind the same alias is shaped as ever.
+#[tokio::test]
+async fn http_code_does_not_override_an_err_whatever_its_result_is_called() {
+    let client = boot().await;
+    for path in ["/forbidden-by-import", "/forbidden-by-alias"] {
+        let resp = client.post(path).send().await;
+        resp.assert_status(StatusCode::FORBIDDEN);
+        resp.assert_header_is_not_exist("x-created");
+    }
+    let resp = client.post("/created-by-alias").send().await;
+    resp.assert_status(StatusCode::CREATED);
+    resp.assert_header("x-created", "yes");
+    resp.assert_text("created").await;
 }
 
 #[tokio::test]

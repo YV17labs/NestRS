@@ -450,7 +450,10 @@ with a witness in `nest-rs-config`:
 - a declaration **supersedes** an ordinary factory for the same type, wherever
   the two fall in `imports = [..]` — `a_pin_survives_a_bare_import_listed_before_it`;
 - two declarations for one type raise `ContestedDeclarationError` before any
-  factory runs — `two_pinned_bases_for_one_config_fail_the_boot`;
+  factory runs, naming both — each as the import that made it and its position
+  in its module's `imports` (`ContainerBuilder::enter_import`, which `#[module]`
+  emits around every import) — `two_pinned_bases_for_one_config_fail_the_boot`,
+  `two_pins_in_two_modules_are_both_named`;
 - the synchronous `App::new` refuses a queued factory it could never drain
   (`UnresolvedFactoryError`) — `the_synchronous_boot_refuses_a_config_it_could_never_resolve`.
 

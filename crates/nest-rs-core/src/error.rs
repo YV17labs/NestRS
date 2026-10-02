@@ -175,13 +175,21 @@ pub struct DuplicateProviderError {
 /// also binds. A module queuing the same default twice never does, so a diamond
 /// import stays legal.
 ///
-/// `remedy` comes from the declaring call site, which is the only place that
-/// knows what the two sites were.
+/// Both declarations are named — each as the import that made it and the
+/// module whose `imports = [..]` lists it — so the reader goes to the two lines
+/// to reconcile instead of searching the tree for them. `remedy` comes from the
+/// declaring seam, which knows what a declaration of its type means.
 #[derive(Debug, Error)]
-#[error("contested declaration: `{type_name}` is declared by two import sites. {remedy}")]
+#[error(
+    "contested declaration: `{type_name}` is declared twice — by {first}, and by {second}. {remedy}"
+)]
 pub struct ContestedDeclarationError {
     /// The type declared more than once.
     pub type_name: &'static str,
+    /// The declaration made first, as the import that made it.
+    pub first: String,
+    /// The declaration that contested it, the same way.
+    pub second: String,
     /// What the reader should do instead, supplied by the declaring seam.
     pub remedy: &'static str,
 }

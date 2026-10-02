@@ -51,8 +51,14 @@ fn check_duplicate_providers(builder: &ContainerBuilder) -> Result<()> {
 /// Fail the boot when two import sites each declared a value for one type —
 /// neither may silently win on queue position.
 fn check_contested_declarations(builder: &ContainerBuilder) -> Result<()> {
-    if let Some((type_name, remedy)) = builder.contested_factories().first() {
-        return Err(ContestedDeclarationError { type_name, remedy }.into());
+    if let Some(contested) = builder.contested_factories().first() {
+        return Err(ContestedDeclarationError {
+            type_name: contested.type_name,
+            first: contested.first.clone(),
+            second: contested.second.clone(),
+            remedy: contested.remedy,
+        }
+        .into());
     }
     Ok(())
 }
@@ -85,7 +91,9 @@ impl App {
         // `ConfigModule::for_feature` — is then *seen* by the check below and
         // refused by name, instead of the value being silently absent because
         // nothing ever asked the module what it would have built.
-        let builder = M::register(M::collect(Container::builder()));
+        let root = std::any::type_name::<M>();
+        let builder = M::collect(Container::builder().enter_root(root)).leave_import();
+        let builder = M::register(builder.enter_root(root)).leave_import();
         let roots = [TypeId::of::<M>()];
         // `ReachableProviders` is seeded after register but is global
         // infrastructure for the access graph, so it must be in `global` up
@@ -264,6 +272,7 @@ impl App {
 
 struct ModuleHooks {
     type_id: TypeId,
+    name: &'static str,
     collect: fn(ContainerBuilder) -> ContainerBuilder,
     register: fn(ContainerBuilder) -> ContainerBuilder,
 }
@@ -415,6 +424,7 @@ impl AppBuilder {
     pub fn module<M: Module + 'static>(mut self) -> Self {
         self.modules.push(ModuleHooks {
             type_id: TypeId::of::<M>(),
+            name: std::any::type_name::<M>(),
             collect: M::collect,
             register: M::register,
         });
@@ -433,7 +443,7 @@ impl AppBuilder {
         } = self;
 
         for hooks in &modules {
-            builder = (hooks.collect)(builder);
+            builder = (hooks.collect)(builder.enter_root(hooks.name)).leave_import();
         }
         // Before any factory runs: two import sites declared the same type and
         // one would have to lose silently.
@@ -475,7 +485,7 @@ impl AppBuilder {
         // before modules register (same timing as the bare global set).
         let global_keyed: HashSet<ProviderKey> = builder.keyed_provider_keys();
         for hooks in &modules {
-            builder = (hooks.register)(builder);
+            builder = (hooks.register)(builder.enter_root(hooks.name)).leave_import();
         }
         // Overrides last so they win over the modules' registrations.
         for ov in overrides {

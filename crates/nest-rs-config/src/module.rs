@@ -225,6 +225,15 @@ mod tests {
         #[module(imports = [pin(), pin()])]
         struct TwoPins;
 
+        #[module(imports = [OwnerModule, pin()])]
+        struct FirstPinner;
+
+        #[module(imports = [pin()])]
+        struct SecondPinner;
+
+        #[module(imports = [FirstPinner, SecondPinner])]
+        struct PinnedInTwoModules;
+
         /// The bug this replaced: factories are first-queued-wins, so a bare import
         /// listed above the pin — the shape you get for free when another module
         /// imports the same one — dropped the pinned value on the floor with no
@@ -258,6 +267,29 @@ mod tests {
             assert!(
                 err.contains("pin it once"),
                 "the config seam supplies its own remedy, not a generic one: {err}"
+            );
+            assert!(
+                err.contains(
+                    "by `pin(..)` at `imports[0]` of `TwoPins`, and by `pin(..)` at \
+                     `imports[1]` of `TwoPins`"
+                ),
+                "both declarations are named, by position: {err}"
+            );
+        }
+
+        /// Q16: the failure named the config and not where it was pinned, so two
+        /// pins in two modules sent the reader searching the tree for both. It
+        /// names each declaration by the module that imports it.
+        #[tokio::test]
+        async fn two_pins_in_two_modules_are_both_named() {
+            let err = match App::builder().module::<PinnedInTwoModules>().build().await {
+                Ok(_) => panic!("two pinned bases for one config must not boot"),
+                Err(err) => err.to_string(),
+            };
+            assert!(
+                err.contains("`pin(..)` at `imports[1]` of `FirstPinner`")
+                    && err.contains("`pin(..)` at `imports[0]` of `SecondPinner`"),
+                "{err}"
             );
         }
 

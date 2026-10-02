@@ -112,10 +112,10 @@ shared remedy sentence); a port's default implementation is an *ordinary*
 factory, so a vendor binding supersedes it wherever it sits in `imports`, and a
 binding that reads another factory's output declares it
 (`provide_*_factory_after`), so `imports` order stays a readability choice. The
-error, `ContestedDeclarationError`, names the contested port and the remedy — not
-the two bindings that contest it. **Whether it should name them too is an open
-question for the owner**: these rules promised both names, and the error prints
-the port alone. `nest-rs-storage` is the recorded exception to this whole
+error, `ContestedDeclarationError`, names the contested port, both declarations —
+each as the import that made it, at its position in the `imports` of the module
+that lists it — and the remedy, so the reader goes to the two lines to reconcile
+rather than searching the tree for them. `nest-rs-storage` is the recorded exception to this whole
 section — a capability name pinned to S3 — and is fixed by giving it the shape
 above, not by documenting it.
 
@@ -395,7 +395,8 @@ You cannot get any of this wrong silently — the boot enforces it:
 
 - a pinned base **supersedes** a bare import's env-only factory, wherever the
   two fall in `imports`;
-- two pinned bases for one config **fail the boot** naming it
+- two pinned bases for one config **fail the boot** naming it and both pins,
+  each by the module and the position that imports it
   (`ContestedDeclarationError`) — as do two modules binding the same
   implementation, which is how importing both throttler backends is caught;
 - a config the synchronous `App::new` could never resolve **fails the boot**

@@ -11,11 +11,13 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let name = item.ident.clone();
     let name_str = name.to_string();
 
-    let import_calls = args
-        .imports
-        .iter()
-        .enumerate()
-        .map(|(i, import)| match import {
+    // Every import's phase runs between `enter_import` and `leave_import`, so a
+    // declaration it makes is named by the module and the position that
+    // imported it — what a contested declaration's boot error points at.
+    let import_calls = args.imports.iter().enumerate().map(|(i, import)| {
+        let at = proc_macro2::Literal::usize_unsuffixed(i);
+        let label = import_label(import);
+        let call = match import {
             // Bare type path → static `Module`.
             Expr::Path(p) => {
                 let path = &p.path;
@@ -26,42 +28,47 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
             // so register consumes *that* value; the fallback closure only runs on
             // the synchronous `App::new` path, which has no collect phase. Either
             // way the expression is evaluated exactly once (CORE-I9).
-            other => {
-                let idx = proc_macro2::Literal::usize_unsuffixed(i);
-                quote! {
-                    builder = ::nest_rs_core::ContainerBuilder::register_dynamic_import(
-                        builder,
-                        ::std::any::TypeId::of::<#name>(),
-                        #idx,
-                        || #other,
-                    );
-                }
-            }
-        });
+            other => quote! {
+                builder = ::nest_rs_core::ContainerBuilder::register_dynamic_import(
+                    builder,
+                    ::std::any::TypeId::of::<#name>(),
+                    #at,
+                    || #other,
+                );
+            },
+        };
+        quote! {
+            builder = builder.enter_import(#name_str, #at, #label);
+            #call
+            builder = builder.leave_import();
+        }
+    });
 
     // Collect phase only queues async factories; providers untouched here. The
     // dynamic import is constructed here and parked for the register phase.
-    let collect_calls = args
-        .imports
-        .iter()
-        .enumerate()
-        .map(|(i, import)| match import {
+    let collect_calls = args.imports.iter().enumerate().map(|(i, import)| {
+        let at = proc_macro2::Literal::usize_unsuffixed(i);
+        let label = import_label(import);
+        let call = match import {
             Expr::Path(p) => {
                 let path = &p.path;
                 quote! { builder = <#path as ::nest_rs_core::Module>::collect(builder); }
             }
-            other => {
-                let idx = proc_macro2::Literal::usize_unsuffixed(i);
-                quote! {
-                    builder = ::nest_rs_core::ContainerBuilder::collect_dynamic_import(
-                        builder,
-                        ::std::any::TypeId::of::<#name>(),
-                        #idx,
-                        #other,
-                    );
-                }
-            }
-        });
+            other => quote! {
+                builder = ::nest_rs_core::ContainerBuilder::collect_dynamic_import(
+                    builder,
+                    ::std::any::TypeId::of::<#name>(),
+                    #at,
+                    #other,
+                );
+            },
+        };
+        quote! {
+            builder = builder.enter_import(#name_str, #at, #label);
+            #call
+            builder = builder.leave_import();
+        }
+    });
 
     // Access-graph descriptor submitted to the link-time registry. Only
     // statically-typed imports are recorded — a dynamic `for_root(...)`
@@ -298,6 +305,24 @@ pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
         #descriptor_submission
     }
     .into()
+}
+
+/// An import as a boot error names its site: a module by its path, a dynamic
+/// import by the function that builds it — `HttpModule::for_root(..)`, the
+/// arguments left out, since a pinned config is no part of where it was
+/// declared and may hold a secret.
+fn import_label(import: &Expr) -> String {
+    let spelled = |tokens: proc_macro2::TokenStream| {
+        tokens.to_string().split_whitespace().collect::<String>()
+    };
+    match import {
+        Expr::Path(p) => spelled(quote!(#p)),
+        Expr::Call(call) => match &*call.func {
+            Expr::Path(func) => format!("{}(..)", spelled(quote!(#func))),
+            _ => "an import expression".to_owned(),
+        },
+        _ => "an import expression".to_owned(),
+    }
 }
 
 /// Last path segment for readable boot-time panics.

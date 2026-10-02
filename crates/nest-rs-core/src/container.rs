@@ -147,6 +147,26 @@ impl QueuedFactory {
     }
 }
 
+/// One import whose phase is running: the module whose `imports = [..]` names
+/// it — `None` for a root the app was built from — and the import as written.
+#[derive(Clone, Copy)]
+struct ImportSite {
+    /// The module and the import's position in its list.
+    importer: Option<(&'static str, usize)>,
+    import: &'static str,
+}
+
+impl std::fmt::Display for ImportSite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.importer {
+            Some((importer, at)) => {
+                write!(f, "`{}` at `imports[{at}]` of `{importer}`", self.import)
+            }
+            None => write!(f, "`{}`, a root the app is built from", self.import),
+        }
+    }
+}
+
 /// How one [`ContainerBuilder::queue`] call differs from the plain form.
 ///
 /// Named fields rather than three positional arguments: `also` and `after` are
@@ -339,14 +359,18 @@ pub struct ContainerBuilder {
     /// cannot resolve.
     factories: Vec<QueuedFactory>,
     /// Types queued by [`provide_declared_factory`](Self::provide_declared_factory)
-    /// — a call site chose a value rather than accepting the default. Kept so a
-    /// declaration supersedes an already-queued default instead of losing the
-    /// first-queued-wins race to it.
-    declared_factories: HashSet<TypeId>,
+    /// — a call site chose a value rather than accepting the default — each
+    /// with the import that declared it. Kept so a declaration supersedes an
+    /// already-queued default instead of losing the first-queued-wins race to
+    /// it, and so a second declaration can name the first.
+    declared_factories: HashMap<TypeId, String>,
     /// Two declarations for one type: neither may silently win, so the build
-    /// fails naming it (see [`ContestedDeclarationError`](crate::ContestedDeclarationError)).
-    /// Pairs of (type name, remedy).
-    contested_factories: Vec<(&'static str, &'static str)>,
+    /// fails naming both (see [`ContestedDeclarationError`](crate::ContestedDeclarationError)).
+    contested_factories: Vec<crate::ContestedDeclarationError>,
+    /// The imports whose phase is running, innermost last — what a declaration
+    /// made now is named by. Pushed and popped by the `#[module]` expansion
+    /// around each import, and by the app builder around each root.
+    import_sites: Vec<ImportSite>,
     scoped: HashMap<TypeId, ScopedFactory>,
     transient: HashMap<TypeId, TransientFactory>,
     /// Concrete/keyed registrations that replaced an earlier one — a wiring
@@ -811,14 +835,22 @@ impl ContainerBuilder {
         let name = std::any::type_name::<T>();
         // A default never displaces a declaration, whichever order they arrive
         // in — the two `if`s here are what make the outcome order-independent.
-        if remedy.is_none() && self.declared_factories.contains(&id) {
+        if remedy.is_none() && self.declared_factories.contains_key(&id) {
             return self;
         }
-        if let Some(remedy) = remedy
-            && !self.declared_factories.insert(id)
-        {
-            self.contested_factories.push((name, remedy));
-            return self;
+        if let Some(remedy) = remedy {
+            let site = self.declaring_site();
+            if let Some(first) = self.declared_factories.get(&id) {
+                self.contested_factories
+                    .push(crate::ContestedDeclarationError {
+                        type_name: name,
+                        first: first.clone(),
+                        second: site,
+                        remedy,
+                    });
+                return self;
+            }
+            self.declared_factories.insert(id, site);
         }
         let boxed: BoxedFactory = Box::new(move |container| {
             Box::pin(async move {
@@ -841,10 +873,54 @@ impl ContainerBuilder {
         self
     }
 
-    /// Types declared by more than one import site, with each site's remedy.
+    /// Types declared by more than one import site, each naming both sites.
     /// Checked by `AppBuilder::build` before any factory runs.
-    pub(crate) fn contested_factories(&self) -> &[(&'static str, &'static str)] {
+    pub(crate) fn contested_factories(&self) -> &[crate::ContestedDeclarationError] {
         &self.contested_factories
+    }
+
+    /// The import whose phase is running, as a declaration made now names its
+    /// site: the innermost one, since that is the import whose expression made
+    /// the call.
+    fn declaring_site(&self) -> String {
+        match self.import_sites.last() {
+            Some(site) => site.to_string(),
+            None => "a call outside any module's imports".to_owned(),
+        }
+    }
+
+    /// Enter the phase of the import `import` — written as it stands at `at` in
+    /// `importer`'s `imports = [..]` — so a declaration it makes can be named.
+    ///
+    /// **Internal ABI** — emitted by `#[module]` around each import, and called
+    /// by the app builder around each root; lockstep with `nest-rs-core-macros`,
+    /// do not call by hand.
+    #[doc(hidden)]
+    pub fn enter_import(mut self, importer: &'static str, at: usize, import: &'static str) -> Self {
+        self.import_sites.push(ImportSite {
+            importer: Some((importer, at)),
+            import,
+        });
+        self
+    }
+
+    /// Enter the phase of the root module `root` the app is built from.
+    pub(crate) fn enter_root(mut self, root: &'static str) -> Self {
+        self.import_sites.push(ImportSite {
+            importer: None,
+            import: root,
+        });
+        self
+    }
+
+    /// Leave the import [`enter_import`](Self::enter_import) (or a root) entered
+    /// last.
+    ///
+    /// **Internal ABI** — see [`enter_import`](Self::enter_import).
+    #[doc(hidden)]
+    pub fn leave_import(mut self) -> Self {
+        self.import_sites.pop();
+        self
     }
 
     /// Register a request-scoped provider: `factory` builds a fresh `T` for

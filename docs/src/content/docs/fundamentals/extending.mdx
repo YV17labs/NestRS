@@ -91,8 +91,8 @@ bridges. This is the mode NestRS uses most.
 :::caution[One by-import port does not yet arbitrate]
 `ThrottlerStore`, `dyn JobProducer` (queue) and `dyn OccurrenceLock` (schedule)
 declare their binding, so importing two backends of any of them fails the boot:
-`contested declaration`, naming the port and the one sentence that says what to
-import instead. `dyn JobContext`
+`contested declaration`, naming the port, both imports that bind it and the one
+sentence that says what to import instead. `dyn JobContext`
 (database) binds through a container call that records no duplicate, so **two
 database drivers would resolve to whichever module was imported last,
 silently**. Until that is closed, link exactly one database driver and do not

@@ -9,10 +9,21 @@
 //! `Setting::refuse` — the demo's `IssuerConfig` did, for its OAuth client list —
 //! prints that list's secrets into the boot error. `ConfigService::json` decodes
 //! once, in `nest-rs-config`, and refuses through `nest_rs_core::DecodeError`.
-//! Members: every `impl Config for …` under `crates/` and `demo/`, its whole body
-//! read as tokens, so a helper closure or a `use serde_json::from_str` inside it
-//! is seen as readily as a direct call. A helper *function* outside the impl is
-//! the known looseness.
+//! Members: every `impl Config for …` under `crates/` and `demo/`.
+//!
+//! **What it reads**: the whole file an `impl Config` sits in, outside
+//! `#[cfg(test)]` — a `from_env` decodes through a helper beside it as readily
+//! as in its own body — and every path in it read through the crate's imports
+//! (`nest_rs_conformance::imports`), so `use serde_json as json`, `use
+//! serde_json::from_str` and a re-export the crate root makes are all
+//! `serde_json`. A file declaring a `#[config]` names `serde_json` nowhere: none
+//! does today, and the rule costs nothing to keep.
+//!
+//! **What it cannot read**: a helper in *another* file of the crate that a
+//! `from_env` calls. Following it needs the crate's call graph, which a
+//! syntactic read does not have; it is the one shape left, named here rather
+//! than implied. A rename of `serde_json` outside the crate root, a glob of its
+//! items and the like are refused in all framework source by the `blinds` join.
 //!
 //! **Every framework item taking a developer's error into a box** — a bound
 //! `Into<Box<dyn …>>`, on the item or on the `impl` it sits in — against the rule
@@ -40,7 +51,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use nest_rs_conformance::baseline;
-use nest_rs_conformance::sources::{each_source, repo_root};
+use nest_rs_conformance::imports::{CrateImports, module_of, spelled_paths};
+use nest_rs_conformance::sources::{
+    crate_dirs, each_source, is_cfg_test, parsed, relative, repo_root, rust_files,
+};
 use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::visit::Visit;
@@ -61,32 +75,72 @@ fn no_config_decodes_a_structured_value_itself() {
     let root = repo_root();
     let mut impls = 0usize;
     let mut wrong: BTreeSet<String> = BTreeSet::new();
-    each_source(&root, |rel, ast| {
-        let mut found = ConfigImpls::default();
-        found.visit_file(ast);
-        impls += found.impls;
-        for ty in found.decoding {
-            wrong.insert(format!("{rel}: {ty}"));
+    for dir in crate_dirs() {
+        for entry in ["src/lib.rs", "src/main.rs"] {
+            let entry = dir.join(entry);
+            if !entry.is_file() {
+                continue;
+            }
+            let imports = CrateImports::read(&entry, &root);
+            let src = dir.join("src");
+            for file in rust_files(&src) {
+                let Some(module) = module_of(&file, &src) else {
+                    continue;
+                };
+                // The other crate root reads its own files, and a file no
+                // `mod` declares is no part of this crate.
+                if (module.is_empty() && file != entry) || !imports.has_module(&module) {
+                    continue;
+                }
+                let Some(ast) = parsed(&file) else { continue };
+                let (found, decoding) = decodes_in(&ast, &imports, &module);
+                impls += found;
+                if decoding {
+                    wrong.insert(relative(&file, &root));
+                }
+            }
         }
-    });
+    }
 
     baseline::floor(impls, FLOOR, "`impl Config for` block(s)");
     assert!(
         wrong.is_empty(),
-        "{} `#[config]`(s) decode a structured value with `serde_json` in their own \
-         `from_env`, so a value that does not decode is refused in serde's words — which \
-         quote it. Read it with `env.json::<T>(\"KEY\")?` instead:\n  {}",
+        "{} file(s) declare a `#[config]` and name `serde_json` — its own name, an alias, \
+         or an import of one of its items — so a value that does not decode is refused in \
+         serde's words, which quote it. Read it with `env.json::<T>(\"KEY\")?` instead:\n  {}",
         wrong.len(),
         wrong.into_iter().collect::<Vec<_>>().join("\n  "),
     );
 }
 
-/// The `impl Config for` blocks of one file, and the types whose block names
-/// `serde_json`.
+/// How many `impl Config for` blocks `ast` holds, and whether — when it holds
+/// any — a path in it outside `#[cfg(test)]` resolves to `serde_json`.
+fn decodes_in(ast: &syn::File, imports: &CrateImports, module: &[String]) -> (usize, bool) {
+    let mut found = ConfigImpls::default();
+    found.visit_file(ast);
+    if found.impls == 0 {
+        return (0, false);
+    }
+    let tokens: TokenStream = ast
+        .items
+        .iter()
+        .filter(|item| !item_is_cfg_test(item))
+        .map(ToTokens::to_token_stream)
+        .collect();
+    let decoding = spelled_paths(tokens).iter().any(|path| {
+        let resolved = match path.split_first() {
+            Some((first, rest)) if first.is_empty() => rest.to_vec(),
+            _ => imports.resolve(module, path),
+        };
+        resolved.first().is_some_and(|root| root == "serde_json")
+    });
+    (found.impls, decoding)
+}
+
+/// The `impl Config for` blocks of one file.
 #[derive(Default)]
 struct ConfigImpls {
     impls: usize,
-    decoding: Vec<String>,
 }
 
 impl<'ast> Visit<'ast> for ConfigImpls {
@@ -96,47 +150,123 @@ impl<'ast> Visit<'ast> for ConfigImpls {
             .as_ref()
             .and_then(|(path, _)| path.segments.last())
             .is_some_and(|last| last.ident == "Config");
-        if is_config {
+        if is_config && !is_cfg_test(&item.attrs) {
             self.impls += 1;
-            if names_ident(item.to_token_stream(), "serde_json") {
-                self.decoding
-                    .push(item.self_ty.to_token_stream().to_string());
-            }
         }
         syn::visit::visit_item_impl(self, item);
     }
+
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        if !is_cfg_test(&node.attrs) {
+            syn::visit::visit_item_mod(self, node);
+        }
+    }
 }
 
-/// The join is proved on the shape it exists to catch: the demo's
-/// `IssuerConfig` as it stood, and the same body reading through `env.json`.
+/// A top-level item behind `#[cfg(test)]`.
+fn item_is_cfg_test(item: &syn::Item) -> bool {
+    match item {
+        syn::Item::Mod(i) => is_cfg_test(&i.attrs),
+        syn::Item::Fn(i) => is_cfg_test(&i.attrs),
+        syn::Item::Impl(i) => is_cfg_test(&i.attrs),
+        syn::Item::Use(i) => is_cfg_test(&i.attrs),
+        syn::Item::Const(i) => is_cfg_test(&i.attrs),
+        syn::Item::Static(i) => is_cfg_test(&i.attrs),
+        syn::Item::Struct(i) => is_cfg_test(&i.attrs),
+        _ => false,
+    }
+}
+
+/// The join is proved on the shapes it exists to catch: the demo's
+/// `IssuerConfig` as it stood, the same body through an alias, through an
+/// imported function and through a helper beside it — and the body reading
+/// through `env.json`, which passes.
 #[test]
-fn the_join_sees_a_config_decoding_its_own_value() {
-    let caught: syn::File = syn::parse_quote! {
+fn the_join_sees_a_config_decoding_its_own_value_however_it_names_serde_json() {
+    let caught: [syn::File; 4] = [
+        syn::parse_quote! {
+            impl Config for IssuerConfig {
+                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+                    let clients = match env.setting("CLIENTS")? {
+                        Some(raw) => serde_json::from_str(&raw.value).map_err(|e| raw.refuse(e))?,
+                        None => base.clients,
+                    };
+                    Ok(Self { clients })
+                }
+            }
+        },
+        syn::parse_quote! {
+            use serde_json as json;
+            impl Config for IssuerConfig {
+                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+                    let raw = env.setting("CLIENTS")?.unwrap();
+                    Ok(Self { clients: json::from_str(&raw.value).map_err(|e| raw.refuse(e))? })
+                }
+            }
+        },
+        syn::parse_quote! {
+            use serde_json::from_str;
+            impl Config for IssuerConfig {
+                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+                    let raw = env.setting("CLIENTS")?.unwrap();
+                    Ok(Self { clients: from_str(&raw.value).map_err(|e| raw.refuse(e))? })
+                }
+            }
+        },
+        syn::parse_quote! {
+            fn decode(raw: &str) -> Result<Vec<Client>, ::serde_json::Error> {
+                ::serde_json::from_str(raw)
+            }
+            impl Config for IssuerConfig {
+                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
+                    let raw = env.setting("CLIENTS")?.unwrap();
+                    Ok(Self { clients: decode(&raw.value).map_err(|e| raw.refuse(e))? })
+                }
+            }
+        },
+    ];
+    for file in &caught {
+        let imports = CrateImports::of_items(&file.items);
+        assert_eq!(
+            decodes_in(file, &imports, &[]),
+            (1, true),
+            "{}",
+            file.to_token_stream()
+        );
+    }
+    // A re-export at the crate root, imported plainly into the file: the
+    // crate's imports read through it.
+    let lib: syn::File = syn::parse_quote! {
+        pub(crate) use serde_json as wire;
+        mod config;
+    };
+    let config: syn::File = syn::parse_quote! {
+        use crate::wire::from_str;
         impl Config for IssuerConfig {
             fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-                let clients = match env.setting("CLIENTS")? {
-                    Some(raw) => serde_json::from_str(&raw.value).map_err(|e| raw.refuse(e))?,
-                    None => base.clients,
-                };
-                Ok(Self { clients })
+                Ok(Self { clients: from_str("[]").unwrap_or(base.clients) })
             }
         }
     };
+    let mut crate_items = lib.items.clone();
+    crate_items.push(syn::parse_quote! { mod config { use crate::wire::from_str; } });
+    let imports = CrateImports::of_items(&crate_items);
+    assert_eq!(
+        decodes_in(&config, &imports, &["config".to_owned()]),
+        (1, true)
+    );
+
     let passed: syn::File = syn::parse_quote! {
         impl nest_rs::config::Config for IssuerConfig {
             fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
                 Ok(Self { clients: env.json("CLIENTS")?.unwrap_or(base.clients) })
             }
         }
+        #[cfg(test)]
+        mod tests { fn fixture() { let _ = serde_json::json!({}); } }
     };
-    let mut found = ConfigImpls::default();
-    found.visit_file(&caught);
-    assert_eq!(found.impls, 1);
-    assert_eq!(found.decoding, ["IssuerConfig"]);
-    let mut found = ConfigImpls::default();
-    found.visit_file(&passed);
-    assert_eq!(found.impls, 1);
-    assert!(found.decoding.is_empty());
+    let imports = CrateImports::of_items(&passed.items);
+    assert_eq!(decodes_in(&passed, &imports, &[]), (1, false));
 }
 
 #[test]

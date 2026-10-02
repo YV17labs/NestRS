@@ -15,14 +15,30 @@
 //! internals to the next person editing it, and it is right there.
 //!
 //! **What resolves.** A path is `nest_rs_<crate>::<segment>…`, or
-//! `nest_rs::<concern>::<segment>…` read through the umbrella's own re-exports.
-//! Each segment is walked through the crate's `lib.rs` and the `pub mod` files
-//! under it until it names a public item — a type, a trait, a function, a
-//! constant, a re-export — past which the rest is a member the parser would need
-//! the type's `impl`s to judge, and is taken on trust. A module holding a glob
-//! re-export answers for any name. A `nest_rs::<word>` whose word is no umbrella
-//! re-export is a span target (`nest_rs::operation`), not a path, and is left to
-//! the `targets` join.
+//! `nest_rs::<segment>…` — the umbrella is a crate like the others, walked the
+//! same way, and a segment naming one of its re-exports of a framework crate
+//! (`pub use nest_rs_http as http;`) carries the walk into that crate. Each
+//! segment is walked through the crate's `lib.rs` and the `pub mod` files under
+//! it until it names a public item — a type, a trait, a function, a constant, a
+//! re-export — past which the rest is a member the parser would need the type's
+//! `impl`s to judge, and is taken on trust. A module holding a glob re-export
+//! answers for any name.
+//!
+//! **A span target is not a path, and the vocabulary says which is which.** A
+//! `nest_rs::…` the framework declares as a span target
+//! (`sources::declared_targets` — `nest_rs::operation`, `nest_rs::oauth::client`)
+//! is a filter directive, left to the `targets` join. Anything else spelled
+//! `nest_rs::…` is a path and must resolve: the join used to take every
+//! `nest_rs::<word>` that was no umbrella re-export for a target, so a misspelled
+//! concern (`nest_rs::shedule::BACKEND_REMEDY`), a renamed one and an item at the
+//! umbrella's root (`nest_rs::App`) were never checked — the drift the join
+//! exists to catch. A target named in prose that is no longer declared is the
+//! same drift, and fails the same way — unless it is one [`RETIRED_TARGETS`]
+//! states, which the rules name as history.
+//!
+//! **Quoted tool output is not prose.** A fenced block marked
+//! `frame="terminal"` is what a command printed — rustc's rendering of a type
+//! included — and a page quotes it rather than names a path in it.
 //!
 //! **A module named as a place is a file.** A rule that says a sentence "is
 //! worded once in the codegen crate's `job` module" is pointing at source a
@@ -32,7 +48,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use nest_rs_conformance::sources::{files_with_extension, parsed, read, relative, repo_root};
+use nest_rs_conformance::imports::CrateImports;
+use nest_rs_conformance::sources::{
+    declared_targets, files_with_extension, parsed, read, relative, repo_root,
+};
 use syn::{Item, UseTree, Visibility};
 
 /// Below this the walk is reading the wrong tree.
@@ -63,47 +82,45 @@ fn prose(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// `nest_rs::<alias>` → the crate it re-exports, read off the umbrella's
-/// `lib.rs`: `pub use nest_rs_http as http;` at its root, and a family's members
-/// one module down (`oauth::client`).
-fn umbrella(root: &Path) -> BTreeMap<String, String> {
-    let mut aliases = BTreeMap::new();
-    let ast = parsed(&root.join("crates/nest-rs/src/lib.rs")).expect("the umbrella parses");
-    collect_aliases(&ast.items, "", &mut aliases);
-    aliases
-}
+/// Span targets the framework retired, which the rules and the logs page name
+/// as history — so a reader holding a filter that names one learns why it
+/// matches nothing.
+///
+/// **Stated, not derived, and it has to be**: a retired target has no
+/// declaration left to read it off. Adding a line is retiring a target, which
+/// is a reviewed act; a target merely misspelled in prose is never one.
+const RETIRED_TARGETS: [&str; 2] = ["nest_rs::access", "nest_rs::access_graph"];
 
-fn collect_aliases(items: &[Item], prefix: &str, out: &mut BTreeMap<String, String>) {
-    for item in items {
-        match item {
-            Item::Use(item) if is_pub(&item.vis) => {
-                if let UseTree::Rename(rename) = &item.tree {
-                    let target = rename.ident.to_string();
-                    if target.starts_with("nest_rs_") {
-                        out.insert(format!("{prefix}{}", rename.rename), target);
-                    }
-                }
-            }
-            Item::Mod(module) if is_pub(&module.vis) => {
-                if let Some((_, inner)) = &module.content {
-                    collect_aliases(inner, &format!("{prefix}{}::", module.ident), out);
-                }
-            }
-            _ => {}
-        }
-    }
+/// Every span target the framework declares or retired, as spelled — the
+/// vocabulary a `nest_rs::…` in prose is a filter directive of rather than a
+/// path.
+fn targets() -> BTreeSet<&'static str> {
+    declared_targets()
+        .iter()
+        .map(|(target, _, _)| *target)
+        .chain(RETIRED_TARGETS)
+        .collect()
 }
 
 fn is_pub(vis: &Visibility) -> bool {
     matches!(vis, Visibility::Public(_))
 }
 
-/// Every `nest_rs…::…` path `text` spells, as `(crate, segments)` once the
-/// umbrella is read through, with the line it sits on.
-fn paths_in(text: &str, aliases: &BTreeMap<String, String>) -> Vec<(usize, String, Vec<String>)> {
+/// Every `nest_rs…::…` path `text` spells, as `(crate, segments)`, with the
+/// line it sits on — a declared span target left out.
+fn paths_in(text: &str, targets: &BTreeSet<&str>) -> Vec<(usize, String, Vec<String>)> {
     let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let mut out = Vec::new();
+    let mut terminal = false;
     for (number, line) in text.lines().enumerate() {
+        let fence = line.trim_start();
+        if fence.starts_with("```") {
+            terminal = !terminal && fence.contains("frame=\"terminal\"");
+            continue;
+        }
+        if terminal {
+            continue;
+        }
         for (at, _) in line.match_indices("nest_rs") {
             if line[..at].chars().next_back().is_some_and(ident) {
                 continue;
@@ -124,24 +141,12 @@ fn paths_in(text: &str, aliases: &BTreeMap<String, String>) -> Vec<(usize, Strin
             if head.ends_with('_') || segments.is_empty() {
                 continue;
             }
-            let (krate, segments) = if head == "nest_rs" {
-                // The longest alias the segments open with: `oauth::client`
-                // before `oauth`.
-                let found = (1..=segments.len().min(2)).rev().find_map(|n| {
-                    aliases
-                        .get(&segments[..n].join("::"))
-                        .map(|krate| (krate.clone(), segments[n..].to_vec()))
-                });
-                match found {
-                    Some(found) => found,
-                    None => continue,
-                }
-            } else {
-                (head.to_owned(), segments)
-            };
-            if !segments.is_empty() {
-                out.push((number + 1, krate, segments));
+            if head == "nest_rs"
+                && targets.contains(format!("nest_rs::{}", segments.join("::")).as_str())
+            {
+                continue;
             }
+            out.push((number + 1, head.to_owned(), segments));
         }
     }
     out
@@ -165,17 +170,43 @@ enum Child {
     File([PathBuf; 2]),
 }
 
-/// Every file the walk parsed, so a crate read for its hundredth path is parsed
-/// once.
+/// Every file the walk parsed, and every crate whose imports it read, so a
+/// crate read for its hundredth path is read once.
 #[derive(Default)]
-struct Parsed(HashMap<PathBuf, Option<Vec<Item>>>);
+struct Parsed {
+    files: HashMap<PathBuf, Option<Vec<Item>>>,
+    imports: HashMap<PathBuf, CrateImports>,
+}
 
 impl Parsed {
     fn items(&mut self, path: &Path) -> Option<Vec<Item>> {
-        self.0
+        self.files
             .entry(path.to_owned())
             .or_insert_with(|| parsed(path).map(|file| file.items))
             .clone()
+    }
+
+    /// The framework crate a module of the crate at `lib` re-exports whole
+    /// under `name` — `pub use nest_rs_http as http;` — read through
+    /// `nest_rs_conformance::imports`, the reader the `umbrella` join shares.
+    fn reexported_crate(
+        &mut self,
+        lib: &Path,
+        root: &Path,
+        module: &[String],
+        name: &str,
+    ) -> Option<String> {
+        let imports = self
+            .imports
+            .entry(lib.to_owned())
+            .or_insert_with(|| CrateImports::read(lib, root));
+        imports
+            .imports_of(module)
+            .find(|(alias, import)| *alias == name && import.public)
+            .and_then(|(_, import)| match import.path.as_slice() {
+                [krate] if krate.starts_with("nest_rs_") => Some(krate.clone()),
+                _ => None,
+            })
     }
 }
 
@@ -255,6 +286,15 @@ fn unresolved(root: &Path, krate: &str, segments: &[String], files: &mut Parsed)
     let mut child_dir = dir.join("src");
     for (depth, segment) in segments.iter().enumerate() {
         let mut module = public(&items, &child_dir);
+        // A whole framework crate re-exported here — the umbrella's
+        // `pub use nest_rs_http as http;` — is walked into, so a path through
+        // the front door is held to the crate behind it.
+        if segments.len() > depth + 1
+            && let Some(target) =
+                files.reexported_crate(&dir.join("src/lib.rs"), root, &segments[..depth], segment)
+        {
+            return unresolved(root, &target, &segments[depth + 1..], files);
+        }
         if let Some(child) = module.modules.remove(segment) {
             items = match child {
                 Child::Inline(inner) => inner,
@@ -284,7 +324,7 @@ fn unresolved(root: &Path, krate: &str, segments: &[String], files: &mut Parsed)
 #[test]
 fn every_path_the_prose_names_resolves() {
     let root: &Path = &repo_root();
-    let aliases = umbrella(root);
+    let targets = targets();
     let mut files = Parsed::default();
     let mut seen = 0usize;
     let mut holes = BTreeSet::new();
@@ -292,7 +332,7 @@ fn every_path_the_prose_names_resolves() {
         let Ok(text) = read(&file) else {
             continue;
         };
-        for (line, krate, segments) in paths_in(&text, &aliases) {
+        for (line, krate, segments) in paths_in(&text, &targets) {
             seen += 1;
             if let Some(why) = unresolved(root, &krate, &segments, &mut files) {
                 holes.insert(format!(
@@ -315,40 +355,91 @@ fn every_path_the_prose_names_resolves() {
     );
 }
 
-/// The reader sees a path through the umbrella, stops at a type, and leaves a
-/// span target and a placeholder alone.
+/// The reader takes a `nest_rs::…` for a path unless the framework declares
+/// it as a span target, and walks the umbrella like any other crate.
 #[test]
 fn a_path_is_read_through_the_umbrella_and_a_target_is_not_a_path() {
-    let aliases = BTreeMap::from([
-        ("queue".to_owned(), "nest_rs_queue".to_owned()),
-        (
-            "oauth::client".to_owned(),
-            "nest_rs_oauth_client".to_owned(),
-        ),
+    let targets = BTreeSet::from([
+        "nest_rs::operation",
+        "nest_rs::oauth::client",
+        "nest_rs::access",
     ]);
     let text = "`nest_rs::queue::Envelope`, `nest_rs_queue::envelope::open`,\n\
                 `nest_rs::oauth::client::OAuthClient`, `nest_rs::operation`,\n\
-                `nest_rs_<x>::TARGET`, `nest_rs::<concern>`, `nest_rs::queue`";
-    let read: Vec<(usize, String, String)> = paths_in(text, &aliases)
+                `nest_rs_<x>::TARGET`, `nest_rs::<concern>`, `nest_rs::oauth::client`=off\n\
+                `nest_rs::storagge::Storage` and `nest_rs::App`; it was `nest_rs::access`\n\
+                ```text frame=\"terminal\"\n\
+                error: `nest_rs::nest_rs_authn::AuthnGuard` does not check this edge\n\
+                ```\n\
+                `nest_rs::acces`";
+    let read: Vec<(usize, String, String)> = paths_in(text, &targets)
         .into_iter()
         .map(|(line, krate, segments)| (line, krate, segments.join("::")))
         .collect();
     assert_eq!(
         read,
         vec![
-            (1, "nest_rs_queue".to_owned(), "Envelope".to_owned()),
+            (1, "nest_rs".to_owned(), "queue::Envelope".to_owned()),
             (1, "nest_rs_queue".to_owned(), "envelope::open".to_owned()),
             (
                 2,
-                "nest_rs_oauth_client".to_owned(),
-                "OAuthClient".to_owned()
+                "nest_rs".to_owned(),
+                "oauth::client::OAuthClient".to_owned()
             ),
+            // A word that is no declared target is a path, and is checked.
+            (4, "nest_rs".to_owned(), "storagge::Storage".to_owned()),
+            (4, "nest_rs".to_owned(), "App".to_owned()),
+            (8, "nest_rs".to_owned(), "acces".to_owned()),
         ],
     );
 
     let root: &Path = &repo_root();
     let files = &mut Parsed::default();
     let path = |segments: &[&str]| segments.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    // Through the umbrella's crate re-exports, at the root and in a family.
+    assert_eq!(
+        unresolved(root, "nest_rs", &path(&["queue", "Envelope"]), files),
+        None
+    );
+    assert_eq!(
+        unresolved(
+            root,
+            "nest_rs",
+            &path(&["oauth", "client", "OAuthClient"]),
+            files
+        ),
+        None,
+    );
+    assert_eq!(
+        unresolved(root, "nest_rs", &path(&["prelude", "App"]), files),
+        None
+    );
+    // The shapes the join used to take for span targets and never check.
+    for (segments, why) in [
+        (
+            &["shedule", "BACKEND_REMEDY"][..],
+            "`nest_rs` has no public `shedule`",
+        ),
+        (
+            &["oauth", "resourse", "OAuthResourceModule"],
+            "`nest_rs::oauth` has no public `resourse`",
+        ),
+        (
+            &["prelude", "NoSuchThing"],
+            "`nest_rs::prelude` has no public `NoSuchThing`",
+        ),
+        (&["App"], "`nest_rs` has no public `App`"),
+        (
+            &["queue", "NoSuchThing"],
+            "`nest_rs_queue` has no public `NoSuchThing`",
+        ),
+    ] {
+        assert_eq!(
+            unresolved(root, "nest_rs", &path(segments), files).as_deref(),
+            Some(why),
+            "{segments:?}",
+        );
+    }
     assert_eq!(
         unresolved(root, "nest_rs_queue", &path(&["Envelope"]), files),
         None

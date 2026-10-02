@@ -24,11 +24,27 @@
 //!
 //! Members are derived: every crate under `crates/`, its `[dependencies]`, its
 //! `[features]`, and the `mod` tree from `src/lib.rs` or `src/main.rs`.
+//!
+//! **What it reads.** A path is read through the crate's imports
+//! (`nest_rs_conformance::imports`) before its root is judged, so an optional
+//! dependency's item reached under another name — `use opt_a::Thing` then
+//! `Thing`, a re-export in a submodule, `use opt_a as a`, `extern crate opt_a as
+//! a` — is judged as `opt_a`. It reads every path, every `use` leaf, every
+//! `extern crate`, every macro call's tokens, every non-`cfg` attribute's tokens,
+//! and the paths a string literal inside such an attribute spells —
+//! `#[serde(with = "opt_a::codec")]` is a path the compiler resolves, quoted.
+//!
+//! **What it refuses**, because it cannot read through it: a `mod x;` whose file
+//! the default layout does not find (a module the tree cannot read is a module
+//! every judgement here gets wrong), and a glob import from an optional
+//! dependency, which hides the names it brings in. A `#[path]` module and an
+//! `extern crate … as` are refused in all framework source by the `blinds` join.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use nest_rs_conformance::baseline;
+use nest_rs_conformance::imports::CrateImports;
 use nest_rs_conformance::sources::{is_cfg_test, parsed, path_roots, relative, repo_root};
 use proc_macro2::TokenStream;
 use syn::punctuated::Punctuated;
@@ -175,13 +191,18 @@ fn cfgs(attrs: &[Attribute]) -> Vec<Meta> {
 /// A walk over one crate's `mod` tree, carrying the gates above each site.
 struct Walk<'m> {
     manifest: &'m Manifest,
+    imports: &'m CrateImports,
     file: String,
     gates: Vec<Meta>,
     holes: BTreeSet<String>,
     /// `mod x;` declarations to read next, with the directory their file
-    /// resolves against and the gates in force at the declaration.
-    pending: Vec<(PathBuf, String, Vec<Meta>)>,
+    /// resolves against, the module path they open and the gates in force at
+    /// the declaration.
+    pending: Vec<(PathBuf, String, Vec<String>, Vec<Meta>)>,
     dir: PathBuf,
+    /// The module the walk is in, below the crate root — what a path is read
+    /// through the imports of.
+    module: Vec<String>,
 }
 
 impl Walk<'_> {
@@ -196,9 +217,19 @@ impl Walk<'_> {
         }
     }
 
+    /// Judge `segments`, written in the current module, by the root it
+    /// resolves to through the crate's imports.
+    fn check_path(&mut self, segments: &[String]) {
+        let resolved = self.imports.resolve(&self.module, segments);
+        if let Some(root) = resolved.first() {
+            let root = root.clone();
+            self.check(&root);
+        }
+    }
+
     fn check_tokens(&mut self, tokens: &TokenStream) {
         for root in path_roots(tokens) {
-            self.check(&root);
+            self.check_path(&[root]);
         }
     }
 
@@ -264,22 +295,55 @@ fn expr_attrs(expr: &Expr) -> &[Attribute] {
     }
 }
 
-fn use_roots(tree: &UseTree, out: &mut Vec<String>) {
+/// Every path a `use` tree names, leaf by leaf, as `(path, is a glob)`.
+fn use_paths(tree: &UseTree, prefix: &mut Vec<String>, out: &mut Vec<(Vec<String>, bool)>) {
     match tree {
-        UseTree::Path(p) => out.push(p.ident.to_string()),
-        UseTree::Name(n) => out.push(n.ident.to_string()),
-        UseTree::Rename(r) => out.push(r.ident.to_string()),
-        UseTree::Group(g) => g.items.iter().for_each(|t| use_roots(t, out)),
-        UseTree::Glob(_) => {}
+        UseTree::Path(p) => {
+            prefix.push(p.ident.to_string());
+            use_paths(&p.tree, prefix, out);
+            prefix.pop();
+        }
+        UseTree::Name(n) => {
+            let mut path = prefix.clone();
+            if n.ident != "self" {
+                path.push(n.ident.to_string());
+            }
+            out.push((path, false));
+        }
+        UseTree::Rename(r) => {
+            let mut path = prefix.clone();
+            if r.ident != "self" {
+                path.push(r.ident.to_string());
+            }
+            out.push((path, false));
+        }
+        UseTree::Group(g) => g.items.iter().for_each(|t| use_paths(t, prefix, out)),
+        UseTree::Glob(_) => out.push((prefix.clone(), true)),
     }
+}
+
+/// The paths a string literal spells, read as tokens — `"opt_a::codec"`,
+/// `"T: opt_a::Trait"`. A literal that does not lex spells none.
+fn quoted_roots(tokens: &TokenStream) -> Vec<String> {
+    nest_rs_conformance::sources::string_literals(tokens.clone())
+        .iter()
+        .filter_map(|text| text.parse::<TokenStream>().ok())
+        .flat_map(|inner| path_roots(&inner))
+        .collect()
 }
 
 impl<'ast> Visit<'ast> for Walk<'_> {
     fn visit_item(&mut self, node: &'ast Item) {
         self.gated(item_attrs(node), |walk| match node {
             Item::Mod(m) if m.content.is_none() => {
-                walk.pending
-                    .push((walk.dir.clone(), m.ident.to_string(), walk.gates.clone()));
+                let mut module = walk.module.clone();
+                module.push(m.ident.to_string());
+                walk.pending.push((
+                    walk.dir.clone(),
+                    m.ident.to_string(),
+                    module,
+                    walk.gates.clone(),
+                ));
                 for attr in &m.attrs {
                     walk.visit_attribute(attr);
                 }
@@ -287,17 +351,32 @@ impl<'ast> Visit<'ast> for Walk<'_> {
             Item::Mod(m) => {
                 let outer = walk.dir.clone();
                 walk.dir = outer.join(m.ident.to_string());
+                walk.module.push(m.ident.to_string());
                 syn::visit::visit_item_mod(walk, m);
+                walk.module.pop();
                 walk.dir = outer;
             }
             Item::Use(u) => {
-                let mut roots = Vec::new();
-                // `use ::x::…` and `use x::…` both root at `x`.
-                use_roots(&u.tree, &mut roots);
-                for root in roots {
+                let mut paths = Vec::new();
+                // `use ::x::…` and `use x::…` both root at `x`, and a leaf
+                // naming a re-export of another module is read through it.
+                use_paths(&u.tree, &mut Vec::new(), &mut paths);
+                for (path, glob) in paths {
+                    let resolved = walk.imports.resolve(&walk.module, &path);
+                    let Some(root) = resolved.first().cloned() else {
+                        continue;
+                    };
+                    if glob && walk.manifest.optional.contains(&root) {
+                        walk.holes.insert(format!(
+                            "{} :: a glob import from the optional `{root}` hides the names \
+                             it brings in — name them",
+                            walk.file,
+                        ));
+                    }
                     walk.check(&root);
                 }
             }
+            Item::ExternCrate(e) => walk.check(&e.ident.to_string()),
             _ => syn::visit::visit_item(walk, node),
         });
     }
@@ -359,10 +438,19 @@ impl<'ast> Visit<'ast> for Walk<'_> {
     }
 
     fn visit_path(&mut self, node: &'ast syn::Path) {
-        if (node.segments.len() > 1 || node.leading_colon.is_some())
-            && let Some(first) = node.segments.first()
-        {
-            self.check(&first.ident.to_string());
+        let segments: Vec<String> = node.segments.iter().map(|s| s.ident.to_string()).collect();
+        if node.leading_colon.is_some() {
+            // `::x::…` names the crate `x`, past every import.
+            if let Some(first) = segments.first() {
+                let first = first.clone();
+                self.check(&first);
+            }
+        } else if !segments.is_empty() {
+            // A single segment is judged too: `Thing`, imported from an
+            // optional dependency, is that dependency's item wherever it is
+            // named. One no import explains resolves to itself, and a local
+            // binding is never an optional dependency's name.
+            self.check_path(&segments);
         }
         syn::visit::visit_path(self, node);
     }
@@ -377,6 +465,9 @@ impl<'ast> Visit<'ast> for Walk<'_> {
             && !list.path.is_ident("cfg")
         {
             self.check_tokens(&list.tokens);
+            for root in quoted_roots(&list.tokens) {
+                self.check_path(&[root]);
+            }
         }
         syn::visit::visit_attribute(self, node);
     }
@@ -387,41 +478,61 @@ fn crate_holes(dir: &Path, root: &Path) -> (BTreeSet<String>, usize) {
     let Some(manifest) = Manifest::read(dir) else {
         return (BTreeSet::new(), 0);
     };
-    let mut walk = Walk {
-        manifest: &manifest,
-        file: String::new(),
-        gates: Vec::new(),
-        holes: BTreeSet::new(),
-        pending: Vec::new(),
-        dir: PathBuf::new(),
-    };
-    let mut files = Vec::new();
-    for entry in ["src/lib.rs", "src/main.rs"] {
-        let path = dir.join(entry);
-        if path.is_file() {
-            files.push((path, Vec::new(), dir.join("src")));
-        }
-    }
+    let mut holes = BTreeSet::new();
     let mut read = 0;
-    while let Some((path, gates, children)) = files.pop() {
-        let Some(ast) = parsed(&path) else {
+    // A package's library and its binary are two crates, each with its own
+    // module tree — and its own imports to read a path through.
+    for entry in ["src/lib.rs", "src/main.rs"] {
+        let entry = dir.join(entry);
+        if !entry.is_file() {
             continue;
-        };
-        read += 1;
-        walk.file = relative(&path, root);
-        walk.gates = gates;
-        walk.dir = children;
-        walk.visit_file(&ast);
-        // A file `x.rs`'s children resolve under `x/`, and `lib.rs` / `mod.rs`'s
-        // under their own folder: handing every child `parent/<name>` is both.
-        for (parent, name, gates) in walk.pending.drain(..) {
-            let flat = parent.join(format!("{name}.rs"));
-            let nested = parent.join(&name).join("mod.rs");
-            let child = if flat.is_file() { flat } else { nested };
-            files.push((child, gates, parent.join(&name)));
         }
+        let imports = CrateImports::read(&entry, root);
+        let mut walk = Walk {
+            manifest: &manifest,
+            imports: &imports,
+            file: String::new(),
+            gates: Vec::new(),
+            holes: imports
+                .unread
+                .iter()
+                .map(|module| {
+                    format!(
+                        "{module} — the default layout finds no file that parses, so nothing \
+                         it holds is read"
+                    )
+                })
+                .collect(),
+            pending: Vec::new(),
+            dir: PathBuf::new(),
+            module: Vec::new(),
+        };
+        let mut files = vec![(entry, Vec::new(), Vec::new(), dir.join("src"))];
+        while let Some((path, module, gates, children)) = files.pop() {
+            // A file that is not there or does not parse is in
+            // `imports.unread`, reported above — never skipped in silence.
+            let Some(ast) = parsed(&path) else {
+                continue;
+            };
+            read += 1;
+            walk.file = relative(&path, root);
+            walk.gates = gates;
+            walk.dir = children;
+            walk.module = module;
+            walk.visit_file(&ast);
+            // A file `x.rs`'s children resolve under `x/`, and `lib.rs` /
+            // `mod.rs`'s under their own folder: handing every child
+            // `parent/<name>` is both.
+            for (parent, name, module, gates) in walk.pending.drain(..) {
+                let flat = parent.join(format!("{name}.rs"));
+                let nested = parent.join(&name).join("mod.rs");
+                let child = if flat.is_file() { flat } else { nested };
+                files.push((child, module, gates, parent.join(&name)));
+            }
+        }
+        holes.extend(walk.holes);
     }
-    (walk.holes, read)
+    (holes, read)
 }
 
 #[test]
@@ -523,6 +634,79 @@ fn body() {
             "src/engine.rs :: `opt_a` is optional and no feature gating this site enables it",
             "src/engine.rs :: `opt_c` is optional and no feature gating this site enables it",
             "src/http/nested.rs :: `opt_c` is optional and no feature gating this site enables it",
+        ],
+    );
+}
+
+/// Every way a name can reach an optional dependency without its own root
+/// spelling it — and the two shapes the walk cannot read, which it reports
+/// rather than skips. The tree is the one that once read as clean: an ungated
+/// `extern crate … as`, a `#[path]` module, a path quoted in a `serde`
+/// attribute.
+#[test]
+fn a_name_reaching_an_optional_dependency_is_judged_by_where_it_resolves() {
+    const TREE: [(&str, &str); 5] = [
+        (
+            "Cargo.toml",
+            r#"
+[package]
+name = "probe"
+[features]
+default = []
+http = ["dep:opt-a", "dep:opt-b", "dep:opt-c", "dep:opt-d", "dep:opt-e", "dep:opt-f"]
+[dependencies]
+opt-a = { version = "1.0", optional = true }
+opt-b = { version = "1.0", optional = true }
+opt-c = { version = "1.0", optional = true }
+opt-d = { version = "1.0", optional = true }
+opt-e = { version = "1.0", optional = true }
+opt-f = { version = "1.0", optional = true }
+"#,
+        ),
+        (
+            "src/lib.rs",
+            r#"
+extern crate opt_a as renamed;
+fn via_alias() { renamed::x(); }
+#[path = "elsewhere/hidden.rs"]
+mod hidden;
+#[derive(serde::Deserialize)]
+struct S { #[serde(with = "opt_c::codec")] f: u8 }
+#[cfg(feature = "http")]
+use opt_d::Thing;
+fn imported() -> Thing { Thing }
+#[cfg(feature = "http")]
+mod gated;
+use gated::Moved;
+fn moved(_: Moved) {}
+use opt_f::*;
+"#,
+        ),
+        ("src/elsewhere/hidden.rs", "fn h() { opt_b::y(); }"),
+        ("src/gated.rs", "pub use opt_e as e;\npub use e::Moved;"),
+        ("src/clean.rs", "fn unused() {}"),
+    ];
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "dependencies-through-imports-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    crate::plant(&scratch, &TREE);
+    let (holes, _) = crate_holes(&scratch, &scratch);
+    let _ = std::fs::remove_dir_all(&scratch);
+    let holes: Vec<String> = holes.into_iter().collect();
+    assert_eq!(
+        holes,
+        [
+            "src/lib.rs :: `opt_a` is optional and no feature gating this site enables it",
+            "src/lib.rs :: `opt_c` is optional and no feature gating this site enables it",
+            "src/lib.rs :: `opt_d` is optional and no feature gating this site enables it",
+            "src/lib.rs :: `opt_e` is optional and no feature gating this site enables it",
+            "src/lib.rs :: `opt_f` is optional and no feature gating this site enables it",
+            "src/lib.rs :: a glob import from the optional `opt_f` hides the names it brings \
+             in — name them",
+            "src/lib.rs :: mod hidden — the default layout finds no file that parses, so \
+             nothing it holds is read",
         ],
     );
 }

@@ -15,4 +15,5 @@
 //! and is not it.
 
 pub mod baseline;
+pub mod imports;
 pub mod sources;

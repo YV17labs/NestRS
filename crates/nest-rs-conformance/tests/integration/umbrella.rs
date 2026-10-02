@@ -100,11 +100,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use nest_rs_conformance::baseline;
+use nest_rs_conformance::imports::CrateImports;
 use nest_rs_conformance::sources::{
     crate_dirs, executed_tokens, exported_decorators, files_with_extension, parsed, path_roots,
     read, repo_root, rust_files, spells_path, umbrella_matrix,
 };
-use syn::{Item, UseTree};
+use syn::Item;
 
 const BASELINE: &str = "umbrella-baseline.txt";
 
@@ -238,40 +239,22 @@ type Reexport = (String, String, Option<String>);
 /// level of descent is the whole search — and the module names it finds are
 /// what [`Capability::concern`] reads, which is why the family is declared once,
 /// in the umbrella, and nowhere else.
+///
+/// Read through `nest_rs_conformance::imports`, the reader the `paths` join
+/// walks the same re-exports with: two readers of one table is how the two
+/// joins would come to disagree about which concerns exist.
 fn reexports(root: &Path) -> (BTreeSet<Reexport>, BTreeSet<String>) {
-    let Some(ast) = parsed(&root.join("crates/nest-rs/src/lib.rs")) else {
-        return (BTreeSet::new(), BTreeSet::new());
-    };
+    let imports = CrateImports::read(&root.join("crates/nest-rs/src/lib.rs"), root);
     let mut families = BTreeSet::new();
-    let flattened: Vec<(Option<String>, &Item)> = ast
-        .items
-        .iter()
-        .flat_map(|item| match item {
-            Item::Mod(module) => module
-                .content
-                .as_ref()
-                .map(|(_, inner)| {
-                    let name = module.ident.to_string();
-                    inner
-                        .iter()
-                        .map(|nested| (Some(name.clone()), nested))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-            other => vec![(None, other)],
-        })
-        .collect();
-    let found = flattened
-        .into_iter()
-        .filter_map(|(family, item)| {
-            let Item::Use(use_item) = item else {
-                return None;
-            };
-            // `pub use nest_rs_http as http;` — a bare rename, no `::` in it,
-            // which is a `UseTree::Rename` at the top of the tree rather than
-            // the `Path` a qualified import would give.
-            let UseTree::Rename(rename) = &use_item.tree else {
-                return None;
+    let mut found = BTreeSet::new();
+    let mut modules: Vec<Vec<String>> = vec![Vec::new()];
+    modules.extend(imports.children_of(&[]).map(|child| vec![child.clone()]));
+    for module in modules {
+        for (alias, import) in imports.imports_of(&module) {
+            // A whole crate under a name of its own — `pub use nest_rs_http as
+            // http;` — rather than an item out of one.
+            let [krate] = import.path.as_slice() else {
+                continue;
             };
             // **`pub`, and gated on the *right* feature.** The column's sentence
             // is that the re-export "is what makes `::nest_rs::<y>::` resolve
@@ -282,10 +265,10 @@ fn reexports(root: &Path) -> (BTreeSet<Reexport>, BTreeSet<String>) {
             // the expansion needs it, which is `E0433` inside a macro, blamed on
             // the attribute. That is the failure *Shipping a new capability*
             // step 1 exists to prevent, and the cell was closed regardless.
-            if !matches!(use_item.vis, syn::Visibility::Public(_)) {
-                return None;
+            if !krate.starts_with("nest_rs_") || alias == krate || !import.public {
+                continue;
             }
-            let gate = use_item.attrs.iter().find_map(|attr| {
+            let gate = import.attrs.iter().find_map(|attr| {
                 let text = quote::ToTokens::to_token_stream(attr).to_string();
                 let at = text.find("feature")?;
                 text[at..]
@@ -293,17 +276,16 @@ fn reexports(root: &Path) -> (BTreeSet<Reexport>, BTreeSet<String>) {
                     .nth(1)
                     .map(std::string::ToString::to_string)
             });
-            let alias = rename.rename.to_string();
-            let concern = match &family {
-                Some(name) => {
-                    families.insert(name.clone());
-                    format!("{name}::{alias}")
+            let concern = match module.first() {
+                Some(family) => {
+                    families.insert(family.clone());
+                    format!("{family}::{alias}")
                 }
-                None => alias,
+                None => alias.clone(),
             };
-            Some((rename.ident.to_string(), concern, gate))
-        })
-        .collect();
+            found.insert((krate.clone(), concern, gate));
+        }
+    }
     (found, families)
 }
 

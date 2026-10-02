@@ -13,8 +13,26 @@ fn hash_and_verify_round_trip() {
 fn invalid_stored_hash_returns_error() {
     assert!(matches!(
         verify_password("not-a-phc-string", "password"),
-        Err(PasswordError::InvalidHash)
+        Err(PasswordError::InvalidHash(_))
     ));
+}
+
+/// A PHC string that parses but names a hash this hasher cannot run is an
+/// unusable record, not a wrong password: `Ok(false)` would lock its owner out
+/// with nothing in the logs to say why.
+#[test]
+fn a_parsable_hash_the_hasher_cannot_run_is_invalid_not_a_mismatch() {
+    let scrypt =
+        "$scrypt$ln=16,r=8,p=1$aM15713r3Xsvxbi31lqr1Q$nFNh2CVHVjNldFVKDHDlm4CbdRSCdEBsjjJxD+iCs5E";
+    let error = verify_password(scrypt, "password").expect_err("an scrypt hash cannot be verified");
+    assert!(
+        matches!(error, PasswordError::InvalidHash(_)),
+        "got {error:?}"
+    );
+    assert!(
+        std::error::Error::source(&error).is_some(),
+        "the cause says why the record is unusable",
+    );
 }
 
 #[test]

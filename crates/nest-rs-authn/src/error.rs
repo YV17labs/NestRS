@@ -24,12 +24,15 @@ use nest_rs_guards::NoBearerChallenge;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PasswordError {
     /// Argon2 refused to hash — rare, and an infrastructure signal (OOM, RNG
-    /// failure) rather than anything about the password.
+    /// failure) rather than anything about the password. The cause is kept:
+    /// it is what tells an operator *which* of those it was.
     #[error("password hashing failed")]
-    HashFailed,
-    /// The stored string did not parse as a PHC hash.
-    #[error("stored password hash is not valid PHC")]
-    InvalidHash,
+    HashFailed(#[source] argon2::password_hash::Error),
+    /// The stored string is not a hash this hasher can run: it did not parse
+    /// as PHC, or names an algorithm, version or parameters it refuses. The
+    /// cause says which.
+    #[error("stored password hash is not usable")]
+    InvalidHash(#[source] argon2::password_hash::Error),
 }
 
 /// What a caller is told when its credential could not be evaluated: the

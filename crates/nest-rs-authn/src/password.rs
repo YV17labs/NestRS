@@ -28,7 +28,7 @@ const ARGON2_P_COST: u32 = 1;
 /// path.
 fn argon2() -> Result<Argon2<'static>, PasswordError> {
     let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, None)
-        .map_err(|_| PasswordError::HashFailed)?;
+        .map_err(|error| PasswordError::HashFailed(error.into()))?;
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
@@ -41,7 +41,7 @@ pub fn hash_password(password: &str) -> Result<String, PasswordError> {
     argon2()?
         .hash_password(password.as_bytes())
         .map(|hash| hash.to_string())
-        .map_err(|_| PasswordError::HashFailed)
+        .map_err(PasswordError::HashFailed)
 }
 
 /// Returns `true` when `password` matches `encoded_hash`.
@@ -49,11 +49,19 @@ pub fn hash_password(password: &str) -> Result<String, PasswordError> {
 /// Verification reads the parameters **out of the stored hash**, not from the
 /// pinned ones — which is what lets [`ARGON2_M_COST`] and its siblings move
 /// without invalidating every credential already in the database.
+///
+/// Only a mismatch is `Ok(false)`. A hash that parses but cannot be run — an
+/// algorithm, version or parameter set this hasher refuses — is
+/// [`InvalidHash`](PasswordError::InvalidHash): reading it as "wrong password"
+/// would lock its owner out with nothing in the logs to say why.
 pub fn verify_password(encoded_hash: &str, password: &str) -> Result<bool, PasswordError> {
-    let parsed = PasswordHash::new(encoded_hash).map_err(|_| PasswordError::InvalidHash)?;
-    Ok(argon2()?
-        .verify_password(password.as_bytes(), &parsed)
-        .is_ok())
+    let parsed = PasswordHash::new(encoded_hash)
+        .map_err(|error| PasswordError::InvalidHash(error.into()))?;
+    match argon2()?.verify_password(password.as_bytes(), &parsed) {
+        Ok(()) => Ok(true),
+        Err(argon2::password_hash::Error::PasswordInvalid) => Ok(false),
+        Err(error) => Err(PasswordError::InvalidHash(error)),
+    }
 }
 
 /// Run a verify against a dummy hash — call when the account is absent so the
@@ -69,13 +77,17 @@ pub fn burn_verify(password: &str) {
         Err(error) => {
             tracing::error!(
                 target: crate::TARGET,
-                %error,
+                error = %nest_rs_core::error_message(&error),
                 "timing dummy hash failed to initialize — absent-account burn degrades to no-op",
             );
             String::new()
         }
     });
     if !dummy.is_empty() {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the burn is the work, not the verdict"
+        )]
         let _ = verify_password(dummy, password);
     }
 }

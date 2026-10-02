@@ -66,6 +66,12 @@
 //! `AuthnGuard` the authorization check runs against an empty principal — a
 //! name-based heuristic logs a `warn` at boot.
 //!
+//! The pool takes no marker bound, and needs none: it holds `Arc<dyn Guard>`
+//! and calls each edge's `check_*` through it, so a pooled guard runs every
+//! check it overrides whether or not it declares the marker. The markers are
+//! what a decorator site binds on — declare them anyway, or the guard cannot
+//! also be bound at one.
+//!
 //! ## Marking a handler `#[public]`
 //!
 //! ```rust,ignore

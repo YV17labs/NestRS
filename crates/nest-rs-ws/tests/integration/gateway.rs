@@ -1761,3 +1761,55 @@ async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
     assert_eq!(cut.field("cut").as_deref(), Some("1"), "{cut:#?}");
     drop(socket);
 }
+
+/// Refuses every message, and declares no `WsGuard`: the marker is a bound
+/// `#[messages]` emits for the guards declared at its site, and the global pool
+/// — `Arc<dyn Guard>`, with no marker to consult — is not one of them.
+#[injectable]
+#[derive(Default)]
+struct UnmarkedWsGuard;
+
+impl Layer for UnmarkedWsGuard {}
+
+#[async_trait]
+impl Guard for UnmarkedWsGuard {
+    async fn check_ws_message(
+        &self,
+        _client: &WsClient,
+        _event: &str,
+        _data: &serde_json::Value,
+    ) -> Result<(), Denial> {
+        Err(Denial::forbidden("refused by an unmarked WS check"))
+    }
+}
+
+#[module(imports = [WsModule], providers = [SocketGateway, UnmarkedWsGuard])]
+struct UnmarkedPoolModule;
+
+/// A pooled guard checks every message whether or not it declares `WsGuard`, so
+/// a missing marker on a global guard costs a compile-time bound and nothing on
+/// the wire — the other three edges are held in `nest-rs-testing`'s
+/// `guard_markers`.
+#[tokio::test]
+async fn a_pooled_guard_without_ws_guard_still_checks_every_message() {
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<UnmarkedPoolModule>()
+        .use_guards_global([nest_rs_guards::guard::<UnmarkedWsGuard>()])
+        .build_ws()
+        .await
+        .expect("an unmarked global guard boots");
+
+    let mut socket = app.socket("/socket").connect().await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    let reply = socket.next_envelope().await.to_string();
+    assert!(
+        !reply.contains("\"hi\""),
+        "the handler must not answer a message its pooled guard refused: {reply}",
+    );
+    assert!(
+        reply.contains("refused by an unmarked WS check"),
+        "the pool ran the guard's own check_ws_message: {reply}",
+    );
+
+    app.shutdown().await.expect("the transport stops cleanly");
+}

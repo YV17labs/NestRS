@@ -108,14 +108,27 @@ Bound idle sockets at the server or the reverse proxy until the transport can
 express "this response is stalled": that is the shape enforceable without
 knowing whose bytes are queued.
 
-**At shutdown a stream holds the transport's window, and is cut at its end.** A
-stream never finishes on its own, so a stopping process keeps it open for the
-whole shutdown window (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s by default)
-and then closes it with every other connection still open — a peer that stopped
-reading included. The client's `EventSource` reconnects, to another replica once
-this one has left the load balancer. The stream's `http.request` line is filed
-as its body ends, at the cut, with the head's `status` and the `bytes` written
-before it: the head is what the client received. See [Shutdown](/http/configuration/#shutdown).
+**At shutdown a stream ends at the signal.** A stream never finishes on its
+own, so holding it open would only spend the whole shutdown window
+(`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s by default) waiting for an end that
+is not coming. The transport ends it the moment shutdown is asked for —
+cleanly, its last chunk written, so the client's `EventSource` reads an end and
+reconnects, to a replica still in the load balancer. Its `http.request` line
+carries the head's `status`, the `bytes` written, and `outcome="cancelled"`: the
+transport ended it, not the stream. A peer that stopped reading parks the write,
+so its stream ends with the window instead, like every connection still open
+then. See [Shutdown](/http/configuration/#shutdown).
+
+`#[sse]` marks its response as having no end of its own. A handler that streams
+events some other way marks its own, so it ends at the signal too:
+
+```rust title="crates/features/src/chat/http/controller.rs"
+use nest_rs::http::OpenEndedBody;
+use nest_rs::http::poem::{IntoResponse, Response};
+
+let mut response: Response = events.into_response();
+response.extensions_mut().insert(OpenEndedBody);
+```
 
 Gate a stream with a **capability-only guard**
 (`#[use_guards(TranscodeGuard)]`), never `#[authorize]`: the posture masks

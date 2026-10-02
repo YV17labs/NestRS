@@ -1,5 +1,6 @@
-//! `HttpTransport::serve` once shutdown is asked for: the window poem is handed,
-//! what it closes at the bound, and what it leaves open.
+//! `HttpTransport::serve` once shutdown is asked for: what ends at the signal,
+//! the window poem is handed, what it closes at the bound, and what it leaves
+//! open.
 //!
 //! Over real sockets, since the window governs connections and `TestClient` has
 //! none. The clock is paused once the connections are up, so the default window
@@ -10,11 +11,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{HttpConfig, HttpTransport, SseStream, controller, routes};
+use nest_rs_core::{App, ContainerBuilder, Transport, module};
+use nest_rs_http::{
+    DetachedWork, HttpConfig, HttpEndpointMeta, HttpTransport, SseStream, controller, routes,
+};
 use nest_rs_testing::LogCapture;
 use poem::web::websocket::{Message as Frame, WebSocket};
-use poem::{IntoResponse, handler};
+use poem::{Body, IntoResponse, Route, handler};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
@@ -61,6 +64,17 @@ impl ShutdownController {
     #[public]
     async fn stream(&self) -> SseStream {
         SseStream::new(futures_util::stream::pending())
+    }
+
+    /// A body with an end of its own that it never reaches: a download, not an
+    /// event stream, so only the window ends it.
+    #[get("/download")]
+    #[public]
+    async fn download(&self) -> Body {
+        Body::from_bytes_stream(
+            futures_util::stream::once(async { Ok::<_, std::io::Error>(&b"part"[..]) })
+                .chain(futures_util::stream::pending()),
+        )
     }
 
     #[get("/slow")]
@@ -117,8 +131,13 @@ struct Serving {
 }
 
 async fn serve() -> Serving {
+    serve_module::<ShutdownModule>().await
+}
+
+/// [`serve`] for any module — the same transport, the same echo socket.
+async fn serve_module<M: nest_rs_core::Module + 'static>() -> Serving {
     let app = App::builder()
-        .module::<ShutdownModule>()
+        .module::<M>()
         .build()
         .await
         .expect("module boots");
@@ -230,12 +249,13 @@ async fn read_to_end(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&rest).into_owned()
 }
 
-/// An endless `#[sse]` stream would hold a graceful shutdown forever, and a
-/// WebSocket is not poem's to wait for at all. The window bounds the first and
-/// cuts it; the second is left open and said to be, and its handler still
-/// answers after the transport has stopped.
+/// An `#[sse]` stream has no end of its own, so waiting on it could only ever
+/// spend the whole window: it is ended at the signal instead — cleanly, its last
+/// chunk written, so the client's `EventSource` reads an end and reconnects (to a
+/// replica still in the load balancer) rather than a cut — and its line says the
+/// transport, not the stream, ended it.
 #[tokio::test]
-async fn a_stream_and_a_websocket_held_open_hold_the_shutdown_no_longer_than_its_window() {
+async fn an_event_stream_is_ended_at_the_signal_and_files_its_line_cancelled() {
     let logs = LogCapture::install();
     let serving = serve().await;
     let mut stream = request(serving.port, "/shutdown/stream").await;
@@ -244,6 +264,109 @@ async fn a_stream_and_a_websocket_held_open_hold_the_shutdown_no_longer_than_its
         head.starts_with("HTTP/1.1 200"),
         "the stream opened: {head}"
     );
+
+    let took = serving.stop().await;
+
+    assert!(
+        took < Duration::from_secs(1),
+        "shutdown did not wait on a stream with no end of its own, took {took:?}",
+    );
+    let rest = read_to_end(&mut stream).await;
+    assert!(
+        rest.ends_with("0\r\n\r\n"),
+        "the body ended with its last chunk rather than a cut: {rest:?}",
+    );
+    logs.expect_none(nest_rs_http::target::HTTP, CUT);
+    let line = operation_line(&logs, "/shutdown/stream");
+    assert_eq!(
+        line.field("status").as_deref(),
+        Some("200"),
+        "its head was answered"
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "and the transport ended its body before the stream did",
+    );
+    assert_span_cancelled(&logs, "/shutdown/stream");
+}
+
+/// A body with an end of its own is a response still being answered, like a
+/// request still running: it gets the window, and is cut at its close. Its head
+/// was answered, so its line carries the head's `status` and the `bytes` written
+/// before the cut — and `cancelled`, since it never reached its end.
+#[tokio::test]
+async fn a_streamed_download_holds_the_window_and_is_cut_at_its_close() {
+    let logs = LogCapture::install();
+    let serving = serve().await;
+    let mut download = request(serving.port, "/shutdown/download").await;
+    let head = read_head(&mut download).await;
+    assert!(
+        head.starts_with("HTTP/1.1 200"),
+        "the download started: {head}"
+    );
+
+    let took = serving.stop().await;
+
+    let window = HttpConfig::default().shutdown_timeout;
+    assert!(
+        took >= window && took < window + Duration::from_secs(1),
+        "the download held the window to its close, and not past it — took {took:?}",
+    );
+    let cut = logs.expect_one(nest_rs_http::target::HTTP, CUT);
+    assert_eq!(cut.level, "warn");
+    assert_eq!(cut.field("cut").as_deref(), Some("1"));
+    assert_eq!(cut.field("upgraded_open").as_deref(), Some("0"));
+    assert_eq!(
+        cut.field("shutdown_timeout_ms"),
+        Some(window.as_millis().to_string()),
+    );
+    read_to_end(&mut download).await;
+    let line = operation_line(&logs, "/shutdown/download");
+    assert_eq!(line.field("status").as_deref(), Some("200"));
+    assert_eq!(
+        line.field("bytes").as_deref(),
+        Some("4"),
+        "the one part written"
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "the window cut the body before its end",
+    );
+    assert_span_cancelled(&logs, "/shutdown/download");
+}
+
+/// The span of a request whose body the transport stopped says so in the
+/// line's word, as a request cut before it answered does.
+fn assert_span_cancelled(logs: &LogCapture, path: &str) {
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_http::unit::REQUEST
+                && span.field("url.path").as_deref() == Some(path)
+        })
+        .expect("the request's span");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "{path}: {:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+}
+
+/// A hand-mounted endpoint is the developer's own: the transport cannot see
+/// inside it, so a socket it upgraded is neither waited for nor closed. It is
+/// left open, the line that closes the transport says so, and its handler still
+/// answers after the transport has stopped.
+#[tokio::test]
+async fn a_hand_mounted_websocket_is_left_open_and_said_to_be() {
+    let logs = LogCapture::install();
+    let serving = serve().await;
+    // The listener is up once a plain connection lands.
+    drop(connect(serving.port).await);
     let (mut websocket, _) =
         tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}/socket", serving.port))
             .await
@@ -251,39 +374,16 @@ async fn a_stream_and_a_websocket_held_open_hold_the_shutdown_no_longer_than_its
 
     let took = serving.stop().await;
 
-    let window = HttpConfig::default().shutdown_timeout;
     assert!(
-        took >= window,
-        "shutdown waited on the open stream until the window closed, took {took:?}",
+        took < Duration::from_secs(1),
+        "nothing the transport tracks was open, took {took:?}"
     );
-    assert!(
-        took < window + Duration::from_secs(1),
-        "and not past it, took {took:?}",
+    let open = logs.expect_one(
+        nest_rs_http::target::HTTP,
+        "HTTP transport stopped with upgraded connections still open; they end with their \
+         handlers or with the process",
     );
-    let cut = logs.expect_one(nest_rs_http::target::HTTP, CUT);
-    assert_eq!(cut.level, "warn");
-    assert_eq!(
-        cut.field("cut").as_deref(),
-        Some("1"),
-        "the stream is the one connection the window closed",
-    );
-    assert_eq!(
-        cut.field("upgraded_open").as_deref(),
-        Some("1"),
-        "the WebSocket is still open, and the line says so",
-    );
-    assert_eq!(
-        cut.field("shutdown_timeout_ms"),
-        Some(window.as_millis().to_string()),
-    );
-
-    read_to_end(&mut stream).await;
-
-    // The stream's head was answered, so its line is filed as the body ends — at
-    // the cut — with the status the client received, never as `cancelled`.
-    let line = operation_line(&logs, "/shutdown/stream");
-    assert_eq!(line.field("status").as_deref(), Some("200"));
-    assert_eq!(line.field("outcome"), None);
+    assert_eq!(open.field("upgraded_open").as_deref(), Some("1"));
 
     websocket
         .send(Message::text("still here"))
@@ -415,4 +515,94 @@ async fn an_idle_connection_is_closed_at_the_signal_without_spending_the_window(
     );
     assert_eq!(read_to_end(&mut client).await, "");
     logs.expect_none(nest_rs_http::target::HTTP, CUT);
+}
+
+/// A self-mount whose every request starts one unit of [`DetachedWork`] that
+/// never unwinds: polled once, so it is running, then never again — the shape of
+/// a unit that blocks its thread, which no stop can reach.
+fn stuck_mount(path: &'static str, owner: &'static str) -> HttpEndpointMeta {
+    let work = DetachedWork::new();
+    let carried = work.clone();
+    HttpEndpointMeta::new(path, "probe", move |_container, route: Route| {
+        let work = carried.clone();
+        route.at(
+            path,
+            poem::endpoint::make(move |_| {
+                let work = work.clone();
+                async move {
+                    let mut unit = Box::pin(work.run(std::future::pending::<()>()));
+                    assert!(futures_util::poll!(unit.as_mut()).is_pending());
+                    std::mem::forget(unit);
+                    "started"
+                }
+            }),
+        )
+    })
+    .owned_by(owner)
+    .exempt()
+    .runs_detached(work)
+}
+
+struct SettleA;
+struct SettleB;
+
+impl nest_rs_core::Discoverable for SettleA {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<SettleA, HttpEndpointMeta>(stuck_mount("/settle-a", "SettleA"))
+    }
+}
+
+impl nest_rs_core::Discoverable for SettleB {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder.attach_meta::<SettleB, HttpEndpointMeta>(stuck_mount("/settle-b", "SettleB"))
+    }
+}
+
+#[module(providers = [SettleA, SettleB])]
+struct SettleModule;
+
+/// What every self-mount carries is waited for once, not once per mount. Each
+/// stuck unit holds the window — it is work still running — and then the
+/// transport stops them all and waits [`nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT`]
+/// for them together: the sum a grace period is sized against counts one
+/// settle, so `k` mounts paying one each would spend `k − 1` of them past it.
+#[tokio::test]
+async fn work_stopped_on_several_mounts_is_waited_for_once() {
+    let logs = LogCapture::install();
+    let serving = serve_module::<SettleModule>().await;
+    for path in ["/settle-a", "/settle-b"] {
+        let mut client = request(serving.port, path).await;
+        let head = read_head(&mut client).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{path} started: {head}");
+    }
+
+    let took = serving.stop().await;
+
+    let window = HttpConfig::default().shutdown_timeout;
+    let settle = nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
+    assert!(
+        took >= window + settle,
+        "work still running holds the window, then the settle — took {took:?}",
+    );
+    assert!(
+        took < window + settle + settle / 2,
+        "one settle for every mount, not one per mount — took {took:?}",
+    );
+    let unwound = logs.find(
+        nest_rs_http::target::HTTP,
+        "stopped work did not unwind within its bound; it runs on through the shutdown hooks",
+    );
+    let mut paths: Vec<_> = unwound
+        .iter()
+        .map(|line| (line.field("path"), line.field("still_running")))
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        [
+            (Some("/settle-a".to_owned()), Some("1".to_owned())),
+            (Some("/settle-b".to_owned()), Some("1".to_owned())),
+        ],
+        "each mount names what it left running",
+    );
 }

@@ -65,10 +65,12 @@
 //! answered request's is named, and records it failed with the same outcome
 //! word.
 //!
-//! A *streaming* response cut mid-flow is not that case: its head was answered,
-//! so its line is filed as the body ends — at the cut — with the head's status
-//! and the bytes written before it. The status is what the client received, and
-//! the count is what says the body was shorter than it would have been.
+//! A *streaming* response the transport stops is not that case: its head was
+//! answered, so its line is filed as the body ends — with the head's status, the
+//! bytes written before the end, and `outcome = cancelled`, because the body did
+//! not reach an end of its own. That is a stream with no end of its own ended at
+//! the shutdown signal, or any body still being written when the window closes
+//! — see `response_body`.
 //!
 //! [`CANCELLED`]: nest_rs_core::operation_log::CANCELLED
 
@@ -119,12 +121,16 @@ impl AccessLog {
     /// here: this is one member of a family every edge files into, and a second
     /// copy of either is what makes a family drift while both halves look right.
     ///
-    /// **No `outcome` field, and that is deliberate.** Its peers carry one
-    /// because they have no other way to say how the work ended; a request has
-    /// `status`, which says it more precisely than three words could. Classifying
-    /// a `404` or a `401` as `ok` or `error` is a judgement the framework has no
-    /// business making on an operator's behalf.
-    pub(crate) fn emit(self, status: u16, bytes: u64) {
+    /// **No `outcome` field on an answer that ran to its end, and that is
+    /// deliberate.** Its peers carry one because they have no other way to say
+    /// how the work ended; a request has `status`, which says it more precisely
+    /// than three words could. Classifying a `404` or a `401` as `ok` or `error`
+    /// is a judgement the framework has no business making on an operator's
+    /// behalf. The one `outcome` an answered request carries is
+    /// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED), for a body the
+    /// transport stopped before it ended — the status says how the head went,
+    /// and nothing else says the body never finished.
+    pub(crate) fn emit(self, status: u16, bytes: u64, outcome: Option<&'static str>) {
         tracing::info!(
             name: crate::unit::REQUEST,
             target: nest_rs_core::operation_log::TARGET,
@@ -133,6 +139,7 @@ impl AccessLog {
             path = self.uri.path(),
             status,
             bytes,
+            outcome,
             duration_ms = nest_rs_core::operation_log::duration_ms(self.start),
             client_ip = %self.client.ip,
             // Whether the address came from a proxy header or from the peer.
@@ -148,7 +155,7 @@ impl AccessLog {
     /// here, so there is nothing to count; the status is what that error will
     /// answer with.
     pub(crate) fn abandoned(self, status: u16) {
-        self.emit(status, 0);
+        self.emit(status, 0, None);
     }
 
     /// File a request that ended before it answered — dropped

@@ -1,4 +1,12 @@
-//! What the transport still holds open when its shutdown window closes.
+//! The transport's way down as the connections it serves see it: the instant
+//! shutdown is asked for, the instant the window closes, and what is still open
+//! at the second.
+//!
+//! The edge reads the first two. A response whose body has no end of its own
+//! ([`OpenEndedBody`](crate::OpenEndedBody)) is ended at the signal, and a body
+//! dropped unfinished once the window has closed was cut by it — both say so on
+//! their `http.request` line, which is why the edge holds the drain rather than
+//! the transport alone.
 //!
 //! poem closes every connection it still serves once the window handed to
 //! `run_with_graceful_shutdown` elapses, and keeps its count of them private,
@@ -6,8 +14,10 @@
 //! tally, one level down: every socket the listener accepts counts as open
 //! until it is dropped. Counting sockets rather than requests is also what lets
 //! it see the connections poem does not: an upgraded one (a WebSocket) leaves
-//! poem's count at the upgrade, and neither the window nor anything else in the
-//! transport closes it.
+//! poem's count at the upgrade, and the window does not close it. A gateway's
+//! socket is carried by its mount's [`DetachedWork`](crate::DetachedWork), which
+//! closes it; one a hand-built endpoint upgraded is the developer's own, and
+//! this count is what says it outlived the transport.
 
 use std::io::IoSlice;
 use std::pin::Pin;
@@ -21,15 +31,18 @@ use poem::listener::{Acceptor, Listener};
 use poem::web::{LocalAddr, RemoteAddr};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, Result as IoResult};
 use tokio::time::Instant;
+use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
-/// The sockets a transport has accepted and not yet dropped, and how many of
-/// them the shutdown window closed.
+/// The sockets a transport has accepted and not yet dropped, how many of them
+/// the shutdown window closed, and the two instants of its way down.
 #[derive(Default)]
 pub(crate) struct Drain {
     open: AtomicUsize,
     closed_at_bound: AtomicUsize,
     /// When the window elapses; set once, when shutdown is asked for.
     bound: OnceLock<Instant>,
+    /// Cancelled when shutdown is asked for.
+    going_away: CancellationToken,
 }
 
 impl Drain {
@@ -49,6 +62,22 @@ impl Drain {
     /// closed on its own before it is not counted as closed by it.
     pub(crate) fn begin(&self, window: Duration) {
         let _ = self.bound.set(Instant::now() + window);
+        self.going_away.cancel();
+    }
+
+    /// Resolves once shutdown has been asked for.
+    pub(crate) fn going_away(&self) -> WaitForCancellationFutureOwned {
+        self.going_away.clone().cancelled_owned()
+    }
+
+    /// When the window closes — `None` until shutdown is asked for.
+    pub(crate) fn bound(&self) -> Option<Instant> {
+        self.bound.get().copied()
+    }
+
+    /// The window has closed: whatever is dropped from now on is cut by it.
+    pub(crate) fn is_past_bound(&self) -> bool {
+        self.bound().is_some_and(|bound| Instant::now() >= bound)
     }
 
     /// Say what the window left behind, once the server has stopped: how many
@@ -80,11 +109,7 @@ impl Drain {
     }
 
     fn closed(&self) {
-        if self
-            .bound
-            .get()
-            .is_some_and(|bound| Instant::now() >= *bound)
-        {
+        if self.is_past_bound() {
             self.closed_at_bound.fetch_add(1, Ordering::AcqRel);
         }
         self.open.fetch_sub(1, Ordering::AcqRel);

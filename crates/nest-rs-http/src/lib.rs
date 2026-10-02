@@ -66,6 +66,7 @@ pub use pipe::{IntoInner, Piped, Valid};
 pub use problem::{ProblemDetails, normalize_error_response};
 pub use raw_body::{RawBody, current_body_limit};
 pub use reflector::Reflector;
+pub use response_body::OpenEndedBody;
 pub use scope::Scoped;
 pub use security_headers::HttpSecurityHeaders;
 pub use shaper::{ResponseShaping, RouteFuture, RouteResponseShaper, ShapedEndpoint};

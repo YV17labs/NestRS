@@ -56,6 +56,7 @@ use tracing::Instrument;
 
 use crate::access_log::{AccessLog, Unanswered};
 use crate::client_ip::{ClientIp, ClientOrigin};
+use crate::drain::Drain;
 use crate::location::CallerUri;
 use crate::matched::MatchedRoute;
 use crate::{response_body, trace_context};
@@ -250,9 +251,18 @@ pub(crate) struct EdgeEndpoint<E> {
     /// inbound `X-Forwarded-For` **or** `X-Request-Id` may be believed, and both
     /// answers are needed whether or not a line is emitted.
     trusted_proxies: Arc<[IpAddr]>,
+    /// The transport's way down, for the response bodies this edge carries:
+    /// one with no end of its own ends at the signal, and one dropped unfinished
+    /// past the window's close was cut by it.
+    drain: Arc<Drain>,
 }
 
 impl<E> EdgeEndpoint<E> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one value per decision the transport hands its edge, each a field read once \
+                  per request; two call sites, both in `HttpTransport::configure`"
+    )]
     pub(crate) fn new(
         inner: E,
         container: Container,
@@ -261,6 +271,7 @@ impl<E> EdgeEndpoint<E> {
         headers: Vec<(HeaderName, HeaderValue)>,
         normalize: bool,
         counts_body: bool,
+        drain: Arc<Drain>,
     ) -> Self {
         let shared_scope = (!container.has_dynamic_scopes())
             .then(|| Arc::new(RequestScope::new(container.clone())));
@@ -288,6 +299,7 @@ impl<E> EdgeEndpoint<E> {
             counts_body,
             access_log,
             trusted_proxies,
+            drain,
         }
     }
 
@@ -523,7 +535,13 @@ where
                 // streaming body is the request still running, and what
                 // `current_trace_id()` answers inside one cannot depend on
                 // whether an operator wanted an access line.
-                Ok(response_body::carry(continuation, span, log, resp))
+                Ok(response_body::carry(
+                    continuation,
+                    span,
+                    log,
+                    resp,
+                    &self.drain,
+                ))
             }
             // Only reachable with CORS or compression configured, where a wrap
             // outside this one renders the error. The request is still filed —
@@ -567,6 +585,7 @@ mod tests {
             // These unit tests drive the edge directly, with nothing wrapped
             // outside it that could rewrite a body.
             false,
+            Arc::default(),
         )
     }
 
@@ -585,6 +604,7 @@ mod tests {
             headers,
             true,
             false,
+            Arc::default(),
         )
     }
 

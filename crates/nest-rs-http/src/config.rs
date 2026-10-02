@@ -194,12 +194,15 @@ pub struct HttpConfig {
     /// signal. The listener closes at the signal and every connection is asked
     /// to finish what it is answering; one still open when the window closes is
     /// closed at once — a request still running is dropped without an answer,
-    /// and a streaming response (an `#[sse]` stream, an MCP stream) is cut, so
-    /// its client reconnects. One `warn` on `nest_rs::http` names how many. A
-    /// WebSocket is not closed by the window: poem hands an upgraded connection
-    /// to its handler at the upgrade and stops tracking it, so it ends with its
-    /// handler or with the process — the same line counts those apart, as
-    /// `upgraded_open`.
+    /// and a body still being written is cut. One `warn` on `nest_rs::http`
+    /// names how many. A stream with no end of its own — an `#[sse]` stream, an
+    /// MCP session's `GET` stream — does not wait for the window: it ends at the
+    /// signal, so its client reconnects at once. A gateway's WebSocket and a
+    /// graphql-ws socket are closed at the signal with `1001 Going Away`, after
+    /// what they are answering. A socket a hand-built endpoint upgraded is the
+    /// developer's own — poem stops tracking it at the upgrade and the transport
+    /// cannot see inside the endpoint — so it ends with its handler or with the
+    /// process, and the same line counts those apart, as `upgraded_open`.
     ///
     /// Read from `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
     /// 3600 — refused outside, from the environment and from the pinned struct

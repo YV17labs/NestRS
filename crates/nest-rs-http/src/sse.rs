@@ -54,6 +54,7 @@ use futures_util::stream::BoxStream;
 use futures_util::{Stream, StreamExt};
 use nest_rs_core::Container;
 use poem::web::sse::SSE;
+use poem::{IntoResponse, Response};
 
 use crate::config::HttpConfig;
 
@@ -123,12 +124,15 @@ impl SseSettings {
         }
     }
 
-    /// Wrap a handler's event stream into the response the route serves.
+    /// Wrap a handler's event stream into the response the route serves —
+    /// marked [`OpenEndedBody`](crate::OpenEndedBody), so the transport ends it
+    /// at the shutdown signal rather than holding its window for an end that
+    /// is not coming.
     ///
     /// Emitted by `#[sse]`; there is no reason to call it by hand, and doing so
     /// on an ordinary route would produce a `text/event-stream` the document
     /// does not describe.
-    pub fn respond(&self, stream: SseStream) -> SSE {
+    pub fn respond(&self, stream: SseStream) -> Response {
         let stream = stream.0;
         // A ceiling, not an idle timeout: traffic never pushes it out. It is
         // evaluated whenever the body is polled, so it bounds emission — see the
@@ -144,9 +148,12 @@ impl SseSettings {
             })),
             None => SSE::new(stream),
         };
-        match self.keep_alive {
+        let sse = match self.keep_alive {
             Some(every) => sse.keep_alive(every),
             None => sse,
-        }
+        };
+        let mut response = sse.into_response();
+        response.extensions_mut().insert(crate::OpenEndedBody);
+        response
     }
 }

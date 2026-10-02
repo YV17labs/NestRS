@@ -124,9 +124,13 @@ pub struct HttpTransport {
     security_headers: crate::HttpSecurityHeaders,
     compression: bool,
     version_selector: Option<crate::VersionSelector>,
-    /// What each self-mount runs off its connections, by mount path: stopped
-    /// once `serve` has stopped serving. See [`DetachedWork`](crate::DetachedWork).
+    /// What each self-mount runs off its connections, by mount path: told at
+    /// the signal, given the window, and stopped at its close. See
+    /// [`DetachedWork`](crate::DetachedWork).
     detached: Vec<(String, DetachedWork)>,
+    /// The way down, shared with the edge so a response body can read it — see
+    /// `crate::drain`.
+    drain: Arc<Drain>,
     endpoint: Option<BoxEndpoint<'static, Response>>,
 }
 
@@ -228,6 +232,7 @@ impl HttpTransport {
             // controller mounts at, so there is nothing to resolve per request.
             version_selector: None,
             detached: Vec::new(),
+            drain: Arc::default(),
             endpoint: None,
         }
     }
@@ -338,9 +343,11 @@ impl HttpTransport {
     }
 
     /// How long [`serve`](Transport::serve) lets open connections finish once
-    /// shutdown is asked for. The listener closes at once; a connection still
-    /// open when the window closes is closed — a request still running gets no
-    /// answer, a stream is cut — and one `warn` names how many. Defaults to 20
+    /// shutdown is asked for. The listener closes at once, and a body with no
+    /// end of its own ([`OpenEndedBody`](crate::OpenEndedBody)) ends then; a
+    /// connection still open when the window closes is closed — a request still
+    /// running gets no answer, a download is cut — and one `warn` names how
+    /// many. Defaults to 20
     /// seconds; [`HttpModule`](crate::HttpModule) passes
     /// `HttpConfig.shutdown_timeout`, whose range the boot enforces.
     pub fn shutdown_timeout(mut self, window: Duration) -> Self {
@@ -777,6 +784,7 @@ impl Transport for HttpTransport {
                 // This shape is only mounted when neither CORS nor compression
                 // is configured, so nothing outside can rewrite the body.
                 false,
+                Arc::clone(&self.drain),
             )
             .boxed()
         } else {
@@ -819,6 +827,7 @@ impl Transport for HttpTransport {
                 // request body without touching `Content-Length`, so a declared
                 // length stops bounding anything.
                 self.compression,
+                Arc::clone(&self.drain),
             )
             .boxed();
             // Response compression, negotiated from `Accept-Encoding`. Inside
@@ -868,7 +877,7 @@ impl Transport for HttpTransport {
         // poem keeps its count of open connections to itself, so the transport
         // counts the sockets it accepts — which is also the only count that sees
         // an upgraded connection, since poem stops tracking one at the upgrade.
-        let drain = Arc::new(Drain::default());
+        let drain = self.drain;
         let listener = match self.tls {
             Some(tls) => {
                 // Built before the listener binds, and fallible on purpose: a
@@ -886,27 +895,35 @@ impl Transport for HttpTransport {
                 drain.track(TcpListener::bind(bind)).boxed()
             }
         };
+        let detached = self.detached;
         // The window is poem's to enforce: past it, poem drops every connection
         // it still serves. `begin` runs before poem starts that clock, so every
-        // socket poem closes at the bound is counted as closed by it.
+        // socket poem closes at the bound is counted as closed by it — and it is
+        // the signal itself, for every body and every unit of work the transport
+        // carries.
         let signal = {
             let drain = Arc::clone(&drain);
+            let leaving: Vec<DetachedWork> =
+                detached.iter().map(|(_, work)| work.clone()).collect();
             async move {
                 cancel.cancelled().await;
                 drain.begin(window);
+                for work in &leaving {
+                    work.go_away();
+                }
             }
         };
         let served = Server::new(listener)
             .run_with_graceful_shutdown(endpoint, signal, Some(window))
             .await;
+        // What the connections only carried — a socket poem stopped tracking at
+        // its upgrade, an operation on rmcp's task, a DataLoader batch — gets
+        // the rest of the window like everything else, then is stopped, all of
+        // it together: this is the last thing `serve` does, so nothing it
+        // carried is still running when the shutdown hooks start.
+        DetachedWork::stop_at(&detached, drain.bound()).await;
         if served.is_ok() {
             drain.report(window);
-        }
-        // Whatever a cut connection carried stops with the transport, never
-        // after it: this is the last thing `serve` does, so nothing it served is
-        // still running when the shutdown hooks start.
-        for (path, work) in &self.detached {
-            work.stop(path).await;
         }
         served?;
         Ok(())

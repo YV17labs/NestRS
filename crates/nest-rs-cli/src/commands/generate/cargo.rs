@@ -564,6 +564,95 @@ mod tests {
         );
     }
 
+    /// The framework requires itself in lockstep: every `nest-rs-*` requirement
+    /// the root manifest declares is `=` the release it ships, and a framework
+    /// crate links a sibling only through that table.
+    ///
+    /// **Semver does not cover what an expansion calls.** A `*-macros` crate
+    /// emits calls into `#[doc(hidden)]` seams — of its runtime crate and of up
+    /// to eleven others — through code `nest-rs-codegen` writes. Under a `"7.0"`
+    /// floor a partial `cargo update -p` could pair one crate's 7.0.1 expansion
+    /// with another's 7.0.0 seams, and the error lands inside a macro expansion,
+    /// blamed on the attribute. Pinning only each macros crate to its runtime —
+    /// the `serde` / `serde_derive` shape — closes one of those edges and leaves
+    /// the codegen and every cross-crate seam open, so the pin is the whole
+    /// family's: one release, required exactly, everywhere.
+    ///
+    /// A member spelling its own requirement would step around the pin, so it
+    /// is refused too. A *dev*-dependency is not read: it is never part of what
+    /// a consumer links.
+    #[test]
+    fn the_framework_requires_itself_at_its_own_release() {
+        let manifests = repo_manifests();
+        let (_, root) = manifests
+            .iter()
+            .find(|(rel, _)| rel == "Cargo.toml")
+            .expect("the root manifest is in the walk");
+        let doc = root.parse::<DocumentMut>().expect("valid TOML");
+        let release = doc["workspace"]["package"]["version"]
+            .as_str()
+            .expect("the workspace declares its release");
+        let pinned = format!("={release}");
+        let table = doc["workspace"]["dependencies"]
+            .as_table_like()
+            .expect("the root declares `[workspace.dependencies]`");
+        let mut framework = 0usize;
+        for (name, entry) in table.iter() {
+            if !name.starts_with("nest-rs") {
+                continue;
+            }
+            framework += 1;
+            let required = entry.get("version").and_then(Item::as_str);
+            assert_eq!(
+                required,
+                Some(pinned.as_str()),
+                "Cargo.toml: `{name}` is required at {required:?} — a framework crate is \
+                 required at `{pinned}`, the release, so an expansion and the seams it \
+                 calls always come from one",
+            );
+        }
+        // One entry per framework library the workspace links; below that the
+        // walk is reading the wrong table.
+        assert!(
+            framework >= 40,
+            "the root declares {framework} framework crate(s) — below forty the walk is \
+             reading the wrong table",
+        );
+
+        let mut members = 0usize;
+        for (rel, raw) in &manifests {
+            if !rel.starts_with("crates/") {
+                continue;
+            }
+            members += 1;
+            let doc = raw.parse::<DocumentMut>().expect("valid TOML");
+            for kind in ["dependencies", "build-dependencies"] {
+                let Some(table) = doc.get(kind).and_then(Item::as_table_like) else {
+                    continue;
+                };
+                for (name, entry) in table.iter() {
+                    // The umbrella is a consumer's line, never a framework
+                    // crate's — `consumers_name_only_the_umbrella` owns it.
+                    if !name.starts_with("nest-rs-") {
+                        continue;
+                    }
+                    assert_eq!(
+                        entry.get("workspace").and_then(Item::as_bool),
+                        Some(true),
+                        "{rel}: `{name}` in `[{kind}]` spells its own requirement — a \
+                         framework crate links a sibling with `{{ workspace = true }}`, \
+                         which carries the `{pinned}` lockstep pin",
+                    );
+                }
+            }
+        }
+        assert!(
+            members >= 40,
+            "the walk found {members} crate manifest(s) — below forty it is reading the \
+             wrong tree",
+        );
+    }
+
     // `manifests-ci.md` states that `rust-toolchain.toml` "pins the toolchain and
     // matches the workspace `rust-version`" — and nothing read it. The floor is
     // restated by three workspaces, three images, the publish workflow, the

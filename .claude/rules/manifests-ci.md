@@ -62,15 +62,26 @@ taken**.
 `async-graphql-poem` carry `=7.2.1` because `nest-rs-graphql` reads that
 crate's public-but-internal registry API. Nothing else carries a patch.
 
-**The framework's own crates require each other in the same two components**
-(`"7.0"`), which at a lockstep release is the range `"7.0.0"` names. **Whether a
-surface crate should require its `*-macros` crate with `=` is an owner
-question.** In a patch release a macros crate may start emitting a path its
-surface crate gained in that same patch, and a partial `cargo update -p` can then
-pair macros 7.0.x with runtime 7.0.0 — which no two-component floor prevents. The
-usual answer is the `serde` / `serde_derive` pair's: the runtime requires its
-macros crate at `=` its own version. Possible and unbuilt; it would be a second
-documented exception to the form above.
+**The framework's own crates require each other at `=` the release** — every
+`nest-rs-*` entry of the root `[workspace.dependencies]` is `"=7.0.0"`, and a
+framework crate links a sibling only through `{ workspace = true }`. This is not
+a third-party requirement, so the two-component form does not bind it; it is the
+lockstep one tag publishes, stated where cargo reads it.
+
+The reason is what an expansion calls. A `*-macros` crate emits calls into
+`#[doc(hidden)]` seams that semver does not cover — its runtime crate's, and up
+to eleven others' (`#[operations]` reaches `nest-rs-authz`, `-seaorm`, `-pipes`,
+`-guards`) — through code `nest-rs-codegen` writes. Under a `"7.0"` floor a
+partial `cargo update -p` could pair one crate's 7.0.1 expansion with another's
+7.0.0 seams, and the error lands inside a macro expansion, blamed on the
+attribute. The `serde` / `serde_derive` pin — a runtime requiring its macros
+crate at `=` — closes one edge of that and leaves the codegen and every
+cross-crate seam open, so the pin is the whole framework's. It costs a consumer
+nothing: they require `nest-rs = "7.0"`, and the umbrella moves every crate at
+once. Bump the requirements with `[workspace.package] version`.
+`the_framework_requires_itself_at_its_own_release` (same file as
+`versions_are_major_minor`) fails on a requirement that is not `=` the release,
+and on a member spelling its own.
 
 `versions_are_major_minor`
 (`crates/nest-rs-cli/src/commands/generate/cargo.rs`) walks the repo's

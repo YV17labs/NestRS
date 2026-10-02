@@ -51,8 +51,8 @@ including the escape-on-spawn case.
 ## What waits for the commit
 
 An [event](/events/) emitted inside the transaction is dispatched **after**
-the commit, and dropped when the request rolls back, fails to commit, or
-writes nothing — an event announces a fact, and a write that did not land is
+the commit, and dropped when the transaction rolls back or fails to commit, or
+the request fails — an event announces a fact, and a write that did not land is
 not one. The same holds at every boundary that settles a transaction: a
 WebSocket message, an MCP operation, a queue attempt, a scheduled tick. The
 listeners run outside the transaction they waited for, on the pool, with the

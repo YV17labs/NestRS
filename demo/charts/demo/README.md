@@ -124,8 +124,9 @@ Scale-to-zero is one value away and deliberately not the default:
   until a replica starts.
 
 A scale-up is safe either way: a worker start puts its peers' in-flight jobs
-back on the queue, and each job's lease and settled mark keep them from running
-twice. Set it to 0 knowing that.
+back on the queue, each job's lease makes that second delivery wait out the
+first, and its settled mark then acknowledges it without running. The queue is
+still at least once, so the handlers stay idempotent. Set it to 0 knowing that.
 
 ## Graceful shutdown
 
@@ -133,6 +134,6 @@ The framework installs a SIGTERM handler and drains its transports, so
 `terminationGracePeriodSeconds` is the window it gets. The default 30s holds
 every app's way down at the framework's defaults — 20s for the HTTP window or the
 worker's drain, half a second after it, five for the shutdown hooks and three
-for the telemetry flush. One is not the default: `live`'s is 60s because a
-rollout drops WebSocket connections and clients reconnect. Raise an app's grace
-period with any window you raise, keeping 8.5s above it.
+for the telemetry flush — `live`'s included: its sockets close with `1001 Going
+Away` at the signal, and their clients reconnect to a replica still serving.
+Raise an app's grace period with any window you raise, keeping 8.5s above it.

@@ -198,9 +198,8 @@ apps:
     host: ""
     ingress: true
     # WebSocket. Sockets live up to NESTRS_WS__MAX_CONNECTION_SECS (4h by
-    # default), so a rollout drops them and clients reconnect — CPU is a poor
+    # default), so a rollout closes them and clients reconnect — CPU is a poor
     # signal for a connection-bound edge, hence no autoscaling here by default.
-    terminationGracePeriodSeconds: 60
 
   worker:
     bin: worker

@@ -279,7 +279,7 @@ with its own clone of the event. Three consequences worth naming:
   transaction rolls back never happened. Emitted inside a transaction (a
   mutating request, a WebSocket message, an MCP operation, a queue attempt,
   a scheduled tick), the dispatch waits for the commit and is dropped when
-  the unit of work rolls back, fails to commit, or writes nothing. A
+  the transaction rolls back or fails to commit, or the unit of work fails. A
   listener runs *outside* that transaction — on the pool, with the scope and
   the ability its emitter had — so its own writes stand on their own and a
   statement it fails cannot take the emitter's down with it. A write that

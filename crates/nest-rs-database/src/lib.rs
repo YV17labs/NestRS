@@ -32,10 +32,11 @@
 //! 3. Provide your own `Repo`-equivalent query API that calls
 //!    [`current_executor`] and downcasts to your concrete type.
 //! 4. Override [`Executor::after_commit`] on every handle a boundary settles a
-//!    transaction for: hold the work, run it after the commit, drop it when the
-//!    boundary writes nothing. The default runs it at once, which is right for a
-//!    pool and wrong for a transaction — an event emitted inside one would be
-//!    dispatched before the transaction it reports had landed.
+//!    transaction for: hold the work, run it after the commit — or after a
+//!    boundary that succeeded without opening one — and drop it otherwise. The
+//!    default runs it at once, which is right for a pool and wrong for a
+//!    transaction — an event emitted inside one would be dispatched before the
+//!    transaction it reports had landed.
 //!
 //! The SeaORM-specific pieces (`Repo`, `condition_for`, the mask shaper,
 //! `Bind<S, A>`, `CrudService`) are unreachable from your implementation —

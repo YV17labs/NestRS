@@ -92,8 +92,8 @@ impl EventBus {
     /// inside a unit of work that holds a transaction — a mutating request, a
     /// WS message, an MCP operation, a job attempt — the dispatch waits for that
     /// transaction through [`nest_rs_database::after_commit`]: it runs when the
-    /// boundary commits, and is dropped unrun when it rolls back, fails to
-    /// commit, or writes nothing. A listener therefore never pushes a job,
+    /// boundary commits, and is dropped unrun when it rolls back or fails to
+    /// commit, or the unit of work fails. A listener therefore never pushes a job,
     /// notifies a subscriber or calls out about a write that did not land, and
     /// never sees one that has not landed yet. It runs outside that
     /// transaction, on the pool, under the emitter's scope and ability. With no

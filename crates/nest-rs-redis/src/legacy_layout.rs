@@ -26,8 +26,8 @@
 //!   in one `warn`, since a structure the check cannot read is one it cannot
 //!   vouch for.
 //!
-//! Never a `SCAN`, which costs the whole keyspace and which an ACL confined to
-//! `nestrs:*` refuses; a `NOPERM` answer is the caller's to say
+//! Never a `SCAN`, which costs the whole keyspace and which the queue's ACL rule,
+//! confined to `nestrs:queue:*`, refuses; a `NOPERM` answer is the caller's to say
 //! ([`outside_the_acl`]), never taken for an empty layout.
 
 use apalis_redis::Config;

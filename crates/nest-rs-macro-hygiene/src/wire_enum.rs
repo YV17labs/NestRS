@@ -1,11 +1,9 @@
 //! `#[wire_enum]` — the enum mode of `#[expose]`.
 //!
-//! The sibling `#[expose]` cannot be witnessed here (it needs a real entity,
-//! and `DeriveEntityModel` roots its expansion at the call site's `sea_orm`).
-//! `#[wire_enum]` has no such excuse: a column's enum type is a plain Rust
-//! enum, so the whole expansion — `Serialize`, `Deserialize`, `JsonSchema`,
-//! `async_graphql::Enum` and their four `crate = ` overrides — has to resolve
-//! against a manifest that names only the umbrella. It is precisely the derive
+//! A column's enum type is a plain Rust enum, so the whole expansion —
+//! `Serialize`, `Deserialize`, `JsonSchema`, `async_graphql::Enum` and their
+//! four `crate = ` overrides — has to resolve against a manifest that names
+//! only the umbrella. It is precisely the derive
 //! routing that was invisible to review before this file existed: written by
 //! hand, an exposed enum put `schemars` **and** `async-graphql` in the entity
 //! crate's manifest for code it never wrote.

@@ -15,11 +15,6 @@
 //! file names neither `rmcp` nor `ServerHandler` nor a router — and if that ever
 //! regresses, this crate needs a second dependency and stops compiling, which is
 //! the whole point of it.
-//!
-//! `#[authorize(Action, Entity)]` is deliberately *not* witnessed here: it needs
-//! a real entity, which is the same reason this crate does not consume
-//! `#[crud]`/`#[expose]`. Its expansion is proved by `nest-rs-mcp`'s own suite
-//! and by `demo/`.
 
 use nest_rs::core::Layer;
 use nest_rs::guards::{Denial, Guard, McpGuard, async_trait};
@@ -106,6 +101,14 @@ impl HygieneTool {
     #[public]
     fn ping(&self) -> Result<String, McpError> {
         Ok("pong".into())
+    }
+
+    /// The class gate, against the entity [`crate::entity`] declares.
+    #[cfg(feature = "seaorm")]
+    #[tool(description = "Count what the caller may read.")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn count(&self) -> Result<String, McpError> {
+        Ok("0".into())
     }
 
     /// An operation compiled out takes its wrapper, its route and its guard with

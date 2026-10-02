@@ -101,6 +101,14 @@ impl HygieneController {
         "sync".into()
     }
 
+    /// The class gate, against the entity [`crate::entity`] declares.
+    #[cfg(feature = "seaorm")]
+    #[get("/count")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn count(&self) -> String {
+        "0".into()
+    }
+
     /// A route compiled out takes its endpoint, its mount, its document entry
     /// and its guard with it — none of which exists in this build.
     #[cfg(any())]

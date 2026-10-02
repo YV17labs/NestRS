@@ -36,9 +36,8 @@ http = ["nest-rs/http"]
 mcp = ["nest-rs/mcp"]
 queue = ["nest-rs/queue"]
 schedule = ["nest-rs/schedule"]
-# `#[wire_enum]` — the one decorator of `nest-rs-resource` this crate can
-# exercise (`#[expose]` needs a real entity, which a zero-dep crate cannot
-# hold). It rides `seaorm`, the single feature that activates both halves.
+# `#[expose]`, `#[wire_enum]` and the entity every `#[authorize(Action, Entity)]`
+# witness names. `#[crud]` rides `http` and `seaorm` together.
 seaorm = ["nest-rs/seaorm"]
 ws = ["nest-rs/ws"]
 

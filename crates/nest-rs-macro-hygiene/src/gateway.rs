@@ -50,6 +50,14 @@ impl HygieneGateway {
         "sync".into()
     }
 
+    /// The class gate, against the entity [`crate::entity`] declares.
+    #[cfg(feature = "seaorm")]
+    #[subscribe_message("hygiene.count")]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn count(&self) -> Result<u64, std::fmt::Error> {
+        Ok(0)
+    }
+
     /// A synchronous connection hook, likewise.
     #[on_connect]
     fn connected(&self) {}

@@ -20,17 +20,6 @@ use nest_rs_conformance::sources::{
 };
 use syn::Item;
 
-/// The decorators `nest-rs-macro-hygiene` cannot apply, and why. Permanent: a
-/// line here is a property of the decorator, never work outstanding.
-///
-/// `#[expose]` sits on an entity, and `DeriveEntityModel` roots its expansion at
-/// the call site's `sea_orm` with no `crate = ` override, so an entity cannot
-/// live in a crate whose one dependency is `nest-rs`. `#[crud]`'s expansion
-/// reaches the entity it decorates for the same reason; its own contract is
-/// proved by `nest-rs-cli`'s e2e
-/// `crud_needs_no_dependency_the_controller_does_not_name`.
-const UNWITNESSABLE: [&str; 2] = ["crud", "expose"];
-
 /// Twenty-seven decorators stand today; below this the scan reads the wrong tree.
 const DECORATOR_FLOOR: usize = 20;
 
@@ -62,7 +51,7 @@ fn hygiene_attrs(root: &Path) -> BTreeSet<String> {
 }
 
 /// Every `#[proc_macro_attribute]` a `crates/*-macros` crate exports is applied
-/// in `nest-rs-macro-hygiene`, or named in [`UNWITNESSABLE`] with its reason.
+/// in `nest-rs-macro-hygiene`.
 #[test]
 fn every_decorator_is_applied_in_the_hygiene_witness() {
     let root = repo_root();
@@ -84,22 +73,11 @@ fn every_decorator_is_applied_in_the_hygiene_witness() {
         exported.len(),
     );
 
-    let unapplied: Vec<&String> = exported
-        .iter()
-        .filter(|d| !applied.contains(*d) && !UNWITNESSABLE.contains(&d.as_str()))
-        .collect();
+    let unapplied: Vec<&String> = exported.iter().filter(|d| !applied.contains(*d)).collect();
     assert!(
         unapplied.is_empty(),
         "no use site in nest-rs-macro-hygiene, so nothing proves the expansion needs no \
          second manifest line: {unapplied:?}",
-    );
-    let stale: Vec<&&str> = UNWITNESSABLE
-        .iter()
-        .filter(|d| !exported.contains(**d) || applied.contains(**d))
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "these exemptions name a decorator that is gone or now applied — delete them: {stale:?}",
     );
 }
 

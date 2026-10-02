@@ -246,9 +246,9 @@ fn crud_needs_no_dependency_the_controller_does_not_name() {
     // `#[crud]` emitted `::uuid::Uuid` for three routes, so a crate that wrote
     // the attribute and nothing else failed with `E0433` naming a crate the
     // developer never wrote — the hard "no" that a macro expansion may not put
-    // a line in a manifest. It shipped anyway, because the witness that should
-    // have caught it cannot reach `#[crud]` and the one above passes for an
-    // unrelated reason: `g resource` bootstraps `g auth`, whose claims type
+    // a line in a manifest. It shipped anyway, because the compile witness did
+    // not apply `#[crud]` then (`nest-rs-macro-hygiene` does now) and the case
+    // above passes for an unrelated reason: `g resource` bootstraps `g auth`, whose claims type
     // names `uuid`, so the dependency is there whether the macro needs it or not.
     //
     // This case takes that accident away. The auth modules leave the module

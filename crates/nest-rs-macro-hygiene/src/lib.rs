@@ -16,11 +16,9 @@
 //! decorators emit. The kernel's decorators (`#[module]`, `#[injectable]`,
 //! `#[hooks]`, `#[nest_rs::main]`) are witnessed under no feature at all.
 //!
-//! Extend this crate whenever a decorator is added. Decorators excluded by
-//! the documented contract (see `macros.md`) are deliberately not
-//! exercised: emitted derives and the entity-site trio
-//! `::sea_orm`/`::uuid`/`::chrono`, whose expansions target the call-site
-//! prelude because the developer's own source writes them.
+//! Extend this crate whenever a decorator is added. Emitted derives are the
+//! one class deliberately not exercised (see `macros.md`): a derive without a
+//! `crate = ` override targets the call-site prelude by construction.
 //!
 //! `#[resolver]` **is** witnessed ([`resolver`]), and it is the case this file
 //! most needed: it wraps async-graphql's own `#[Object]`, a third-party macro
@@ -35,38 +33,20 @@
 //! prelude and a controller crate needs no `poem` line — the exclusion this
 //! paragraph used to record no longer describes the macro.
 //!
-//! `#[wire_enum]` **is** witnessed ([`wire_enum`]) even though its sibling
-//! `#[expose]` is not: an enum is a plain Rust item, so nothing in its
-//! expansion needs an entity, and the four derives it routes (`Serialize`,
-//! `Deserialize`, `JsonSchema`, `async_graphql::Enum`) are exactly the class a
-//! zero-dep manifest can decide.
+//! `#[expose]` and `#[crud]` **are** witnessed ([`entity`], [`crud`]), and so
+//! is `#[authorize(Action, Entity)]` at all four edges, against that entity.
+//! An entity can live here because sea-orm's derives emit *relative*
+//! `sea_orm::` paths, which `use nest_rs::seaorm::sea_orm;` in the entity's
+//! module satisfies — no `sea-orm` line. `#[crud]` is the case that proved the
+//! witness must reach them: it emitted `::uuid::Uuid` for three routes, so a
+//! controller whose source never wrote `uuid` failed with `E0433` blamed on the
+//! attribute, and nothing compiled it behind one manifest line.
 //!
-//! **Not witnessed here:** `#[expose]` and `#[crud]` (`nest-rs-resource`).
-//! Exercising them needs a real entity, and an entity cannot live in a zero-dep
-//! crate: `DeriveEntityModel` roots its own expansion at the call site's
-//! `sea_orm` and — checked against sea-orm-macros 2.0, not assumed — offers no
-//! `crate = ` override to redirect it. That is the entity-site exception, and it
-//! is why the exclusion is principled rather than merely convenient.
-//!
-//! It is also why the two are excluded for *different* reasons, which matters:
-//! `#[expose]` sits on an entity, whose own source legitimately writes
-//! `sea_orm`; `#[crud]` sits on a **controller**, whose source writes nothing
-//! but `std`, `nest_rs` and `crate::`. Only the first has an excuse. `#[crud]`'s
-//! contract is therefore proved in `nest-rs-cli`'s e2e by
-//! `crud_needs_no_dependency_the_controller_does_not_name`, which builds the one
-//! tree that can observe it: a resource whose crate declares no `uuid`.
-//!
-//! Their path rooting is not left to review, though — `tests/integration/`
-//! carries the static half of this witness: it reads every `*-macros` source
-//! and fails on a path rooted outside the framework, whichever decorator emits
-//! it. That scan is what a compile proof cannot be, namely exhaustive over
-//! decorators no zero-dep consumer can call; the compile proof is what a scan
-//! cannot be, namely decisive about what actually resolves. Neither replaces
-//! the other, and `#[crud]` is the case that proved it: it emitted
-//! `::uuid::Uuid` for three routes and one resolver argument, so a controller
-//! whose own source never wrote `uuid` failed with `E0433` blamed on the
-//! attribute — invisible here, and invisible to the generator's e2e too, which
-//! adds `uuid` for an unrelated reason.
+//! **The limit:** a witness proves the arms it compiles and no others. An arm of
+//! a decorator applied nowhere here — a key no witness writes, a feature
+//! combination the matrix does not build — is proved only where something else
+//! compiles it, such as `nest-rs-cli`'s scaffold e2e; and that proves nothing
+//! when the generated project happens to declare the crate the arm names.
 //!
 //! [`canary`] is the witness's second mandate: one `#[expect]` per entry of the
 //! repository's `clippy.toml`, so an entry that stops resolving fails the build
@@ -84,8 +64,12 @@ pub mod canary;
 pub mod config;
 #[cfg(feature = "http")]
 pub mod controller;
+#[cfg(all(feature = "http", feature = "seaorm"))]
+pub mod crud;
 #[cfg(feature = "graphql")]
 pub mod dataloader;
+#[cfg(feature = "seaorm")]
+pub mod entity;
 pub mod entry;
 #[cfg(feature = "ws")]
 pub mod gateway;

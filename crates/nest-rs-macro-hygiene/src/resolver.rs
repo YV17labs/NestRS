@@ -83,6 +83,14 @@ impl GreetingResolver {
         "Goodbye!".to_owned()
     }
 
+    /// The class gate, against the entity [`crate::entity`] declares.
+    #[cfg(feature = "seaorm")]
+    #[query]
+    #[authorize(nest_rs::authz::Read, crate::entity::Entity)]
+    fn note_count(&self) -> u64 {
+        0
+    }
+
     /// An operation compiled out takes its root field and its guard with it.
     #[cfg(any())]
     #[query]

@@ -103,7 +103,7 @@ const JOINS: &[(&str, Declares)] = &[
     ("mirrors", crate::mirrors::followed),
     ("naming", crate::naming::followed),
     ("panics", crate::panics::followed),
-    ("paths", crate::paths::followed),
+    ("paths", Vec::new),
     ("queue_capabilities", crate::queue_capabilities::followed),
     ("seams", crate::seams::followed),
     ("shapes", crate::shapes::followed),

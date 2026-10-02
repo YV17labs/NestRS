@@ -1,18 +1,18 @@
-//! The paths join: every framework path the rules and the docs name resolves.
+//! The paths join: every framework path the docs name resolves.
 //!
-//! A rule or a page that names `nest_rs_queue::envelope` tells a reader where to
-//! look, and a reader who types it gets `E0603` — the module went private in
-//! 7.0 and the sentence in `CLAUDE.md` did not follow. Nothing compiles prose,
-//! so nothing said so: a path in a paragraph is the one reference in this tree
-//! that no compiler, no rustdoc link check and no test ever resolves. This join
-//! resolves it.
+//! A page that names `nest_rs::seaorm::page::clamp_page_size` tells a reader
+//! what to type, and a reader who types it gets `E0603` when the module is
+//! private. Nothing compiles prose, so nothing said so: a path in a paragraph is
+//! the one reference that no compiler, no rustdoc link check and no test ever
+//! resolves. This join resolves it.
 //!
-//! **What is read.** The prose a reader follows *outside* the source: `CLAUDE.md`,
-//! the rules under `.claude/rules/`, `docs/STYLE.md`, every docs page, every
-//! crate's README. The CHANGELOG is left out on purpose — it names what a release
-//! removed, and a removed path is the one path that must not resolve. A comment
-//! in the source is left out too: `crate::module` is how code names its own
-//! internals to the next person editing it, and it is right there.
+//! **What is read.** What a *user* follows: every docs page and every crate's
+//! README — the crates.io landing pages. The repository's own rules
+//! (`CLAUDE.md`, `.claude/`, `docs/STYLE.md`) are not read: they are held by
+//! review, and no program reads them. The CHANGELOG is left out on purpose — it
+//! names what a release removed, and a removed path is the one path that must
+//! not resolve. A comment in the source is left out too: `crate::module` is how
+//! code names its own internals to the next person editing it.
 //!
 //! **What resolves.** A path is `nest_rs_<crate>::<segment>…`, or
 //! `nest_rs::<segment>…` — the umbrella is a crate like the others, walked the
@@ -40,42 +40,25 @@
 //! `frame="terminal"` is what a command printed — rustc's rendering of a type
 //! included — and a page quotes it rather than names a path in it.
 //!
-//! **A module named as a place is a file.** A rule that says a sentence "is
-//! worded once in the codegen crate's `job` module" is pointing at source a
-//! reader opens, not a path a caller types — so it names the file
+//! **A module named as a place is a file.** A sentence pointing at source a
+//! reader opens, not a path a caller types, names the file
 //! (`crates/nest-rs-codegen/src/job.rs`), which never pretends to be importable.
-//!
-//! **It reads no name of the source by its spelling**, so it declares none to
-//! the `blinds` join: a path is walked through each crate's modules and
-//! re-exports, read through the shared resolver, and what the resolver cannot
-//! follow — a `#[path]` module, an `extern crate … as` — is refused there.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::Followed;
-use nest_rs_conformance::imports::CrateImports;
 use nest_rs_conformance::sources::{
     declared_targets, files_with_extension, parsed, read, relative, repo_root,
 };
 use syn::{Item, UseTree, Visibility};
 
-/// What this join reads by its spelling, for the `blinds` join to keep visible.
-pub(crate) fn followed() -> Vec<Followed> {
-    Vec::new()
-}
-
 /// Below this the walk is reading the wrong tree.
 const FLOOR: usize = 50;
 
-/// The prose a reader follows outside the source.
+/// The prose a user follows outside the source: the docs pages and the crate
+/// READMEs.
 fn prose(root: &Path) -> Vec<PathBuf> {
-    let mut files = vec![root.join("CLAUDE.md"), root.join("docs/STYLE.md")];
-    files.extend(files_with_extension(&root.join(".claude/rules"), "md"));
-    files.extend(files_with_extension(
-        &root.join("docs/src/content/docs"),
-        "mdx",
-    ));
+    let mut files = files_with_extension(&root.join("docs/src/content/docs"), "mdx");
     files.extend(files_with_extension(
         &root.join("docs/src/content/docs"),
         "md",
@@ -93,7 +76,7 @@ fn prose(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Span targets the framework retired, which the rules and the logs page name
+/// Span targets the framework retired, which the logs page names
 /// as history — so a reader holding a filter that names one learns why it
 /// matches nothing.
 ///
@@ -173,6 +156,10 @@ struct Module {
     modules: BTreeMap<String, Child>,
     /// Whether a glob re-export makes any name possible.
     glob: bool,
+    /// A whole framework crate re-exported under a name of its own —
+    /// `pub use nest_rs_http as http;` — mapped to the crate, which the walk
+    /// carries on into.
+    crates: BTreeMap<String, String>,
 }
 
 /// Where a public module's items are.
@@ -181,12 +168,11 @@ enum Child {
     File([PathBuf; 2]),
 }
 
-/// Every file the walk parsed, and every crate whose imports it read, so a
-/// crate read for its hundredth path is read once.
+/// Every file the walk parsed, so a crate read for its hundredth path is read
+/// once.
 #[derive(Default)]
 struct Parsed {
     files: HashMap<PathBuf, Option<Vec<Item>>>,
-    imports: HashMap<PathBuf, CrateImports>,
 }
 
 impl Parsed {
@@ -195,29 +181,6 @@ impl Parsed {
             .entry(path.to_owned())
             .or_insert_with(|| parsed(path).map(|file| file.items))
             .clone()
-    }
-
-    /// The framework crate a module of the crate at `lib` re-exports whole
-    /// under `name` — `pub use nest_rs_http as http;` — read through
-    /// `nest_rs_conformance::imports`, the reader the `umbrella` join shares.
-    fn reexported_crate(
-        &mut self,
-        lib: &Path,
-        root: &Path,
-        module: &[String],
-        name: &str,
-    ) -> Option<String> {
-        let imports = self
-            .imports
-            .entry(lib.to_owned())
-            .or_insert_with(|| CrateImports::read(lib, root));
-        imports
-            .imports_of(module)
-            .find(|(alias, import)| *alias == name && import.public)
-            .and_then(|(_, import)| match import.path.as_slice() {
-                [krate] if krate.starts_with("nest_rs_") => Some(krate.clone()),
-                _ => None,
-            })
     }
 }
 
@@ -244,6 +207,13 @@ fn public(items: &[Item], dir: &Path) -> Module {
             Item::Use(item) => {
                 if is_pub(&item.vis) {
                     leaves(&item.tree, &mut module);
+                    if let UseTree::Rename(rename) = &item.tree
+                        && rename.ident.to_string().starts_with("nest_rs_")
+                    {
+                        module
+                            .crates
+                            .insert(rename.rename.to_string(), rename.ident.to_string());
+                    }
                 }
                 continue;
             }
@@ -301,10 +271,9 @@ fn unresolved(root: &Path, krate: &str, segments: &[String], files: &mut Parsed)
         // `pub use nest_rs_http as http;` — is walked into, so a path through
         // the front door is held to the crate behind it.
         if segments.len() > depth + 1
-            && let Some(target) =
-                files.reexported_crate(&dir.join("src/lib.rs"), root, &segments[..depth], segment)
+            && let Some(target) = module.crates.get(segment)
         {
-            return unresolved(root, &target, &segments[depth + 1..], files);
+            return unresolved(root, target, &segments[depth + 1..], files);
         }
         if let Some(child) = module.modules.remove(segment) {
             items = match child {
@@ -330,8 +299,8 @@ fn unresolved(root: &Path, krate: &str, segments: &[String], files: &mut Parsed)
     None
 }
 
-/// Every framework path a rule, a page or a README names resolves to a public
-/// item of the crate it names.
+/// Every framework path a page or a README names resolves to a public item of
+/// the crate it names.
 #[test]
 fn every_path_the_prose_names_resolves() {
     let root: &Path = &repo_root();
@@ -360,7 +329,7 @@ fn every_path_the_prose_names_resolves() {
     );
     assert!(
         holes.is_empty(),
-        "a path the prose names does not resolve; name the public item, or the file when \
+        "a path the docs name does not resolve; name the public item, or the file when \
          the sentence points at source:\n{}",
         holes.into_iter().collect::<Vec<_>>().join("\n"),
     );

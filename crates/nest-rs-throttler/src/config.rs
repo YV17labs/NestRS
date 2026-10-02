@@ -6,8 +6,7 @@ use nest_rs_config::{
     Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
 };
 
-/// The window's floor, the variable that sets it, and why. Its ceiling is an
-/// owner question.
+/// The window's range, the variable that sets it, and why.
 const WINDOW: DurationBounds = DurationBounds {
     key: "WINDOW_SECS",
     field: "ThrottlerConfig::window_secs",
@@ -17,7 +16,11 @@ const WINDOW: DurationBounds = DurationBounds {
         why: "a zero window resets every bucket on every hit, so the count never passes one and \
               every request is allowed at any limit",
     }),
-    most: None,
+    most: Bound {
+        count: 24 * 60 * 60,
+        why: "a window past a day is a quota rather than a rate, and a quota kept in a store \
+              that a restart or an eviction forgets is not one — count it in the database",
+    },
 };
 
 /// Rate-limit settings, settable via `NESTRS_THROTTLER__*` or pinned through
@@ -27,7 +30,8 @@ const WINDOW: DurationBounds = DurationBounds {
 pub struct ThrottlerConfig {
     /// Requests allowed per window. Unset ⇒ module default (60).
     pub limit: Option<u32>,
-    /// Window size in whole seconds, at least 1. Unset ⇒ module default (60).
+    /// Window size in whole seconds, from 1 to 86400 (a day). Unset ⇒ module
+    /// default (60).
     pub window_secs: Option<u64>,
 }
 
@@ -103,6 +107,36 @@ mod tests {
         assert!(
             pinned.contains(&var)
                 && pinned.contains("`ThrottlerConfig::window_secs` set in code is 0ns"),
+            "{pinned}"
+        );
+    }
+
+    /// Every duration a deployment sets has a ceiling: a window past a day is
+    /// refused naming the variable, from either side.
+    #[test]
+    fn a_window_past_a_day_is_refused_from_either_side() {
+        let var = nest_rs_config::var_name("throttler", "WINDOW_SECS");
+        let from_env = ThrottlerConfig::from_env(
+            &ConfigService::with_vars("throttler", [("WINDOW_SECS", "86401")]),
+            Default::default(),
+        )
+        .expect_err("past a day")
+        .to_string();
+        assert!(
+            from_env.contains(&var) && from_env.contains("must be at most 86400 seconds"),
+            "{from_env}"
+        );
+        let pinned = ThrottlerConfig::from_env(
+            &ConfigService::with_vars("throttler", []),
+            ThrottlerConfig {
+                limit: None,
+                window_secs: Some(u64::MAX),
+            },
+        )
+        .expect_err("a pinned window past a day")
+        .to_string();
+        assert!(
+            pinned.contains("above the 86400s it must be at most"),
             "{pinned}"
         );
     }

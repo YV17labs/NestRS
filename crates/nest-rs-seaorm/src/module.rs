@@ -80,8 +80,9 @@ async fn connect(config: &SeaOrmConfig) -> anyhow::Result<DatabaseConnection> {
             )
         );
     }
-    // A config seeded on the builder skips `from_env`, and with it the floor
-    // the variable is held to: checked again where the budget is spent.
+    // A config seeded on the builder skips `from_env`, and with it the range
+    // the variable is held to: checked again where the budget is spent, before
+    // sqlx adds it to a clock.
     if let Some(secs) = config.connect_timeout_secs {
         crate::config::CONNECT_TIMEOUT.check(
             <SeaOrmConfig as nest_rs_config::Namespaced>::NAMESPACE,
@@ -95,4 +96,31 @@ async fn connect(config: &SeaOrmConfig) -> anyhow::Result<DatabaseConnection> {
         "connecting to database"
     );
     Ok(Database::connect(config.connect_options()).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// config-4r2, the seeded path: a config handed to the builder skips
+    /// `from_env`, and the top of the range reached sqlx and panicked the boot.
+    /// The check where the budget is spent refuses it naming the variable, before
+    /// anything is dialled.
+    #[tokio::test]
+    async fn a_seeded_budget_past_the_ceiling_is_refused_before_sqlx_sees_it() {
+        let config = SeaOrmConfig {
+            url: "postgres://nobody@127.0.0.1:1/none".to_owned(),
+            connect_timeout_secs: Some(u64::MAX),
+            ..SeaOrmConfig::default()
+        };
+        let refused = connect(&config)
+            .await
+            .expect_err("refused rather than handed to sqlx")
+            .to_string();
+        assert!(
+            refused.contains(&nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS"))
+                && refused.contains("above the 3600s it must be at most"),
+            "{refused}"
+        );
+    }
 }

@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use nest_rs_config::{ConfigError, ConfigService, env_var};
+use nest_rs_config::{
+    Bound, ConfigError, ConfigService, DurationBounds, DurationUnit, Floor, env_var,
+};
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_core::parse_bool;
@@ -8,6 +10,28 @@ use nest_rs_core::parse_bool;
 /// The OTel SDK's own metric export period, restated so it is a named,
 /// documented default rather than a number buried in a dependency.
 pub const DEFAULT_METRIC_INTERVAL: Duration = Duration::from_secs(60);
+
+/// The namespace this crate's variables are read under. Not a `#[config]`'s —
+/// the config is read before the container exists — but named once all the same.
+pub(crate) const NAMESPACE: &str = "opentelemetry";
+
+/// The metric export period's range, the variable that sets it, and why.
+pub(crate) const METRIC_INTERVAL: DurationBounds = DurationBounds {
+    key: "METRIC_INTERVAL_SECS",
+    field: "OpenTelemetryConfig::metric_interval",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound {
+        count: 1,
+        why: "a periodic reader on a shorter period exports in a tight loop, which costs the \
+              collector more than any metric is worth",
+    }),
+    most: Bound {
+        count: 60 * 60,
+        why: "a metric exported less often than hourly reaches the collector after the \
+              dashboards and alerts that read it have moved on, and the reader holds an hour of \
+              state in memory meanwhile",
+    },
+};
 
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///
@@ -116,7 +140,8 @@ impl OpenTelemetryConfig {
     /// `Err`, naming the variable, when one cannot be read — both of its
     /// spellings set, or a `<KEY>_FILE` naming an unreadable file — or when
     /// `SAMPLE_RATIO` or `METRIC_INTERVAL_SECS` holds a value that does not
-    /// parse, or a ratio that is not a number. Only the two
+    /// parse, a ratio that is not a number, or an interval outside a second to an
+    /// hour. Only the two
     /// `<PREFIX>_LOG_FORMAT` / `<PREFIX>_LOG_SOURCE_LOCATION` settings keep
     /// their default with a warning instead: they are the framework-wide logging
     /// family, which the kernel's fallback logger reads the same way before any
@@ -129,7 +154,7 @@ impl OpenTelemetryConfig {
         // through. The two knobs below that warn-and-default rather than fail
         // keep their own parse, and take the name from `var_name` for the
         // report.
-        let env = ConfigService::for_namespace("opentelemetry");
+        let env = ConfigService::for_namespace(NAMESPACE);
 
         if let Some(v) = env.get("SERVICE_NAME")? {
             cfg.service_name = v;
@@ -177,23 +202,19 @@ impl OpenTelemetryConfig {
             }
             cfg.trace_sample_ratio = ratio.clamp(0.0, 1.0);
         }
-        // `0` is the documented sentinel for "keep the default".
-        if let Some(secs) = env.parse::<u64>("METRIC_INTERVAL_SECS")?
-            && secs > 0
-        {
-            cfg.metric_interval = Duration::from_secs(secs);
-        }
+        cfg.metric_interval = METRIC_INTERVAL.read(&env, cfg.metric_interval)?.value;
 
         Ok(cfg)
     }
 
     /// Pin the metric export interval, overriding the SDK's 60 s default.
     /// Dropping it to a few seconds is what makes a local collector setup
-    /// verifiable in the time it takes to read the output.
+    /// verifiable in the time it takes to read the output. Held at
+    /// [`OpenTelemetry::init_with`](crate::OpenTelemetry::init_with) to the
+    /// range `NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS` is: a second to an
+    /// hour.
     pub fn with_metric_interval(mut self, interval: Duration) -> Self {
-        if !interval.is_zero() {
-            self.metric_interval = interval;
-        }
+        self.metric_interval = interval;
         self
     }
 
@@ -452,29 +473,50 @@ mod tests {
         });
     }
 
-    /// A zero or empty interval keeps the default — a `PeriodicReader` on a zero
-    /// period is a tight export loop, which is worse than a slow one.
+    /// An empty interval keeps the default, and a zero one is refused naming the
+    /// variable — it was read as "keep the default", a sentinel the unset
+    /// variable already spells, and a pinned zero was dropped without a word.
+    /// A `PeriodicReader` on a zero period is a tight export loop.
     #[test]
-    fn a_zero_or_empty_metric_interval_keeps_the_default() {
-        for raw in ["0", ""] {
+    fn an_empty_interval_keeps_the_default_and_a_zero_one_is_refused() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(var_name("opentelemetry", "METRIC_INTERVAL_SECS"), "");
+            assert_eq!(
+                OpenTelemetryConfig::from_env("svc")
+                    .expect("readable config")
+                    .metric_interval,
+                DEFAULT_METRIC_INTERVAL,
+            );
+            Ok(())
+        });
+        for (raw, sentence) in [
+            ("0", "must be at least 1 second"),
+            ("3601", "must be at most 3600 seconds"),
+        ] {
             figment::Jail::expect_with(|jail| {
                 jail.set_env(var_name("opentelemetry", "METRIC_INTERVAL_SECS"), raw);
-                assert_eq!(
-                    OpenTelemetryConfig::from_env("svc")
-                        .expect("readable config")
-                        .metric_interval,
-                    DEFAULT_METRIC_INTERVAL,
-                    "`{raw}` must not shorten the interval",
+                let err = OpenTelemetryConfig::from_env("svc")
+                    .expect_err("outside the range")
+                    .to_string();
+                assert!(
+                    err.contains(&var_name("opentelemetry", "METRIC_INTERVAL_SECS"))
+                        && err.contains(sentence),
+                    "{err}"
                 );
                 Ok(())
             });
         }
-        assert_eq!(
-            OpenTelemetryConfig::new("svc")
-                .with_metric_interval(Duration::ZERO)
-                .metric_interval,
-            DEFAULT_METRIC_INTERVAL,
-        );
+        let pinned = METRIC_INTERVAL
+            .check(
+                NAMESPACE,
+                "OpenTelemetryConfig::metric_interval",
+                OpenTelemetryConfig::new("svc")
+                    .with_metric_interval(Duration::ZERO)
+                    .metric_interval,
+            )
+            .expect_err("a pinned zero is held to the floor where it is spent")
+            .to_string();
+        assert!(pinned.contains("set in code is 0ns"), "{pinned}");
     }
 
     #[test]

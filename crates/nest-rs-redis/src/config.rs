@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Config, ConfigError, ConfigService, DurationBounds, DurationUnit, Environment, Floor,
+    Bound, Config, ConfigError, ConfigService, DurationBounds, DurationUnit, Environment, Floor,
     Namespaced, Result, config,
 };
 
@@ -22,11 +22,19 @@ const DEFAULT_URL: &str = "redis://127.0.0.1/";
 /// misconfigured URL fails the container's startup probe instead of parking it.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// The connect budget's floor, the variable that sets it, and why. Above zero
-/// rather than a whole second: the budget also bounds every command, and a
-/// sub-second one set in code is a fail-fast choice, not a mistake. Its ceiling
-/// is an owner question: a budget of hours is legal, and the boot's deadline
-/// saturates rather than panics on one the clock cannot hold.
+/// The connect budget's range, the variable that sets it, and why. The floor is
+/// above zero rather than a whole second: the budget also bounds every command,
+/// and a sub-second one set in code is a fail-fast choice, not a mistake.
+///
+/// The ceiling is an hour, and it is one knob's ceiling on purpose — the budget
+/// bounds the boot's wait, every command a caller waits on, and the socket's
+/// liveness, and a second budget for any one of them would be a second answer to
+/// one question. Past an hour none of them is bounding anything: a Redis that
+/// has not answered a command in an hour is gone rather than slow, and a boot
+/// that waits longer is the parked process the budget exists to end. It also
+/// keeps the liveness the budget sets under what the kernel accepts — a
+/// keepalive idle past 32 767 s failed every dial with `EINVAL` — which
+/// `connection.rs` asserts at compile time.
 pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds {
     key: "CONNECT_TIMEOUT_SECS",
     field: "RedisConfig::connect_timeout",
@@ -35,7 +43,12 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds {
         "the budget bounds the boot's connect and every command after it, and a zero one gives \
          up before the first attempt and fails every command at once",
     ),
-    most: None,
+    most: Bound {
+        count: 60 * 60,
+        why: "the budget bounds the boot's wait for Redis and every command a caller waits on, \
+              and past an hour it bounds neither — a Redis silent that long is gone rather than \
+              slow, and a boot that waits longer is a parked process",
+    },
 };
 
 /// Redis settings, settable via `NESTRS_REDIS__*` or pinned through
@@ -53,7 +66,9 @@ pub struct RedisConfig {
     /// retries an unreachable endpoint on its own, so without a budget a wrong
     /// URL parks the process with an empty log — never healthy, never crashed —
     /// and an outage holds every caller. Read from
-    /// `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`; defaults to 10s.
+    /// `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, whole seconds from 1 to 3600 —
+    /// refused outside, and in code anything above zero up to an hour; defaults
+    /// to 10s.
     pub connect_timeout: Duration,
     /// What a `rediss://` URL trusts and presents: nothing set trusts the
     /// authorities of Mozilla's root program compiled into the client and

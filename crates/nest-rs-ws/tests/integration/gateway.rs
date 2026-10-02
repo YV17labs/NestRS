@@ -1104,7 +1104,8 @@ async fn a_message_round_trips_over_a_real_upgrade() {
 
 #[module(
     imports = [WsModule, WsModule::for_root(WsConfig {
-        max_connection: Some(Duration::from_millis(200)),
+        // The floor every connection ceiling is held to: a second.
+        max_connection: Some(Duration::from_secs(1)),
         ..WsConfig::default()
     })],
     providers = [SocketGateway],

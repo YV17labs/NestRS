@@ -70,12 +70,12 @@ const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds {
               none a job running at shutdown stays in flight until a peer's sweep takes it, the \
               orphan threshold later",
     }),
-    most: Some(Bound {
+    most: Bound {
         count: 60 * 60,
         why: "a stopping replica holds its rollout for as long as it drains, and a job still \
               running an hour into a shutdown is one to hand back and resume from its \
               checkpoint, not to wait out",
-    }),
+    },
 };
 
 /// The orphan threshold's bounds, the variable that sets it, and why.
@@ -87,15 +87,17 @@ const ORPHAN_AFTER: DurationBounds = DurationBounds {
         count: 5,
         why: "five heartbeats of one second each — anything shorter reads a slow answer as a death",
     }),
-    most: Some(Bound {
+    most: Bound {
         count: 24 * 60 * 60,
         why: "the threshold is how long a crashed replica's jobs wait for a peer to take them, \
               and past a day that wait is a typo rather than a choice",
-    }),
+    },
 };
 
-/// The lease's floor, the variable that sets it, and why. Its ceiling is half
-/// the orphan threshold, checked once both are read.
+/// The lease's bounds, the variable that sets it, and why. Its nearer ceiling is
+/// half the orphan threshold the deployment set, checked once both are read;
+/// the one stated here is half the threshold's own ceiling, which no lease can
+/// pass whatever the threshold.
 const LEASE: DurationBounds = DurationBounds {
     key: "LEASE_SECS",
     field: "RedisWorkerConfig::lease",
@@ -104,14 +106,19 @@ const LEASE: DurationBounds = DurationBounds {
         count: 1,
         why: "a lease renewed every third of it needs at least a second to renew in",
     }),
-    most: None,
+    most: Bound {
+        count: ORPHAN_AFTER.most.count / 2,
+        why: "the lease must lapse inside half the orphan threshold, and the threshold is at \
+              most a day",
+    },
 };
 
-/// The poll's floor, the variable that sets it, and why: every poll costs Redis
+/// The poll's bounds, the variable that sets it, and why: every poll costs Redis
 /// a fetch and a sweep of silent peers per method per replica, jobs or none, so
 /// ten milliseconds already spends up to two hundred scripts a second on a
-/// method with nothing to do. Its ceiling is the orphan threshold, checked once
-/// both are read.
+/// method with nothing to do. Its nearer ceiling is the orphan threshold the
+/// deployment set, checked once both are read; the one stated here is the
+/// threshold's own ceiling.
 const POLL_INTERVAL: DurationBounds = DurationBounds {
     key: "POLL_INTERVAL_MS",
     field: "RedisWorkerConfig::poll_interval",
@@ -121,7 +128,11 @@ const POLL_INTERVAL: DurationBounds = DurationBounds {
         why: "every poll costs Redis a fetch and a sweep per method per replica, jobs or none — \
               up to two hundred scripts a second at the floor",
     }),
-    most: None,
+    most: Bound {
+        count: ORPHAN_AFTER.most.count * 1000,
+        why: "a replica polling less often than the orphan threshold reads as dead to its \
+              peers between polls, and the threshold is at most a day",
+    },
 };
 
 /// Consumer settings, settable via `NESTRS_REDIS__WORKER__*` or pinned through
@@ -512,7 +523,7 @@ mod tests {
     /// fails the subtraction apalis would have panicked on.
     #[test]
     fn apalis_sweeps_under_the_longest_orphan_threshold_accepted_without_a_panic() {
-        let longest = ORPHAN_AFTER.most.as_ref().expect("a ceiling").count;
+        let longest = ORPHAN_AFTER.most.count;
         let accepted = read(
             &[("ORPHAN_AFTER_SECS", &longest.to_string())],
             Default::default(),

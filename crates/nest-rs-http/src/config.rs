@@ -43,12 +43,85 @@ const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds {
               off switch it is for `REQUEST_TIMEOUT_SECS`: a shutdown that waits without a bound \
               is what this window exists to prevent",
     }),
-    most: Some(Bound {
+    most: Bound {
         count: 3600,
         why: "a window past an hour is a unit slip more often than a choice (`25000` meant as \
               milliseconds is seven hours), and it outlasts the grace period an orchestrator \
               gives a replica, whose kill then cuts what the window held without a word",
+    },
+};
+
+/// The floor every long-lived connection's lifetime ceiling is held to — an
+/// `#[sse]` stream here, a WebSocket and a GraphQL subscription in their own
+/// crates — and its off switch: `0` from the environment, `None` in code.
+///
+/// One declaration for the three because it is one control: a connection
+/// authenticates once and then acts with those privileges for as long as it
+/// lives, whichever transport carries it.
+pub const MAX_CONNECTION_FLOOR: Floor = Floor::UnitsOrOff(Bound {
+    count: 1,
+    why: "a ceiling under a second ends every connection as it opens, so its client reconnects \
+          in a loop",
+});
+
+/// The ceiling on [`MAX_CONNECTION_FLOOR`]'s settings — a day.
+pub const MAX_CONNECTION_CEILING: Bound = Bound {
+    count: 24 * 60 * 60,
+    why: "a connection keeps the privileges it authenticated with until it ends, so past a day \
+          it outlives the token that admitted it — an hour by default — many times over; a \
+          deployment that means no ceiling turns it off",
+};
+
+/// The floor of a server-sent stream's keep-alive interval — HTTP's `#[sse]`
+/// here, MCP's stream in its own crate — and its off switch.
+pub const SSE_KEEP_ALIVE_FLOOR: Floor = Floor::UnitsOrOff(Bound {
+    count: 1,
+    why: "a comment under a second apart is traffic, not a keep-alive",
+});
+
+/// The ceiling on [`SSE_KEEP_ALIVE_FLOOR`]'s settings — an hour.
+pub const SSE_KEEP_ALIVE_CEILING: Bound = Bound {
+    count: 60 * 60,
+    why: "a keep-alive exists to beat an intermediary's idle timeout, and those are minutes — \
+          nginx's and a cloud load balancer's sixty seconds by default — so one sent less often \
+          than hourly keeps nothing alive",
+};
+
+/// The per-request budget's range, the variable that sets it, and why.
+const REQUEST_TIMEOUT: DurationBounds = DurationBounds {
+    key: "REQUEST_TIMEOUT_SECS",
+    field: "HttpConfig::request_timeout",
+    unit: DurationUnit::Seconds,
+    least: Floor::UnitsOrOff(Bound {
+        count: 1,
+        why: "a budget under a second times out every request before its handler has run",
     }),
+    most: Bound {
+        count: 60 * 60,
+        why: "a request still running after an hour has outlived every client and proxy timeout \
+              in front of it, and a budget that long is a unit slip (`30000` meant as \
+              milliseconds is eight hours); a route that streams for longer turns it off",
+    },
+};
+
+/// The `#[sse]` stream ceiling's range — [`MAX_CONNECTION_FLOOR`] and
+/// [`MAX_CONNECTION_CEILING`] — and the variable that sets it.
+const SSE_MAX_CONNECTION: DurationBounds = DurationBounds {
+    key: "SSE_MAX_CONNECTION_SECS",
+    field: "HttpConfig::sse_max_connection",
+    unit: DurationUnit::Seconds,
+    least: MAX_CONNECTION_FLOOR,
+    most: MAX_CONNECTION_CEILING,
+};
+
+/// The `#[sse]` keep-alive's range — [`SSE_KEEP_ALIVE_FLOOR`] and
+/// [`SSE_KEEP_ALIVE_CEILING`] — and the variable that sets it.
+const SSE_KEEP_ALIVE: DurationBounds = DurationBounds {
+    key: "SSE_KEEP_ALIVE_SECS",
+    field: "HttpConfig::sse_keep_alive",
+    unit: DurationUnit::Seconds,
+    least: SSE_KEEP_ALIVE_FLOOR,
+    most: SSE_KEEP_ALIVE_CEILING,
 };
 
 /// HTTP transport options resolved at boot. Every field is settable both via
@@ -114,18 +187,19 @@ pub struct HttpConfig {
     /// aborted and the client gets `503 Service Unavailable` with a
     /// `Retry-After`, bounding how long a slow/stuck request ties up a
     /// connection. `None` ⇒ no timeout. Read from
-    /// `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` (whole seconds; `0` ⇒ no timeout);
-    /// defaults to 30 seconds.
+    /// `NESTRS_HTTP__REQUEST_TIMEOUT_SECS`, whole seconds from 1 to 3600 or `0`
+    /// for no timeout — refused outside, from the environment and from the
+    /// pinned struct alike; defaults to 30 seconds.
     ///
     /// **The `0` spelling is the framework's shared one**, not this field's:
-    /// [`ConfigService::seconds`] is where every duration ceiling reads its off
-    /// state, and the reason it is shared is that four crates each reading `0`
-    /// their own way is four chances for one of them to read it as *zero
-    /// seconds* — which here would time every request out before its handler
-    /// ran. Reading it through `parse` did exactly that, and left `None` (no
-    /// timeout at all) reachable from the pinned struct and from no value of
-    /// the variable, which is the dual-path rule broken in the one direction a
-    /// deployment cannot work around.
+    /// [`Floor::UnitsOrOff`] is where every duration that may be off reads it,
+    /// and the reason it is shared is that four crates each reading `0` their
+    /// own way is four chances for one of them to read it as *zero seconds* —
+    /// which here would time every request out before its handler ran. Reading
+    /// it through `parse` did exactly that, and left `None` (no timeout at all)
+    /// reachable from the pinned struct and from no value of the variable, which
+    /// is the dual-path rule broken in the one direction a deployment cannot
+    /// work around. Off in code is `None`; a pinned zero is refused.
     pub request_timeout: Option<Duration>,
     /// `true` (the default) fails boot when global guards are registered and
     /// an endpoint the transport cannot shape (an imperative `mount(...)`)
@@ -179,7 +253,8 @@ pub struct HttpConfig {
     /// **A security control, not a resource knob**, and the third instance of
     /// the same one: a stream authenticates once, at the request, then emits
     /// with those privileges for as long as it lives. Same reading, same
-    /// 4-hour default and same `0` ⇒ unlimited spelling as
+    /// 4-hour default, same range — one second to a day
+    /// ([`MAX_CONNECTION_CEILING`]) — and same `0` ⇒ unlimited spelling as
     /// `NESTRS_WS__MAX_CONNECTION_SECS` and
     /// `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`. Read from
     /// `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS`; the `http` namespace because SSE
@@ -187,8 +262,8 @@ pub struct HttpConfig {
     pub sse_max_connection: Option<Duration>,
     /// How often a `#[sse]` stream emits a keep-alive comment, so an idle
     /// stream is not dropped by an intermediary that sees no bytes. `None` ⇒
-    /// none sent. Read from `NESTRS_HTTP__SSE_KEEP_ALIVE_SECS` (whole seconds;
-    /// `0` ⇒ none); defaults to 15 seconds.
+    /// none sent. Read from `NESTRS_HTTP__SSE_KEEP_ALIVE_SECS`, whole seconds
+    /// from 1 to 3600 or `0` for none; defaults to 15 seconds.
     pub sse_keep_alive: Option<Duration>,
     /// How long the transport lets open connections finish after a shutdown
     /// signal. The listener closes at the signal and every connection is asked
@@ -306,17 +381,24 @@ impl Config for HttpConfig {
             server_header: env.flag("SERVER_HEADER", base.server_header)?,
             global_prefix,
             max_body_bytes: env.parse("MAX_BODY_BYTES")?.or(base.max_body_bytes),
-            request_timeout: env.seconds("REQUEST_TIMEOUT_SECS", base.request_timeout)?,
+            request_timeout: optional(REQUEST_TIMEOUT.read_optional(env, base.request_timeout)?),
             fail_secure_strict: env.flag("FAIL_SECURE_STRICT", base.fail_secure_strict)?,
             security_headers: HttpSecurityHeaders::from_env(env, base.security_headers)?,
             compression: env.flag("COMPRESSION", base.compression)?,
             access_log: env.flag("ACCESS_LOG", base.access_log)?,
             trusted_proxies: parse_trusted_proxies(env, base.trusted_proxies)?,
-            sse_max_connection: env.seconds("SSE_MAX_CONNECTION_SECS", base.sse_max_connection)?,
-            sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,
+            sse_max_connection: optional(
+                SSE_MAX_CONNECTION.read_optional(env, base.sse_max_connection)?,
+            ),
+            sse_keep_alive: optional(SSE_KEEP_ALIVE.read_optional(env, base.sse_keep_alive)?),
             shutdown_timeout: SHUTDOWN_TIMEOUT.read(env, base.shutdown_timeout)?.value,
         })
     }
+}
+
+/// A setting read through its bounds, as the field holds it.
+fn optional(read: Option<nest_rs_config::BoundedDuration>) -> Option<Duration> {
+    read.map(|read| read.value)
 }
 
 /// The header the [`ApiVersioning::Header`] strategy reads, validated here so

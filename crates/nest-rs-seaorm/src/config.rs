@@ -12,8 +12,12 @@ use nest_rs_config::{
 };
 use sea_orm::ConnectOptions;
 
-/// The acquire budget's floor, the variable that sets it, and why. Its ceiling
-/// is an owner question.
+/// The acquire budget's range, the variable that sets it, and why. SeaORM hands
+/// it to sqlx as the pool's `acquire_timeout`: how long the boot waits for its
+/// first connection, and every query after it for one from the pool. sqlx adds
+/// it to an `Instant` unchecked, so a value past what a clock holds panicked the
+/// boot inside sqlx naming nothing — the ceiling is what keeps every value the
+/// boot accepts one the library accepts too.
 pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds {
     key: "CONNECT_TIMEOUT_SECS",
     field: "SeaOrmConfig::connect_timeout_secs",
@@ -23,7 +27,12 @@ pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds {
         why: "the pool gives up on a zero budget before any connection opens, so the boot fails \
               as a pool timeout against a database that answers",
     }),
-    most: None,
+    most: Bound {
+        count: 60 * 60,
+        why: "the budget is how long every query waits for a pooled connection, and past an hour \
+              the request that asked for one has long been abandoned — a pool that cannot hand \
+              one out sooner is down, not busy",
+    },
 };
 
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
@@ -38,8 +47,8 @@ pub struct SeaOrmConfig {
     pub max_connections: Option<u32>,
     /// Lower bound on idle pooled connections; `None` uses SeaORM's default.
     pub min_connections: Option<u32>,
-    /// How long to wait for a connection before failing, in whole seconds, at
-    /// least 1; `None` uses the default.
+    /// How long to wait for a connection before failing, in whole seconds, from
+    /// 1 to 3600; `None` uses the default.
     pub connect_timeout_secs: Option<u64>,
     /// Log every statement SeaORM issues. Off in production — chatty and leaks
     /// query shapes into logs.
@@ -241,6 +250,40 @@ mod tests {
             SeaOrmConfig::from_env(&ConfigService::with_vars("seaorm", []), Default::default())
                 .expect("unset is the library's default");
         assert_eq!(unset.connect_timeout_secs, None);
+    }
+
+    /// config-4r2: the top of the range passed the reader and panicked the boot
+    /// inside sqlx, "overflow when adding duration to instant", naming no
+    /// variable. Past the ceiling it is refused naming the variable, from either
+    /// side.
+    #[test]
+    fn a_connect_timeout_past_the_ceiling_is_refused_from_either_side() {
+        let var = nest_rs_config::var_name("seaorm", "CONNECT_TIMEOUT_SECS");
+        for value in ["3601", "18446744073709551615"] {
+            let from_env = SeaOrmConfig::from_env(
+                &ConfigService::with_vars("seaorm", [("CONNECT_TIMEOUT_SECS", value)]),
+                Default::default(),
+            )
+            .expect_err("past the ceiling")
+            .to_string();
+            assert!(
+                from_env.contains(&var) && from_env.contains("must be at most 3600 seconds"),
+                "{from_env}"
+            );
+        }
+        let pinned = SeaOrmConfig::from_env(
+            &ConfigService::with_vars("seaorm", []),
+            SeaOrmConfig {
+                connect_timeout_secs: Some(u64::MAX),
+                ..pinned("postgres://localhost/app")
+            },
+        )
+        .expect_err("a pinned budget past the ceiling is refused")
+        .to_string();
+        assert!(
+            pinned.contains(&var) && pinned.contains("above the 3600s it must be at most"),
+            "{pinned}"
+        );
     }
 
     #[test]

@@ -261,21 +261,33 @@ rolls out (step 7).
      can hold that many jobs it has not started, out of a trigger's sight — size a
      KEDA `listLength` per running slot; see
      [Fetching on Redis](/queue/scaling/#fetching-on-redis).
-   - **A bounded duration has a range**, checked at boot whether it comes from
-     the environment or is pinned in code, and a value outside it fails the boot
+   - **Every duration has a range**, checked at boot whether it comes from the
+     environment or is pinned in code, and a value outside it fails the boot
      naming the variable: the worker's `ORPHAN_AFTER_SECS` from 5 seconds to a
      day, `LEASE_SECS` from 1 second to half of it, `POLL_INTERVAL_MS` from 10
      milliseconds to the orphan threshold and `SHUTDOWN_TIMEOUT_SECS` from 1
      second to an hour; HTTP's `SHUTDOWN_TIMEOUT_SECS` from 1 to 3600;
      `NESTRS_AUTHN__EXPIRES_IN_SECS` from 1 second to thirty days and
-     `NESTRS_AUTHN__LEEWAY_SECS` from 0 to 300 seconds; and
-     `NESTRS_REDIS__CONNECT_TIMEOUT_SECS`, `NESTRS_SEAORM__CONNECT_TIMEOUT_SECS`
-     and `NESTRS_THROTTLER__WINDOW_SECS` refuse `0`. A value 6.x accepted there —
-     a worker drain window of `0` or above an hour, a zero connect timeout or
-     window, a token lifetime past thirty days — has to move; see the
-     [env-var reference](/configuration/env-reference/). A duration outside that
-     list, such as `NESTRS_HTTP__REQUEST_TIMEOUT_SECS`, where `0` is off, reads
-     as it did.
+     `NESTRS_AUTHN__LEEWAY_SECS` from 0 to 300 seconds;
+     `NESTRS_REDIS__CONNECT_TIMEOUT_SECS` and `NESTRS_SEAORM__CONNECT_TIMEOUT_SECS`
+     from 1 second to an hour; `NESTRS_THROTTLER__WINDOW_SECS` from 1 second to a
+     day; `NESTRS_HEALTH__INDICATOR_TIMEOUT_MS` and `PROBE_DEADLINE_MS` from 1
+     millisecond to a minute; `NESTRS_OPENTELEMETRY__METRIC_INTERVAL_SECS` from 1
+     second to an hour, where `0` used to keep the default and now fails the
+     boot. Where `0` is off it still is, and a value is held to a range:
+     `NESTRS_HTTP__REQUEST_TIMEOUT_SECS` up to an hour; the connection ceilings
+     `NESTRS_HTTP__SSE_MAX_CONNECTION_SECS`, `NESTRS_WS__MAX_CONNECTION_SECS`
+     and `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` up to a day;
+     `NESTRS_HTTP__SSE_KEEP_ALIVE_SECS`, `NESTRS_MCP__SSE_KEEP_ALIVE_SECS` and
+     `NESTRS_MCP__SSE_RETRY_SECS` up to an hour; `NESTRS_HTTP__TLS_RELOAD_SECS`
+     up to a day. In code, off is `None`: a pinned `Some(Duration::ZERO)` fails
+     the boot, and so does a pinned value under a second where the floor is one.
+     A value 6.x accepted there — a worker drain window of `0` or above an hour,
+     a zero connect timeout or window, a token lifetime past thirty days, a
+     connection ceiling past a day — has to move; see the
+     [env-var reference](/configuration/env-reference/). `ConfigService::seconds`
+     is gone: a config of your own reads a duration through `DurationBounds` —
+     see [Configuration](/configuration/#configservice-api).
    - **Redis 6.2 or later, and no Cluster** — the limits of apalis 0.7 the
      [delivery page](/queue/delivery/#limits) states.
 

@@ -67,8 +67,16 @@ impl OpenTelemetry {
     /// Install the subscriber from an explicit [`OpenTelemetryConfig`] (the
     /// programmatic path; [`init`](Self::init) is the env-driven wrapper).
     /// Returns the flush guard that must outlive `main`, or an error that
-    /// aborts boot on an unparseable filter or a failed exporter build.
+    /// aborts boot on an unparseable filter, a metric interval outside its
+    /// range or a failed exporter build.
     pub fn init_with(config: OpenTelemetryConfig) -> Result<Self, OpenTelemetryError> {
+        // A config built in code reaches here without `from_env`, so its
+        // interval is held to the variable's range where it is spent.
+        crate::config::METRIC_INTERVAL.check(
+            crate::config::NAMESPACE,
+            "OpenTelemetryConfig::metric_interval",
+            config.metric_interval,
+        )?;
         let filter = parse_log_filter(&config.log_filter)?;
         let fmt_layer = console_layer(config.log_format, config.log_source_location);
 

@@ -47,7 +47,10 @@ mod versioning;
 pub use allow::{AllowedMethods, MethodTable};
 pub use boot_check::{GlobalGuardsActive, HttpBootCheck};
 pub use client_ip::{ClientIp, ClientOrigin};
-pub use config::HttpConfig;
+pub use config::{
+    HttpConfig, MAX_CONNECTION_CEILING, MAX_CONNECTION_FLOOR, SSE_KEEP_ALIVE_CEILING,
+    SSE_KEEP_ALIVE_FLOOR,
+};
 pub use context::{Ctx, RejectedCredential};
 pub use controller::{Controller, HttpControllerMeta, HttpRouteMeta, HttpVerb, RequestBodyMeta};
 pub use cors::HttpCors;

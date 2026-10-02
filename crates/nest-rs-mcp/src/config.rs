@@ -36,12 +36,44 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{
+    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
+};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 
 /// rmcp's own default POST body ceiling, restated so the framework's default is
 /// readable here rather than inherited invisibly.
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// The stream keep-alive's range — every server-sent stream's,
+/// [`SSE_KEEP_ALIVE_FLOOR`](nest_rs_http::SSE_KEEP_ALIVE_FLOOR) and
+/// [`SSE_KEEP_ALIVE_CEILING`](nest_rs_http::SSE_KEEP_ALIVE_CEILING) — and the
+/// variable that sets it.
+const SSE_KEEP_ALIVE: DurationBounds = DurationBounds {
+    key: "SSE_KEEP_ALIVE_SECS",
+    field: "McpConfig::sse_keep_alive",
+    unit: DurationUnit::Seconds,
+    least: nest_rs_http::SSE_KEEP_ALIVE_FLOOR,
+    most: nest_rs_http::SSE_KEEP_ALIVE_CEILING,
+};
+
+/// The advertised reconnection delay's range, the variable that sets it, and
+/// why.
+const SSE_RETRY: DurationBounds = DurationBounds {
+    key: "SSE_RETRY_SECS",
+    field: "McpConfig::sse_retry",
+    unit: DurationUnit::Seconds,
+    least: Floor::UnitsOrOff(Bound {
+        count: 1,
+        why: "a client told to come back sooner reconnects at once, and every client a restart \
+              dropped does it together",
+    }),
+    most: Bound {
+        count: 60 * 60,
+        why: "a client told to wait more than an hour before resuming a dropped stream has \
+              abandoned the session it would resume",
+    },
+};
 
 /// MCP streamable-HTTP options resolved at boot (namespace `mcp`). See the
 /// module docs for why the host allowlist is a security control.
@@ -65,10 +97,12 @@ pub struct McpConfig {
     /// from `NESTRS_MCP__JSON_RESPONSE`; defaults to `false`.
     pub json_response: bool,
     /// SSE keep-alive ping interval. `None` ⇒ no pings. Read from
-    /// `NESTRS_MCP__SSE_KEEP_ALIVE_SECS` (`0` ⇒ none); defaults to 15s.
+    /// `NESTRS_MCP__SSE_KEEP_ALIVE_SECS`, whole seconds from 1 to 3600 or `0`
+    /// for none; defaults to 15s.
     pub sse_keep_alive: Option<Duration>,
     /// `retry:` interval advertised on SSE priming events. `None` ⇒ none. Read
-    /// from `NESTRS_MCP__SSE_RETRY_SECS` (`0` ⇒ none); defaults to 3s.
+    /// from `NESTRS_MCP__SSE_RETRY_SECS`, whole seconds from 1 to 3600 or `0`
+    /// for none; defaults to 3s.
     pub sse_retry: Option<Duration>,
     /// Cap on a single POST body, enforced while streaming (independent of
     /// `Content-Length`); over it the client gets `413`. Read from
@@ -140,8 +174,12 @@ impl Config for McpConfig {
             allowed_hosts: env.list("ALLOWED_HOSTS", base.allowed_hosts)?,
             legacy_session_mode: env.flag("LEGACY_SESSION_MODE", base.legacy_session_mode)?,
             json_response: env.flag("JSON_RESPONSE", base.json_response)?,
-            sse_keep_alive: env.seconds("SSE_KEEP_ALIVE_SECS", base.sse_keep_alive)?,
-            sse_retry: env.seconds("SSE_RETRY_SECS", base.sse_retry)?,
+            sse_keep_alive: SSE_KEEP_ALIVE
+                .read_optional(env, base.sse_keep_alive)?
+                .map(|read| read.value),
+            sse_retry: SSE_RETRY
+                .read_optional(env, base.sse_retry)?
+                .map(|read| read.value),
             max_request_body_bytes: env
                 .parse::<usize>("MAX_REQUEST_BODY_BYTES")?
                 .unwrap_or(base.max_request_body_bytes),
@@ -226,6 +264,38 @@ mod tests {
 
         assert_eq!(cfg.sse_keep_alive, None);
         assert_eq!(cfg.sse_retry, Some(Duration::from_secs(3)));
+    }
+
+    /// Both stream durations have a ceiling like every duration a deployment
+    /// sets: past an hour is refused naming the variable, from either side.
+    #[test]
+    fn an_sse_duration_past_an_hour_is_refused_from_either_side() {
+        for key in ["SSE_KEEP_ALIVE_SECS", "SSE_RETRY_SECS"] {
+            let refused = McpConfig::from_env(
+                &ConfigService::with_vars("mcp", [(key, "3601")]),
+                McpConfig::default(),
+            )
+            .expect_err("past an hour")
+            .to_string();
+            assert!(
+                refused.contains(&nest_rs_config::var_name("mcp", key))
+                    && refused.contains("must be at most 3600 seconds, or 0 to turn it off"),
+                "{refused}"
+            );
+        }
+        let pinned = McpConfig::from_env(
+            &ConfigService::with_vars("mcp", []),
+            McpConfig {
+                sse_retry: Some(Duration::from_secs(7200)),
+                ..McpConfig::default()
+            },
+        )
+        .expect_err("a pinned retry past an hour")
+        .to_string();
+        assert!(
+            pinned.contains("above the 3600s it must be at most"),
+            "{pinned}"
+        );
     }
 
     #[test]

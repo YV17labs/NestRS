@@ -236,7 +236,9 @@ impl RedisConnection {
             .map_err(RedisError::Budget)?;
         let endpoint = address(&config.url);
         let client = client(config, &endpoint)?;
-        let deadline = deadline_after(budget);
+        // The budget was held to its range above, so an hour at most: no clock
+        // overflows adding it.
+        let deadline = Instant::now() + budget;
         let mut backoff = FIRST_RETRY_BACKOFF;
         let mut attempts = 0u32;
         let mut last_error = None;
@@ -421,14 +423,6 @@ async fn bounded<F: Future>(budget: Duration, call: F) -> Result<F::Output, redi
     })
 }
 
-/// `budget` from now, or a year from now when the budget is too large for the
-/// clock: a wait nobody means literally, which must not panic the boot.
-fn deadline_after(budget: Duration) -> Instant {
-    const FAR: Duration = Duration::from_secs(365 * 24 * 60 * 60);
-    let now = Instant::now();
-    now.checked_add(budget).unwrap_or_else(|| now + FAR)
-}
-
 /// Whether an attempt failed in a way every attempt will repeat.
 ///
 /// **An answer from Redis repeats only when it names the deployment's own
@@ -572,7 +566,11 @@ fn manager_config(budget: Duration) -> ConnectionManagerConfig {
 /// The kernel reads the idle time in whole seconds, and refuses zero — which a
 /// budget under a second would round to, failing every dial — so both are a
 /// second at the least: under that, a retransmitted packet would drop a socket
-/// whose answers a command is waiting for.
+/// whose answers a command is waiting for. And it refuses an idle time past
+/// [`KEEPALIVE_IDLE_LIMIT`] and a user timeout past [`USER_TIMEOUT_LIMIT`] with
+/// `EINVAL`, on every dial, so the budget's ceiling sits under both — asserted
+/// below at compile time rather than clamped here, since a budget the boot
+/// accepts can never reach either.
 fn liveness(budget: Duration) -> TcpSettings {
     let silence = budget.max(LIVENESS_FLOOR);
     let settings = TcpSettings::default().set_keepalive(TcpKeepalive::new().with_time(silence));
@@ -580,6 +578,25 @@ fn liveness(budget: Duration) -> TcpSettings {
     let settings = settings.set_user_timeout(silence);
     settings
 }
+
+/// Linux's `MAX_TCP_KEEPIDLE` (`include/net/tcp.h`): the longest idle time
+/// `TCP_KEEPIDLE` accepts, in seconds.
+const KEEPALIVE_IDLE_LIMIT: Duration = Duration::from_secs(32_767);
+
+/// The longest `TCP_USER_TIMEOUT` Linux accepts: an `int` of milliseconds.
+const USER_TIMEOUT_LIMIT: Duration = Duration::from_millis(i32::MAX as u64);
+
+const _: () = {
+    let most = crate::config::CONNECT_TIMEOUT
+        .unit
+        .duration(crate::config::CONNECT_TIMEOUT.most.count);
+    assert!(
+        most.as_secs() <= KEEPALIVE_IDLE_LIMIT.as_secs()
+            && most.as_millis() <= USER_TIMEOUT_LIMIT.as_millis(),
+        "the connect budget's ceiling sets the socket's liveness, and must stay under what the \
+         kernel accepts for both",
+    );
+};
 
 /// The endpoint the connect diagnostics name, in logs and in the boot error:
 /// the address the client parsed from the URL — `host:port`, or a socket path —
@@ -1043,12 +1060,45 @@ mod tests {
         }
     }
 
-    /// A budget too large for the clock must not panic the boot on the
-    /// `Instant` it computes.
-    #[test]
-    fn a_budget_too_large_for_the_clock_still_yields_a_deadline() {
-        let deadline = deadline_after(Duration::MAX);
-        assert!(deadline > Instant::now() + Duration::from_secs(300 * 24 * 60 * 60));
+    /// config-6r2: a budget past the kernel's keepalive limit passed every check
+    /// and then failed every dial with `EINVAL`, warning "redis unreachable"
+    /// against a Redis that answered, for the whole budget. Past the ceiling it
+    /// is refused before anything is dialled, from code and from the variable,
+    /// naming the variable — the top of `u64` included, which no clock holds.
+    #[tokio::test]
+    async fn a_budget_past_the_ceiling_is_refused_before_any_dial() {
+        for budget in [
+            Duration::from_secs(60 * 60 + 1),
+            Duration::from_secs(32_768),
+            Duration::MAX,
+        ] {
+            let attempt = tokio::time::timeout(
+                Duration::from_secs(2),
+                RedisConnection::connect(&config("redis://127.0.0.1:1/", budget)),
+            )
+            .await
+            .expect("refused at once rather than dialled");
+            let Err(RedisError::Budget(refused)) = attempt else {
+                panic!("{budget:?} must be refused as a budget");
+            };
+            let text = refused.to_string();
+            assert!(
+                text.contains(&nest_rs_config::var_name("redis", "CONNECT_TIMEOUT_SECS"))
+                    && text.contains("it must be at most"),
+                "{text}",
+            );
+        }
+        let from_env = <RedisConfig as nest_rs_config::Config>::from_env(
+            &nest_rs_config::ConfigService::with_vars("redis", [("CONNECT_TIMEOUT_SECS", "32768")]),
+            RedisConfig::default(),
+        )
+        .expect_err("past the ceiling");
+        assert!(
+            from_env
+                .to_string()
+                .contains("must be at most 3600 seconds"),
+            "{from_env}"
+        );
     }
 
     /// C6: an unreachable backend used to park the process forever with zero

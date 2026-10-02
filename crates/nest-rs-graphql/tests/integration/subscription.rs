@@ -499,7 +499,8 @@ async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
 
 #[module(imports = [
     GraphqlModule::for_root(GraphqlConfig {
-        max_connection: Some(Duration::from_millis(300)),
+        // The floor every connection ceiling is held to: a second.
+        max_connection: Some(Duration::from_secs(1)),
         ..GraphqlConfig::default()
     }),
     TickModule,

@@ -21,12 +21,12 @@ pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds {
         why: "a token that expires as it is minted is refused by every verifier, so every \
               sign-in would succeed and hand out nothing usable",
     }),
-    most: Some(Bound {
+    most: Bound {
         count: 30 * 24 * 60 * 60,
         why: "an access token is a bearer credential until it expires and nothing revokes it \
               sooner, so a lifetime past thirty days is a unit slip or a credential that never \
               ends — a long session is a refresh flow, not a long token",
-    }),
+    },
 };
 
 /// The clock-skew leeway's range, the variable that sets it, and why.
@@ -38,11 +38,11 @@ pub(crate) const LEEWAY: DurationBounds = DurationBounds {
         count: 0,
         why: "no leeway is a leeway",
     }),
-    most: Some(Bound {
+    most: Bound {
         count: 5 * 60,
         why: "RFC 7519 §4.1.4 allows \"no more than a few minutes\" for clock skew, and every \
               second past it is a second an expired token still verifies",
-    }),
+    },
 };
 
 // No `Debug`: secrets must not leak through a derived format.

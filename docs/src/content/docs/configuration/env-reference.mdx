@@ -66,7 +66,7 @@ config survives adopting or dropping the observability stack.
 | `PORT` | listen port |
 | `GLOBAL_PREFIX` | path prefix for every route (unset ⇒ none) |
 | `MAX_BODY_BYTES` | request body cap |
-| `REQUEST_TIMEOUT_SECS` | per-request timeout — default `30`, `0` ⇒ no timeout. An overrun answers `503` with a `Retry-After`, not `504`: this transport is the origin, not a gateway |
+| `REQUEST_TIMEOUT_SECS` | per-request timeout — default `30`; whole seconds from `1` to `3600`, or `0` ⇒ no timeout. An overrun answers `503` with a `Retry-After`, not `504`: this transport is the origin, not a gateway |
 | `SHUTDOWN_TIMEOUT_SECS` | how long open connections may finish after a shutdown signal — default `20`, so the window, the shutdown hooks' 5 s and OpenTelemetry's 3 s flush end inside the 30 s a Kubernetes pod gets before `SIGKILL`; whole seconds from `1` to `3600`, refused outside, and `0` is refused rather than read as off. What is still open when it closes is cut — a running request goes unanswered, a stream ends — and one `warn` counts it. A WebSocket is not closed by it: see [Shutdown](/http/configuration/#shutdown) |
 | `FAIL_SECURE_STRICT` | fail boot (vs warn) on an unguarded self-mount under global guards — default `true` |
 | `SECURITY_HEADERS` | master switch for the secure-by-default response headers |
@@ -74,7 +74,7 @@ config survives adopting or dropping the observability stack.
 | `REFERRER_POLICY` · `CROSS_ORIGIN_OPENER_POLICY` · `CROSS_ORIGIN_RESOURCE_POLICY` | the rest of the default-on set — `strict-origin-when-cross-origin`, `same-origin`, `same-origin`; `off` drops one, a blank value fails the boot, and an empty one keeps the default |
 | `CONTENT_SECURITY_POLICY` · `CROSS_ORIGIN_EMBEDDER_POLICY` · `PERMISSIONS_POLICY` | settable, off by default — each governs a *document* whose sources the framework cannot speak for; see [HTTP configuration](/http/configuration/) |
 | `TLS_CERT` / `TLS_KEY` | PEM cert + key for HTTPS (inline); `TLS_CERT_FILE` / `TLS_KEY_FILE` read from a path instead. One half without the other fails the boot, and so do both spellings of one half in the same tier. Unset ⇒ plain HTTP |
-| `TLS_RELOAD_SECS` | how often a file-sourced pair is re-read, so a renewal swaps in without a restart — default `60`, `0` disables |
+| `TLS_RELOAD_SECS` | how often a file-sourced pair is re-read, so a renewal swaps in without a restart — default `60`; from `1` to `86400` (a day), or `0` disables |
 | `VERSIONING` | how a caller selects an API version — `uri` (default), `header`, `media_type` |
 | `VERSION_HEADER` | the header the `header` strategy reads — default `X-API-Version` |
 | `DEFAULT_VERSION` | the version served to a caller that states none; unset ⇒ the unversioned routes |
@@ -85,8 +85,8 @@ config survives adopting or dropping the observability stack.
 | `CORS_CREDENTIALS` | allow credentialed requests — default `false` |
 | `CORS_MAX_AGE` | preflight cache lifetime in seconds |
 | `COMPRESSION` | negotiate response compression from `Accept-Encoding` — default `false` (leave it to the proxy unless the app terminates responses) |
-| `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h), `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
-| `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`, `0` ⇒ none sent |
+| `SSE_MAX_CONNECTION_SECS` | how long an [`#[sse]` stream](/http/streaming/) may stay open before the server ends it and the client reconnects — default `14400` (4 h); from `1` to `86400` (a day), or `0` ⇒ unlimited. A security control: the stream authenticates once, at the request |
+| `SSE_KEEP_ALIVE_SECS` | keep-alive comment interval on an `#[sse]` stream, so an idle feed is not dropped by an intermediary — default `15`; from `1` to `3600`, or `0` ⇒ none sent |
 | `ACCESS_LOG` | emit one access-log event per request on `nest_rs::operation` — default `true`. Owned by the HTTP transport, so it needs no observability crate; `trace_id` joins the line only when one is mounted |
 | `TRUSTED_PROXIES` | comma-separated reverse-proxy IPs whose `Forwarded` (RFC 7239) / `X-Forwarded-For` / `X-Real-IP` / `traceparent` / `X-Request-Id` are believed. Empty (the default) ⇒ none is read, every caller is its transport peer, and every inbound trace is [restarted](/fundamentals/correlation/). Shared by [`ClientIp`](/http/extractors/), the [throttler](/rate-limiting/) and the trace context; an unparseable entry aborts the boot |
 
@@ -101,7 +101,7 @@ sea-orm picks it, the variable does not change.
 | `URL` | database connection string |
 | `MAX_CONNECTIONS` | pool maximum connections (unset ⇒ SeaORM default) |
 | `MIN_CONNECTIONS` | pool minimum connections (unset ⇒ SeaORM default) |
-| `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, at least `1` (unset ⇒ SeaORM default) — `0` fails the boot rather than time out every acquire |
+| `CONNECT_TIMEOUT_SECS` | connection-acquire timeout in seconds, from `1` to `3600` (unset ⇒ SeaORM default) — `0` fails the boot rather than time out every acquire, and past an hour the request that asked for a connection has long been abandoned |
 | `SQLX_LOGGING` | log SQL statements |
 | `OBSERVE_SERIALIZATION_CONFLICTS` | tag commit-time serialization conflicts at `warn` |
 
@@ -152,7 +152,7 @@ from.
 | `SERVICE_NAME` | service name; overrides the name passed to `OpenTelemetry::init` |
 | `OTLP_ENDPOINT` | collector endpoint (unset ⇒ no export) |
 | `SAMPLE_RATIO` | trace sampling ratio, `0.0`–`1.0` (default `1.0`) |
-| `METRIC_INTERVAL_SECS` | metric export period (default `60`; `0` keeps the default). Traces and logs export immediately — metrics wait for this flush |
+| `METRIC_INTERVAL_SECS` | metric export period, from `1` to `3600` (default `60`; `0` is refused). Traces and logs export immediately — metrics wait for this flush |
 | `SERVICE_VERSION` · `SERVICE_ENVIRONMENT` · `SERVICE_INSTANCE_ID` | resource attributes |
 
 The console layer reads the [`NESTRS_LOG*` family](#logging--nestrs_log)
@@ -220,8 +220,8 @@ is refused too.)
 | `ALLOWED_HOSTS` | comma-separated `Host` authorities accepted (anti-DNS-rebinding). Defaults to loopback, so a public deployment **must** name itself; an empty list disables the check and is reported at `warn` |
 | `LEGACY_SESSION_MODE` | keep sessions alive for protocol revisions older than `2026-07-28` — default `true` |
 | `JSON_RESPONSE` | answer simple operations with `application/json` instead of an SSE stream — default `false` |
-| `SSE_KEEP_ALIVE_SECS` | SSE keep-alive ping interval (`0` ⇒ none) — default `15` |
-| `SSE_RETRY_SECS` | `retry:` interval advertised on SSE priming events (`0` ⇒ none) — default `3` |
+| `SSE_KEEP_ALIVE_SECS` | SSE keep-alive ping interval, from `1` to `3600` (`0` ⇒ none) — default `15` |
+| `SSE_RETRY_SECS` | `retry:` interval advertised on SSE priming events, from `1` to `3600` (`0` ⇒ none) — default `3` |
 | `MAX_REQUEST_BODY_BYTES` | cap on a single POST body, enforced while streaming — default 4 MiB |
 | `STATELESS_PROTOCOL_METADATA_REQUIRED` | require per-request protocol metadata on stateless POSTs (SEP-2243) — default `false` |
 

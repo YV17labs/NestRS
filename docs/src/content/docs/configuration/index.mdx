@@ -205,12 +205,32 @@ prefix. Every method is sync, and every one that reads a value returns a
 | `env.flag("KEY", default)?` → `bool`           | `1`/`true`/`yes`/`on` and their negatives (case-insensitive) |
 | `env.list("KEY", default)?` → `Vec<String>`    | Comma-separated, trimmed, empties dropped   |
 | `env.json::<T>("KEY")?` → `Option<T>`          | A structured value — a list of records, a map — written as JSON |
-| `env.seconds("KEY", base)?` → `Option<Duration>` | Whole seconds; `0` means off              |
 | `env.count("KEY", base)?` → `Option<usize>`    | A whole count; `0` means unlimited          |
 | `env.setting("KEY")?` → `Option<Setting>`      | The raw string and the spelling that supplied it — for a value your own code refuses |
 | `env.material("KEY")?` → `Option<Setting<Material>>` | The bytes as given, and the file they came from — for certificates and keys |
 | `env.var_name("KEY")` → `String`               | The full env-var **name** (for error messages) |
 | `env.spellings("KEY")` → `String`              | Both spellings, `NESTRS_<NS>__KEY (or NESTRS_<NS>__KEY_FILE)` — for a message naming a setting that was not read |
+
+**A duration is read through its bounds, never through `parse`.** Declare a
+`nest_rs_config::DurationBounds` beside the config — the key, the field that pins
+it, its unit, a floor and a ceiling each with the sentence a refusal gives — and
+read it with `BOUNDS.read(env, base)?` (or `read_optional` for an
+`Option<Duration>`): a value outside the range fails the boot naming the
+variable, from the environment or pinned in code alike, in the framework's own
+words. A ceiling a deployment may lift deliberately takes `Floor::UnitsOrOff`, so
+`0` from the environment and `None` in code are off.
+
+```rust title="crates/features/src/reports/config.rs"
+use nest_rs::config::{Bound, DurationBounds, DurationUnit, Floor};
+
+const WINDOW: DurationBounds = DurationBounds {
+    key: "WINDOW_SECS",
+    field: "ReportsConfig::window",
+    unit: DurationUnit::Seconds,
+    least: Floor::Units(Bound { count: 1, why: "a shorter window counts nothing" }),
+    most: Bound { count: 3600, why: "past an hour the report is stale before it is read" },
+};
+```
 
 **Every variable can be given as a file.** `NESTRS_<NS>__KEY_FILE=/run/secrets/key`
 supplies `KEY` from the file it names — the Docker and Kubernetes secrets

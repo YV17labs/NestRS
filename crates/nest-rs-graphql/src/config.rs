@@ -7,13 +7,25 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, Result, config};
+use nest_rs_config::{Config, ConfigService, DurationBounds, DurationUnit, Result, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
 /// Four hours — the same default ceiling `NESTRS_WS__MAX_CONNECTION_SECS`
 /// carries, because it is the same control on the same kind of socket.
 const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
+
+/// The subscription socket ceiling's range — the one every long-lived
+/// connection's is held to, [`MAX_CONNECTION_FLOOR`](nest_rs_http::MAX_CONNECTION_FLOOR)
+/// and [`MAX_CONNECTION_CEILING`](nest_rs_http::MAX_CONNECTION_CEILING) — and the
+/// variable that sets it.
+const MAX_CONNECTION: DurationBounds = DurationBounds {
+    key: "MAX_CONNECTION_SECS",
+    field: "GraphqlConfig::max_connection",
+    unit: DurationUnit::Seconds,
+    least: nest_rs_http::MAX_CONNECTION_FLOOR,
+    most: nest_rs_http::MAX_CONNECTION_CEILING,
+};
 
 /// A hundred entity references per `_entities` call — a page of parents on the
 /// router's side, which is what a query plan turns into one such call.
@@ -72,8 +84,9 @@ pub struct GraphqlConfig {
     /// ceiling the socket keeps those privileges after expiry, logout or
     /// revocation, for as long as the peer holds it open.
     ///
-    /// Read from `NESTRS_GRAPHQL__MAX_CONNECTION_SECS` (whole seconds; `0` ⇒
-    /// unlimited); defaults to 4 hours.
+    /// Read from `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`, whole seconds from 1 to
+    /// 86400 (a day) or `0` for unlimited — refused outside, from the
+    /// environment and from the pinned struct alike; defaults to 4 hours.
     ///
     /// [`WsConfig::max_connection`]: https://docs.rs/nest-rs-ws
     pub max_connection: Option<Duration>,
@@ -180,7 +193,9 @@ impl Config for GraphqlConfig {
             max_complexity: env.parse("MAX_COMPLEXITY")?.or(d.max_complexity),
             disable_introspection: env.flag("DISABLE_INTROSPECTION", d.disable_introspection)?,
             max_batch_size: env.parse("MAX_BATCH_SIZE")?.unwrap_or(d.max_batch_size),
-            max_connection: env.seconds("MAX_CONNECTION_SECS", d.max_connection)?,
+            max_connection: MAX_CONNECTION
+                .read_optional(env, d.max_connection)?
+                .map(|read| read.value),
             federation: env.flag("FEDERATION", d.federation)?,
             max_representations: env.count("MAX_REPRESENTATIONS", d.max_representations)?,
             strict_resolver_membership: env
@@ -303,5 +318,38 @@ mod tests {
         assert!(cfg.emit_sdl);
         assert_eq!(cfg.max_depth, Some(15));
         assert_eq!(cfg.max_complexity, Some(2000));
+    }
+
+    /// The subscription ceiling shares every long-lived connection's range:
+    /// past a day, or a pinned zero, is refused naming the variable.
+    #[test]
+    fn a_subscription_ceiling_outside_its_range_is_refused_from_either_side() {
+        let var = nest_rs_config::var_name("graphql", "MAX_CONNECTION_SECS");
+        let from_env = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", [("MAX_CONNECTION_SECS", "86401")]),
+            GraphqlConfig::default(),
+        )
+        .expect_err("past a day")
+        .to_string();
+        assert!(
+            from_env.contains(&var) && from_env.contains("must be at most 86400 seconds"),
+            "{from_env}"
+        );
+        let pinned = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", []),
+            GraphqlConfig {
+                max_connection: Some(Duration::ZERO),
+                ..GraphqlConfig::default()
+            },
+        )
+        .expect_err("a pinned zero")
+        .to_string();
+        assert!(pinned.contains("`None` turns it off"), "{pinned}");
+        let off = GraphqlConfig::from_env(
+            &ConfigService::with_vars("graphql", [("MAX_CONNECTION_SECS", "0")]),
+            GraphqlConfig::default(),
+        )
+        .expect("`0` is off");
+        assert_eq!(off.max_connection, None);
     }
 }

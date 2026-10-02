@@ -262,7 +262,10 @@ with its own clone of the event. Three consequences worth naming:
   and the chain continues with the next listener. `emit` returns normally, so
   the emitter's own post-emit work still runs and an HTTP response is still
   built. Side effects that can fail belong on the [Queue](/queue/), which
-  buys retries as well as isolation.
+  buys retries as well as isolation. A listener runs inside its emitter's
+  unit of work, so it is dropped with it — a request the shutdown window cut,
+  an operation its client cancelled — and its `events.dispatch` line says so,
+  `cancelled`.
 - **No bridge to a transaction** — `emit` does not enroll itself in the
   ambient executor's transaction. If a listener must write to the same
   transaction as the emitter, call it directly from the service instead

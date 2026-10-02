@@ -128,6 +128,12 @@ impl EventBus {
 /// The panic is contained here rather than in `emit` so the containment and the
 /// line that reports it are the same statement — a listener that panicked still
 /// files its unit, with `outcome = panic`.
+///
+/// A listener runs inside its emitter's unit, so it is dropped with it — a
+/// request the shutdown window cut, an operation its client cancelled, an
+/// attempt its worker stopped. That end is filed too, by [`DispatchLine`]'s
+/// `Drop`, as `cancelled`: a listener stopped before it settled is exactly the
+/// one an operator looks for afterwards.
 async fn dispatch_one(
     cause: &nest_rs_core::Correlation,
     event: &'static str,
@@ -156,41 +162,81 @@ async fn dispatch_one(
     // which is the shape `RequestContinuation` documents, rather than
     // assembling the context a second time to re-enter it.
     let continuation = nest_rs_core::RequestContinuation::new(None, correlation);
-    let started = std::time::Instant::now();
+    let line = DispatchLine {
+        event,
+        listener,
+        continuation: &continuation,
+        span: span.clone(),
+        started: std::time::Instant::now(),
+        filed: false,
+    };
     let outcome = continuation
         .scope(AssertUnwindSafe(fut).catch_unwind())
-        .instrument(span.clone())
+        .instrument(span)
         .await;
-    let settled = match &outcome {
-        Ok(()) => nest_rs_core::operation_log::OK,
-        Err(_) => nest_rs_core::operation_log::PANIC,
-    };
-    nest_rs_core::operation_log::record_outcome(&span, settled);
-    // Both lines are filed **inside** the correlation, because they sit after
-    // the `.await` that unwound it: a line emitted out here carries no ids at
-    // all, which `nest_rs_mcp::propagate` documents having shipped once and
-    // fixed the same way. Reporting is the last thing this unit does, so it is
-    // re-entered rather than kept open.
-    continuation.enter(|| {
-        tracing::info!(
-            name: crate::unit::DISPATCH,
-            target: nest_rs_core::operation_log::TARGET,
-            message = crate::unit::DISPATCH,
-            event = event,
-            listener = listener,
-            outcome = settled,
-            duration_ms = nest_rs_core::operation_log::duration_ms(started),
-        );
-        if let Err(payload) = &outcome {
-            tracing::error!(
-                target: crate::TARGET,
-                event = event,
-                listener = listener,
-                panic = panic_message(payload.as_ref()),
-                "event listener panicked — dispatch continues with the next listener",
-            );
+    match outcome {
+        Ok(()) => line.file(nest_rs_core::operation_log::OK),
+        Err(payload) => {
+            line.file(nest_rs_core::operation_log::PANIC);
+            continuation.enter(|| {
+                tracing::error!(
+                    target: crate::TARGET,
+                    event = event,
+                    listener = listener,
+                    panic = panic_message(payload.as_ref()),
+                    "event listener panicked — dispatch continues with the next listener",
+                );
+            });
         }
-    });
+    }
+}
+
+/// One listener's `events.dispatch` line, filed exactly once — by the end the
+/// dispatch saw, or by `Drop` when the listener is dropped first.
+///
+/// Filed **inside** the correlation, re-entered rather than kept open: the line
+/// sits after the `.await` that unwound it, and a line emitted out there carries
+/// no ids at all, which `nest_rs_mcp::propagate` documents having shipped once
+/// and fixed the same way.
+struct DispatchLine<'a> {
+    event: &'static str,
+    listener: &'static str,
+    continuation: &'a nest_rs_core::RequestContinuation,
+    /// The listener's span, which records the outcome the line files, in the
+    /// same word.
+    span: tracing::Span,
+    started: std::time::Instant,
+    filed: bool,
+}
+
+impl DispatchLine<'_> {
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+    }
+
+    fn emit(&mut self, outcome: &'static str) {
+        self.filed = true;
+        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
+        self.continuation.enter(|| {
+            tracing::info!(
+                name: crate::unit::DISPATCH,
+                target: nest_rs_core::operation_log::TARGET,
+                message = crate::unit::DISPATCH,
+                event = self.event,
+                listener = self.listener,
+                outcome,
+                duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
+            );
+        });
+    }
+}
+
+impl Drop for DispatchLine<'_> {
+    fn drop(&mut self) {
+        if !self.filed {
+            self.emit(nest_rs_core::operation_log::CANCELLED);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -518,5 +564,46 @@ mod panic_containment {
             Some(nest_rs_core::operation_log::PANIC),
         );
         assert_eq!(line.field("listener").as_deref(), Some("Notifier::boom"));
+    }
+
+    /// A listener runs inside the emitter's own unit, so when that unit is
+    /// dropped — a request cut by the shutdown window, an operation its client
+    /// cancelled, an attempt its worker stopped — the listener goes with it.
+    /// It is a unit stopped before it settled, and still files its line,
+    /// `cancelled`, in its own trace.
+    #[tokio::test]
+    async fn a_listener_dropped_with_its_emitter_files_its_unit_cancelled() {
+        let bus = EventBus::new();
+        bus.subscribe_named("Notifier::waits", move |_: NotifyRequested| async move {
+            std::future::pending::<()>().await;
+        });
+        let logs = LogCapture::install();
+
+        let emitted = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            bus.emit(NotifyRequested { id: "dropped" }),
+        )
+        .await;
+        assert!(emitted.is_err(), "the emitter was dropped mid-listener");
+
+        let line = logs.expect_one(nest_rs_core::operation_log::TARGET, crate::unit::DISPATCH);
+        assert_eq!(
+            line.field("outcome").as_deref(),
+            Some(nest_rs_core::operation_log::CANCELLED),
+        );
+        assert_eq!(line.field("listener").as_deref(), Some("Notifier::waits"));
+        assert!(
+            line.trace_id.is_some(),
+            "in the listener's trace: {line:#?}"
+        );
+        // The listener's span fails with the line's word.
+        let span = logs.expect_span(crate::TARGET, crate::unit::DISPATCH);
+        assert_eq!(
+            span.field("error.type").as_deref(),
+            Some(nest_rs_core::operation_log::CANCELLED),
+            "{:?}",
+            span.fields,
+        );
+        assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
     }
 }

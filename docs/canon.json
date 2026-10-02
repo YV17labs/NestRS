@@ -76,6 +76,12 @@
       "define_visitor"
     ],
     "ActionMarker": [],
+    "AnswerFallback": [
+      "kind",
+      "map",
+      "mapper",
+      "split"
+    ],
     "AppBuilderExceptionFiltersExt": [
       "use_exception_filters_global"
     ],
@@ -232,6 +238,7 @@
     "IntoInner": [
       "into_inner"
     ],
+    "IsStreamReturn": [],
     "Job": [],
     "JobContext": [
       "scope"
@@ -273,12 +280,13 @@
     "Namespaced": [],
     "OccurrenceLock": [
       "claim",
-      "claimed",
-      "release",
-      "renew"
+      "claimed"
     ],
     "Opaque": [
       "opaque"
+    ],
+    "OperationAnswer": [
+      "refused"
     ],
     "PartExt": [
       "into_byte_stream"
@@ -359,7 +367,7 @@
       "type_key"
     ]
   },
-  "test_count": 2698,
+  "test_count": 2762,
   "version_req": "7.0",
   "otel_binding": "_otel",
   "envelope_keys": [

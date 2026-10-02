@@ -89,6 +89,49 @@ mod tests {
         );
     }
 
+    /// `CLAUDE.md`, *No wait the framework does not bound*: a scaffolded
+    /// binary's `main` is `#[nest_rs::main]`, which tears the runtime down within
+    /// the shutdown budget, never `#[tokio::main]`, whose runtime drop waits on
+    /// whatever an abandoned unit left blocking. The repository's own sources
+    /// are held to it by the conformance suite's `entries` join; templates are
+    /// strings, so they are held here.
+    #[test]
+    fn every_scaffolded_entry_point_runs_on_nest_rs_main() {
+        /// The app's `main`, the migration runner's and the seed's.
+        const FLOOR: usize = 3;
+
+        let scanned = sources();
+        let mut entries = 0;
+        let mut wrong = Vec::new();
+        for (file, src) in &scanned {
+            let lines: Vec<&str> = src.lines().map(str::trim).collect();
+            for (at, line) in lines.iter().enumerate() {
+                if line.starts_with("#[tokio::main]") {
+                    wrong.push(format!("{file}:{} is `#[tokio::main]`", at + 1));
+                }
+                if line.starts_with("async fn main(") {
+                    entries += 1;
+                    let above = at.checked_sub(1).and_then(|above| lines.get(above));
+                    if above != Some(&"#[nest_rs::main]") {
+                        wrong.push(format!(
+                            "{file}:{} is an `async fn main` without `#[nest_rs::main]` above it",
+                            at + 1,
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            entries >= FLOOR,
+            "the scan found {entries} scaffolded `async fn main` — it stopped matching",
+        );
+        assert!(
+            wrong.is_empty(),
+            "a scaffolded entry point whose runtime's teardown nothing bounds:\n{}",
+            wrong.join("\n"),
+        );
+    }
+
     /// `CLAUDE.md`: *metadata is mandatory — a bare log is a defect*. A scaffold
     /// emits what the rules mandate, so a template that logs without a field
     /// ships that defect into every generated project. The whole framework holds

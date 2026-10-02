@@ -23,7 +23,6 @@ anyhow.workspace = true
 nest-rs.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
-tokio.workspace = true
 tracing-subscriber.workspace = true
 "#;
 
@@ -40,7 +39,7 @@ use migrations::Migrator;
 use sea_orm_migration::MigratorTrait;
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     // `EnvPrefix::var` rather than a literal: this binary then reads the same
     // log variable the apps do, including under a project's own prefix.
@@ -82,7 +81,6 @@ publish = false
 anyhow.workspace = true
 nest-rs.workspace = true
 sea-orm.workspace = true
-tokio.workspace = true
 "#;
 
 /// `nestrs run db seed`. Empty, but connected: the wiring a fixture needs is
@@ -95,7 +93,7 @@ pub(crate) const SEED_BIN: &str = r#"//! Demo/reference data, applied by `nestrs
 
 use anyhow::Result;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let conn = nest_rs::seaorm::connect_from_env().await?;
     conn.ping().await?;

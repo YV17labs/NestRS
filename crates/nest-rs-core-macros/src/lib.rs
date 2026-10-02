@@ -1,11 +1,12 @@
 //! Surface-agnostic nestrs decorators (`#[injectable]`, `#[module]`,
-//! `#[hooks]`, `#[input]`), re-exported by `nest-rs-core`. Each
+//! `#[hooks]`, `#[input]`, `#[main]`), re-exported by `nest-rs-core`. Each
 //! `#[proc_macro_attribute]` entry below is a thin delegation to its
 //! implementation module.
 #![warn(missing_docs)]
 
 use proc_macro::TokenStream;
 
+mod entry;
 mod hooks;
 mod injectable;
 mod input;
@@ -208,4 +209,40 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(input::input(args, item).into()).into()
+}
+
+/// Run an app's `async fn main` on the runtime the framework owns, and end the
+/// process within the shutdown budget.
+///
+/// ```ignore
+/// #[nest_rs::main]
+/// async fn main() -> anyhow::Result<()> {
+///     App::builder().module::<AppModule>().build().await?.run().await
+/// }
+/// ```
+///
+/// It builds what `#[tokio::main]` builds — tokio's multi-threaded runtime with
+/// every driver enabled, sized by `TOKIO_WORKER_THREADS` — runs the body on it,
+/// and then does the one thing `#[tokio::main]` cannot: it tears the runtime
+/// down within what the shutdown hooks and the telemetry flush left of the
+/// hooks' budget — all of it when the body ran no app. Dropping a runtime waits
+/// for every blocking task still running, so under `#[tokio::main]` a hook the
+/// budget abandoned while it waited on a `spawn_blocking` — or a request dropped
+/// at the shutdown window mid `tokio::fs` call — held the process past every
+/// bound, after its last line.
+/// Here what is still running then is abandoned with the process, and said.
+///
+/// No argument is taken, and one is refused naming why: there is nothing left
+/// for one to choose. The app's manifest needs no `tokio` line for it.
+///
+/// # Expands to
+///
+/// ```ignore
+/// fn main() -> anyhow::Result<()> {
+///     ::nest_rs_core::__main::<anyhow::Result<()>, _>(async move { /* the body */ })
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
+    ::nest_rs_codegen::reroot(entry::main(args, input).into()).into()
 }

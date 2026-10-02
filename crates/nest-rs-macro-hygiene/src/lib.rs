@@ -64,6 +64,7 @@
 pub mod config;
 pub mod controller;
 pub mod dataloader;
+pub mod entry;
 pub mod gateway;
 pub mod indicators;
 pub mod interceptor;

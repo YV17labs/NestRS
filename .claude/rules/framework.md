@@ -1020,11 +1020,10 @@ are the SDK's, cited where `nest-rs-opentelemetry` shuts it down. A client
 without one is bounded by the edge's request timeout where there is one, and
 behind a queue job or a tick by nothing.
 
-**Whether this becomes a `CLAUDE.md` invariant** — *every port call the framework
-awaits has a bound, and shutdown abandons an in-flight call rather than awaiting
-it* — is an owner question. Until it is answered the rule binds the framework
-crates this file is loaded for, and a new awaited call is presumed to owe a net
-until it is checked.
+**It is a `CLAUDE.md` invariant** — *No wait the framework does not bound*: every
+port call the framework awaits has a bound, and the way down abandons what is
+still running at its bound rather than awaiting it (*Shutdown is bounded end to
+end*, below). A new awaited call is presumed to owe a net until it is checked.
 
 **The namespace falls out of the contract — it is never arbitrated.** A port
 owns a config namespace **if and only if its contract requires the integrator to
@@ -1437,9 +1436,9 @@ runner awaits it, as a transport's is by its `JoinSet`.
 why.** An orchestrator sends `SIGTERM`, waits its grace period — 30 s by default
 on Kubernetes — and kills: whatever the process still waited on dies with it, and
 a replica that never exits stalls a rollout. So every wait on the way down has a
-bound, and what still runs at the bound is abandoned with a `warn` naming it,
-never awaited in silence. The way down is three steps, in order, each with its
-own bound:
+bound, and what still runs at the bound is abandoned with a line naming it,
+never awaited in silence (`CLAUDE.md`, *No wait the framework does not bound*).
+The way down is four steps, in order, each with its own bound:
 
 1. **The transports stop, together.** The signal cancels the token every `serve`
    shares, and `App::run` joins them all. Each transport owes its own bound
@@ -1511,6 +1510,33 @@ own bound:
    (3 s) between them; what still exports then is abandoned and named on stderr.
    The SDK's own bound is five seconds per provider, in turn, and its metrics
    provider ignores the timeout it is handed, so the bound is the crate's.
+4. **The runtime is torn down** by `#[nest_rs::main]`, within what the hooks and
+   the flush left of the hooks' budget — so it adds nothing to the sum. Dropping
+   a tokio runtime waits for every blocking task still running, which is what
+   `#[tokio::main]` does as `main` returns: a hook abandoned while it waited on a
+   `spawn_blocking`, or a request dropped mid `tokio::fs` call, held the exit for
+   as long as that call lasted, past every bound and after the last line. Under
+   `#[nest_rs::main]` it is abandoned with the process; still running at the
+   bound, it is said at `warn` when the bound is one the teardown could wait out.
+   **Every binary the repository writes uses it** — the scaffold's, the demo's,
+   the benchmark's, tools included: a `main` that never ran an app spent none of
+   the hooks' budget, so its teardown is given all of it, and blocking work it
+   left behind is waited for that long and named if it outlives it — never
+   abandoned at once without a line. The conformance suite's `entries`
+   join refuses an `async fn main` without it and `#[tokio::main]` anywhere in
+   `crates/`, `demo/`, `bench/` and the documentation; the CLI's own suite holds
+   the templates.
+
+**A signal received on the way down exits at once.** The first `SIGINT` or
+`SIGTERM` starts the way down; one received after it — or after a transport's
+failure started it — is a person or a supervisor that has stopped waiting, and
+since the first the handlers are the runtime's, so the operating system's default
+action no longer runs. The process exits with `128 + n` (130 for `SIGINT`, 143
+for `SIGTERM`) after one `error` on `nest_rs::app` naming what it abandons — the
+transports still stopping, the hook running, or the exit itself — and runs
+nothing after it, the flush included. The handlers are installed before any
+transport serves, so a signal arriving with the first request never meets the
+default action either.
 
 **The steps add up, so the grace period has to hold their sum** — the longest
 transport stop, then the hooks' budget, then the flush: 20 + 0.5 + 5 + 3 =

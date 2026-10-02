@@ -13,6 +13,7 @@ mod decodes;
 mod dependencies;
 mod docs;
 mod edges;
+mod entries;
 mod env_names;
 mod events;
 mod filters;
@@ -60,7 +61,7 @@ pub(crate) const EDGES: [&str; 7] = [
 /// tree whose answer is written beside it rather than only on the real one,
 /// where a reading that is wrong the same way twice passes.
 ///
-/// Here because two joins plant — `naming` and `grammars`.
+/// Here because several joins plant one.
 pub(crate) fn plant(root: &std::path::Path, tree: &[(&str, &str)]) {
     for (file, text) in tree {
         let path = root.join(file);

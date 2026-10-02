@@ -126,6 +126,21 @@ to require it, **stop and ask**.
   there are no others.
 - **No silent failure.** Never return `[]`/`None` when the DB errored —
   batch and loader methods return `Result`. Never log-and-pretend-success.
+- **No wait the framework does not bound.** Every port call the framework
+  awaits has a bound of the framework's — a backend is trusted to answer, never
+  to answer in time — and the way down abandons what is still running at its
+  bound, with a line naming it, rather than awaiting it: each transport stops
+  within its window (the HTTP window, the Redis worker's drain, the scheduler's
+  tick bound, each then a settle), the shutdown hooks within their one budget,
+  the telemetry flush within its own, and the runtime's teardown within what
+  the hooks left of theirs — which is why every binary's `main` is
+  `#[nest_rs::main]`, never `#[tokio::main]`, whose runtime drop waits on
+  whatever an abandoned unit left blocking. A signal received during the way
+  down exits at once. The steps sum under Kubernetes' default grace, and
+  `nest-rs-testing` pins the sum for every transport the framework ships. One
+  member is unbounded and raised rather than refused — a database statement on a
+  connection that stopped answering — and `framework.md` states it under *A port
+  call the framework awaits is bounded*.
 - **No queue promise stronger than at least once.** A job may run more than
   once — a redelivery after its settled mark lapsed, a lease outlived by a
   replica cut off from Redis — so a handler is idempotent, and no rustdoc, log

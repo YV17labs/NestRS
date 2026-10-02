@@ -114,11 +114,6 @@ const TRACING_SUBSCRIBER: Dep = Dep {
     workspace_value: "{ version = \"0.3\", features = [\"env-filter\"] }",
     features: &[],
 };
-const TOKIO: Dep = Dep {
-    name: "tokio",
-    workspace_value: "{ version = \"1.53\", features = [\"macros\", \"rt-multi-thread\"] }",
-    features: &[],
-};
 
 /// The crates a resource port (DB-backed CRUD + HTTP) needs.
 ///
@@ -159,7 +154,6 @@ pub(super) fn migrations_deps() -> Vec<&'static Dep> {
         &SEA_ORM,
         &SEA_ORM_MIGRATION,
         &ANYHOW,
-        &TOKIO,
         &TRACING_SUBSCRIBER,
     ]
 }

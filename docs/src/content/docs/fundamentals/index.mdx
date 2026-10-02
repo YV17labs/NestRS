@@ -108,7 +108,7 @@ pub struct BlogModule;
 ```rust title="apps/blog/src/main.rs"
 use nest_rs::core::App;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> anyhow::Result<()> {
     App::builder()
         .module::<BlogModule>()

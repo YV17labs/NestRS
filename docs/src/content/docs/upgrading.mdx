@@ -225,6 +225,15 @@ rolls out (step 7).
      it; a worker pod you gave 45 seconds for the old 30-second drain can keep
      its drain and its grace, or drop both to the defaults. See
      [the way down](/fundamentals/lifecycle/#the-way-down).
+   - **`main` is `#[nest_rs::main]`.** Replace `#[tokio::main]` on every
+     binary's `main` — the apps, and the `migrate` and `seed` tools — and drop
+     the `tokio` line a crate carried only for it (its tests keep theirs as a
+     dev-dependency). The decorator builds the same runtime and ends the process
+     within the shutdown budget: under `#[tokio::main]`, the runtime's drop
+     waits for every blocking call still running, so a hook abandoned while it
+     waited on one held the exit past every bound. A second `SIGINT` or
+     `SIGTERM` during the way down now exits at once, with code 130 or 143 and
+     one `error` naming what it abandons; in 6.x it was ignored.
    - **Operation lines can end unanswered.** A request dropped at the window, or
      by a client that reset its connection, files its `http.request` line with
      `outcome="cancelled"` and no `status` or `bytes`, and a handler that panics

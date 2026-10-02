@@ -80,17 +80,16 @@ nest_rs::ws :: failed to serialize reply
 nest_rs::ws :: writer task failed
 
 # ── nest_rs::app
-# `tokio::signal::unix::signal` returns `Err` for one reason a process can
-# arrange — a refused signal number — and the call sites hard-code
-# `SignalKind::terminate()`. The other misconfiguration, a runtime built without
-# the signal driver, **panics** rather than returning `Err`.
-nest_rs::app :: failed to install SIGTERM handler
-# Stronger than an environment claim: this line sits under `#[cfg(not(unix))]`,
-# so it is never compiled here at all. It appears in the population because the
-# scan reads the source with `syn`, which is blind to `cfg` — a limit of the
-# join worth knowing, and the reason a `cfg`-gated event cannot simply be
-# filtered out of the family.
-nest_rs::app :: failed to install ctrl-c handler
+# One line for both platforms, where two stood — one per signal API — before the
+# second signal was answered. On unix, `tokio::signal::unix::signal` returns
+# `Err` for one reason a process can arrange — a refused signal number — and
+# `way_down::Signals::install` hard-codes `SignalKind::interrupt()` and
+# `SignalKind::terminate()`; the other misconfiguration, a runtime built without
+# the signal driver, **panics** rather than returning `Err`. On Windows the call
+# is `tokio::signal::windows::ctrl_c`, under `#[cfg(not(unix))]`, so it is never
+# compiled here at all — it is in the population because the scan reads the
+# source with `syn`, which is blind to `cfg`.
+nest_rs::app :: failed to install the shutdown signal handlers; the process stops only when a transport does
 
 # ── nest_rs::health
 # `ProbeReport` is an `IndicatorStatus` plus three `BTreeMap<&'static str,

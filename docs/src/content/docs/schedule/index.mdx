@@ -195,7 +195,7 @@ pub struct ApiModule;
 use nest_rs::core::App;
 use api::ApiModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> anyhow::Result<()> {
     App::builder()
         .module::<ApiModule>()

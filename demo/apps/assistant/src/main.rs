@@ -4,7 +4,7 @@ use nest_rs::core::App;
 
 use assistant::AssistantModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
 

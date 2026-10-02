@@ -184,7 +184,8 @@ where
 /// transports' windows and the shutdown hooks' budget
 /// (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`, which tabulates the sum): 20 + 0.5 +
 /// 5 + 3 = 28.5 seconds by default, under the 30 a Kubernetes pod is given before
-/// `SIGKILL`. Three seconds is ample for a
+/// `SIGKILL`. The runtime's teardown after it is held to what is left of the
+/// hooks' budget, so it adds nothing. Three seconds is ample for a
 /// collector that answers — a final batch is one request per signal — and a
 /// collector that does not answer is the case the bound exists for.
 ///

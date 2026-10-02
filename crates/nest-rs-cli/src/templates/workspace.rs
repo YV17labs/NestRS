@@ -79,9 +79,10 @@ publish = false
 [dependencies]
 features.workspace = true
 nest-rs.workspace = true
-tokio.workspace = true
 anyhow.workspace = true
 
+[dev-dependencies]
+tokio.workspace = true
 "#;
 
 pub(crate) const APP_LIB: &str = r#"mod module;
@@ -95,7 +96,7 @@ use nest_rs::core::App;
 
 use {{snake}}::{{module}};
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
 

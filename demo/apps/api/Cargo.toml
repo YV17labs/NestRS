@@ -8,13 +8,13 @@ publish = false
 nest-rs.workspace = true
 features.workspace = true
 poem.workspace = true
-tokio.workspace = true
 anyhow.workspace = true
 uuid.workspace = true
 sea-orm.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+tokio.workspace = true
 nest-rs.workspace = true
 # Enables `features::testing` (dev keypair, org id, tokens, Redis databases) for e2e.
 features = { workspace = true, features = ["test-support"] }

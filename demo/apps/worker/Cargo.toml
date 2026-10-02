@@ -7,10 +7,10 @@ publish = false
 [dependencies]
 nest-rs.workspace = true
 features.workspace = true
-tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+tokio.workspace = true
 nest-rs.workspace = true
 features = { workspace = true, features = ["test-support"] }
 migrations.workspace = true

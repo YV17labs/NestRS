@@ -2591,7 +2591,6 @@ dependencies = [
  "nest-rs",
  "sea-orm",
  "sea-orm-migration",
- "tokio",
  "tracing-subscriber",
 ]
 

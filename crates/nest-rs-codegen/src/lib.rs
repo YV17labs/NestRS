@@ -19,6 +19,7 @@ mod casing;
 mod crud;
 mod dispatch;
 mod duration;
+mod entry;
 mod identity;
 mod inject;
 mod job;
@@ -56,6 +57,7 @@ pub use crud::{
 };
 pub use dispatch::{Collision, DispatchKeys};
 pub use duration::duration_millis;
+pub use entry::{ENTRY, entry_needs_an_async_fn, entry_takes_no_arguments};
 pub use identity::{KEY, invalid_job_key, is_valid_job_key, key_value, key_without_replicas_one};
 pub use inject::{
     InjectableBody, LayerDeps, build_injectable_body, dependencies_method, dependency_names_method,

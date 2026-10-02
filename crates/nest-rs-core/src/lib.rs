@@ -93,6 +93,7 @@ pub mod request_scope;
 pub mod target;
 pub mod trace_context;
 pub mod transport;
+mod way_down;
 
 // The three access-graph validators have no caller outside `src/` in either
 // workspace and are `pub(crate)`: visibility wider than its use is a promise
@@ -136,6 +137,9 @@ pub use trace_context::{
 #[doc(hidden)]
 pub use trace_context::{current_correlation, set_actor_id};
 pub use transport::{Transport, TransportContribution};
+// `#[nest_rs::main]`'s expansion — see the `way_down` module.
+#[doc(hidden)]
+pub use way_down::__main;
 
 // Cross-crate Layer-System wiring — `pub` for the five registry crates and
 // macro output, not public API. `LayerSpec` (above) is the one deliberate
@@ -180,7 +184,7 @@ pub use validator;
 // only path that used to exist for one) reads as a mistake.
 pub use async_trait::async_trait;
 
-pub use nest_rs_core_macros::{hooks, module};
+pub use nest_rs_core_macros::{hooks, main, module};
 
 /// The provider decorator. Every `#[inject]` field must be an `Arc<T>` or
 /// `Arc<dyn Trait>` — a dependency is resolved from the container as a shared

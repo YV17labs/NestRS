@@ -8,11 +8,11 @@ publish = false
 nest-rs.workspace = true
 features.workspace = true
 serde.workspace = true
-tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+tokio.workspace = true
 nest-rs.workspace = true
 # Enables `features::testing` (dev keypair, org id, tokens, Redis databases) for e2e.
 features = { workspace = true, features = ["test-support"] }

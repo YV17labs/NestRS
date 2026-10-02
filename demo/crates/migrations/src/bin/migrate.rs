@@ -3,7 +3,7 @@ use migrations::Migrator;
 use sea_orm_migration::MigratorTrait;
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(

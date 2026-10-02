@@ -14,7 +14,6 @@ publish = false
 # benchmark an install shape that no longer exists.
 nest-rs = { path = "../../../crates/nest-rs", features = ["http"] }
 anyhow = "1.0"
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread"] }
 # `serde`/`schemars` stay: `dto.rs` writes those derives itself. `poem` does
 # not — the handler reaches it through `nest_rs::http::poem`.
 serde = { version = "1.0", features = ["derive"] }

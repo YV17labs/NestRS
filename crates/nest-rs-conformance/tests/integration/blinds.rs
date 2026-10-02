@@ -91,6 +91,7 @@ const JOINS: &[(&str, Declares)] = &[
     ("dependencies", crate::dependencies::followed),
     ("docs", crate::docs::followed),
     ("edges", crate::edges::followed),
+    ("entries", crate::entries::followed),
     ("env_names", crate::env_names::followed),
     ("events", crate::events::followed),
     ("filters", crate::filters::followed),

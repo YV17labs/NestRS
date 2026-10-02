@@ -9,7 +9,6 @@ nest-rs.workspace = true
 sea-orm-migration.workspace = true
 sea-orm.workspace = true
 anyhow.workspace = true
-tokio.workspace = true
 tracing-subscriber.workspace = true
 
 [lints]

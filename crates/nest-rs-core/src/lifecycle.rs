@@ -19,6 +19,7 @@ use futures_util::FutureExt as _;
 use tokio::time::Instant;
 
 use crate::container::Container;
+use crate::way_down::WayDown;
 
 /// How long the shutdown hooks may run, all of them together, before what still
 /// waits is abandoned.
@@ -33,11 +34,14 @@ use crate::container::Container;
 /// | the transports stop, together | each its own: the HTTP window then [`SHUTDOWN_SETTLE_TIMEOUT`], the Redis worker's drain window, the scheduler's tick bound then the settle | 20.5 s, the longest |
 /// | the shutdown hooks run | this budget, across all three phases | 5 s |
 /// | telemetry flushes | `nest_rs_opentelemetry`'s flush bound, every provider at once | 3 s |
+/// | the runtime is torn down | what remains of this budget, under `#[nest_rs::main]` | nothing past it |
 ///
 /// 28.5 seconds, one and a half short of the kill: a process past its grace dies
 /// without a line, skipping every later hook and the flush. A bound per hook
 /// could not hold that sum — `k` hooks that hang cost `k` times the bound — which
-/// is why the budget is a deadline the three phases share.
+/// is why the budget is a deadline the three phases share. The runtime's own
+/// teardown adds nothing to it: it is held to what the hooks and the flush left
+/// of this deadline, so work they abandoned no longer holds the exit.
 ///
 /// **Once it is spent, every later hook still starts.** Each is polled once
 /// against the elapsed deadline: a hook that finishes without waiting — a
@@ -48,7 +52,8 @@ use crate::container::Container;
 /// A constant rather than a setting: a cleanup that needs longer is draining
 /// work, and draining belongs in a transport's own window, which a deployment
 /// does configure. The bound covers a hook that waits — an `async fn` pending on
-/// I/O, a lock, a channel; one that blocks its thread is past any timer's reach.
+/// I/O, a lock, a channel; one that blocks its thread is past any timer's reach,
+/// and the process exit no longer waits for it either.
 ///
 /// The scheduler reads it as its own window: a tick still running when shutdown
 /// is asked for is developer code on the way down, as a hook is, and gets the
@@ -225,12 +230,14 @@ pub(crate) async fn run_phase_lenient(
     container: &Container,
     phase: LifecyclePhase,
     deadline: Instant,
+    way_down: &WayDown,
 ) {
     for hook in hooks_for(phase) {
         if !(hook.present)(container) {
             report_inert_hook(hook, phase);
             continue;
         }
+        way_down.hook(phase, hook.provider, hook.method);
         let started = Instant::now();
         // Polled once even past the deadline — `timeout_at` polls the hook
         // before its timer — so a hook that finishes without waiting still runs
@@ -367,6 +374,7 @@ mod tests {
             &container,
             LifecyclePhase::BeforeApplicationShutdown,
             Instant::now() + SHUTDOWN_HOOKS_TIMEOUT,
+            &WayDown::default(),
         )
         .await;
     }

@@ -7,7 +7,7 @@ use nest_rs::guards::{AppBuilderGuardsExt, guard};
 
 use api::ApiModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
 

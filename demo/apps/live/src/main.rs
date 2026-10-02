@@ -6,7 +6,7 @@ use nest_rs::guards::{AppBuilderGuardsExt, guard};
 
 use live::LiveModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
 

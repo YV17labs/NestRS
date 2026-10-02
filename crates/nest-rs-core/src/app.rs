@@ -3,7 +3,7 @@
 //! drives the lifecycle and transports.
 
 use std::any::{Any, TypeId};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -25,6 +25,7 @@ use crate::error::{
 use crate::lifecycle::{LifecyclePhase, run_phase, run_phase_lenient};
 use crate::module::Module;
 use crate::transport::{Transport, TransportContribution};
+use crate::way_down::{WayDown, watch_signals};
 
 /// Entry point for a nestrs application. Builds the container from a root
 /// [`Module`] and runs every transport its imports contribute concurrently
@@ -157,6 +158,11 @@ impl App {
     /// The transports are awaited without a bound of this method's own: each
     /// owes its own, per [`Transport::serve`].
     ///
+    /// A signal received once the way down has begun exits the process at once,
+    /// with the code a shell gives a process that signal killed (130 for
+    /// `SIGINT`, 143 for `SIGTERM`) and one `error` line naming what it abandons.
+    /// See the `way_down` module.
+    ///
     /// Every transport is contributed by an imported module via
     /// [`TransportContribution`] — `HttpModule` brings `HttpTransport`,
     /// `ScheduleModule` brings `Scheduler`, `RedisWorkerModule` brings
@@ -171,7 +177,7 @@ impl App {
             "nestrs starting",
         );
 
-        let mut transports: Vec<Box<dyn Transport>> = Vec::new();
+        let mut transports: Vec<(&'static str, Box<dyn Transport>)> = Vec::new();
         for contribution in Discovery::new(&container).meta::<TransportContribution>() {
             let transport = (contribution.meta.build)(&container)?;
             tracing::info!(
@@ -179,10 +185,10 @@ impl App {
                 transport = contribution.meta.name,
                 "attached module-contributed transport",
             );
-            transports.push(transport);
+            transports.push((contribution.meta.name, transport));
         }
 
-        for t in transports.iter_mut() {
+        for (_, t) in transports.iter_mut() {
             t.configure(&container).await?;
         }
 
@@ -192,17 +198,29 @@ impl App {
         run_phase(&container, LifecyclePhase::OnApplicationBootstrap).await?;
 
         let cancel = CancellationToken::new();
-        spawn_shutdown_signal(cancel.clone());
+        let way_down = Arc::new(WayDown::default());
+        watch_signals(cancel.clone(), Arc::clone(&way_down));
 
         let mut join = JoinSet::new();
-        for transport in transports {
+        // Which transport each task serves, so a signal on the way down can say
+        // which ones it is about to abandon.
+        let mut serving: HashMap<tokio::task::Id, &'static str> = HashMap::new();
+        for (name, transport) in transports {
             let token = cancel.clone();
-            join.spawn(async move { transport.serve(token).await });
+            let task = join.spawn(async move { transport.serve(token).await });
+            serving.insert(task.id(), name);
         }
+        way_down.transports(still_serving(&serving));
 
         let mut first_err: Option<anyhow::Error> = None;
-        while let Some(res) = join.join_next().await {
-            match res {
+        while let Some(res) = join.join_next_with_id().await {
+            let ended = match &res {
+                Ok((task, _)) => *task,
+                Err(join_err) => join_err.id(),
+            };
+            serving.remove(&ended);
+            way_down.transports(still_serving(&serving));
+            match res.map(|(_, served)| served) {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     if first_err.is_none() {
@@ -224,15 +242,18 @@ impl App {
         // Shutdown is best-effort: every provider's cleanup runs even if one
         // fails, panics or a transport errored — and the three phases share one
         // deadline, so the teardown's cost is bounded whatever the hook count.
+        // The runtime's own teardown is held to what they leave of it
+        // (`way_down::__main`), so it is recorded where that can read it.
         let deadline = tokio::time::Instant::now() + crate::SHUTDOWN_HOOKS_TIMEOUT;
-        run_phase_lenient(&container, LifecyclePhase::OnModuleDestroy, deadline).await;
-        run_phase_lenient(
-            &container,
+        crate::way_down::hooks_deadline(deadline);
+        for phase in [
+            LifecyclePhase::OnModuleDestroy,
             LifecyclePhase::BeforeApplicationShutdown,
-            deadline,
-        )
-        .await;
-        run_phase_lenient(&container, LifecyclePhase::OnApplicationShutdown, deadline).await;
+            LifecyclePhase::OnApplicationShutdown,
+        ] {
+            run_phase_lenient(&container, phase, deadline, &way_down).await;
+        }
+        way_down.exit();
 
         match first_err {
             Some(e) => Err(e),
@@ -481,37 +502,12 @@ impl AppBuilder {
     }
 }
 
-fn spawn_shutdown_signal(cancel: CancellationToken) {
-    tokio::spawn(async move {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut sigterm = match signal(SignalKind::terminate()) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!(target: crate::target::APP, error = %crate::error_message(&e), "failed to install SIGTERM handler");
-                    return;
-                }
-            };
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => tracing::info!(target: crate::target::APP, signal = "SIGINT", "shutdown signal received"),
-                _ = sigterm.recv()          => tracing::info!(target: crate::target::APP, signal = "SIGTERM", "shutdown signal received"),
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            match tokio::signal::ctrl_c().await {
-                Ok(()) => {
-                    tracing::info!(target: crate::target::APP, signal = "ctrl-c", "shutdown signal received")
-                }
-                Err(e) => {
-                    tracing::warn!(target: crate::target::APP, error = %crate::error_message(&e), "failed to install ctrl-c handler");
-                    return;
-                }
-            }
-        }
-        cancel.cancel();
-    });
+/// The transports still running, in a stable order, for the line a signal on
+/// the way down files.
+fn still_serving(serving: &HashMap<tokio::task::Id, &'static str>) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = serving.values().copied().collect();
+    names.sort_unstable();
+    names
 }
 
 #[cfg(test)]

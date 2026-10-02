@@ -102,17 +102,18 @@ publish = false
 [dependencies]
 features.workspace = true
 nest-rs.workspace = true
-tokio.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
 nest-rs.workspace = true
+tokio.workspace = true
 ```
 
 One `nest-rs` line, and it stays one for the rest of this tutorial: the
 capabilities arrive as **features** on it (`[workspace.dependencies]` in the
-root manifest is where the list lives). `tokio` and `anyhow` are there because
-`main.rs` writes them.
+root manifest is where the list lives). `anyhow` is there because `main.rs`
+writes it, and `tokio` only for the tests, which write `#[tokio::test]`:
+`#[nest_rs::main]` builds the runtime `main` runs on itself.
 
 The root module is where transports come in. `HttpModule::for_root` pins
 the listen port in code — not in `.env`:
@@ -150,7 +151,7 @@ use nest_rs::core::App;
 
 use blog::BlogModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
 
@@ -165,7 +166,10 @@ async fn main() -> Result<()> {
 
 `App::builder()` runs the four boot phases — seeds, collect, factories,
 register — verifies the access graph, then `.run()` blocks on the
-transports. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
+transports. `#[nest_rs::main]` builds the runtime all of it runs on, and once
+`run` returns it ends the process within the
+[shutdown budget](/fundamentals/lifecycle/#the-way-down) rather than waiting on
+whatever the way down abandoned. The CLI also writes `src/lib.rs` (re-exporting `BlogModule`
 for the tests in [Test it end to end](/tutorial/testing/)), a smoke test that
 asserts the greeting, and an **empty** `tests/e2e/main.rs`. The e2e suite has to
 exist even while empty: `nestrs run test unit` filters on `not binary(e2e)`, and

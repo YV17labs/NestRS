@@ -5,7 +5,7 @@ use nest_rs::opentelemetry::OpenTelemetry;
 
 use auth::AuthModule;
 
-#[tokio::main]
+#[nest_rs::main]
 async fn main() -> Result<()> {
     let _environment = Environment::init();
     let _otel = OpenTelemetry::init("auth")?;

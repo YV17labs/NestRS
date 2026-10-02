@@ -688,7 +688,11 @@ async fn an_attempt_outlasting_the_shutdown_window_is_handed_back_within_it() {
         2,
         "interrupted once, then run by the next replica"
     );
-    assert_eq!(OUTLASTED.finished(run), 1, "and completed exactly once");
+    assert_eq!(
+        OUTLASTED.finished(run),
+        1,
+        "and completed by the next replica"
+    );
 }
 
 // --- a shutdown while Redis stalls ----------------------------------------------

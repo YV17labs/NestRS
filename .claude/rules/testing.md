@@ -216,7 +216,7 @@ section does not bind it.
 - **A procedure the docs hand an operator is run by an e2e test**, as
   printed: a move, a drain, anything that changes data an operator cannot
   get back. The 6.x queue move is one
-  (`layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once`),
+  (`layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_and_copies_none`),
   and like any filled cell it is proved: leaving out the `ZADD` that
   re-registers the moved in-flight set fails it.
 - **A second checkout takes its own `CARGO_TARGET_DIR`.** Sharing one, cargo

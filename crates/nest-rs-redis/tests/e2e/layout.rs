@@ -9,8 +9,9 @@
 //! - **The way out the documentation prescribes is run, not described.** The move
 //!   the queue pages publish — every structure renamed under the namespace, the
 //!   in-flight set registered as a consumer — is played on a layout written the
-//!   way 6.x wrote it, and a 7.0 worker then runs every job it held exactly once:
-//!   the one waiting, the one held back, and the one a 6.x replica died running.
+//!   way 6.x wrote it, and a 7.0 worker then runs every job it held — the one
+//!   waiting, the one held back, and the one a 6.x replica died running — the
+//!   move losing none and copying none.
 //! - **Everything a queue holds is under its namespace, and the queue page's ACL
 //!   runs it.** A Redis user created exactly as the page prescribes — reaching
 //!   `nestrs:queue:*` and nothing else, allowed the commands the page lists and
@@ -519,10 +520,10 @@ async fn left_at_the_root(admin: &mut RedisConnection, queue: &str) -> Vec<Strin
 /// A queue a 6.x release left jobs in — one waiting, one held back, one in
 /// flight on a replica that died — refuses the 7.0 worker, counting each, and
 /// once moved the way the upgrade page says, nothing is left at the root, the
-/// worker starts, and each of the three jobs runs exactly once — the held-back
-/// one no sooner than its due second.
+/// worker starts, and each of the three jobs runs, the move having copied none —
+/// the held-back one no sooner than its due second.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once() {
+async fn a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_and_copies_none() {
     let mut admin = crate::connect().await;
     clear_the_root(&mut admin, MOVED_QUEUE).await;
     crate::forget(MOVED_QUEUE).await;

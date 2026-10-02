@@ -15,9 +15,10 @@
 //!   lease the dead one held;
 //! - **the same job filed twice** reaches two deliveries at once.
 //!
-//! In every case the job runs once — to completion, once overall — the second
-//! delivery is handed back while the first holds the lease, and it is
-//! acknowledged without running once the first has settled it.
+//! In each case the guard meets the second delivery the same way: it is handed
+//! back while the first holds the lease, and acknowledged without running once
+//! the first has settled the job — inside the settled mark's one span, which
+//! every test here stays within.
 //!
 //! The same step meets a cancel: a job cancelled while it waits — on its queue,
 //! on its delay, or for its next attempt — is acknowledged without running when
@@ -134,7 +135,8 @@ struct ScaleUpModule;
 /// queue again, and the replica starting fetches it: the lease sends it back
 /// until the first has settled it, and then it is acknowledged without running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replica_starting_mid_flight_never_runs_the_in_flight_job_twice() {
+async fn a_replica_starting_mid_flight_hands_the_swept_job_back_then_acknowledges_it_without_running()
+ {
     let logs = LogCapture::install_global();
     let run = crate::this_run();
     let first = crate::replica::<ScaleUpModule>().await;
@@ -208,13 +210,14 @@ struct StallModule;
 /// replica's in-flight job back onto the queue while it still runs — the sweep
 /// is apalis's own, called here as a peer calls it. The replica fetches the
 /// swept copy itself; its lease sends that back until the job settles, and the
-/// job runs once.
+/// settled mark then acknowledges it without running.
 ///
 /// The job outlasts one heartbeat: against Redis 6.2 a swept worker fetches
 /// nothing until its next one (apalis re-registers it on an error text only
 /// Redis 7 writes), and the copy has to arrive while the job still runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replica_taken_for_dead_while_it_runs_a_job_never_runs_it_twice() {
+async fn a_replica_taken_for_dead_while_it_runs_a_job_hands_the_swept_copy_back_then_acknowledges_it_without_running()
+ {
     let logs = LogCapture::install_global();
     let run = crate::this_run();
     let replica = crate::replica::<StallModule>().await;
@@ -283,10 +286,10 @@ struct DeathModule;
 
 /// A replica killed mid-attempt — no drain, no hand-back, its lease no longer
 /// renewed — leaves its job in flight. The next replica's startup sweep finds
-/// it, waits out the dead replica's lease, and runs it: to completion, once
-/// overall.
+/// it, waits out the dead replica's lease, and runs it again: the dead
+/// replica's attempt started it, the next one completes it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replica_dying_mid_attempt_leaves_its_job_to_complete_exactly_once() {
+async fn a_replica_dying_mid_attempt_leaves_its_job_to_the_next_replica_after_its_lease() {
     let run = crate::this_run();
     let doomed = crate::mortal_replica::<DeathModule>().await;
     doomed
@@ -315,7 +318,11 @@ async fn a_replica_dying_mid_attempt_leaves_its_job_to_complete_exactly_once() {
         2,
         "started by the replica that died, then by the one after it",
     );
-    assert_eq!(ORPHANED.finished(run), 1, "and completed exactly once");
+    assert_eq!(
+        ORPHANED.finished(run),
+        1,
+        "and completed by the replica after it"
+    );
 }
 
 // --- one job filed twice ------------------------------------------------------------
@@ -348,7 +355,8 @@ struct TwiceModule;
 /// room to run both at once: the second waits on the first's lease, and is
 /// acknowledged without running once the first settled the job.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn one_job_delivered_twice_at_once_runs_once() {
+async fn one_job_delivered_twice_at_once_hands_the_second_delivery_back_then_acknowledges_it_without_running()
+ {
     let logs = LogCapture::install_global();
     let run = crate::this_run();
     let id = uuid::Uuid::now_v7().to_string();

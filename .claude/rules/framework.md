@@ -881,7 +881,7 @@ the check cannot read is one it cannot vouch for — and it hides nothing at the
 other names. Never a `SCAN`, which costs the whole keyspace and which an ACL
 confined to `nestrs:queue:*` refuses; a `NOPERM` answer is said, never taken for an
 empty layout. The move the docs print is the one
-`layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once` runs.
+`layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_and_copies_none` runs.
 
 **Each Redis binding's page prescribes its ACL rule whole, and the rule is run,
 not described.** Redis checks every command a script calls against the caller's

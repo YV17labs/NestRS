@@ -1,3 +1,5 @@
+pub const TARGET: &str = "features::notifications";
+
 mod command;
 mod entity;
 mod module;

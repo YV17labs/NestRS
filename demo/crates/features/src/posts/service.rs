@@ -51,7 +51,7 @@ impl PostsService {
         active.status = Set(PostStatus::Draft);
         let model = self.create_from_active(active).await?;
         tracing::debug!(
-            target: "features::posts",
+            target: crate::posts::TARGET,
             id = %model.id,
             %org_id,
             "post created",
@@ -87,7 +87,7 @@ impl PostsService {
         .map_err(ServiceError::from)?;
 
         tracing::debug!(
-            target: "features::posts",
+            target: crate::posts::TARGET,
             id = %post_id,
             %org_id,
             "post published",

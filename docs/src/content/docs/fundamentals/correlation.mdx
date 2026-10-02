@@ -19,7 +19,7 @@ impl PostService {
         let post = self.repo.publish(id).await?;
         // No id is named here, and none should be: the line carries `trace_id`,
         // `span_id` and `actor_id` already.
-        tracing::info!(target: "features::posts", %id, "post published");
+        tracing::info!(target: crate::posts::TARGET, %id, "post published");
         Ok(post)
     }
 }

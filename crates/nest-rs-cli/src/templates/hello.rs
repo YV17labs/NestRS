@@ -59,7 +59,9 @@ impl {{controller}} {
 // `hello` feature; `nestrs new blog` inside that workspace writes the `blog`
 // one — the same shape either way, so no path ends up with a mute app.
 
-pub(crate) const FEATURE_MOD: &str = r#"mod module;
+pub(crate) const FEATURE_MOD: &str = r#"pub const TARGET: &str = "features::{{snake}}";
+
+mod module;
 mod service;
 
 pub mod http;

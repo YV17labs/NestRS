@@ -30,7 +30,7 @@ impl AudioTasks {
     #[after("3s")]
     async fn warmup_on_boot(&self) -> Result<()> {
         tracing::info!(
-            target: "features::audio",
+            target: crate::audio::TARGET,
             phase = "warmup",
             "audio pipeline ready to enqueue",
         );
@@ -40,7 +40,7 @@ impl AudioTasks {
     #[cron(CronExpression::EVERY_MINUTE, replicas = "each")]
     async fn heartbeat(&self) -> Result<()> {
         tracing::info!(
-            target: "features::audio",
+            target: crate::audio::TARGET,
             queue = AUDIO_QUEUE,
             "audio producer heartbeat",
         );

@@ -16,7 +16,7 @@ impl NotificationsGateway {
     #[public]
     async fn ping(&self, client: &WsClient) {
         if let Err(e) = client.broadcast("pong", &"hi") {
-            tracing::warn!(target: "features::notifications", error = %error_message(&e), "broadcast failed");
+            tracing::warn!(target: crate::notifications::TARGET, error = %error_message(&e), "broadcast failed");
         }
     }
 }

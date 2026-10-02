@@ -35,7 +35,7 @@ impl AudioService {
     pub async fn presign_upload(&self, filename: &str) -> Result<PresignedUrlDto, AudioError> {
         let key = format!("{}-{filename}", Uuid::now_v7());
         let url = self.storage.presign_put(&key, PRESIGN_TTL).await?;
-        tracing::debug!(target: "features::audio", key, "minted presigned upload URL");
+        tracing::debug!(target: crate::audio::TARGET, key, "minted presigned upload URL");
         Ok(PresignedUrlDto { key, url })
     }
 
@@ -43,7 +43,7 @@ impl AudioService {
         self.queue
             .push(AudioQueue, TranscodeCommand { file: file.clone() }, None)
             .await?;
-        tracing::debug!(target: "features::audio", file, "enqueued transcode job");
+        tracing::debug!(target: crate::audio::TARGET, file, "enqueued transcode job");
         Ok(())
     }
 
@@ -67,7 +67,7 @@ impl AudioService {
             .put_stream(&derived, AUDIO_CONTENT_TYPE, source)
             .await?;
         tracing::debug!(
-            target: "features::audio",
+            target: crate::audio::TARGET,
             file,
             derived_key = derived,
             "transcoded",
@@ -85,7 +85,7 @@ impl AudioService {
             .put_stream(&key, AUDIO_CONTENT_TYPE, part)
             .await?;
         let url = self.storage.presign_get(&key, PRESIGN_TTL).await?;
-        tracing::debug!(target: "features::audio", key, "stored direct multipart upload");
+        tracing::debug!(target: crate::audio::TARGET, key, "stored direct multipart upload");
         Ok(PresignedUrlDto { key, url })
     }
 
@@ -142,7 +142,7 @@ impl AudioService {
                     }
                     Err(e) => {
                         tracing::warn!(
-                            target: "features::audio",
+                            target: crate::audio::TARGET,
                             file = %file,
                             error = %error_message(&e),
                             "transcode status poll failed",

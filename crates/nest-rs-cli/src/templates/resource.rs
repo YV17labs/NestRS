@@ -9,7 +9,9 @@
 //! every route (no ability) with no row ever reaching Postgres. So there is no
 //! unguarded variant to generate — `g resource` bootstraps `g auth` instead.
 
-pub(crate) const MOD: &str = r#"mod entity;
+pub(crate) const MOD: &str = r#"pub const TARGET: &str = "features::{{snake}}";
+
+mod entity;
 mod module;
 mod service;
 

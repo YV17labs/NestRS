@@ -20,7 +20,7 @@ impl Guard for ModerationGuard {
         match data.get("author").and_then(Value::as_str) {
             Some(author @ "banned") => {
                 tracing::warn!(
-                    target: "features::chat",
+                    target: crate::chat::TARGET,
                     action = "post",
                     subject = event,
                     author,

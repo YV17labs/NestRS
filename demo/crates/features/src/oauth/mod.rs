@@ -1,3 +1,5 @@
+pub const TARGET: &str = "features::oauth";
+
 mod config;
 mod dtos;
 mod module;

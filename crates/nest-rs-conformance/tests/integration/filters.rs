@@ -27,6 +27,16 @@
 //! reads calls, not `macro_rules!` transcribers, so a literal target a
 //! transcriber writes is refused by the `blinds` join — a target handed *to* a
 //! macro is read where the macro is called.
+//!
+//! **And how each one is spelled.** `CLAUDE.md` makes a target a constant its
+//! owner declares, never a literal at the call site, because a typo in a literal
+//! is a target carrying one event no filter selects, and nothing says so. A
+//! framework crate declares `TARGET` at its root; a product feature at its
+//! module's, `features::posts::TARGET`. The second test holds every call site of
+//! both workspaces to it — shipped code and the doc examples it carries, since an
+//! example is the line a reader copies — and leaves out test code, whose targets
+//! are fixtures. The demo logged on eighteen literals until 7.0, every one a
+//! `features::…` string retyped per file.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -34,7 +44,8 @@ use std::path::Path;
 use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    Named, declared_target, declared_targets, each_source, repo_root,
+    Named, declared_target, declared_targets, doctests, each_source, is_cfg_test, item_attrs,
+    named_at, repo_root, top_level, value_after,
 };
 use syn::Macro;
 use syn::visit::Visit;
@@ -160,5 +171,59 @@ fn no_target_is_a_prefix_of_another() {
         pairs.len(),
         targets.len(),
         pairs.iter().cloned().collect::<Vec<_>>().join("\n  "),
+    );
+}
+
+/// The call sites that spell their target as a literal, and how many sites were
+/// read at all.
+#[derive(Default)]
+struct LiteralSites {
+    file: String,
+    read: usize,
+    found: BTreeSet<String>,
+}
+
+impl<'ast> Visit<'ast> for LiteralSites {
+    fn visit_item(&mut self, node: &'ast syn::Item) {
+        if is_cfg_test(item_attrs(node)) {
+            return;
+        }
+        syn::visit::visit_item(self, node);
+    }
+
+    fn visit_macro(&mut self, node: &'ast Macro) {
+        let flat = top_level(&node.tokens);
+        if let Some(at) = value_after(&flat, "target", ':') {
+            self.read += 1;
+            if let Some((Named::Literal(text), _)) = named_at(&flat, at) {
+                self.found.insert(format!("{} spells `{text}`", self.file));
+            }
+        }
+        syn::visit::visit_macro(self, node);
+    }
+}
+
+#[test]
+fn no_target_is_spelled_as_a_literal_where_it_is_emitted() {
+    let root = repo_root();
+    let mut scan = LiteralSites::default();
+    each_source(&root, |rel, ast| {
+        if rel.contains("/tests/") || !rel.contains("/src/") {
+            return;
+        }
+        scan.file = rel.to_owned();
+        scan.visit_file(ast);
+        for example in doctests(ast) {
+            scan.visit_file(&example);
+        }
+    });
+    baseline::floor(scan.read, FLOOR, "tracing target(s) at a call site");
+    assert!(
+        scan.found.is_empty(),
+        "{} call site(s) spell their target as a literal. A target is a constant \
+         its owner declares — `TARGET` at a framework crate's root, at a product \
+         feature's module root — and the call site names it:\n  {}",
+        scan.found.len(),
+        scan.found.iter().cloned().collect::<Vec<_>>().join("\n  "),
     );
 }

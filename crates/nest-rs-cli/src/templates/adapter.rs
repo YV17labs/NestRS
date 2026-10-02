@@ -195,7 +195,7 @@ impl {{gateway}} {
         // a delivery failure is logged rather than propagated (this handler
         // returns `()` — there is no client left to surface an error to).
         if let Err(e) = client.broadcast("{{kebab}}.{{op}}", {{op_value}}) {
-            tracing::warn!(target: "features::{{snake}}", error = %error_message(&e), "broadcast failed");
+            tracing::warn!(target: crate::{{snake}}::TARGET, error = %error_message(&e), "broadcast failed");
         }
     }
 }

@@ -20,7 +20,7 @@ impl ResponseError for AudioError {
     }
 
     fn as_response(&self) -> Response {
-        tracing::error!(target: "features::audio", error = %error_message(self), "audio operation failed");
+        tracing::error!(target: crate::audio::TARGET, error = %error_message(self), "audio operation failed");
         ProblemDetails::from_status(StatusCode::INTERNAL_SERVER_ERROR)
             .with_detail(self.to_string())
             .into_response()

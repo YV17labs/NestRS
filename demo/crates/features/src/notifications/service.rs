@@ -31,7 +31,7 @@ impl NotificationsService {
         let conn = Repo::<Notifications>::conn()?;
         let model = Repo::<Notifications>::insert_unscoped(active, &conn).await?;
         tracing::debug!(
-            target: "features::notifications",
+            target: crate::notifications::TARGET,
             id = %model.id,
             org_id = %model.org_id,
             "notification persisted",
@@ -52,7 +52,7 @@ impl NotificationsService {
             purged += Repo::<Notifications>::delete(model).await?.rows_affected;
         }
         tracing::debug!(
-            target: "features::notifications",
+            target: crate::notifications::TARGET,
             purged,
             %cutoff,
             "expired notifications purged",

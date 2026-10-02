@@ -439,7 +439,7 @@ setting in words.
 ## Observability
 
 A constant event-name message plus structured fields, never interpolation —
-the output is JSON. `tracing::info!(target: "features::users", user_id = %id,
+the output is JSON. `tracing::info!(target: crate::users::TARGET, user_id = %id,
 "created user")`, not a formatted sentence. **Every event carries at least one
 field**; a bare log is a defect, and the events queried under an incident are
 exactly the ones people emit bare. Controllers log `info` on success, services
@@ -448,7 +448,12 @@ exactly the ones people emit bare. Controllers log `info` on success, services
 **The target is rooted at the crate that emits, never at the product.** One
 target per concern per crate: `features::users` here. A crate whose name is
 not the product's keeps its own root anyway — the target's one job is to say
-where the event came from.
+where the event came from. **It is declared once, by the module that owns it**
+— `pub const TARGET: &str = "features::users";` at the top of
+`users/mod.rs`, which every generated feature starts with — and every call site
+names that constant. A literal retyped per file is a typo away from a target
+no filter selects, and nothing says so; a test asserts against the same
+constant for the same reason.
 
 ## Testing
 

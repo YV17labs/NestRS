@@ -80,7 +80,7 @@ impl UsersService {
             Some(password),
         )?;
         let user = self.create_from_active(active).await?;
-        tracing::debug!(target: "features::users", id = %user.id, %org_id, "user registered with password");
+        tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, "user registered with password");
         Ok(User::from(&user))
     }
 
@@ -99,7 +99,7 @@ impl UsersService {
             }
             Err(e) => return Err(e.into()),
         };
-        tracing::debug!(target: "features::users", id = %user.id, %org_id, "user created");
+        tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, "user created");
         Ok(user)
     }
 
@@ -117,7 +117,7 @@ impl UsersService {
 
         let Some(email) = identity.verified_email() else {
             tracing::warn!(
-                target: "features::users",
+                target: crate::users::TARGET,
                 provider = identity.provider,
                 reason = "no_verified_email",
                 "social login rejected: unknown identity with no verified email",
@@ -169,7 +169,7 @@ impl UsersService {
         {
             Ok(_) => {
                 tracing::debug!(
-                    target: "features::users",
+                    target: crate::users::TARGET,
                     provider = identity.provider,
                     %user_id,
                     "linked social identity to user",
@@ -197,13 +197,13 @@ impl UsersService {
             None,
         )
         .map_err(|e| {
-            tracing::error!(target: "features::users", provider = identity.provider, error = %error_message(&e), "social user preparation failed");
+            tracing::error!(target: crate::users::TARGET, provider = identity.provider, error = %error_message(&e), "social user preparation failed");
             AuthError::Failed("identity resolution failed".into())
         })?;
 
         let user = match Repo::<Users>::insert_unscoped(active, conn).await {
             Ok(user) => {
-                tracing::debug!(target: "features::users", id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
+                tracing::debug!(target: crate::users::TARGET, id = %user.id, %org_id, provider = identity.provider, "provisioned a user from social login");
                 user
             }
             Err(e) if is_unique_violation(&e) => find_by_email(email, conn)
@@ -269,7 +269,7 @@ fn new_identity_active(user_id: Uuid, identity: &SocialIdentity) -> user_identit
 }
 
 fn social_store_unavailable(provider: &str, err: DbErr) -> AuthError {
-    tracing::error!(target: "features::users", provider, error = %error_message(&err), "social identity store unreachable");
+    tracing::error!(target: crate::users::TARGET, provider, error = %error_message(&err), "social identity store unreachable");
     AuthError::Unavailable {
         detail: err.to_string(),
         retry_after: None,
@@ -296,7 +296,7 @@ fn is_unique_violation(err: &DbErr) -> bool {
 }
 
 fn store_unavailable(email: &str, err: DbErr) -> AuthError {
-    tracing::error!(target: "features::users", identity = %redact_email(email), error = %error_message(&err), "credential lookup failed");
+    tracing::error!(target: crate::users::TARGET, identity = %redact_email(email), error = %error_message(&err), "credential lookup failed");
     AuthError::Unavailable {
         detail: err.to_string(),
         retry_after: None,
@@ -326,24 +326,24 @@ pub(crate) fn verify_credentials(
 ) -> Result<entity::Model, CredentialError> {
     let Some(user) = user else {
         burn_verify(password);
-        tracing::warn!(target: "features::users", identity = %redact_email(email), reason = "unknown_email", "login failed");
+        tracing::warn!(target: crate::users::TARGET, identity = %redact_email(email), reason = "unknown_email", "login failed");
         return Err(CredentialError);
     };
 
     let Some(ref hash) = user.password_hash else {
         burn_verify(password);
-        tracing::warn!(target: "features::users", identity = %redact_email(email), reason = "no_password_set", "login failed");
+        tracing::warn!(target: crate::users::TARGET, identity = %redact_email(email), reason = "no_password_set", "login failed");
         return Err(CredentialError);
     };
 
     match verify_password(hash, password) {
         Ok(true) => Ok(user),
         Ok(false) => {
-            tracing::warn!(target: "features::users", identity = %redact_email(email), reason = "bad_password", "login failed");
+            tracing::warn!(target: crate::users::TARGET, identity = %redact_email(email), reason = "bad_password", "login failed");
             Err(CredentialError)
         }
         Err(e) => {
-            tracing::error!(target: "features::users", identity = %redact_email(email), error = %error_message(&e), reason = "unverifiable_hash", "login failed");
+            tracing::error!(target: crate::users::TARGET, identity = %redact_email(email), error = %error_message(&e), reason = "unverifiable_hash", "login failed");
             Err(CredentialError)
         }
     }
@@ -369,7 +369,7 @@ impl UsersService {
         if names.is_empty() {
             return Ok(HashMap::new());
         }
-        tracing::debug!(target: "features::users", count = names.len(), "loading users by name");
+        tracing::debug!(target: crate::users::TARGET, count = names.len(), "loading users by name");
         let rows = Repo::<Users>::scoped(Action::Read)
             .filter(live_condition::<Users>())
             .filter(entity::Column::Name.is_in(names.iter().cloned()))
@@ -384,7 +384,7 @@ impl UsersService {
     #[on_application_shutdown]
     async fn report(&self) -> Result<()> {
         let count = Users::find().count(self.db.as_ref()).await?;
-        tracing::debug!(target: "features::users", count, "users present at shutdown");
+        tracing::debug!(target: crate::users::TARGET, count, "users present at shutdown");
         Ok(())
     }
 }

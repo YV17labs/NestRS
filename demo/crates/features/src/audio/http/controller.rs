@@ -143,7 +143,7 @@ impl AudioController {
                 let id = payload.attempt.to_string();
                 let body = serde_json::to_string(&payload).unwrap_or_else(|e| {
                     tracing::error!(
-                        target: "features::audio",
+                        target: crate::audio::TARGET,
                         error = %error_message(&e),
                         "failed to serialize transcode event",
                     );

@@ -42,7 +42,7 @@ appear under the default `info` filter. A production deploy should respect
 
 ```rust title="crates/features/src/users/service.rs"
 tracing::info!(
-    target: "features::users",
+    target: crate::users::TARGET,
     user_id = %id,
     "creating user",
 );

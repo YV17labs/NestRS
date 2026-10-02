@@ -41,7 +41,7 @@
 //! #[async_trait]
 //! impl Guard for AuditGuard {
 //!     async fn check_http(&self, req: &mut HttpRequest) -> Result<(), Denial> {
-//!         tracing::info!(target: "api::authn", method = %req.method(), path = %req.uri(), "request seen");
+//!         tracing::info!(target: crate::authn::TARGET, method = %req.method(), path = %req.uri(), "request seen");
 //!         Ok(())
 //!     }
 //! }

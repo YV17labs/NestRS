@@ -302,13 +302,13 @@ pub struct BlogService;
 impl BlogService {
     #[on_application_bootstrap]
     async fn warm(&self) -> anyhow::Result<()> {
-        tracing::info!(target: "features::blog", entries = 0, "cache warmed");
+        tracing::info!(target: crate::blog::TARGET, entries = 0, "cache warmed");
         Ok(())
     }
 
     #[on_application_shutdown]
     async fn flush(&self) {
-        tracing::info!(target: "features::blog", pending = 0, "buffers flushed");
+        tracing::info!(target: crate::blog::TARGET, pending = 0, "buffers flushed");
     }
 }
 "#;

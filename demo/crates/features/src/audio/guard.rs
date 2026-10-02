@@ -43,7 +43,7 @@ impl TranscodeGuard {
         }
 
         tracing::warn!(
-            target: "features::audio",
+            target: crate::audio::TARGET,
             action = ?Action::Manage,
             subject = std::any::type_name::<OrgEntity>(),
             "transcode denied: caller lacks the admin capability",

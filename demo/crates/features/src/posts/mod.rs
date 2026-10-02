@@ -1,3 +1,5 @@
+pub const TARGET: &str = "features::posts";
+
 mod entities;
 mod error;
 mod event;

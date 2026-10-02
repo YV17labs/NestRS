@@ -56,14 +56,14 @@ impl NotificationsListener {
         };
         match self.queue.push(NotifyQueue, command, None).await {
             Ok(receipt) => tracing::debug!(
-                target: "features::notifications",
+                target: crate::notifications::TARGET,
                 post_id = %event.post_id,
                 org_id = %event.org_id,
                 job_id = %receipt.id(),
                 "enqueued a publish notification for the worker",
             ),
             Err(error) => tracing::error!(
-                target: "features::notifications",
+                target: crate::notifications::TARGET,
                 error = %error_message(&error),
                 post_id = %event.post_id,
                 org_id = %event.org_id,

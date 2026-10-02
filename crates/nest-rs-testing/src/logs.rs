@@ -7,11 +7,16 @@
 //!
 //! ```no_run
 //! # use nest_rs_testing::LogCapture;
+//! # const TARGET: &str = "features::orders";
 //! let logs = LogCapture::install();
-//! tracing::warn!(target: "nest_rs::orm", entity = "post", "denying all rows");
-//! let event = logs.expect_one("nest_rs::orm", "denying all rows");
-//! assert_eq!(event.field("entity").as_deref(), Some("post"));
+//! tracing::warn!(target: TARGET, order = 7, "order refused");
+//! let event = logs.expect_one(TARGET, "order refused");
+//! assert_eq!(event.field("order").as_deref(), Some("7"));
 //! ```
+//!
+//! The target is read from the constant the code under test logs on, never
+//! retyped: a test asserting a copied literal passes while the code drifts away
+//! from it.
 //!
 //! The capture is **thread-local** ([`tracing::subscriber::set_default`]), so
 //! parallel tests do not see each other's events. Hold the [`LogCapture`] across

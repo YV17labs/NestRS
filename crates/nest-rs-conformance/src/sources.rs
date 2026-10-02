@@ -732,8 +732,12 @@ pub fn declared_target(tokens: &TokenStream, file: &str) -> Option<Named> {
 /// The key is **(declaring crate, constant name)**, which is unique:
 /// `nest-rs-core` declares seven targets, so the crate alone cannot say which
 /// of them `…::operation_log::TARGET` is, and `TARGET` alone cannot say which
-/// crate's it is now that every crate has one.
+/// crate's it is now that every crate has one. A product file resolves through
+/// [`resolve_product_const`] instead, where the module is a level of the key.
 pub fn resolve_target(segments: &[String], file: &str) -> Option<&'static str> {
+    if file.starts_with("demo/") {
+        return resolve_product_const(segments, file);
+    }
     let name = segments.last()?;
     let owner = declaring_crate(segments, file);
     declared_targets()
@@ -754,6 +758,132 @@ fn declaring_crate(segments: &[String], file: &str) -> String {
         .and_then(|rest| rest.split('/').next())
         .unwrap_or_default()
         .to_owned()
+}
+
+/// Resolve a constant path written in a **product** file — one under `demo/` —
+/// to the string it names.
+///
+/// A product crate is a container: `features` declares one `TARGET` per
+/// feature (`features::posts::TARGET`, `features::users::TARGET`), so the
+/// framework's key — the crate and the constant's name — names several
+/// declarations there, and the module is the third level of it. The path is read
+/// through the crate's own imports ([`crate::imports::CrateImports`]) from the
+/// module the file is, so `crate::posts::TARGET`, `super::TARGET` and an imported
+/// `TARGET` all land on the one declaration; a path that roots anywhere but the
+/// crate itself resolves to nothing, and its site is reported unresolved.
+fn resolve_product_const(segments: &[String], file: &str) -> Option<&'static str> {
+    let (krate, _) = file.split_once("/src/")?;
+    let root = repo_root();
+    let src = root.join(krate).join("src");
+    let module = crate::imports::module_of(&root.join(file), &src)?;
+    let canonical = product_imports(&src, &module)?.resolve(&module, segments);
+    let (first, rest) = canonical.split_first()?;
+    if first != "crate" {
+        return None;
+    }
+    let (name, declared_in) = rest.split_last()?;
+    product_consts()
+        .iter()
+        .find(|konst| konst.krate == krate && konst.module == declared_in && konst.name == *name)
+        .map(|konst| konst.value)
+}
+
+/// One string constant a product crate declares, where it declares it.
+struct ProductConst {
+    /// The crate's directory, repository-relative: `demo/crates/features`.
+    krate: String,
+    /// The module that declares it, below the crate root.
+    module: Vec<String>,
+    name: String,
+    value: &'static str,
+}
+
+/// Every `const NAME: &str = "…"` the product crates declare outside test code,
+/// by crate, module and name. Walked once per test process, as
+/// [`declared_targets`] is.
+fn product_consts() -> &'static [ProductConst] {
+    static TABLE: std::sync::OnceLock<Vec<ProductConst>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let root = repo_root();
+        let mut out = Vec::new();
+        for dir in crate_dirs() {
+            let krate = relative(&dir, &root);
+            if !krate.starts_with("demo/") {
+                continue;
+            }
+            let src = dir.join("src");
+            for file in rust_files(&src) {
+                let (Some(module), Some(ast)) =
+                    (crate::imports::module_of(&file, &src), parsed(&file))
+                else {
+                    continue;
+                };
+                collect_str_consts(&ast.items, &krate, module, &mut out);
+            }
+        }
+        out
+    })
+}
+
+fn collect_str_consts(
+    items: &[Item],
+    krate: &str,
+    module: Vec<String>,
+    out: &mut Vec<ProductConst>,
+) {
+    for item in items {
+        match item {
+            Item::Const(konst) if !is_cfg_test(&konst.attrs) => {
+                if let Expr::Lit(lit) = &*konst.expr
+                    && let Lit::Str(text) = &lit.lit
+                {
+                    out.push(ProductConst {
+                        krate: krate.to_owned(),
+                        module: module.clone(),
+                        name: konst.ident.to_string(),
+                        value: Box::leak(text.value().into_boxed_str()),
+                    });
+                }
+            }
+            Item::Mod(inner) if !is_cfg_test(&inner.attrs) => {
+                if let Some((_, items)) = &inner.content {
+                    let mut nested = module.clone();
+                    nested.push(inner.ident.to_string());
+                    collect_str_consts(items, krate, nested, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+thread_local! {
+    /// Each product crate root's imports, read once per thread: `CrateImports`
+    /// holds `syn` attributes, which no `static` may.
+    static PRODUCT_IMPORTS: std::cell::RefCell<
+        std::collections::BTreeMap<PathBuf, std::rc::Rc<crate::imports::CrateImports>>,
+    > = Default::default();
+}
+
+/// The imports of the crate root whose tree holds `module` — a package's
+/// `lib.rs`, or its `main.rs` for a module only the binary declares.
+fn product_imports(
+    src: &Path,
+    module: &[String],
+) -> Option<std::rc::Rc<crate::imports::CrateImports>> {
+    let root = repo_root();
+    ["lib.rs", "main.rs"]
+        .into_iter()
+        .map(|entry| src.join(entry))
+        .filter(|entry| entry.is_file())
+        .map(|entry| {
+            PRODUCT_IMPORTS.with(|cache| {
+                std::rc::Rc::clone(cache.borrow_mut().entry(entry.clone()).or_insert_with(|| {
+                    std::rc::Rc::new(crate::imports::CrateImports::read(&entry, &root))
+                }))
+            })
+        })
+        .find(|imports| imports.has_module(module))
 }
 
 /// The operation log's own target, read from its declaration.
@@ -1350,6 +1480,33 @@ mod tests {
             "a join reads a path's components through `sources::segments`, below \
              the root it walked — read off the absolute path, the answer depends \
              on where the checkout sits: {around:#?}",
+        );
+    }
+
+    /// A product crate declares one `TARGET` per module, so the module is part
+    /// of the key: the same name resolves to the declaration its path reaches,
+    /// however the path is spelled, and to nothing when it reaches none.
+    #[test]
+    fn a_product_target_resolves_through_the_module_its_path_reaches() {
+        let path = |p: &[&str]| p.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let service = "demo/crates/features/src/posts/service.rs";
+        let adapter = "demo/crates/features/src/posts/http/interceptor.rs";
+        assert_eq!(
+            resolve_target(&path(&["crate", "posts", "TARGET"]), service),
+            Some("features::posts"),
+        );
+        assert_eq!(
+            resolve_target(&path(&["super", "TARGET"]), service),
+            Some("features::posts"),
+        );
+        assert_eq!(
+            resolve_target(&path(&["crate", "users", "TARGET"]), adapter),
+            Some("features::users"),
+            "the module the path names, not the one the file sits in",
+        );
+        assert_eq!(
+            resolve_target(&path(&["crate", "posts", "NOT_DECLARED"]), service),
+            None,
         );
     }
 }

@@ -87,7 +87,7 @@ impl AudioService {
         self.queue
             .push(AudioQueue, TranscodeCommand { file: file.clone() }, None)
             .await?;
-        tracing::debug!(target: "features::audio", file, "enqueued transcode job");
+        tracing::debug!(target: crate::audio::TARGET, file, "enqueued transcode job");
         Ok(())
     }
 }
@@ -208,7 +208,7 @@ let pushed = self
 match pushed {
     Ok(receipt) => Ok(Some(receipt)),
     Err(QueueError::UniqueKeyHeld { holder, .. }) => {
-        tracing::debug!(target: "features::audio", holder = %holder, "transcode already queued");
+        tracing::debug!(target: crate::audio::TARGET, holder = %holder, "transcode already queued");
         Ok(None)
     }
     Err(error) => Err(error.into()),
@@ -243,7 +243,7 @@ waits:
 let receipt = self.queue.push(AudioQueue, job, None).await?;
 
 if self.queue.cancel(&receipt).await? {
-    tracing::info!(target: "features::audio", job_id = %receipt.id(), "transcode withdrawn");
+    tracing::info!(target: crate::audio::TARGET, job_id = %receipt.id(), "transcode withdrawn");
 }
 ```
 

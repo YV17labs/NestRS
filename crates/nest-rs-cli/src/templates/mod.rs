@@ -137,20 +137,20 @@ mod tests {
     /// ships that defect into every generated project. The whole framework holds
     /// this at zero; the generated code has to as well.
     ///
-    /// Matches the macro-call shape (`tracing::<level>!(target: "…"`), so prose
-    /// mentioning `tracing::` never trips it.
+    /// Matches the macro-call shape (`tracing::<level>!(target: …`), so prose
+    /// mentioning `tracing::` never trips it. The target ends at its comma
+    /// whichever way it is spelled, and the next field must come before the
+    /// message's opening quote.
     #[test]
     fn no_scaffolded_log_is_emitted_without_a_structured_field() {
         let scanned = sources();
         let bare: Vec<&str> = scanned
             .iter()
             .flat_map(|(_, src)| src.lines())
-            .filter(|line| line.contains("tracing::") && line.contains("!(target: \""))
+            .filter(|line| line.contains("tracing::") && line.contains("!(target: "))
             .filter(|line| {
-                // Between the target's closing quote and the message's opening
-                // one there must be at least one `field = value` pair.
-                line.split_once("!(target: \"")
-                    .and_then(|(_, rest)| rest.split_once('"'))
+                line.split_once("!(target: ")
+                    .and_then(|(_, rest)| rest.split_once(','))
                     .is_some_and(|(_, after)| !after.split('"').next().unwrap_or("").contains('='))
             })
             .map(|line| line.trim())
@@ -160,6 +160,28 @@ mod tests {
             bare.is_empty(),
             "these scaffolded logs carry no structured field:\n{}",
             bare.join("\n"),
+        );
+    }
+
+    /// `CLAUDE.md`: a target is a constant its owner declares, never a literal
+    /// at the call site — and a scaffold emits what the rules mandate. A feature
+    /// declares `TARGET` at its root and its files log on `crate::<feature>::TARGET`,
+    /// the shape the demo and the conformance join hold the repo to. The
+    /// generated code has no join of its own, so this is it.
+    #[test]
+    fn no_scaffolded_log_spells_its_target_as_a_literal() {
+        let scanned = sources();
+        let literal: Vec<&str> = scanned
+            .iter()
+            .flat_map(|(_, src)| src.lines())
+            .filter(|line| line.contains("!(target: \""))
+            .map(|line| line.trim())
+            .collect();
+
+        assert!(
+            literal.is_empty(),
+            "these scaffolded logs spell their target as a literal:\n{}",
+            literal.join("\n"),
         );
     }
 }

@@ -1,3 +1,5 @@
+pub const TARGET: &str = "features::audio";
+
 mod command;
 mod config;
 mod dtos;

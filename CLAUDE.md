@@ -793,6 +793,13 @@ concern several crates emit on (`nest_rs::routes`, from five) is declared once
 by the crate the others already depend on, and read from there. A crate owning exactly one
 concern spells it `TARGET` at its root; a crate owning several gets a `target`
 module (`nest_rs_core::target`, `nest_rs_http::target`, and those two only).
+**The product follows the same law one level down**: `features` is a container,
+so each feature that logs declares `pub const TARGET: &str = "features::<feature>";`
+at its module root and every file names `crate::<feature>::TARGET` — and a
+scaffolded feature starts with that line. Held over both workspaces' shipped code
+and doc examples by the `filters` join, test code excepted, and over the CLI
+templates by their own test; the demo logged on eighteen retyped literals until
+7.0.
 `operation_log::kind` holds the three `otel.kind` values this framework emits
 — `server`, `consumer`, `internal`. The specification defines five; nothing here
 opens a span for an outbound call or for handing work to a queue, and a constant

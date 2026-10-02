@@ -25,7 +25,7 @@ impl Guard for PostAuthorGuard {
             })?;
             let Some(sub) = claims.sub else {
                 tracing::warn!(
-                    target: "features::posts",
+                    target: crate::posts::TARGET,
                     org_id = %claims.org_id,
                     reason = "no_subject",
                     "post write denied",
@@ -45,7 +45,7 @@ impl Guard for PostAuthorGuard {
             Some(claims) if claims.sub.is_some() => Ok(()),
             Some(claims) => {
                 tracing::warn!(
-                    target: "features::posts",
+                    target: crate::posts::TARGET,
                     org_id = %claims.org_id,
                     "post write denied: token carries no subject",
                 );
@@ -55,7 +55,7 @@ impl Guard for PostAuthorGuard {
             }
             None => {
                 tracing::warn!(
-                    target: "features::posts",
+                    target: crate::posts::TARGET,
                     reason = "no_claims",
                     "post write denied",
                 );

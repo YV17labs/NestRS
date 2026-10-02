@@ -59,7 +59,7 @@ impl ChatGateway {
     #[public]
     async fn typing(&self, message: SendMessageDto, client: &WsClient) {
         if let Err(e) = client.broadcast("typing", &message) {
-            tracing::warn!(target: "features::chat", error = %error_message(&e), "broadcast failed");
+            tracing::warn!(target: crate::chat::TARGET, error = %error_message(&e), "broadcast failed");
         }
     }
 }

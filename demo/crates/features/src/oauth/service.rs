@@ -157,7 +157,7 @@ pub(crate) fn issue_with_jwt(
         .sign(&claims)
         .map_err(|e| TokenError::Sign(e.into()))?;
     tracing::debug!(
-        target: "features::oauth",
+        target: crate::oauth::TARGET,
         ?sub,
         %org_id,
         roles = ?claims.roles,
@@ -177,12 +177,12 @@ pub(crate) fn grant_client_credentials_with_jwt(
     client: &AuthenticatedClient,
 ) -> Result<AccessTokenResponse, TokenError> {
     if grant_type != "client_credentials" {
-        tracing::warn!(target: "features::oauth", grant_type, "unsupported grant type");
+        tracing::warn!(target: crate::oauth::TARGET, grant_type, "unsupported grant type");
         return Err(TokenError::UnsupportedGrant);
     }
     let roles = roles_for_scope(scope, &client.scopes).ok_or_else(|| {
         tracing::warn!(
-            target: "features::oauth",
+            target: crate::oauth::TARGET,
             requested_scope = ?scope,
             allowed = ?client.scopes,
             "requested scope not granted"

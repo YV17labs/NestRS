@@ -36,7 +36,7 @@ impl ExceptionFilter for PostProblemFilter {
             Ok(bytes) => bytes,
             Err(error) => {
                 tracing::error!(
-                    target: "features::posts",
+                    target: crate::posts::TARGET,
                     error = %error_message(&error),
                     "problem+json body failed to serialize",
                 );

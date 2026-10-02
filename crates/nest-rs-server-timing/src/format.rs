@@ -16,11 +16,19 @@ pub(crate) fn format_header(entries: &[Entry], total: Duration) -> Option<Header
     if !buf.is_empty() {
         buf.push_str(", ");
     }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "fmt::Write for String never fails"
+    )]
     let _ = write!(buf, "total;dur={:.2}", as_millis_f64(total));
     HeaderValue::from_str(&buf).ok()
 }
 
 fn write_entry(buf: &mut String, e: &Entry) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "fmt::Write for String never fails"
+    )]
     let _ = write!(buf, "{};dur={:.2}", e.name, as_millis_f64(e.dur));
     if let Some(desc) = &e.desc {
         // `server-timing-param-value` is `token / quoted-string` (RFC 7230);
@@ -36,6 +44,10 @@ fn write_entry(buf: &mut String, e: &Entry) {
                         buf.push('\\');
                         buf.push(ch);
                     }
+                    // A quoted-string cannot carry a control character, and one
+                    // left in would fail the whole header — every entry and the
+                    // total with it — over one tooltip.
+                    _ if ch.is_control() => buf.push(' '),
                     _ => buf.push(ch),
                 }
             }
@@ -127,6 +139,18 @@ mod tests {
         .unwrap();
         let s = h.to_str().unwrap();
         assert!(s.contains(r#"db;dur=5.00;desc="users \"primary\"""#));
+    }
+
+    #[test]
+    fn a_control_character_in_a_desc_does_not_cost_the_header() {
+        let h = format_header(
+            &[entry_with_desc("db", "users\nfetch", 5)],
+            Duration::from_millis(20),
+        )
+        .expect("the header survives a desc it cannot carry verbatim");
+        let s = h.to_str().unwrap();
+        assert!(s.contains(r#"db;dur=5.00;desc="users fetch""#), "{s}");
+        assert!(s.contains("total;dur=20"));
     }
 
     #[test]

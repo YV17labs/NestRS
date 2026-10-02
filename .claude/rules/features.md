@@ -4,172 +4,127 @@ paths:
   - "demo/crates/features/**/*.toml"
 ---
 
-# Product features — port + adapters
+# Product features — port and adapters
 
-`demo/crates/features/` holds product vertical slices. **Hexagonal per
-slice**: the port at the feature root, one adapter sub-folder per
-transport.
+`demo/crates/features/` holds the product's vertical slices, hexagonal per
+slice: the port at the feature root, one adapter folder per edge.
 
-## North Star
+## The bar
 
-- **A new CRUD feature is ≤ 60 lines of hand-written glue** beyond the
-  entity's own column declarations (measured on `orgs/`: ~30 non-entity
-  body lines for a full HTTP CRUD slice). **When that breaks, open an
-  issue — don't rewrite the boilerplate.**
-- **Adding a feature = copying `users/`** — plus the two wiring edits the
-  copy can't carry: `pub mod <feature>;` in `features/src/lib.rs` and the
-  `<Feature><Edge>Module` entry in the serving app's `module.rs`.
-  `nestrs g feature/resource/<transport>` does all three.
-  **If the copy isn't enough, fix the exemplar — don't invent a second
-  pattern.**
+- **A new CRUD feature is at most 60 lines of hand-written glue** beyond the
+  entity's column declarations; `orgs/` is the measurement. When that breaks,
+  open an issue — never rewrite the boilerplate.
+- **Adding a feature is copying `users/`**, plus the two edits a copy cannot
+  carry: `pub mod <feature>;` in `lib.rs` and the `<Feature><Edge>Module`
+  entry in the serving app's `module.rs`. `nestrs g feature/resource/<edge>`
+  does all three. If the copy is not enough, fix the exemplar; never invent a
+  second pattern.
 - **Security is wired by composition, not ceremony.** Importing
-  `SeaOrmModule::for_root` + `SeaOrmDatabaseModule` + `Authz<Edge>Module` activates row-level filtering,
-  transaction scope and response masking. Handlers opt *out* by not
-  importing. Guards still bind explicitly per route — the principal
-  source is a policy decision.
+  `SeaOrmModule::for_root`, `SeaOrmDatabaseModule` and `Authz<Edge>Module`
+  turns on row filtering, the transaction scope and response masking. Guards
+  still bind per route: the principal source is a policy decision.
 
 ## Layout
 
-The port lives at the **root** — not in a `core/` sub-folder. Deliberate.
+The port lives at the feature **root**, never in a `core/` folder.
 
-| Path | Contents | Module struct |
+| Path | Contents | Module |
 |---|---|---|
-| `users/` (root) | `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `guard.rs` (only when **two** adapters bind it — one transport's guard stays in its adapter), `module.rs` | `UsersModule` (port) |
+| `users/` | `mod.rs`, `entity.rs`/`entities/`, `service.rs`/`services/`, `dto.rs`/`dtos/`, `command.rs`/`event.rs`, `config.rs`, `error.rs`, `guard.rs` (only when two adapters bind it), `module.rs` | `UsersModule` (port) |
 | `users/http/` | `controller.rs` | `UsersHttpModule` |
-| `users/graphql/` | `resolver.rs` (field + root merged into `UsersResolver`) | `UsersGraphqlModule` |
-| `users/ws/` | `gateway.rs` | `UsersWsModule` (imports `AuthzWsModule`, which brings `WsModule` transitively) |
-| `users/queue/` | `processor.rs` (payload lives at the port) | `UsersQueueModule` |
-| `users/schedule/` | `tasks.rs` (`#[scheduled]` host) | `UsersScheduleModule` |
+| `users/graphql/` | `resolver.rs` (field and root operations in one `UsersResolver`) | `UsersGraphqlModule` |
+| `users/ws/` | `gateway.rs` | `UsersWsModule` |
+| `users/queue/` | `processor.rs` (its payload lives at the port) | `UsersQueueModule` |
+| `users/schedule/` | `tasks.rs` | `UsersScheduleModule` |
 | `users/mcp/` | `tool.rs` | `UsersMcpModule` |
-| `users/events/` | `listener.rs` (event listener host) | `UsersEventsModule` |
+| `users/events/` | `listener.rs` | `UsersEventsModule` |
 
-**Each adapter imports `UsersModule` explicitly** — composition, not
-inheritance. Importing only the port mounts no endpoint. **No umbrella
-module re-exporting every edge**: the app lists the edges it serves, so
-imports reflect what the binary actually exposes.
+**Each adapter imports its port explicitly** — composition, not inheritance.
+Importing only the port mounts nothing, and no module re-exports every edge:
+the app lists the edges it serves, so its imports are what the binary exposes.
 
-### The adapter shape is invariant
+**A feature that emits events declares its span target at its root** —
+`pub const TARGET: &str = "features::<feature>";` in its `mod.rs` — and every
+event names `crate::<feature>::TARGET`, never a literal (`CLAUDE.md`,
+*Observability*). A feature that emits nothing declares none.
 
-One transport, one adapter sub-folder, one `<Feature><Edge>Module` — for
-every feature, always. **A product never inverts it** into a single
-top-level edge folder injecting every domain service: that trades the
-module gate — an app importing exactly the edges it serves — for a
-god-adapter no app can subset, and it hides every tool or route behind
-one provider in the access graph. **It is refused, not merely discouraged**: the
-naming join refuses an edge folder directly under `features/src/`, because no
-name an adapter there could take is allowed — `features` is a container, never a
-subject (*Every type in a `module.rs` shares the stem* in `architecture.md`).
+**The adapter shape is invariant.** One edge, one adapter folder, one
+`<Feature><Edge>Module`, for every feature. A product never inverts it into a
+single top-level edge folder injecting every service: that trades the module
+gate — an app importing exactly the edges it serves — for a god-adapter no app
+can subset, which hides every route or tool behind one provider in the access
+graph. No adapter there could be named: `features` is a container, never a
+subject (`architecture.md`). The naming check in `nest-rs-conformance` refuses
+an edge folder directly under `features/src/`.
 
-**A transport that cannot host two features at one mount point is a
-framework defect.** Report it and keep the shape; it is never a licence
-to invert. None is open today — MCP was the last one, and it is closed:
-several bare `#[mcp]` hosts aggregate onto one endpoint, so a product
-serving several domains at the single URL its clients point at still
-writes one `mcp/` adapter per feature. `demo/apps/assistant` is the
-witness (`audio` + `users` on `/mcp` through a bare `#[mcp]`, `posts` on
-`/mcp/posts` through its own `#[mcp(path = "/mcp/posts")]`).
+**A transport that cannot host two features at one mount point is a framework
+defect**, unless `edges.md` argues it (a WS gateway owns its path). Report it
+and keep the shape. `demo/apps/assistant` is the witness
+for MCP: `audio` and `users` share `/mcp` through bare `#[mcp]` hosts, and
+`posts` mounts its own path.
 
-**One `#[module]` per folder.** The DI file is **always** `module.rs`;
-**exactly one** `#[module]` struct per file. Multiple modules per feature
-⇒ multiple folders.
+**A feature with a `config.rs` imports `ConfigModule::for_feature::<C>()` and
+writes no `for_root`**: the in-code path for a config you own is its
+`impl Default` (`architecture.md`, *Configuration*). `oauth/module.rs` and
+`audio/schedule/module.rs` are the exemplars.
 
-**A feature module with a `config.rs` writes `ConfigModule::for_feature::<C>()`
-in its imports, and no `for_root`.** `for_feature` **declares** that the config
-must load; it does not configure it. The in-code path for a config you own is
-its `impl Default`, which you can edit — that is what the dual-path rule buys a
-consumer of `nest-rs-*`, who cannot. A `for_root` nobody calls is speculative
-API in the exemplar people copy; add one the day an app must pin your config
-from outside your crate. `oauth/module.rs` and `audio/schedule/module.rs` are
-the exemplars. See *Configuration — one seam per config* in `architecture.md`.
+## One `service.rs` per feature
 
-**One `service.rs` per feature — don't fragment.** Extra `impl` blocks
-(`CrudService`, the opt-in `Creatable`/`Updatable`/`Deletable`,
+Extra `impl` blocks (`CrudService`, `Creatable`/`Updatable`/`Deletable`,
 `#[dataloader]`, `#[hooks]`) are macro requirements, not extra files.
+Splitting is a last resort, chosen by `architecture.md`'s three provider
+questions, never by file size:
 
-Splitting is a **last** resort, and it takes one of two shapes — pick by
-the three questions in `architecture.md`, never by file size:
-
-- **The extracted thing dispatches nothing and owns no domain logic**
-  (a factory, a client, a seam, an enum). It is a custom-provider or
-  vocabulary file named for what it is, beside `service.rs`. This is the
-  common case, and it leaves the service count at one.
-- **The slice genuinely owns two services**, each with domain logic of
-  its own. Then and only then: `services/`, one **bare-named** file per
-  service (`services/input.rs` → `InputService`), flat re-export from
-  `mod.rs`. Two services because a name was hard to choose is a
-  mis-modeled slice, not a folder.
+- **The extracted thing dispatches nothing and owns no domain logic** — a
+  factory, a client, an enum. It is a custom-provider or vocabulary file named
+  for what it is, beside `service.rs`. The common case; the service count stays
+  one.
+- **The slice owns two bodies of domain logic.** Then `services/`, one
+  bare-named file each (`services/input.rs` holds `InputService`), re-exported
+  flat. Two services because a name was hard to choose is a mis-modelled slice.
 
 ## Errors — the framework owns the plumbing
 
-A feature **never** redefines `nest_rs_seaorm::ServiceError`, or
-`nest_rs_authn::AuthError`/`CredentialError`/`TokenError`. Features write
-their own errors only for genuinely **domain-specific wire contracts** or
-**security-opaque variants** — in `error.rs`, never as scattered enums
-inside `service.rs`.
+A feature never redefines `nest_rs_seaorm::ServiceError` or the authn errors
+(`AuthError`, `CredentialError`, `TokenError`). It writes its own only for a
+domain-specific wire contract or a security-opaque variant, in `error.rs`.
 
-## Transfer objects — named for the boundary they cross
+## Transfer objects — where they live
 
-Each layer speaks its native vocabulary. **The suffix is the boundary**,
-not a generic "it moves data" — `…Job` / `…Response` / a blanket `…Dto`
-are all wrong.
+The suffixes are `architecture.md`'s (*Transfer objects*). Placement:
 
-| Kind | Suffix | Where |
-|---|---|---|
-| REST body (request/response) | **`Dto`** — `LoginDto`, `AccessTokenDto` | port: `dto.rs` / `dtos/` |
-| Queue payload, imperative ("do X" → one handler, idempotent, replayable; verb-led) | **`Command`** — `TranscodeCommand` | port: `command.rs` / `commands/` |
-| Published fact, on the event bus or a queue ("X happened" → many consumers; past-tense) | **`Event`** — `OrderPlacedEvent` | port: `event.rs`; several flat as `<fact>_event.rs` — `events/` is the edge folder |
-| WS message payload (the `data` of an envelope, either direction) | **`Dto`** — `SendMessageDto`, `ChatMessageDto` | with the gateway's feature |
-| GraphQL input, hand-written | **`Input`** | `graphql/input.rs` / `graphql/inputs/` |
-| GraphQL output | the object type itself (bare, or `Payload` for a wrapper) | with the resolver |
+- **A REST body** (`Dto`), **a queue `Command`** and **a published `Event`**
+  live at the port: a queue payload is a producer↔worker contract, so the
+  `queue/` adapter's processor imports it. A scaffolded job is a `Command`;
+  choose `Event` only to broadcast a fact.
+- **A WS payload** (`Dto`) lives with the gateway's feature; **a hand-written
+  GraphQL input** in `graphql/input.rs` or `graphql/inputs/`; **a GraphQL
+  output** is the object type itself (or a `Payload` wrapper), with the
+  resolver.
+- One type or several is `architecture.md`'s *Several of the same role*;
+  events never take a folder, since `events/` is the edge.
 
-A **queue payload is a producer↔worker contract**, so it lives at the
-**port** (feature root), never in the consumer-side `queue/` adapter —
-the `processor.rs` imports it. A scaffolded job defaults to a `Command`
-(the common case); choose `Event` only when broadcasting a fact.
+**The entity's derived forms are the exception.** `Create<E>` / `Update<E>`
+are at once the service's input, the GraphQL `input` and the REST body, so no
+single boundary suffix fits; they live inside the entity's `#[expose]` block
+(`create = CreateUser`), and the SDL reads `input CreateUser` on purpose.
+Hand-written transfer objects keep their suffix. Do not split per transport
+without a genuine need.
 
-The role word is carried by **both** the type and its file, and placement
-mirrors the entity rule: one → the bare file, two or more → a pluralized
-directory (one `<snake>_<role>.rs` per type, flat re-export from
-`mod.rs`).
-
-### The entity exception
-
-The entity and its derived CRUD forms are the exception. The entity stays
-`Model` in `entity.rs`; its `#[expose]`d wire struct keeps the **bare
-entity name** (the entity *is* the wire contract); and the
-macro-generated `Create<E>` / `Update<E>` are **bare too**.
-
-Why: a CRUD shape derived from the entity has no *single* boundary — one
-Rust struct is at once the service's `Create`/`Update` type
-(transport-agnostic), the GraphQL `input`, and the REST body. A transfer
-suffix would be wrong at the service layer and would give a
-non-idiomatic `input Create<E>Dto`. So it lives inside the entity's
-`#[expose]` block (`create = CreateUser`), not a separate file. The
-resulting SDL reads `input CreateUser` — deliberate.
-
-Hand-written transfer objects keep their boundary suffix; **only the
-entity-derived forms drop it.** Do not split per transport unless a
-genuine need appears.
-
-## GraphQL composition is discovered, not listed
+## GraphQL composition is discovered
 
 Each `#[operations]` block submits its objects to `inventory`, merged into the
-schema at boot. The resolver struct is still listed in `providers` — for
-the access contract only. Batch field fetches with `#[dataloader]`
-(request-scoped) to avoid N+1.
+schema at boot. The resolver struct is still listed in `providers`, for the
+access contract. Batch field fetches with `#[dataloader]`.
 
 ## Exemplars
 
-- **`src/users/`** — reference feature. Copy before inventing.
-- **`src/orgs/`** — the ~30-line full HTTP CRUD slice (the North Star
-  measurement).
-- **`src/posts/`** — tutorial feature exemplar.
-- **`src/notifications/schedule/`** — a scheduled job that is the deployment's
-  work, not the process's: `#[every("1h", replicas = "one")]`, hosted by the
-  worker beside `ScheduleModule` and `nest_rs::redis::RedisScheduleModule`, so
-  scaling the worker never multiplies it. `audio`'s transcode seed is the
-  deployment's work too — an enqueue every replica repeated would queue it once
-  per replica — so it is `"one"` as well, and the `api` that hosts it binds the
-  same lock. A job about the process itself — `audio`'s heartbeat — fires on
-  each replica, and says so: `replicas = "each"`, the default written out, so
-  the decision is read rather than inferred.
+- **`src/users/`** — the reference feature.
+- **`src/orgs/`** — the full HTTP CRUD slice the bar is measured on.
+- **`src/posts/`** — the tutorial feature.
+- **`src/notifications/schedule/`** — work that belongs to the deployment, not
+  the process: `replicas = "one"`, hosted by the worker beside the Redis
+  schedule binding, so scaling never multiplies it. `audio`'s transcode seed is
+  deployment work too. A job about the process itself — `audio`'s heartbeat —
+  writes `replicas = "each"`, the default spelled out, so the decision is read
+  rather than inferred.

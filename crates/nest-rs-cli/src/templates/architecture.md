@@ -3,7 +3,7 @@
 | Level | Named for | Appears as |
 |---|---|---|
 | **Project** | the product | the repository and the workspace — **nowhere else** |
-| **Family** | the **standard** that names its members | a shared crate-name prefix, and the first level of every path, span target and config namespace its members own — `nest_rs::oauth::client`, `NESTRS_OAUTH__CLIENT__*` |
+| **Family** | the **standard** that names its members | a shared crate-name prefix, and the first level of every path, span target and config namespace its members own — `nest_rs::oauth::client`, `<PREFIX>_OAUTH__CLIENT__*` |
 | **Crate** | what it holds | its directory, and the root of every span target it emits |
 | **App** | what it **serves** (`api`, `worker`, `auth`) | the binary, and `<App>Module` |
 | **Module** | its **domain** (`users`, `billing`) | `<module>/`, `<Module>Module` |
@@ -16,10 +16,8 @@
 ```
 
 **A name and its path say the same thing, and that is the whole law.** From a
-path you know the type; from a type you know where the file is. Nothing weaker is
-worth having — a reader who has to *learn* which crate holds `SeaOrmDatabaseModule` has
-lost the only property naming buys, and a name seen in a stack trace has to
-identify itself without the path beside it.
+path you know the type; from a type you know where the file is — and a name in
+a stack trace identifies itself without the path beside it.
 
 **The stem is the crate's subject plus every folder below `src/`, joined.**
 
@@ -32,48 +30,35 @@ identify itself without the path beside it.
 | `nest-rs-seaorm/src/database/module.rs` | `SeaOrmDatabaseModule` |
 | `features/src/audio/http/module.rs` | `AudioHttpModule` |
 
-**A port keeps the bare name; a driver carries its own.** `ThrottlerStore` is
-the trait, and its implementations are already `InMemoryThrottler` and
-`RedisThrottler` — the module follows the implementation, so
-`nest_rs::redis::RedisThrottlerModule` sits beside `RedisThrottler` and says the
-same thing. The bare `ThrottlerModule` belongs to `nest-rs-throttler`, which
-defines the port. Two consequences, both deliberate: the path stutters
-(`redis::RedisQueueModule`), and swapping a backend edits the type name as well
-as the import. Both are paid on purpose — **a name that is unambiguous in a log
-outranks a name that is short in an import**, and a module name appears in a
-composition root, not in fifty call sites.
+**A port keeps the bare name; a driver carries its own.** The bare
+`ThrottlerModule` belongs to `nest-rs-throttler`, which defines the port and
+its `InMemoryThrottler`; `nest_rs::redis::RedisThrottlerModule` sits beside
+`RedisThrottler`. The path stutters and a backend swap edits the type name, on
+purpose: **a name that is unambiguous in a log
+outranks a name that is short in an import**.
 
 **An adapter crate is named for the vendor whose types are the developer's
 surface** — the storage when the library is hidden (`nest-rs-redis`: apalis is
-an implementation detail, `redis::` is what a caller touches), the library when
-the library *is* the surface (`nest-rs-seaorm`: entities, `Repo`, `DbErr` are
-sea-orm's, and postgres/mysql/sqlite are interchangeable behind its URL). Never
-a capability name worn by one backend: that is a port's word, and a port keeps
-it.
+an implementation detail), the library when it *is* the surface
+(`nest-rs-seaorm`: entities, `Repo` and `DbErr` are sea-orm's). Never a
+capability name worn by one backend: that is a port's word.
 
 ## Ports & Adapters — three module shapes, and no fourth
 
-The framework is Ports & Adapters as it is practised now: explicit in the
-composition root, thin where a library has already done the work, verified by
-tests rather than trusted to discipline. A **port** is a crate that defines a
-contract *and the semantics that travel with it* — `nest-rs-queue` owns what a
-job attempt *is* (the job's id, the envelope, the trace, the span, the outcome
-classes, the retry budget and the wait before a retry, the events); an
-**adapter** is a crate named for a vendor that carries *only the
-transport* — how to connect, fetch, acknowledge, count. A library that is
-already multi-backend (sea-orm, object_store) is **wrapped, never abstracted**:
-the wrapper is the adapter, the library is the port, and its URL scheme picks
-the backend. Dependency runs one way — the adapter depends on the port, and a
-port's dependencies name no vendor crate.
+A **port** is a crate that defines a contract *and the semantics that travel
+with it* — `nest-rs-queue` owns what a job attempt *is*. An **adapter** is named
+for a vendor and carries *only the transport*: connect, fetch, acknowledge,
+count. A library already multi-backend (sea-orm, object_store) is **wrapped,
+never abstracted** — its URL scheme picks the backend. The adapter depends on
+the port; a port names no vendor crate.
 
-Every module in a composition root is one of three shapes, and a reader learns
-the list once:
+Every module in a composition root is one of three shapes:
 
 | Shape | Example | Role | Variables |
 |---|---|---|---|
-| `<Vendor>Module::for_root(cfg)` | `SeaOrmModule`, `RedisModule` | opens the **resource** — the pool, the connection — once, for every binding in the crate | `NESTRS_<VENDOR>__*` |
-| `<Port>Module::for_root(cfg)` | `ThrottlerModule`, `HttpModule`, `HealthModule` | the **capability**: its policy, its guard, its default implementation — when the port has any | `NESTRS_<PORT>__*` |
-| `<Vendor><Port>Module` | `SeaOrmDatabaseModule`, `RedisQueueModule`, `RedisThrottlerModule` | **binds** the vendor to the port; a bare import, unless it owns settings of its own — then a `for_root` | `NESTRS_<VENDOR>__<PORT>__*` |
+| `<Vendor>Module::for_root(cfg)` | `SeaOrmModule`, `RedisModule` | opens the **resource** — the pool, the connection — once, for every binding in the crate | `<PREFIX>_<VENDOR>__*` |
+| `<Port>Module::for_root(cfg)` | `ThrottlerModule`, `HttpModule`, `HealthModule` | the **capability**: its policy, its guard, its default implementation — when the port has any | `<PREFIX>_<PORT>__*` |
+| `<Vendor><Port>Module` | `SeaOrmDatabaseModule`, `RedisQueueModule`, `RedisThrottlerModule` | **binds** the vendor to the port; a bare import, unless it owns settings of its own — then a `for_root` | `<PREFIX>_<VENDOR>__<PORT>__*` |
 
 ```rust
 SeaOrmModule::for_root(None),      SeaOrmDatabaseModule,   SeaOrmHealthModule,
@@ -82,105 +67,62 @@ ThrottlerModule::for_root(None),   RedisThrottlerModule,
 HttpModule::for_root(HttpConfig { port: 3002, ..Default::default() }),
 ```
 
-"Bare or `for_root`" is not a fourth rule; it is the one under *Configuration*:
-a module that owns a `#[config]` offers a `for_root`, and one that owns none is
-imported bare. A bare import of a module that *does* own one is still legal —
-it is a dependency declaration, and the module reads its variables all the same
-— so `for_root` in a root is the sign of settings, never their precondition.
+"Bare or `for_root`" is *Configuration*'s rule, not a fourth shape: a module
+that owns a `#[config]` offers a `for_root`, and a bare import of it still reads
+its variables — `for_root` is the sign of settings, never their precondition.
 
-**The layout follows.** An adapter crate's root holds the resource —
-`src/config.rs`, `src/connection.rs`, `src/module.rs` (the one case a driver's
-`src/module.rs` is right: it is a module *of the crate's own subject*, never one
-binding wearing the crate's name) — and **one folder per port it binds**:
-`queue/`, `worker/`, `schedule/`, `throttler/` under `nest-rs-redis`; `database/` and
-`health/` under `nest-rs-seaorm`, whose `worker/` holds the job-context bridge
-the database binding installs rather than a binding of its own. A binding
-folder holds the adapter types (`queue/producer.rs`, `throttler/store.rs`) and
-its `module.rs`; what several bindings share sits at the root — **and only
-that**: a root file one binding alone reaches belongs in that binding's folder,
-because a root file reads as shared. `naming.rs`'s bindings gate fires on a
-binding that names a sibling's type, and on a root file exactly one binding
-folder uses. A port crate holds
-the contract and its semantics and **no module** when it has nothing to register
-(`nest-rs-queue`, `nest-rs-database`): a second queue adapter calls
-`nest_rs_queue::consume` for the attempt and writes its fetch loop, nothing
-more.
+**The layout follows.** An adapter crate's root holds the resource
+(`config.rs`, `connection.rs`, its own `module.rs`) and **one folder per port
+it binds** (`queue/`, `throttler/` under `nest-rs-redis`), each with its
+adapter types and `module.rs`. What several bindings share sits at the root
+**and only that**, and a binding never names a sibling's type. A port crate
+with nothing to register holds no module (`nest-rs-queue`): a second queue
+adapter calls `nest_rs_queue::consume` and writes its fetch loop, nothing more.
 
 **Swapping or adding a backend edits the composition root and nothing else.**
-Two adapters binding one port are a boot error (`provide_declared_factory`, one
-shared remedy sentence); a port's default implementation is an *ordinary*
-factory, so a vendor binding supersedes it wherever it sits in `imports`, and a
-binding that reads another factory's output declares it
-(`provide_*_factory_after`), so `imports` order stays a readability choice. The
-error, `ContestedDeclarationError`, names the contested port, both declarations —
-each as the import that made it, at its position in the `imports` of the module
-that lists it — and the remedy, so the reader goes to the two lines to reconcile
-rather than searching the tree for them. `nest-rs-storage` is the recorded exception to this whole
-section — a capability name pinned to S3 — and is fixed by giving it the shape
-above, not by documenting it.
+A vendor binding supersedes the port's default wherever it sits in `imports`;
+two adapters binding one port fail the boot with `ContestedDeclarationError`,
+naming both imports.
 
-**The crate counts only when it is a subject.** Every `nest-rs-*` is named for
-what it holds, so it prefixes. A product library like `features` is a container
-— its modules are domains, so `audio/http/module.rs` is `AudioHttpModule`, never
-`FeaturesAudioHttpModule`.
+**The crate counts only when it is a subject.** A product library like
+`features` is a container, so `audio/http/module.rs` is `AudioHttpModule`,
+never `FeaturesAudioHttpModule`.
 
 **Every type in a `module.rs` shares the stem**, not just the module:
-`nest-rs-oauth-resource/src/module.rs` declares `OAuthResourceModule`, the
-`OAuthResourceSetup` its `for_root` returns, and the private `OAuthResourceHost`
-that carries the `#[module]`. A rename that leaves a sibling behind is half a
-rename, and the half left behind is the one a reader trips on. The same reading
-gives the adapter's own types — `posts/http/controller.rs` is `PostsController`,
-`users/ws/gateway.rs` is `UsersGateway`. An edge folder directly under a
-framework crate's `src/` adapts the crate itself, so its adapter takes the
-crate's subject: `nest-rs-x/src/http/controller.rs` is `XController`, beside the
-`XHttpModule` its `module.rs` already takes — `src` names a layout level, never a
-module — and the suite mirror of that folder, `tests/<suite>/http/`, reads the
-same way. **In a product crate the same folder is refused**, under an app's
-`src/` and a library's alike, because no name it could take is allowed: the
-app's name stops at `<App>Module`, so `apps/api/src/http/controller.rs` cannot
-hold an `ApiController`, and a library like `features` is a container, never a
-subject. A product's edge adapter belongs to a module folder
-(`<module>/<edge>/`), and the naming join refuses the other with that sentence
-rather than inventing a name for it.
+`OAuthResourceModule`, the `OAuthResourceSetup` its `for_root` returns, the
+private `OAuthResourceHost` carrying the `#[module]`. A provider that is not the
+module's own — a lifecycle hook, an endpoint — gets a file named for it, and a
+`#[module]` or `impl Module` lives in a `module.rs` and nowhere else. A rename
+that leaves a sibling behind is half a rename.
 
-Enforced, not merely written: `naming.rs` in `nest-rs-conformance` derives every
-`module.rs` and every edge adapter in both workspaces and fails on a name that
-does not match its path. A `module.rs` is read for **every type it declares**,
-whatever its suffix or visibility — a provider that is not the module's own (a
-lifecycle hook, an endpoint) gets a file named for it rather than sitting beside
-the module as a private stranger — and a `#[module]` or an `impl Module`
-anywhere but a `module.rs` fails on where it is. Its baseline is empty and only
-shrinks.
+Adapters read the same way: `posts/http/controller.rs` is `PostsController`,
+and an edge folder directly under a framework crate's `src/` adapts the crate
+(`nest-rs-x/src/http/controller.rs` is `XController`). **In a product crate
+that folder is refused** — no name it could take is allowed — so a product's
+edge adapter lives in `<module>/<edge>/`.
 
-**One documented precedence, and it is the only one.** A file whose subject is a
-*capability* rather than its module keeps the capability's name — `audio`'s
-`TranscodeGuard`, `posts`' `PostAuthorGuard`. That is the rule under
-*Precedence* below, it is judgement rather than a scan, and it applies to role
-files only: a `module.rs` never takes it.
+**One documented precedence, and it is the only one:** a role file whose
+subject is a *capability* rather than its module keeps the capability's name —
+`audio`'s `TranscodeGuard`, `posts`' `PostAuthorGuard`. A `module.rs` never
+takes it.
 
-**No module or provider below the root ever carries the project's or the app's
-name.** The project name stops at the workspace; the app name stops at
-`<App>Module`. An app may share the project's name only while it is the only
-app — and even then, nothing beneath it may. There is no marker exception: a
-product module never prefixes itself to stand apart from the framework — see
-*The product's own* below.
+**No module or provider below the root carries the project's or the app's
+name**: the project name stops at the workspace, the app name at
+`<App>Module` — even when the only app shares the project's name.
 
-**A module name is plural when the domain is a collection of enumerable things
-(`users`, `orders`), singular when it is a capability (`auth`, `search`).** Not
-cosmetic: the generator singularizes the folder name to derive the entity, so a
-wrongly pluralized module produces a wrongly named entity, silently.
+**A module name is plural for a collection of enumerable things (`users`),
+singular for a capability (`auth`, `search`)** — the generator singularizes the
+folder to derive the entity, so a wrong plural names the entity wrong.
+
+`nestrs generate` writes the names a path derives, `nestrs lint` checks the one
+it cannot (*Vocabulary*, below), and review holds the rest.
 
 ## Families — a shared prefix names a standard, never a theme
 
-`crates/` is one flat directory, read alphabetically. A shared prefix is
-therefore the only grouping a reader is given for free, and it is worth having.
-It is also a **claim**, compiled into every path, every span target and every
-env var the family owns — so it has to be checkable, not merely helpful.
-
-**A family exists when one external standard names each of its members.** The
-prefix takes that standard's subject; the word after it is *read off* the
-standard's own vocabulary rather than chosen. RFC 6749 §1.1 enumerates the roles
-— *client*, *authorization server*, *resource server* — so the family is:
+A shared prefix is a **claim**, compiled into every path, span target and env
+var the family owns, so it has to be checkable. **A family exists when one
+external standard names each of its members**: the prefix takes the standard's
+subject, and the word after it is *read off* its vocabulary — RFC 6749 §1.1:
 
 | Crate | Path a caller types | Read off |
 |---|---|---|
@@ -188,54 +130,28 @@ standard's own vocabulary rather than chosen. RFC 6749 §1.1 enumerates the role
 | `nest-rs-oauth-server` | `nest_rs::oauth::server` | §1.1 *authorization server* |
 | `nest-rs-oauth-resource` | `nest_rs::oauth::resource` | §1.1 *resource server* |
 
-**The membership test must be answerable by someone who did not write the code.**
-*Does this standard name this thing?* is such a test. *Is this about auth?* is
-not. A family whose membership is argued will be argued again, and every
-re-argument renames crates — which is the cost the level exists to stop.
+**The membership test is answerable by someone who did not write the code** —
+*does this standard name this thing?*, never *is this about auth?* — because
+every re-argument of membership renames crates.
 
-**No crate carries the prefix alone.** A name that is both a level and a member
-denotes two things at once, and that breaks the property the whole model buys:
-from a type you know the path. The family is `oauth`, so there is no
-`nest-rs-oauth`.
-
-**A theme is not a family.** Grouping *everything about auth* is a reading aid,
-and reading aids belong in the documentation's own sections, which group without
-asserting anything about what the code does. Alphabetical order already puts a
-theme's members side by side; a prefix additionally states that the standard
-above them is shared, which is a stronger claim and usually a false one.
-
-**Recorded so it is not re-derived: `authn-*` / `authz-*` was considered, and the
-standards retire it.** The instinct is sound — authentication and authorization
-*are* the two halves of this territory — but the resulting family cannot be
-tested. RFC 6749 titles itself *The OAuth 2.0 **Authorization** Framework*, so a
-client and an authorization server are authz; social login is authentication
-performed *through* that authorization flow; a JWT verifier serves both, because
-one token carries the identity and the scopes; and RFC 9728 discovery is served
-to callers who have no identity at all, so it is neither. One member in five
-classifies without argument. `authn` and `authz` stay as **crate** names — the
-pair is real, and it is the pair a reader wants — but they name two crates, not
-two families.
+**No crate carries the prefix alone** — a name that is both a level and a
+member denotes two things, so there is no `nest-rs-oauth`. **A theme is not a
+family**: grouping *everything about auth* is a reading aid, which belongs in
+the documentation. That is why `authn` and `authz` are two crates and not two
+families — no standard sorts social login, a JWT verifier or RFC 9728
+discovery into one or the other.
 
 ## The product's own — what the product decides, and nothing else
 
-A product module is named for its domain and its name is derived from its path
-like any other — `features/authn/module.rs` is `AuthnModule`, whether or not the
-framework happens to export a type of that name. **No marker is ever added to
-tell a product name apart from a framework one.** A product name is local and a
-framework name is global, and the path a caller already types separates them.
+A product module is named from its path like any other — `features/authn/module.rs`
+is `AuthnModule`, whether or not the framework exports that name. **No marker
+is ever added to tell a product name from a framework one**: the path a caller
+types separates them. A driver's `Redis` is a *subject* that names a backend; a
+product marker such as `App` names nothing and buys only length.
 
-**This does not reach the framework's own crates, and the two rules do not
-compete.** *A port keeps the bare name; a driver carries its own subject* binds
-`nest-rs-redis`, and it still does: `Redis` is a **subject**, so
-`RedisThrottlerModule` says which backend a log line came from at no cost but
-length. The product has no such word — the marker considered here was `App`,
-which names nothing, and a marker that carries no subject buys no
-identification, only length. So the framework keeps paying and the product
-stops.
-
-**Two colliding idents cannot both be imported into one file**, so where the
-product's own name equals the framework's, the framework's is written in full
-at the point of use — not aliased, and not renamed:
+**Where the product's name equals the framework's, the framework's is written
+in full at the point of use** — not aliased (`#[module]` names a module in boot
+errors by the struct's own ident, which an alias does not change):
 
 ```rust
 // features/src/authn/module.rs — the product's AuthnModule binds the framework's
@@ -243,73 +159,36 @@ at the point of use — not aliased, and not renamed:
 pub struct AuthnModule;
 ```
 
-That qualified path is **mandatory, not a preference**: `use … as` is not an
-escape either, because `#[module]` records `ModuleDescriptor.name` from the
-struct's own ident at its *definition* site. That descriptor label is the one
-place in the framework where a name appears without its path — it is what
-`AccessGraphError` and `UnresolvedDependencyError` print. Everything else is
-path-qualified and unaffected: `ContestedDeclarationError` carries
-`std::any::type_name::<T>()`, and a provider's label is the last segment of the
-path **as written** in `providers = [...]`, so an alias does rename it.
+**What is not the product's own does not live in the product.** What every
+consumer would write identically — a wire shape a specification fixes, a token
+a framework seam requires, a default nobody varies — belongs in the framework;
+left in the app it drifts from what it duplicates. What stays is what the
+product *decides*: its claims, policy, scopes and validation rules. Two tells:
 
-Nothing collides in this repo today — `nest_rs::authn::AuthnModule` is a
-hand-written dynamic module with no `#[module]`, so it files no descriptor and
-no boot line. **Whether the framework should absorb such a binding entirely —
-`AuthnModule::for_root::<S>(cfg)` registering the strategy and its guard, so the
-product declares no module at all — is an open question for the owner**, not a
-decided remedy: it is possible and unbuilt, and writing it as settled would put
-a claim in the rules that nothing has tested.
-
-**A prefixed variant was tried and removed; recorded so it is not re-proposed.**
-`app_authn` / `AppAuthnModule` triggered on the *namespace* the umbrella
-re-exports rather than on the ident, so fourteen of seventeen marked types
-carried a marker that distinguished them from nothing — `nest-rs-authz` exports
-no `AuthzModule`, and `nest-rs-oauth-server` exports no module at all. A marker
-that is right for three names and noise for fourteen is not a convention.
-
-**What is not the product's own does not live in the product.** Anything a
-module holds that *every* consumer would write identically — a wire shape a
-specification fixes, a token a framework seam requires, a default nobody varies
-— is the framework's. Left in the app it is a copy waiting to drift from the
-thing it duplicates, and the drift is silent because nothing joins the two. **It
-moves up.** What stays is what this product *decides*: its claims, its policy,
-its scopes, its validation rules.
-
-Two tells, and both have been found here:
-
-- **The fields are a specification's own field names.** `AccessTokenResponse`'s
-  `access_token` / `token_type` / `expires_in` are RFC 6749 §5.1, so no
-  conforming issuer can spell them otherwise. The framework already held §5.2's
-  `TokenError` — one half of one response in the framework and the other half in
-  the app is the asymmetry this rule names.
-- **The type has no members at all.** A struct declared only so a macro has a
-  concrete provider to gate on says nothing about the product; the seam that
-  demands it should declare it.
-
-This is *One declaration, every site the standard permits* read from the other
-end: there the framework owes every site an answer, here the product owes the
-framework anything that was never its own.
+- **The fields are a specification's own** — `access_token` / `expires_in` are
+  RFC 6749 §5.1, and no conforming issuer spells them otherwise.
+- **The type has no members.** A struct declared only so a macro has a provider
+  to gate on says nothing about the product; the seam that demands it declares it.
 
 ## Modules — two files, two jobs, never merged
 
 | File | Job | Answers to | Holds |
 |---|---|---|---|
-| `mod.rs` | which **files** exist, and **what leaves the module** | the compiler, and readers | `//!`, `mod`, `pub use` |
+| `mod.rs` | which **files** exist, and **what leaves the module** | the compiler, and readers | `mod`, `pub use` |
 | `module.rs` | which **providers** exist, what is imported | the framework | exactly one `#[module]` |
 
-`module.rs` is the DI module. `mod.rs` is both the folder index *and* the
-export contract: **its `pub use` list is what the rest of the workspace may
-reach.** `pub` means exported; everything else is `pub(crate)` or private. A
-`mod.rs` that re-exports everything cancels the encapsulation — that list is a
-decision, not plumbing.
+`module.rs` is the DI module; `mod.rs` is the folder index *and* the export
+contract: **its `pub use` list is what the rest of the workspace may reach.**
+`pub` means exported; everything else is `pub(crate)` or private, and a
+`mod.rs` re-exporting everything cancels the encapsulation.
 
 **No `*_module.rs`, ever.** One `#[module]` per file, one `module.rs` per
 folder; two modules in a feature means two folders.
 
 ## Configuration — one seam per config, decided by ownership
 
-A `#[config]` is reached through **exactly one** seam. Which one follows from
-who owns it, and there is no judgement call:
+A `#[config]` is reached through **exactly one** seam, and who owns it decides
+which:
 
 | Whose config | Seam | In-code path |
 |---|---|---|
@@ -318,22 +197,18 @@ who owns it, and there is no judgement call:
 | nobody's (a discovered plugin) | its registry entry reads its own namespace | none — credentials are deployment data |
 
 The split is *who can edit the struct*. You cannot touch `HttpConfig::default`,
-so `HttpModule::for_root(cfg)` is the only way to set a port from code — which
-is why the dual-path rule binds every `nest-rs-*` module. Your own
-`OAuthConfig` needs no seam: its `impl Default` **is** the in-code path, and
-adding a `for_root` nobody calls is speculative API in the exemplar people copy.
-Write one the day an app needs to pin your config from outside your crate.
+so `HttpModule::for_root(cfg)` is how a port is set from code, and every
+`nest-rs-*` module offers both paths. Your own config's `impl Default` **is**
+its in-code path; write a `for_root` the day an app must pin it from outside
+your crate, not before.
 
-**`ConfigModule::for_root()` is the one homonym** — it takes no config and
-configures no module. It switches on the `.env` cascade, and goes first in the
-root's imports. Everything below is about `Module::for_root(x)`, which is a
-different thing wearing the same name (NestJS's, kept deliberately).
+**`ConfigModule::for_root()` is the one homonym**: it configures no module,
+switches on the `.env` cascade, and goes first in the root's imports.
 
-**`for_root` configures; `for_feature` registers.** They are not two ways to do
-one thing, and `for_feature` deliberately takes no value: a config reachable
-through two seams is a config whose value depends on `imports = [..]` order.
-A library module therefore writes **both** — `for_feature` in its `imports` so
-the config always loads, and a `for_root` so a caller can pin it:
+**`for_root` configures; `for_feature` registers** and takes no value, since a
+config reachable through two seams depends on `imports` order. A library module
+writes **both** — `for_feature` so the config always loads, `for_root` so a
+caller can pin it:
 
 ```rust
 #[module(imports = [ConfigModule::for_feature::<StorageConfig>()], providers = [Storage])]
@@ -348,64 +223,36 @@ impl StorageModule {
 pub type StorageSetup = ConfigSetup<StorageModule, StorageConfig>;
 ```
 
-That is the whole seam when `for_root` only pins — reach for `ConfigSetup`
-rather than hand-rolling a `*Setup`. Write your own only when `collect` queues
-more than the config (a pool, a client) or `register` does more than recurse.
+That is the whole seam when `for_root` only pins; hand-roll a `*Setup` only
+when it queues more than the config (a pool, a client).
 
-**The converse is load-bearing: a module that owns no config gets no
-`for_root`.** *Owns* means its own namespace, never a config belonging to
-something it merely discovers — `SocialModule` discovers providers that each
-carry their own `#[config]`, so it stays a bare import with no seam at all.
-Giving it one forces a list of unrelated config types, hence type erasure,
-hence no duplicate detection.
+**A module that owns no config gets no `for_root`.** *Owns* means its own
+namespace: `SocialModule` discovers providers that each carry a `#[config]`, so
+it stays a bare import — a seam there would erase their types and lose
+duplicate detection.
 
 **A `#[config]`'s namespace is its stem, exactly as its type name is — read,
 never chosen.** The segments are the crate's subject, then every folder below
-`src/` on the way to the file that is not a pluralised role folder, joined by
-`__` — the same derivation that names the module types, so the variable and the
-code say one thing: `http/src/config.rs` → `HttpConfig` → `NESTRS_HTTP__*`;
-`seaorm/src/config.rs` → `SeaOrmConfig` → `NESTRS_SEAORM__URL`;
-`redis/src/worker/config.rs` → `RedisWorkerConfig` →
-`NESTRS_REDIS__WORKER__*`; a family member adds the family as a level, so
-`oauth-client/src/config.rs` → `NESTRS_OAUTH__CLIENT__*`, the same string as its
-path `nest_rs::oauth::client`; `social/src/providers/github/config.rs` →
-`NESTRS_SOCIAL__GITHUB__*` (`providers/` is a role folder, so it is not a
-segment — and the type there, `GithubSocialConfig`, takes the member-first name
-the role tables give a provider's files). A product crate reads the same way
-with its container left out, as its module types do: `features/src/oauth/config.rs`
-→ `OAuthConfig` → `NESTRS_OAUTH__*` — the product's namespace is no more its
-own choice than its type name is. From a variable a reader knows the
-file and the module that reads it; from a module they know the variable. The
-vendor is in the variable when the vendor is in the path — never one without
-the other — and `NESTRS_DATABASE__URL`, the universal convention, is exactly
-what this forbids: a word that names neither the crate nor the type that parses
-it. Enforced over both workspaces by `naming.rs` — `namespace_is_the_stem` for
-the variable, `a_config_is_named_for_its_stem` for the type, read off the
-namespace so the two halves cannot pass apart. **One namespace, one
-type**: from a variable a reader finds the one type that parses it, so two
-`#[config]` structs declaring one namespace are refused at boot, naming both —
-two configs in one folder are two folders.
+`src/` that is not a pluralised role folder, joined by `__`:
+`redis/src/worker/config.rs` → `RedisWorkerConfig` → `<PREFIX>_REDIS__WORKER__*`;
+`oauth-client/src/config.rs` → `<PREFIX>_OAUTH__CLIENT__*`, the same string as
+`nest_rs::oauth::client`; `social/src/providers/github/config.rs` →
+`<PREFIX>_SOCIAL__GITHUB__*`; and a product crate leaves its container out, so
+`features/src/oauth/config.rs` → `OAuthConfig` → `<PREFIX>_OAUTH__*`.
+`<PREFIX>_DATABASE__URL`, the universal convention, names neither the crate nor
+the type that parses it, and is exactly what this forbids. **One namespace, one
+type**: two `#[config]` on one namespace fail the boot; two configs, two folders.
 
 **`Config` names a `#[config]`, and nothing else.** A settings struct a config
-nests — its TLS, its CORS policy — is vocabulary, so the file names the kind and
-the type prepends the crate's subject: `http/src/tls.rs` holds `HttpTls`, and
-`http/src/cors.rs` holds `HttpCors`. A `*Config` that no `#[config]` declares
-reads as a namespace of variables that does not exist.
+nests is vocabulary: `http/src/tls.rs` holds `HttpTls`, not an `HttpTlsConfig`
+that reads as a namespace which does not exist. **Seeding**
+(`App::builder().provide(cfg)`) is not a seam: it freezes the namespace against
+the deployment, and is the hermetic-test hatch only.
 
-**Pinning by seeding (`App::builder().provide(cfg)`) is not a seam** — a seed
-short-circuits the resolving factory and freezes that whole namespace against
-the deployment. It is the hermetic-test hatch, and nothing else.
-
-You cannot get any of this wrong silently — the boot enforces it:
-
-- a pinned base **supersedes** a bare import's env-only factory, wherever the
-  two fall in `imports`;
-- two pinned bases for one config **fail the boot** naming it and both pins,
-  each by the module and the position that imports it
-  (`ContestedDeclarationError`) — as do two modules binding the same
-  implementation, which is how importing both throttler backends is caught;
-- a config the synchronous `App::new` could never resolve **fails the boot**
-  too (`UnresolvedFactoryError`), instead of surfacing as a `None` much later.
+The boot holds the rest: a pinned base supersedes a bare import's env-only
+factory wherever it sits in `imports`; two pinned bases for one config fail
+with `ContestedDeclarationError`; a config the synchronous `App::new` could
+never resolve fails with `UnresolvedFactoryError` rather than a late `None`.
 
 ## Providers — three questions, in order
 
@@ -449,112 +296,63 @@ is named for the role, never for the type.
 | Module config (`#[config]`) | `config.rs` |
 | Error types (every one — public, crate-private, domain or driver defect; a wire error document a client parses, such as `ProblemDetails`, is named for its document) / Static constants | `error.rs` / `constants.rs` |
 
-An adapter role carries its folder: `schedule/tasks.rs`, never `tasks.rs` at
-the module root. A transport-specific guard belongs to its adapter too
-(`mcp/guard.rs`).
+An adapter role carries its folder (`schedule/tasks.rs`, `mcp/guard.rs`). A
+layer serving one transport sits in its folder (`http/interceptor.rs`); one a
+module applies whatever the edge sits at the module root. **A crate whose whole
+subject is one edge keeps its role files at the crate root**
+(`nest-rs-server-timing`'s `interceptor.rs`): the folder separates *several*
+adapters, and there are none to separate.
 
-**The layer roles are on the table because they are dispatched to.** An
-`#[interceptor]`, a `#[filter]` and an exception filter are mounted by the
-framework exactly as a guard or a pipe is, so they are named for the role and
-not for the type. The rule above binds them the same way: a layer that exists
-to serve one transport sits in that transport's folder
-(`http/interceptor.rs`), and a layer a module applies to itself whatever the
-edge sits flat at the module root.
-
-**A crate whose whole subject is one layer keeps it at the crate root.** There
-is no `http/` folder to carry when the crate serves one edge and nothing else —
-`nest-rs-server-timing`'s `interceptor.rs` is the whole crate, and wrapping it
-in a folder would name an adapter the crate has no second of. The folder
-separates *several* adapters within one module; it is not a suffix the role
-carries everywhere.
-
-**Custom providers.** Injectable, but nothing is dispatched *to* them. Named
-for what they are, file named the same, and **never folded into `service.rs`**.
-A recognised word beats an invented one: `Factory`, `Client`, `Store`,
-`Registry`, `Source`, `Bridge`.
+**Custom providers** are injected but never dispatched to: named for what they
+are, file named the same, **never folded into `service.rs`**, and a recognised
+word beats an invented one — `Factory`, `Client`, `Store`, `Registry`,
+`Source`, `Bridge`.
 
 **Vocabulary.** Not registered anywhere: an enum, a struct, a type alias, a set
 of constants. Named for *what it declares* — a role suffix on vocabulary is
-noise, and *what it declares* is not a matter of taste:
+noise. **The file and its folder, read together, spell the type**: one of the
+two names the *kind*, never both and never neither.
 
-**The file and its folder, read together, spell the type.** One of the two
-names the *kind*, never both and never neither, and every shape that takes is
-already in the framework you import — so each one below is a path you can open:
-
-- **The kind is the subject**, so neither word has to add one — `seaorm/src/repo.rs`
-  is `Repo`, `core/src/container.rs` is `Container`, `queue/src/queue_name.rs`
-  is `QueueName`.
-- **The file names the kind**, and the type prepends the subject —
+- **The kind is the subject** — `seaorm/src/repo.rs` is `Repo`.
+- **The file names the kind**, the type prepends the subject —
   `redis/src/connection.rs` is `RedisConnection`, `events/src/bus.rs` is
-  `EventBus`, `worker/src/context.rs` is `JobContext`.
-- **The folder names the kind**, and the file names the subject —
-  `pipes/src/pipes/validation.rs` is `ValidationPipe`,
+  `EventBus`.
+- **The folder names the kind**, the file names the subject —
   `authn/src/strategies/jwt.rs` is `JwtStrategy`.
 
 **One shape is refused, and only one: a stem that appears nowhere in what the
-file declares.** No example of it is given above, and that is the point — the
-framework holds none, because a real one is a defect to fix rather than a case
-to publish, so this is the half of the rule that has to be *applied* rather
-than recognised. Apply it as a question: **does either name reach the other?** When
-no word of the stem reaches the type and no word of the type reaches the stem,
-the file was named for a *slot* — "who acts", "what we pass around" — instead of
-a subject, and a slot has no admission test, so the next type about that slot
-lands there too. It is `shared/` at the scale of a file, and it is invisible
-from outside: both names read perfectly well on their own, and only the pair is
-wrong.
+file declares.** Ask: **does either name reach the other?** If neither does, the
+file was named for a *slot* — "who acts", "what we pass around" — not a
+subject; a slot has no admission test, so it fills. It is `shared/` at the
+scale of a file, and only the pair reads wrong.
 
-Everything short of that passes, and the tolerance is deliberate — a tighter
-test, the stem as the type's first or last word, reads well and is false on a
-third of this framework:
+Everything short of that passes, deliberately — a tighter test is false on a
+third of the framework:
 
-- **The shared word may come from the folder rather than the file.**
-  `throttler/store.rs` holds `RedisThrottler`, `worker/consumer.rs` holds
-  `RedisWorker`: a binding file names the *seam*, the type names the *thing
-  that fills it*, and it is the adapter's own vocabulary — `InMemoryThrottler`
-  beside `RedisThrottler` — that a reader matches on.
+- **The shared word may come from the folder**: `throttler/store.rs` holds
+  `RedisThrottler` — the file names the *seam*, the type *what fills it*.
 - **An inflection is the same word**, and so is a word in the middle:
-  `scope.rs` holds `Scoped`, `logging.rs` holds `LogFormat`, `token.rs` holds
-  `AccessTokenRequest`. This is why the rule is *read* and not run — `naming.rs`
-  mechanises what a path derives, and English morphology is not that.
+  `scope.rs` holds `Scoped`, `token.rs` holds `AccessTokenRequest`.
 - **A recognised word is a role, not vocabulary.** `registry.rs`, `client.rs`,
-  `store.rs`, `factory.rs`, `source.rs`, `bridge.rs` and `inventory.rs` are
-  named by the custom-provider paragraph above and take its pairing
-  (`<Subject>Registry`); this rule is for the files no table names.
+  `store.rs`, `factory.rs`, `source.rs`, `bridge.rs` and `inventory.rs` take the
+  custom-provider pairing (`<Subject>Registry`).
+- **A file whose principal export is not a type is a namespace** and owes
+  nothing: `queue/src/consume.rs` exports `consume::attempt`, and the call site
+  reads the stem as part of the name.
 
-**Executed, not merely written.** `nestrs lint` runs this pairing over a
-project's `src/`, and the framework's conformance suite runs *the same code*
-over its own tree — so the rule shipped and the rule met are one symbol rather
-than two implementations that drift. It refuses only what this paragraph
-refuses; every tolerance below is a pass, and files a table already names are
-skipped.
-
-**A file whose principal export is not a type is a namespace, and owes nothing
-above.** `queue/src/consume.rs` exports `consume::discover`,
-`consume::attempt` and `consume::refuse`; the `Delivery` and `AttemptOutcome` it
-also declares are those procedures' vocabulary rather than the file's subject.
-The stem names what a caller
-*calls*, and the call site reads it as part of the name. A file whose subject
-*is* a type owes the pairing.
+`nestrs lint` runs this pairing over a project's `src/` and refuses only the
+one shape; files a table already names are skipped.
 
 **Vocabulary sits flat at the module root.** It is never gathered into
 `types/`, `model/`, `common/` or `shared/`: a folder named for who uses it has
-no admission test, so nothing can ever be refused from it and it fills. A
-module root that feels crowded is a module to split, not vocabulary to bury.
+no admission test, so nothing can be refused from it and it fills. A crowded
+module root is a module to split, not vocabulary to bury.
 
-**The same holds one level up, and rules out a `shared` crate.** The crate
-table names a crate for *what it holds*; "shared" and "common" name *who
-reaches for it*, so they admit anything and refuse nothing. A substrate crate
-is shared *because* it holds the substrate, never the other way round — and if
-the subject cannot be named in one noun, the sharing is accidental: the
-vocabulary belongs to the module that owns it, and a second consumer is the
-signal that two modules were drawn wrong.
-
-**`core` is the one positional word that survives, and it survives on a test.**
-It names the kernel rather than an audience, and a kernel is checkable: *every
-other crate in the workspace composes on it, and it composes on none of them*.
-`nest-rs-core` passes — the container, the module system, the access graph, the
-lifecycle and the trace context, depended on by all and depending on no
-sibling. A `core` that fails that test is a `shared` wearing a better word.
+**The same rules out a `shared` or `common` crate**: they name *who reaches
+for* it, so they admit anything. If a crate's subject cannot be named in one
+noun, its vocabulary belongs to the module that owns it. **`core` survives on a
+test** — every other crate composes on it and it composes on none of them; a
+`core` that fails it is a `shared` wearing a better word.
 
 Shared test doubles are the one crate-root file: `testing.rs`, behind
 `#[cfg(test)]`, doubles only.
@@ -562,18 +360,15 @@ Shared test doubles are the one crate-root file: `testing.rs`, behind
 ## Precedence — when a type carries a primitive role *and* logic
 
 A primitive role wins **only when the framework is the sole caller and the file
-holds no domain logic**. `tasks.rs` earns its name when the clock is the only
-caller and the work it drives lives in a service; otherwise it is a service
-that happens to have a trigger. Same test for `#[hooks]`, `#[listeners]` and a
-health indicator: a lifecycle hook or a scheduled tick never renames a service.
+holds no domain logic**: `tasks.rs` earns its name when the work it drives
+lives in a service. Same test for `#[hooks]`, `#[listeners]` and a health
+indicator — a hook or a tick never renames a service.
 
 ## Several of the same role
 
 Pluralized sub-folder; the singular trait file stays at the parent. **The
-folder exists to carry *several*, so one of a kind is a file**: `dtos/` holds
-`login_dto.rs` beside `signup_dto.rs`, while a module with a single transfer
-object writes `dto.rs` at its root. A plural folder holding one file names a
-collection that is not there.
+folder exists to carry *several*, so one of a kind is a file** — a single
+transfer object is `dto.rs` at the module root.
 
 | Folder | File | Type |
 |---|---|---|
@@ -585,63 +380,37 @@ A provider's role is spelled by its folder *and* its type, so the file does not
 spell it a third time. A transfer object is read far from its folder — in a
 handler signature — so it keeps the suffix at both sites.
 
-**Events take no plural folder, because `events/` is an edge.** A folder name
-means one thing, and the edge vocabulary is closed, so the edge keeps the word:
-one event payload is `event.rs`, several sit flat at the port as
-`<fact>_event.rs` (`post_published_event.rs`), and `events/` holds the listener
-host alone.
+**Events take no plural folder, because `events/` is an edge.** One event
+payload is `event.rs`; several sit flat at the port as `<fact>_event.rs`
+(`post_published_event.rs`), and `events/` holds the listener host alone.
 
-**Two services in one module is a last resort.** Extracting a factory, a client
-or an enum leaves the count at one, and that is the common case. Reach for
-`services/` only when the module owns two bodies of domain logic.
+**Two services in one module is a last resort** — extract a factory, a client
+or an enum first; `services/` is for two bodies of domain logic.
 
 ## Folders
 
-- **One file, one subject.** A file's `//!` names its subject in one sentence;
-  a sentence that needs *and* names two files. A procedure and the record it
-  writes, a transport and the registry it announces into — each pair is two
-  files, however short, because a reader looking for either one opens the name.
-- A module that is not a feature still gets a folder — cross-cutting wiring
-  imported once by the root is `<name>/module.rs`, never a top-level
-  `<name>.rs`. A hand-written `impl Module` is still a DI module.
+- **One file, one subject.** A subject that needs *and* to state is two files
+  — a procedure and the record it writes — however short.
+- Cross-cutting wiring imported once by the root is still a module in a
+  folder, `<name>/module.rs`, never a top-level `<name>.rs`.
 - **A module's sub-folders are a closed set of two kinds**: transport adapters
   and pluralized role folders (`services/`, `entities/`, `dtos/`, …). **There
   is no third kind.** A folder invented to group "things that go together" —
   `contract/`, `types/`, `core/`, `shared/`, `common/`, `interfaces/` — is a
-  defect: every file it would hold is already named by a table above (a trait
-  lives with its concern), so it sits flat beside
-  its siblings. A folder that feels too full means the module is too big; split
-  the module, never the vocabulary.
+  defect: every file it would hold is named by a table above, and a trait lives
+  with its concern. A folder that feels too full means the module is too big.
 - **The edge vocabulary is closed**: `http`, `graphql`, `ws`, `queue`,
   `schedule`, `mcp`, `events`. The *form* is open — a new edge follows
   `<edge>/module.rs` + `<Module><Edge>Module` — but adding one is a framework
   change, not a local improvisation.
-- **A file under `<edge>/` serves that edge and nothing else.** The folder is a
-  statement about the file, exactly as a type's name is a statement about its
-  path, and a file answering two edges from inside one of them makes that
-  statement false. So a type the framework dispatches to at several edges — one
-  guard implementing `check_http`, `check_graphql`, `check_ws_message` and
-  `check_mcp`, one layer bound at more than one — sits **at the level every edge
-  it answers can reach**: the crate root, or the module root beside the edge
-  folders. Not in the folder of whichever edge asked for it first.
-
-  This one is worth stating because it is the hardest to see from the inside.
-  `nest-rs-authz/src/http/guard.rs` held exactly such a guard through 5.1 and the
-  name was never wrong — `AbilityGuard` reads correctly anywhere. Only its
-  *location* was, and it cost three transports the HTTP feature to reach their
-  own guard, put the WS entry behind `http`, and made three of the demo's four
-  `Authz<Edge>Module`s import an HTTP adapter they never served. The reverse is
-  **not** a law: a crate whose whole subject is one edge keeps its role files at
-  the root (`nest-rs-server-timing`'s `interceptor.rs`), because a folder
-  separates several adapters and there are none to separate.
-
-  Mechanised by `no_file_under_an_edge_folder_answers_another_edge` in
-  `naming.rs`, which derives each edge's dispatch surface from the framework's
-  own `pub trait` declarations rather than listing it. Two things it cannot see
-  and a reviewer therefore owes: an edge-bound trait that does not name its edge
-  (`SocketContext`, `RouteResponseShaper`), and an alias whose aliased type is
-  the thing answering several edges.
-- `mod.rs` / `lib.rs` carry `//!`, `mod` and `pub use` — no logic.
+- **A file under `<edge>/` serves that edge and nothing else.** A type the
+  framework dispatches to at several edges — a guard implementing `check_http`
+  and `check_ws_message`, a layer bound at more than one edge — sits **at the
+  level every edge it answers can reach**: the crate root, or the module root
+  beside the edge folders — or every other edge must enable that edge's
+  feature to reach it. Only what dispatches to the type shows this.
+- `mod.rs` / `lib.rs` carry `mod` and `pub use`, and a `//!` where the crate
+  writes doc comments — no logic.
 - Injected service field is `svc` when there is one, `<name>_svc` when there
   are several. Non-service dependencies keep descriptive names (`db`, `queue`,
   `config`).
@@ -651,7 +420,7 @@ or an enum leaves the count at one, and that is the common case. Reach for
 **A module may not take a name from the structural vocabulary.** These words
 already mean something to the layout, and reusing one makes every path
 ambiguous. Pick the domain word instead — a module about desktop applications
-is `programs`, not `apps`.
+is `programs`, not `apps`. `nestrs new` and `nestrs generate` refuse them.
 
 ```
 structure   apps  crates  features  src  tests

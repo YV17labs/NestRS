@@ -66,10 +66,14 @@ rung:
 
 **No home-made test parses Rust source to prove a rule**, and nothing reads
 `CLAUDE.md` or `.claude/`. A source scanner cannot see what the compiler
-resolves, so it either misses or grows into a second compiler — 7.0 built one
-and removed it (`.claude/decisions/conformance-scanner.md`). What stays in
-`nest-rs-conformance` is **structural**: facts read off file paths and
-manifests (the naming law, the test layout), where there is nothing to evade.
+resolves, so it either misses or grows into a second compiler
+(`.claude/decisions/conformance-scanner.md`). What stays in
+`nest-rs-conformance` is **structural**: facts read off file paths, manifests,
+and the declarations themselves — a constant's value, a type's name beside its
+file — never a scan of how code uses them, so there is nothing to evade. A
+check carries no baseline of tolerated violations: a violation is fixed, or the
+check is wrong. The docs lint's baseline of pre-existing page violations is the
+one exception, and it only shrinks.
 The CLI reading the `architecture.md` template it ships is product data, not
 an exception.
 
@@ -95,9 +99,9 @@ a defect inside `nest-rs-redis`.
    wrong, and deciding which is the finding. A type renamed without its
    `*Setup`, `*Host` or config is half a rename.
 4. **A variable is a path too.** A `#[config]`'s namespace is its stem joined
-   by `__`: `SeaOrmConfig` reads `NESTRS_SEAORM__URL`, `RedisWorkerConfig`
-   reads `NESTRS_REDIS__WORKER__*`. `NESTRS_DATABASE__URL` names neither the
-   crate nor the type, and is the defect.
+   by `__`: `SeaOrmConfig` reads `<PREFIX>_SEAORM__URL`, `RedisWorkerConfig`
+   reads `<PREFIX>_REDIS__WORKER__*`. `<PREFIX>_DATABASE__URL` names neither
+   the crate nor the type, and is the defect.
 
 The composition root has **three module shapes, no fourth** —
 `<Vendor>Module::for_root` opens a resource, `<Port>Module::for_root` carries a
@@ -306,7 +310,7 @@ backends, decorator pairs. An ask arrives at one of them.
 - **Every wait the framework owns is bounded.** A port call the framework
   awaits has a bound of the framework's, and the way down abandons what is
   still running at its bound, with a line naming it. A gap is listed in its
-  crate's `//!` with an issue. The mechanics are in `framework.md`.
+  crate's `//!` with an issue. The mechanics are in `.claude/rules/container.md`.
 - **Doc comments only when the *why* is non-obvious** — never paraphrase the
   name.
 - **Security events log at `warn`+**, never `debug`.
@@ -323,7 +327,7 @@ deviations — is `.claude/rules/observability.md`. What every crate obeys:
   | Emitting crate | Target |
   |---|---|
   | a `nest-rs-*` framework crate | `nest_rs::<concern>` — `nest_rs::http`; a family member roots at its family: `nest_rs::oauth::client` |
-  | the shared feature library | `features::<feature>` — each feature declares `pub const TARGET` at its root |
+  | the shared feature library | `features::<feature>` — each feature that emits declares `pub const TARGET` at its root |
   | an app crate, or a single-crate project | `<app>::<concern>` |
 
   **No target is a raw-string prefix of an unrelated one** — `EnvFilter`

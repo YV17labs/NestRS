@@ -2,239 +2,125 @@
 paths:
   - "**/tests/**/*.rs"
   - "crates/nest-rs-testing/**"
+  - "demo/crates/features/src/testing.rs"
+  - ".config/nextest.toml"
 ---
 
 # Writing tests — the toolbox
 
-The layout/suite norm, the runner and the "e2e infra is always
-reachable" rule live in `CLAUDE.md` (locked — don't reopen). This file
-is the toolbox: reach for `nest-rs-testing` before hand-rolling a
-harness.
+The test layout, the two suite names, the runner and "e2e infra is always
+reachable" are `CLAUDE.md`'s, and locked. This file is the toolbox and the
+decisions that keep live suites from meeting each other. Reach for
+`nest-rs-testing` before hand-rolling a harness.
 
-## `nest-rs-testing` helpers
+## `nest-rs-testing`
 
 - **`TestApp` / `TestAppBuilder`** — boots the real DI graph and drives
-  HTTP/GraphQL/OpenAPI/MCP through poem's `TestClient` (re-exported),
-  no socket. The default e2e entry point. **It boots the transport the
-  app's own `HttpModule::for_root(cfg)` describes**, through
-  `HttpTransport::from_config` — the same call the module's
-  `TransportContribution` makes. So pin an `HttpConfig` on the module to
-  test a non-default prefix, versioning strategy, body cap or timeout;
-  `TestAppBuilder::http(t)` is for a transport the app does *not*
-  declare. It built a bare transport once, and a suite asserting
-  `/widgets` shipped an app serving `/api/widgets`.
-- **`override_dyn` / `override_value`** on the builder — swap a
-  provider for a test double at build time. Never for the DB —
-  mocking the database in e2e is a hard no.
+  HTTP, GraphQL, OpenAPI and MCP through poem's `TestClient`, no socket. The
+  default e2e entry point, and the composition witness `CLAUDE.md` asks of
+  every `for_root` seam. It boots the transport the app's own
+  `HttpModule::for_root(cfg)` describes, through the call the module itself
+  makes: pin an `HttpConfig` on the module to test a prefix, a versioning
+  strategy, a body cap or a timeout. `TestAppBuilder::http(t)` is only for a
+  transport the app does not declare — a bare one tests a server the app
+  never runs.
+- **`provide` / `provide_arc`** seed a value, which short-circuits its
+  resolving factory; **`override_dyn` / `override_value`** swap a provider for
+  a double. Never the database (`CLAUDE.md`, hard "no").
 - **`HeadlessApp` / `TransportHandle`** — boot with no transport, for
   lifecycle, DI and discovery assertions.
-- **`EphemeralDatabase`** (`nest-rs-testing`'s `orm` feature, which the
-  umbrella's `testing` and `seaorm` switch on together) — a per-test
-  database, dropped with the value.
-- **`load_project_env`** — loads the `.env` cascade so e2e picks up
-  the devcontainer hostnames (`postgres`, `redis`, `rustfs`).
+- **`WsApp` / `WsSocket`, `GraphqlSocket`** — a real upgrade, for the edges
+  whose protocol is the socket.
+- **`LogCapture`** — the events a unit emits are half its contract: a denial
+  that fails closed and logs nothing passes every response assertion.
+- **`EphemeralDatabase`** (`orm` feature) — a per-test database, dropped with
+  the value.
+- **`load_project_env`** — the `.env` cascade, so an e2e reaches the
+  devcontainer's `postgres`, `redis` and `rustfs`.
 
-## What is missing is a cell, not a feeling
+## Running `cargo mutants`
 
-Coverage answers *did this line run*. Nothing answers *was this answer
-asserted* — a line executed ten times by a green test whose emitted value
-nobody read is 100 % covered and wrong. So the unit is neither the test nor
-the percentage: **a test is one cell in a matrix whose row is a member of a
-family and whose column is an obligation every member owes.**
+Why mutants and not coverage is `CLAUDE.md` (*How a rule is held*): coverage
+answers *did this line run*, a weaker question. Nothing here measures tests by
+name or by count.
 
-Everything the framework interprets belongs to a family — the decorators and
-their halves, the edges, the layer families, the `for_root` seams, the umbrella
-features, the `warn`+ events, the manifests the repo owns *and generates*.
-Four clauses, load-bearing in this order.
+```
+git diff HEAD > /tmp/c.diff
+CARGO_TARGET_DIR=target/mutants cargo mutants --in-diff /tmp/c.diff \
+  --test-tool nextest -p <touched crate> -j1
+```
 
-1. **A family is declared at its second member.** The second thing the
-   framework interprets the same way is not a second thing, it is a family.
-   Declaring it costs three lines: how its members are **derived from the
-   source**, what every member owes, and **how a member is spelled**. Deriving
-   is the whole of it — a hand-written member list is the defect, not the
-   shortcut: one family here is guarded twice in one file, once from a derived
-   population and once from eleven literal paths, and the drift was in the
-   literal half.
+- **Its own target directory.** It builds in a copy of the tree under
+  `TMPDIR`, and the trybuild projects it leaves behind point into that
+  deleted copy, which breaks the next build of anything else sharing the
+  directory.
+- **`-j1` whenever the target directory is shared**, since every job then
+  builds into it at once. With `CARGO_TARGET_DIR` unset, each job builds in its
+  own copy: parallel, slower cold.
+- **`--test-tool nextest`**, because the suites are nextest's.
+- **A missed mutant is handled as `CLAUDE.md`'s tier 2 says; an unviable one
+  is noise.**
 
-   **A derivation reads what makes a member, never one way of spelling it.** The
-   grammars join enrolled a decorator by reading its name out of the string
-   literal an `unknown_argument` or `unmatched_meta` call opens with. The
-   worker-job family words those sentences through `JobDecorator::name()`, and
-   `#[api]` refused strangers in a sentence of its own, so `#[every]`, `#[cron]`,
-   `#[after]` and `#[api]` — each with a `key = value` grammar — stood outside the
-   population with their holes unjoined, while the join reported the family
-   whole. It now enrols `JobDecorator::ALL` beside the literals, and `#[api]`
-   refuses an unknown key through `unknown_argument` and a bare one with the
-   family's sentence rather than `syn`'s `expected =`.
+## Live backends are shared — each suite hands out its parts
 
-2. **A declared family is joined, and the join answers both questions.** One
-   test per family joins members × obligations. An empty cell **fails** — that
-   is the hole. The other direction is not a failure but a **precondition**:
-   the join names each cell's occupants, and **a cell that has one is closed —
-   no second test is written for it.** A test already there for its own
-   scenario stays; what is forbidden is adding one *for coverage*, which is how
-   a suite grows without gaining an assertion. The join is **workspace-wide**:
-   a member covered from another crate is covered, and a per-crate view
-   manufactures false holes that get closed with duplicate tests — one crate
-   here was reported untested while its whole public surface was asserted from
-   four other crates.
+nextest runs each test in its own process, and both workspaces' suites run on
+one Postgres and one Redis. Isolation is declared, never hoped for.
 
-   **A join lands on existing code through a baseline, never through a sprint.**
-   A baseline line is existing code, or a name a dependency dictates and this
-   repo cannot change — recorded with its upstream issue; code the same change
-   writes is never baselined, it is fixed. Today's empty cells are recorded once; the join fails on the *next* one, and
-   the baseline **only shrinks** — the docs linter's contract, for the same
-   reason. Filling a pre-existing cell is ranked work, not a debt to clear:
-   `warn`+ events deciding access come first because they are what an incident
-   queries, and a cell whose emptiness is a decision is written down as one.
-
-3. **A filled cell is a proved cell.** A test filling a cell must fail when the
-   behaviour it asserts is removed — establish that once, while writing it. A
-   green cell that would stay green is worse than an empty one: the matrix
-   reads as covered and the join goes quiet.
-
-4. **The spelling is the whole mechanism.** A test covering a member spells that
-   member the way the framework spells it — in its file name, its function
-   name, or a literal in its body. Nothing else is needed and nothing else
-   works: a family whose members cannot be spelled cannot be joined, so the
-   spelling is decided when the family is declared, never per test.
-
-**This catches absence, never wrongness.** A cell filled by a test asserting
-the wrong thing passes the join; that is what `/audit` is for, and the two do
-not substitute for each other.
-
-Two moves in this need judgement and have no grep: noticing that something has
-**become** a family, and writing a cell body that would actually fail. Both are
-work for an agent; the join itself never is.
-
-**A join may not be blinded.** A join reads Rust as written, so a construction
-that writes a member under another name — or where the join does not look —
-takes it out of the population while the join stays green, and each join that
-learned one such construction left the next join open to it. So what a join
-reads by its spelling is **declared beside the code that reads it** (each
-join's `followed()`), and the `blinds` join refuses, in the `src/` of every
-crate in both workspaces, whatever would hide one: a rename or a `type` alias of
-it, an import through it or a glob of it, a `macro_rules!` writing it where its
-join does not expand, a `cfg_attr` wrapping it, a `#[path]` module, an
-`extern crate … as`, a file `syn` cannot parse. There is no baseline: a blind
-spot fails the day it is written. A join that must follow an import rather than
-refuse it — the dependencies, decodes, paths and umbrella joins, which judge a
-path by where it resolves — reads the crate through the one shared resolver
-(`nest_rs_conformance::imports`). Every join's `//!` states what it reads by its
-spelling and what is refused, and a new join owes the row: `blinds` fails on a
-join with none. `#[cfg(test)]` is read as a predicate that *implies* `test`, so
-`cfg(not(test))` and `cfg(any(test, …))` are shipped code to every join.
-
-**A join reads the tree, never the directories above it.** Every path a join
-classifies is read below the repository root — `sources::segments` for its
-components, `sources::relative` for its spelling, both through `sources::below`,
-which refuses a path outside the tree rather than falling back to the absolute
-one. Until 7.0 some joins read absolute components, so a checkout under `~/src/`
-or inside a folder named like an edge changed verdicts: under `…/schedule/`, the
-framework's guards read as schedule adapters.
-`naming::no_verdict_depends_on_where_the_checkout_sits` plants one tree under a
-plain root and under `…/src/schedule/nestrs` and asks the path-reading joins and
-`nestrs lint` for the same written verdict, and a unit test keeps `.components()`
-and `.ancestors()` out of every join.
-
-Before writing any test: **which family is this a member of, what does that
-family owe, and how is the member spelled?** A test that answers none of the
-three is covering product behaviour, not a framework obligation, and this
-section does not bind it.
-
-## Reminders that bite
-
-- The e2e gate is the nextest filter `binary(e2e)` — never `#[ignore]`.
-- nextest does not run doctests: `cargo test --doc` is its own step
-  (demo's `test unit` recipe runs both).
-- A DB/Redis/S3 connection failure in the devcontainer is a regression
-  to report, never a reason to skip e2e.
-- `nest-rs-testing`'s own test tree organizes by concern — the one
-  sanctioned exception to "mirror `src/`".
-- **Runner config is `.config/nextest.toml`**, read automatically, so a
-  *Definition of done* invocation stays the same everywhere.
-- **A suite sharing a build directory declares a test group there.**
-  nextest runs each test in its own *process*, so anything shared
-  between tests is shared between processes. `nest-rs-cli`'s e2e
-  compiles every scaffolded workspace into one `CARGO_TARGET_DIR` —
-  worth keeping, it turns minutes into seconds — and concurrent builds
-  raced on the fingerprints of shared dependencies. It surfaced as a
-  **linker** error on whichever generic crate lost (`quote`,
-  `proc-macro2`, `libc`), naming nothing about the cause and moving
-  between runs, which reads exactly like a broken toolchain.
-  `max-threads = 1` on a group scoped to that binary is the fix;
-  per-test target directories are not, since each would rebuild the
-  whole tree.
-- **A live backend is shared the same way, so an e2e suite hands its parts
-  out where it declares them.** A test that needs a Redis logical database
-  of its own takes it from the one `DB_*` list in its suite's `main.rs`
-  (`nest-rs-redis`'s e2e holds it), which a `const` block checks at compile
-  time — every index from 1 to 15, no two equal — so a collision is a build
-  error rather than two tests flushing each other's keys. A test that starts a worker drains a queue
-  named for that test alone, since a worker in one process takes another
-  test's jobs; a test that pushes where no worker drains uses a name or a
-  key unique to its run, and deletes what it filed.
-- **Redis's sixteen databases are split between the two workspaces, because
-  both suites run on one Redis.** 0 is the developer's — what `nestrs run dev`
-  and a running app drain — and the framework suite's shared one, on queue
-  names of its own; 1 is the demo suites' shared one, named by the committed
-  `demo/.env.test`, and nothing drains it; 2 to 8 are the demo's per-test
-  databases; 9 to 15 the framework's. Each half is checked where its list is
-  written — the framework's at compile time, the demo's by `config()` before
-  anything connects — so a test taking the other half's database never runs,
-  and a `FLUSHDB` in one never reaches a job the other filed.
-- **A demo test cannot name its own queue, so its database is the isolation.**
-  `audio` and `notifications` are the product's names, fixed by its
-  `#[queue]`s, and every worker booted over a product module drains them. So a
-  demo test that starts a worker, or a scheduler whose tasks enqueue, takes a
-  database of its own from `features::testing::RedisDatabase` — an enum with
-  one entry per test, named for it, so two entries on one database is a
-  duplicate-discriminant error — and seeds it
-  (`.provide(RedisDatabase::X.config())`) into every app of the test that must
-  meet: the producer and the worker alike. A test that only pushes stays on the
-  suites' database, where nothing takes its job; what it filed stays there,
-  since deleting it would mean writing apalis's keys outside its API. Until
-  7.0 the worker's e2e booted `WorkerModule` on the database `.env` names, and
-  ran whatever a developer's api or another suite had queued, against the main
-  Postgres (`module::the_worker_app_runs_the_jobs_on_its_own_database_and_none_from_the_suites`).
 - **A suite that boots over SeaORM runs on an `EphemeralDatabase`**, never on
-  the database `<PREFIX>_SEAORM__URL` names: it creates one, seeds its
-  connection (`provide_arc(db.connection())`), which short-circuits the pool
-  `SeaOrmModule` would open, and drops it with the guard. The live suite's users
-  test seeded the main database until 7.0 — it failed on an unmigrated one, and
-  left rows behind whenever it failed before its own cleanup, and the worker's
-  e2e booted `WorkerModule` over the main database's pool; no member is open.
-- **A test that needs its own database or user seeds its config**
-  (`TestApp::provide`) rather than pinning a `for_root` base: the suite's
-  own `<PREFIX>_REDIS__URL` outranks a pin, field by field, and would move
-  the app back onto the shared database — or around the proxy the test put
-  in front of it.
-- **The events join reads what `syn` parses, and `syn` never parses a
-  macro's tokens.** A message spelled inside `assert!` or `assert_eq!`
-  reads as unasserted, however the test fares. Bind the line first —
-  `let line = logs.expect_one(TARGET, "…");` — then assert on the binding.
-- **A procedure the docs hand an operator is run by an e2e test**, as
-  printed: a move, a drain, anything that changes data an operator cannot
-  get back. The 6.x queue move is one
-  (`layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_and_copies_none`),
-  and like any filled cell it is proved: leaving out the `ZADD` that
-  re-registers the moved in-flight set fails it.
+  the database `<PREFIX>_SEAORM__URL` names: it seeds the connection
+  (`provide_arc(db.connection())`), which keeps `SeaOrmModule` from opening
+  its pool, and the guard drops the database. A dirty or unmigrated main
+  database then fails nothing.
+- **Redis's sixteen databases are split between the workspaces.** 0 is the
+  developer's — what `nestrs run dev` drains — and the framework suite's
+  shared one; the demo holds the lower half above it, the framework the upper
+  half. Each list is checked at compile time where it is written: the
+  framework's `DB_*` constants in `nest-rs-redis`'s e2e `main.rs`, the demo's
+  `features::testing::RedisDatabase`, one variant per test, so two tests on
+  one database is a duplicate discriminant. A `FLUSHDB` in one half never
+  reaches a job the other filed.
+- **A test that starts a worker drains a queue no other test pushes to.** In
+  the framework the queue is named for the test. A demo test cannot name its
+  queue — `audio` and `notifications` are the product's `#[queue]`s — so its
+  own Redis database is the isolation, seeded into every app of the test that
+  must meet: the producer and the worker alike. A test that only pushes stays
+  on the suites' shared database, where nothing drains.
+- **A test needing its own database or user seeds its config**
+  (`TestApp::provide`), never a `for_root` pin: the suite's own
+  `<PREFIX>_REDIS__URL` outranks a pin field by field and would move the app
+  back onto the shared database, or around a proxy the test put in front of
+  it.
+- **What a test files where nothing drains, it names uniquely and deletes** —
+  unless deleting means writing apalis's keys outside its API (`CLAUDE.md`,
+  hard "no"); then it stays.
+
+## Decisions that bite
+
+- **A procedure the docs hand an operator is run by an e2e test, as printed** —
+  a move, a drain, anything that changes data an operator cannot get back.
+- **Runner configuration is `.config/nextest.toml`**, read automatically, so
+  every invocation in `CLAUDE.md` is the same on every machine.
+- **A suite sharing a build directory declares a test group.** `nest-rs-cli`'s
+  e2e compiles every scaffolded workspace into one target directory and runs
+  in the `scaffold-check` group; the trybuild suites (`diagnostics.rs` in each
+  crate's integration suite) run in the `trybuild` group. Both have
+  `max-threads = 1`. Per-test target directories are not the fix: each would
+  rebuild the tree. A missing group shows as a linker error on an unrelated
+  crate, which reads as a broken toolchain.
 - **A second checkout takes its own `CARGO_TARGET_DIR`.** Sharing one, cargo
-  reuses the other checkout's test binaries, whose `CARGO_MANIFEST_DIR`
-  still points there — so every conformance join reads the other tree, or,
-  once that tree is gone, an empty one whose floors fail within
-  milliseconds. `cargo clean -p nest-rs-conformance -p nest-rs-cli` recovers.
-- **trybuild and doctests compile the sources on disk when they run**, so a
-  file edited while a suite runs voids that run; re-run it rather than
-  reading its failures.
-- **A compile-fail snapshot pins the refusal its fixture exists for, and no
-  error the fixture made on its own.** A fixture that does not parse, or whose
-  names no longer resolve, stays red whatever the decorator says — so the
-  refusal it promises can change or vanish with the suite green. Both are
-  mechanised in `nest-rs-conformance`'s `snapshots` join: a fixture must parse,
-  and its `.stderr` carries no name-resolution error — a code (`E0404`, `E0432`,
-  `E0433`, `E0599`, …) or one of the sentences rustc prints without one
-  (`cannot find attribute`, `cannot find macro`, `cannot determine resolution`)
-  — unless its `//!` says `deliberately fails to resolve`. Read a
-  regenerated `.stderr` before committing it; the join catches the two
-  mechanical cases, not a cascade of any other kind.
+  reuses the other checkout's test binaries, whose `CARGO_MANIFEST_DIR` still
+  points there, so every test reading the tree reads the wrong one.
+  `cargo clean -p <crate>` recovers.
+- **trybuild and doctests compile the sources on disk when they run**: a file
+  edited during a run voids it. Re-run rather than read its failures.
+
+## Compile-fail snapshots
+
+**A snapshot pins the refusal its fixture exists for, and no error the fixture
+made on its own.** A fixture that does not parse, or whose names no longer
+resolve, stays red whatever the decorator says, so the refusal it promises can
+change or vanish with the suite green. A fixture therefore parses and its
+`.stderr` carries no name-resolution error, unless its `//!` says
+`deliberately does not parse` or `deliberately fails to resolve` — held by the
+`snapshots` check in `nest-rs-conformance`. Anything else a regenerated snapshot pins is review:
+read the `.stderr` `TRYBUILD=overwrite` wrote before committing it.

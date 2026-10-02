@@ -14,6 +14,6 @@ path, and is the intended exception.
 Spans and lines used to be two vocabularies (`http.request` beside "request
 served"); a unit is now one typed constant read by both.
 
-`NESTRS_HTTP__ACCESS_LOG` stays: it predates the family and is an app's pinned
+`<PREFIX>_HTTP__ACCESS_LOG` stays: it predates the family and is an app's pinned
 config, not a deployment's filter. Four more booleans for the other edges would
 be four declarations of a decision `nest_rs::operation=off` already makes.

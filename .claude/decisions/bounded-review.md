@@ -11,9 +11,9 @@ and, where mechanical, a new conformance join.
 
 The result during 7.0: the rules corpus grew from about 4,400 to 6,200 lines,
 the scanner from 7.2k to 17.9k, and three audit rounds produced 79 findings in
-the last, about a quarter of them against the scanner itself. The owner
-memory recording an admin port and gauges built because rules "widen every need
-to its whole family", then removed, is the same mechanism.
+the last, about a quarter of them against the scanner itself. An admin port and
+gauges built because the rules "widen every need to its whole family", then
+removed, came from the same mechanism.
 
 Now: decide for the family, build for the caller, list the other members in the
 commit body; security and data-integrity fixes stay family-wide. An audit runs

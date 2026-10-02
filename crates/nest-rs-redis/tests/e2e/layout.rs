@@ -19,10 +19,15 @@
 //!   completion, a retry and a dead letter, with every apalis script the worker
 //!   runs them through. The database holds no other key afterwards, and Redis's
 //!   own ACL log holds no denial but the 6.x check's.
+//! - **The 6.x check only reads.** A user Redis allows nothing but the reads the
+//!   check documents — `TYPE`, `LLEN`, `ZCARD`, `ZRANGE`, `SCARD`, beside the
+//!   connection's `PING` and `SELECT` — runs it over a job waiting, one held
+//!   back and one in flight, and Redis's ACL log holds no denial: a write or a
+//!   script added to the check fails here, whatever command it spells.
 //!
 //! Every name at the root is built from the queue's, never written whole: this
-//! suite plays the layout the framework left behind, and a literal of it would
-//! read, to the keys join, as the framework still writing it.
+//! suite plays the layout the framework left behind, as apalis derived it from
+//! the queue's bare name.
 
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -112,7 +117,14 @@ async fn clear_the_root(admin: &mut RedisConnection, queue: &str) {
 /// Whether the worker of `M`'s app refuses to start, and with what — `None`
 /// when it starts, in which case it is stopped again.
 async fn worker_refusal<M: nest_rs_core::Module + 'static>() -> Option<String> {
-    let app = TestApp::builder()
+    worker_refusal_of::<M>(TestApp::builder()).await
+}
+
+/// [`worker_refusal`], booting from `builder`.
+async fn worker_refusal_of<M: nest_rs_core::Module + 'static>(
+    builder: nest_rs_testing::TestAppBuilder,
+) -> Option<String> {
+    let app = builder
         .module::<M>()
         .build_headless()
         .await
@@ -366,6 +378,96 @@ async fn an_applications_key_beside_6x_jobs_hides_none_of_them() {
         Some(format!("{flag} (string)")),
         "the consumers name is read and named; the failed one holds no job and is never read",
     );
+}
+
+// --- the 6.x check, under a user allowed only its reads ---------------------------------
+
+const READ_ONLY_QUEUE: &str = "nestrs-e2e-layout-read-only";
+
+/// The ACL user this test creates, and removes — named for this run, so no
+/// earlier run's denial in `ACL LOG` is read as its own.
+const READ_ONLY_USER: &str = "nestrs-e2e-read-only";
+
+/// Every command the 6.x check may send, and the connection's own: its proof
+/// and the database its URL names.
+const READS: [&str; 7] = ["ping", "select", "type", "llen", "zcard", "zrange", "scard"];
+
+#[queue(name = "nestrs-e2e-layout-read-only", job = LayoutCommand)]
+struct ReadOnlyQueue;
+
+#[injectable]
+#[derive(Default)]
+struct ReadOnlyProcessor;
+
+#[processor]
+impl ReadOnlyProcessor {
+    #[process(queue = ReadOnlyQueue, retries = 0)]
+    async fn run(&self, _job: LayoutCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[module(
+    imports = [RedisModule::for_root(None), RedisQueueModule, RedisWorkerModule::for_root(None)],
+    providers = [ReadOnlyProcessor],
+)]
+struct ReadOnlyModule;
+
+/// The 6.x check sends nothing but reads: run as a user Redis allows the
+/// commands of [`READS`] and nothing else, over a job waiting, one held back and
+/// one in flight — every branch of the check — it finds all three and refuses
+/// the worker, and Redis denied the user nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_6x_check_runs_under_a_user_allowed_only_its_reads() {
+    let mut admin = crate::connect().await;
+    clear_the_root(&mut admin, READ_ONLY_QUEUE).await;
+    let waiting = leave_a_6x_job(&mut admin, READ_ONLY_QUEUE).await;
+    let scheduled = leave_a_6x_job_scheduled(&mut admin, READ_ONLY_QUEUE).await;
+    let in_flight = format!("{READ_ONLY_QUEUE}:inflight:{READ_ONLY_QUEUE}");
+    let _: () = redis::pipe()
+        .sadd(&in_flight, "01KYQ7RH444ZAHA2JP8JBJVRA3")
+        .ignore()
+        .zadd(format!("{READ_ONLY_QUEUE}:consumers"), &in_flight, 0)
+        .ignore()
+        .query_async(&mut admin)
+        .await
+        .expect("a job in flight on a 6.x replica");
+
+    let user = crate::acl_user(READ_ONLY_USER);
+    crate::forget_user(&user).await;
+    let password = format!(">{}", crate::ACL_PASSWORD);
+    let reads = READS.map(|command| format!("+{command}"));
+    let _: () = redis::cmd("ACL")
+        .arg(&[
+            "SETUSER",
+            &user,
+            "on",
+            &password,
+            "~*",
+            "resetchannels",
+            "-@all",
+        ])
+        .arg(&reads)
+        .query_async(&mut admin)
+        .await
+        .expect("ACL SETUSER");
+    let reader = nest_rs_redis::RedisConfig {
+        url: crate::redis_url().replacen("://", &format!("://{user}:{}@", crate::ACL_PASSWORD), 1),
+        ..Default::default()
+    };
+    let refused = worker_refusal_of::<ReadOnlyModule>(TestApp::builder().provide(reader)).await;
+    crate::forget_user(&user).await;
+    clear_the_root(&mut admin, READ_ONLY_QUEUE).await;
+
+    let refused = refused.expect("the worker refuses to start beside the 6.x jobs");
+    for expected in [
+        format!("1 waiting on {waiting}"),
+        format!("1 held for later on {scheduled}"),
+        format!("1 in flight in {in_flight}"),
+    ] {
+        assert!(refused.contains(&expected), "{expected:?} in {refused}");
+    }
+    crate::assert_redis_denied_nothing_but(&user, &[]).await;
 }
 
 // --- moving a queue out of the 6.x layout ------------------------------------------

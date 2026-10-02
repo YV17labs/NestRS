@@ -22,8 +22,9 @@ default = []
 http = ["dep:uuid", "dep:nest-rs-resource", "nest-rs-authz/http"]
 # GraphQL transport extractors: the `bind` resolver helper and `LoaderScope`
 # (the `BatchContext` that re-installs the request executor + ability around
-# each `#[dataloader]` batch).
-graphql = ["dep:nest-rs-graphql", "dep:uuid"]
+# each `#[dataloader]` batch). `nest-rs-authz/graphql` is forwarded because
+# `src/graphql/bind.rs` refuses through `nest_rs_authz::graphql::forbidden`.
+graphql = ["dep:nest-rs-graphql", "dep:uuid", "nest-rs-authz/graphql"]
 # WebSocket transport extractor: `WsDataContext` (the `SocketContext` that
 # re-installs the request executor + ability around each gateway message).
 ws = ["dep:nest-rs-ws"]

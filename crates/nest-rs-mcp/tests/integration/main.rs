@@ -14,6 +14,7 @@
 
 mod diagnostics;
 mod endpoint;
+mod error;
 mod guard;
 mod mcp_impl;
 mod operation;

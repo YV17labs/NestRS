@@ -1,9 +1,7 @@
 use std::net::IpAddr;
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
-};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 use poem::http::HeaderName;
 
 use crate::cors::HttpCors;
@@ -33,23 +31,22 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 pub(crate) const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The variable the shutdown window is read from, and the range it must fall in.
-const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds {
-    key: "SHUTDOWN_TIMEOUT_SECS",
-    field: "HttpConfig::shutdown_timeout",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "SHUTDOWN_TIMEOUT_SECS",
+    "HttpConfig::shutdown_timeout",
+    Floor::Units(Bound {
         count: 1,
         why: "a shorter window cuts every request in flight at the signal, and `0` is not the \
               off switch it is for `REQUEST_TIMEOUT_SECS`: a shutdown that waits without a bound \
               is what this window exists to prevent",
     }),
-    most: Bound {
+    Bound {
         count: 3600,
         why: "a window past an hour is a unit slip more often than a choice (`25000` meant as \
               milliseconds is seven hours), and it outlasts the grace period an orchestrator \
               gives a replica, whose kill then cuts what the window held without a word",
     },
-};
+);
 
 /// The floor every long-lived connection's lifetime ceiling is held to — an
 /// `#[sse]` stream here, a WebSocket and a GraphQL subscription in their own
@@ -88,41 +85,38 @@ pub const SSE_KEEP_ALIVE_CEILING: Bound = Bound {
 };
 
 /// The per-request budget's range, the variable that sets it, and why.
-const REQUEST_TIMEOUT: DurationBounds = DurationBounds {
-    key: "REQUEST_TIMEOUT_SECS",
-    field: "HttpConfig::request_timeout",
-    unit: DurationUnit::Seconds,
-    least: Floor::UnitsOrOff(Bound {
+const REQUEST_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "REQUEST_TIMEOUT_SECS",
+    "HttpConfig::request_timeout",
+    Floor::UnitsOrOff(Bound {
         count: 1,
         why: "a budget under a second times out every request before its handler has run",
     }),
-    most: Bound {
+    Bound {
         count: 60 * 60,
         why: "a request still running after an hour has outlived every client and proxy timeout \
               in front of it, and a budget that long is a unit slip (`30000` meant as \
               milliseconds is eight hours); a route that streams for longer turns it off",
     },
-};
+);
 
 /// The `#[sse]` stream ceiling's range — [`MAX_CONNECTION_FLOOR`] and
 /// [`MAX_CONNECTION_CEILING`] — and the variable that sets it.
-const SSE_MAX_CONNECTION: DurationBounds = DurationBounds {
-    key: "SSE_MAX_CONNECTION_SECS",
-    field: "HttpConfig::sse_max_connection",
-    unit: DurationUnit::Seconds,
-    least: MAX_CONNECTION_FLOOR,
-    most: MAX_CONNECTION_CEILING,
-};
+const SSE_MAX_CONNECTION: DurationBounds = DurationBounds::secs(
+    "SSE_MAX_CONNECTION_SECS",
+    "HttpConfig::sse_max_connection",
+    MAX_CONNECTION_FLOOR,
+    MAX_CONNECTION_CEILING,
+);
 
 /// The `#[sse]` keep-alive's range — [`SSE_KEEP_ALIVE_FLOOR`] and
 /// [`SSE_KEEP_ALIVE_CEILING`] — and the variable that sets it.
-const SSE_KEEP_ALIVE: DurationBounds = DurationBounds {
-    key: "SSE_KEEP_ALIVE_SECS",
-    field: "HttpConfig::sse_keep_alive",
-    unit: DurationUnit::Seconds,
-    least: SSE_KEEP_ALIVE_FLOOR,
-    most: SSE_KEEP_ALIVE_CEILING,
-};
+const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
+    "SSE_KEEP_ALIVE_SECS",
+    "HttpConfig::sse_keep_alive",
+    SSE_KEEP_ALIVE_FLOOR,
+    SSE_KEEP_ALIVE_CEILING,
+);
 
 /// HTTP transport options resolved at boot. Every field is settable both via
 /// `NESTRS_HTTP__*` env vars (read by [`Config::from_env`]) and via the pinned

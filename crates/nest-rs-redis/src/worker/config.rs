@@ -22,9 +22,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
-};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 
 /// Default drain window on shutdown: 20s, the HTTP transport's window, and for
 /// the same arithmetic. The way down is the transports' windows, then the
@@ -60,58 +58,55 @@ const HEARTBEATS_PER_THRESHOLD: u32 = 10;
 const MIN_HEARTBEAT: Duration = Duration::from_secs(1);
 
 /// The drain window's bounds, the variable that sets it, and why.
-const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds {
-    key: "SHUTDOWN_TIMEOUT_SECS",
-    field: "RedisWorkerConfig::shutdown_timeout",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+const SHUTDOWN_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "SHUTDOWN_TIMEOUT_SECS",
+    "RedisWorkerConfig::shutdown_timeout",
+    Floor::Units(Bound {
         count: 1,
         why: "the drain keeps up to half its window to hand interrupted jobs back, and with \
               none a job running at shutdown stays in flight until a peer's sweep takes it, the \
               orphan threshold later",
     }),
-    most: Bound {
+    Bound {
         count: 60 * 60,
         why: "a stopping replica holds its rollout for as long as it drains, and a job still \
               running an hour into a shutdown is one to hand back and resume from its \
               checkpoint, not to wait out",
     },
-};
+);
 
 /// The orphan threshold's bounds, the variable that sets it, and why.
-const ORPHAN_AFTER: DurationBounds = DurationBounds {
-    key: "ORPHAN_AFTER_SECS",
-    field: "RedisWorkerConfig::orphan_after",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+const ORPHAN_AFTER: DurationBounds = DurationBounds::secs(
+    "ORPHAN_AFTER_SECS",
+    "RedisWorkerConfig::orphan_after",
+    Floor::Units(Bound {
         count: 5,
         why: "five heartbeats of one second each — anything shorter reads a slow answer as a death",
     }),
-    most: Bound {
+    Bound {
         count: 24 * 60 * 60,
         why: "the threshold is how long a crashed replica's jobs wait for a peer to take them, \
               and past a day that wait is a typo rather than a choice",
     },
-};
+);
 
 /// The lease's bounds, the variable that sets it, and why. Its nearer ceiling is
 /// half the orphan threshold the deployment set, checked once both are read;
 /// the one stated here is half the threshold's own ceiling, which no lease can
 /// pass whatever the threshold.
-const LEASE: DurationBounds = DurationBounds {
-    key: "LEASE_SECS",
-    field: "RedisWorkerConfig::lease",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+const LEASE: DurationBounds = DurationBounds::secs(
+    "LEASE_SECS",
+    "RedisWorkerConfig::lease",
+    Floor::Units(Bound {
         count: 1,
         why: "a lease renewed every third of it needs at least a second to renew in",
     }),
-    most: Bound {
-        count: ORPHAN_AFTER.most.count / 2,
+    Bound {
+        count: ORPHAN_AFTER.most().count / 2,
         why: "the lease must lapse inside half the orphan threshold, and the threshold is at \
               most a day",
     },
-};
+);
 
 /// The poll's bounds, the variable that sets it, and why: every poll costs Redis
 /// a fetch and a sweep of silent peers per method per replica, jobs or none, so
@@ -119,21 +114,20 @@ const LEASE: DurationBounds = DurationBounds {
 /// method with nothing to do. Its nearer ceiling is the orphan threshold the
 /// deployment set, checked once both are read; the one stated here is the
 /// threshold's own ceiling.
-const POLL_INTERVAL: DurationBounds = DurationBounds {
-    key: "POLL_INTERVAL_MS",
-    field: "RedisWorkerConfig::poll_interval",
-    unit: DurationUnit::Millis,
-    least: Floor::Units(Bound {
+const POLL_INTERVAL: DurationBounds = DurationBounds::millis(
+    "POLL_INTERVAL_MS",
+    "RedisWorkerConfig::poll_interval",
+    Floor::Units(Bound {
         count: 10,
         why: "every poll costs Redis a fetch and a sweep per method per replica, jobs or none — \
               up to two hundred scripts a second at the floor",
     }),
-    most: Bound {
-        count: ORPHAN_AFTER.most.count * 1000,
+    Bound {
+        count: ORPHAN_AFTER.most().count * 1000,
         why: "a replica polling less often than the orphan threshold reads as dead to its \
               peers between polls, and the threshold is at most a day",
     },
-};
+);
 
 /// Consumer settings, settable via `NESTRS_REDIS__WORKER__*` or pinned through
 /// [`RedisWorkerModule::for_root`](crate::RedisWorkerModule::for_root).
@@ -203,7 +197,7 @@ impl Config for RedisWorkerConfig {
         let orphan_after = ORPHAN_AFTER.read(env, base.orphan_after)?;
         let lease = LEASE.read(env, base.lease)?;
         let poll_interval = POLL_INTERVAL.read(env, base.poll_interval)?;
-        let threshold = env.var_name(ORPHAN_AFTER.key);
+        let threshold = env.var_name(ORPHAN_AFTER.key());
         // A peer takes a crashed replica's jobs once it has missed its
         // heartbeats for the threshold — at least four fifths of it after the
         // crash, a heartbeat being at most a fifth — and the delivery that
@@ -299,7 +293,7 @@ mod tests {
         assert_eq!(cfg.lease, Duration::from_secs(4));
         assert_eq!(cfg.heartbeat(), Duration::from_secs(6));
 
-        let Floor::Units(least) = ORPHAN_AFTER.least else {
+        let Floor::Units(least) = ORPHAN_AFTER.least() else {
             panic!("the orphan threshold's floor is a count of seconds");
         };
         let floor = RedisWorkerConfig {
@@ -523,7 +517,7 @@ mod tests {
     /// fails the subtraction apalis would have panicked on.
     #[test]
     fn apalis_sweeps_under_the_longest_orphan_threshold_accepted_without_a_panic() {
-        let longest = ORPHAN_AFTER.most.count;
+        let longest = ORPHAN_AFTER.most().count;
         let accepted = read(
             &[("ORPHAN_AFTER_SECS", &longest.to_string())],
             Default::default(),

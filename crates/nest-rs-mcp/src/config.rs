@@ -36,9 +36,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
-};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 
 /// rmcp's own default POST body ceiling, restated so the framework's default is
@@ -49,31 +47,29 @@ const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// [`SSE_KEEP_ALIVE_FLOOR`](nest_rs_http::SSE_KEEP_ALIVE_FLOOR) and
 /// [`SSE_KEEP_ALIVE_CEILING`](nest_rs_http::SSE_KEEP_ALIVE_CEILING) — and the
 /// variable that sets it.
-const SSE_KEEP_ALIVE: DurationBounds = DurationBounds {
-    key: "SSE_KEEP_ALIVE_SECS",
-    field: "McpConfig::sse_keep_alive",
-    unit: DurationUnit::Seconds,
-    least: nest_rs_http::SSE_KEEP_ALIVE_FLOOR,
-    most: nest_rs_http::SSE_KEEP_ALIVE_CEILING,
-};
+const SSE_KEEP_ALIVE: DurationBounds = DurationBounds::secs(
+    "SSE_KEEP_ALIVE_SECS",
+    "McpConfig::sse_keep_alive",
+    nest_rs_http::SSE_KEEP_ALIVE_FLOOR,
+    nest_rs_http::SSE_KEEP_ALIVE_CEILING,
+);
 
 /// The advertised reconnection delay's range, the variable that sets it, and
 /// why.
-const SSE_RETRY: DurationBounds = DurationBounds {
-    key: "SSE_RETRY_SECS",
-    field: "McpConfig::sse_retry",
-    unit: DurationUnit::Seconds,
-    least: Floor::UnitsOrOff(Bound {
+const SSE_RETRY: DurationBounds = DurationBounds::secs(
+    "SSE_RETRY_SECS",
+    "McpConfig::sse_retry",
+    Floor::UnitsOrOff(Bound {
         count: 1,
         why: "a client told to come back sooner reconnects at once, and every client a restart \
               dropped does it together",
     }),
-    most: Bound {
+    Bound {
         count: 60 * 60,
         why: "a client told to wait more than an hour before resuming a dropped stream has \
               abandoned the session it would resume",
     },
-};
+);
 
 /// MCP streamable-HTTP options resolved at boot (namespace `mcp`). See the
 /// module docs for why the host allowlist is a security control.

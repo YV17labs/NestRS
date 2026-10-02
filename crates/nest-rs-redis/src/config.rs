@@ -9,8 +9,8 @@
 use std::time::Duration;
 
 use nest_rs_config::{
-    Bound, Config, ConfigError, ConfigService, DurationBounds, DurationUnit, Environment, Floor,
-    Namespaced, Result, config,
+    Bound, Config, ConfigError, ConfigService, DurationBounds, Environment, Floor, Namespaced,
+    Result, config,
 };
 
 use crate::RedisTls;
@@ -35,21 +35,20 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 /// keeps the liveness the budget sets under what the kernel accepts — a
 /// keepalive idle past 32 767 s failed every dial with `EINVAL` — which
 /// `connection.rs` asserts at compile time.
-pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds {
-    key: "CONNECT_TIMEOUT_SECS",
-    field: "RedisConfig::connect_timeout",
-    unit: DurationUnit::Seconds,
-    least: Floor::AboveZero(
+pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "CONNECT_TIMEOUT_SECS",
+    "RedisConfig::connect_timeout",
+    Floor::AboveZero(
         "the budget bounds the boot's connect and every command after it, and a zero one gives \
          up before the first attempt and fails every command at once",
     ),
-    most: Bound {
+    Bound {
         count: 60 * 60,
         why: "the budget bounds the boot's wait for Redis and every command a caller waits on, \
               and past an hour it bounds neither — a Redis silent that long is gone rather than \
               slow, and a boot that waits longer is a parked process",
     },
-};
+);
 
 /// Redis settings, settable via `NESTRS_REDIS__*` or pinned through
 /// [`RedisModule::for_root`](crate::RedisModule::for_root). The URL and the

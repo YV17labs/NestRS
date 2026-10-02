@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, DurationBounds, DurationUnit, Result, config};
+use nest_rs_config::{Config, ConfigService, DurationBounds, Result, config};
 
 pub(crate) const DEFAULT_PATH: &str = "/graphql";
 
@@ -19,13 +19,12 @@ const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 /// connection's is held to, [`MAX_CONNECTION_FLOOR`](nest_rs_http::MAX_CONNECTION_FLOOR)
 /// and [`MAX_CONNECTION_CEILING`](nest_rs_http::MAX_CONNECTION_CEILING) — and the
 /// variable that sets it.
-const MAX_CONNECTION: DurationBounds = DurationBounds {
-    key: "MAX_CONNECTION_SECS",
-    field: "GraphqlConfig::max_connection",
-    unit: DurationUnit::Seconds,
-    least: nest_rs_http::MAX_CONNECTION_FLOOR,
-    most: nest_rs_http::MAX_CONNECTION_CEILING,
-};
+const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
+    "MAX_CONNECTION_SECS",
+    "GraphqlConfig::max_connection",
+    nest_rs_http::MAX_CONNECTION_FLOOR,
+    nest_rs_http::MAX_CONNECTION_CEILING,
+);
 
 /// A hundred entity references per `_entities` call — a page of parents on the
 /// router's side, which is what a query plan turns into one such call.

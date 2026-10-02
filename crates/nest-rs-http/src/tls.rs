@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::stream::{self, BoxStream, StreamExt};
-use nest_rs_config::{Bound, ConfigService, DurationBounds, DurationUnit, Floor, Setting};
+use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor, Setting};
 use poem::listener::{RustlsCertificate, RustlsConfig};
 use rustls::crypto::aws_lc_rs::sign::any_supported_type;
 use rustls::pki_types::pem::PemObject;
@@ -15,23 +15,22 @@ use rustls::sign::CertifiedKey;
 const DEFAULT_RELOAD_SECS: u64 = 60;
 
 /// The watch interval's range, the variable that sets it, and why.
-const RELOAD: DurationBounds = DurationBounds {
-    key: "TLS_RELOAD_SECS",
-    field: "HttpTls::with_reload_secs",
-    unit: DurationUnit::Seconds,
-    least: Floor::UnitsOrOff(Bound {
+const RELOAD: DurationBounds = DurationBounds::secs(
+    "TLS_RELOAD_SECS",
+    "HttpTls::with_reload_secs",
+    Floor::UnitsOrOff(Bound {
         count: 1,
         why: "the kernel's timers and the files' own write settle are not finer than that, and \
               a renewal is not that urgent",
     }),
-    most: Bound {
+    Bound {
         count: 24 * 60 * 60,
         why: "a certificate replaced on disk is served only once the next read finds it, and a \
               replacement after a key compromise is due within a day of it (CA/Browser Forum \
               Baseline Requirements §4.9.1.1) — a watch rarer than that serves the revoked one \
               past it",
     },
-};
+);
 
 /// Where the PEM material came from — which is what decides whether it can be
 /// reloaded. Inline bytes are the deployment's final word; files are a *source*
@@ -208,7 +207,7 @@ impl HttpTls {
         if self.reload_secs > 0 {
             RELOAD.check(
                 <crate::HttpConfig as nest_rs_config::Namespaced>::NAMESPACE,
-                RELOAD.field,
+                RELOAD.field(),
                 Duration::from_secs(self.reload_secs),
             )?;
         }

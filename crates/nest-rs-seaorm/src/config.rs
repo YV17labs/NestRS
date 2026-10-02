@@ -7,9 +7,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
-};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 use sea_orm::ConnectOptions;
 
 /// The acquire budget's range, the variable that sets it, and why. SeaORM hands
@@ -18,22 +16,21 @@ use sea_orm::ConnectOptions;
 /// it to an `Instant` unchecked, so a value past what a clock holds panicked the
 /// boot inside sqlx naming nothing — the ceiling is what keeps every value the
 /// boot accepts one the library accepts too.
-pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds {
-    key: "CONNECT_TIMEOUT_SECS",
-    field: "SeaOrmConfig::connect_timeout_secs",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+pub(crate) const CONNECT_TIMEOUT: DurationBounds = DurationBounds::secs(
+    "CONNECT_TIMEOUT_SECS",
+    "SeaOrmConfig::connect_timeout_secs",
+    Floor::Units(Bound {
         count: 1,
         why: "the pool gives up on a zero budget before any connection opens, so the boot fails \
               as a pool timeout against a database that answers",
     }),
-    most: Bound {
+    Bound {
         count: 60 * 60,
         why: "the budget is how long every query waits for a pooled connection, and past an hour \
               the request that asked for one has long been abandoned — a pool that cannot hand \
               one out sooner is down, not busy",
     },
-};
+);
 
 /// Pool settings for [`SeaOrmModule`](crate::SeaOrmModule). Every field is
 /// settable via a `NESTRS_SEAORM__*` env var (see `from_env`) or pinned through

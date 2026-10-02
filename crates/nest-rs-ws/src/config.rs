@@ -19,7 +19,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{Config, ConfigService, DurationBounds, DurationUnit, Result, config};
+use nest_rs_config::{Config, ConfigService, DurationBounds, Result, config};
 
 /// Default socket-lifetime ceiling: 4 hours. Long enough not to disrupt a normal
 /// interactive session, short enough to bound how long a revoked or expired
@@ -30,13 +30,12 @@ const DEFAULT_MAX_CONNECTION_SECS: u64 = 4 * 60 * 60;
 /// is held to, [`MAX_CONNECTION_FLOOR`](nest_rs_http::MAX_CONNECTION_FLOOR) and
 /// [`MAX_CONNECTION_CEILING`](nest_rs_http::MAX_CONNECTION_CEILING) — and the
 /// variable that sets it.
-const MAX_CONNECTION: DurationBounds = DurationBounds {
-    key: "MAX_CONNECTION_SECS",
-    field: "WsConfig::max_connection",
-    unit: DurationUnit::Seconds,
-    least: nest_rs_http::MAX_CONNECTION_FLOOR,
-    most: nest_rs_http::MAX_CONNECTION_CEILING,
-};
+const MAX_CONNECTION: DurationBounds = DurationBounds::secs(
+    "MAX_CONNECTION_SECS",
+    "WsConfig::max_connection",
+    nest_rs_http::MAX_CONNECTION_FLOOR,
+    nest_rs_http::MAX_CONNECTION_CEILING,
+);
 
 /// Default per-message byte cap: 64 KiB. Applied at the WebSocket *protocol*
 /// layer so an oversize frame is refused while reading rather than after

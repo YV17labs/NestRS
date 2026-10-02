@@ -381,7 +381,20 @@ impl ConfigService {
     /// [`Setting::refuse`], which names the variable the deployment actually
     /// set, and it quotes the value only through [`Setting::shown`], which never
     /// repeats what a file held.
+    ///
+    /// A duration's key — one ending in `_SECS` or `_MS` — is refused here and
+    /// at every reader built on this one: it is read through
+    /// [`DurationBounds`](crate::DurationBounds), which holds it to a range and
+    /// names its unit, and a reader that does neither is how a zero or a unit
+    /// slip boots.
     pub fn setting(&self, key: &str) -> Result<Option<Setting>, ConfigError> {
+        self.refuse_duration(key)?;
+        self.duration_setting(key)
+    }
+
+    /// [`setting`](Self::setting) without the duration check — the reader
+    /// [`DurationBounds`](crate::DurationBounds) reads through, and nothing else.
+    pub(crate) fn duration_setting(&self, key: &str) -> Result<Option<Setting>, ConfigError> {
         match self.spelled(key)? {
             None => Ok(None),
             Some(Spelled::Inline(value)) => {
@@ -422,6 +435,7 @@ impl ConfigService {
     /// [`Setting`] around the material says which spelling supplied it, so a
     /// consumer's refusal of the bytes names that variable.
     pub fn material(&self, key: &str) -> Result<Option<Setting<Material>>, ConfigError> {
+        self.refuse_duration(key)?;
         Ok(match self.spelled(key)? {
             None => None,
             Some(Spelled::Inline(value)) => Some(Setting::new(
@@ -447,6 +461,18 @@ impl ConfigService {
                 })
             }
         })
+    }
+
+    /// Refuse `key` when it names a duration, which only
+    /// [`DurationBounds`](crate::DurationBounds) reads.
+    fn refuse_duration(&self, key: &str) -> Result<(), ConfigError> {
+        let key = key.to_ascii_uppercase();
+        if key.ends_with("_SECS") || key.ends_with("_MS") {
+            return Err(ConfigError::UnboundedDuration {
+                var: self.var_name(&key),
+            });
+        }
+        Ok(())
     }
 
     /// Which spelling of `key` the tier that answers set, refusing both.
@@ -1330,5 +1356,51 @@ mod tests {
                 "and it names the variable: {err}",
             );
         }
+    }
+
+    /// A duration is read through `DurationBounds` and nowhere else: every
+    /// public reader refuses a `_SECS` or `_MS` key — set or not, in either
+    /// case — naming `DurationBounds`, while the bounds themselves read it.
+    #[test]
+    fn every_public_reader_refuses_a_duration_key_naming_duration_bounds() {
+        let env = ConfigService::with_vars("fixture", [("WINDOW_SECS", "30")]);
+        for key in ["WINDOW_SECS", "window_secs", "DEADLINE_MS", "UNSET_SECS"] {
+            let refusals = [
+                env.get(key).map(drop),
+                env.setting(key).map(drop),
+                env.material(key).map(drop),
+                env.parse::<u64>(key).map(drop),
+                env.json::<u64>(key).map(drop),
+                env.flag(key, false).map(drop),
+                env.count(key, None).map(drop),
+                env.list(key, Vec::new()).map(drop),
+            ];
+            for refused in refusals {
+                let err = refused.expect_err("a duration key is refused");
+                assert!(
+                    matches!(err, ConfigError::UnboundedDuration { ref var } if *var == var_name("fixture", key)),
+                    "{err:?}"
+                );
+                assert!(err.to_string().contains("`DurationBounds`"), "{err}");
+            }
+        }
+
+        const WINDOW: crate::DurationBounds = crate::DurationBounds::secs(
+            "WINDOW_SECS",
+            "FixtureConfig::window",
+            crate::Floor::AboveZero("why"),
+            crate::Bound {
+                count: 60,
+                why: "why",
+            },
+        );
+        assert_eq!(
+            WINDOW
+                .read(&env, std::time::Duration::from_secs(5))
+                .expect("the bounds read it")
+                .value,
+            std::time::Duration::from_secs(30),
+        );
+        assert_eq!(env.get("WINDOWS").expect("not a duration"), None);
     }
 }

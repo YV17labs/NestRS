@@ -33,6 +33,18 @@ pub enum ConfigError {
         #[source]
         source: DecodeError,
     },
+    /// A duration's variable — its key ends in `_SECS` or `_MS` — asked of a
+    /// [`ConfigService`](crate::ConfigService) reader, which holds a value to no
+    /// range. A defect in the config's `from_env`, refused at the first boot
+    /// that reads it, whatever the deployment set.
+    #[error(
+        "{var} is a duration, and a duration is read through `DurationBounds`, which holds it \
+         to a floor and a ceiling and names its unit — never through a `ConfigService` reader"
+    )]
+    UnboundedDuration {
+        /// The variable the reader was asked for.
+        var: String,
+    },
     /// A loaded config failed `validator::Validate`.
     ///
     /// Renders the **namespace** and one line per offending field. The

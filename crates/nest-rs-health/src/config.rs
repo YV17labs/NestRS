@@ -32,9 +32,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
-};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 
 /// Per-indicator ceiling: 750 ms. Under the probe deadline by a margin, so the
 /// common single-slow-indicator case is reported **by name** (`health indicator
@@ -62,28 +60,26 @@ const PAST_A_MINUTE: Bound = Bound {
 };
 
 /// The per-indicator ceiling's range, the variable that sets it, and why.
-const INDICATOR_TIMEOUT: DurationBounds = DurationBounds {
-    key: "INDICATOR_TIMEOUT_MS",
-    field: "HealthConfig::indicator_timeout_ms",
-    unit: DurationUnit::Millis,
-    least: Floor::Units(Bound {
+const INDICATOR_TIMEOUT: DurationBounds = DurationBounds::millis(
+    "INDICATOR_TIMEOUT_MS",
+    "HealthConfig::indicator_timeout_ms",
+    Floor::Units(Bound {
         count: 1,
         why: NOT_ZERO,
     }),
-    most: PAST_A_MINUTE,
-};
+    PAST_A_MINUTE,
+);
 
 /// The probe deadline's range, the variable that sets it, and why.
-const PROBE_DEADLINE: DurationBounds = DurationBounds {
-    key: "PROBE_DEADLINE_MS",
-    field: "HealthConfig::probe_deadline_ms",
-    unit: DurationUnit::Millis,
-    least: Floor::Units(Bound {
+const PROBE_DEADLINE: DurationBounds = DurationBounds::millis(
+    "PROBE_DEADLINE_MS",
+    "HealthConfig::probe_deadline_ms",
+    Floor::Units(Bound {
         count: 1,
         why: NOT_ZERO,
     }),
-    most: PAST_A_MINUTE,
-};
+    PAST_A_MINUTE,
+);
 
 /// Health probe options resolved at boot (namespace `health`). See the module
 /// docs for why the unit is milliseconds and why `0` is refused.

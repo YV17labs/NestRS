@@ -99,19 +99,21 @@ pub enum Floor {
 /// field that pins it in code.
 ///
 /// Declared as a `const` beside the config that reads it, so the numbers, the
-/// reasons and the field doc stay one screen apart:
+/// reasons and the field doc stay one screen apart. Built only through
+/// [`secs`](Self::secs) or [`millis`](Self::millis), which hold the key to its
+/// unit's suffix — `_SECS` or `_MS` — so a key and the unit its value is read in
+/// cannot disagree: in a `const`, a mismatch does not compile.
 ///
 /// ```
 /// use std::time::Duration;
-/// use nest_rs_config::{Bound, ConfigService, DurationBounds, DurationUnit, Floor};
+/// use nest_rs_config::{Bound, ConfigService, DurationBounds, Floor};
 ///
-/// const WINDOW: DurationBounds = DurationBounds {
-///     key: "WINDOW_SECS",
-///     field: "FixtureConfig::window",
-///     unit: DurationUnit::Seconds,
-///     least: Floor::Units(Bound { count: 1, why: "a shorter window counts nothing" }),
-///     most: Bound { count: 3600, why: "past an hour it is a unit slip" },
-/// };
+/// const WINDOW: DurationBounds = DurationBounds::secs(
+///     "WINDOW_SECS",
+///     "FixtureConfig::window",
+///     Floor::Units(Bound { count: 1, why: "a shorter window counts nothing" }),
+///     Bound { count: 3600, why: "past an hour it is a unit slip" },
+/// );
 ///
 /// let env = ConfigService::with_vars("fixture", [("WINDOW_SECS", "30")]);
 /// assert_eq!(WINDOW.read(&env, Duration::from_secs(60))?.value, Duration::from_secs(30));
@@ -123,10 +125,12 @@ pub enum Floor {
 /// assert!(WINDOW.read(&pinned, Duration::ZERO).is_err(), "a pin is held to the same range");
 ///
 /// // A ceiling a deployment may lift says so in its floor, and `0` reads as off.
-/// const CEILING: DurationBounds = DurationBounds {
-///     least: Floor::UnitsOrOff(Bound { count: 1, why: "a shorter ceiling ends every stream" }),
-///     ..WINDOW
-/// };
+/// const CEILING: DurationBounds = DurationBounds::secs(
+///     "WINDOW_SECS",
+///     "FixtureConfig::window",
+///     Floor::UnitsOrOff(Bound { count: 1, why: "a shorter ceiling ends every stream" }),
+///     WINDOW.most(),
+/// );
 /// let off = ConfigService::with_vars("fixture", [("WINDOW_SECS", "0")]);
 /// assert!(CEILING.read_optional(&off, Some(Duration::from_secs(60)))?.is_none());
 /// # Ok::<(), nest_rs_config::ConfigError>(())
@@ -134,20 +138,97 @@ pub enum Floor {
 #[derive(Clone, Copy, Debug)]
 pub struct DurationBounds {
     /// The variable's key in the namespace — `SHUTDOWN_TIMEOUT_SECS`.
-    pub key: &'static str,
+    key: &'static str,
     /// The field the value is pinned through in code, as a caller writes it —
     /// `HttpConfig::shutdown_timeout`.
-    pub field: &'static str,
-    /// The unit the variable is written in.
-    pub unit: DurationUnit,
+    field: &'static str,
+    /// The unit the variable is written in, which its key's suffix spells.
+    unit: DurationUnit,
     /// The floor.
-    pub least: Floor,
+    least: Floor,
     /// The ceiling — where a value stops being a setting and becomes a slip,
     /// never above what the library or the kernel the value reaches accepts.
     /// A setting whose range ends at another setting's value states here the
     /// end that setting's own ceiling implies, and checks the nearer end once
     /// both are read, through [`BoundedDuration::refuse`].
-    pub most: Bound,
+    most: Bound,
+}
+
+impl DurationBounds {
+    /// A range read in whole seconds, from a key ending in `_SECS`; any other
+    /// key is refused when the bounds are built, at compile time in a `const`.
+    pub const fn secs(key: &'static str, field: &'static str, least: Floor, most: Bound) -> Self {
+        assert!(
+            ends_with(key, "_SECS"),
+            "a `DurationBounds::secs` key ends in `_SECS`, the unit its value is read in",
+        );
+        Self {
+            key,
+            field,
+            unit: DurationUnit::Seconds,
+            least,
+            most,
+        }
+    }
+
+    /// A range read in whole milliseconds, from a key ending in `_MS`; any
+    /// other key is refused when the bounds are built, at compile time in a
+    /// `const`.
+    pub const fn millis(key: &'static str, field: &'static str, least: Floor, most: Bound) -> Self {
+        assert!(
+            ends_with(key, "_MS"),
+            "a `DurationBounds::millis` key ends in `_MS`, the unit its value is read in",
+        );
+        Self {
+            key,
+            field,
+            unit: DurationUnit::Millis,
+            least,
+            most,
+        }
+    }
+
+    /// The variable's key in the namespace — `SHUTDOWN_TIMEOUT_SECS`.
+    pub const fn key(&self) -> &'static str {
+        self.key
+    }
+
+    /// The field the value is pinned through in code, as a caller writes it.
+    pub const fn field(&self) -> &'static str {
+        self.field
+    }
+
+    /// The unit the variable is written in.
+    pub const fn unit(&self) -> DurationUnit {
+        self.unit
+    }
+
+    /// The floor.
+    pub const fn least(&self) -> Floor {
+        self.least
+    }
+
+    /// The ceiling, in the variable's unit.
+    pub const fn most(&self) -> Bound {
+        self.most
+    }
+}
+
+/// Whether `key` ends in `suffix` — `str::ends_with`, which is not `const`.
+const fn ends_with(key: &str, suffix: &str) -> bool {
+    let (key, suffix) = (key.as_bytes(), suffix.as_bytes());
+    if key.len() < suffix.len() {
+        return false;
+    }
+    let start = key.len() - suffix.len();
+    let mut i = 0;
+    while i < suffix.len() {
+        if key[start + i] != suffix[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// What the environment says about a setting.
@@ -222,7 +303,7 @@ impl DurationBounds {
     /// The variable, read and held to the range; `0` is [`Variable::Off`] when
     /// the floor admits off and the caller has a `None` to give it.
     fn variable(&self, env: &ConfigService, may_be_off: bool) -> Result<Variable, ConfigError> {
-        let Some(setting) = env.setting(self.key)? else {
+        let Some(setting) = env.duration_setting(self.key)? else {
             return Ok(Variable::Unset);
         };
         let count = setting.parse::<u64>()?;
@@ -339,19 +420,18 @@ impl fmt::Display for Count {
 mod tests {
     use super::*;
 
-    const RANGE: DurationBounds = DurationBounds {
-        key: "WINDOW_SECS",
-        field: "FixtureConfig::window",
-        unit: DurationUnit::Seconds,
-        least: Floor::Units(Bound {
+    const RANGE: DurationBounds = DurationBounds::secs(
+        "WINDOW_SECS",
+        "FixtureConfig::window",
+        Floor::Units(Bound {
             count: 1,
             why: "the floor's reason",
         }),
-        most: Bound {
+        Bound {
             count: 60,
             why: "the ceiling's reason",
         },
-    };
+    );
 
     fn env(vars: &[(&str, &str)]) -> ConfigService {
         ConfigService::with_vars("fixture", vars.iter().copied())
@@ -449,19 +529,18 @@ mod tests {
 
     #[test]
     fn a_millisecond_unit_names_itself() {
-        const PROBE: DurationBounds = DurationBounds {
-            key: "DEADLINE_MS",
-            field: "FixtureConfig::deadline",
-            unit: DurationUnit::Millis,
-            least: Floor::Units(Bound {
+        const PROBE: DurationBounds = DurationBounds::millis(
+            "DEADLINE_MS",
+            "FixtureConfig::deadline",
+            Floor::Units(Bound {
                 count: 1,
                 why: "why",
             }),
-            most: Bound {
+            Bound {
                 count: 60_000,
                 why: "past a minute",
             },
-        };
+        );
         let text = refused(PROBE.read(&env(&[("DEADLINE_MS", "0")]), Duration::from_millis(5)));
         assert!(text.contains("must be at least 1 millisecond"), "{text}");
         let text = refused(PROBE.read(
@@ -556,16 +635,15 @@ mod tests {
     /// value set in code to anything above zero.
     #[test]
     fn a_floor_above_zero_takes_a_sub_unit_value_set_in_code() {
-        const BUDGET: DurationBounds = DurationBounds {
-            key: "BUDGET_SECS",
-            field: "FixtureConfig::budget",
-            unit: DurationUnit::Seconds,
-            least: Floor::AboveZero("a zero budget gives up before its first attempt"),
-            most: Bound {
+        const BUDGET: DurationBounds = DurationBounds::secs(
+            "BUDGET_SECS",
+            "FixtureConfig::budget",
+            Floor::AboveZero("a zero budget gives up before its first attempt"),
+            Bound {
                 count: 3600,
                 why: "why",
             },
-        };
+        );
         let from_env = refused(BUDGET.read(&env(&[("BUDGET_SECS", "0")]), Duration::from_secs(5)));
         assert!(
             from_env.contains("must be at least 1 second — a zero budget"),

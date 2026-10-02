@@ -1,8 +1,6 @@
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, ConfigError, ConfigService, DurationBounds, DurationUnit, Floor, env_var,
-};
+use nest_rs_config::{Bound, ConfigError, ConfigService, DurationBounds, Floor, env_var};
 use nest_rs_core::EnvPrefix;
 use nest_rs_core::logging::var;
 use nest_rs_core::parse_bool;
@@ -16,22 +14,21 @@ pub const DEFAULT_METRIC_INTERVAL: Duration = Duration::from_secs(60);
 pub(crate) const NAMESPACE: &str = "opentelemetry";
 
 /// The metric export period's range, the variable that sets it, and why.
-pub(crate) const METRIC_INTERVAL: DurationBounds = DurationBounds {
-    key: "METRIC_INTERVAL_SECS",
-    field: "OpenTelemetryConfig::metric_interval",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+pub(crate) const METRIC_INTERVAL: DurationBounds = DurationBounds::secs(
+    "METRIC_INTERVAL_SECS",
+    "OpenTelemetryConfig::metric_interval",
+    Floor::Units(Bound {
         count: 1,
         why: "a periodic reader on a shorter period exports in a tight loop, which costs the \
               collector more than any metric is worth",
     }),
-    most: Bound {
+    Bound {
         count: 60 * 60,
         why: "a metric exported less often than hourly reaches the collector after the \
               dashboards and alerts that read it have moved on, and the reader holds an hour of \
               state in memory meanwhile",
     },
-};
+);
 
 /// Configuration for [`crate::OpenTelemetry::init`].
 ///

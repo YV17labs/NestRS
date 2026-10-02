@@ -2,26 +2,23 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
-};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Result, config};
 
 /// The window's range, the variable that sets it, and why.
-const WINDOW: DurationBounds = DurationBounds {
-    key: "WINDOW_SECS",
-    field: "ThrottlerConfig::window_secs",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+const WINDOW: DurationBounds = DurationBounds::secs(
+    "WINDOW_SECS",
+    "ThrottlerConfig::window_secs",
+    Floor::Units(Bound {
         count: 1,
         why: "a zero window resets every bucket on every hit, so the count never passes one and \
               every request is allowed at any limit",
     }),
-    most: Bound {
+    Bound {
         count: 24 * 60 * 60,
         why: "a window past a day is a quota rather than a rate, and a quota kept in a store \
               that a restart or an eviction forgets is not one — count it in the database",
     },
-};
+);
 
 /// Rate-limit settings, settable via `NESTRS_THROTTLER__*` or pinned through
 /// [`ThrottlerModule::for_root`](crate::ThrottlerModule::for_root).

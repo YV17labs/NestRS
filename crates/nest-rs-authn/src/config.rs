@@ -2,9 +2,7 @@
 
 use std::time::Duration;
 
-use nest_rs_config::{
-    Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Namespaced, config,
-};
+use nest_rs_config::{Bound, Config, ConfigService, DurationBounds, Floor, Namespaced, config};
 
 use crate::JwtOptions;
 use crate::error::AuthError;
@@ -12,38 +10,36 @@ use crate::error::AuthError;
 // the config path checks it too only to surface an env-var-named message.
 
 /// The token lifetime's range, the variable that sets it, and why.
-pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds {
-    key: "EXPIRES_IN_SECS",
-    field: "AuthnConfig::expires_in_secs",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+pub(crate) const EXPIRES_IN: DurationBounds = DurationBounds::secs(
+    "EXPIRES_IN_SECS",
+    "AuthnConfig::expires_in_secs",
+    Floor::Units(Bound {
         count: 1,
         why: "a token that expires as it is minted is refused by every verifier, so every \
               sign-in would succeed and hand out nothing usable",
     }),
-    most: Bound {
+    Bound {
         count: 30 * 24 * 60 * 60,
         why: "an access token is a bearer credential until it expires and nothing revokes it \
               sooner, so a lifetime past thirty days is a unit slip or a credential that never \
               ends — a long session is a refresh flow, not a long token",
     },
-};
+);
 
 /// The clock-skew leeway's range, the variable that sets it, and why.
-pub(crate) const LEEWAY: DurationBounds = DurationBounds {
-    key: "LEEWAY_SECS",
-    field: "AuthnConfig::leeway_secs",
-    unit: DurationUnit::Seconds,
-    least: Floor::Units(Bound {
+pub(crate) const LEEWAY: DurationBounds = DurationBounds::secs(
+    "LEEWAY_SECS",
+    "AuthnConfig::leeway_secs",
+    Floor::Units(Bound {
         count: 0,
         why: "no leeway is a leeway",
     }),
-    most: Bound {
+    Bound {
         count: 5 * 60,
         why: "RFC 7519 §4.1.4 allows \"no more than a few minutes\" for clock skew, and every \
               second past it is a second an expired token still verifies",
     },
-};
+);
 
 // No `Debug`: secrets must not leak through a derived format.
 /// Env-driven JWT key material (namespace `authn`). The combination of keys

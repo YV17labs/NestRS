@@ -1,0 +1,25 @@
+error[E0080]: evaluation panicked: a `DurationBounds::millis` key ends in `_MS`, the unit its value is read in
+  --> tests/integration/diagnostics/duration_bounds_millis_on_a_secs_key.rs:6:32
+   |
+ 6 |   const WINDOW: DurationBounds = DurationBounds::millis(
+   |  ________________________________^
+ 7 | |     "WINDOW_SECS",
+ 8 | |     "FixtureConfig::window",
+ 9 | |     Floor::AboveZero("a zero window counts nothing"),
+10 | |     Bound { count: 60_000, why: "past a minute it is a unit slip" },
+11 | | );
+   | |_^ evaluation of `WINDOW` failed inside this call
+   |
+note: inside `DurationBounds::millis`
+  --> $RUST/core/src/panic.rs
+   |
+   |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+   |
+  ::: src/bounds.rs
+   |
+   | /         assert!(
+   | |             ends_with(key, "_MS"),
+   | |             "a `DurationBounds::millis` key ends in `_MS`, the unit its value is read in",
+   | |         );
+   | |_________- in this macro invocation

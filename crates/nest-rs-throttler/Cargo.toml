@@ -75,7 +75,7 @@ nest-rs-throttler = { path = ".", features = ["graphql", "mcp", "ws"] }
 # `test-util` (not part of tokio's `full`) pauses time, so a store that never
 # answers is denied at `HIT_TIMEOUT` without the suite waiting those seconds out.
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
-nest-rs-interceptors.workspace = true
+nest-rs-interceptors = { path = "../nest-rs-interceptors" }
 # The scope half of the guard's contract is only observable in a status code:
 # `guard.rs` boots the documented global wiring and counts requests against a
 # route's own `#[meta(Throttle)]`. Path-only (intra-workspace dev-edge), per the

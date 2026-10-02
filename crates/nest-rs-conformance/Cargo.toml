@@ -42,14 +42,14 @@ nest-rs-cli = { path = "../nest-rs-cli" }
 # themselves read — `JobDecorator::ALL` — rather than through a copy of its
 # names, which would be the second list the table exists to replace. Syn,
 # quote and proc-macro2 already sit in this graph, so the edge adds one crate.
-nest-rs-codegen = { workspace = true }
+nest-rs-codegen = { path = "../nest-rs-codegen" }
 # The namespaces join judges the tree by the unclaimed-variable report's own
 # near-miss rule rather than a copy of it, and the doctor's parity join runs the
 # loader it mirrors. A workspace crate: the edge adds no third-party dependency.
-nest-rs-config = { workspace = true }
+nest-rs-config = { path = "../nest-rs-config" }
 # The mirror join builds the selector and the prefix a cascade may not name from
 # the kernel's own constants, never a literal.
-nest-rs-core = { workspace = true }
+nest-rs-core = { path = "../nest-rs-core" }
 # The mirror join runs the loader where it reads the process: its working
 # directory, for a relative `_FILE`, and the selectors a cascade may not name.
 # `figment::Jail` sets and restores both, as `nest-rs-config`'s own suite does;

@@ -639,6 +639,27 @@ mod tests {
                     );
                 }
             }
+            // A test edge is the one a sibling is linked by path alone: a
+            // versioned dev-edge pointing back at a crate that depends on this
+            // one is a member cycle no publish order satisfies, and one to a
+            // crate published after this one falls back to an index that does
+            // not have it yet. Cargo strips a versionless dev-dependency from
+            // the published manifest, so the path costs nothing.
+            if let Some(table) = doc.get("dev-dependencies").and_then(Item::as_table_like) {
+                for (name, entry) in table.iter() {
+                    if !name.starts_with("nest-rs") {
+                        continue;
+                    }
+                    let path_only = entry.get("path").is_some()
+                        && entry.get("version").is_none()
+                        && entry.get("workspace").is_none();
+                    assert!(
+                        path_only,
+                        "{rel}: `{name}` in `[dev-dependencies]` is versioned — a sibling is a \
+                         test edge by `{{ path = \"../{name}\" }}` alone",
+                    );
+                }
+            }
         }
         assert!(
             members >= 40,

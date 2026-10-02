@@ -56,7 +56,7 @@ nest-rs-seaorm = { path = "../nest-rs-seaorm" }
 # `cargo nextest run --workspace`, not only when some other member happens to
 # unify the feature in.
 nest-rs-authz = { path = "../nest-rs-authz", features = ["graphql"] }
-nest-rs-core.workspace = true
+nest-rs-core = { path = "../nest-rs-core" }
 sea-orm.workspace = true
 # trybuild pins `#[expose]`'s and `#[wire_enum]`'s compile diagnostics as a
 # contract: the exposure decorators refuse ~25 distinct shapes, and the sentence

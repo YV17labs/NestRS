@@ -109,8 +109,13 @@ table, so `cargo clippy --workspace` never reaches it and it drifted
 back to a five-crate stanza unobserved. Anything else added outside the
 workspaces inherits the same blind spot and belongs on the list the day
 it is created.
-- Intra-workspace dev-deps stay **path-only** (no `version`) so
-  publishing doesn't drag test-only cycles.
+- Intra-workspace dev-deps stay **path-only** — `{ path = "../nest-rs-x" }`,
+  no `version` and no `workspace = true`, which carries one — so publishing
+  doesn't drag test-only cycles, and a dev-edge to a crate published later
+  never falls back to an index that lacks it. Cargo strips a versionless
+  dev-dependency from the published manifest. One rule for every member,
+  the unpublished `nest-rs-conformance` included; the dev-dependency half of
+  `the_framework_requires_itself_at_its_own_release` holds it.
 - Product crates under `demo/` set `publish = false`; `demo/` is its
   own workspace and never joins the root `members`.
 - **The Rust floor is one value, restated everywhere it is read.**

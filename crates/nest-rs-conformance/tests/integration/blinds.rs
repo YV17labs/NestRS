@@ -106,6 +106,7 @@ const JOINS: &[(&str, Declares)] = &[
     ("shapes", crate::shapes::followed),
     ("snapshots", crate::snapshots::followed),
     ("targets", crate::targets::followed),
+    ("transports", crate::transports::followed),
     ("umbrella", crate::umbrella::followed),
     ("units", crate::units::followed),
     ("upgrading", crate::upgrading::followed),

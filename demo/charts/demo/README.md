@@ -98,7 +98,7 @@ apps:
           stabilizationWindowSeconds: 600
 ```
 
-— and keep `terminationGracePeriodSeconds` at least 8s above
+— and keep `terminationGracePeriodSeconds` at least 8.5s above
 `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, for the shutdown hooks and the
 telemetry flush that follow the drain, raising both toward a job's
 length when jobs are long (see [Graceful shutdown](#graceful-shutdown)).
@@ -130,7 +130,9 @@ twice. Set it to 0 knowing that.
 ## Graceful shutdown
 
 The framework installs a SIGTERM handler and drains its transports, so
-`terminationGracePeriodSeconds` is the window it gets. Two are not the default:
-the worker's is 45s, above the 30s
-`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` it drains within, and `live`'s is
-60s because a rollout drops WebSocket connections and clients reconnect.
+`terminationGracePeriodSeconds` is the window it gets. The default 30s holds
+every app's way down at the framework's defaults — 20s for the HTTP window or the
+worker's drain, half a second after it, five for the shutdown hooks and three
+for the telemetry flush. One is not the default: `live`'s is 60s because a
+rollout drops WebSocket connections and clients reconnect. Raise an app's grace
+period with any window you raise, keeping 8.5s above it.

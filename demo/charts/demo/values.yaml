@@ -208,9 +208,6 @@ apps:
     port: 3005
     host: ""
     ingress: false
-    # Must exceed NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS (30s by default),
-    # or SIGKILL lands mid-drain and every in-flight job is re-run.
-    terminationGracePeriodSeconds: 45
     # Two facts about this worker, both from the framework's own source:
     #
     # 1. A `#[process]` method runs as many jobs at once as its `concurrency`

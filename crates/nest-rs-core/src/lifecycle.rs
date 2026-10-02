@@ -25,19 +25,19 @@ use crate::container::Container;
 ///
 /// **One budget for the whole teardown, never one per hook**, because the budget
 /// it is spent from is per process. Kubernetes gives a pod 30 seconds between
-/// `SIGTERM` and `SIGKILL` by default, and the way down spends them in three
-/// steps, each bounded by default so the three sum under the grace:
+/// `SIGTERM` and `SIGKILL` by default, and the way down spends them in steps,
+/// each bounded by default so they sum under the grace:
 ///
 /// | Step | Bound | Default |
 /// |---|---|---|
-/// | the transports stop | the HTTP shutdown window, `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS` | 20 s |
+/// | the transports stop, together | each its own: the HTTP window then [`SHUTDOWN_SETTLE_TIMEOUT`], the Redis worker's drain window, the scheduler's tick bound then the settle | 20.5 s, the longest |
 /// | the shutdown hooks run | this budget, across all three phases | 5 s |
 /// | telemetry flushes | `nest_rs_opentelemetry`'s flush bound, every provider at once | 3 s |
 ///
-/// 28 seconds, two short of the kill: a process past its grace dies without a
-/// line, skipping every later hook and the flush. A bound per hook could not
-/// hold that sum — `k` hooks that hang cost `k` times the bound — which is why
-/// the budget is a deadline the three phases share.
+/// 28.5 seconds, one and a half short of the kill: a process past its grace dies
+/// without a line, skipping every later hook and the flush. A bound per hook
+/// could not hold that sum — `k` hooks that hang cost `k` times the bound — which
+/// is why the budget is a deadline the three phases share.
 ///
 /// **Once it is spent, every later hook still starts.** Each is polled once
 /// against the elapsed deadline: a hook that finishes without waiting — a

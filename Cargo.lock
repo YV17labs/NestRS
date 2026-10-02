@@ -3379,6 +3379,8 @@ dependencies = [
  "nest-rs-opentelemetry",
  "nest-rs-pipes",
  "nest-rs-queue",
+ "nest-rs-redis",
+ "nest-rs-schedule",
  "nest-rs-ws",
  "poem",
  "schemars",

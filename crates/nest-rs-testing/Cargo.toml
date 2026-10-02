@@ -119,6 +119,14 @@ nest-rs-queue = { path = "../nest-rs-queue" }
 # an HTTP `Json` body needs `JsonSchema` for the OpenAPI document.
 serde.workspace = true
 schemars.workspace = true
+# `shutdown.rs` sums the way down from every crate that bounds a step of it —
+# each transport's window, the telemetry flush — so it reads their constants
+# whatever features this crate is built with. Behind a feature, the sum was a
+# test the Definition-of-done run never compiled, and raising any constant
+# passed the whole suite. Path-only, so publishing drags none of them.
+nest-rs-opentelemetry = { path = "../nest-rs-opentelemetry" }
+nest-rs-redis = { path = "../nest-rs-redis" }
+nest-rs-schedule = { path = "../nest-rs-schedule" }
 
 # The workspace lints minus `unsafe_code = "forbid"`, which this crate states in
 # its `lib.rs` instead (its tests write the environment).

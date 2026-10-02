@@ -209,8 +209,12 @@ not started still start as permits free inside it. What still runs when the
 window closes is interrupted — its `queue.job` line filed with
 `outcome="cancelled"` — and its job handed back to the queue inside the
 reserve, so the orchestrator's `SIGKILL` never lands on a job the worker still
-holds — give the pod a grace period at least eight seconds above the window, for
-the shutdown hooks' five and the telemetry flush's three that follow it. A job
+holds. The window is 20 seconds by default, which leaves the shutdown hooks'
+five and the telemetry flush's three inside Kubernetes' default 30-second grace
+period; a window you raise needs the pod's grace period at least 8.5 seconds
+above it — eight for those two, and the half second an app serving HTTP beside
+the worker spends after its own window
+([the way down](/fundamentals/lifecycle/#the-way-down)). A job
 that reaches its permit after the window closed is handed back without
 starting. A retry's next attempt is already on the schedule, so it holds
 nothing up.
@@ -336,7 +340,7 @@ that kept it.
 
 | Variable | Default | What it bounds |
 |---|---|---|
-| `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `30` | The drain window, hand-backs included — attempts get all of it but the reserve, one connection budget or five seconds, at most half; at least `1`, at most `3600` |
+| `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` | `20` | The drain window, hand-backs included — attempts get all of it but the reserve, one connection budget or five seconds, at most half; at least `1`, at most `3600` |
 | `NESTRS_REDIS__WORKER__ORPHAN_AFTER_SECS` | `300` | How long a silent replica keeps its jobs; at least `5`, at most `86400` — a day |
 | `NESTRS_REDIS__WORKER__LEASE_SECS` | `30` | How long a claim outlives its last renewal; at least `1`, and at most half the orphan threshold, so a crashed replica's lease has lapsed by the time a peer takes its jobs |
 | `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` | `100` | How often a method asks for jobs while a permit is free — its ceiling, and its idle cost; at least `10`, and at most the orphan threshold, since the sweep of silent replicas runs on it |

@@ -81,9 +81,9 @@ batch exporters on Drop, so it must live until `main` returns. That flush is
 bounded: the three providers export at once, and what is still exporting after
 three seconds (`FLUSH_TIMEOUT`) is abandoned with a line on stderr naming it,
 so a collector that stopped answering delays the exit by three seconds and
-never holds it. Three is the last step of the
-[shutdown budget](/fundamentals/lifecycle/#ordering-and-failure), which sums
-under a Kubernetes pod's 30-second grace.
+never holds it. Three is the last bounded step of
+[the way down](/fundamentals/lifecycle/#the-way-down), which sums to 28.5
+seconds under a Kubernetes pod's 30-second grace.
 `OpenTelemetryModule` then exposes the meter as a provider; it mounts no
 per-request layer, since what it adds to a span reaches every edge through
 the framework's span constructor.

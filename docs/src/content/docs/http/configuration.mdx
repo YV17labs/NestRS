@@ -270,15 +270,17 @@ paired with `Retry-After`.
 ## Shutdown
 
 On `SIGTERM` or `SIGINT` the transport stops accepting and gives what is open
-`shutdown_timeout` to finish — `20` seconds by default. It is the first of three
-bounded steps on the way down: the window, then five seconds for the
-[shutdown hooks](/fundamentals/lifecycle/#ordering-and-failure), then three for
-the [telemetry flush](/opentelemetry/) — 28 seconds, under the `30` a
-Kubernetes pod gets between `SIGTERM` and `SIGKILL`. Raise the window together
-with the pod's grace period, keeping the eight seconds after it:
+`shutdown_timeout` to finish — `20` seconds by default. It is the first of the
+bounded steps on [the way down](/fundamentals/lifecycle/#the-way-down): the
+window, then half a second for what the transport stopped to unwind, then five
+seconds for the [shutdown hooks](/fundamentals/lifecycle/#ordering-and-failure),
+then three for the [telemetry flush](/opentelemetry/) — 28.5 seconds, under the
+`30` a Kubernetes pod gets between `SIGTERM` and `SIGKILL`. Raise the window
+together with the pod's grace period, keeping the eight and a half seconds after
+it:
 
 ```bash title=".env.production" frame="terminal"
-NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS=55    # beside terminationGracePeriodSeconds: 65
+NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS=55    # beside terminationGracePeriodSeconds: 64
 ```
 
 Whole seconds from `1` to `3600`; anything outside fails the boot naming the
@@ -321,7 +323,8 @@ When the window closes on open connections, one `warn` on `nest_rs::http`
 counts them: `cut`, the connections it closed, and `upgraded_open`, the
 WebSockets still open. The shutdown hooks run once every transport has stopped,
 five seconds between all of them — see [Lifecycle](/fundamentals/lifecycle/#ordering-and-failure) —
-so keep the grace period above this window plus theirs and the flush's.
+so keep the grace period above this window plus the half second, theirs and the
+flush's.
 
 **A client that goes away mid-request is seen only if it resets.** The line of a
 request whose client stopped waiting depends on how the client left:

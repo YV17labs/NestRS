@@ -204,8 +204,8 @@ pub struct HttpConfig {
     /// Read from `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, whole seconds from 1 to
     /// 3600 — refused outside, from the environment and from the pinned struct
     /// alike; defaults to 20 seconds. Keep the pod's grace period above it plus
-    /// the shutdown hooks' budget and the telemetry flush — 8 seconds between
-    /// them.
+    /// the half second `serve` gives what it stopped to unwind, the shutdown
+    /// hooks' budget and the telemetry flush — 8.5 seconds between them.
     pub shutdown_timeout: Duration,
 }
 

@@ -26,14 +26,21 @@ use nest_rs_config::{
     Bound, Config, ConfigService, DurationBounds, DurationUnit, Floor, Result, config,
 };
 
-/// Default drain window on shutdown: 30s, Kubernetes' default
-/// `terminationGracePeriodSeconds`. Attempts run for all but its reserve — one
-/// connection budget, ten seconds by default, or five when the budget is
-/// shorter, and never more than half the window — and what still runs then is
-/// handed back in it, which takes milliseconds on a Redis that answers; the
-/// queue documentation still asks for a grace period above the window, so
-/// SIGKILL never cuts the reserve short.
-const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
+/// Default drain window on shutdown: 20s, the HTTP transport's window, and for
+/// the same arithmetic. The way down is the transports' windows, then the
+/// shutdown hooks' five seconds, then the telemetry flush's three — and it has to
+/// fit the 30 seconds Kubernetes gives a pod between `SIGTERM` and `SIGKILL` by
+/// default, or the kill lands mid-drain, takes the hooks and the flush with it,
+/// and says nothing. 30 here did not fit, and every default deployment of a
+/// worker was one shutdown from that. `nest-rs-testing` pins the sum for every
+/// transport, this one included.
+///
+/// Attempts run for all but the window's reserve — one connection budget, ten
+/// seconds by default, or five when the budget is shorter, and never more than
+/// half the window — and what still runs then is handed back in it, which takes
+/// milliseconds on a Redis that answers. A deployment whose jobs need longer
+/// raises the window and the pod's grace period together.
+const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 20;
 
 /// Default orphan threshold: five minutes, apalis's own — ten of the heartbeats a
 /// replica proves it is alive with.
@@ -129,7 +136,8 @@ pub struct RedisWorkerConfig {
     /// replica inside the reserve, so SIGTERM never blocks past the window and
     /// the orchestrator's SIGKILL never takes a job with it. Read from
     /// `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, at least 1 and at most 3600
-    /// (an hour); defaults to 30s.
+    /// (an hour); defaults to 20s, so the default way down fits Kubernetes'
+    /// default grace period with the shutdown hooks and the telemetry flush.
     pub shutdown_timeout: Duration,
     /// How long a replica may go without proving it is alive before the others
     /// take the jobs it was running and run them again. A replica proves it
@@ -255,12 +263,13 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_timeout_defaults_to_30s_and_reads_the_env() {
-        // QUEUE-I5: the drain window is configurable and defaults to a
-        // K8s-friendly 30s.
+    fn shutdown_timeout_defaults_to_20s_and_reads_the_env() {
+        // QUEUE-I5: the drain window is configurable, and its default leaves the
+        // hooks and the flush room under a Kubernetes pod's default grace — the
+        // sum itself is pinned in `nest-rs-testing`, beside every other edge's.
         assert_eq!(
             RedisWorkerConfig::default().shutdown_timeout,
-            Duration::from_secs(30)
+            Duration::from_secs(20)
         );
         let cfg = read(&[("SHUTDOWN_TIMEOUT_SECS", "5")], Default::default()).expect("ok");
         assert_eq!(cfg.shutdown_timeout, Duration::from_secs(5));

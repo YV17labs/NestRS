@@ -1466,11 +1466,13 @@ own bound:
      operation running through the shutdown hooks. A stopped unit files
      `outcome = cancelled`.
    - **The Redis worker** stops fetching and drains within
-     `RedisWorkerConfig::shutdown_timeout` (*A shutdown stays inside
-     `shutdown_timeout`*, in the queue's entry below). An attempt the drain
-     interrupts files its `queue.job` line `outcome = cancelled` — from the port,
-     which files it for any attempt a driver drops, so a second adapter owes
-     nothing for it.
+     `RedisWorkerConfig::shutdown_timeout` — 20 s by default, HTTP's window and
+     for the same sum (*A shutdown stays inside `shutdown_timeout`*, in the
+     queue's entry below); its reserve for handing interrupted jobs back is
+     inside the window, so the window is the whole of its stop. An attempt the
+     drain interrupts files its `queue.job` line `outcome = cancelled` — from the
+     port, which files it for any attempt a driver drops, so a second adapter
+     owes nothing for it.
    - **The scheduler** starts no tick once shutdown is observed and abandons a
      lock call in flight. A tick already running is developer code on the way
      down, as a hook is, so it gets what a hook gets: `Scheduler::SHUTDOWN_TIMEOUT`
@@ -1511,11 +1513,16 @@ own bound:
    provider ignores the timeout it is handed, so the bound is the crate's.
 
 **The steps add up, so the grace period has to hold their sum** — the longest
-transport bound, then the hooks' budget, then the flush: 20 + 5 + 3 = 28 s by
-default, two under the kubelet's 30. `the_default_shutdown_steps_sum_under_a_kubernetes_grace_period`
-in `nest-rs-testing` reads the three constants and fails the day they stop
-fitting. That is also why the demo chart gives the worker 45 s for its 30 s
-drain.
+transport stop, then the hooks' budget, then the flush: 20 + 0.5 + 5 + 3 =
+28.5 s by default, one and a half under the kubelet's 30. A deployment that
+raises a window keeps its grace period 8.5 s above the longest one.
+`the_default_shutdown_steps_sum_under_a_kubernetes_grace_period` in
+`nest-rs-testing` reads every transport's default bound, the hooks' budget and
+the flush — as dev-dependencies, never behind a feature, so the
+Definition-of-done run compiles it — fails the day any of them stops fitting, and
+pins the stated 28.5 s so a moved constant sends its author to every page that
+quotes it. The conformance suite holds its transport rows to the framework's
+`impl Transport`s.
 
 ## Surface crates — decisions, not mechanics
 

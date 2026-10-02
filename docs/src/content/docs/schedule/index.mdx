@@ -247,7 +247,7 @@ the hooks so no tick runs through the cleanup it may depend on. Still running
 then, it is stopped where it waits, files its `schedule.tick` line with
 `outcome="cancelled"`, and is named in one `warn`; what it had not done stays
 undone. A task that needs longer pushes a [queue](/queue/) job, which a worker
-drains within a window of its own.
+drains within a window of its own. See [the way down](/fundamentals/lifecycle/#the-way-down).
 
 Every tick opens its own `schedule.tick` span, so the lines your task
 writes are already correlated: a **fresh** `trace_id` each time (a clock

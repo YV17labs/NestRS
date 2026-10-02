@@ -211,18 +211,20 @@ rolls out (step 7).
      open connections once `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
      seconds by default, where 6.x waited for every one: a request still running
      is dropped unanswered and a stream is cut, while an upgraded WebSocket ends
-     with its handler or the process. A scheduled tick still running gets 5
-     seconds and is then stopped, where 6.x waited for it to end. The shutdown
-     hooks — `OnModuleDestroy`,
+     with its handler or the process; half a second more lets what it stopped
+     unwind. The worker hands back what still runs before
+     `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes — **20 by default, down
+     from 30**, which did not fit the grace period with what follows it. A
+     scheduled tick still running gets 5 seconds and is then stopped, where 6.x
+     waited for it to end. The shutdown hooks — `OnModuleDestroy`,
      `BeforeApplicationShutdown`, `OnApplicationShutdown` — then share one
      5-second budget, a hook still waiting past it abandoned with a `warn`, and
-     OpenTelemetry's final flush takes 3 seconds at most: 28 seconds, inside the
-     30 Kubernetes grants by default. A window you widen needs
-     `terminationGracePeriodSeconds` at least 8 seconds above it. The worker
-     hands back what still runs before
-     `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes, 30 by default. Give
-     the pod a grace period at least 8 seconds above the drain its process runs — see
-     [Shutdown](/queue/delivery/#shutdown).
+     OpenTelemetry's final flush takes 3 seconds at most: 28.5 seconds, inside
+     the 30 Kubernetes grants by default. A window you widen — HTTP's or the
+     worker's — needs `terminationGracePeriodSeconds` at least 8.5 seconds above
+     it; a worker pod you gave 45 seconds for the old 30-second drain can keep
+     its drain and its grace, or drop both to the defaults. See
+     [the way down](/fundamentals/lifecycle/#the-way-down).
    - **Operation lines can end unanswered.** A request dropped at the window, or
      by a client that reset its connection, files its `http.request` line with
      `outcome="cancelled"` and no `status` or `bytes`, and a handler that panics

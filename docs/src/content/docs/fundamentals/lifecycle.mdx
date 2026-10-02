@@ -151,19 +151,9 @@ lifecycle treat failure differently, and deliberately:
   its own `warn`. The bound reaches a hook that awaits; one that blocks its
   thread is past any timer's reach.
 
-The budget is one of three bounded steps, and it is sized against their sum.
-Kubernetes gives a pod 30 seconds between `SIGTERM` and `SIGKILL` by default,
-and a process past it dies without a line, skipping every hook still to run
-and the telemetry flush:
-
-| Step | Bound | Default |
-|---|---|---|
-| The transports stop | the HTTP [shutdown window](/http/configuration/#shutdown) | 20 s |
-| The shutdown hooks run | `SHUTDOWN_HOOKS_TIMEOUT`, across all three phases | 5 s |
-| Telemetry flushes | [`FLUSH_TIMEOUT`](/opentelemetry/), every provider at once | 3 s |
-
-28 seconds, two under the kill. A bound per hook could not hold a sum — four
-hooks that hang would spend twenty seconds — which is why it is a budget.
+The budget is one of the bounded steps on [the way down](#the-way-down), and it
+is sized against their sum. A bound per hook could not hold a sum — four hooks
+that hang would spend twenty seconds — which is why it is a budget.
 
 ```text frame="terminal"
 Error: lifecycle hook MigrationGuard::check (OnModuleInit) failed: pending migrations
@@ -179,6 +169,7 @@ build container
 → on_module_init            ┐ strict — first error or panic aborts boot
 → on_application_bootstrap  ┘
 → serve (until SIGINT / SIGTERM, or a transport errors)
+→ transports stop              — each within its own window
 → on_module_destroy            ┐ exhaustive — every hook starts, errors and
 → before_application_shutdown  │ panics logged; five seconds between all of
 → on_application_shutdown      ┘ them, what still waits then is abandoned
@@ -187,10 +178,36 @@ build container
 Shutdown is triggered by `SIGINT` / `SIGTERM` (a shared cancellation
 token cancels every transport), or by the first transport that errors —
 which cancels the rest, then runs the teardown phases once the last
-transport has stopped. The HTTP transport stops within its shutdown window
-(`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`) and the queue worker within its drain
-window (`NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`); a scheduled tick
-already running is awaited to its end.
+transport has stopped.
+
+## The way down
+
+Kubernetes gives a pod 30 seconds between `SIGTERM` and `SIGKILL` by default,
+and a process past it dies without a line, skipping every hook still to run and
+the telemetry flush. So every step from the signal to the exit is bounded, and
+by default they sum under the kill:
+
+| Step | Bound | Default |
+|---|---|---|
+| The transports stop, together | each its own window, then half a second (`SHUTDOWN_SETTLE_TIMEOUT`) for what it stopped to unwind | 20.5 s, the longest |
+| The shutdown hooks run | `SHUTDOWN_HOOKS_TIMEOUT`, across all three phases | 5 s |
+| Telemetry flushes | [`FLUSH_TIMEOUT`](/opentelemetry/), every provider at once | 3 s |
+
+28.5 seconds, one and a half under the kill. Each transport's window is its
+own:
+
+- the HTTP transport's [shutdown window](/http/configuration/#shutdown),
+  `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, 20 s, then the half second;
+- the queue worker's [drain window](/queue/delivery/#configuration),
+  `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS`, 20 s, its hand-backs inside it;
+- the scheduler's: a [scheduled tick](/schedule/) already running gets what a
+  hook gets — five seconds, spent *before* the hooks so no tick runs through the
+  cleanup it may depend on — and one still running then is stopped where it
+  waits and files its `schedule.tick` line `outcome="cancelled"`, then the half
+  second.
+
+Raising a window means raising the pod's grace period with it, keeping 8.5
+seconds above the longest window for the half second, the hooks and the flush.
 
 <Aside type="tip">
 A test harness can drive the init phases without serving: `App::init()`

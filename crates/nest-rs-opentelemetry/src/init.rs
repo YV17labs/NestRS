@@ -180,10 +180,11 @@ where
 
 /// How long the final telemetry flush may hold the exit, every provider at once.
 ///
-/// The last of the three bounded steps on the way down, after the transports'
-/// window and the shutdown hooks' budget (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`,
-/// which tabulates the sum): 20 + 5 + 3 seconds by default, under the 30 a
-/// Kubernetes pod is given before `SIGKILL`. Three seconds is ample for a
+/// The last bounded step of the way down that a process waits out, after the
+/// transports' windows and the shutdown hooks' budget
+/// (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT`, which tabulates the sum): 20 + 0.5 +
+/// 5 + 3 = 28.5 seconds by default, under the 30 a Kubernetes pod is given before
+/// `SIGKILL`. Three seconds is ample for a
 /// collector that answers — a final batch is one request per signal — and a
 /// collector that does not answer is the case the bound exists for.
 ///

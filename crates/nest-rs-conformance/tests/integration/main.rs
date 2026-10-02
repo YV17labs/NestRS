@@ -28,6 +28,7 @@ mod seams;
 mod shapes;
 mod snapshots;
 mod targets;
+mod transports;
 mod umbrella;
 mod units;
 mod upgrading;

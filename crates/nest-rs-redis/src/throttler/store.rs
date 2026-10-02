@@ -40,7 +40,7 @@ use crate::RedisConnection;
 /// developer's variables, while a key is the framework's own machinery, and two
 /// deployments sharing one Redis are separated by the logical database in the
 /// connection URL.
-const BUCKETS: &str = "nestrs:throttler:buckets";
+pub(crate) const BUCKETS: &str = "nestrs:throttler:buckets";
 
 /// The key `subject`'s window is counted in. The subject is the port's —
 /// `nest_rs_throttler` joins its parts with U+001F, so a route pattern's `:`
@@ -145,17 +145,10 @@ impl ThrottlerStore for RedisThrottler {
 mod tests {
     use super::*;
 
-    /// The concern is read off the owning crate's span target rather than
-    /// chosen, so renaming the target moves the key — or fails here.
+    /// The port's subject follows the structure verbatim, its separators
+    /// included.
     #[test]
-    fn the_rate_limiters_keys_name_the_concern_its_crate_emits_on() {
-        let concern = nest_rs_throttler::TARGET
-            .strip_prefix("nest_rs::")
-            .expect("a framework target");
-        assert_eq!(
-            BUCKETS.split(':').collect::<Vec<_>>(),
-            ["nestrs", concern, "buckets"],
-        );
+    fn a_bucket_carries_the_subject_verbatim() {
         let subject = "http\u{1f}/users/:id\u{1f}203.0.113.7";
         assert_eq!(bucket(subject), format!("{BUCKETS}:{subject}"));
     }

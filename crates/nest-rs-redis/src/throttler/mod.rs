@@ -6,4 +6,6 @@ mod module;
 mod store;
 
 pub use module::RedisThrottlerModule;
+#[cfg(test)]
+pub(crate) use store::BUCKETS;
 pub use store::RedisThrottler;

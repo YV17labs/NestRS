@@ -23,7 +23,7 @@ use crate::layout::millis;
 /// developer's variables, while a key is the framework's own machinery, and two
 /// deployments sharing one Redis are separated by the logical database in the
 /// connection URL.
-const CLAIMS: &str = "nestrs:schedule:claims";
+pub(crate) const CLAIMS: &str = "nestrs:schedule:claims";
 
 /// The key the occurrence `token` is claimed under. The token is the port's and
 /// is never parsed here: its `:` are the port's levels, which is what makes a
@@ -114,18 +114,10 @@ fn holder() -> String {
 mod tests {
     use super::*;
 
-    /// The concern is read off the owning crate's span target rather than
-    /// chosen, so renaming the target moves the keys — or fails here — and the
-    /// port's token follows the structure verbatim, its own levels included.
+    /// The port's token follows the structure verbatim, its own levels
+    /// included.
     #[test]
-    fn the_claims_name_the_concern_its_crate_emits_on_and_carry_the_token_verbatim() {
-        let concern = nest_rs_schedule::TARGET
-            .strip_prefix("nest_rs::")
-            .expect("a framework target");
-        assert_eq!(
-            CLAIMS.split(':').collect::<Vec<_>>(),
-            ["nestrs", concern, "claims"],
-        );
+    fn a_claim_carries_the_token_verbatim() {
         assert_eq!(
             claim_key("features:AudioTasks:sweep:1789000000000"),
             "nestrs:schedule:claims:features:AudioTasks:sweep:1789000000000"

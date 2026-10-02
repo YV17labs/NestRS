@@ -172,17 +172,61 @@ mod tests {
         QueueName::new("audio").expect("a valid name")
     }
 
-    /// The concern is read off the port's span target rather than chosen, so
-    /// renaming the target moves the namespace — or fails here.
+    /// Every key this crate writes, beside the span target of the crate that
+    /// owns its concern — the queue's, the scheduler's, the rate limiter's,
+    /// never `redis`.
+    fn every_key() -> Vec<(&'static str, &'static str)> {
+        let queue = [
+            NAMESPACE,
+            OPEN,
+            LEASES,
+            SETTLED,
+            CANCELLED,
+            CHECKPOINTS,
+            ATTEMPTS,
+            DEFERRED,
+            UNIQUE,
+            THROTTLE,
+        ];
+        let mut keys: Vec<_> = queue.map(|key| (key, nest_rs_queue::TARGET)).into();
+        #[cfg(feature = "schedule")]
+        keys.push((crate::schedule::CLAIMS, nest_rs_schedule::TARGET));
+        #[cfg(feature = "throttler")]
+        keys.push((crate::throttler::BUCKETS, nest_rs_throttler::TARGET));
+        keys
+    }
+
+    /// Every key is `nestrs:<concern>:<structure>[:…]`, its concern read off
+    /// the owning crate's span target — so renaming the target moves the keys,
+    /// or fails here — a queue's member-first, and no key another's twin or its
+    /// prefix but at a level, so a `SCAN` of one never matches the other.
     #[test]
-    fn a_queue_lives_under_the_concern_its_port_emits_on() {
-        let concern = nest_rs_queue::TARGET
-            .strip_prefix("nest_rs::")
-            .expect("a framework target");
-        assert_eq!(
-            namespace(&audio()).split(':').collect::<Vec<_>>(),
-            ["nestrs", concern, "audio"],
-        );
+    fn every_key_is_a_level_of_the_concern_its_owner_emits_on() {
+        let keys = every_key();
+        for (at, &(key, target)) in keys.iter().enumerate() {
+            let concern = target
+                .strip_prefix("nest_rs::")
+                .expect("a framework target")
+                .replace("::", ":");
+            let levels: Vec<_> = key.split(':').collect();
+            assert!(
+                key.starts_with(&format!("nestrs:{concern}:")) && levels.len() >= 3,
+                "{key} is `nestrs:{concern}:<structure>`",
+            );
+            if target == nest_rs_queue::TARGET {
+                assert_eq!(levels[2], QUEUE_SLOT, "{key} names its queue first");
+            }
+            for (other_at, &(other, _)) in keys.iter().enumerate() {
+                if other_at != at
+                    && let Some(rest) = other.strip_prefix(key)
+                {
+                    assert!(
+                        rest.starts_with(':'),
+                        "{key} prefixes {other} inside a level"
+                    );
+                }
+            }
+        }
         assert_eq!(config(&audio()).get_namespace(), &namespace(&audio()));
     }
 

@@ -160,18 +160,26 @@ two vocabularies for these units — the spans said `http.request` while
 the lines said `request served` — so an operator learned the set twice and a
 query could pick the wrong one.
 
-Every one carries `duration_ms`, and every one but HTTP carries `outcome`
-(`ok` / `error` / `panic` / `cancelled`) — a request has `status`, which says how
-it ended more precisely than four words could. `cancelled` is a unit stopped
-before it settled and dropped where it waited, and every edge that can see one
-stopped files it: MCP for an operation its client cancelled, or that the HTTP
-transport stopped at the end of its shutdown window; HTTP for a request dropped
-before it answered — cut by that window, or reset by its client — which is,
-with a handler that panicked (`panic`), the one HTTP line with an `outcome` and
-without a `status`, since nothing was answered; the queue for an attempt its
-worker stopped, a drain whose window closed on it included; and the scheduler
-for a tick still running at its shutdown bound. So one query answers "what did
-this deployment do", and "what failed" is `outcome != ok` or `status >= 400`.
+Every one carries `duration_ms`, and every one but an answered HTTP request
+carries `outcome` (`ok` / `error` / `panic` / `cancelled`) — a request has
+`status`, which says how it ended more precisely than four words could.
+`cancelled` is a unit stopped before it settled — its caller gave up on it, the
+server ended it at the shutdown signal because it had no end of its own, or the
+shutdown window closed on it — and `panic` one that unwound. Neither comes with
+a handler's return, so every edge builds both, and every edge files them:
+
+| Edge | `cancelled` | `panic` |
+|---|---|---|
+| HTTP | a request dropped before it answered — cut by the window, or reset by its client (no `status`); a stream ended at the signal, or a body cut at the window (with its `status` and `bytes`) | a handler that unwound — the connection goes with it |
+| WebSocket | a message or a hook still running when the window closes | a handler (its client gets an error frame), a hook (`#[on_connect]` closes the socket `1011`) |
+| GraphQL | a field whose request is dropped, or torn down by a sibling field that unwound; a socket the server ended | a field (over HTTP, the request unwinds too); a subscription (the socket closes `1011`) |
+| MCP | an operation its client cancelled or the window stopped; a `subscriptions/listen` at the signal | a tool or a notification — its client gets an internal error |
+| Queue | an attempt its worker stopped, a drain whose window closed included | an attempt whose handler unwound |
+| Events | a listener dropped with its emitter | a listener, contained; the next one runs |
+| Schedule | a tick still running at the scheduler's shutdown bound | a tick whose job unwound |
+
+So one query answers "what did this deployment do", and "what failed" is
+`outcome != ok` or `status >= 400`.
 
 The unit's span says the same thing to a tracing backend: every span whose unit
 did not end `ok` carries OpenTelemetry's `error.type` — the same word as the

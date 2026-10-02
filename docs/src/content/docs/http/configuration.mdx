@@ -269,11 +269,12 @@ paired with `Retry-After`.
 
 ## Shutdown
 
-On `SIGTERM` or `SIGINT` the transport stops accepting and gives what is open
-`shutdown_timeout` to finish — `20` seconds by default. It is the first of the
-bounded steps on [the way down](/fundamentals/lifecycle/#the-way-down): the
-window, then half a second for what the transport stopped to unwind, then five
-seconds for the [shutdown hooks](/fundamentals/lifecycle/#ordering-and-failure),
+On `SIGTERM` or `SIGINT` the transport stops accepting, ends what has no end of
+its own — a stream, a socket — the way its protocol ends one, and gives what is
+still answering `shutdown_timeout` to finish — `20` seconds by default. It is the
+first of the bounded steps on [the way down](/fundamentals/lifecycle/#the-way-down):
+the window, then half a second for what the transport stopped to unwind, then
+five seconds for the [shutdown hooks](/fundamentals/lifecycle/#ordering-and-failure),
 then three for the [telemetry flush](/opentelemetry/) — 28.5 seconds, under the
 `30` a Kubernetes pod gets between `SIGTERM` and `SIGKILL`. Raise the window
 together with the pod's grace period, keeping the eight and a half seconds after
@@ -302,27 +303,40 @@ What the window does depends on what the connection is doing:
   answered one's — named `GET /reports/:id` for the route the router matched,
   with `http.route` — and failed: `error.type` is `cancelled`, the status
   `Error`.
+- **A stream with no end of its own** — an [`#[sse]` stream](/http/streaming/),
+  an MCP session's standalone `GET` stream — is ended **at the signal**,
+  cleanly: its last chunk is written, so the client's `EventSource` reads an end
+  and reconnects, to a replica still in the load balancer. Waiting would only
+  have spent the whole window on an end that is not coming. Its `http.request`
+  line carries the head's `status`, the `bytes` written, and
+  `outcome="cancelled"`, since the transport ended it rather than the stream.
+- **A body with an end of its own** — a download — is a response still being
+  answered: it gets the window, and is cut at its close, its line carrying the
+  head's `status`, the `bytes` written before the cut and `outcome="cancelled"`.
+- **A WebSocket** — a [gateway's socket](/websockets/) is closed **at the
+  signal** with RFC 6455's `1001 Going Away`, after the message it is
+  answering; a [graphql-ws socket](/graphql/subscriptions/) first completes
+  each subscription still running and answers what is still answering, then
+  closes the same way. A message or a
+  subscription still running when the window closes is dropped with its socket,
+  and files its line `cancelled`. A socket a hand-built endpoint upgraded is the
+  developer's own: the transport cannot see inside it, so it neither waits for
+  nor closes one — it ends when its handler ends it, or with the process.
 - **An MCP operation still running** — runs on a task of rmcp's rather than on
-  the connection that asked for it, so the transport stops it itself once the
-  window has closed: it is dropped where it waits, files its `mcp.operation`
-  line with `outcome="cancelled"`, and one `warn` names how many were stopped.
-  `serve` waits half a second at most for what it stopped to unwind, so none is
-  still running when the shutdown hooks start — unless one blocks its thread,
-  which no timer reaches and which is named at `error` instead.
-- **A stream** — an [`#[sse]` stream](/http/streaming/) or an MCP stream never
-  finishes on its own, so it holds the window to its end and is cut there; the
-  client's `EventSource` reconnects, to another replica once this one has left
-  the load balancer. Its head was answered, so its `http.request` line is filed
-  as the body ends — at the cut — with the head's `status` and the `bytes`
-  written before it, not as `cancelled`.
-- **A WebSocket** — is not the window's. poem hands an upgraded connection to
-  its handler and stops tracking it, so the transport neither waits for it nor
-  closes it: it ends when its handler ends it, or with the process.
+  the connection that asked for it, so it gets the window like a request, and
+  the transport stops it itself once the window has closed: it is dropped where
+  it waits, files its `mcp.operation` line with `outcome="cancelled"`, and one
+  `warn` names how many were stopped. A `subscriptions/listen` is answered its
+  final result at the signal instead, since a subscription has no end of its
+  own.
 
+What the transport stopped at the close gets half a second to unwind, once for
+every mount together, so none of it is still running when the shutdown hooks
+start; what still is then — a unit blocking its thread — is named at `error`.
 When the window closes on open connections, one `warn` on `nest_rs::http`
-counts them: `cut`, the connections it closed, and `upgraded_open`, the
-WebSockets still open. The shutdown hooks run once every transport has stopped,
-five seconds between all of them — see [Lifecycle](/fundamentals/lifecycle/#ordering-and-failure) —
+counts them: `cut`, the connections it closed, and `upgraded_open`, the sockets
+a hand-built endpoint left open. The shutdown hooks run once every transport has
+stopped, five seconds between all of them — see [Lifecycle](/fundamentals/lifecycle/#ordering-and-failure) —
 so keep the grace period above this window plus the half second, theirs and the
 flush's.
 

@@ -751,11 +751,16 @@ affordable.** The ids relate lines; the *identity* of the work — which route,
 which event, which job, which tool — is an **event** attribute on a line the edge
 emits once per unit, the way HTTP's access log always has. An edge without
 that line leaves its work anonymous on the console, which is the state HTTP's
-access log has always prevented and the other edges lacked. **A unit stopped
-before it settles still files it** — dropped at a shutdown window, cancelled by
-its caller, torn down with its worker — as `outcome = cancelled`. Where the edge
-does not stop the unit itself, the line is filed by a guard dropped with the
-unit's future, since code that has to notice the stop is code that can miss it.
+access log has always prevented and the other edges lacked. **A unit that does
+not settle still files it**: one stopped first — cancelled by its caller, ended by
+the server at the shutdown signal because it has no end of its own, cut by the
+shutdown window, torn down with its worker — as `outcome = cancelled`, and one
+that unwound as `outcome = panic`. Neither comes with a handler's return, so
+every edge builds both: the line is held by a guard dropped with the unit's
+future, since code that has to notice the stop is code that can miss it, and a
+panic is contained where the unit is dispatched — unless the edge's transport
+takes the connection down with it, as HTTP's does. The `units` join holds every
+edge to naming both; each edge's suite proves which of its units files them.
 **The unit's span says what its line says**: wherever an edge files a line it
 records the outcome through `operation_log::record_outcome`, so anything but
 `ok` exports with OpenTelemetry's `error.type` — the same word — and an `Error`

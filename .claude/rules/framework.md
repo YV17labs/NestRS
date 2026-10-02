@@ -1287,12 +1287,32 @@ line whose proof you cannot run is a line you have not done.
     `outcome` and `duration_ms`, its field names are **flat** (a dotted name is
     ambiguous to `tracing` beside a path target), and it takes no config toggle —
     the shared target is the family's, so one filter directive silences all of
-    them. `duration_ms` is the one field the **text** console pads — to
+    them. It files **`cancelled`** for a unit stopped before it settled and
+    **`panic`** for one that unwound: the two ends no handler's return carries,
+    so both are built — a guard dropped with the unit's future files the first,
+    a containment where the unit is dispatched the second, unless the edge's
+    transport takes the connection down with it (HTTP's does). **`panic` names
+    the unit that unwound, never one torn down by it**: a guard may read the
+    unwind in progress (`std::thread::panicking()`) only where nothing but its
+    own unit shares the future it is dropped with. Where siblings do — a GraphQL
+    selection's fields resolve together — the unit catches its own unwind,
+    files `panic` and resumes it, and its guard files `cancelled` when another's
+    unwind drops it. The `units` join's ends cell holds every edge to naming
+    both. `duration_ms` is the one
+    field the **text** console pads — to
     `operation_log::DURATION_DECIMALS`, the resolution the formula already rounds
     to — because a duration is read as a column and a width that moves with the
     value is re-parsed by eye every line. JSON keeps the bare number: trailing
     zeros are the reader's affordance, not the machine's.
-16. **Four witnesses** — an `integration` suite covering guards / pipes / scope /
+16. **A way down** — what the edge carries that has no end of its own ends at
+    the shutdown signal the way its protocol ends one (an event stream ends, a
+    socket closes `1001 Going Away`, a subscription completes), what is still
+    answering gets the window, and work the edge runs off its connections —
+    a socket poem stops tracking at its upgrade, a task of a library's own — is
+    declared as a `DetachedWork`, which the transport tells at the signal and
+    stops at the window's close. Each proved over a real socket: a transport
+    that left it out returned past live sockets with every test green.
+17. **Four witnesses** — an `integration` suite covering guards / pipes / scope /
     posture; a driver in `nest-rs-testing` if the protocol needs one; an adapter
     in `demo/` (`<feature>/<edge>/`); and a use site in `nest-rs-macro-hygiene`
     proving the decorators need no second manifest line.
@@ -1449,21 +1469,47 @@ The way down is four steps, in order, each with its own bound:
    its thread cannot unwind, and is named at `error`.
    - **HTTP** hands poem a graceful-shutdown timeout, `HttpConfig::shutdown_timeout`
      (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, pinned or from the environment: 20 s by
-     default; 1 s to an hour). A connection still open at the bound — a streaming
-     body such as an SSE stream or an MCP session — is closed, with one `warn`
-     saying how many were, and a handler on it is dropped, over HTTP/1.1 and
-     HTTP/2 alike, filing its `http.request` line `outcome = cancelled` with no
-     `status` (a stream's head was answered, so a cut stream files its line with
-     that status and the bytes written, as its body ends). The request timeout
-     bounds a handler, never a streaming body, which is why this bound is the
-     transport's own.
+     default; 1 s to an hour). A connection still open at the bound — a request
+     still running, a download, a peer that stopped reading — is closed, with one
+     `warn` saying how many were, and a handler on it is dropped, over HTTP/1.1
+     and HTTP/2 alike, filing its `http.request` line `outcome = cancelled` with
+     no `status` (a stream's head was answered, so a body cut there files its line
+     with that status, the bytes written and `outcome = cancelled`, as it ends).
+     The request timeout bounds a handler, never a streaming body, which is why
+     this bound is the transport's own.
+   - **What has no end of its own ends at the signal, the standard way.**
+     Waiting on it could only spend the whole window, and cutting it at the bound
+     tells its client nothing — so the moment shutdown is asked for, each ends as
+     its protocol ends one, after whatever unit it is answering:
+     - an event stream — a response marked `OpenEndedBody`: `#[sse]`, and an MCP
+       session's standalone `GET` stream — ends cleanly, its last chunk written,
+       so a client's `EventSource` reconnects;
+     - a gateway's WebSocket closes with RFC 6455 §7.4.1's `1001 Going Away`;
+     - a graphql-ws socket answers each running subscription `complete` — the
+       protocol engine's own frame, which a `stop` per running subscription
+       draws from it — answers a query or a mutation still running over it, then
+       closes `1001`, as its lifetime ceiling now does too (with a five-second
+       hard edge there, since a ceiling has no window);
+     - an MCP `subscriptions/listen` is answered its final
+       `SubscriptionsListenResult`, the 2026-07-28 schema's graceful teardown;
+     - a hand-built endpoint (`HttpTransport::mount`) is **refused**: the
+       transport cannot see inside a raw endpoint, so a socket it upgraded is
+       neither told nor waited for, and the drain's line counts it as
+       `upgraded_open`.
+
+     Each files its unit line `cancelled` — the server ended it, not its client.
    - **Work a connection only carries stops with the transport.** A self-mount
      that runs its units off the connection that asked for them — rmcp runs each
-     MCP operation on a task of its own — declares an
-     `HttpEndpointMeta::runs_detached(DetachedWork)`, and `serve` stops it as the
-     last thing it does, then settles. Without it a cut connection left its
-     operation running through the shutdown hooks. A stopped unit files
-     `outcome = cancelled`.
+     MCP operation on a task of its own, async-graphql each DataLoader batch, and
+     poem hands a socket to a task it stops tracking at the upgrade — declares an
+     `HttpEndpointMeta::runs_detached(DetachedWork)`. The transport tells it at
+     the signal (`DetachedWork::going_away`), gives it the rest of the window,
+     then stops what still runs and settles it — **once for every mount
+     together**, so the sum counts one settle whatever the app mounts. Without it
+     a cut connection left its operation running through the shutdown hooks, and
+     the transport returned past every live socket. A stopped unit files
+     `outcome = cancelled` and is never polled again, so a field and the batch it
+     waits on cannot meet a channel the other dropped.
    - **The Redis worker** stops fetching and drains within
      `RedisWorkerConfig::shutdown_timeout` — 20 s by default, HTTP's window and
      for the same sum (*A shutdown stays inside `shutdown_timeout`*, in the
@@ -1491,13 +1537,20 @@ The way down is four steps, in order, each with its own bound:
    itself — HTTP's handler is dropped by hyper, a queue attempt by its driver —
    the line is filed by a guard dropped with the unit's future, so it cannot
    depend on the edge noticing the stop; MCP and the scheduler stop their units
-   themselves and the guard files the line all the same. The unit's span
-   records the same outcome as `error.type`, and an HTTP request cut before it
-   answered is named for the route its router matched, since every endpoint the
-   framework mounts notes it as it starts (`nest_rs_http::matched`).
-   Built at HTTP, MCP, the queue and the scheduler; a WebSocket or
-   GraphQL-over-WS handler is not closed by the window at all, which is an owner
-   question.
+   themselves and the guard files the line all the same. Every edge files it:
+   HTTP's request and its body; a WebSocket message and its two hooks; a GraphQL
+   field — dropped with its request, the unit that was actually running — and a
+   graphql-ws socket; an MCP operation, notification and subscription; a queue
+   attempt; an event listener, dropped with the emitter whose unit it runs
+   inside; a scheduled tick still running at the scheduler's bound. A unit that
+   unwinds files `panic` at every edge: contained where it is dispatched, and
+   answered where a client waits — an MCP client an internal error, a WebSocket
+   client an error frame with its socket kept, a socket whose connect hook or
+   subscription unwound a `1011` — except over HTTP, whose transport takes the
+   connection down with the handler. The unit's span records the same outcome
+   as `error.type`, and an HTTP request cut before it answered is named for the
+   route its router matched, since every endpoint the framework mounts notes it
+   as it starts (`nest_rs_http::matched`).
 2. **The shutdown hooks run** — `#[on_module_destroy]`,
    `#[before_application_shutdown]`, `#[on_application_shutdown]` — all three
    phases inside **one** budget, `SHUTDOWN_HOOKS_TIMEOUT` (5 s): a deadline they

@@ -210,9 +210,13 @@ rolls out (step 7).
    - **Shutdown** now ends within bounds you can read. HTTP stops waiting for
      open connections once `NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS` runs out, 20
      seconds by default, where 6.x waited for every one: a request still running
-     is dropped unanswered and a stream is cut, while an upgraded WebSocket ends
-     with its handler or the process; half a second more lets what it stopped
-     unwind. The worker hands back what still runs before
+     is dropped unanswered and a download is cut, while a stream with no end of
+     its own — an `#[sse]` stream, an MCP session's `GET` stream — ends at the
+     signal, a gateway's WebSocket closes with `1001 Going Away` after the
+     message it is answering, and a graphql-ws socket completes each
+     subscription, then closes the same way. A socket a hand-built endpoint
+     upgraded ends with its handler or the process; half a second more lets what
+     it stopped unwind. The worker hands back what still runs before
      `NESTRS_REDIS__WORKER__SHUTDOWN_TIMEOUT_SECS` closes — **20 by default, down
      from 30**, which did not fit the grace period with what follows it. A
      scheduled tick still running gets 5 seconds and is then stopped, where 6.x
@@ -237,13 +241,21 @@ rolls out (step 7).
    - **Operation lines can end unanswered.** A request dropped at the window, or
      by a client that reset its connection, files its `http.request` line with
      `outcome="cancelled"` and no `status` or `bytes`, and a handler that panics
-     files `outcome="panic"`; an MCP operation the shutdown or its client cancels
-     files `outcome="cancelled"`, and so does a queue attempt a worker stops or a
-     tick the scheduler stops. A client that closes its connection the ordinary
-     way is not seen while the handler runs, so its line carries the answer's
-     `status`. A log query or a dashboard that reads every `http.request` line's
-     `status` meets lines without one, and every operation span that did not end
-     `ok` now exports with `error.type` and an `Error` status.
+     files `outcome="panic"`; a stream ended at the signal or cut at the window
+     files `outcome="cancelled"` beside its `status`. Every other edge files both
+     words too — an MCP operation the shutdown or its client cancels, a queue
+     attempt a worker stops, a tick the scheduler stops; see the table in
+     [Logs](/opentelemetry/logs/). A client that closes its connection the
+     ordinary way is not seen while the handler runs, so its line carries the
+     answer's `status`. A log query or a dashboard that reads every
+     `http.request` line's `status` meets lines without one, and one that reads
+     only `ok` lines of `graphql.subscription` meets the sockets a shutdown ended
+     as `cancelled`; every operation span that did not end `ok` now exports with
+     `error.type` and an `Error` status.
+   - **A panic is answered at every edge that runs off its request.** An MCP tool
+     that panics answers its client a JSON-RPC internal error, where 6.x left it
+     waiting for its own timeout; a WebSocket handler answers an error frame and
+     the socket goes on, where 6.x lost the socket.
    - **The worker fetches up to a method's `concurrency` per poll**, every
      `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` (100 by default), so a busy replica
      can hold that many jobs it has not started, out of a trigger's sight — size a

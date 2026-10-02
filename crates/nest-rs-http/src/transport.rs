@@ -387,7 +387,8 @@ impl HttpTransport {
         self.mounts.push((
             path,
             Box::new(move |container, route| {
-                let endpoint = build(container).into_endpoint().map_to_response().boxed();
+                let endpoint =
+                    crate::matched(build(container).into_endpoint().map_to_response()).boxed();
                 route.nest(mount_path.clone(), endpoint)
             }),
         ));

@@ -341,7 +341,8 @@ impl Storage {
 ///
 /// Every path that returns aborts explicitly, and did before this existed. The
 /// path that does not return is cancellation — a request timeout (30s by
-/// default), a client that hung up — where the future is simply dropped and no
+/// default), a client that reset its connection, the shutdown window closing on
+/// the request — where the future is simply dropped and no
 /// `.await` in it will ever run again. The parts stayed on the store, billed
 /// until a lifecycle rule swept them, and nothing was logged at all: it is the
 /// likeliest interruption for exactly the uploads streaming exists for.

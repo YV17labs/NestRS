@@ -741,6 +741,13 @@ before it settles still files it** — dropped at a shutdown window, cancelled b
 its caller, torn down with its worker — as `outcome = cancelled`. Where the edge
 does not stop the unit itself, the line is filed by a guard dropped with the
 unit's future, since code that has to notice the stop is code that can miss it.
+**The unit's span says what its line says**: wherever an edge files a line it
+records the outcome through `operation_log::record_outcome`, so anything but
+`ok` exports with OpenTelemetry's `error.type` — the same word — and an `Error`
+status (HTTP's `5xx` records its status code instead, as the HTTP conventions
+ask), and the `units` join fails on a file that opens a unit and records none.
+A request cut before it answers is named for the route the router matched,
+like an answered one, rather than exported anonymous.
 
 **A unit of work has one canonical name, and it is `<edge>.<unit>`.** It is
 declared once by **the crate that owns the edge**, as `<crate>::unit::<UNIT>`

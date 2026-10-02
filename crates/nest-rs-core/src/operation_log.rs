@@ -150,6 +150,51 @@ pub const PANIC: &str = "panic";
 /// `ok` for an answer nobody received.
 pub const CANCELLED: &str = "cancelled";
 
+/// Record on a unit's span how the unit ended, where OpenTelemetry reads it.
+///
+/// A unit that did not complete as asked — [`ERROR`], [`PANIC`], [`CANCELLED`] —
+/// gets the word its line files under `outcome` as the span's `error.type`, and
+/// the span's status set to `Error`; [`OK`] records nothing, since the
+/// conventions leave a successful span's status unset. One word for the line and
+/// the span, so an operator queries one vocabulary whichever half they hold.
+///
+/// **Every edge calls it wherever it files a line**, including from the guard
+/// that files a dropped unit `cancelled`: [`operation_span!`](crate::operation_span)
+/// declares both fields on every unit's span, and a declared field nothing
+/// records is the defect the macro's docs name. The conventions ask for both on a
+/// failed operation — `error.type` is *conditionally required* when the operation
+/// ended in error, and the status follows it — and without them a backend shows
+/// a request cut at the shutdown window, or a job that panicked, as a span that
+/// succeeded. The conformance suite's `units` join fails on a file that opens a
+/// unit and never calls it.
+pub fn record_outcome(span: &tracing::Span, outcome: &str) {
+    if outcome != OK {
+        record_error(span, outcome);
+    }
+}
+
+/// Record on a unit's span that it ended in an error of class `error_type`.
+///
+/// [`record_outcome`] is the call an edge makes; this is the form under it for
+/// the one edge whose conventions name a finer class than the outcome word: an
+/// HTTP request answered `5xx` records its status code, as a string, which is
+/// what OpenTelemetry's HTTP conventions put in `error.type` for a response
+/// whose status says it failed.
+pub fn record_error(span: &tracing::Span, error_type: &str) {
+    span.record(ERROR_TYPE, error_type);
+    span.record(STATUS_CODE, STATUS_ERROR);
+}
+
+/// OpenTelemetry's attribute for the class of error an operation ended with.
+const ERROR_TYPE: &str = "error.type";
+
+/// The field `tracing-opentelemetry` reads a span's status from.
+const STATUS_CODE: &str = "otel.status_code";
+
+/// The status a failed unit's span carries. `tracing-opentelemetry` reads the
+/// word case-insensitively; the conventions' own spelling is `Error`.
+const STATUS_ERROR: &str = "error";
+
 /// The field name every edge files [`duration_ms`] under.
 ///
 /// A field name is a literal token in `tracing`'s macro grammar, so an edge

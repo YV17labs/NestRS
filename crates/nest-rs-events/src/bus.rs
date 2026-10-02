@@ -159,12 +159,13 @@ async fn dispatch_one(
     let started = std::time::Instant::now();
     let outcome = continuation
         .scope(AssertUnwindSafe(fut).catch_unwind())
-        .instrument(span)
+        .instrument(span.clone())
         .await;
     let settled = match &outcome {
         Ok(()) => nest_rs_core::operation_log::OK,
         Err(_) => nest_rs_core::operation_log::PANIC,
     };
+    nest_rs_core::operation_log::record_outcome(&span, settled);
     // Both lines are filed **inside** the correlation, because they sit after
     // the `.await` that unwound it: a line emitted out here carries no ids at
     // all, which `nest_rs_mcp::propagate` documents having shipped once and

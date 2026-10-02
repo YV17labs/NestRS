@@ -222,12 +222,15 @@ rolls out (step 7).
      the pod a grace period at least 8 seconds above the drain its process runs — see
      [Shutdown](/queue/delivery/#shutdown).
    - **Operation lines can end unanswered.** A request dropped at the window, or
-     by a client that hung up, files its `http.request` line with
+     by a client that reset its connection, files its `http.request` line with
      `outcome="cancelled"` and no `status` or `bytes`, and a handler that panics
      files `outcome="panic"`; an MCP operation the shutdown or its client cancels
      files `outcome="cancelled"`, and so does a queue attempt a worker stops. A
-     log query or a dashboard that reads every `http.request` line's `status`
-     meets lines without one.
+     client that closes its connection the ordinary
+     way is not seen while the handler runs, so its line carries the answer's
+     `status`. A log query or a dashboard that reads every `http.request` line's
+     `status` meets lines without one, and every operation span that did not end
+     `ok` now exports with `error.type` and an `Error` status.
    - **The worker fetches up to a method's `concurrency` per poll**, every
      `NESTRS_REDIS__WORKER__POLL_INTERVAL_MS` (100 by default), so a busy replica
      can hold that many jobs it has not started, out of a trigger's sight — size a

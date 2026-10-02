@@ -37,6 +37,10 @@ impl std::fmt::Display for LookupError {
     }
 }
 
+/// Told when the waiting query has started, so its request is dropped while the
+/// query runs.
+static WAITING: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 #[resolver]
 struct NoteResolver;
 
@@ -78,6 +82,15 @@ impl NoteResolver {
     #[public]
     async fn look_up(&self) -> Result<i32, LookupError> {
         Err(LookupError)
+    }
+
+    /// Waits on something that never comes: only dropping its request ends it.
+    #[query]
+    #[public]
+    async fn waits(&self) -> String {
+        WAITING.notify_one();
+        std::future::pending::<()>().await;
+        String::new()
     }
 
     #[mutation]
@@ -191,6 +204,54 @@ async fn a_failing_operation_says_so() {
         Some(nest_rs_core::operation_log::ERROR),
         "a GraphQL error is answered with a 200, so the HTTP line alone reports \
          a request that failed as one that succeeded: {served:?}",
+    );
+    // The span exports what the line files: the operation failed.
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_graphql::unit::OPERATION
+                && span.field("graphql.field.name").as_deref() == Some("refused")
+        })
+        .expect("the failing operation's span");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::ERROR),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+}
+
+/// A GraphQL request dropped while an operation runs — its client reset the
+/// connection, or the shutdown window closed on it — exports its HTTP span
+/// under the route the GraphQL endpoint is mounted at, as an answered one does:
+/// the endpoint notes the route it was reached on as it starts.
+#[tokio::test]
+async fn a_dropped_graphql_request_exports_its_http_span_under_its_route() {
+    let logs = LogCapture::install();
+    let app = boot().await;
+
+    tokio::select! {
+        _ = app
+            .http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ waits }" }))
+            .send() => panic!("the waiting query never answers"),
+        () = WAITING.notified() => {}
+    }
+
+    let span = logs.expect_span("nest_rs::http", nest_rs_http::unit::REQUEST);
+    assert_eq!(
+        span.field("http.route").as_deref(),
+        Some("/graphql"),
+        "{:?}",
+        span.fields
+    );
+    assert_eq!(span.field("otel.name").as_deref(), Some("POST /graphql"));
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
     );
 }
 

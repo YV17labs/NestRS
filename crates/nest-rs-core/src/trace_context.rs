@@ -893,7 +893,13 @@ const fn unhex(byte: u8) -> Option<u8> {
 /// - `actor_id` — declared [`Empty`](tracing::field::Empty), filled here from an
 ///   inherited correlation (a WS message on an authenticated socket, a job whose
 ///   producer knew the caller), and otherwise filled by the authn
-///   guard if and when it resolves a principal.
+///   guard if and when it resolves a principal;
+/// - `error.type` and `otel.status_code` — declared empty, and filled by the edge
+///   through [`operation_log::record_outcome`](crate::operation_log::record_outcome)
+///   when its unit ends in anything but `ok`: OpenTelemetry's class of the error
+///   and the span status a backend reads a failed operation by. Every edge records
+///   them where it files its operation line, the line for a unit dropped
+///   `cancelled` included.
 ///
 /// `kind` is **required**, and it is OpenTelemetry's span kind (`"server"`,
 /// `"consumer"`, `"internal"`, …). It is an argument rather than a field a call
@@ -954,6 +960,8 @@ macro_rules! operation_span {
                 span_id = %__correlation.span_id(),
                 parent_span_id = $crate::tracing::field::Empty,
                 actor_id = $crate::tracing::field::Empty,
+                "error.type" = $crate::tracing::field::Empty,
+                otel.status_code = $crate::tracing::field::Empty,
                 $($($field)*)?
             )
         });

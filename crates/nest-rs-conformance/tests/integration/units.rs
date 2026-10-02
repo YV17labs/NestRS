@@ -26,10 +26,16 @@
 //! example is what a developer copies and it is the site this join reached
 //! last.
 //!
+//! A unit's span says how the unit ended, as its line does: every file that
+//! opens one records the outcome through `operation_log::record_outcome` (or
+//! `record_error`, the form under it), or the `error.type` and status the span
+//! declares export empty for a unit that failed.
+//!
 //! **What it reads by its spelling**: `operation_span!` and `info!` calls, at a
 //! call site and inside a `macro_rules!` transcriber alike — a slot the
 //! transcriber's caller fills is a binding, which only the shared emitter may
-//! spell. The `blinds` join refuses a rename of either.
+//! spell — and calls to `record_outcome` and `record_error`. The `blinds` join
+//! refuses a rename of any of them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -51,6 +57,8 @@ pub(crate) fn followed() -> Vec<Followed> {
         Followed::call(LINE)
             .through(&["tracing", "log"])
             .read_in_transcribers(),
+        Followed::call(RECORD_OUTCOME),
+        Followed::call(RECORD_ERROR),
     ]
 }
 
@@ -178,6 +186,9 @@ struct Scan {
     /// name, or the umbrella's `nest_rs::<crate>` — which is the one fact
     /// [`a_unit_is_opened_only_by_the_crate_that_declares_it`] reads.
     opened: BTreeMap<(String, String), BTreeSet<String>>,
+    /// Every file that records a unit's outcome on its span —
+    /// [`RECORD_OUTCOME`] or [`RECORD_ERROR`] called.
+    recorded: BTreeSet<String>,
 }
 
 impl Scan {
@@ -239,7 +250,26 @@ impl<'ast> Visit<'ast> for Scan {
         }
         syn::visit::visit_macro(self, node);
     }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(called) = &*node.func
+            && called
+                .path
+                .segments
+                .last()
+                .is_some_and(|last| last.ident == RECORD_OUTCOME || last.ident == RECORD_ERROR)
+        {
+            self.recorded.insert(self.file.clone());
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
 }
+
+/// The two calls that record how a unit ended on its span:
+/// `operation_log::record_outcome`, and the form under it HTTP calls with a
+/// status code.
+const RECORD_OUTCOME: &str = "record_outcome";
+const RECORD_ERROR: &str = "record_error";
 
 /// The macro that opens a unit, and the one that files its line.
 const OPEN: &str = "operation_span";
@@ -653,4 +683,71 @@ fn every_declared_unit_name_is_an_edge_namespace_that_names_its_owner() {
         wrong.len(),
         wrong.join("\n  "),
     );
+}
+
+/// **A unit's span says how it ended, wherever one is opened.**
+///
+/// `operation_span!` declares `error.type` and `otel.status_code` on every
+/// unit's span, and an edge fills them through `operation_log::record_outcome`
+/// where it files the unit's line. A declared field nothing records is the
+/// defect the macro's own docs name, and here it is silent twice over: the span
+/// exports, and a backend shows a request cut at the shutdown window, or a job
+/// that panicked, as an operation that succeeded. Read per file, which is the
+/// granularity every edge keeps — the file that opens a unit is the file that
+/// settles it, HTTP's span helpers included — so an edge that opens a unit and
+/// never records one fails here the day it lands.
+#[test]
+fn every_file_that_opens_a_unit_records_how_it_ended() {
+    let scan = scan_all(&repo_root());
+    let opening: BTreeSet<&String> = scan
+        .opened
+        .values()
+        .flatten()
+        .filter(|file| !file.ends_with("(doctest)"))
+        .collect();
+    baseline::floor(opening.len(), OPENING_FLOOR, "file(s) opening a unit");
+    let silent: Vec<&str> = opening
+        .into_iter()
+        .filter(|file| !scan.recorded.contains(*file))
+        .map(String::as_str)
+        .collect();
+    assert!(
+        silent.is_empty(),
+        "{} file(s) open a unit of work and never record how it ended on its span — call \
+         `nest_rs_core::operation_log::record_outcome` where the line is filed, or the span \
+         exports a failed unit as a success:\n  {}",
+        silent.len(),
+        silent.join("\n  "),
+    );
+}
+
+/// Below this the scan is reading the wrong tree: eight files open a unit today.
+const OPENING_FLOOR: usize = 8;
+
+/// The reading itself: a file that opens a unit and records it is told apart
+/// from one that opens a unit and records nothing.
+#[test]
+fn a_recorded_outcome_is_read_off_the_call() {
+    let records: syn::File = syn::parse_quote! {
+        fn open() {
+            let span = nest_rs_core::operation_span!(target: T, kind: nest_rs_core::operation_log::kind::SERVER, crate::unit::JOB, &c);
+            nest_rs_core::operation_log::record_outcome(&span, outcome);
+        }
+    };
+    let silent: syn::File = syn::parse_quote! {
+        fn open() {
+            let span = nest_rs_core::operation_span!(target: T, kind: nest_rs_core::operation_log::kind::SERVER, crate::unit::TICK, &c);
+        }
+    };
+    let mut scan = Scan {
+        file: "records.rs".to_owned(),
+        ..Scan::default()
+    };
+    scan.visit_file(&records);
+    scan.file = "silent.rs".to_owned();
+    scan.visit_file(&silent);
+
+    assert_eq!(scan.recorded, BTreeSet::from(["records.rs".to_owned()]));
+    let opening: BTreeSet<&String> = scan.opened.values().flatten().collect();
+    assert_eq!(opening.len(), 2, "{:?}", scan.opened);
 }

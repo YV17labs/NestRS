@@ -190,7 +190,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             // resolver gates (GraphQL errors in a 200, not a blanket HTTP
             // 401) while a present bearer is still verified.
             let method = poem::EndpointExt::data(method, ::nest_rs_http::Public);
-            route.nest(options.path.as_str(), method)
+            route.nest(options.path.as_str(), ::nest_rs_http::matched(method))
         })
         .exempt(),
     )

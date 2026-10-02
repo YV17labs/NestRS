@@ -48,7 +48,7 @@
 use std::fmt::Write;
 
 use nest_rs_core::{Correlation, TraceParent, TraceState};
-use poem::http::{HeaderName, HeaderValue, Method, header};
+use poem::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use poem::{Request, Response};
 
 use crate::client_ip::{ClientIp, ClientOrigin};
@@ -284,6 +284,20 @@ pub(crate) fn name_route(span: &tracing::Span, method: &Method, route: Option<&s
         None => {
             span.record("otel.name", tracing::field::display(method));
         }
+    }
+}
+
+/// Record on the span that the request failed, when its status says so.
+///
+/// A `5xx` is the one status class OpenTelemetry's HTTP conventions read as a
+/// failed *server* operation: the span's status becomes `Error` and
+/// `error.type` the status code, as a string. A `4xx` is the caller's error and
+/// leaves both unset, by the same conventions. A request dropped before it
+/// answered has no status at all, and its guard records the outcome word instead
+/// (`access_log::Unanswered`).
+pub(crate) fn record_failure(span: &tracing::Span, status: StatusCode) {
+    if status.is_server_error() {
+        nest_rs_core::operation_log::record_error(span, status.as_str());
     }
 }
 

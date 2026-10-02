@@ -181,11 +181,11 @@ where
     let inner = service.compat();
     Route::new().at(
         "/",
-        GuardedEndpoint {
+        nest_rs_http::matched(GuardedEndpoint {
             guard,
             context,
             inner,
-        },
+        }),
     )
 }
 

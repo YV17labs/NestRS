@@ -564,6 +564,14 @@ async fn an_attempt_its_driver_drops_files_its_line_cancelled_in_the_jobs_trace(
         "the line carries the job's trace: {line:#?}"
     );
     assert_eq!(line.trace_id, span.field("trace_id"), "{line:#?}");
+    // The span exports what the line files: the attempt did not complete.
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
     assert!(
         logs.events()
             .iter()

@@ -38,15 +38,32 @@
 //!
 //! A handler still running when the shutdown window closes is dropped where it
 //! waits — poem closes its connection, and hyper drops the request with it — and
-//! so is one whose client goes away first. That request is still a unit of work
-//! the edge accepted, so it still files its line: [`Unanswered`] holds the line
-//! while the request runs and files it [`CANCELLED`] if the request is dropped
-//! before a response exists, with the duration it ran for. It carries no
-//! `status` and no `bytes`, because nothing was answered and nothing was
-//! written — the `outcome` is how the line says so, in the word every other
-//! edge files a stopped unit with. A handler that panics unwinds through the
-//! same guard and takes its connection down: that line says
+//! so is one whose client resets its connection first. That request is still a
+//! unit of work the edge accepted, so it still files its line: [`Unanswered`]
+//! holds the line while the request runs and files it [`CANCELLED`] if the
+//! request is dropped before a response exists, with the duration it ran for.
+//! It carries no `status` and no `bytes`, because nothing was answered and
+//! nothing was written — the `outcome` is how the line says so, in the word
+//! every other edge files a stopped unit with. A handler that panics unwinds
+//! through the same guard and takes its connection down: that line says
 //! [`PANIC`](nest_rs_core::operation_log::PANIC) instead.
+//!
+//! **A client that closes its connection the ordinary way is not that case.**
+//! Over HTTP/1.1 a half-close is legal — a client may send its request, shut its
+//! writing side and still read the answer — so hyper does not read a `FIN` as an
+//! abandonment while a handler runs: the handler runs to its end, the answer is
+//! written to a socket nobody reads, and the line is filed with that `status`
+//! and those `bytes`. Only an abortive close — a reset, which a client's
+//! `SO_LINGER` of zero, a crashed process or a dropped HTTP/2 stream sends —
+//! drops the request, and files it `cancelled`. hyper's reading is the
+//! specification's; what an operator counts by `outcome = cancelled` is
+//! therefore the requests the server could see were abandoned, never every
+//! client that stopped waiting.
+//!
+//! The guard also settles the request's span the same way, whatever the access
+//! log is set to: it names the span for the route the router had matched, as an
+//! answered request's is named, and records it failed with the same outcome
+//! word.
 //!
 //! A *streaming* response cut mid-flow is not that case: its head was answered,
 //! so its line is filed as the body ends — at the cut — with the head's status
@@ -62,6 +79,7 @@ use poem::Request;
 use poem::http::{Method, Uri};
 
 use crate::client_ip::ClientIp;
+use crate::matched::MatchedRoute;
 
 /// A request being timed. Opened before the inner tree runs, filed once the
 /// response body has been written.
@@ -154,41 +172,65 @@ impl AccessLog {
     }
 }
 
-/// A request's line, held while the request runs and filed
-/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) if the request is
-/// dropped before it answers — [`PANIC`](nest_rs_core::operation_log::PANIC)
-/// if it unwinds instead.
+/// What a request owes if it ends before it answers, held while it runs: its
+/// span named for the route it matched and recorded failed, and its line filed
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED) — or
+/// [`PANIC`](nest_rs_core::operation_log::PANIC) if it unwinds instead.
 ///
-/// Borrowing the continuation rather than cloning it costs the path nothing: it
-/// is declared after the continuation, so a dropped request drops it first, and
-/// the line is filed inside the request's own context — the same ids every other
-/// line of that request carries.
+/// Borrowing rather than cloning costs the path nothing: it is declared after
+/// everything it borrows, so a dropped request drops it first, and the line is
+/// filed inside the request's own context — the same ids every other line of
+/// that request carries.
 pub(crate) struct Unanswered<'a> {
     log: Option<AccessLog>,
     continuation: &'a RequestContinuation,
+    span: &'a tracing::Span,
+    method: &'a Method,
+    matched: &'a MatchedRoute,
+    answered: bool,
 }
 
 impl<'a> Unanswered<'a> {
-    pub(crate) fn hold(log: Option<AccessLog>, continuation: &'a RequestContinuation) -> Self {
-        Self { log, continuation }
+    pub(crate) fn hold(
+        log: Option<AccessLog>,
+        continuation: &'a RequestContinuation,
+        span: &'a tracing::Span,
+        method: &'a Method,
+        matched: &'a MatchedRoute,
+    ) -> Self {
+        Self {
+            log,
+            continuation,
+            span,
+            method,
+            matched,
+            answered: false,
+        }
     }
 
-    /// The request produced an answer: its line is the answer's to file.
+    /// The request produced an answer: its span is named off the answer, and its
+    /// line is the answer's to file.
     pub(crate) fn answered(mut self) -> Option<AccessLog> {
+        self.answered = true;
         self.log.take()
     }
 }
 
 impl Drop for Unanswered<'_> {
     fn drop(&mut self) {
+        if self.answered {
+            return;
+        }
+        // Unwinding rather than dropped: a handler that panicked takes its
+        // connection down with it, and the unit still ended in a panic.
+        let outcome = if std::thread::panicking() {
+            nest_rs_core::operation_log::PANIC
+        } else {
+            nest_rs_core::operation_log::CANCELLED
+        };
+        crate::trace_context::name_route(self.span, self.method, self.matched.route().as_deref());
+        nest_rs_core::operation_log::record_outcome(self.span, outcome);
         if let Some(log) = self.log.take() {
-            // Unwinding rather than dropped: a handler that panicked takes its
-            // connection down with it, and the unit still ended in a panic.
-            let outcome = if std::thread::panicking() {
-                nest_rs_core::operation_log::PANIC
-            } else {
-                nest_rs_core::operation_log::CANCELLED
-            };
             self.continuation.enter(|| log.unanswered(outcome));
         }
     }
@@ -218,7 +260,14 @@ mod tests {
     fn a_request_dropped_unanswered_files_its_line_cancelled() {
         let logs = LogCapture::install();
         let (log, continuation) = held();
-        drop(Unanswered::hold(Some(log), &continuation));
+        let span = tracing::Span::none();
+        drop(Unanswered::hold(
+            Some(log),
+            &continuation,
+            &span,
+            &Method::GET,
+            &MatchedRoute::default(),
+        ));
 
         let line = the_line(&logs);
         assert_eq!(
@@ -236,7 +285,10 @@ mod tests {
     fn an_answered_request_is_not_filed_by_the_guard() {
         let logs = LogCapture::install();
         let (log, continuation) = held();
-        let answered = Unanswered::hold(Some(log), &continuation).answered();
+        let span = tracing::Span::none();
+        let matched = MatchedRoute::default();
+        let answered =
+            Unanswered::hold(Some(log), &continuation, &span, &Method::GET, &matched).answered();
         assert!(answered.is_some());
         logs.expect_none(nest_rs_core::operation_log::TARGET, crate::unit::REQUEST);
     }

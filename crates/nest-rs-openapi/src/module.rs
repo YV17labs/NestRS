@@ -11,7 +11,7 @@
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{Container, ContainerBuilder, DynamicModule};
-use nest_rs_http::{HttpEndpointMeta, join_path, version_path};
+use nest_rs_http::{HttpEndpointMeta, join_path, matched, version_path};
 use poem::{Route, get};
 
 use crate::config::OpenApiConfig;
@@ -125,18 +125,21 @@ fn register(builder: ContainerBuilder, options: OpenApiConfig) -> ContainerBuild
                     });
                 }
                 let mut route = route
-                    .at(SPEC_PATH, get(ui::spec_endpoint(default)))
-                    .at(DOCS_PATH, get(ui::swagger_index))
-                    .at(CSS_PATH, get(ui::swagger_css))
-                    .at(BUNDLE_PATH, get(ui::swagger_bundle))
-                    .at(PRESET_PATH, get(ui::swagger_preset));
+                    .at(SPEC_PATH, matched(get(ui::spec_endpoint(default))))
+                    .at(DOCS_PATH, matched(get(ui::swagger_index)))
+                    .at(CSS_PATH, matched(get(ui::swagger_css)))
+                    .at(BUNDLE_PATH, matched(get(ui::swagger_bundle)))
+                    .at(PRESET_PATH, matched(get(ui::swagger_preset)));
                 // One document per version when the version is not in the path:
                 // OpenAPI keys operations by path, so two versions a header
                 // selects cannot both be described at `/posts`. Swagger UI stays
                 // on the default document.
                 for version in versioned_documents(container) {
                     let spec = spec(container, &options, Some(&version), &mut reported);
-                    route = route.at(document_path(&version), get(ui::spec_endpoint(spec)));
+                    route = route.at(
+                        document_path(&version),
+                        matched(get(ui::spec_endpoint(spec))),
+                    );
                 }
                 route
             })

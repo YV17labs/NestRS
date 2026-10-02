@@ -712,6 +712,7 @@ pub async fn refuse(
         backend_id,
         attempt = 1u32,
     );
+    nest_rs_core::operation_log::record_outcome(&span, nest_rs_core::operation_log::ERROR);
     with_request_scope(None, correlation, async move {
         tracing::error!(
             target: TARGET,
@@ -794,14 +795,19 @@ struct JobIdentity {
 struct JobLine {
     identity: JobIdentity,
     started: Instant,
+    /// The attempt's span, which the outcome is recorded on for the export.
+    span: tracing::Span,
     filed: bool,
 }
 
 impl JobLine {
+    /// Opened first thing inside the attempt, so the span current here is the
+    /// attempt's own.
     fn open(identity: JobIdentity) -> Self {
         Self {
             identity,
             started: Instant::now(),
+            span: tracing::Span::current(),
             filed: false,
         }
     }
@@ -813,6 +819,7 @@ impl JobLine {
     }
 
     fn emit(&self, outcome: &'static str) {
+        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
         let identity = &self.identity;
         tracing::info!(
             name: unit::JOB,

@@ -1473,7 +1473,10 @@ own bound:
    itself — HTTP's handler is dropped by hyper, a queue attempt by its driver —
    the line is filed by a guard dropped with the unit's future, so it cannot
    depend on the edge noticing the stop; MCP stops its operations itself and
-   files the line where it does.
+   files the line where it does. The unit's span records the same outcome as
+   `error.type`, and an HTTP request cut before it answered is named for the
+   route its router matched, since every endpoint the framework mounts notes it
+   as it starts (`nest_rs_http::matched`).
    Built at HTTP, MCP and the queue; a WebSocket or GraphQL-over-WS handler is
    not closed by the window at all, which is an owner question.
    - **The scheduler** starts no tick once shutdown is observed and abandons a lock

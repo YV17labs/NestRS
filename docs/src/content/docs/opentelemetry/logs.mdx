@@ -166,11 +166,19 @@ it ended more precisely than four words could. `cancelled` is a unit stopped
 before it settled and dropped where it waited, and every edge that can see one
 stopped files it: MCP for an operation its client cancelled, or that the HTTP
 transport stopped at the end of its shutdown window; HTTP for a request dropped
-before it answered — cut by that window, or left by its client — which is,
+before it answered — cut by that window, or reset by its client — which is,
 with a handler that panicked (`panic`), the one HTTP line with an `outcome` and
-without a `status`, since nothing was answered; and the queue for an attempt its worker stopped, a drain whose window
-closed on it included. So one query answers "what did this deployment
-do", and "what failed" is `outcome != ok` or `status >= 400`.
+without a `status`, since nothing was answered; and the queue for an attempt
+its worker stopped, a drain whose window closed on it included. So one query
+answers "what did this deployment do", and "what failed" is `outcome != ok` or
+`status >= 400`.
+
+The unit's span says the same thing to a tracing backend: every span whose unit
+did not end `ok` carries OpenTelemetry's `error.type` — the same word as the
+line's `outcome` — and an `Error` status, and an HTTP request answered `5xx`
+carries its status code there instead, as the HTTP conventions ask. A request
+dropped before it answered is still named `{method} {route}` for the route the
+router had matched, so a backend groups it with the answered ones.
 
 ```text frame="terminal"
 INFO nest_rs::operation: http.request method=GET path="/users" status=401 bytes=127 duration_ms=0.103 client_ip=127.0.0.1 forwarded=false user_agent="curl/8.14.1" trace_id=01a015a9433c7c2393647b0a40e5b658 span_id=6c6f2ed837da7b3b

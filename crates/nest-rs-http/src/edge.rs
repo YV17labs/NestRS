@@ -57,6 +57,7 @@ use tracing::Instrument;
 use crate::access_log::{AccessLog, Unanswered};
 use crate::client_ip::{ClientIp, ClientOrigin};
 use crate::location::CallerUri;
+use crate::matched::MatchedRoute;
 use crate::{response_body, trace_context};
 
 /// The route template poem's router matched, off whichever shape came back.
@@ -431,7 +432,7 @@ where
 {
     type Output = Response;
 
-    async fn call(&self, req: Request) -> Result<Response> {
+    async fn call(&self, mut req: Request) -> Result<Response> {
         // Decided before anything else runs: everything below — the ambient
         // context, the echoed header, the access line — has to agree on one id,
         // and the only way to guarantee that is to resolve it once, here. The
@@ -457,6 +458,11 @@ where
         let log = self
             .access_log
             .then(|| AccessLog::open(&req, client, user_agent));
+        // Where the endpoint the router reaches notes the route it matched, for
+        // the one request whose response cannot carry it out: one dropped before
+        // it answers (`matched`).
+        let matched = MatchedRoute::default();
+        req.extensions_mut().insert(matched.clone());
 
         // Request scope, ambient for everything inward — guards, extractors, the
         // data layer, global pipes — and for the response body afterwards.
@@ -469,9 +475,10 @@ where
         };
         let continuation = RequestContinuation::new(Some(scope), correlation.clone());
         // Held across every await below: a request dropped at one — its connection
-        // cut by the shutdown window, or closed by its client — files its line
-        // `cancelled` instead of none at all.
-        let unanswered = Unanswered::hold(log, &continuation);
+        // cut by the shutdown window, or reset by its client — names its span for
+        // the route it matched, records it failed, and files its line
+        // `cancelled`, instead of exporting an anonymous span and filing nothing.
+        let unanswered = Unanswered::hold(log, &continuation, &span, &method, &matched);
 
         // The configured cap is installed *inside* the continuation and is not
         // part of it: a whole-body cap is this transport's, and its two readers
@@ -510,6 +517,7 @@ where
                 // Always, whatever the access log is set to: the status is what
                 // an exported server span is read for, and it costs one record.
                 span.record("http.response.status_code", resp.status().as_u16());
+                trace_context::record_failure(&span, resp.status());
                 trace_context::stamp(&correlation, &mut resp);
                 // Unconditional, unlike the log it may or may not carry: a
                 // streaming body is the request still running, and what
@@ -524,6 +532,7 @@ where
             // log.
             Err(err) => {
                 span.record("http.response.status_code", err.status().as_u16());
+                trace_context::record_failure(&span, err.status());
                 if let Some(log) = log {
                     log.abandoned(err.status().as_u16());
                 }

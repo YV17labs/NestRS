@@ -366,6 +366,29 @@ async fn a_request_still_running_when_the_window_closes_is_cut_unanswered() {
         .expect("the line says how long the request ran")
         .parse::<f64>()
         .expect("a number of milliseconds");
+
+    // And its span exports like an answered one's — under the route the router
+    // had matched before the handler ran — and failed, with the line's word.
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_http::unit::REQUEST
+                && span.field("url.path").as_deref() == Some("/shutdown/stuck")
+        })
+        .expect("the cut request's span");
+    assert_eq!(
+        span.field("otel.name").as_deref(),
+        Some("GET /shutdown/stuck"),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("http.route").as_deref(), Some("/shutdown/stuck"));
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
 }
 
 /// An idle kept-alive connection has nothing in flight, so it is closed at the

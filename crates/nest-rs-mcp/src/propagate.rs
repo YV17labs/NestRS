@@ -192,6 +192,7 @@ impl<H> PropagatingHandler<H> {
             mcp.method.name = method,
             mcp.operation.name = addressed,
         );
+        let recorded = operation.clone();
 
         // One box, not two: the type erasure the guard's `around` needs and the
         // scope installation are the same future, and this runs on every MCP
@@ -245,6 +246,12 @@ impl<H> PropagatingHandler<H> {
             // context carries no ids at all — which is exactly what it did until a
             // capture of real output showed the gap. Outside is still the right
             // depth: here the guard's verdict and the whole duration are known.
+            let outcome = match &settled {
+                Some(Ok(_)) => nest_rs_core::operation_log::OK,
+                Some(Err(_)) => nest_rs_core::operation_log::ERROR,
+                None => nest_rs_core::operation_log::CANCELLED,
+            };
+            nest_rs_core::operation_log::record_outcome(&recorded, outcome);
             nest_rs_core::RequestContinuation::new(None, reported).enter(|| {
                 tracing::info!(
                     name: crate::unit::OPERATION,
@@ -257,11 +264,7 @@ impl<H> PropagatingHandler<H> {
                     // addressed nothing.
                     method = method,
                     operation = addressed,
-                    outcome = match &settled {
-                        Some(Ok(_)) => nest_rs_core::operation_log::OK,
-                        Some(Err(_)) => nest_rs_core::operation_log::ERROR,
-                        None => nest_rs_core::operation_log::CANCELLED,
-                    },
+                    outcome,
                     duration_ms = nest_rs_core::operation_log::duration_ms(started),
                 );
             });
@@ -369,6 +372,10 @@ macro_rules! notification_method {
                     // rather than assumed: a notification handler returns `()`, so
                     // it has no failure channel, and had it unwound this line
                     // would not be reached.
+                    //
+                    // Not recorded on a span: a notification opens none of its
+                    // own, and the span it runs under is the HTTP request's, whose
+                    // outcome is the request's to record.
                     tracing::info!(
                         name: crate::unit::OPERATION,
                         target: nest_rs_core::operation_log::TARGET,

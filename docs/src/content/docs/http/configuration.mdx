@@ -296,8 +296,10 @@ What the window does depends on what the connection is doing:
   and over HTTP/2 alike: closing an HTTP/2 connection resets every stream on
   it, and hyper drops a reset stream's handler. Its `http.request` line is
   still filed, with `outcome="cancelled"` and the time it ran in place of a
-  `status` and `bytes`, since nothing was answered — the same line a request
-  whose client hung up before the answer files.
+  `status` and `bytes`, since nothing was answered. Its span exports like an
+  answered one's — named `GET /reports/:id` for the route the router matched,
+  with `http.route` — and failed: `error.type` is `cancelled`, the status
+  `Error`.
 - **An MCP operation still running** — runs on a task of rmcp's rather than on
   the connection that asked for it, so the transport stops it itself once the
   window has closed: it is dropped where it waits, files its `mcp.operation`
@@ -319,6 +321,24 @@ counts them: `cut`, the connections it closed, and `upgraded_open`, the
 WebSockets still open. The shutdown hooks run once every transport has stopped,
 five seconds between all of them — see [Lifecycle](/fundamentals/lifecycle/#ordering-and-failure) —
 so keep the grace period above this window plus theirs and the flush's.
+
+**A client that goes away mid-request is seen only if it resets.** The line of a
+request whose client stopped waiting depends on how the client left:
+
+- **An abortive close** — a reset: an HTTP/2 stream cancelled, a socket closed
+  with `SO_LINGER` of zero, a process that crashed — drops the request where its
+  handler waits, exactly as the window does, and it files
+  `outcome="cancelled"` with no `status`.
+- **An ordinary close** — `close()` after a timeout, a browser navigating away,
+  `curl` giving up — is a half-close over HTTP/1.1, which is legal: a client may
+  send its request, shut its writing side and still read the answer. So hyper
+  does not take it for an abandonment while the handler runs; the handler runs
+  to its end, the answer is written to a socket nobody reads, and the line is
+  filed with that `status` and `bytes`.
+
+hyper's reading is the specification's, so `outcome="cancelled"` counts the
+requests the server could see were abandoned — never every client that stopped
+waiting.
 
 ## Default security headers
 

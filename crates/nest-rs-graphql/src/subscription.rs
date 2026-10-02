@@ -259,7 +259,7 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
                     }
                     None => guarded,
                 };
-                let line = SubscriptionLine::new(correlation.clone());
+                let line = SubscriptionLine::new(correlation.clone(), span.clone());
                 nest_rs_core::with_request_scope(None, correlation, async move {
                     let _line = line;
                     served.await;
@@ -287,13 +287,16 @@ impl<E: Executor> Endpoint for SubscriptionEndpoint<E> {
 /// scope that future installed.
 struct SubscriptionLine {
     correlation: nest_rs_core::Correlation,
+    /// The subscription's span, which the outcome is recorded on for the export.
+    span: tracing::Span,
     started: std::time::Instant,
 }
 
 impl SubscriptionLine {
-    fn new(correlation: nest_rs_core::Correlation) -> Self {
+    fn new(correlation: nest_rs_core::Correlation, span: tracing::Span) -> Self {
         Self {
             correlation,
+            span,
             started: std::time::Instant::now(),
         }
     }
@@ -301,6 +304,8 @@ impl SubscriptionLine {
 
 impl Drop for SubscriptionLine {
     fn drop(&mut self) {
+        let outcome = nest_rs_core::operation_log::OK;
+        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
         nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
             tracing::info!(
                 name: crate::unit::SUBSCRIPTION,
@@ -311,7 +316,7 @@ impl Drop for SubscriptionLine {
                 // — the same fact the span's own comment records. A closed socket
                 // is not an error, and an aborted one is the deployment's news,
                 // not the subscription's.
-                outcome = nest_rs_core::operation_log::OK,
+                outcome,
                 // How long it stayed open, which on a subscription is the number
                 // an operator actually reads.
                 duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
@@ -342,9 +347,10 @@ mod tests {
 
         // No `#[tokio::test]`: this is the teardown case, where there may be no
         // runtime left to reach a task-local through.
-        drop(SubscriptionLine::new(nest_rs_core::Correlation::minted(
-            None,
-        )));
+        drop(SubscriptionLine::new(
+            nest_rs_core::Correlation::minted(None),
+            tracing::Span::none(),
+        ));
 
         let served = logs.find(
             nest_rs_core::operation_log::TARGET,
@@ -371,7 +377,7 @@ mod tests {
         let correlation = nest_rs_core::Correlation::minted(None);
 
         nest_rs_core::with_request_scope(None, correlation.clone(), async {
-            let _line = SubscriptionLine::new(correlation);
+            let _line = SubscriptionLine::new(correlation, tracing::Span::none());
         })
         .await;
 

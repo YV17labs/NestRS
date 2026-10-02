@@ -604,8 +604,11 @@ async fn under_connection<F: std::future::Future<Output = ()>>(
     hook: F,
 ) {
     let started = std::time::Instant::now();
+    let recorded = span.clone();
     nest_rs_core::with_request_scope(None, connection.clone(), async {
         hook.await;
+        let outcome = nest_rs_core::operation_log::OK;
+        nest_rs_core::operation_log::record_outcome(&recorded, outcome);
         // A hook is developer code that logs and writes like any handler, so the
         // socket opening and closing are units of work and owe the family's line
         // the same way a message does. The canonical name says which of the two
@@ -621,7 +624,7 @@ async fn under_connection<F: std::future::Future<Output = ()>>(
             // records the same constant for the same reason. Leaving it off
             // instead was the one field of the family these two lines dropped,
             // and a cross-edge `outcome != ok` query silently skipped them.
-            outcome = nest_rs_core::operation_log::OK,
+            outcome,
             duration_ms = nest_rs_core::operation_log::duration_ms(started),
         );
     })
@@ -718,8 +721,14 @@ async fn handle_text<G: Gateway>(
         .as_ref()
         .map(|container| Arc::new(RequestScope::new(container.clone())));
     let started = std::time::Instant::now();
+    let recorded = span.clone();
     let reply = nest_rs_core::with_request_scope(scope, correlation, async {
         let reply = dispatch.await;
+        let outcome = match &reply {
+            WsReply::Error(_) => nest_rs_core::operation_log::ERROR,
+            _ => nest_rs_core::operation_log::OK,
+        };
+        nest_rs_core::operation_log::record_outcome(&recorded, outcome);
         // One line per message, inside the scope so it carries the message's own
         // ids rather than the socket's. A socket can serve thousands of messages
         // under one upgrade, so the `101`'s access line names the connection and
@@ -730,10 +739,7 @@ async fn handle_text<G: Gateway>(
             message = crate::unit::MESSAGE,
             event = %event,
             conn_id,
-            outcome = match &reply {
-                WsReply::Error(_) => nest_rs_core::operation_log::ERROR,
-                _ => nest_rs_core::operation_log::OK,
-            },
+            outcome,
             duration_ms = nest_rs_core::operation_log::duration_ms(started),
         );
         reply

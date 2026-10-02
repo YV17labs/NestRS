@@ -1394,6 +1394,7 @@ impl Runner {
             Ok(Err(_)) => nest_rs_core::operation_log::ERROR,
             Err(_) => nest_rs_core::operation_log::PANIC,
         };
+        nest_rs_core::operation_log::record_outcome(&tracing::Span::current(), settled);
         // One line per tick, whatever happened — the clock is not a caller, so this
         // is the only place a tick says it ran at all. Emitted inside the scope, so
         // it carries the trace the job's own events carry.

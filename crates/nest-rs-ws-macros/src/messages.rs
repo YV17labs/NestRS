@@ -591,7 +591,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                                 __gw, __server, __chains, __ctx, __data_pipe,
                             );
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
-                            __route.at(__path, __ep)
+                            __route.at(__path, ::nest_rs_ws::nest_rs_http::matched(__ep))
                         },
                     )
                     .owned_by(#gateway_name)

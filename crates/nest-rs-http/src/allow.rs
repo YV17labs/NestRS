@@ -173,6 +173,10 @@ impl Endpoint for AllowedMethods {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Response> {
+        // Every controller route reaches the router through this table, so this
+        // is where a controller request notes the route it matched — read only
+        // if it is dropped before it answers (`matched`).
+        crate::matched::note(&req);
         let result = self.inner.call(req).await;
         // Narrowed to poem's own routing error rather than to "any `405`": a
         // handler that deliberately answers `405` is stating something about

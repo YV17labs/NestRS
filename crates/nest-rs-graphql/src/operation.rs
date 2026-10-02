@@ -195,6 +195,7 @@ where
         graphql.field.name = operation,
     );
     let started = std::time::Instant::now();
+    let recorded = span.clone();
     // The request's own scope, under this unit's correlation: a field resolves
     // against the request that asked for it — its providers, its executor, its
     // ability — while its events and its line name the field rather than the
@@ -204,6 +205,12 @@ where
         correlation,
         async move {
             let out = fut.await;
+            let outcome = if succeeded(&out) {
+                nest_rs_core::operation_log::OK
+            } else {
+                nest_rs_core::operation_log::ERROR
+            };
+            nest_rs_core::operation_log::record_outcome(&recorded, outcome);
             // Filed inside the scope, so it carries this unit's ids without
             // being handed them — the shape `nest_rs_schedule`'s tick uses.
             tracing::info!(
@@ -212,11 +219,7 @@ where
                 message = crate::unit::OPERATION,
                 role = role,
                 operation = operation,
-                outcome = if succeeded(&out) {
-                    nest_rs_core::operation_log::OK
-                } else {
-                    nest_rs_core::operation_log::ERROR
-                },
+                outcome,
                 duration_ms = nest_rs_core::operation_log::duration_ms(started),
             );
             out

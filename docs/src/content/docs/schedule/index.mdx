@@ -44,23 +44,30 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use nest_rs::core::injectable;
-use nest_rs::schedule::scheduled;
+use nest_rs::schedule::{CronExpression, scheduled};
 
-use crate::audio::AudioService;
+use crate::audio::{AUDIO_QUEUE, AudioConfig, AudioService};
 
 #[injectable]
 pub struct AudioTasks {
     #[inject]
     svc: Arc<AudioService>,
+    #[inject]
+    config: Arc<AudioConfig>,
 }
 
 #[scheduled]
 impl AudioTasks {
-    #[every("5s")]
+    #[every("5s", replicas = "one")]
     async fn enqueue_transcode(&self) -> Result<()> {
+        if !self.config.synthetic_seed {
+            return Ok(());
+        }
         let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await
+        self.svc.seed_and_enqueue(format!("track-{id}.mp3")).await?;
+        Ok(())
     }
+    // …
 }
 ```
 
@@ -68,15 +75,22 @@ impl AudioTasks {
   `#[inject]` shape as any other service.
 - **`#[scheduled]`** on the impl block orchestrates the per-method trigger
   attributes and submits one cron entry per decorated method.
-- **`#[every("5s")]`** runs the method on a fixed interval. A failure
+- **`#[every("5s", replicas = "one")]`** runs the method on a fixed
+  interval, **once per occurrence across the app's replicas**. Every
+  replica of the API runs this scheduler, and the method stores a source
+  object and enqueues a transcode of it — work the deployment wants done
+  once, which three replicas left at the default would do three times. So
+  each occurrence is claimed through the app's occurrence lock and fires on
+  the one replica that wins it; see
+  [Firing once across replicas](#firing-once-across-replicas). A failure
   returns `Err`; it is logged and the schedule continues — one failed run
   never stops the job.
 - **The cron method is thin.** Its only job is to decide *when* and
-  *what payload* (here a synthetic file id). The enqueue plumbing —
-  the `JobProducer`, the queue name, the `TranscodeDto` shape —
-  lives inside `AudioService::enqueue_transcode`. The same service
-  call is used by the HTTP producer and by this scheduler, so there is
-  exactly one place where the "enqueue an audio job" decision lives.
+  *what payload* (here a synthetic file id). The plumbing — the object
+  store, the `JobProducer`, the queue — lives inside
+  `AudioService::seed_and_enqueue`, which ends in the same
+  `enqueue_transcode` the HTTP producer calls, so there is exactly one
+  place where the "enqueue an audio job" decision lives.
 
 ## Several methods on the same provider
 
@@ -85,25 +99,11 @@ owns the deps once, and as many decorated methods as you need share them.
 Mix triggers freely:
 
 ```rust title="crates/features/src/audio/schedule/tasks.rs (from the demo, abridged)"
-use nest_rs::core::injectable;
-use nest_rs::schedule::{scheduled, CronExpression};
-
-use nest_rs::queue::QueueName;
-
-use crate::audio::AudioQueue;
-
-#[injectable]
-pub struct AudioTasks {
-    #[inject]
-    svc: Arc<AudioService>,
-}
-
 #[scheduled]
 impl AudioTasks {
-    #[every("5s")]
+    #[every("5s", replicas = "one")]
     async fn enqueue_transcode(&self) -> Result<()> {
-        let id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        self.svc.enqueue_transcode(format!("track-{id}.mp3")).await
+        // …
     }
 
     #[after("3s")]
@@ -116,11 +116,11 @@ impl AudioTasks {
         Ok(())
     }
 
-    #[cron(CronExpression::EVERY_MINUTE)]
+    #[cron(CronExpression::EVERY_MINUTE, replicas = "each")]
     async fn heartbeat(&self) -> Result<()> {
         tracing::info!(
             target: "features::audio",
-            queue = AudioQueue::NAME,
+            queue = AUDIO_QUEUE,
             "audio producer heartbeat",
         );
         Ok(())
@@ -133,6 +133,13 @@ Three cron entries land in the scheduler — `AudioTasks::enqueue_transcode`,
 same `AudioTasks` instance. Same `Arc<AudioService>`, three triggers, no
 ceremony. Each method calls into the service or logs; none of them
 build a queue payload or reach for a connection.
+
+**Each one declares how many replicas fire it, by what it does.** The seed
+is work the deployment does once, so `replicas = "one"`. The heartbeat says
+*this* process is alive, which is only true if every process says it, so
+`replicas = "each"` — the default, written out so the decision is read
+rather than inferred. And `#[after]` fires once per process by construction:
+it is a process's own warm-up, and takes no `replicas` at all.
 
 <Aside type="caution">
 A single `#[scheduled]` impl block per struct (multiple would conflict at
@@ -161,43 +168,69 @@ silently skipped.
 The provider goes in its feature module like any other `#[injectable]`:
 
 ```rust title="crates/features/src/audio/schedule/module.rs (from the demo)"
+use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 
 use super::tasks::AudioTasks;
-use crate::audio::AudioModule;
+use crate::audio::{AudioConfig, AudioModule};
 
-#[module(imports = [AudioModule], providers = [AudioTasks])]
+#[module(
+    imports = [ConfigModule::for_feature::<AudioConfig>(), AudioModule],
+    providers = [AudioTasks],
+)]
 pub struct AudioScheduleModule;
 ```
 
 The module imports `AudioModule` because `AudioTasks` injects
-`Arc<AudioService>`. Forget the import and the access graph fails the
+`Arc<AudioService>`, and registers `AudioConfig` because it injects that
+too. Forget the import and the access graph fails the
 boot with a clear message naming `AudioService` as the missing
 dependency — the same Rust-visibility rule every other adapter follows.
 
 The app activates the scheduler by importing `ScheduleModule` —
-`ScheduleModule` contributes the scheduler to `App::run` itself:
+`ScheduleModule` contributes the scheduler to `App::run` itself — and, since
+the seed fires once across replicas, the occurrence lock it claims through:
+`RedisScheduleModule`, over the connection `RedisModule` opens. Leave that
+binding out and the boot fails, naming `AudioTasks::enqueue_transcode` and the
+binding to import.
 
-```rust title="apps/api/src/module.rs (from the demo)"
+```rust title="apps/api/src/module.rs (from the demo, abridged)"
 use nest_rs::core::module;
+// …
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::ScheduleModule;
+// …
 use features::audio::{AudioHttpModule, AudioScheduleModule};
+// …
 
-#[module(imports = [
-    AudioHttpModule,
-    AudioScheduleModule,
-    ScheduleModule,
-])]
+#[module(
+    imports = [
+        // …
+        RedisModule::for_root(None),
+        RedisQueueModule,
+        // …
+        ScheduleModule,
+        RedisScheduleModule,
+        // …
+        AudioHttpModule,
+        AudioScheduleModule,
+    ],
+)]
 pub struct ApiModule;
 ```
 
-```rust title="apps/api/src/main.rs (from the demo)"
+```rust title="apps/api/src/main.rs (from the demo, abridged)"
+use anyhow::Result;
+// …
 use nest_rs::core::App;
+// …
 use api::ApiModule;
 
 #[nest_rs::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
+    // …
     App::builder()
+        // …
         .module::<ApiModule>()
         .build()
         .await?
@@ -222,13 +255,13 @@ from the app's module tree.
 $ nestrs run dev api
 …
  INFO nest_rs::app: attached module-contributed transport transport="Scheduler"
- INFO nest_rs::schedule: scheduled job (interval) provider="AudioTasks" method="enqueue_transcode" interval_ms=5000 replicas="each"
+ INFO nest_rs::schedule: scheduled job (interval) provider="AudioTasks" method="enqueue_transcode" interval_ms=5000 replicas="one" key="features::AudioTasks::enqueue_transcode"
  INFO nest_rs::schedule: scheduled job (one-shot) provider="AudioTasks" method="warmup_on_boot" delay_ms=3000 replicas="each"
  INFO nest_rs::schedule: scheduled job (cron) provider="AudioTasks" method="heartbeat" timezone="UTC" replicas="each"
  INFO features::audio: audio pipeline ready to enqueue phase="warmup" trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
  INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="warmup_on_boot" replicas="each" outcome="ok" duration_ms=0.302 trace_id=01a015a91d527cb1b9d15a8ba7fe8846 span_id=bd824ae7eb1f9e7a
-DEBUG features::audio: enqueued transcode job file="track-1787069801760.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
- INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="each" outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+DEBUG features::audio: enqueued transcode job file="track-1787069800014.mp3" trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
+ INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="one" occurrence=1787069800000 outcome="ok" duration_ms=101.901 trace_id=01a015a9252076e399f736a97ae90784 span_id=052e261668035200
 ```
 
 The scheduler logs one line per job at boot, then one `schedule.tick` line at

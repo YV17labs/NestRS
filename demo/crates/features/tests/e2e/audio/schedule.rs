@@ -7,7 +7,9 @@ use features::audio::{AudioQueue, AudioScheduleModule, TranscodeCommand};
 use features::testing::RedisDatabase;
 use nest_rs::core::{injectable, module};
 use nest_rs::queue::processor;
-use nest_rs::redis::{RedisModule, RedisQueueModule, RedisWorker, RedisWorkerModule};
+use nest_rs::redis::{
+    RedisModule, RedisQueueModule, RedisScheduleModule, RedisWorker, RedisWorkerModule,
+};
 use nest_rs::schedule::{ScheduleModule, Scheduler};
 use nest_rs::testing::TestApp;
 
@@ -45,7 +47,13 @@ impl CountingProcessor {
 }
 
 #[module(
-    imports = [RedisModule::for_root(None), RedisQueueModule, ScheduleModule, AudioScheduleModule],
+    imports = [
+        RedisModule::for_root(None),
+        RedisQueueModule,
+        ScheduleModule,
+        RedisScheduleModule,
+        AudioScheduleModule,
+    ],
 )]
 struct ScheduleHarness;
 

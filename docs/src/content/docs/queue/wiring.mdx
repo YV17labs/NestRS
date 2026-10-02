@@ -101,7 +101,7 @@ inventory, no apalis monitor.
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
 use nest_rs::http::{HttpConfig, HttpModule};
-use nest_rs::redis::{RedisModule, RedisQueueModule};
+use nest_rs::redis::{RedisModule, RedisQueueModule, RedisScheduleModule};
 use nest_rs::schedule::ScheduleModule;
 use nest_rs::seaorm::{SeaOrmDatabaseModule, SeaOrmHealthModule, SeaOrmModule};
 
@@ -115,6 +115,7 @@ use features::audio::{AudioHttpModule, AudioScheduleModule};
         RedisModule::for_root(None),
         RedisQueueModule,
         ScheduleModule,
+        RedisScheduleModule,
         HttpModule::for_root(HttpConfig {
             port: 3002,
             compression: true,
@@ -128,9 +129,12 @@ pub struct ApiModule;
 ```
 
 That `apps/api` is exactly this shape: producer-only. Its HTTP
-controller and scheduled timer both call `AudioService::enqueue_transcode`,
+controller and scheduled timer both end in `AudioService::enqueue_transcode`,
 which pushes through the bound `JobProducer` onto Redis. No worker
-runs in this process — that's the worker binary's job.
+runs in this process — that's the worker binary's job. `RedisScheduleModule`
+is the schedule's binding, not a worker's: the occurrence lock the timer
+claims through, because the API's replicas fire that enqueue once per
+occurrence between them rather than once each.
 
 ## Module-gating across the shared crate
 

@@ -167,5 +167,9 @@ the access contract only. Batch field fetches with `#[dataloader]`
 - **`src/notifications/schedule/`** — a scheduled job that is the deployment's
   work, not the process's: `#[every("1h", replicas = "one")]`, hosted by the
   worker beside `ScheduleModule` and `nest_rs::redis::RedisScheduleModule`, so
-  scaling the worker never multiplies it. A job about the process itself —
-  `audio`'s heartbeat — keeps the default, `"each"`.
+  scaling the worker never multiplies it. `audio`'s transcode seed is the
+  deployment's work too — an enqueue every replica repeated would queue it once
+  per replica — so it is `"one"` as well, and the `api` that hosts it binds the
+  same lock. A job about the process itself — `audio`'s heartbeat — fires on
+  each replica, and says so: `replicas = "each"`, the default written out, so
+  the decision is read rather than inferred.

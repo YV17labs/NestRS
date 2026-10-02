@@ -217,9 +217,9 @@ up a moment later. One `trace_id`, two `span_id`s — the job is a child of the
 tick, across a process boundary:
 
 ```text frame="terminal"
-DEBUG features::audio: enqueued transcode job file="track-1790450417644.mp3" trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=24b6cae9a236614d
- INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="each" outcome="ok" duration_ms=1.807 trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=24b6cae9a236614d
-DEBUG features::audio: transcoded file="track-1790450417644.mp3" derived_key="transcoded/track-1790450417644.mp3" trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=0cd80bc02ff04789
+DEBUG features::audio: enqueued transcode job file="track-1790450415012.mp3" trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=24b6cae9a236614d
+ INFO nest_rs::operation: schedule.tick provider="AudioTasks" method="enqueue_transcode" replicas="one" occurrence=1790450415000 outcome="ok" duration_ms=1.807 trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=24b6cae9a236614d
+DEBUG features::audio: transcoded file="track-1790450415012.mp3" derived_key="transcoded/track-1790450415012.mp3" trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=0cd80bc02ff04789
  INFO nest_rs::operation: queue.job queue=audio processor="AudioProcessor::transcode" job_id=01a0df29-3fec-7382-82f1-a2a474f32e73 backend_id="01M3FJJFZDWYGNMB9TN8Y4NDFG" attempt=1 outcome="ok" duration_ms=0.059 trace_id=01a0df293fec738282f1a2a3d9b451bb span_id=0cd80bc02ff04789
 ```
 

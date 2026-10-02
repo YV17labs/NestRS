@@ -2,6 +2,7 @@ mod audio;
 mod graphql;
 mod health;
 mod http;
+mod module;
 mod openapi;
 mod orgs;
 mod posts;

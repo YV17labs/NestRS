@@ -17,7 +17,7 @@ pub struct AudioTasks {
 
 #[scheduled]
 impl AudioTasks {
-    #[every("5s")]
+    #[every("5s", replicas = "one")]
     async fn enqueue_transcode(&self) -> Result<()> {
         if !self.config.synthetic_seed {
             return Ok(());
@@ -37,7 +37,7 @@ impl AudioTasks {
         Ok(())
     }
 
-    #[cron(CronExpression::EVERY_MINUTE)]
+    #[cron(CronExpression::EVERY_MINUTE, replicas = "each")]
     async fn heartbeat(&self) -> Result<()> {
         tracing::info!(
             target: "features::audio",
@@ -52,8 +52,8 @@ impl AudioTasks {
 mod tests {
     use std::any::TypeId;
 
-    use nest_rs::core::{Discoverable, ReachableProviders};
-    use nest_rs::schedule::ScheduledMethod;
+    use nest_rs::core::Discoverable;
+    use nest_rs::schedule::{Replicas, ScheduledMethod};
 
     use super::AudioTasks;
     use crate::audio::AudioService;
@@ -77,13 +77,22 @@ mod tests {
     }
 
     #[test]
-    fn injected_dependency_is_recorded_for_the_access_graph() {
-        assert!(AudioTasks::dependencies().contains(&TypeId::of::<AudioService>()));
-        assert!(AudioTasks::injected().contains(&TypeId::of::<AudioService>()));
+    fn the_transcode_seed_fires_once_per_occurrence_and_the_heartbeat_on_each_replica() {
+        let replicas = |method: &str| {
+            nest_rs::core::inventory::iter::<ScheduledMethod>()
+                .find(|m| {
+                    (m.provider_type_id)() == TypeId::of::<AudioTasks>() && m.method == method
+                })
+                .map(|m| m.replicas)
+        };
+        assert_eq!(replicas("enqueue_transcode"), Some(Replicas::One));
+        assert_eq!(replicas("heartbeat"), Some(Replicas::Each));
+        assert_eq!(replicas("warmup_on_boot"), Some(Replicas::Each));
     }
 
     #[test]
-    fn reachable_providers_marker_is_a_normal_provider() {
-        let _ = TypeId::of::<ReachableProviders>();
+    fn injected_dependency_is_recorded_for_the_access_graph() {
+        assert!(AudioTasks::dependencies().contains(&TypeId::of::<AudioService>()));
+        assert!(AudioTasks::injected().contains(&TypeId::of::<AudioService>()));
     }
 }

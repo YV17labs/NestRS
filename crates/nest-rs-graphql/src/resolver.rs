@@ -12,6 +12,7 @@
 //! during `Schema::build` (no container access), the reachable set lives in a
 //! thread-local installed by [`build_schema`] for the build's duration.
 
+use nest_rs_http::DetachedWork;
 use std::any::TypeId;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -827,7 +828,11 @@ pub(crate) type DiscoveredSchema =
 /// limits on every incoming query. Both default to unset to keep the change
 /// opt-in; production apps should pin them via `NESTRS_GRAPHQL__MAX_DEPTH` /
 /// `__MAX_COMPLEXITY` or the pinned `GraphqlConfig`.
-pub(crate) fn build_schema(container: Container, config: &GraphqlConfig) -> DiscoveredSchema {
+pub(crate) fn build_schema(
+    container: Container,
+    config: &GraphqlConfig,
+    batches: &DetachedWork,
+) -> DiscoveredSchema {
     let reachable = container
         .get::<ReachableProviders>()
         .map(|p| Arc::new(p.0.clone()));
@@ -840,6 +845,7 @@ pub(crate) fn build_schema(container: Container, config: &GraphqlConfig) -> Disc
     .data(container.clone())
     .extension(crate::loader::LoaderExtensionFactory::new(
         container.clone(),
+        batches.clone(),
     ));
     // The app-wide chain in front of `_service` / `_entities` — see
     // `crate::federation`. Installed whatever `config.federation` says, because

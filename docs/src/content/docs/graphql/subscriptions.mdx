@@ -160,9 +160,18 @@ A subscription socket captures its principal once, at the upgrade, and
 replays it for every item it pushes. `NESTRS_GRAPHQL__MAX_CONNECTION_SECS`
 bounds how long that may last — the same control, and the same default of
 four hours, that `NESTRS_WS__MAX_CONNECTION_SECS` applies to a gateway
-socket. When it elapses the server closes the socket, so the peer
+socket. When it elapses the server ends the socket, so the peer
 re-upgrades, which re-runs the guard chain and re-checks the token's
 `exp`. Set it to `0` to disable the ceiling.
+
+The server ends a socket the protocol's way, at the ceiling and at the
+shutdown signal alike: each subscription still running gets a `complete`, a
+query or a mutation sent over the socket is answered first, then the socket
+closes with RFC 6455's `1001 Going Away` and a reason saying what to do —
+re-upgrade, or reconnect to a replica still serving. A socket the server
+ended files its `graphql.subscription` line `cancelled`; one its client closed
+files `ok`, one the protocol refused `error`. A subscription whose stream
+panics closes the socket with `1011 Internal Error` and files `panic`.
 
 Everything else is the GraphQL module's own configuration — see
 [Configuration](/graphql/configuration/).

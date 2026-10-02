@@ -18,9 +18,11 @@
 //! which answers `None` on a federation field rather than pretending.
 
 use std::any::Any;
+use std::panic::AssertUnwindSafe;
 
 use async_graphql::extensions::ExtensionContext;
 use async_graphql::{Context, Result};
+use futures_util::FutureExt;
 use tracing::Instrument;
 
 /// One GraphQL operation, as a [`Guard`](https://docs.rs/nest-rs-guards) sees
@@ -142,9 +144,24 @@ impl<'a> GraphqlOperationContext<'a> {
 /// wire, and a line naming the ident cannot be joined against a capture of the
 /// request that produced it.
 ///
-/// No `outcome = panic`: a resolver that unwinds never reaches this line, and
-/// async-graphql owns the catch. Reporting one would be a claim this seam
-/// cannot make.
+/// # How it ends
+///
+/// The line is filed by [`OperationLine`], held across the field's whole run,
+/// so a field files its line however it ends. `ok` or `error` when it returns.
+/// `cancelled` when it is dropped first — its request cut by the shutdown
+/// window, or left by its client — the unit the request line already says was
+/// stopped, and the one that was actually running. `panic` when it unwinds —
+/// caught here only to be named, then resumed: async-graphql catches nothing,
+/// so the unwind travels on — over HTTP to the edge, which files the request
+/// `panic` and takes the connection down as for any handler; over a graphql-ws
+/// socket to the socket's loop, which contains it and closes the socket with
+/// 1011.
+///
+/// **Caught at the field, never inferred from an unwind in progress.** The
+/// fields of one selection resolve together, so one that unwinds tears its
+/// siblings down with it: a sibling dropped by that unwind did not panic, it
+/// was stopped before it settled, and files `cancelled`. One panic is one
+/// `panic` line.
 #[doc(hidden)]
 pub async fn run_operation<T, F>(
     role: &'static str,
@@ -194,8 +211,14 @@ where
         graphql.operation.role = role,
         graphql.field.name = operation,
     );
-    let started = std::time::Instant::now();
-    let recorded = span.clone();
+    let line = OperationLine {
+        role,
+        operation,
+        correlation: correlation.clone(),
+        span: span.clone(),
+        started: std::time::Instant::now(),
+        filed: false,
+    };
     // The request's own scope, under this unit's correlation: a field resolves
     // against the request that asked for it — its providers, its executor, its
     // ability — while its events and its line name the field rather than the
@@ -204,29 +227,72 @@ where
         nest_rs_core::current_request_scope(),
         correlation,
         async move {
-            let out = fut.await;
-            let outcome = if succeeded(&out) {
-                nest_rs_core::operation_log::OK
-            } else {
-                nest_rs_core::operation_log::ERROR
-            };
-            nest_rs_core::operation_log::record_outcome(&recorded, outcome);
-            // Filed inside the scope, so it carries this unit's ids without
-            // being handed them — the shape `nest_rs_schedule`'s tick uses.
-            tracing::info!(
-                name: crate::unit::OPERATION,
-                target: nest_rs_core::operation_log::TARGET,
-                message = crate::unit::OPERATION,
-                role = role,
-                operation = operation,
-                outcome,
-                duration_ms = nest_rs_core::operation_log::duration_ms(started),
-            );
-            out
+            match AssertUnwindSafe(fut).catch_unwind().await {
+                Ok(out) => {
+                    line.file(if succeeded(&out) {
+                        nest_rs_core::operation_log::OK
+                    } else {
+                        nest_rs_core::operation_log::ERROR
+                    });
+                    out
+                }
+                Err(unwound) => {
+                    line.file(nest_rs_core::operation_log::PANIC);
+                    std::panic::resume_unwind(unwound)
+                }
+            }
         },
     )
     .instrument(span)
     .await
+}
+
+/// One field's `graphql.operation` line, filed exactly once — by the field
+/// returning or unwinding, or by `Drop`, as
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED), when it is dropped
+/// first: its request cut, or a sibling field's unwind tearing it down.
+///
+/// The correlation is held rather than read from the ambient context: a `Drop`
+/// runs while the future is being torn down, which is not reliably inside the
+/// scope that future installed. The span is held so it records the outcome the
+/// line files, in the same word.
+struct OperationLine<'a> {
+    role: &'static str,
+    operation: &'a str,
+    correlation: nest_rs_core::Correlation,
+    span: tracing::Span,
+    started: std::time::Instant,
+    filed: bool,
+}
+
+impl OperationLine<'_> {
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+    }
+
+    fn emit(&mut self, outcome: &'static str) {
+        self.filed = true;
+        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
+        nest_rs_core::RequestContinuation::new(None, self.correlation.clone()).enter(|| {
+            tracing::info!(
+                name: crate::unit::OPERATION,
+                target: nest_rs_core::operation_log::TARGET,
+                message = crate::unit::OPERATION,
+                role = self.role,
+                operation = self.operation,
+                outcome,
+                duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
+            );
+        });
+    }
+}
+
+impl Drop for OperationLine<'_> {
+    fn drop(&mut self) {
+        if !self.filed {
+            self.emit(nest_rs_core::operation_log::CANCELLED);
+        }
+    }
 }
 
 /// A `#[subscription]`'s answer, accepted only when it is a value — a stream.

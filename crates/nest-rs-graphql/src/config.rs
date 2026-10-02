@@ -62,7 +62,8 @@ pub struct GraphqlConfig {
     #[validate(range(min = 1))]
     pub max_batch_size: usize,
     /// Maximum lifetime of one graphql-ws subscription socket. When it elapses
-    /// the server closes the socket, so the peer must re-upgrade — re-running
+    /// the server completes each running subscription and closes the socket
+    /// with `1001 Going Away`, so the peer must re-upgrade — re-running
     /// the operation guard and re-checking token `exp`.
     ///
     /// A **security** control, not a resource knob, and the same one

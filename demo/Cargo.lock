@@ -2869,6 +2869,7 @@ dependencies = [
  "async-graphql",
  "async-graphql-poem",
  "async-trait",
+ "futures-util",
  "inventory",
  "nest-rs-config",
  "nest-rs-core",

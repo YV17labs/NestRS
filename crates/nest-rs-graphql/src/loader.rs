@@ -5,6 +5,12 @@
 //! the GraphQL context by [`LoaderExtension`], where a `#[field_resolver]` reads it as
 //! `&DataLoader<…>`. Per-request build makes module import order irrelevant:
 //! the container is fully assembled when the request arrives.
+//!
+//! async-graphql runs every batch on a task of its own, so a batch is work the
+//! connection only carries: it runs in the `/graphql` mount's
+//! [`DetachedWork`], and the transport stops it with everything else at the
+//! close of its window rather than letting it read on through the shutdown
+//! hooks.
 
 use std::any::TypeId;
 use std::sync::Arc;
@@ -15,15 +21,17 @@ use async_graphql::extensions::{
 };
 use async_graphql::{Request, ServerResult};
 use nest_rs_core::{Container, ReachableProviders, TaskContext};
+use nest_rs_http::DetachedWork;
 
 /// One DataLoader registration. `owner_type_id` is the `TypeId` of the
 /// `#[dataloader]` impl's `Self`; when the owner is not in
 /// [`ReachableProviders`], `container.get::<Self>()` would panic at request
-/// time, so the seed is module-gated by the owner's reachability.
+/// time, so the seed is module-gated by the owner's reachability. `seed` is
+/// handed the work the mount's batches are carried by, for [`batch_spawner`].
 #[doc(hidden)]
 pub struct GraphqlLoaderRegistration {
     pub owner_type_id: fn() -> TypeId,
-    pub seed: fn(&Container, Request) -> Request,
+    pub seed: fn(&Container, &DetachedWork, Request) -> Request,
 }
 
 inventory::collect!(GraphqlLoaderRegistration);
@@ -58,14 +66,14 @@ pub trait GraphqlBatchContext: Send + Sync + 'static {
 }
 
 #[doc(hidden)]
-pub fn batch_spawner(container: &Container) -> GraphqlBatchSpawner {
+pub fn batch_spawner(container: &Container, batches: &DetachedWork) -> GraphqlBatchSpawner {
     let inner = match container.get_dyn::<dyn GraphqlBatchContext>() {
         Some(ctx) => ctx.spawner(),
         None => Box::new(|fut| {
             tokio::spawn(fut);
         }),
     };
-    instrumented(inner)
+    instrumented(inner, batches.clone())
 }
 
 /// Carry the request across the batch's task boundary, whatever the registered
@@ -81,17 +89,22 @@ pub fn batch_spawner(container: &Container) -> GraphqlBatchSpawner {
 ///
 /// Wrapping *here*, rather than asking every `GraphqlBatchContext` implementor
 /// to remember it, is the point: this is the one seam every batch goes through,
-/// bound or unbound.
-fn instrumented(inner: GraphqlBatchSpawner) -> GraphqlBatchSpawner {
+/// bound or unbound. It is also why the batch is carried here: whatever task a
+/// context spawns it on, it runs as `batches` work, which the transport stops
+/// at the close of its window.
+fn instrumented(inner: GraphqlBatchSpawner, batches: DetachedWork) -> GraphqlBatchSpawner {
     Box::new(move |fut| {
-        inner(Box::pin(TaskContext::current().carry(fut)));
+        let carried = batches.clone();
+        inner(Box::pin(async move {
+            let _ = carried.run(TaskContext::current().carry(fut)).await;
+        }));
     })
 }
 
-/// Seeds every discovered DataLoader into each GraphQL request.
 /// The per-request seeding step of one reachable dataloader.
-type LoaderSeed = fn(&Container, Request) -> Request;
+type LoaderSeed = fn(&Container, &DetachedWork, Request) -> Request;
 
+/// Seeds every discovered DataLoader into each GraphQL request.
 pub(crate) struct LoaderExtensionFactory {
     container: Container,
     /// The reachable loaders, resolved **once** at schema build. Reachability
@@ -99,14 +112,20 @@ pub(crate) struct LoaderExtensionFactory {
     /// link-time inventory and re-testing the gate per request was pure
     /// repetition of a boot-time answer.
     seeds: Arc<[LoaderSeed]>,
+    /// What the batches are carried by — the `/graphql` mount's.
+    batches: DetachedWork,
 }
 
 impl LoaderExtensionFactory {
-    pub(crate) fn new(container: Container) -> Self {
+    pub(crate) fn new(container: Container, batches: DetachedWork) -> Self {
         warn_unreachable_loaders(&container);
         let seeds = reachable_seeds(&container);
         warn_missing_batch_context(&container, seeds.len());
-        Self { container, seeds }
+        Self {
+            container,
+            seeds,
+            batches,
+        }
     }
 }
 
@@ -192,6 +211,7 @@ impl ExtensionFactory for LoaderExtensionFactory {
         Arc::new(LoaderExtension {
             container: self.container.clone(),
             seeds: Arc::clone(&self.seeds),
+            batches: self.batches.clone(),
         })
     }
 }
@@ -199,6 +219,7 @@ impl ExtensionFactory for LoaderExtensionFactory {
 struct LoaderExtension {
     container: Container,
     seeds: Arc<[LoaderSeed]>,
+    batches: DetachedWork,
 }
 
 #[async_trait]
@@ -210,7 +231,7 @@ impl Extension for LoaderExtension {
         next: NextPrepareRequest<'_>,
     ) -> ServerResult<Request> {
         for seed in self.seeds.iter() {
-            request = seed(&self.container, request);
+            request = seed(&self.container, &self.batches, request);
         }
         next.run(ctx, request).await
     }
@@ -264,7 +285,7 @@ mod tests {
     inventory::submit! {
         GraphqlLoaderRegistration {
             owner_type_id: || TypeId::of::<AbsentOwner>(),
-            seed: |_, request| request,
+            seed: |_, _, request| request,
         }
     }
 
@@ -327,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn batch_spawner_without_a_context_runs_the_future_on_tokio_spawn() {
         let container = Container::builder().build();
-        let spawner = batch_spawner(&container);
+        let spawner = batch_spawner(&container, &DetachedWork::new());
         let ran = Arc::new(AtomicUsize::new(0));
         let r = ran.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -365,7 +386,7 @@ mod tests {
         });
         let container = Container::builder().provide_dyn(ctx).build();
 
-        let spawner = batch_spawner(&container);
+        let spawner = batch_spawner(&container, &DetachedWork::new());
         let (tx, rx) = tokio::sync::oneshot::channel();
         spawner(Box::pin(async move {
             let _ = tx.send(());

@@ -41,6 +41,11 @@ async-trait.workspace = true
 # Re-exported so the GraphqlModule mount code can name the poem integration
 # through the framework, keeping it out of every app's manifest.
 async-graphql-poem.workspace = true
+# The graphql-ws loop is this crate's own — the one place a socket's end can
+# enter the protocol — so it splits the socket and reads both halves as streams;
+# and an unwind is caught where it is named: a subscription's in that loop, a
+# field's at its operation line.
+futures-util.workspace = true
 # Re-exported so `#[resolver]`-generated `inventory::submit!` resolves through
 # the framework without apps depending on `inventory` directly.
 inventory.workspace = true
@@ -53,8 +58,11 @@ tokio.workspace = true
 
 [dev-dependencies]
 # Boot the schema in-process and fire GraphQL requests at it (the ContextSeed
-# bridge test). nest-rs-http/nest-rs-core are already runtime deps above.
-nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql"] }
+# bridge test). nest-rs-http/nest-rs-core are already runtime deps above. `ws`
+# binds a real port: the graphql-ws socket's way down — `complete`, then the
+# Close frame — exists only over a real upgrade, and so does the shutdown window
+# a DataLoader batch is stopped at.
+nest-rs-testing = { path = "../nest-rs-testing", features = ["graphql", "ws"] }
 # `#[resolver]` macro emits paths to `::nest_rs_guards::run_global_graphql_guards`,
 # so any test using `#[resolver]` needs the crate in scope. Dev-dep cycle is
 # allowed by Cargo (nest-rs-guards depends on us as a normal dep).

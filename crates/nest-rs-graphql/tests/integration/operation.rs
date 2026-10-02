@@ -99,6 +99,21 @@ impl NoteResolver {
         Ok(true)
     }
 
+    /// Outlasts any client patient enough to wait for it in a test.
+    #[query]
+    #[public]
+    async fn slow(&self) -> async_graphql::Result<bool> {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        Ok(true)
+    }
+
+    #[query]
+    #[public]
+    async fn explode(&self) -> async_graphql::Result<bool> {
+        tokio::task::yield_now().await;
+        panic!("the resolver exploded")
+    }
+
     #[field_resolver]
     async fn shout(&self, parent: &Note, _ctx: &Context<'_>) -> async_graphql::Result<String> {
         Ok(parent.body.to_uppercase())
@@ -356,5 +371,127 @@ async fn the_unit_is_a_child_of_the_request_that_carried_the_document() {
             .all(|span| span.field("graphql.field.name").is_some()),
         "the span carries what the line carries, in the conventions' dotted \
          shape: {spans:?}",
+    );
+}
+
+/// A field whose request is dropped before it answers — its client gone, or its
+/// connection cut by the shutdown window — is a unit stopped before it settled,
+/// and still files its line: `cancelled`, beside the request's own `cancelled`.
+/// The request line was filed and this one was not, so the unit that was
+/// actually running was the one missing from the log.
+#[tokio::test]
+async fn a_field_whose_request_is_dropped_files_its_line_cancelled() {
+    let logs = LogCapture::install();
+    let app = boot().await;
+
+    let sent = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        app.http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ slow }" }))
+            .send(),
+    )
+    .await;
+    assert!(sent.is_err(), "the request was dropped before it answered");
+
+    let filed = lines(&logs);
+    assert_eq!(filed.len(), 1, "one line for the field: {filed:#?}");
+    assert_eq!(filed[0].field("operation").as_deref(), Some("slow"));
+    assert_eq!(
+        filed[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert_field_span_failed(&logs, "slow", nest_rs_core::operation_log::CANCELLED);
+}
+
+/// async-graphql does not catch a resolver that unwinds — the panic travels up
+/// through the request, which the HTTP edge files `panic` — so the field filed
+/// nothing: the unit that unwound was the one the log could not name.
+#[tokio::test]
+async fn a_field_that_panics_files_its_line_panic() {
+    use nest_rs_graphql::async_graphql::futures_util::FutureExt;
+
+    let logs = LogCapture::install();
+    let app = boot().await;
+
+    let unwound = std::panic::AssertUnwindSafe(
+        app.http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ explode }" }))
+            .send(),
+    )
+    .catch_unwind()
+    .await;
+    assert!(
+        unwound.is_err(),
+        "the panic unwinds the request, as a handler's does over HTTP"
+    );
+
+    let filed = lines(&logs);
+    assert_eq!(filed.len(), 1, "one line for the field: {filed:#?}");
+    assert_eq!(filed[0].field("operation").as_deref(), Some("explode"));
+    assert_eq!(
+        filed[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    assert_field_span_failed(&logs, "explode", nest_rs_core::operation_log::PANIC);
+}
+
+/// The field's span fails with the word its line files.
+fn assert_field_span_failed(logs: &LogCapture, field: &str, outcome: &str) {
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_graphql::unit::OPERATION
+                && span.field("graphql.field.name").as_deref() == Some(field)
+        })
+        .unwrap_or_else(|| panic!("the span of `{field}`"));
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(outcome),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+}
+
+/// Fields of one selection resolve together, so a field that unwinds tears its
+/// siblings down with it. Only the field that unwound files `panic`: the one
+/// torn down beside it was stopped before it settled, and files `cancelled` —
+/// one panic is one `panic` line, whatever else it took with it.
+#[tokio::test]
+async fn a_field_torn_down_by_a_sibling_that_panics_files_cancelled() {
+    use nest_rs_graphql::async_graphql::futures_util::FutureExt;
+
+    let logs = LogCapture::install();
+    let app = boot().await;
+
+    let unwound = std::panic::AssertUnwindSafe(
+        app.http()
+            .post("/graphql")
+            .body_json(&serde_json::json!({ "query": "{ slow explode }" }))
+            .send(),
+    )
+    .catch_unwind()
+    .await;
+    assert!(unwound.is_err(), "the panic unwinds the request");
+
+    let filed = lines(&logs);
+    let outcome = |operation: &str| {
+        filed
+            .iter()
+            .find(|line| line.field("operation").as_deref() == Some(operation))
+            .and_then(|line| line.field("outcome"))
+    };
+    assert_eq!(filed.len(), 2, "one line per field: {filed:#?}");
+    assert_eq!(
+        outcome("explode").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC)
+    );
+    assert_eq!(
+        outcome("slow").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "the sibling did not unwind: {filed:#?}",
     );
 }

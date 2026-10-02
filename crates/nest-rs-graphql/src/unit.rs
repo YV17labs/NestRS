@@ -8,9 +8,10 @@
 //! of them is visible from both.** A query, a mutation, an entity reference and
 //! a field resolver are each dispatched by this crate's own `#[operations]`
 //! expansion, which knows the field being resolved — so the field is the unit
-//! and [`OPERATION`] names it. A subscription is served by async-graphql's own
-//! message loop, which this crate never sees an operation boundary inside, so
-//! the connection is the unit and [`SUBSCRIPTION`] names that.
+//! and [`OPERATION`] names it. A subscription is run by async-graphql's
+//! protocol engine, inside the socket: this crate reads the frames going in and
+//! out but never an operation's run, so the connection is the unit and
+//! [`SUBSCRIPTION`] names that.
 //!
 //! The asymmetry is the standard's, not a choice: what a site cannot see it
 //! cannot name, and levelling the two down to one connection-shaped unit would

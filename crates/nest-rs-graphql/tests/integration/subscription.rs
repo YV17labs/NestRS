@@ -375,3 +375,284 @@ fn the_socket_lifetime_ceiling_defaults_on_and_is_disabled_only_by_zero() {
         .expect("a whole-second ceiling resolves");
     assert_eq!(pinned.max_connection, Some(Duration::from_secs(30)));
 }
+
+// ── The way down ────────────────────────────────────────────────────────────
+//
+// The socket is a connection poem stops tracking at the upgrade, so the
+// shutdown window neither waited for one nor closed it: every subscription ran
+// on under the shutdown hooks until the process exit cut it — and the lifetime
+// ceiling dropped the socket outright. Both now end the protocol's way: every
+// running subscription is completed, then the socket closes with RFC 6455
+// §7.4.1's 1001 Going Away. These run over a real upgrade, because the close is
+// the socket's and the in-process driver has none.
+
+use nest_rs_testing::ws::{WsApp, WsFrame, WsSocket, WsSocketBuilder};
+use poem::web::websocket::CloseCode;
+
+fn graphql_ws(app: &WsApp) -> WsSocketBuilder {
+    app.socket("/graphql")
+        .header("sec-websocket-protocol", "graphql-transport-ws")
+}
+
+/// The next text frame, parsed.
+async fn next_message(socket: &mut WsSocket) -> serde_json::Value {
+    match socket.next_frame().await {
+        Some(WsFrame::Text(text)) => serde_json::from_str(&text).expect("a protocol message"),
+        other => panic!("expected a protocol message, got {other:?}"),
+    }
+}
+
+/// `connection_init`, `connection_ack`, then `subscribe` as id `1`.
+async fn subscribe(socket: &mut WsSocket, query: &str) {
+    socket.send_text(r#"{"type":"connection_init"}"#).await;
+    assert_eq!(next_message(socket).await["type"], "connection_ack");
+    socket
+        .send_text(
+            serde_json::json!({ "id": "1", "type": "subscribe", "payload": { "query": query } })
+                .to_string(),
+        )
+        .await;
+}
+
+/// Wait until the `ticks` stream has subscribed to its source — the operation is
+/// running from then on.
+async fn running(state: &TickResolverState) {
+    for _ in 0..250 {
+        if state.tx.receiver_count() > 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the subscription never started");
+}
+
+async fn ticks_app<M: nest_rs_core::Module + 'static>() -> (WsApp, Arc<TickResolverState>) {
+    let app = TestApp::builder()
+        .module::<M>()
+        .build_ws()
+        .await
+        .expect("a schema carrying a subscription boots on a real port");
+    let state = app
+        .container()
+        .get::<TickResolverState>()
+        .expect("the resolver's state is a provider of the booted app");
+    (app, state)
+}
+
+/// At the signal a subscription is told it is over with the protocol's own
+/// `complete` — the server's end of an operation that is not an error — and the
+/// socket then closes with 1001 and a reason saying what to do. The transport
+/// waits for that close rather than returning past a socket it never told, and
+/// the socket's line says the server ended it.
+#[tokio::test]
+async fn a_subscription_is_completed_then_closed_going_away_at_the_signal() {
+    let logs = LogCapture::install();
+    let (app, state) = ticks_app::<SubscriptionApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+
+    let asked = std::time::Instant::now();
+    let stopping = tokio::spawn(app.shutdown());
+    let completed = next_message(&mut socket).await;
+    let (code, reason) = socket.expect_close().await;
+    stopping
+        .await
+        .expect("shutdown does not panic")
+        .expect("the transport stops cleanly");
+
+    assert_eq!(completed["type"], "complete", "{completed}");
+    assert_eq!(completed["id"], "1", "{completed}");
+    assert_eq!(
+        code,
+        CloseCode::Away,
+        "§7.4.1 1001: the server is going down"
+    );
+    assert!(
+        reason.contains("reconnect"),
+        "the peer is told what to do: {reason}"
+    );
+    assert!(
+        asked.elapsed() < Duration::from_secs(1),
+        "a socket with nothing in flight does not spend the window, took {:?}",
+        asked.elapsed(),
+    );
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION,
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "the server ended the socket, not its client",
+    );
+    // The socket's span fails with the line's word.
+    let span = logs.expect_span(nest_rs_graphql::TARGET, nest_rs_graphql::unit::SUBSCRIPTION);
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+}
+
+#[module(imports = [
+    GraphqlModule::for_root(GraphqlConfig {
+        max_connection: Some(Duration::from_millis(300)),
+        ..GraphqlConfig::default()
+    }),
+    TickModule,
+])]
+struct CeilingApp;
+
+/// The ceiling ends a socket the same way: it forces a re-upgrade so the guard
+/// runs again, and a client that read the 1006 a dropped socket gave it could
+/// not tell that from a network fault, nor which of its subscriptions had ended.
+#[tokio::test]
+async fn the_lifetime_ceiling_completes_the_subscriptions_and_closes_going_away() {
+    let (app, state) = ticks_app::<CeilingApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+
+    let completed = next_message(&mut socket).await;
+    let (code, reason) = socket.expect_close().await;
+
+    assert_eq!(completed["type"], "complete", "{completed}");
+    assert_eq!(completed["id"], "1", "{completed}");
+    assert_eq!(code, CloseCode::Away);
+    assert!(reason.contains("re-upgrade"), "{reason}");
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[resolver]
+struct ExplodingResolver;
+
+#[operations]
+impl ExplodingResolver {
+    #[subscription]
+    #[public]
+    async fn exploding(&self) -> impl futures_stream::Stream<Item = i32> {
+        futures_stream::once(async { panic!("the subscription exploded") })
+    }
+}
+
+#[module(imports = [GraphqlModule::for_root(None), TickModule], providers = [ExplodingResolver])]
+struct ExplodingApp;
+
+/// A subscription stream that panics took the socket task down: no line, and a
+/// socket the peer read as 1006. The socket is the unit here, so it files
+/// `panic` and closes with §7.4.1's 1011 Internal Error.
+#[tokio::test]
+async fn a_subscription_that_panics_files_panic_and_closes_with_internal_error() {
+    let logs = LogCapture::install();
+    let (app, _) = ticks_app::<ExplodingApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { exploding }").await;
+
+    let (code, _) = socket.expect_close().await;
+
+    assert_eq!(code, CloseCode::Error, "§7.4.1 1011");
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_graphql::unit::SUBSCRIPTION,
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    let contained = logs.expect_one(
+        nest_rs_graphql::TARGET,
+        "graphql subscription panicked; the socket is closed with an internal error",
+    );
+    assert_eq!(contained.level, "error");
+    assert!(
+        contained
+            .field("panic")
+            .is_some_and(|panic| panic.contains("the subscription exploded")),
+        "{contained:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+static ANSWER_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[resolver]
+struct SlowAnswerResolver;
+
+#[operations]
+impl SlowAnswerResolver {
+    /// Takes long enough for shutdown to be asked for while it answers, and far
+    /// less than the window.
+    #[query]
+    #[public]
+    async fn slow_answer(&self) -> i32 {
+        ANSWER_STARTED.notify_one();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        42
+    }
+}
+
+#[module(imports = [GraphqlModule::for_root(None), TickModule], providers = [SlowAnswerResolver])]
+struct AnsweringApp;
+
+/// A query sent over the socket is a unit still answering, not a channel
+/// without an end: at the signal it is answered, inside the window as a request
+/// running over HTTP is — while the subscription beside it is completed at
+/// once — and only then does the socket close.
+#[tokio::test]
+async fn a_query_answering_at_the_signal_is_answered_before_the_close() {
+    let (app, state) = ticks_app::<AnsweringApp>().await;
+    let mut socket = graphql_ws(&app).connect().await;
+    subscribe(&mut socket, "subscription { ticks { seq } }").await;
+    running(&state).await;
+    socket
+        .send_text(
+            serde_json::json!({
+                "id": "2", "type": "subscribe", "payload": { "query": "{ slowAnswer }" },
+            })
+            .to_string(),
+        )
+        .await;
+    ANSWER_STARTED.notified().await;
+
+    let stopping = tokio::spawn(app.shutdown());
+    let mut seen = Vec::new();
+    let (code, _) = loop {
+        match socket.next_frame().await {
+            Some(WsFrame::Text(text)) => {
+                seen.push(serde_json::from_str::<serde_json::Value>(&text).expect("a message"));
+            }
+            Some(WsFrame::Close(Some(close))) => break close,
+            other => panic!("expected messages then a close, got {other:?} after {seen:?}"),
+        }
+    };
+    stopping
+        .await
+        .expect("shutdown does not panic")
+        .expect("the transport stops cleanly");
+
+    let of = |id: &str| -> Vec<&str> {
+        seen.iter()
+            .filter(|message| message["id"] == id)
+            .filter_map(|message| message["type"].as_str())
+            .collect()
+    };
+    assert_eq!(
+        of("1"),
+        ["complete"],
+        "the subscription is completed: {seen:?}"
+    );
+    assert_eq!(
+        of("2"),
+        ["next", "complete"],
+        "the query is answered: {seen:?}"
+    );
+    let answer = seen
+        .iter()
+        .find(|message| message["id"] == "2" && message["type"] == "next")
+        .expect("the answer");
+    assert_eq!(answer["payload"]["data"]["slowAnswer"], 42, "{answer}");
+    assert_eq!(code, CloseCode::Away);
+}

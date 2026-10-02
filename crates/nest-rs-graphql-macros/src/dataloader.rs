@@ -132,15 +132,16 @@ fn dataloader_for_method(
                 owner_type_id: || ::core::any::TypeId::of::<#self_ty>(),
                 // Built per request from the assembled container (so the
                 // module's import order is irrelevant).
-                seed: |__container, __request| {
+                seed: |__container, __batches, __request| {
                     let __loader = <#loader_name>::from_container(__container);
                     // Spawner re-installs the request's ambient executor +
                     // ability around each batch — a batch runs on a spawned
-                    // task where task-locals are gone.
+                    // task where task-locals are gone — and runs it as the
+                    // mount's carried work, stopped with the transport.
                     __request.data(
                         ::nest_rs_graphql::async_graphql::dataloader::DataLoader::new(
                             __loader,
-                            ::nest_rs_graphql::batch_spawner(__container),
+                            ::nest_rs_graphql::batch_spawner(__container, __batches),
                         ),
                     )
                 },

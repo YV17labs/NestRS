@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use nest_rs_config::ConfigModule;
 use nest_rs_core::{ContainerBuilder, DynamicModule};
-use nest_rs_http::{HttpBootCheck, HttpEndpointMeta};
+use nest_rs_http::{DetachedWork, HttpBootCheck, HttpEndpointMeta};
 use poem::Route;
 
 use crate::config::GraphqlConfig;
@@ -134,9 +134,16 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             _ => Ok(()),
         },
     ));
+    // What the mount carries off its connections — every graphql-ws socket,
+    // which poem stops tracking at the upgrade, and every DataLoader batch,
+    // which async-graphql runs on a task of its own. Declared below, so the
+    // transport tells it at the shutdown signal and stops it at the close of
+    // its window.
+    let carried = DetachedWork::new();
+    let mounted = carried.clone();
     builder.provide_meta(
         HttpEndpointMeta::new(log_path, "graphql", move |container, route: Route| {
-            let schema = build_schema(container.clone(), &options);
+            let schema = build_schema(container.clone(), &options, &mounted);
             // SDL emit lives here — this is the only place we hold the
             // assembled container; rendered from the serving schema to avoid
             // building it twice.
@@ -173,7 +180,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
                 options.max_batch_size,
             ))
             .get(GetEndpoint::new(
-                SubscriptionEndpoint::new(schema, bridge, options.max_connection),
+                SubscriptionEndpoint::new(schema, bridge, options.max_connection, mounted.clone()),
                 options.playground.then(|| {
                     async_graphql::http::playground_source(
                         async_graphql::http::GraphQLPlaygroundConfig::new(options.path.as_str())
@@ -192,6 +199,7 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             let method = poem::EndpointExt::data(method, ::nest_rs_http::Public);
             route.nest(options.path.as_str(), ::nest_rs_http::matched(method))
         })
-        .exempt(),
+        .exempt()
+        .runs_detached(carried),
     )
 }

@@ -21,4 +21,13 @@ disallowed-methods = [
     { path = "std::env::var_os", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
     { path = "syn::Attribute::parse_nested_meta", reason = "read key = value through nest_rs_codegen::Grammar" },
     { path = "syn::meta::parser", reason = "read key = value through nest_rs_codegen::Grammar" },
+    { path = "apalis_redis::Config::active_jobs_list", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+    { path = "apalis_redis::Config::consumers_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+    { path = "apalis_redis::Config::dead_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+    { path = "apalis_redis::Config::done_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+    { path = "apalis_redis::Config::failed_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+    { path = "apalis_redis::Config::inflight_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+    { path = "apalis_redis::Config::job_data_hash", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+    { path = "apalis_redis::Config::scheduled_jobs_set", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
+    { path = "apalis_redis::Config::signal_list", reason = "apalis's structures are read only by legacy_layout.rs (CLAUDE.md)" },
 ]

@@ -1232,6 +1232,10 @@ struct PoisonModule;
 /// worker can route it through the port's refusal, since apalis owns the fetch.
 /// What the worker owes is the line saying so, at `error`, naming the queue —
 /// never the generic retry a transport failure gets.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the suite plays what apalis files, where apalis files it"
+)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fetch_meeting_a_record_apalis_cannot_decode_says_what_it_stranded() {
     crate::forget(POISON_QUEUE).await;

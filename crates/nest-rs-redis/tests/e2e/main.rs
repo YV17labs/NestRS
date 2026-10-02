@@ -443,6 +443,10 @@ fn this_run() -> u64 {
 /// A test that counts every job its queue holds, rather than its own run's,
 /// counts this one too: calling it first is what proves a test does not. Names
 /// are apalis's, read off its `Config`, so the ghost sits where apalis looks.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the suite plays what apalis files, where apalis files it"
+)]
 async fn ghost(queue: &str, payload: serde_json::Value) {
     use apalis::prelude::{Request, Storage};
 

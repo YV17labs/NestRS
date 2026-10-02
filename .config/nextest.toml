@@ -25,3 +25,15 @@ max-threads = 1
 [[profile.default.overrides]]
 filter = 'package(nest-rs-cli) and binary(e2e)'
 test-group = 'scaffold-check'
+
+# The trybuild suites (`tests/integration/diagnostics.rs`, one per macro crate,
+# each test named `*_diagnostics`) each drive a cargo build of their own under
+# one shared `target/tests/trybuild`, and concurrent builds there only queue on
+# its lock while holding a test slot. One at a time measured 57 s → 46 s for the
+# whole non-e2e run here, because the rest of the suite keeps every other core.
+[test-groups.trybuild]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'test(/_diagnostics$/)'
+test-group = 'trybuild'

@@ -149,11 +149,9 @@ pub fn read(path: &Path) -> io::Result<String> {
 pub fn declared_str(path: &Path, name: &str) -> Option<String> {
     let ast = parsed(path)?;
     // Top level first, so a free constant always wins a name an `impl` also
-    // uses. The associated arm came second, for `EnvPrefix::DEFAULT` — a value
-    // the `docs` join needs and which lives where the type that owns it does,
-    // which is the placement the naming rules ask for. Reading only free
-    // constants would have meant either a second reader beside this one or a
-    // literal beside the rule forbidding it.
+    // uses. The associated arm reads a value that lives where the type owning
+    // it does — `EnvPrefix::DEFAULT` — which is the placement the naming rules
+    // ask for.
     ast.items
         .iter()
         .find_map(|item| match item {
@@ -212,8 +210,8 @@ pub fn crate_dirs() -> Vec<PathBuf> {
 /// So neither reading is left to a call site to re-derive:
 /// [`UmbrellaMatrix::features`] is the developer's set — what the landing counts
 /// and the docs' packages table maps — and [`UmbrellaMatrix::crates`] is the set
-/// that owes witnesses, which is the umbrella join's own subject and is keyed on
-/// the crate for the reason that join argues at `Capability::cell`.
+/// of crates whose README owes an install line, which the `canon` binary
+/// publishes for the docs linter.
 ///
 /// Parsed with a TOML parser rather than scanned: a feature list wraps across
 /// lines as freely as a Rust string does, and the wrapping is what a

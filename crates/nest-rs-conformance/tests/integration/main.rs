@@ -17,7 +17,6 @@ mod acls;
 mod blinds;
 mod decodes;
 mod dependencies;
-mod docs;
 mod durations;
 mod edges;
 mod entries;

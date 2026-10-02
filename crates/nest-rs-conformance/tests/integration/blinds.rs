@@ -91,7 +91,6 @@ const JOINS: &[(&str, Declares)] = &[
     ("acls", crate::acls::followed),
     ("decodes", crate::decodes::followed),
     ("dependencies", crate::dependencies::followed),
-    ("docs", crate::docs::followed),
     ("durations", crate::durations::followed),
     ("edges", crate::edges::followed),
     ("entries", crate::entries::followed),
@@ -111,7 +110,7 @@ const JOINS: &[(&str, Declares)] = &[
     ("snapshots", crate::snapshots::followed),
     ("targets", crate::targets::followed),
     ("transports", crate::transports::followed),
-    ("umbrella", crate::umbrella::followed),
+    ("umbrella", Vec::new),
     ("units", crate::units::followed),
     ("upgrading", crate::upgrading::followed),
 ];

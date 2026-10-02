@@ -18,12 +18,13 @@
 // `install-stanza`, `otel-guard`, `decorator-import`, `decorator-index`, `layer-impl`,
 // `trait-surface`, `exception-response-error`, `bare-log`, `config-table`, `for-root-form`,
 // `fence-title`, `fence-untitled`, `test-layout`, `architecture-drift`, `envelope-drift`,
-// `landing-claim`. Each
+// `landing-claim`, `family-mention`, `readme-install`. Each
 // is documented on its constant below and each was filed as a shipped defect first.
 //
 // Every code-truth check reads the canon, which `nest-rs-conformance`'s `canon` binary derives
 // from the tree and this file runs on start — see the `CANON` doc below. The checks quoting
-// `demo/` read its files directly: raw content, never a second derivation of a framework fact.
+// `demo/` read its files directly, and `readme-install` reads the crate READMEs: raw content,
+// never a second derivation of a framework fact.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
@@ -237,6 +238,10 @@ export const RULES = Object.freeze({
   architectureDrift: 'architecture-drift',
   envelopeDrift: 'envelope-drift',
   landingClaim: 'landing-claim',
+  // Corpus-scoped code-truth — every member of a family the canon publishes is
+  // owed somewhere, rather than one page owing anything.
+  familyMention: 'family-mention',
+  readmeInstall: 'readme-install',
 });
 
 /// Pages that restate a file the framework ships, keyed by rel like
@@ -730,27 +735,120 @@ const OTEL_INIT = /\blet\s+(\w+)\s*=\s*(?:nest_rs_opentelemetry::)?OpenTelemetry
 /// `@<req>` whenever the manifest constrains beyond the major — a bare
 /// `cargo add` takes the newest major, which is the validator trap exactly.
 function cargoAddInvocations(blocks) {
+  return blocks.filter((block) => SHELL_INFO.test(block.info))
+    .flatMap((block) => shellLines(block.body))
+    .filter((line) => /^cargo\s+add\b/.test(line))
+    .map(parseCargoAdd);
+}
+
+/// One `cargo add` command line: the packages it names, the features and
+/// `--no-default-features` it applies to them.
+function parseCargoAdd(line) {
+  const tokens = line.trim().split(/\s+/).slice(2);
+  const pkgs = [];
+  const features = [];
+  let noDefault = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '--no-default-features') { noDefault = true; continue; }
+    if (t === '--features' || t === '-F') { features.push(...splitFeatures(tokens[++i])); continue; }
+    if (t.startsWith('--features=')) { features.push(...splitFeatures(t.slice(11))); continue; }
+    if (t.startsWith('-')) continue; // --dev, --build, --optional, …
+    const at = t.lastIndexOf('@');
+    pkgs.push(at > 0
+      ? { name: t.slice(0, at), req: t.slice(at + 1) }
+      : { name: t, req: null });
+  }
+  return { line, pkgs, features, noDefault };
+}
+
+/// Span targets that instrument the framework's own internals — the DI graph
+/// and the GraphQL dataloader. An operator has no decision to make about
+/// either, so no page owes them a filter directive. Stated, not baselined: a
+/// baseline line says "not yet", and this is "no".
+const INTERNAL_TARGETS = new Set(['nest_rs::container', 'nest_rs::loader']);
+
+/// The features every `cargo add … nest-rs … --features` under a page's
+/// `## Install` asks for.
+function installedFeatures(src) {
+  return cargoAddInvocations(fencedBlocks(src).filter((b) => b.section === 'Install'))
+    .filter((inv) => inv.pkgs.some((p) => p.name === 'nest-rs'))
+    .flatMap((inv) => inv.features);
+}
+
+/// **`family-mention`** — every member of a family the canon publishes is named
+/// on some page, in the spelling a reader types: a unit of work
+/// (`graphql.operation`, what a dashboard groups on), an operator-facing span
+/// target (`nest_rs::http`, what `<PREFIX>_LOG` selects on), a queue
+/// `Capability::<Variant>` (what a driver declares), and an umbrella capability
+/// as a `cargo add nest-rs --features <x>` under some `## Install`.
+///
+/// A family grows a member in Rust, and this is what makes the docs owe it a
+/// line the day it exists: two units reached 5.1 named on zero of 125 pages, and
+/// a feature can ship a surface no reader can discover how to install. Config
+/// env keys are not a member here: a source scan for them is blind to every key
+/// read through a constant, and a check blind to a quarter of its population is
+/// a false guarantee.
+export function familyMentions(sources, canon = CANON) {
+  const named = (spelling) => sources.some((src) => src.includes(spelling));
+  const installs = new Set(sources.flatMap(installedFeatures));
   const out = [];
-  for (const block of blocks) {
-    if (!SHELL_INFO.test(block.info)) continue;
-    for (const line of shellLines(block.body)) {
-      if (!/^cargo\s+add\b/.test(line)) continue;
-      const tokens = line.split(/\s+/).slice(2);
-      const pkgs = [];
-      const features = [];
-      let noDefault = false;
-      for (let i = 0; i < tokens.length; i++) {
-        const t = tokens[i];
-        if (t === '--no-default-features') { noDefault = true; continue; }
-        if (t === '--features' || t === '-F') { features.push(...splitFeatures(tokens[++i])); continue; }
-        if (t.startsWith('--features=')) { features.push(...splitFeatures(t.slice(11))); continue; }
-        if (t.startsWith('-')) continue; // --dev, --build, --optional, …
-        const at = t.lastIndexOf('@');
-        pkgs.push(at > 0
-          ? { name: t.slice(0, at), req: t.slice(at + 1) }
-          : { name: t, req: null });
+  const add = (detail) => out.push(`(corpus)::${RULES.familyMention}::${detail}`);
+  for (const unit of canon.units) {
+    if (!named(unit)) add(`unit of work \`${unit}\` is named on no page`);
+  }
+  for (const target of canon.targets.filter((t) => !INTERNAL_TARGETS.has(t))) {
+    if (!named(target)) add(`span target \`${target}\` is named on no page`);
+  }
+  for (const variant of canon.queue_capabilities) {
+    if (!named(`Capability::${variant}`)) {
+      add(`queue capability \`Capability::${variant}\` is named on no page`);
+    }
+  }
+  for (const feature of canon.capabilities) {
+    if (!installs.has(feature)) {
+      add(`capability \`${feature}\` has no \`cargo add nest-rs --features ${feature}\` under any `
+        + 'page\'s `## Install`');
+    }
+  }
+  return out;
+}
+
+/// Every README a reader can land on — the repository's and each crate's, the
+/// crates.io landing pages — keyed by repo-relative path, `null` when absent.
+function readmes() {
+  const out = new Map([['README.md', readFileSync(join(REPO_ROOT, 'README.md'), 'utf8')]]);
+  for (const name of readdirSync(join(REPO_ROOT, 'crates')).sort()) {
+    const path = join(REPO_ROOT, 'crates', name, 'README.md');
+    out.set(`crates/${name}/README.md`, existsSync(path) ? readFileSync(path, 'utf8') : null);
+  }
+  return out;
+}
+
+/// **`readme-install`** — the front door is one crate. A capability crate's own
+/// README, its crates.io landing page, installs the umbrella with the feature
+/// (`cargo add nest-rs --features <x>`), and no README tells a reader to
+/// `cargo add` a capability sub-crate instead. Both halves, because the negative
+/// alone passes on an empty corpus.
+export function readmeInstalls(texts, canon = CANON) {
+  const out = [];
+  const adds = (text) => [...(text ?? '').replace(/\\\n\s*/g, ' ')
+    .matchAll(/cargo\s+add\s[^\n`]*/g)].map((m) => parseCargoAdd(m[0]));
+  for (const [krate, feature] of Object.entries(canon.capability_crates)) {
+    const rel = `crates/${krate}/README.md`;
+    const installs = adds(texts.get(rel)).some((inv) => inv.pkgs.some((p) => p.name === 'nest-rs')
+      && inv.features.includes(feature));
+    if (!installs) {
+      out.push(`${rel}::${RULES.readmeInstall}::no \`cargo add nest-rs --features ${feature}\` — `
+        + 'a crate\'s landing page installs the umbrella, never the crate');
+    }
+  }
+  for (const [rel, text] of texts) {
+    for (const inv of adds(text)) {
+      for (const pkg of inv.pkgs.filter((p) => canon.capability_crates[p.name])) {
+        out.push(`${rel}::${RULES.readmeInstall}::\`${inv.line.trim()}\` installs a sub-crate — `
+          + `write \`cargo add nest-rs --features ${canon.capability_crates[pkg.name]}\``);
       }
-      out.push({ line, pkgs, features, noDefault });
     }
   }
   return out;
@@ -1611,6 +1709,8 @@ export function lint() {
   // which `lintFile`'s injectable `src` would take as the page's contents.
   const current = [
     ...PAGES.flatMap((page) => lintFile(page)), ...lintSections(), ...lintTitles(),
+    ...familyMentions(PAGES.map((page) => readFileSync(page, 'utf8'))),
+    ...readmeInstalls(readmes()),
   ].sort();
 
   // Fail closed: a registered mirror that no page matched means the page was
@@ -1764,8 +1864,9 @@ function main() {
   if (fresh.length) {
     console.error(`\n✖ ${fresh.length} new docs-style violation(s) (not in baseline):\n`);
     for (const x of fresh) {
-      const [file, rule, detail] = x.split('::');
-      console.error(`  ${file}  [${rule}]  ${detail}`);
+      // A detail may quote a path, so only the first two separators are fields.
+      const [file, rule, ...detail] = x.split('::');
+      console.error(`  ${file}  [${rule}]  ${detail.join('::')}`);
     }
     console.error('\nFix them on the page. The baseline records what was already there when a '
       + 'rule landed; it never grows.\n');

@@ -377,6 +377,19 @@ files a fence quotes, the READMEs `readme-install` reads — the linter reads di
   corrected the panic to `let _otel =` and left the page's canonical `main` on
   `let _opentelemetry =`, so the reader who tripped the panic was told to write a line the
   example he started from did not contain.
+- **`family-mention`** — every member of a family the canon publishes is named on some page, in
+  the spelling a reader types: a unit of work (`graphql.operation`, what a dashboard groups on), an
+  operator-facing span target (`nest_rs::http`, what `<PREFIX>_LOG` selects on — the DI graph's
+  and the dataloader's internal two excepted, in the linter, with the reason), a queue
+  `Capability::<Variant>`, and every umbrella capability as a `cargo add nest-rs --features <x>`
+  under some page's `## Install`. A family grows a member in Rust, and this makes the docs owe it
+  a line the day it exists: two units of work reached 5.1 named on zero of 125 pages. Config env
+  keys are deliberately not a family here — a source scan for them is blind to every key read
+  through a constant, and a check blind to a quarter of its population is a false guarantee.
+- **`readme-install`** — the front door is one crate. A capability crate's own README, its
+  crates.io landing page, installs the umbrella with the feature (`cargo add nest-rs --features
+  <x>`), and no README tells a reader to `cargo add` a capability sub-crate instead. Both
+  halves, because the negative alone passes on an empty corpus.
 
 ## G. Section tiers — Basics above All options
 

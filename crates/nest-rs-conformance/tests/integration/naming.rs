@@ -77,8 +77,8 @@ const CONFIG_NAMES_BASELINE: &str = "config-names-baseline.txt";
 /// reports is an artefact.
 ///
 /// A floor belongs to the population it guards, so this module carries one per
-/// population rather than one number several joins share — the shape `canon`
-/// and `docs` already use. Six of these were bare literals at their call site,
+/// population rather than one number several joins share — the shape the
+/// `canon` binary uses. Six of these were bare literals at their call site,
 /// which is the one form that cannot be reviewed: a floor is all that stands
 /// between a scan that silently reads nothing and a baseline diff that looks
 /// green.

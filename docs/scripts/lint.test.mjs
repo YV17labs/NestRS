@@ -29,7 +29,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { CONTENT_ROOT } from '../src/sidebar.mjs';
-import { CANON, RULES, lintFile, lint } from './lint-docs.mjs';
+import {
+  CANON, RULES, familyMentions, lintFile, lint, readmeInstalls,
+} from './lint-docs.mjs';
 
 /// The version a documented pin has to carry, read from the same canon the rule
 /// reads — a literal here would make the `install-stanza` fixture fail on the
@@ -143,6 +145,40 @@ nest-rs = { version = "${CANON_VERSION}", features = ["http", "graphql"] }
   [RULES.asideType, 'sample.mdx', page('<Aside>Untyped.</Aside>')],
 ];
 
+/// The rules whose population is a whole corpus rather than one page, each with
+/// a corpus that must produce it and one that must not — so a rule that stops
+/// firing fails, and so does one that fires on everything.
+const FAMILY = {
+  ...CANON,
+  units: ['probe.unit'],
+  targets: ['nest_rs::probe', 'nest_rs::container'],
+  queue_capabilities: ['Probe'],
+  capabilities: ['probe'],
+  capability_crates: { 'nest-rs-probe': 'probe' },
+};
+const NAMES_EVERY_MEMBER = 'Group on `probe.unit`, filter `nest_rs::probe`, declare '
+  + '`Capability::Probe`.\n\n## Install\n\n```bash\ncargo add nest-rs --features http,probe\n```\n';
+const CORPUS_FIXTURES = [
+  [RULES.familyMention, () => familyMentions(['A page naming nothing.'], FAMILY),
+    () => familyMentions([NAMES_EVERY_MEMBER], FAMILY), 4],
+  [RULES.readmeInstall, () => readmeInstalls(new Map([
+    ['README.md', 'Run `cargo add nest-rs-probe`.'],
+    ['crates/nest-rs-probe/README.md', 'cargo add nest-rs --features http'],
+  ]), FAMILY), () => readmeInstalls(new Map([
+    ['README.md', 'Run `cargo add nest-rs --features probe`.'],
+    ['crates/nest-rs-probe/README.md', '```bash\ncargo add --dev nest-rs --features probe\n```'],
+  ]), FAMILY), 2],
+];
+
+for (const [rule, fires, quiet, count] of CORPUS_FIXTURES) {
+  test(`${rule} fires`, () => {
+    const fired = fires();
+    assert.equal(fired.length, count, `the ${rule} fixture produced ${fired.join('\n') || 'nothing'}`);
+    assert.ok(fired.every((v) => v.split('::')[1] === rule), fired.join('\n'));
+    assert.deepEqual(quiet(), [], `the ${rule} fixture naming every member still fired`);
+  });
+}
+
 for (const [rule, rel, src] of FIXTURES) {
   test(`${rule} fires`, () => {
     const fired = rulesFor(rel, src);
@@ -205,7 +241,7 @@ test('a duplicate heading takes the -1 suffix', () => {
 });
 
 test('every rule has a fixture that proves it still fires', () => {
-  const proved = new Set(FIXTURES.map(([rule]) => rule));
+  const proved = new Set([...FIXTURES, ...CORPUS_FIXTURES].map(([rule]) => rule));
   const owed = Object.values(RULES).filter(
     (rule) => !proved.has(rule) && !CORPUS_SCOPED.has(rule),
   );

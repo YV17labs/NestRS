@@ -279,8 +279,8 @@ wake the deployment.
   number with no suffix is not one.
 - A poll under ten milliseconds fails the boot, from the environment or pinned
   in code: `` invalid value for NESTRS_REDIS__WORKER__POLL_INTERVAL_MS: must be at
-  least 10 — every poll costs Redis a fetch and a sweep per method per replica,
-  jobs or none … ``.
+  least 10 milliseconds — every poll costs Redis a fetch and a sweep per method
+  per replica, jobs or none … ``.
 - A trigger naming a list the worker does not fill reads zero forever and holds
   the deployment at `minReplicaCount`, saying nothing. The 6.x layout's list is
   one such name — see [Upgrading queues from 6.x](/queue/upgrading/).

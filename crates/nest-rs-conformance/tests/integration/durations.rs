@@ -31,13 +31,25 @@
 //! and passed by name is a literal this join does not see at the call, so a
 //! `const` string ending in a duration suffix is refused wherever it is
 //! declared, unless it is a `DurationBounds`' own `key:`.
+//!
+//! **And what the prose quotes of a refusal is what the boot writes.** A refusal
+//! names its unit — `must be at least 10 milliseconds` — and a page quoting it
+//! without the unit sends the operator grepping a boot log for a sentence it
+//! never prints: the scaling page did, through a whole audit round. In every
+//! `invalid value for <VARIABLE>: …` that a docs page, a crate README, a rule or
+//! `CLAUDE.md` quotes of a `_SECS` or `_MS` variable, every `must be at least` /
+//! `must be at most` count is followed by the unit the suffix names, in the
+//! number the count takes. The CHANGELOG is history, quoting what a release
+//! printed, and is not read.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    crate_dirs, flatten, is_cfg_test, parsed, relative, repo_root, rust_files,
+    crate_dirs, files_with_extension, files_with_name, flatten, is_cfg_test, parsed, read,
+    relative, repo_root, rust_files,
 };
 use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
@@ -85,6 +97,131 @@ fn every_duration_is_read_through_its_bounds() {
         found.wrong.len(),
         found.wrong.into_iter().collect::<Vec<_>>().join("\n  "),
     );
+}
+
+/// Quoted refusals of a duration variable the prose must hold — the scaling
+/// page's poll refusal at the least. Below this the scan reads the wrong tree.
+const QUOTE_FLOOR: usize = 1;
+
+#[test]
+fn every_quoted_duration_refusal_names_its_unit() {
+    let root = repo_root();
+    let mut pages: Vec<PathBuf> = ["md", "mdx"]
+        .into_iter()
+        .flat_map(|extension| files_with_extension(&root.join("docs/src/content/docs"), extension))
+        .collect();
+    pages.extend(files_with_extension(&root.join("crates"), "md"));
+    pages.extend(files_with_extension(&root.join(".claude/rules"), "md"));
+    pages.extend(files_with_name(&root, "CLAUDE.md"));
+    let (mut quoted, mut wrong) = (0, Vec::new());
+    for page in &pages {
+        let text = read(page).unwrap_or_else(|error| panic!("{} reads: {error}", page.display()));
+        for quote in duration_quotes(&text) {
+            quoted += 1;
+            wrong.extend(
+                quote
+                    .slips
+                    .iter()
+                    .map(|slip| format!("{}: {}: {slip}", relative(page, &root), quote.variable)),
+            );
+        }
+    }
+    baseline::floor(quoted, QUOTE_FLOOR, "quoted duration refusal(s)");
+    assert!(
+        wrong.is_empty(),
+        "{} quoted refusal(s) leave out the unit the boot writes after the count, so the \
+         sentence a reader greps the boot log for is never printed — quote it whole:\n  {}",
+        wrong.len(),
+        wrong.join("\n  "),
+    );
+}
+
+/// One `invalid value for <VARIABLE>: …` quote of a duration variable, and every
+/// count in it not followed by the unit the boot writes.
+struct DurationQuote {
+    variable: String,
+    slips: Vec<String>,
+}
+
+/// Every quote in `text` of a duration variable's refusal. A quote runs from the
+/// variable to the closing backtick or the ellipsis cutting it short, across
+/// line breaks, since a page wraps a long sentence.
+fn duration_quotes(text: &str) -> Vec<DurationQuote> {
+    const OPENING: &str = "invalid value for ";
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = Vec::new();
+    for (at, _) in flat.match_indices(OPENING) {
+        let rest = &flat[at + OPENING.len()..];
+        let variable: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '<' | '>'))
+            .collect();
+        let unit = if variable.ends_with("_SECS") {
+            ("second", "seconds")
+        } else if variable.ends_with("_MS") {
+            ("millisecond", "milliseconds")
+        } else {
+            continue;
+        };
+        let quote = &rest[variable.len()..];
+        let quote = &quote[..quote.find(['`', '…']).unwrap_or(quote.len())];
+        let mut slips = Vec::new();
+        for bound in ["must be at least ", "must be at most "] {
+            for (from, _) in quote.match_indices(bound) {
+                let after = &quote[from + bound.len()..];
+                let count: String = after.chars().take_while(char::is_ascii_digit).collect();
+                let word: String = after[count.len()..]
+                    .trim_start()
+                    .chars()
+                    .take_while(char::is_ascii_alphabetic)
+                    .collect();
+                let expected = if count == "1" { unit.0 } else { unit.1 };
+                if count.is_empty() || word != expected {
+                    slips.push(format!(
+                        "`{bound}{count} {word}…` — the boot writes `{bound}{count} {expected}`"
+                    ));
+                }
+            }
+        }
+        out.push(DurationQuote { variable, slips });
+    }
+    out
+}
+
+/// The docs half is proved on the quote prose-8 found — the scaling page's poll
+/// refusal as it stood, wrapped across lines and cut by an ellipsis — and on
+/// what it passes: the same quote with its unit, a singular count, and a
+/// variable that is not a duration. Written under another deployment's prefix,
+/// since a quote is read whatever prefix it was taken under and a framework
+/// variable is never spelled as a literal.
+#[test]
+fn the_join_sees_a_quoted_refusal_without_its_unit() {
+    let slips = |text: &str| {
+        duration_quotes(text)
+            .into_iter()
+            .map(|quote| (quote.variable, quote.slips))
+            .collect::<Vec<_>>()
+    };
+    let stale = "- A poll under ten milliseconds fails the boot: `` invalid value for \
+                 ACME_REDIS__WORKER__POLL_INTERVAL_MS: must be at\n  least 10 — every poll \
+                 costs Redis a fetch …``.";
+    assert_eq!(
+        slips(stale),
+        [(
+            "ACME_REDIS__WORKER__POLL_INTERVAL_MS".to_owned(),
+            vec![
+                "`must be at least 10 …` — the boot writes `must be at least 10 milliseconds`"
+                    .to_owned()
+            ],
+        )],
+    );
+    let right = "`` invalid value for ACME_REDIS__WORKER__POLL_INTERVAL_MS: must be at\n  \
+                 least 10 milliseconds — every poll …`` and `invalid value for \
+                 ACME_HTTP__SHUTDOWN_TIMEOUT_SECS: must be at least 1 second — a shorter \
+                 window`, and `invalid value for ACME_POSTS__PAGE_SIZE: must be at least 1`";
+    let found = slips(right);
+    assert_eq!(found.len(), 2, "the page size is no duration: {found:?}");
+    assert!(found.iter().all(|(_, slips)| slips.is_empty()), "{found:?}");
 }
 
 /// The methods of `ConfigService`'s `impl` taking a `key` — the readers a

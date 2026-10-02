@@ -565,7 +565,10 @@ connection authenticates once whichever transport carries it —,
 declaration again), `MCP__SSE_RETRY_SECS` 1 s to an hour and
 `HTTP__TLS_RELOAD_SECS` 1 s to a day. The `durations` join in
 `nest-rs-conformance` refuses a `_SECS` or `_MS` key read through any other
-reader, and a `DurationBounds` whose key's suffix contradicts its unit. A throttle
+reader, a `DurationBounds` whose key's suffix contradicts its unit, and a page,
+README or rule quoting a refusal without the unit the boot writes after its count
+(`must be at least 10 milliseconds`) — the scaling page quoted the poll's without
+it, a sentence no boot log carries. A throttle
 written in code — `Throttle::new` — refuses a window under a millisecond, the
 Redis store's resolution: a zero window reset every bucket on every hit and let
 every request through at any limit.

@@ -353,3 +353,45 @@ mod an_operation_guard_that_never_runs_the_operation {
         );
     }
 }
+
+/// A body that is JSON but not a GraphQL request — `variables` as a string — was
+/// answered `400` with nothing in it. GraphQL-over-HTTP answers a request it
+/// cannot accept with an `errors` entry saying why, and the why here is a decode
+/// failure: said where and of what kind, never with the value the caller sent.
+/// No `data` member, since nothing was executed.
+#[tokio::test]
+async fn a_body_that_is_not_a_graphql_request_is_answered_with_an_error_entry_and_no_value() {
+    let app = TestApp::builder()
+        .module::<GraphqlTestModule>()
+        .build()
+        .await
+        .expect("boots");
+
+    let resp = app
+        .http()
+        .post("/graphql")
+        .header("content-type", "application/json")
+        .body(r#"{"query":"{ tag }","variables":"sk_live_secret"}"#)
+        .send()
+        .await;
+
+    resp.assert_status(poem::http::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = serde_json::from_str(
+        &resp
+            .0
+            .into_body()
+            .into_string()
+            .await
+            .expect("a response body"),
+    )
+    .expect("a GraphQL response is JSON");
+    let message = body["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an `errors` entry with a message: {body}"));
+    assert!(
+        message.contains("invalid type: a string, expected"),
+        "the decode failure is said: {message}",
+    );
+    assert!(!message.contains("sk_live"), "without the value: {message}");
+    assert!(body.get("data").is_none(), "nothing executed: {body}");
+}

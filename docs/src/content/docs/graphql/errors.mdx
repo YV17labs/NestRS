@@ -248,6 +248,20 @@ rest. The framework does not need any code for this — return the
 `Result` from each `#[field_resolver]` and async-graphql does the
 gathering.
 
+## A body that is not a GraphQL request
+
+A body that is JSON but not a request — `"variables"` as a string — or not
+JSON at all is refused before anything executes: `400`, and one `errors` entry
+saying why, the way GraphQL-over-HTTP answers a request it cannot accept. No
+`data` member, since nothing ran. The why is a decode failure, said like every
+edge says one — where and of what kind, never the value sent:
+
+```bash frame="terminal"
+$ curl -s localhost:3000/graphql -H 'content-type: application/json' \
+    -d '{"query":"{ tag }","variables":"sk_live_secret"}'
+{"errors":[{"message":"the body is not a GraphQL request: invalid type: a string, expected a map at line 1 column 47"}]}
+```
+
 ## Going further
 
 - [Queries and mutations](/graphql/queries-mutations/) — the

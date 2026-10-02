@@ -13,8 +13,8 @@ use async_graphql::parser::types::{DocumentOperations, OperationType};
 use async_graphql::{BatchRequest, Data, Executor, Request as GqlRequest};
 use async_graphql_poem::{GraphQLBatchRequest, GraphQLBatchResponse};
 use nest_rs_core::{Container, ReachableProviders};
-use poem::http::StatusCode;
-use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, Response, Result};
+use poem::http::{StatusCode, header};
+use poem::{Endpoint, Error, FromRequest, IntoResponse, Request, RequestBody, Response, Result};
 
 /// A per-request forwarder, submitted via `inventory`. `seed` reads from the
 /// poem request (and the container) and attaches values to the GraphQL
@@ -368,6 +368,91 @@ async fn without_transaction(fut: BoxFuture<'_, ()>) {
     }
 }
 
+/// The request's GraphQL batch, or the answer to a body that is not one.
+///
+/// A multipart body — a file upload — is read by async-graphql, which owns that
+/// grammar. Any other body is JSON, read here with the same decode async-graphql
+/// runs, for one reason: `BatchRequest` is an *untagged* enum, so serde's error
+/// for a body that fits neither variant names neither — "data did not match any
+/// variant", which tells a client nothing. On that failure the body is read
+/// once more as the shape it was, one request or a list of them, and that
+/// failure is what the client is told.
+async fn read_batch(req: &Request, body: &mut RequestBody) -> Result<BatchRequest, Response> {
+    let multipart = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .trim_start()
+                .get(..10)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("multipart/"))
+        });
+    if multipart {
+        return GraphQLBatchRequest::from_request(req, body)
+            .await
+            .map(|batch| batch.0)
+            .map_err(|refusal| {
+                let reason = match refusal.downcast_ref::<async_graphql::ParseRequestError>() {
+                    Some(parse) => nest_rs_core::error_message(parse),
+                    None => UNREADABLE.to_owned(),
+                };
+                refused(&reason, refusal.status())
+            });
+    }
+    let bytes = match body.take() {
+        Ok(taken) => taken
+            .into_vec()
+            .await
+            .map_err(|_| refused(UNREADABLE, StatusCode::BAD_REQUEST))?,
+        Err(_) => return Err(refused(UNREADABLE, StatusCode::BAD_REQUEST)),
+    };
+    serde_json::from_slice::<BatchRequest>(&bytes)
+        .map_err(|_| refused(&what_it_is_not(&bytes), StatusCode::BAD_REQUEST))
+}
+
+/// What a body that failed to read is said as — the read's own error belongs
+/// to the transport, and the edge's body cap answers `413` for itself.
+const UNREADABLE: &str = "the request body could not be read";
+
+/// Why `bytes` is not a GraphQL request, as the shape it was decodes it.
+fn what_it_is_not(bytes: &[u8]) -> String {
+    let failed = match serde_json::from_slice::<serde_json::Value>(bytes) {
+        Ok(serde_json::Value::Array(_)) => serde_json::from_slice::<Vec<GqlRequest>>(bytes).err(),
+        Ok(_) => serde_json::from_slice::<GqlRequest>(bytes).err(),
+        Err(not_json) => Some(not_json),
+    };
+    match failed {
+        Some(failed) => nest_rs_core::DecodeError::new(&failed).to_string(),
+        None => "neither a GraphQL request nor a list of them".to_owned(),
+    }
+}
+
+/// Answer a request that is not a GraphQL request.
+///
+/// GraphQL-over-HTTP answers a request it cannot accept with a 4xx **and an
+/// `errors` entry** saying why; the `400` this edge used to send said nothing.
+/// No `data` member, since nothing was executed. The why is a decode failure,
+/// so it is said where and of what kind and never with the value the caller
+/// sent ([`DecodeError`](nest_rs_core::DecodeError)) — the sentence every other
+/// edge gives a payload that does not decode.
+fn refused(reason: &str, status: StatusCode) -> Response {
+    // `debug`, as every edge files a payload that does not decode: the client's
+    // error, told to the client.
+    tracing::debug!(
+        target: crate::TARGET,
+        reason,
+        "graphql request refused: the body is not a GraphQL request",
+    );
+    let body = serde_json::json!({
+        "errors": [{ "message": format!("the body is not a GraphQL request: {reason}") }],
+    });
+    Response::builder()
+        .status(status)
+        .content_type("application/json")
+        .body(serde_json::to_vec(&body).unwrap_or_default())
+}
+
 /// Render a variable-pipe `PipeError` as a GraphQL error response — HTTP 200
 /// with an `errors` array, the GraphQL wire convention (matching how a resolver
 /// error surfaces), with any field-level errors under
@@ -398,7 +483,10 @@ impl<E: Executor> Endpoint for ContextEndpoint<E> {
         {
             return Ok(resp);
         }
-        let batch = GraphQLBatchRequest::from_request(&req, &mut body).await?.0;
+        let batch = match read_batch(&req, &mut body).await {
+            Ok(batch) => batch,
+            Err(refusal) => return Ok(refusal),
+        };
         // Enforce the batch-size cap FIRST — before the variable pipes fold over
         // every operation. Checking it only in the seed match below meant a
         // 10k-op batch paid the full pipe cost before the 413 (GQL-I6).

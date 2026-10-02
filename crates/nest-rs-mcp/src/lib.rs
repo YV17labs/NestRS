@@ -104,6 +104,7 @@ mod host;
 mod identity;
 mod module;
 mod operation;
+mod parameters;
 mod propagate;
 mod registry;
 mod scope;
@@ -145,11 +146,13 @@ pub use rmcp::{ErrorData as McpError, ServerHandler};
 /// one `impl ServerHandler` block when a host serves both.
 pub use rmcp::{prompt, prompt_handler, prompt_router, schemars, tool, tool_handler, tool_router};
 
+/// `Parameters<T>` deserializes an operation's typed input — the framework's
+/// own, refusing without the value; `Json<T>` returns a typed structured result
+/// (`structuredContent`, SEP-2106).
+pub use parameters::Parameters;
 pub use rmcp::handler::server::router::prompt::PromptRouter;
 pub use rmcp::handler::server::router::tool::ToolRouter;
-/// `Parameters<T>` deserializes a tool's typed input; `Json<T>` returns a typed
-/// structured result (`structuredContent`, SEP-2106).
-pub use rmcp::handler::server::wrapper::{Json, Parameters};
+pub use rmcp::handler::server::wrapper::Json;
 
 /// The two results almost every tool body names.
 pub use rmcp::model::{CallToolResult, ContentBlock};

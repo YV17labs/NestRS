@@ -25,6 +25,10 @@ nest-rs-pipes.workspace = true
 poem.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
+# `Parameters<P>` is the framework's own, so an operation's arguments are decoded
+# here and refused through `DecodeError` rather than in serde's quoting words.
+serde.workspace = true
+serde_json.workspace = true
 # `task_local!` installs the per-operation `RequestScope` around the inner rmcp
 # endpoint so tool methods reach it via `Scoped<T>`.
 tokio.workspace = true
@@ -47,8 +51,6 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # name the sibling that belongs on the shape the developer reached for.
 trybuild.workspace = true
 poem = { workspace = true, features = ["test"] }
-# Asserting on the `data` a rejected pipe hands the model.
-serde_json.workspace = true
 # `Transport::serve` takes the token that asks it to stop — what the shutdown
 # suite drives a real transport with.
 tokio-util.workspace = true

@@ -201,9 +201,15 @@ reads to decide when to call each.
 ## A validated tool
 
 Tool inputs are deserialized to a typed struct, so the schema the client reads
-is already typed. For extra checks beyond shape — ranges, enums, mutual
-exclusion — add `validate(...)` attributes: `#[input]` already carries the
-`validator` derive, so no extra import and no extra manifest line.
+is already typed. Arguments that do not decode are refused before the body runs
+as a tool error the model can correct — `failed to deserialize parameters:
+invalid type: a string, expected f64` — naming where and what kind and never the
+value, which would otherwise land in the model's transcript. `Parameters` is the
+framework's own for that reason, with rmcp's shape and schema.
+
+For extra checks beyond shape — ranges, enums, mutual exclusion — add
+`validate(...)` attributes: `#[input]` already carries the `validator` derive,
+so no extra import and no extra manifest line.
 
 ```rust title="crates/features/src/weather/coords.rs"
 use nest_rs::mcp::input;

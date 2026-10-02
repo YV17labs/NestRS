@@ -2998,6 +2998,8 @@ dependencies = [
  "poem",
  "rmcp",
  "schemars",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

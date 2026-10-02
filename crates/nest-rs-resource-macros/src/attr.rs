@@ -1,7 +1,7 @@
 //! Parse `#[expose(...)]` into a [`ResourceModel`] and strip the per-field
 //! annotations so the ORM macros see a clean entity.
 
-use nest_rs_codegen::ungrouped_expr;
+use nest_rs_codegen::{Arg, Grammar, ungrouped_expr};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, format_ident, quote};
 use syn::parse::Parse;
@@ -138,56 +138,30 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
     // is source order." On this decorator that is the **wire**:
     // `#[expose(name = "User", name = "Account")]` compiled, and the DTO and the
     // OpenAPI schema took whichever came last.
-    let mut written_keys = nest_rs_codegen::WrittenKeys::default();
-    let parser = syn::meta::parser(|meta| {
-        written_keys.take_key(
-            "expose",
-            &MODEL_KEYS,
-            &meta.path,
-            &nest_rs_codegen::key_as_written(&meta.path),
-        )?;
-        if meta.path.is_ident("name") {
-            // A bare `#[expose(name)]` reaches `meta.value()` as syn's
-            // `` expected `=` ``, which names the grammar and not the key.
-            if !meta.input.peek(syn::Token![=]) {
-                return Err(meta.error(nest_rs_codegen::needs_a_value("expose", "name")));
+    MODEL.parse2(args, |arg| {
+        match arg.key() {
+            "name" => name = Some(type_name(&arg.expr()?)?),
+            "service" => {
+                service = Some(arg.value()?.parse::<Path>().map_err(|stopped| {
+                    syn::Error::new(
+                        stopped.span(),
+                        nest_rs_codegen::takes_value(
+                            "expose",
+                            Some("service"),
+                            "the path of the entity's service, e.g. `service = UsersService`",
+                        ),
+                    )
+                })?);
             }
-            let written: Expr = meta.value()?.parse()?;
-            name = Some(type_name(&written)?);
-            Ok(())
-        } else if meta.path.is_ident("service") {
-            if !meta.input.peek(syn::Token![=]) {
-                return Err(meta.error(nest_rs_codegen::needs_a_value("expose", "service")));
-            }
-            service = Some(meta.value()?.parse::<Path>().map_err(|stopped| {
-                syn::Error::new(
-                    stopped.span(),
-                    nest_rs_codegen::takes_value(
-                        "expose",
-                        Some("service"),
-                        "the path of the entity's service, e.g. `service = UsersService`",
-                    ),
-                )
-            })?);
-            Ok(())
-        } else if meta.path.is_ident("complex") {
-            complex = true;
-            Ok(())
-        } else if meta.path.is_ident("graphql") {
-            graphql = true;
-            Ok(())
-        } else if meta.path.is_ident("soft_delete") {
-            soft_delete = true;
-            Ok(())
-        } else if meta.path.is_ident("timestamps") {
-            timestamps = true;
-            Ok(())
-        } else {
-            // `take_key` refused every name outside `MODEL_KEYS`.
-            Ok(())
+            "complex" => complex = true,
+            "graphql" => graphql = true,
+            "soft_delete" => soft_delete = true,
+            "timestamps" => timestamps = true,
+            // The grammar hands over only its own keys.
+            _ => {}
         }
-    });
-    syn::parse::Parser::parse2(parser, args)?;
+        Ok(())
+    })?;
 
     let name = name.ok_or_else(|| {
         syn::Error::new_spanned(
@@ -222,13 +196,6 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         let mut validate = Vec::new();
         let mut complexity: Option<Expr> = None;
         let mut via: Option<LitStr> = None;
-        // A repeated key is refused across every `#[expose]` on the field, as
-        // the struct half's are: a repeat is one declaration dropped by source
-        // order — `via` decides which foreign key a `HasMany` follows,
-        // `complexity` the query-cost limit. One guard per field, so a key
-        // written in two of its `#[expose]`s is written twice.
-        let mut written_keys = nest_rs_codegen::WrittenKeys::default();
-
         // Pull PK + relation column info out of the `#[sea_orm(...)]` attrs in
         // the same pass. The attrs stay on the field so SeaORM still owns them
         // — we only read.
@@ -240,6 +207,11 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
             // Surface a sea_orm-side parse failure — silently swallowing it
             // (the previous `let _ = ...`) hid malformed `from = some_expr`
             // shapes behind a downstream 'missing from' diagnostic.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "reads sea-orm's own `#[sea_orm]` attribute, whose grammar is sea-orm's: \
+                          a key nestrs does not read is not nestrs's to refuse"
+            )]
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("primary_key") {
                     is_pk = true;
@@ -274,25 +246,29 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
         // no `#[expose]` is hidden from every transport — silence is never a
         // leak. A column added by a later migration stays invisible until
         // someone deliberately exposes it.
+        // Every `#[expose]` on the field is read as one list, so a key written
+        // in two of them is written twice: a repeat is one declaration dropped
+        // by source order — `via` decides which foreign key a `HasMany`
+        // follows, `complexity` the query-cost limit. A bare `#[expose]` adds
+        // nothing to the list.
+        let mut written = TokenStream2::new();
         for attr in field.attrs.iter().filter(|a| a.path().is_ident("expose")) {
             read = true;
-            // Bare `#[expose]` (no parens) carries no options — nothing to parse.
-            if matches!(attr.meta, syn::Meta::Path(_)) {
-                continue;
+            if let syn::Meta::List(list) = &attr.meta
+                && !list.tokens.is_empty()
+            {
+                if !written.is_empty() {
+                    written.extend(quote!(,));
+                }
+                written.extend(list.tokens.clone());
             }
-            attr.parse_nested_meta(|m| {
-                written_keys.take_key(
-                    "expose",
-                    &FIELD_KEYS,
-                    &m.path,
-                    &nest_rs_codegen::key_as_written(&m.path),
-                )?;
-                if m.path.is_ident("input") {
+        }
+        FIELD.parse2(written, |arg| {
+            match arg.key() {
+                "input" => {
                     for kind in listed(
-                        &m,
-                        "input",
-                        "a list of `create` and `update`, e.g. \
-                         `input(create, update)`",
+                        &arg,
+                        "a list of `create` and `update`, e.g. `input(create, update)`",
                     )? {
                         match ungrouped_expr(&kind) {
                             Expr::Path(p) if p.path.is_ident("create") => in_create = true,
@@ -310,35 +286,35 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                             }
                         }
                     }
-                } else if m.path.is_ident("validate") {
-                    if !m.input.peek(syn::token::Paren) {
-                        return Err(m.error(nest_rs_codegen::takes_value(
-                            "expose",
-                            Some("validate"),
-                            "a list of `validator` rules, e.g. `validate(length(min = 1))`",
-                        )));
+                }
+                "validate" => {
+                    let input = arg.input();
+                    if !input.peek(syn::token::Paren) {
+                        return Err(syn::Error::new(
+                            arg.ident().span(),
+                            nest_rs_codegen::takes_value(
+                                "expose",
+                                Some("validate"),
+                                "a list of `validator` rules, e.g. `validate(length(min = 1))`",
+                            ),
+                        ));
                     }
                     let content;
-                    syn::parenthesized!(content in m.input);
+                    syn::parenthesized!(content in input);
                     validate.push(content.parse()?);
-                } else if m.path.is_ident("complexity") {
-                    // Accepts a literal int (`complexity = 5`) or an expression
-                    // string async-graphql parses (`complexity = "first.unwrap_or(20)
-                    // as usize * child_complexity"`) — both re-emit verbatim
-                    // into the generated `#[graphql(complexity = ...)]`. A
-                    // `HasMany` resolver takes `first`/`after`, so the
-                    // expression may name them; every other field has no
-                    // arguments to name.
-                    equals(&m, "complexity")?;
-                    complexity = Some(m.value()?.parse::<Expr>()?);
-                } else if m.path.is_ident("via") {
-                    // Which of the child's foreign keys a `HasMany` follows.
-                    // A column name, not a path: the marker type the parent
-                    // resolves it to is the framework's business.
-                    equals(&m, "via")?;
-                    let written: Expr = m.value()?.parse()?;
-                    let lit =
-                        nest_rs_codegen::require_str_lit(&written, "expose", "via", "author_id")?;
+                }
+                // Accepts a literal int (`complexity = 5`) or an expression
+                // string async-graphql parses (`complexity = "first.unwrap_or(20)
+                // as usize * child_complexity"`) — both re-emit verbatim into the
+                // generated `#[graphql(complexity = ...)]`. A `HasMany` resolver
+                // takes `first`/`after`, so the expression may name them; every
+                // other field has no arguments to name.
+                "complexity" => complexity = Some(arg.expr()?),
+                // Which of the child's foreign keys a `HasMany` follows. A column
+                // name, not a path: the marker type the parent resolves it to is
+                // the framework's business.
+                "via" => {
+                    let lit = arg.str_lit("author_id")?;
                     if syn::parse_str::<Ident>(&lit.value()).is_err() {
                         return Err(syn::Error::new_spanned(
                             &lit,
@@ -352,10 +328,11 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
                     }
                     via = Some(lit);
                 }
-                // `take_key` refused every name outside `FIELD_KEYS`.
-                Ok(())
-            })?;
-        }
+                // The grammar hands over only its own keys.
+                _ => {}
+            }
+            Ok(())
+        })?;
 
         field.attrs.retain(|a| !a.path().is_ident("expose"));
 
@@ -568,46 +545,41 @@ fn foreign_key(written: &Expr) -> syn::Result<Ident> {
 
 /// The struct half's key set — the `#[expose]` written on the `Model` — in the
 /// order its refusals list them.
-const MODEL_KEYS: [&str; 6] = [
-    "name",
-    "service",
-    "graphql",
-    "soft_delete",
-    "timestamps",
-    "complex",
-];
+const MODEL: Grammar = Grammar::new(
+    "expose",
+    &[
+        "name",
+        "service",
+        "graphql",
+        "soft_delete",
+        "timestamps",
+        "complex",
+    ],
+);
 
 /// The field half's key set — the `#[expose]` written on a column, as opposed
 /// to the one on the `Model`.
-const FIELD_KEYS: [&str; 4] = ["input", "validate", "complexity", "via"];
+const FIELD: Grammar = Grammar::new("expose", &["input", "validate", "complexity", "via"]);
 
 /// A field key's list value — `input(create, update)` — each element read as
 /// written, or the key refused naming what its list takes when no list follows.
-fn listed(m: &syn::meta::ParseNestedMeta<'_>, key: &str, takes: &str) -> syn::Result<Vec<Expr>> {
-    if !m.input.peek(syn::token::Paren) {
-        return Err(m.error(nest_rs_codegen::takes_value("expose", Some(key), takes)));
+fn listed(arg: &Arg<'_>, takes: &str) -> syn::Result<Vec<Expr>> {
+    let input = arg.input();
+    let refused = |at: proc_macro2::Span| {
+        syn::Error::new(
+            at,
+            nest_rs_codegen::takes_value("expose", Some(arg.key()), takes),
+        )
+    };
+    if !input.peek(syn::token::Paren) {
+        return Err(refused(arg.ident().span()));
     }
     let content;
-    syn::parenthesized!(content in m.input);
+    syn::parenthesized!(content in input);
     let listed = content
         .parse_terminated(Expr::parse, Token![,])
-        .map_err(|stopped| {
-            syn::Error::new(
-                stopped.span(),
-                nest_rs_codegen::takes_value("expose", Some(key), takes),
-            )
-        })?;
+        .map_err(|stopped| refused(stopped.span()))?;
     Ok(listed.into_iter().collect())
-}
-
-/// The `=` a valued field key needs, checked before `value()` reads it, so a
-/// bare key is refused naming itself rather than with syn's `` expected `=` ``.
-fn equals(m: &syn::meta::ParseNestedMeta<'_>, key: &str) -> syn::Result<()> {
-    if m.input.peek(Token![=]) {
-        Ok(())
-    } else {
-        Err(m.error(nest_rs_codegen::needs_a_value("expose", key)))
-    }
 }
 
 /// Match `HasOne<T>` / `HasMany<T>` on the last path segment. Returns the

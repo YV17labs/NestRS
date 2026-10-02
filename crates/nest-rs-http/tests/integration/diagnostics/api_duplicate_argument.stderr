@@ -1,5 +1,0 @@
-error: #[api] takes at most one `summary`
-  --> tests/integration/diagnostics/api_duplicate_argument.rs:14:35
-   |
-14 |     #[api(summary = "List users", summary = "List every user")]
-   |                                   ^^^^^^^

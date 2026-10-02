@@ -15,10 +15,10 @@
 
 use nest_rs_codegen::pair;
 use nest_rs_codegen::{
-    Edge, JobDecorator, JobKey, PipeWrapper, WrittenKeys, await_if_async, cfg_attrs,
-    duration_millis, generic_args, impl_self_ident, job_argument_needs_a_value, job_key,
-    job_returns_a_result, job_transaction, missing_argument, payload_arg_type, pipe_wrapper,
-    returns_unit, snake_case, takes_value, transactional_value, ungrouped_expr, unread_job_key,
+    Edge, Grammar, JobDecorator, JobKey, PipeWrapper, await_if_async, cfg_attrs, duration_millis,
+    generic_args, impl_self_ident, job_key, job_returns_a_result, job_transaction,
+    missing_argument, payload_arg_type, pipe_wrapper, returns_unit, snake_case, takes_value,
+    transactional_value, ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -26,14 +26,14 @@ use quote::{format_ident, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Expr, ExprLit, FnArg, Ident, ImplItem, Lit, LitStr, Token, Type};
+use syn::{Expr, ExprLit, FnArg, Ident, ImplItem, Lit, LitStr, Type};
 
 /// The member of the job family this decorator is — the column of
 /// `nest_rs_codegen`'s job-key table its keys are read against.
 const PROCESS: JobDecorator = JobDecorator::Process;
 
 /// The two keys `throttle(..)` takes.
-const THROTTLE_KEYS: [&str; 2] = ["limit", "window"];
+const THROTTLE: Grammar = Grammar::new("process", &["limit", "window"]).under("throttle");
 
 /// Why a checkpoint cannot share the attempt's transaction — the refusal of a
 /// `Checkpoint<_>` parameter on a transactional method.
@@ -538,68 +538,58 @@ impl Parse for ProcessArgs {
         let mut concurrency: Option<u32> = None;
         let mut throttle: Option<ThrottleArgs> = None;
         let mut transactional: Option<bool> = None;
-        let mut written = WrittenKeys::default();
 
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            let name = key.to_string();
-            // The family's table answers first: a key another member takes is
-            // not misspelled here but meaningless, and is refused naming why; a
-            // key no member takes is unknown. Every arm below is one this
-            // decorator's column holds, and a key the table gains is a variant
-            // this match must place before it compiles.
-            match job_key(PROCESS, &mut written, &name, &key)? {
-                JobKey::Queue => {
-                    equals(input, &key, &name)?;
-                    queue = Some(input.parse()?);
-                }
+        // The family's table answers first: a key another member takes is not
+        // misspelled here but meaningless, and is refused naming why; a key no
+        // member takes is unknown. Every arm below is one this decorator's
+        // column holds, and a key the table gains is a variant this match must
+        // place before it compiles.
+        PROCESS.grammar().parse(input, |arg| {
+            match job_key(PROCESS, &arg)? {
+                JobKey::Queue => queue = Some(arg.value()?.parse()?),
                 JobKey::Retries => {
-                    equals(input, &key, &name)?;
                     retries = Some(whole_number(
-                        &input.parse()?,
+                        &arg.expr()?,
                         &format!(
                             "{} — the re-runs a failed attempt gets before the job dead-letters",
-                            takes_value("process", Some(&name), "a whole number"),
+                            takes_value("process", Some(arg.key()), "a whole number"),
                         ),
                     )?);
                 }
                 JobKey::Concurrency => {
-                    equals(input, &key, &name)?;
                     concurrency = Some(at_least_one(
-                        &input.parse()?,
+                        &arg.expr()?,
                         &format!(
                             "{} — how many jobs of this method one worker replica runs at once",
-                            takes_value("process", Some(&name), AT_LEAST_ONE),
+                            takes_value("process", Some(arg.key()), AT_LEAST_ONE),
                         ),
                     )?);
                 }
                 JobKey::Throttle => {
+                    let input = arg.input();
                     if !input.peek(syn::token::Paren) {
                         return Err(syn::Error::new(
-                            key.span(),
+                            arg.ident().span(),
                             format!(
                                 "{} — write `{}`",
-                                takes_value("process", Some(&name), "a list"),
+                                takes_value("process", Some(arg.key()), "a list"),
                                 JobKey::Throttle.example(),
                             ),
                         ));
                     }
                     let content;
                     syn::parenthesized!(content in input);
-                    throttle = Some(parse_throttle(&content, key.span())?);
+                    throttle = Some(parse_throttle(&content, arg.ident().span())?);
                 }
                 JobKey::Transactional => {
-                    equals(input, &key, &name)?;
-                    transactional = Some(transactional_value(PROCESS, &input.parse()?)?);
+                    transactional = Some(transactional_value(PROCESS, &arg.expr()?)?);
                 }
                 unread @ (JobKey::Tz | JobKey::Replicas | JobKey::Key) => {
-                    return Err(unread_job_key(PROCESS, unread, &key));
+                    return Err(unread_job_key(PROCESS, unread, arg.ident()));
                 }
             }
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
-            }
-        }
+            Ok(())
+        })?;
 
         let queue = queue.ok_or_else(|| syn::Error::new(input.span(), missing_queue()))?;
 
@@ -613,38 +603,15 @@ impl Parse for ProcessArgs {
     }
 }
 
-/// The `=` after a key, checked before it is consumed, so a bare key earns a
-/// sentence naming the key rather than syn's `expected `=``.
-fn equals(input: ParseStream, key: &Ident, name: &str) -> syn::Result<()> {
-    if !input.peek(Token![=]) {
-        return Err(syn::Error::new(
-            key.span(),
-            job_argument_needs_a_value(PROCESS, name),
-        ));
-    }
-    input.parse::<Token![=]>()?;
-    Ok(())
-}
-
 /// The keys inside `throttle(..)`: both required, each once.
 fn parse_throttle(content: ParseStream, at: Span) -> syn::Result<ThrottleArgs> {
     let mut limit: Option<u32> = None;
     let mut window_ms: Option<u64> = None;
-    let mut written = WrittenKeys::under("throttle");
-    while !content.is_empty() {
-        let key: Ident = content.parse()?;
-        let name = key.to_string();
-        written.take_key("process", &THROTTLE_KEYS, &key, &name)?;
-        if !content.peek(Token![=]) {
-            return Err(syn::Error::new(
-                key.span(),
-                job_argument_needs_a_value(PROCESS, &format!("throttle({name})")),
-            ));
-        }
-        content.parse::<Token![=]>()?;
-        if name == "limit" {
+    THROTTLE.parse(content, |arg| {
+        let value = arg.expr()?;
+        if arg.key() == "limit" {
             limit = Some(at_least_one(
-                &content.parse()?,
+                &value,
                 &format!(
                     "{} — how many jobs may start in one window",
                     takes_value("process", Some("throttle(limit)"), AT_LEAST_ONE),
@@ -654,13 +621,11 @@ fn parse_throttle(content: ParseStream, at: Span) -> syn::Result<ThrottleArgs> {
             window_ms = Some(duration_millis(
                 "process",
                 Some("throttle(window)"),
-                &content.parse()?,
+                &value,
             )?);
         }
-        if !content.is_empty() {
-            content.parse::<Token![,]>()?;
-        }
-    }
+        Ok(())
+    })?;
     match (limit, window_ms) {
         (Some(limit), Some(window_ms)) => Ok(ThrottleArgs { limit, window_ms }),
         _ => Err(syn::Error::new(

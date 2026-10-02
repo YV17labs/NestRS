@@ -2,14 +2,12 @@ use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{Expr, ItemStruct, LitStr, Meta, Token};
+use syn::{Expr, ItemStruct, LitStr};
 
 use nest_rs_codegen::{
     Edge, InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
     injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
-    require_str_lit, scoped_specs, take_path_list,
+    scoped_specs, take_path_list,
 };
 
 pub(crate) fn mcp(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -253,43 +251,20 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
     // path is the address, the server's version is the app's one declaration —
     // is worded once, in `nest-rs-codegen`, for every edge that refuses it.
     Edge::Mcp.reject_version(&args)?;
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut parsed = McpArgs::default();
     // Accepting a repeat drops one of two declarations and source order decides
     // which — here that is the path a host joins, i.e. which peers share its
     // endpoint, and the identity a client is told it reached.
-    let mut written = nest_rs_codegen::WrittenKeys::default();
-    for meta in metas {
-        // Two different answers, and telling them apart is the point. A key
-        // naming a field of the server's identity is a key that *exists* — it is
-        // declared by the app, and the sentence says where — so it is answered
-        // before the grammar takes the key. Anything else is nobody's, and gets
-        // the list of what remains.
-        if let Some(field) = server_field(&meta) {
-            return Err(syn::Error::new_spanned(&meta, field.refusal()));
+    MCP.parse2(args, |arg| {
+        match arg.key() {
+            "path" => parsed.path = Some(arg.str_lit("/mcp")?),
+            "name" => parsed.name = Some(arg.expr()?),
+            "title" => parsed.title = Some(arg.expr()?),
+            // The grammar hands over only its own keys.
+            _ => {}
         }
-        written.take_key(
-            "mcp",
-            &ACCEPTED_KEYS,
-            meta.path(),
-            &nest_rs_codegen::key_as_written(meta.path()),
-        )?;
-        match meta {
-            Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                parsed.path = Some(require_str_lit(&nv.value, "mcp", "path", "/mcp")?)
-            }
-            Meta::NameValue(nv) if nv.path.is_ident("name") => parsed.name = Some(nv.value),
-            Meta::NameValue(nv) if nv.path.is_ident("title") => parsed.title = Some(nv.value),
-            // A key of the grammar written bare.
-            other => {
-                return Err(nest_rs_codegen::unmatched_meta(
-                    "mcp",
-                    &other,
-                    &ACCEPTED_KEYS,
-                ));
-            }
-        }
-    }
+        Ok(())
+    })?;
     if let Some(path) = &parsed.path {
         check_path(path)?;
     }
@@ -301,6 +276,13 @@ fn parse_mcp_args(args: TokenStream2) -> syn::Result<McpArgs> {
 /// in the framework has a home for, which is the only case a list of spellings
 /// actually helps.
 const ACCEPTED_KEYS: [&str; 3] = ["path", "name", "title"];
+
+/// `#[mcp]`'s grammar. Two different answers to a key outside it, and telling
+/// them apart is the point: a key naming a field of the server's identity is a
+/// key that *exists* — it is declared by the app, and the sentence says where —
+/// while anything else is nobody's, and gets the list of what remains.
+const MCP: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("mcp", &ACCEPTED_KEYS).elsewhere(server_field);
 
 /// Where a host's own prose goes, for the fields whose per-operation twin is
 /// what a developer reaching for them usually meant. A server-level field
@@ -361,10 +343,11 @@ const SERVER_FIELDS: [ServerField; 4] = [
 /// The identity field a `#[mcp]` argument names, if it names one. Keyed off the
 /// path alone, so a bare `icons` and an `icons = [..]` get the same answer — a
 /// host that reached for the key learns where it lives either way.
-fn server_field(meta: &Meta) -> Option<&'static ServerField> {
+fn server_field(key: &str) -> Option<String> {
     SERVER_FIELDS
         .iter()
-        .find(|field| meta.path().is_ident(field.key))
+        .find(|field| field.key == key)
+        .map(ServerField::refusal)
 }
 
 impl ServerField {

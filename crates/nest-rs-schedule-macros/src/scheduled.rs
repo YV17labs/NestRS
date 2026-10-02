@@ -14,19 +14,17 @@ use std::str::FromStr;
 
 use nest_rs_codegen::{
     Edge, HostBorrow, JobDecorator, JobKey, Replicas, await_if_async, cfg_attrs, duration_millis,
-    impl_self_ident, job_argument_needs_a_value, job_key, job_keys, job_returns_a_result,
-    job_transaction, key_value, key_without_replicas_one, replicas_value, require_str_lit,
-    returns_unit, shared_receiver, site, takes_value, transactional_value, ungrouped_expr,
-    unread_job_key,
+    impl_self_ident, job_key, job_keys, job_returns_a_result, job_transaction, key_value,
+    key_without_replicas_one, replicas_value, require_str_lit, returns_unit, shared_receiver, site,
+    takes_value, transactional_value, ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::ext::IdentExt;
 use syn::parse::Parser;
-use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, ExprLit, ImplItem, Lit, LitStr, Meta, MetaNameValue, Token};
+use syn::{Attribute, Expr, ExprLit, ImplItem, Lit, LitStr, Token};
 
 pub(crate) fn scheduled(args: TokenStream, input: TokenStream) -> TokenStream {
     let written = TokenStream2::from(input.clone());
@@ -194,7 +192,7 @@ struct TrailingKeys {
     replicas: Option<Replicas>,
     /// The `tz` a calendar is read in — `#[cron]`'s alone, which the table
     /// guarantees by refusing it at the other two.
-    tz: Option<MetaNameValue>,
+    tz: Option<Expr>,
     /// The identity it pins, with the key as written for the refusal of one
     /// beside a job firing on every replica.
     key: Option<(syn::Path, LitStr)>,
@@ -324,43 +322,27 @@ fn parse_trailing_keys(
     if stream.is_empty() {
         return Ok(keys);
     }
-    // `Meta`, not `MetaNameValue`: a bare `transactional` is a legal `Meta::Path`
-    // and reaches the loop, where it earns a sentence naming the key. Parsed as
-    // `MetaNameValue` it failed the whole `Punctuated`, and syn reported
-    // `expected `=`` against the enclosing `#[scheduled]` — the *other* half of
-    // the pair, and a decorator the developer had not touched.
-    let metas: Punctuated<Meta, Token![,]> = Punctuated::parse_terminated(stream)?;
-    let mut written = nest_rs_codegen::WrittenKeys::default();
-    for meta in metas {
-        let path = meta.path().clone();
-        let name = nest_rs_codegen::key_as_written(&path);
-        // Before the value is looked at: a key refused here — unknown, another
-        // member's, or written twice — is refused whatever it was given.
-        let key = job_key(member, &mut written, &name, &path)?;
-        let Meta::NameValue(meta) = meta else {
-            return Err(syn::Error::new_spanned(
-                &path,
-                job_argument_needs_a_value(member, &name),
-            ));
-        };
-        match key {
+    // Read by the member's grammar, which judges each key before its value: a
+    // key refused here — unknown, another member's, or written twice — is
+    // refused whatever it was given, and a bare one earns a sentence naming the
+    // key rather than syn's `expected `=`` against the enclosing `#[scheduled]`.
+    member.grammar().parse(stream, |arg| {
+        match job_key(member, &arg)? {
             JobKey::Transactional => {
-                keys.transactional = Some(transactional_value(member, &meta.value)?);
+                keys.transactional = Some(transactional_value(member, &arg.expr()?)?);
             }
-            JobKey::Replicas => {
-                keys.replicas = Some(replicas_value(member, &meta.value)?);
-            }
+            JobKey::Replicas => keys.replicas = Some(replicas_value(member, &arg.expr()?)?),
             JobKey::Key => {
-                keys.key = Some((meta.path.clone(), key_value(member, &meta.value)?));
+                let at = syn::Path::from(arg.ident().clone());
+                keys.key = Some((at, key_value(member, &arg.expr()?)?));
             }
-            JobKey::Tz => {
-                keys.tz = Some(meta);
-            }
+            JobKey::Tz => keys.tz = Some(arg.expr()?),
             unread @ (JobKey::Queue | JobKey::Retries | JobKey::Concurrency | JobKey::Throttle) => {
-                return Err(unread_job_key(member, unread, &path));
+                return Err(unread_job_key(member, unread, arg.ident()));
             }
         }
-    }
+        Ok(())
+    })?;
     Ok(keys)
 }
 
@@ -381,7 +363,7 @@ fn parse_cron(attr: &Attribute) -> syn::Result<(TokenStream2, TrailingKeys)> {
             let tz = keys
                 .tz
                 .take()
-                .map(|meta| require_str_lit(&meta.value, "cron", "tz", "Europe/Paris"))
+                .map(|value| require_str_lit(&value, "cron", "tz", "Europe/Paris"))
                 .transpose()?;
             if let Some(name) = &tz {
                 validate_timezone_literal(name)?;

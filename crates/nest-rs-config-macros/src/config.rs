@@ -1,10 +1,8 @@
-use nest_rs_codegen::{WrittenKeys, key_as_written, require_str_lit, unmatched_meta};
+use nest_rs_codegen::Grammar;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{ItemStruct, LitStr, Meta, Token, parse_macro_input};
+use syn::{ItemStruct, LitStr, parse_macro_input};
 
 pub(crate) fn config(args: TokenStream, input: TokenStream) -> TokenStream {
     let Args {
@@ -74,48 +72,30 @@ struct Args {
 }
 
 /// Every key `#[config]` takes, in the order its refusals list them.
-const KEYS: [&str; 2] = ["namespace", "validate"];
+const CONFIG: Grammar = Grammar::new("config", &["namespace", "validate"]);
 
 fn parse_args(args: TokenStream2) -> syn::Result<Args> {
-    // `Meta`, not `MetaNameValue`: a bare `#[config(namespace)]` is a
-    // `Meta::Path`, so parsing the narrower shape died on syn's `` expected `=` ``
-    // — the sentence `needs_a_value` exists to replace, at the decorator every
-    // configurable module in both workspaces writes.
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
-
     let mut namespace: Option<LitStr> = None;
     let mut manual_validate = false;
-    let mut written = WrittenKeys::default();
-    for meta in metas {
-        let key = key_as_written(meta.path());
-        written.take_key("config", &KEYS, meta.path(), &key)?;
-        let Meta::NameValue(meta) = &meta else {
-            return Err(unmatched_meta("config", &meta, &KEYS));
-        };
-        match key.as_str() {
-            "namespace" => {
-                namespace = Some(require_str_lit(
-                    &meta.value,
-                    "config",
-                    "namespace",
-                    "seaorm",
-                )?)
-            }
+    CONFIG.parse2(args, |arg| {
+        match arg.key() {
+            "namespace" => namespace = Some(arg.str_lit("seaorm")?),
             "validate" => {
-                let lit = require_str_lit(&meta.value, "config", "validate", "manual")?;
+                let lit = arg.str_lit("manual")?;
                 if lit.value() != "manual" {
                     return Err(syn::Error::new_spanned(
-                        &meta.value,
+                        &lit,
                         "#[config] `validate` takes only `\"manual\"`, which suppresses the \
                          derive so the struct can write `impl Validate` itself",
                     ));
                 }
                 manual_validate = true;
             }
-            // `take_key` refused every name outside `KEYS`.
+            // The grammar hands over only its own keys.
             _ => {}
         }
-    }
+        Ok(())
+    })?;
 
     let lit = namespace.ok_or_else(|| {
         syn::Error::new(

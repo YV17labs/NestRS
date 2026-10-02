@@ -1,5 +1,0 @@
-error: #[mcp] takes at most one `path`
-  --> tests/integration/diagnostics/mcp_duplicate_argument.rs:10:20
-   |
-10 | #[mcp(path = "/a", path = "/b")]
-   |                    ^^^^

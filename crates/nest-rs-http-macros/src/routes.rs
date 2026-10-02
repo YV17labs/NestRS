@@ -14,8 +14,8 @@ use syn::{
 use nest_rs_codegen::{
     Collision, Conditional, DispatchKeys, HostBorrow, RoutePath, await_if_async, cfg_attrs,
     force_guard_typeids, guard_capability_bounds, impl_self_ident, injected_methods_with_layers,
-    layer_deps, mixed_site_ident, normalize_forwarded_args, nth_generic_type, require_str_lit,
-    scoped_specs, shared_receiver, take_flag_attr, take_path_list,
+    layer_deps, mixed_site_ident, normalize_forwarded_args, nth_generic_type, scoped_specs,
+    shared_receiver, take_flag_attr, take_path_list,
 };
 
 use crate::attr::opt_str;
@@ -1528,7 +1528,7 @@ struct ApiMeta {
 /// The match in [`parse_api_attr`] is the other half, and a key listed here
 /// that the match does not read would be accepted and dropped;
 /// `every_api_key_is_read_as_the_table_writes_it` reads every key in the form
-/// [`API_KEYS_WRITTEN`] gives it.
+/// `API_KEYS_WRITTEN` gives it.
 const API_KEYS: [&str; 6] = [
     "summary",
     "description",
@@ -1538,41 +1538,8 @@ const API_KEYS: [&str; 6] = [
     "response_content_type",
 ];
 
-/// How each of [`API_KEYS`] is written, position for position — what the shape
-/// sentence offers.
-const API_KEYS_WRITTEN: [&str; 6] = [
-    "summary = \"...\"",
-    "description = \"...\"",
-    "tags(\"a\", \"b\")",
-    "response = Type",
-    "multipart = Type",
-    "response_content_type = \"type/subtype\"",
-];
-
-/// The refusal of an argument that is not a key at all — `#[api("List
-/// users")]` — which has no name for the unknown-key sentence to quote, so it
-/// is told the whole grammar instead, each key the way it is written.
-fn api_takes_keys() -> String {
-    let written: Vec<String> = API_KEYS_WRITTEN
-        .iter()
-        .map(|written| format!("`{written}`"))
-        .collect();
-    format!("#[api] takes named arguments: {}", written.join(", "))
-}
-
-/// The `=` after a `key = value` key, checked before it is consumed, so a bare
-/// key earns the family's sentence naming the key rather than syn's
-/// `` expected `=` ``, which names the grammar and not the key.
-fn api_equals(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Result<()> {
-    if !input.peek(Token![=]) {
-        return Err(syn::Error::new(
-            key.span(),
-            nest_rs_codegen::needs_a_value("api", &key.to_string()),
-        ));
-    }
-    input.parse::<Token![=]>()?;
-    Ok(())
-}
+/// `#[api]`'s grammar, over [`API_KEYS`].
+const API: nest_rs_codegen::Grammar = nest_rs_codegen::Grammar::new("api", &API_KEYS);
 
 /// Parse `#[api(...)]` straight into [`ApiMeta`].
 ///
@@ -1589,75 +1556,33 @@ fn api_equals(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Resu
 /// `tags` is the one key written with a list rather than `=`, and a bare `tags`
 /// is told the list it takes, as `#[process]` tells a bare `throttle`.
 ///
-/// Hand-rolled rather than routed through `syn::Meta`: a `Meta::NameValue` holds
-/// an **expression**, and `response = Vec<Post>` is a *type* — read as an
-/// expression it is a chain of comparisons, so the whole attribute failed with
-/// "comparison operators cannot be chained" pointing at the decorator, on a type
-/// the developer never wrote.
-#[expect(
-    clippy::map_err_ignore,
-    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
-)]
+/// Read through [`Grammar`](nest_rs_codegen::Grammar) rather than `syn::Meta`:
+/// a `Meta::NameValue` holds an **expression**, and `response = Vec<Post>` is a
+/// *type* — read as an expression it is a chain of comparisons, so the whole
+/// attribute failed with "comparison operators cannot be chained" pointing at the
+/// decorator, on a type the developer never wrote.
 fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
-    attr.parse_args_with(|input: syn::parse::ParseStream<'_>| {
-        let mut out = ApiMeta::default();
-        let mut written = nest_rs_codegen::WrittenKeys::default();
-        while !input.is_empty() {
-            let key: syn::Ident = input
-                .parse()
-                .map_err(|_| syn::Error::new(input.span(), api_takes_keys()))?;
-            let name = key.to_string();
-            written.take_key("api", &API_KEYS, &key, &name)?;
-            match name.as_str() {
-                "summary" => {
-                    api_equals(input, &key)?;
-                    out.summary = Some(require_str_lit(
-                        &input.parse::<Expr>()?,
-                        "api",
-                        "summary",
-                        "List users",
-                    )?);
-                }
-                "description" => {
-                    api_equals(input, &key)?;
-                    out.description = Some(require_str_lit(
-                        &input.parse::<Expr>()?,
-                        "api",
-                        "description",
-                        "…",
-                    )?);
-                }
-                "response" => {
-                    api_equals(input, &key)?;
-                    out.response = Some(api_type(input, "response", "Vec<Post>")?);
-                }
-                "multipart" => {
-                    api_equals(input, &key)?;
-                    out.multipart = Some(api_type(input, "multipart", "UploadForm")?);
-                }
-                "response_content_type" => {
-                    api_equals(input, &key)?;
-                    let lit = require_str_lit(
-                        &input.parse::<Expr>()?,
-                        "api",
-                        "response_content_type",
-                        "text/csv",
-                    )?;
-                    check_media_type(&lit)?;
-                    out.response_content_type = Some(lit);
-                }
-                "tags" => {
-                    out.tags = api_tags(input, &key)?;
-                }
-                // `take_key` refused every name outside `API_KEYS`.
-                _ => {}
+    let mut out = ApiMeta::default();
+    API.parse_attr(attr, |arg| {
+        match arg.key() {
+            "summary" => out.summary = Some(arg.str_lit("List users")?),
+            "description" => out.description = Some(arg.str_lit("…")?),
+            "response" => out.response = Some(api_type(arg.value()?, "response", "Vec<Post>")?),
+            "multipart" => {
+                out.multipart = Some(api_type(arg.value()?, "multipart", "UploadForm")?);
             }
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
+            "response_content_type" => {
+                let lit = arg.str_lit("text/csv")?;
+                check_media_type(&lit)?;
+                out.response_content_type = Some(lit);
             }
+            "tags" => out.tags = api_tags(arg.input(), arg.ident())?,
+            // The grammar hands over only its own keys.
+            _ => {}
         }
-        Ok(out)
-    })
+        Ok(())
+    })?;
+    Ok(out)
 }
 
 /// A type-valued `#[api]` key's value — `response = Vec<Post>` — or the shared
@@ -1846,6 +1771,17 @@ mod tests {
     use syn::parse_quote;
 
     use super::*;
+
+    /// How each of [`API_KEYS`] is written, position for position — the form
+    /// the tests below read every key in.
+    const API_KEYS_WRITTEN: [&str; 6] = [
+        "summary = \"...\"",
+        "description = \"...\"",
+        "tags(\"a\", \"b\")",
+        "response = Type",
+        "multipart = Type",
+        "response_content_type = \"type/subtype\"",
+    ];
 
     // The `429` OAPI-O4 signal is detected on the guard path's last segment, so
     // it survives a fully-qualified path and a `use`-imported name alike, and a
@@ -2047,10 +1983,10 @@ mod tests {
     }
 
     #[test]
-    fn an_argument_that_is_not_a_key_is_told_the_grammar() {
+    fn an_argument_that_is_not_a_key_is_named_as_written() {
         let refusal = api_refusal(quote! { "List users" });
         assert!(
-            refusal.starts_with("#[api] takes named arguments: `summary = \"...\"`"),
+            refusal.starts_with("unknown #[api] argument `\"List users\"`; expected `summary`"),
             "{refusal}"
         );
     }

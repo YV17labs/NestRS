@@ -1,6 +1,6 @@
-//! The schedule member of the one-role-per-method family. Its sibling
-//! `trigger_takes_at_most_one_key` pins a repeated key *inside* one trigger;
-//! this pins two triggers on one method, which is the other refusal.
+//! The schedule member of the one-role-per-method family: two triggers on one
+//! method. A repeated key *inside* one trigger is `nest_rs_codegen::Grammar`'s
+//! refusal, held by its unit tests.
 
 use nest_rs_core::injectable;
 use nest_rs_schedule::scheduled;

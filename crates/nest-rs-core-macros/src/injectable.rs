@@ -1,9 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{Expr, Meta, Token};
+use syn::Expr;
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
@@ -138,6 +136,13 @@ enum InjectableScope {
     Transient,
 }
 
+/// `#[injectable]`'s one key.
+const INJECTABLE: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("injectable", &["scope"]);
+
+/// The values `scope` takes.
+const SCOPES: [&str; 3] = ["singleton", "request", "transient"];
+
 /// Parse `#[injectable(scope = singleton|request|transient)]`. Empty defaults
 /// to [`InjectableScope::Singleton`].
 ///
@@ -153,52 +158,33 @@ fn parse_injectable_scope(args: TokenStream2) -> syn::Result<InjectableScope> {
     if args.is_empty() {
         return Ok(InjectableScope::Singleton);
     }
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut scope: Option<InjectableScope> = None;
-    let mut written = nest_rs_codegen::WrittenKeys::default();
-    for meta in &metas {
-        written.take_key(
-            "injectable",
-            &["scope"],
-            meta.path(),
-            &nest_rs_codegen::key_as_written(meta.path()),
-        )?;
-        let Meta::NameValue(nv) = meta else {
-            return Err(nest_rs_codegen::unmatched_meta(
-                "injectable",
-                meta,
-                &["scope"],
-            ));
-        };
-        let value_text = quote!(#nv).to_string();
-        let Expr::Path(path) = &nv.value else {
+    INJECTABLE.parse2(args, |arg| {
+        let value = arg.expr()?;
+        let Expr::Path(path) = &value else {
             return Err(syn::Error::new_spanned(
-                &nv.value,
+                &value,
                 nest_rs_codegen::unknown_value(
                     "injectable",
                     "scope",
-                    &value_text,
-                    &["singleton", "request", "transient"],
+                    &quote!(#value).to_string(),
+                    &SCOPES,
                 ),
             ));
         };
-        let value = nest_rs_codegen::key_as_written(&path.path);
-        scope = Some(match value.as_str() {
+        let written = nest_rs_codegen::key_as_written(&path.path);
+        scope = Some(match written.as_str() {
             "singleton" => InjectableScope::Singleton,
             "request" => InjectableScope::Request,
             "transient" => InjectableScope::Transient,
             other => {
                 return Err(syn::Error::new_spanned(
-                    &nv.value,
-                    nest_rs_codegen::unknown_value(
-                        "injectable",
-                        "scope",
-                        other,
-                        &["singleton", "request", "transient"],
-                    ),
+                    &value,
+                    nest_rs_codegen::unknown_value("injectable", "scope", other, &SCOPES),
                 ));
             }
         });
-    }
+        Ok(())
+    })?;
     Ok(scope.unwrap_or(InjectableScope::Singleton))
 }

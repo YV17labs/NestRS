@@ -1,6 +1,6 @@
-//! The unknown-key half of the grammar every `key = value` decorator owes.
-//! Its sibling `controller_path_without_a_value` pins the bare-key half, and
-//! both route through the one `nest_rs_codegen::unmatched_meta` sentence — so
+//! The unknown-key refusal every `key = value` decorator owes, the one each
+//! decorator keeps a snapshot of: issued by `nest_rs_codegen::Grammar`, whose
+//! unit tests hold the bare-key and repeated-key halves for every grammar — so
 //! the refusal names the offending key *and* lists the alternatives in
 //! declaration order.
 

@@ -101,19 +101,13 @@ fn expand(args: TokenStream2, item: TokenStream2) -> syn::Result<TokenStream2> {
 /// GraphQL app would otherwise silently put an `Enum` derive on every enum in
 /// every sibling crate.
 fn parse_args(args: TokenStream2) -> syn::Result<bool> {
+    const WIRE_ENUM: nest_rs_codegen::Grammar =
+        nest_rs_codegen::Grammar::new("wire_enum", &["graphql"]);
     let mut graphql = false;
-    let mut written = nest_rs_codegen::WrittenKeys::default();
-    let parser = syn::meta::parser(|meta| {
-        written.take_key(
-            "wire_enum",
-            &["graphql"],
-            &meta.path,
-            &nest_rs_codegen::key_as_written(&meta.path),
-        )?;
+    WIRE_ENUM.parse2(args, |_| {
         graphql = true;
         Ok(())
-    });
-    syn::parse::Parser::parse2(parser, args)?;
+    })?;
     Ok(graphql)
 }
 

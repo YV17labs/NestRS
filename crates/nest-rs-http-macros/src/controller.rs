@@ -6,14 +6,12 @@ use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{LitStr, Meta, Token};
+use syn::LitStr;
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
-    injected_keys_with_layers, injected_names_with_layers, layer_deps, require_str_lit,
-    scoped_specs, take_path_list,
+    injected_keys_with_layers, injected_names_with_layers, layer_deps, scoped_specs,
+    take_path_list,
 };
 
 pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -202,42 +200,32 @@ pub(crate) fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>)> {
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
-    let mut path = None;
-    let mut versions = Vec::new();
-    // Each key answered once. These were plain assignments, so `version = "1",
-    // version = "2"` silently kept the last and mounted the controller at an
-    // address the developer never wrote — while `version = ["1", "1"]` was
-    // already refused, which is the same question asked in the other spelling.
-    let mut written = nest_rs_codegen::WrittenKeys::default().with_remedy(
+/// `#[controller]`'s keys. Each is answered once: these were plain assignments,
+/// so `version = "1", version = "2"` silently kept the last and mounted the
+/// controller at an address the developer never wrote — while `version = ["1",
+/// "1"]` was already refused, which is the same question asked in the other
+/// spelling.
+const CONTROLLER: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("controller", &["path", "version"]).with_remedies(&[(
         "version",
         "to serve several, write one `version = [\"1\", \"2\"]`",
-    );
-    for meta in metas {
-        written.take_key(
-            "controller",
-            &["path", "version"],
-            meta.path(),
-            &nest_rs_codegen::key_as_written(meta.path()),
-        )?;
-        match meta {
-            Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                path = Some(require_str_lit(&nv.value, "controller", "path", "/users")?);
-            }
-            Meta::NameValue(nv) if nv.path.is_ident("version") => {
+    )]);
+
+fn parse_controller_args(args: TokenStream2) -> syn::Result<(LitStr, Vec<LitStr>)> {
+    let mut path = None;
+    let mut versions = Vec::new();
+    CONTROLLER.parse2(args, |arg| {
+        match arg.key() {
+            "path" => path = Some(arg.str_lit("/users")?),
+            "version" => {
                 versions =
-                    nest_rs_codegen::versioning::parse_version_list(&nv.value, "#[controller]")?;
+                    nest_rs_codegen::versioning::parse_version_list(&arg.expr()?, "#[controller]")?;
             }
-            other => {
-                return Err(nest_rs_codegen::unmatched_meta(
-                    "controller",
-                    &other,
-                    &["path", "version"],
-                ));
-            }
+            // The grammar hands over only its own keys.
+            _ => {}
         }
-    }
+        Ok(())
+    })?;
     let path = path.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),

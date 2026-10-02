@@ -214,16 +214,22 @@ rolls out (step 7).
    included. Decode it with `env.json::<T>("KEY")?`, which refuses it naming the
    variable, where it failed and the type it expected, never the value.
 
-6. **If you write decorators on `nest_rs_codegen`**, two signatures changed, two
-   helpers left and one type was renamed. `transactional_value` and
-   `job_argument_needs_a_value` take the `JobDecorator` they word for, so a
-   refusal opens with the site as every value refusal now does, and `job_key`
-   reads a key against the job family's one table, taking the declaration's
-   `WrittenKeys`; `must_be_async` is gone with the rule it worded — a method may
-   be synchronous, and `await_if_async` emits the call either way;
-   `reject_duplicate_argument` is gone too, since a grammar now takes each key
-   through `WrittenKeys::take_key`, which refuses an unknown key and a repeated
-   one in the same call; `CrudConfig` is `CrudDeclaration`.
+6. **If you write decorators on `nest_rs_codegen`**, read their arguments
+   through `Grammar`. A `key = value` grammar is one
+   `const G: Grammar = Grammar::new("attr", &["key", …])`, and `G.parse2(args,
+   |arg| …)` refuses an unknown key, a repeated one and a bare one before the
+   closure sees a key — `reject_duplicate_argument` and `unmatched_meta` are
+   gone with the per-decorator loops they served, and the repository's
+   `clippy.toml` refuses `syn::meta::parser` and
+   `syn::Attribute::parse_nested_meta`, so copy that file if your crate should
+   hold the same line. A job member's grammar is `JobDecorator::grammar()`, and
+   `job_key(member, &arg)` reads the key it handed over. `transactional_value`
+   and `job_argument_needs_a_value` take the `JobDecorator` they word for.
+   `DecoratorPair` is no longer built outside `nest_rs_codegen`: read an edge's
+   pair from `nest_rs_codegen::pair` (`pair::HTTP`, `pair::PROCESSOR`, …).
+   `must_be_async` is gone with the rule it worded — a method may be
+   synchronous, and `await_if_async` emits the call either way; `CrudConfig` is
+   `CrudDeclaration`.
 
    ```rust title="nest_rs_codegen::transactional_value" del={1} ins={2}
    let transactional = nest_rs_codegen::transactional_value(&meta.value)?;

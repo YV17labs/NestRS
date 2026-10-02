@@ -281,7 +281,8 @@ enum AuthorizeArg {
 }
 
 /// The keys `#[authorize]` takes beside its positionals.
-const AUTHORIZE_KEYS: [&str; 2] = ["bind", "id_arg"];
+const AUTHORIZE: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("authorize", &["bind", "id_arg"]);
 
 impl syn::parse::Parse for AuthorizeArg {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
@@ -309,7 +310,7 @@ impl syn::parse::Parse for AuthorizeArg {
                 let spelled = name.to_string();
                 Err(syn::Error::new_spanned(
                     name,
-                    nest_rs_codegen::unknown_argument("authorize", &spelled, &AUTHORIZE_KEYS),
+                    nest_rs_codegen::unknown_argument("authorize", &spelled, AUTHORIZE.keys()),
                 ))
             }
         } else {
@@ -364,20 +365,21 @@ fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpe
     // Refused rather than last-write-wins: `bind` decides **which service loads
     // the authorized subject**, so dropping one of two by source order is the
     // posture silently deciding itself.
-    let mut written = nest_rs_codegen::WrittenKeys::default();
+    let mut keys: Vec<Ident> = Vec::new();
     for arg in args {
         match arg {
             AuthorizeArg::Positional(p) => positional.push(p),
             AuthorizeArg::Bind(key, p) => {
-                written.take_key("authorize", &AUTHORIZE_KEYS, &key, &key.to_string())?;
+                keys.push(key);
                 bind = Some(p);
             }
             AuthorizeArg::IdArg(key, i) => {
-                written.take_key("authorize", &AUTHORIZE_KEYS, &key, &key.to_string())?;
+                keys.push(key);
                 id_arg = Some(i);
             }
         }
     }
+    AUTHORIZE.take_all(&keys)?;
     if id_arg.is_some() && bind.is_none() {
         return Err(syn::Error::new_spanned(
             &attr,

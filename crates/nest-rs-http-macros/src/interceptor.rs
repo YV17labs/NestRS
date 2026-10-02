@@ -9,52 +9,34 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{ItemStruct, Meta, Token, parse_macro_input};
+use syn::{ItemStruct, parse_macro_input};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, dependencies_method, dependency_names_method,
     from_container_method, injected_method, optional_dependencies_method,
 };
 
+/// `#[interceptor]`'s one key.
+const INTERCEPTOR: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("interceptor", &["priority"]);
+
 fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
     if args.is_empty() {
         return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
     }
-    // **The whole list, read key by key in order.** `syn::parse::<Meta>`
-    // consumes one and reports the rest as syn's "unexpected token", which names
-    // neither the key nor the fact. And each key is read for what it *is* before
-    // it is counted: refusing any second argument as a repeated `priority` told
-    // `#[interceptor(prority = 1, order = 2)]` it had repeated a key it never
-    // wrote, and never named the misspelling.
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(TokenStream2::from(args))?;
-    let mut priority: Option<syn::MetaNameValue> = None;
-    let mut written = nest_rs_codegen::WrittenKeys::default();
-    for meta in metas {
-        // Read for what it *is* — known, unknown, or written again — before
-        // anything is counted.
-        written.take_key(
-            "interceptor",
-            &["priority"],
-            meta.path(),
-            &nest_rs_codegen::key_as_written(meta.path()),
-        )?;
-        // A bare `#[interceptor(priority)]` is a `Meta::Path`, and the shared
-        // helper answers it with the needs-a-value sentence.
-        let Meta::NameValue(nv) = meta else {
-            return Err(nest_rs_codegen::unmatched_meta(
-                "interceptor",
-                &meta,
-                &["priority"],
-            ));
-        };
-        priority = Some(nv);
-    }
-    let Some(nv) = priority else {
+    // **The whole list, read key by key in order**, each key read for what it
+    // *is* before it is counted: refusing any second argument as a repeated
+    // `priority` told `#[interceptor(prority = 1, order = 2)]` it had repeated a
+    // key it never wrote, and never named the misspelling.
+    let mut priority: Option<syn::Expr> = None;
+    INTERCEPTOR.parse2(TokenStream2::from(args), |arg| {
+        priority = Some(arg.expr()?);
+        Ok(())
+    })?;
+    let Some(written) = priority else {
         return Ok(quote! { ::nest_rs_http::endpoint_wrap_priority::INTERCEPTORS });
     };
-    let priority = priority_value(&nv.value)?;
+    let priority = priority_value(&written)?;
     Ok(quote! { #priority })
 }
 

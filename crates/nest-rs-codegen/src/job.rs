@@ -5,9 +5,9 @@
 //! takes is answered at every member: built where it means something, refused
 //! where it cannot, naming the fact that makes it meaningless there. That answer
 //! is one table, `cell`, and it is the only statement of it: every member reads
-//! its keys through [`job_key`], the refusal of a key another member takes reads
-//! the same cell, and the list an unknown key is told about is the member's column
-//! ([`job_keys`]). A key added to a parser and not to the table does not compile —
+//! its keys through its [`Grammar`](JobDecorator::grammar), whose keys are the
+//! member's column ([`job_keys`]) and whose refusal of a key another member
+//! takes reads the same cell. A key added to a parser and not to the table does not compile —
 //! the parser matches on [`JobKey`], whose every variant the table must place at
 //! every member — and a key the table gives a member its parser does not read
 //! fails that parser's own tests.
@@ -20,7 +20,8 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{Expr, ExprLit, Lit};
 
-use crate::args::{WrittenKeys, site, takes_one_of};
+use crate::args::{site, takes_one_of};
+use crate::grammar::{Arg, Grammar};
 use crate::identity::KEY;
 use crate::replicas::REPLICAS;
 use crate::ungrouped::ungrouped_expr;
@@ -60,6 +61,60 @@ impl JobDecorator {
     pub fn named(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|member| member.name() == name)
     }
+
+    /// The member's argument grammar: its column of the job-key table, read
+    /// through [`Grammar`] like every other decorator's keys.
+    pub fn grammar(self) -> Grammar {
+        static COLUMNS: [Column; 4] = [
+            column(JobDecorator::Process),
+            column(JobDecorator::Every),
+            column(JobDecorator::Cron),
+            column(JobDecorator::After),
+        ];
+        let at = match self {
+            Self::Process => 0,
+            Self::Every => 1,
+            Self::Cron => 2,
+            Self::After => 3,
+        };
+        let (names, len) = &COLUMNS[at];
+        // Non-capturing, so each is a `fn` the grammar holds: the member is a
+        // constant in each arm.
+        let elsewhere: fn(&str) -> Option<String> = match self {
+            Self::Process => |key| job_argument_refused(Self::Process, key),
+            Self::Every => |key| job_argument_refused(Self::Every, key),
+            Self::Cron => |key| job_argument_refused(Self::Cron, key),
+            Self::After => |key| job_argument_refused(Self::After, key),
+        };
+        let bare: fn(&str, &str) -> String = match self {
+            Self::Process => |_, key| job_argument_needs_a_value(Self::Process, key),
+            Self::Every => |_, key| job_argument_needs_a_value(Self::Every, key),
+            Self::Cron => |_, key| job_argument_needs_a_value(Self::Cron, key),
+            Self::After => |_, key| job_argument_needs_a_value(Self::After, key),
+        };
+        Grammar::new(self.name(), &names[..*len])
+            .elsewhere(elsewhere)
+            .bare(bare)
+    }
+}
+
+/// A member's column of the table as names, and how many of them it holds.
+type Column = ([&'static str; JobKey::ALL.len()], usize);
+
+/// `member`'s column, computed from the table at compile time — so the keys a
+/// grammar takes and the table cannot say two things.
+const fn column(member: JobDecorator) -> Column {
+    let mut names = [""; JobKey::ALL.len()];
+    let mut len = 0;
+    let mut i = 0;
+    while i < JobKey::ALL.len() {
+        if matches!(cell(JobKey::ALL[i], member), Cell::Takes) {
+            names[len] = JobKey::ALL[i].name();
+            len += 1;
+        }
+        i += 1;
+    }
+    (names, len)
 }
 
 /// A key of the worker-job family — every key any member takes.
@@ -208,35 +263,28 @@ pub fn job_keys(member: JobDecorator) -> impl Iterator<Item = JobKey> {
         .filter(move |key| matches!(cell(*key, member), Cell::Takes))
 }
 
-/// Read a key written at `#[member]` against the table, spanned at `at`, taking
-/// it through `written` — the declaration's [`WrittenKeys`].
-///
-/// The key when the member takes it; otherwise one of three refusals, and the
-/// order is the point. A key **another member** takes is not misspelled here, it
-/// is meaningless, so it is refused naming why (`job_argument_refused`) —
-/// checked first and whatever the value, so a developer carrying `retries` from a
-/// `#[process]` to an `#[every]` learns what a tick does instead. A key **no
-/// member** takes keeps the unknown-key sentence, listing the member's column,
-/// and a key written twice the repeat sentence — both through [`WrittenKeys`],
-/// so the whole family refuses a repeat for every key of its column.
-pub fn job_key(
-    member: JobDecorator,
-    written: &mut WrittenKeys,
-    name: &str,
-    at: &impl ToTokens,
-) -> syn::Result<JobKey> {
-    if let Some(refusal) = job_argument_refused(member, name) {
-        return Err(syn::Error::new_spanned(at, refusal));
-    }
-    let column: Vec<JobKey> = job_keys(member).collect();
-    let names: Vec<&str> = column.iter().map(|key| key.name()).collect();
-    let position = written.take_key(member.name(), &names, at, name)?;
-    Ok(column[position])
+/// The [`JobKey`] a member's [`Grammar`](JobDecorator::grammar) handed over —
+/// every key of its column is one, so the refusal is a framework defect, worded
+/// by [`unread_job_key`]'s sentence rather than a panic.
+pub fn job_key(member: JobDecorator, arg: &Arg<'_>) -> syn::Result<JobKey> {
+    JobKey::ALL
+        .into_iter()
+        .find(|key| key.name() == arg.key())
+        .ok_or_else(|| {
+            syn::Error::new_spanned(
+                arg.ident(),
+                format!(
+                    "{}: the job-key table holds no such key — a defect in the framework, not \
+                     in this code",
+                    site(member.name(), Some(arg.key())),
+                ),
+            )
+        })
 }
 
 /// The refusal of `key` at `#[member]` when the table refuses it there, naming
 /// the fact — `None` for a key this member takes, and for a key no member takes,
-/// which [`job_key`] answers with the unknown-key sentence.
+/// which the member's [`Grammar`] answers with the unknown-key sentence.
 fn job_argument_refused(member: JobDecorator, key: &str) -> Option<String> {
     let key = JobKey::ALL.into_iter().find(|known| known.name() == key)?;
     match cell(key, member) {
@@ -249,8 +297,8 @@ fn job_argument_refused(member: JobDecorator, key: &str) -> Option<String> {
     }
 }
 
-/// The refusal a parser returns for a key [`job_key`] handed it and it does not
-/// read — the table gives `#[member]` the key, the parser was not taught it.
+/// The refusal a parser returns for a key its [`Grammar`] handed it and it does
+/// not read — the table gives `#[member]` the key, the parser was not taught it.
 ///
 /// A framework defect, never the developer's: each member's tests read every key
 /// of its column, so this sentence fails a test before it can reach a build. It
@@ -368,9 +416,16 @@ mod tests {
     use super::*;
 
     fn read(member: JobDecorator, name: &str) -> Result<JobKey, String> {
-        let at = syn::Ident::new("at", Span::call_site());
-        job_key(member, &mut WrittenKeys::default(), name, &at)
-            .map_err(|refusal| refusal.to_string())
+        let at = syn::Ident::new(name, Span::call_site());
+        let mut read = None;
+        member
+            .grammar()
+            .parse2(quote!(#at), |arg| {
+                read = Some(job_key(member, &arg)?);
+                Ok(())
+            })
+            .map_err(|refusal| refusal.to_string())?;
+        read.ok_or_else(|| "nothing read".to_owned())
     }
 
     /// A key no member takes is dead vocabulary rather than a family key: it

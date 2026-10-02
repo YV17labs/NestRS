@@ -6,14 +6,12 @@ use nest_rs_codegen::pair;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
-use syn::{LitStr, Meta, Path, Token};
+use syn::{LitStr, Path};
 
 use nest_rs_codegen::{
     InjectableBody, build_injectable_body, from_container_method, guard_capability_bounds,
     injected_keys_with_layers, injected_names_with_layers, layer_deps, reject_http_only_layers,
-    require_str_lit, scoped_specs, take_path_list,
+    scoped_specs, take_path_list,
 };
 
 pub(crate) fn gateway(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -237,43 +235,37 @@ struct GatewayArgs {
     namespace: Option<Path>,
 }
 
+/// `#[gateway]`'s keys, each once — `namespace` decides which `WsServer<N>` the
+/// gateway fans out on, so a dropped second declaration is which sockets a
+/// broadcast reaches, decided by source order.
+const GATEWAY: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("gateway", &["path", "version", "namespace"]).with_remedies(&[(
+        "version",
+        "a gateway owns one mount, so it carries one version",
+    )]);
+
 /// Parse `#[gateway(path = "/ws", version = "1", namespace = ChatNs)]` — `path`
 /// required, the other two optional. Order-independent; unknown keys rejected.
 fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
-    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(args)?;
     let mut path = None;
     let mut version = None;
     let mut namespace = None;
-    // Each key once, every key — `namespace` decides which `WsServer<N>` the
-    // gateway fans out on, so a dropped second declaration is which sockets a
-    // broadcast reaches, decided by source order.
-    let mut written = nest_rs_codegen::WrittenKeys::default().with_remedy(
-        "version",
-        "a gateway owns one mount, so it carries one version",
-    );
-    for meta in metas {
-        written.take_key(
-            "gateway",
-            &["path", "version", "namespace"],
-            meta.path(),
-            &nest_rs_codegen::key_as_written(meta.path()),
-        )?;
-        match meta {
-            Meta::NameValue(nv) if nv.path.is_ident("path") => {
-                path = Some(require_str_lit(&nv.value, "gateway", "path", "/ws")?);
-            }
+    GATEWAY.parse2(args, |arg| {
+        match arg.key() {
+            "path" => path = Some(arg.str_lit("/ws")?),
             // Through `#[controller]`'s own parser, which is what the doc
             // comment above already claims. Taking it through a bare
             // `expr_str` made this a *second* grammar wearing one name: no
             // character-set check, so `version = "a/b"` compiled and mounted at
             // `/va/b/ws`, and no list form, so the spelling learned next door
             // failed here with a bare "expected a string literal".
-            Meta::NameValue(nv) if nv.path.is_ident("version") => {
+            "version" => {
+                let value = arg.expr()?;
                 let declared =
-                    nest_rs_codegen::versioning::parse_version_list(&nv.value, "#[gateway]")?;
+                    nest_rs_codegen::versioning::parse_version_list(&value, "#[gateway]")?;
                 if declared.len() > 1 {
                     return Err(syn::Error::new_spanned(
-                        &nv.value,
+                        &value,
                         nest_rs_codegen::takes_value(
                             "gateway",
                             Some("version"),
@@ -285,18 +277,12 @@ fn parse_gateway_args(args: TokenStream2) -> syn::Result<GatewayArgs> {
                 }
                 version = declared.into_iter().next();
             }
-            Meta::NameValue(nv) if nv.path.is_ident("namespace") => {
-                namespace = Some(expr_path(&nv.value)?)
-            }
-            other => {
-                return Err(nest_rs_codegen::unmatched_meta(
-                    "gateway",
-                    &other,
-                    &["path", "version", "namespace"],
-                ));
-            }
+            "namespace" => namespace = Some(expr_path(&arg.expr()?)?),
+            // The grammar hands over only its own keys.
+            _ => {}
         }
-    }
+        Ok(())
+    })?;
     let path = path.ok_or_else(|| {
         syn::Error::new(
             proc_macro2::Span::call_site(),

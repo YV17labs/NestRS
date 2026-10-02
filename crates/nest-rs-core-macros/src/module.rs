@@ -3,7 +3,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Expr, Ident, ItemStruct, Path, Token, Type, bracketed, parse_macro_input};
+use syn::{Expr, ItemStruct, Path, Token, Type, bracketed, parse_macro_input};
 
 pub(crate) fn module(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as ModuleArgs);
@@ -383,36 +383,30 @@ impl Parse for ProviderBinding {
     }
 }
 
+/// `#[module]`'s two keys.
+const MODULE: nest_rs_codegen::Grammar =
+    nest_rs_codegen::Grammar::new("module", &["imports", "providers"]);
+
 impl Parse for ModuleArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut args = ModuleArgs::default();
-        let mut written = nest_rs_codegen::WrittenKeys::default();
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            // Judged **before** the value shape is parsed. Reading `= [` first
-            // meant the shared unknown-key sentence was reachable only when the
-            // wrong key happened to take a bracketed value: `#[module(exports =
-            // [Foo])]` named the key, `#[module(porviders = Foo)]` answered
-            // `expected square brackets` — and the snapshot pinned the reachable
-            // half, so the join read green over a refusal that fired on one
-            // value shape.
-            //
-            // A repeat is refused rather than merged. It is legible here — two
-            // `providers = [...]` lists concatenate — so nothing is *dropped*,
-            // which is why `duplicate_argument`'s own reasoning does not apply
-            // verbatim. What applies is that every other member of the
-            // `key = value` family refuses it, and a grammar the framework
-            // interprets accepting a spelling its siblings reject is the
-            // asymmetry a shared sentence exists to remove: one list is what a
-            // reader can see whole.
-            let name = key.to_string();
-            written.take_key("module", &["imports", "providers"], &key, &name)?;
-            if input.parse::<Token![=]>().is_err() {
-                return Err(syn::Error::new(
-                    key.span(),
-                    nest_rs_codegen::needs_a_value("module", &name),
-                ));
-            }
+        // Each key is judged **before** its value is read — by the grammar, which
+        // hands over only a known key written for the first time. Reading `= [`
+        // first meant the unknown-key sentence was reachable only when the wrong
+        // key happened to take a bracketed value: `#[module(exports = [Foo])]`
+        // named the key, `#[module(porviders = Foo)]` answered `expected square
+        // brackets`.
+        //
+        // A repeat is refused rather than merged. It is legible here — two
+        // `providers = [...]` lists concatenate — so nothing is *dropped*, which
+        // is why `duplicate_argument`'s own reasoning does not apply verbatim.
+        // What applies is that every other member of the `key = value` family
+        // refuses it, and a grammar the framework interprets accepting a
+        // spelling its siblings reject is the asymmetry a shared sentence exists
+        // to remove: one list is what a reader can see whole.
+        MODULE.parse(input, |arg| {
+            let name = arg.key();
+            let input = arg.value()?;
             // Both keys take a list, and a value that is not one is refused as
             // a value — at the value, naming the decorator and the key — where
             // `bracketed!` answered syn's `expected square brackets`.
@@ -424,40 +418,28 @@ impl Parse for ModuleArgs {
             if !input.peek(syn::token::Bracket) {
                 return Err(syn::Error::new(
                     input.span(),
-                    nest_rs_codegen::takes_value("module", Some(&name), takes),
+                    nest_rs_codegen::takes_value("module", Some(name), takes),
                 ));
             }
             let content;
             bracketed!(content in input);
-
-            match name.as_str() {
-                "imports" => {
-                    let exprs: Punctuated<Expr, Token![,]> =
-                        Punctuated::parse_terminated(&content)?;
-                    args.imports.extend(exprs);
-                }
-                "providers" => {
-                    // An entry that is not a type path is the same mistake one
-                    // level in, and syn's `expected identifier` named nothing.
-                    let bindings: Punctuated<ProviderBinding, Token![,]> =
-                        Punctuated::parse_terminated(&content).map_err(|stopped| {
-                            syn::Error::new(
-                                stopped.span(),
-                                nest_rs_codegen::takes_value("module", Some(&name), takes),
-                            )
-                        })?;
-                    args.providers.extend(bindings);
-                }
-                // Unreachable: the key was judged above, before anything read
-                // the value. Kept as an exhaustive arm rather than a wildcard so
-                // adding a key here without adding it there does not compile.
-                other => unreachable!("`{other}` was refused before the value was read"),
+            if name == "imports" {
+                let exprs: Punctuated<Expr, Token![,]> = Punctuated::parse_terminated(&content)?;
+                args.imports.extend(exprs);
+            } else {
+                // An entry that is not a type path is the same mistake one
+                // level in, and syn's `expected identifier` named nothing.
+                let bindings: Punctuated<ProviderBinding, Token![,]> =
+                    Punctuated::parse_terminated(&content).map_err(|stopped| {
+                        syn::Error::new(
+                            stopped.span(),
+                            nest_rs_codegen::takes_value("module", Some(name), takes),
+                        )
+                    })?;
+                args.providers.extend(bindings);
             }
-
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
-            }
-        }
+            Ok(())
+        })?;
         Ok(args)
     }
 }

@@ -1,5 +1,0 @@
-error: #[every] `key` needs a value — write `key = ...`
-  --> tests/integration/diagnostics/key_needs_a_value.rs:12:38
-   |
-12 |     #[every("30s", replicas = "one", key)]
-   |                                      ^^^

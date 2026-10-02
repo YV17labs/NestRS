@@ -1,5 +1,0 @@
-error: #[every] takes at most one `key`
-  --> tests/integration/diagnostics/key_takes_at_most_one_key.rs:13:58
-   |
-13 |     #[every("30s", replicas = "one", key = "billing::a", key = "billing::b")]
-   |                                                          ^^^

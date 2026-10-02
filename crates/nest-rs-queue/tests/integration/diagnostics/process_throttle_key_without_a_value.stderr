@@ -1,5 +1,0 @@
-error: #[process] `throttle(limit)` needs a value — write `throttle(limit = ...)`
-  --> tests/integration/diagnostics/process_throttle_key_without_a_value.rs:21:43
-   |
-21 |     #[process(queue = DemoQueue, throttle(limit, window = "1m"))]
-   |                                           ^^^^^

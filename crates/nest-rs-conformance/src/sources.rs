@@ -528,6 +528,10 @@ pub fn config_namespace(attrs: &[syn::Attribute]) -> Option<String> {
             .is_some_and(|segment| segment.ident == "config")
     })?;
     let mut namespace = None;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a scanner reading `#[config]` as text, not a decorator's grammar"
+    )]
     let _ = attr.parse_nested_meta(|meta| {
         if meta.path.is_ident("namespace") {
             let lit: syn::LitStr = meta.value()?.parse()?;

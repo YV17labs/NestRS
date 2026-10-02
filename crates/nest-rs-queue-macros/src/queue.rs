@@ -4,17 +4,16 @@
 //! on its surface crate.
 
 use nest_rs_codegen::{
-    WrittenKeys, invalid_queue_name, is_valid_queue_name, missing_argument, needs_a_value,
-    require_str_lit, takes_value,
+    Grammar, invalid_queue_name, is_valid_queue_name, missing_argument, takes_value,
 };
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Expr, Ident, Item, LitStr, Token, Type, parse_macro_input};
+use syn::{Item, LitStr, Type, parse_macro_input};
 
 /// Every key `#[queue]` takes, in the order its unknown-key refusal lists them.
-const KEYS: [&str; 2] = ["name", "job"];
+const QUEUE: Grammar = Grammar::new("queue", &["name", "job"]);
 
 pub(crate) fn queue(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as QueueArgs);
@@ -103,24 +102,10 @@ impl Parse for QueueArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name: Option<LitStr> = None;
         let mut job: Option<Type> = None;
-        let mut written = WrittenKeys::default();
 
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            // The key is judged before the `=`, so a bare `#[queue(name)]` names
-            // the key rather than dying on syn's `` expected `=` `` — and a bare
-            // *unknown* key still reads as unknown rather than as missing a value.
-            let spelled = key.to_string();
-            written.take_key("queue", &KEYS, &key, &spelled)?;
-            if !input.peek(Token![=]) {
-                return Err(syn::Error::new(
-                    key.span(),
-                    needs_a_value("queue", &spelled),
-                ));
-            }
-            input.parse::<Token![=]>()?;
-            if spelled == "job" {
-                job = Some(input.parse::<Type>().map_err(|stopped| {
+        QUEUE.parse(input, |arg| {
+            if arg.key() == "job" {
+                job = Some(arg.value()?.parse::<Type>().map_err(|stopped| {
                     syn::Error::new(
                         stopped.span(),
                         takes_value(
@@ -131,20 +116,18 @@ impl Parse for QueueArgs {
                     )
                 })?);
             } else {
-                let literal = require_str_lit(&input.parse::<Expr>()?, "queue", "name", "emails")?;
+                let literal = arg.str_lit("emails")?;
                 // The rule `QueueName` states, refused at the literal.
                 if !is_valid_queue_name(&literal.value()) {
                     return Err(syn::Error::new(
                         literal.span(),
-                        invalid_queue_name("queue", &spelled, &literal.value()),
+                        invalid_queue_name("queue", arg.key(), &literal.value()),
                     ));
                 }
                 name = Some(literal);
             }
-            if !input.is_empty() {
-                input.parse::<Token![,]>()?;
-            }
-        }
+            Ok(())
+        })?;
 
         let name = name.ok_or_else(|| {
             syn::Error::new(

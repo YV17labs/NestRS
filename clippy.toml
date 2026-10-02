@@ -3,7 +3,8 @@
 # file would *replace* it, not merge with it — never add one below.
 #
 # A path here that stops resolving is only a warning, so every entry has a
-# canary `#[expect]` in `nest-rs-macro-hygiene`: a dead entry fails the build.
+# canary `#[expect]`: in `nest-rs-macro-hygiene`, or at the one sanctioned site
+# when that crate cannot reach the item. A dead entry then fails the build.
 
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
@@ -18,4 +19,6 @@ disallowed-macros = [
 disallowed-methods = [
     { path = "std::env::var", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
     { path = "std::env::var_os", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
+    { path = "syn::Attribute::parse_nested_meta", reason = "read key = value through nest_rs_codegen::Grammar" },
+    { path = "syn::meta::parser", reason = "read key = value through nest_rs_codegen::Grammar" },
 ]

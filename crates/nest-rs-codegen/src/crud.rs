@@ -13,6 +13,8 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, Path, Token};
 
+use crate::grammar::Grammar;
+
 /// How a generated `list` op bounds its result set.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Paginate {
@@ -194,9 +196,12 @@ fn excluded_op_key(written: Span, key: &str, op: &str) -> syn::Error {
 
 /// Every key `#[crud]` takes, in declaration order — the list the unknown-key
 /// refusal reads, so adding a key cannot leave the sentence behind.
-const KEYS: [&str; 7] = [
-    "service", "entity", "output", "create", "update", "ops", "paginate",
-];
+const CRUD: Grammar = Grammar::new(
+    "crud",
+    &[
+        "service", "entity", "output", "create", "update", "ops", "paginate",
+    ],
+);
 
 /// The two values `paginate` takes — the list both of its refusals give.
 const PAGINATE: [&str; 2] = ["cursor", "none"];
@@ -214,19 +219,6 @@ fn value_of<T: Parse>(input: ParseStream, key: &str, what: &str) -> syn::Result<
         .map_err(|error| syn::Error::new(error.span(), crate::takes_value("crud", Some(key), what)))
 }
 
-/// Refuse a bare key. `expected `=`` is syn's, and it names the grammar rather
-/// than the key the developer wrote — the third of the three refusals a
-/// `key = value` grammar owes, worded once in `nest_rs_codegen::args`.
-fn value_for(input: ParseStream, key: &Ident) -> syn::Result<()> {
-    if input.parse::<Token![=]>().is_err() {
-        return Err(syn::Error::new(
-            key.span(),
-            crate::needs_a_value("crud", &key.to_string()),
-        ));
-    }
-    Ok(())
-}
-
 impl Parse for CrudDeclaration {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut service = None;
@@ -237,56 +229,47 @@ impl Parse for CrudDeclaration {
         let mut ops = OpsSelection::Default;
         let mut paginate = Paginate::Cursor;
         let mut paginate_written = None;
-        let mut written = crate::WrittenKeys::default();
 
-        while !input.is_empty() {
-            let key: Ident = input.parse()?;
-            let name = key.to_string();
-            written.take_key("crud", &KEYS, &key, &name)?;
-            match name.as_str() {
+        CRUD.parse(input, |arg| {
+            match arg.key() {
                 "service" => {
-                    value_for(input, &key)?;
                     service = Some(value_of(
-                        input,
+                        arg.value()?,
                         "service",
                         "the name of the injected `CrudService` field, e.g. `service = svc`",
                     )?);
                 }
                 "entity" => {
-                    value_for(input, &key)?;
                     entity = Some(value_of(
-                        input,
+                        arg.value()?,
                         "entity",
                         "the entity's path, e.g. `entity = users::Entity`",
                     )?);
                 }
                 "output" => {
-                    value_for(input, &key)?;
                     output = Some(value_of(
-                        input,
+                        arg.value()?,
                         "output",
                         "the response type's path, e.g. `output = User`",
                     )?);
                 }
                 "create" => {
-                    value_for(input, &key)?;
                     create = Some(value_of(
-                        input,
+                        arg.value()?,
                         "create",
                         "the input type's path, e.g. `create = CreateUser`",
                     )?);
                 }
                 "update" => {
-                    value_for(input, &key)?;
                     update = Some(value_of(
-                        input,
+                        arg.value()?,
                         "update",
                         "the input type's path, e.g. `update = UpdateUser`",
                     )?);
                 }
                 "ops" => {
-                    let ops_span = key.span();
-                    value_for(input, &key)?;
+                    let ops_span = arg.ident().span();
+                    let input = arg.value()?;
                     if !input.peek(syn::token::Bracket) {
                         return Err(syn::Error::new(
                             input.span(),
@@ -339,9 +322,8 @@ impl Parse for CrudDeclaration {
                     ops = OpsSelection::Explicit(selected, ops_span);
                 }
                 "paginate" => {
-                    paginate_written = Some(key.span());
-                    value_for(input, &key)?;
-                    let mode: Ident = input.parse().map_err(|error| {
+                    paginate_written = Some(arg.ident().span());
+                    let mode: Ident = arg.value()?.parse().map_err(|error| {
                         syn::Error::new(
                             error.span(),
                             crate::args::takes_one_of("crud", "paginate", &PAGINATE),
@@ -358,15 +340,11 @@ impl Parse for CrudDeclaration {
                         }
                     };
                 }
-                // `take_key` refused every name outside `KEYS`.
+                // The grammar hands over only its own keys.
                 _ => {}
             }
-            if input.peek(Token![,]) {
-                input.parse::<Token![,]>()?;
-            } else {
-                break;
-            }
-        }
+            Ok(())
+        })?;
 
         // Three required keys, one sentence — the crate that owns the wording
         // was itself three of the family's eight hand-written copies.

@@ -224,9 +224,11 @@ let receipt = queue.push(AudioQueue, command, None).await?;
   under the 6.x namespace the check reads the names apalis's own `Config` getters
   derive — the waiting list, the schedule, the consumers set, and the in-flight
   sets that set lists — with `TYPE` first, then `LLEN`, `ZCARD`, `ZRANGE` or
-  `SCARD` for the type found. It never writes and reads no other name; it is the
-  one place the framework reads apalis's structures itself, a written exception
-  to reaching them only through apalis's API, held there by a conformance join. A
+  `SCARD` for the type found. It never writes and reads no other name — an e2e
+  runs it as a Redis user allowed only those reads, and Redis denies it nothing.
+  It is the one place the framework reads apalis's structures itself, a written
+  exception to reaching them only through apalis's API: the root `clippy.toml`
+  refuses apalis's nine structure getters in every other file. A
   key of another type at one of those names, an application's own, is not taken
   for jobs and hides none beside it: it is left alone and named in one `warn`,
   `a key at a 6.x queue name holds what 6.x never kept there; left alone, and not
@@ -425,8 +427,8 @@ after two failures. **Breaking for code that reached the manager.**
   included, and nothing more: Redis checks the commands inside a script against
   the caller's ACL too. An app running several bindings gives one user each rule.
   An e2e test creates a user from each page's line verbatim and runs the binding
-  through it, reading Redis's `ACL LOG` for any denial, and a conformance join
-  holds each rule to the commands the binding's sources send, both ways.
+  through it, reading Redis's `ACL LOG` for any denial; that a line grants
+  nothing its binding leaves unused is held by review.
   `CLIENT SETINFO`, which the client sends and whose refusal it ignores, is left
   out, because Redis 7.0 refuses a rule naming it.
 
@@ -739,8 +741,8 @@ abandoned with a `warn` naming what it was waiting on.
   umbrella, so an app's manifest needs no `tokio` line for it. **Breaking:**
   replace `#[tokio::main]` on every binary's `main`, and move a `tokio` line kept
   only for it to `[dev-dependencies]`. The scaffold, the demo and the benchmark
-  already do, and a conformance join refuses an `async fn main` without it, and
-  `#[tokio::main]` anywhere, in both workspaces.
+  already do, and the root `clippy.toml` refuses `#[tokio::main]` in every
+  crate of both workspaces.
 - **A second `SIGINT` or `SIGTERM` during the way down exits at once.** In 6.1 it
   was ignored, because the first had replaced the default handlers, so a stuck
   shutdown ended only with `SIGKILL`. The process now exits with 130 or 143 after
@@ -770,8 +772,23 @@ abandoned with a `warn` naming what it was waiting on.
   3. A raised window keeps `terminationGracePeriodSeconds` 8.5 seconds above it.
   The settle bound is the kernel's, `nest_rs::core::SHUTDOWN_SETTLE_TIMEOUT` (500
   ms), shared by HTTP's detached work and the scheduler. A test in
-  `nest-rs-testing` sums every transport's default bound and pins the 28.5, and a
-  conformance join fails on a transport it does not sum.
+  `nest-rs-testing` sums the `stop_bound()` of every transport the framework
+  ships, at its defaults, and pins the 28.5.
+- **Breaking for a hand-written transport: `Transport` gains a required
+  `fn stop_bound(&self) -> Duration`**, the longest `serve` takes to return once
+  told to stop, at the configuration `configure` left. `HttpTransport` answers
+  its shutdown window plus the settle, `Scheduler` its five seconds plus the
+  settle, and `RedisWorker` its drain window — read at `configure` now rather than
+  at `serve`, so the bound is the deployment's own. With no default, a transport
+  cannot be written without the bound it adds to the way down.
+- **The boot files the way down it adds up to.** Once every transport is
+  configured, one `way down bounded` line on `nest_rs::app` carries the longest
+  stop bound among the transports the app mounted, settle included
+  (`stop_bound_ms`), and the shutdown hooks' budget (`hooks_budget_ms`) — the demo
+  api reads `stop_bound_ms=20500 hooks_budget_ms=5000`. Add OpenTelemetry's
+  3-second flush when it is installed, which the kernel cannot see, and a
+  deployment that raised a window reads off the line what its grace period has
+  to hold.
 
 ### Long-lived connections end at the shutdown signal, the standard way
 
@@ -833,7 +850,7 @@ edges. Every edge now files both:
 - A query that reads only `ok` lines of `graphql.subscription` now also meets the
   sockets a shutdown ended, as `cancelled`.
 
-A conformance join holds every edge's shipped source to both words.
+Each edge's own suite drives a unit to both ends and asserts the line it files.
 
 ### A unit's span says how it ended, and a request cut before it answers keeps its route
 
@@ -854,6 +871,39 @@ What a client's close files is now stated. An ordinary close (FIN) is a legal
 HTTP/1.1 half-close, so hyper runs the handler to its end and the line carries the
 answer's `status`. Only a reset — an HTTP/2 stream cancel, `SO_LINGER` of zero, a
 crashed client — drops the request and files `outcome="cancelled"`.
+
+### A unit of work is a typed `Unit`, and its span and its line read every slot off it
+
+**Breaking for code reading a unit's constant as a string, or calling
+`operation_span!`.** A unit was a `&str` constant beside a separate kind and
+target, so a span could be opened under one name and its line filed under
+another. Each `<edge>::unit::*`
+constant — `nest_rs_http::unit::REQUEST` and its siblings — is now a
+`nest_rs::core::operation_log::Unit`, carrying its name, its target and its
+`Kind`; `.name()` gives the string.
+
+- **A unit is declared with `nest_rs_core::unit!`** —
+  `unit!("http.request", target: crate::target::HTTP, kind: Server)` — evaluated
+  in a `const`, so a name off the `<edge>.<unit>` grammar, an edge outside
+  `operation_log::EDGES`, a target other than `nest_rs::<edge>` and a declaring
+  crate other than `nest-rs-<edge>` are compile errors.
+- **`operation_span!` takes the unit as a path** —
+  `operation_span!(nest_rs_http::unit::REQUEST, &correlation, …)` — and reads its
+  target, name and span kind off it; a literal does not match, and a unit another
+  crate declared is refused at compile time.
+  `operation_log::kind::{SERVER, CONSUMER, INTERNAL}` is the enum
+  `operation_log::Kind`, declared with the unit and never at the span site.
+- **`operation_line!` files a unit's operation line** — its target, name,
+  message, `outcome` and `duration_ms`, written once — and records the outcome on
+  the unit's span, so the line and the span cannot say two things. Every edge
+  files its line through it. **Field order changes:** `outcome` and
+  `duration_ms` now come before the edge's own fields.
+- **`contained_panic!` logs a contained panic at `error` under `panic::FIELD`.**
+  Every seam that contains one — lifecycle hooks, the event bus, a GraphQL
+  subscription, an MCP operation, a queue attempt, a Redis delivery, the
+  scheduler, a WebSocket gateway, SeaORM's after-commit work — logs through it, so
+  the field is spelled once. Those lines now put the message first, then
+  `panic`, then the seam's fields.
 
 ### Every variable can be given as a file, and a family's variables carry the family as a level
 
@@ -900,8 +950,18 @@ crashed client — drops the request and files `outcome="cancelled"`.
   boot with `ConfigError::Decode`, worded by `nest_rs::core::DecodeError` — the
   variable, where the value failed, the kind of value found and the type
   expected, never the value. A `from_env` decoding a structured value through
-  `serde_json` itself quotes it back, a client secret in a mistyped list included,
-  so a conformance join refuses one in the framework and the demo.
+  `serde_json` itself and handing the error to `Setting::refuse` or
+  `ConfigError::parse` no longer quotes it back either, as the next entry says.
+- **Security: a refused value never reaches a boot error, whatever format worded
+  the refusal.** `ConfigError::Parse` is `#[non_exhaustive]` and built only
+  through `ConfigError::parse`, which `Setting::refuse` and every duration's
+  refusal go through. It drops a parser's source excerpt — the `1 | key = "…"`
+  lines a TOML error opens with, which repeat the refused line verbatim — and
+  says serde's quoting sentences without their value, so a secret in a mistyped
+  value no longer lands in the boot error a deployment's logs keep. No framework
+  config reads TOML; one of your own that does is covered the same way.
+  **Breaking** for code building `ConfigError::Parse { var, message }` as a
+  literal: call `ConfigError::parse(var, message)`.
 - `OpenTelemetryConfig::from_env` returns a `Result`, and an unparseable
   `SAMPLE_RATIO` or `METRIC_INTERVAL_SECS` — `NaN` included — fails
   `OpenTelemetry::init` with `OpenTelemetryError::Config`, naming the variable,
@@ -935,8 +995,9 @@ while another binary's variable carries its own, so `NESTRS_OPENAI__API_KEY`
 beside a linked `openapi` stays silent. And a misspelled segment must have six
 letters or more, within a quarter of its length: a shorter one has no room for a
 typo that is not also a word (`auth` and `authz` beside `authn`, `es` beside
-`ws`), so there only separators and case count. A conformance join holds every
-namespace of both workspaces outside that reach of every other. The namespace half
+`ws`), so there only separators and case count. `nest-rs-conformance`'s naming
+check holds every namespace of both workspaces outside that reach of every other,
+reading the namespaces the `#[config]` declarations state. The namespace half
 runs at every read of its namespace, ended by an error or not, so a renamed
 required variable is named ahead of the boot error its absence causes; the key
 half runs per namespace, where that namespace's `from_env` ran, because a config's
@@ -998,9 +1059,16 @@ nothing.
   `read_optional` for an `Option<Duration>`, with `Floor::UnitsOrOff` for a bound a
   deployment may switch off — so its refusal is the framework's sentence; see
   [Configuration](https://nestrs.dev/configuration/#configservice-api).
-
-A conformance join refuses a `_SECS` or `_MS` key read through any other reader,
-and a page, README or rule quoting a refusal without the unit the boot writes.
+- **Breaking: a duration's key and its unit cannot disagree.** `DurationBounds`'
+  fields are private; it is built with `DurationBounds::secs(key, field, least,
+  most)` or `DurationBounds::millis(…)`, and a `secs` key not ending in `_SECS`,
+  or a `millis` key not ending in `_MS`, fails to compile in a `const`. Read a
+  declaration back with `key()`, `field()`, `unit()`, `least()` and `most()`.
+- **Breaking: a duration is read through its bounds and nothing else.** Every
+  `ConfigService` reader — `get`, `setting`, `material`, `parse`, `json`, `flag`,
+  `count`, `list` — refuses a key ending in `_SECS` or `_MS` at boot, whatever the
+  deployment set, with the new `ConfigError::UnboundedDuration`, which names
+  `DurationBounds`.
 
 ### A contested declaration names both imports that made it
 
@@ -1186,9 +1254,10 @@ forwarded that way is read too, where it was refused.
 
 A decorator read once refuses a second copy by name — `#[public]` at every edge,
 every flag, `#[api]` and `#[inject]` — where rustc said `cannot find attribute`.
-**Every `key = value` grammar refuses a repeat of every key**, through one guard in
-`nest_rs_codegen`, `WrittenKeys::take_key`, which refuses an unknown key and a
-repeated one in the same call and underlines a repeat at the key; a repeated
+**Every `key = value` grammar refuses a repeat of every key**, through one reader in
+`nest_rs_codegen`, `Grammar`, which refuses an unknown key, a repeated one and one
+written bare before the decorator sees a key, and underlines a repeat at the key —
+eighteen decorators, both halves of `#[expose]` among them; a repeated
 `via` on the `#[expose]` written on a column used to load the rows the second
 foreign key links. `#[crud(create = T, ops = [list, get])]` is refused, where the
 input type of an op `ops` leaves out was dropped in silence, and so is a
@@ -1196,23 +1265,35 @@ input type of an op `ops` leaves out was dropped in silence, and so is a
 = none)]` dropped the documented opt-out in silence, though `paginate` configures
 `list` alone. `#[interceptor]` names a misspelled key rather than reporting a
 repeated `priority`, and a refused `#[mcp(...)]` argument no longer blames the
-`#[tools]` impl beside it.
+`#[tools]` impl beside it. `#[api("…")]` — an argument that is not a key — is
+refused with the shared unknown-argument sentence naming it as written, and
+`#[mcp]`'s refusal of a server-identity field points at the key rather than at
+the whole argument.
 
 **Breaking for decorator authors** building on `nest_rs_codegen`: the worker-job
 helpers take the member of the family they word rather than its name —
 `transactional_value(expr)` is `transactional_value(JobDecorator::Process, expr)`,
 `job_argument_needs_a_value(attr, name)` is `job_argument_needs_a_value(member,
-name)` — and `job_key(member, &mut written, name, at)` answers taken, refused,
-unknown or repeated in one call against the table above. A grammar takes its keys
-through `WrittenKeys::take_key`, and `reject_duplicate_argument` is gone with the
-per-key refusals it served. `takes_value` and `site` word the value family's
-sentences, `must_be_async` is gone with the rule it worded (a method may be
-synchronous; `await_if_async` emits the call), `CrudConfig` is `CrudDeclaration`,
-and the grammars above are public — `cfg_attrs`, `DispatchKeys`, `WrittenKeys`,
-`duration_millis`, `replicas_value` and its `Replicas`, `key_value`,
-`is_valid_job_key`, `RoutePath`, `HostBorrow`, `ungrouped_expr`, `JobDecorator`,
-`JobKey`, `job_keys`, `job_returns_a_result`, `unread_job_key` and
-`versioning::parse_version_args` among them.
+name)` — and `job_key(member, &arg)` reads the `Arg` that
+`JobDecorator::grammar()` hands over against the table above. A decorator reads
+its `key = value` arguments through `Grammar` — declared as a `const` with
+`Grammar::new(attr, keys)`, read with `parse`, `parse2` or `parse_attr`, and
+`take_all` for a list mixing positionals and keys — and the closure it hands over
+receives only keys of its own grammar, each the first time it is written.
+`WrittenKeys`, 6.1's `unmatched_meta` and `reject_duplicate_argument` are gone with
+the per-decorator loops they served, and the root `clippy.toml` refuses
+`syn::meta::parser` and `syn::Attribute::parse_nested_meta` in the repository's
+own crates. `DecoratorPair` can no longer be constructed outside
+`nest-rs-codegen`: the nine pairs are `nest_rs_codegen::pair::{HTTP, GRAPHQL, WS,
+MCP, HOOKS, PROCESSOR, INDICATORS, SCHEDULED, LISTENERS}`, listed by `pair::ALL`,
+where a macro crate reads its own. `takes_value` and `site` word the value
+family's sentences, `must_be_async` is gone with the rule it worded (a method may
+be synchronous; `await_if_async` emits the call), `CrudConfig` is
+`CrudDeclaration`, and the grammars above are public — `cfg_attrs`,
+`DispatchKeys`, `Grammar` and its `Arg`, `duration_millis`, `replicas_value` and
+its `Replicas`, `key_value`, `is_valid_job_key`, `RoutePath`, `HostBorrow`,
+`ungrouped_expr`, `JobDecorator`, `JobKey`, `job_keys`, `job_returns_a_result`,
+`unread_job_key` and `versioning::parse_version_args` among them.
 
 ### HTTP: a route is identified as poem serves it, `off` drops one header, and the nested settings are named for HTTP
 
@@ -1252,7 +1333,9 @@ and the grammars above are public — `cfg_attrs`, `DispatchKeys`, `WrittenKeys`
   so two methods naming one field, `a1_b` beside `a_1b` included, are refused at
   compile time with both named. `#[dataloader]` carries a method's
   `#[cfg]` onto the loader it generates and calls the batch by its path, and a
-  synchronous subscription or `#[entity]` resolver is accepted.
+  synchronous subscription or `#[entity]` resolver is accepted. **Fixed:**
+  `#[operations]` keeps an `#[expect(…)]` written on a resolver method; it kept
+  only `#[allow]`, so the lint the expectation answered fired anyway.
 - **MCP: rmcp 3.1 → 3.4.** `ServerInfo` is `ServerConfig` upstream, and
   `nest_rs::mcp::{ServerConfig, ServerCapabilities}` name the two at the
   framework's surface, so the next upstream rename costs one line there rather than
@@ -1313,6 +1396,23 @@ The caller did nothing wrong in either case (RFC 9110 §15.6.4).
 - `TokenError::Server` — the identity store a grant needed did not answer — is a
   `503` with the opaque `server_error` code, where it was a `500`.
 
+### A stored hash the hasher cannot run is reported, never read as a wrong password
+
+**Fixed, and breaking for code matching `PasswordError`.** `verify_password`
+answered `Ok(false)` for every verification error, so a stored PHC string that
+parses but names an algorithm, a version or parameters Argon2id refuses — an
+scrypt hash, a bogus memory cost — read as a wrong password: its owner was
+locked out, and a login service logged the one reason that was false. Only a
+password that does not match is `Ok(false)` now; anything else is
+`Err(PasswordError::InvalidHash(cause))`, which a caller already logs as an
+unusable record.
+
+- `PasswordError::HashFailed` and `PasswordError::InvalidHash` carry the hasher's
+  error as their `#[source]` — `HashFailed(password_hash::Error)`,
+  `InvalidHash(password_hash::Error)` — so `HashFailed` says whether the RNG or
+  the allocator failed, and `InvalidHash` which part of the hash was wrong. A
+  `match` names them with `(_)`.
+
 ### `nestrs g events`, every generator compiles, and the doctor reads what the app reads
 
 - **Every crate is 7.0.0**, `nest-rs-cli` included. `nestrs new` and every
@@ -1349,11 +1449,13 @@ The caller did nothing wrong in either case (RFC 9110 §15.6.4).
 - **`nestrs doctor` follows the loader.** An empty shell variable hides both `.env`
   spellings, nothing is trimmed that the loader keeps, and `NESTRS_ENV=prod` sends
   it to `.env.production` rather than a `.env.prod` no app reads. Each variable is
-  answered as the loader reads it — a conformance join runs the two side by side on
-  every shape a variable takes: a `_FILE` naming a file that holds nothing is `not
-  set`, and one naming a missing or unreadable file, or a variable given both inline
-  and as a file, is reported as failing the app's boot and blocks. Its tests no
-  longer read the developer's shell or working directory.
+  answered as the loader reads it — a differential test in `nest-rs-cli`'s own
+  suite runs the two side by side on every shape a variable takes, the loader a
+  path-only dev-dependency that `cargo install` never links: a `_FILE` naming a
+  file that holds nothing is `not set`, and one naming a missing or unreadable
+  file, or a variable given both inline and as a file, is reported as failing the
+  app's boot and blocks. Its tests no longer read the developer's shell or working
+  directory.
 - `nestrs doctor -p <dir>` opens a relative `<NAME>_FILE` from `<dir>`, where the
   app started there opens it, rather than from doctor's own working directory.
 - `nestrs doctor` fails, non-zero, on a `.env` naming `<PREFIX>_ENV` or
@@ -1514,14 +1616,20 @@ future handlebars that restores the default flips it back.
   framework's, the demo's and the benchmark's lockfiles with warnings denied, so an
   `unsound` or `unmaintained` advisory fails too, and a build of the framework on the
   beta toolchain, where apalis-redis 0.7.4's never-type-fallback lint turns into a
-  hard error six weeks before stable. A third job checks every crate alone under
-  its default features, and the umbrella with each feature alone: every local gate
-  builds one feature union, so a crate compiling only because a sibling turned a
-  feature on is invisible there — which is how `nest-rs-authz`'s 7.0 engine came to
-  name `nest-rs-core` while it was optional before this release fixed it. The
-  static half of that runs locally too, as the `dependencies` conformance join. A
-  failure opens one issue, or comments on it while it stays open. It is a monitor,
-  not a gate.
+  hard error six weeks before stable. A third job runs `scripts/check-features.sh`,
+  which checks every framework crate under its default features, under none and
+  under each feature alone, reading crates and features from `cargo metadata`:
+  every other gate builds one feature union, so a crate compiling only because a
+  sibling turned a feature on is invisible there — which is how `nest-rs-authz`'s
+  7.0 engine came to name `nest-rs-core` while it was optional before this release
+  fixed it. The script runs locally as it does there. A failure opens one issue,
+  or comments on it while it stays open. It is a monitor, not a gate.
+- **Fixed: `nest-rs-seaorm` compiles with only its `graphql` feature.**
+  `cargo add nest-rs-seaorm --no-default-features --features graphql` failed with
+  `E0432`: its GraphQL refusals go through `nest-rs-authz`'s GraphQL binding, and
+  only `http` forwarded its own; `graphql` now enables `nest-rs-authz/graphql`.
+  The script's first run found it. An application depending on the umbrella was
+  never affected.
 - **apalis-redis 0.7.4 (2025-11-18) is kept past the 12-month freshness bar, by
   decision, and the root manifest says why.** The only newer line,
   1.0.0-rc.9, fails dead-replica recovery: a worker that exits without its clean
@@ -1538,6 +1646,81 @@ future handlebars that restores the default flips it back.
   persisted-queries store, and nestrs builds neither — `#[dataloader]` is
   `DataLoader::new`, which does not cache. The fix ships with async-graphql 8, still a
   release candidate.
+
+### The rules are held by types, lints and behaviour tests
+
+For a contributor. Through 7.0's development `nest-rs-conformance` grew into a
+`syn`-based scanner of the framework's own source — "joins" proving a rule was
+followed, and a `blinds` join proving the others could not be evaded — and three
+audit rounds kept finding constructions that hid a member from a join. None of
+the 27 caught a production defect after it landed. A source scanner sees
+spellings while the compiler resolves items, so a rule is now held by the first
+rung that can hold it (`CLAUDE.md`, *How a rule is held*; the history is
+`.claude/decisions/conformance-scanner.md`):
+
+- **Types.** `Transport::stop_bound` is required, `DurationBounds` and `Unit` are
+  built only through constructors that check them at compile time, the decorator
+  pairs are `nest_rs_codegen::pair::ALL`, every `key = value` decorator reads
+  through `Grammar`, and `nest-rs-queue`'s capability test is an exhaustive
+  `match`, so a new `Capability` does not compile until its refusal is tested.
+- **rustc and clippy.** One `clippy.toml` at the repository root covers
+  `crates/`, `demo/` and `bench/`: `tokio::main` is a disallowed macro;
+  `std::env::var` and `var_os`, `syn::Attribute::parse_nested_meta` and
+  `syn::meta::parser`, and apalis-redis's nine structure getters outside
+  `legacy_layout.rs` are disallowed methods. Every entry has a canary
+  `#[expect]` — in `nest-rs-macro-hygiene`, or in the crate that can reach the
+  item — because an entry whose path stops resolving is only a warning. Both
+  workspaces deny `unwrap_used`, `expect_used`, `panic`, `print_stdout`,
+  `print_stderr`, `map_err_ignore`, `let_underscore_must_use`,
+  `allow_attributes_without_reason`, `dbg_macro`, `todo`, `unimplemented`,
+  `wildcard_imports` and `self_named_module_files`, with `allow-*-in-tests` in
+  `clippy.toml` and one `#![allow]` per suite root. An exception is
+  `#[expect(lint, reason = "…")]` at the site, so a stale one fails the build.
+  `unsafe_code` is `deny` rather than `forbid` in the root workspace, so the three
+  crates that had opted out of the whole table opt in. The sweep found the five
+  defects fixed above.
+- **Behaviour tests, whose assertions `cargo mutants` checks on each diff** — a
+  unit test over the Redis key constants, an e2e running the 6.x check as a
+  read-only Redis user, the doctor's differential test in `nest-rs-cli`, an MCP
+  test that a decode failure behind `anyhow` reaches the operator's line without
+  its value.
+- **Review**, against a written sentence, for what none of these can see.
+
+`nest-rs-conformance` keeps only structural checks over paths, manifests and
+declared constants — the naming law, the test-target layout, the snapshot
+fixtures, the target-constant prefixes and the `nestrs:` keys written outside
+Rust — with no baseline file: 17,875 lines and 106 tests become 3,583 and 23. The
+few source-reading tests left elsewhere are replaced in the same spirit.
+
+- **The docs lint runs the canon generator.** `docs/canon.json` and
+  `docs/demo-sources.json` are no longer committed: `lint-docs.mjs` runs
+  `cargo run -p nest-rs-conformance --bin canon` for the framework facts it checks
+  pages against and reads `demo/` sources directly, so no derived file can be
+  stale. `npm run lint:docs` needs a Rust toolchain; the docs workflow installs
+  one and also triggers on `crates/**`, `demo/**`, the root manifest, the lockfile
+  and the README. Its failure messages no longer cut a detail at its first `::`.
+- **Two docs-lint rules replace checks `nest-rs-conformance` held.** `family-mention` fails on
+  a unit of work, an operator-facing span target, a queue `Capability` variant,
+  or an umbrella capability's `cargo add nest-rs --features <x>` under an
+  `## Install`, that no page names; `readme-install` fails when a capability
+  crate's README does not install the umbrella with its feature, or when any
+  README installs a capability sub-crate.
+- **`scripts/check-features.sh`** checks every framework crate under its default
+  features, under none and under each feature alone, and `nest-rs-macro-hygiene`
+  has one feature per decorator-owning capability, so each capability's
+  decorators are proved to compile under that capability's feature alone.
+- **The trybuild suites run one at a time**, in a nextest `trybuild` test group
+  with `max-threads = 1`: they shared one build lock while holding a test slot,
+  and the non-e2e run went from 57 to 46 seconds here.
+- **The definition of done has three tiers** — while editing, before each commit
+  (fmt, workspace clippy, nextest over the touched crates' reverse dependencies,
+  their e2e, `cargo mutants` on the diff), and before a merge or a release (the
+  full gate, a run under `NESTRS_ENV_PREFIX=ACME`, the feature script, the
+  audits, the docs lint and the demo).
+- **The rules are rewritten** so they agree with each other and each names how
+  it is held: `CLAUDE.md`, the zone rules in `.claude/rules/`, and
+  `.claude/decisions/`, one file per decision recording what was tried and what
+  retired it. Rustdoc cites the zone rule that holds its decision.
 
 ### The demo follows 7.0
 
@@ -1572,16 +1755,16 @@ future handlebars that restores the default flips it back.
   `replicas = "each"`, written out.
 - **Breaking for a copy of the demo: its OAuth issuer config is `OAuthConfig`**,
   read from `NESTRS_OAUTH__CLIENTS` and `NESTRS_OAUTH__DEFAULT_ORG_ID` — it was
-  `IssuerConfig`, under `NESTRS_ISSUER__*`, a namespace its path did not name. The
-  conformance suite now holds every `#[config]`'s namespace and type name to its
-  path in both workspaces.
+  `IssuerConfig`, under `NESTRS_ISSUER__*`, a namespace its path did not name.
+  `nest-rs-conformance`'s naming check now holds every `#[config]`'s namespace and
+  type name to its path in both workspaces.
 - **A publish whose transaction rolls back enqueues no notification**, now that
   events wait for the commit; an e2e test drives both outcomes against real
   Postgres and Redis.
 - **The demo's log targets are constants its features declare**: each feature
   that logs declares `TARGET` at its module root and logs on
-  `crate::<feature>::TARGET`, and a conformance join refuses a literal target at
-  any call site of either workspace.
+  `crate::<feature>::TARGET`; a literal target at a call site is a review
+  finding.
 - **Every error the demo logs goes through `error_message`**, at all eleven sites,
   so a wrapper such as `AudioError::Queue` names the cause beneath it.
 - The posts MCP host reports itself as a `ServerConfig` read from `nest_rs::mcp`, the
@@ -1606,62 +1789,44 @@ future handlebars that restores the default flips it back.
 
 ### Also
 
-- **Every conformance join reads a path below the repository root.** Four joins
-  took the absolute path's components, so a clone under `~/src/`, or under a folder
-  named like an edge, changed their verdicts; `sources::below` is now the one strip,
-  and `no_verdict_depends_on_where_the_checkout_sits` plants a tree under a hostile
-  root to prove it. `nestrs lint` was already root-relative and is pinned by the same
-  test.
-- **New joins keep what the rules state true:** every error type lives in
-  `error.rs`, a root file of an adapter crate serves more than one binding,
-  `Config` names a `#[config]` alone, a compile-fail fixture has to parse, every
-  `nestrs:` key a page, a chart or the code spells is built from a declared one and
-  none prefixes another, every queue `Capability` owes a refusal test, an e2e on each
-  backend declaring it and a page naming it, and an edge folder directly under a
-  framework crate's `src/` adapts the crate, so its adapter takes the crate's
-  subject — while in a product crate, an app's or a library's, it is refused with a
-  sentence: an edge adapter belongs to a module folder, and the app's name stops at
-  `<App>Module`. The grammars join now reaches `#[every]`, `#[cron]`, `#[after]`
-  and `#[api]`, whose refusals were pinned by snapshots but joined to nothing, and
-  reads a decorator through a local `macro_rules!`; an import alias of a sentence
-  is refused by the `blinds` join below.
-- **No conformance join can be blinded.** What each join reads by its spelling is
-  declared beside it, and the `blinds` join refuses, in both workspaces' sources,
-  whatever would hide such a name — a rename, a `type` alias, an import through it
-  or a glob of it, an item a `macro_rules!` or a `cfg_attr` writes where its join
-  does not look, a `#[path]` module, an `extern crate … as`, a file `syn` cannot
-  parse — with no baseline, and a join added without its declaration fails too.
-  The joins that judge a path read it through one import resolver;
-  `#[cfg(not(test))]` is shipped code to every join; the snapshots join reads
-  rustc's codeless resolution errors; MCP's notification operation line, written
-  from a `macro_rules!`, is read by the units join for the first time.
-- **And more, each closing a blind spot a review found:** no `#[config]` decodes a
-  structured value itself (`decodes`); a path rooted at an optional dependency sits
-  under a feature that enables it (`dependencies`); the doctor answers every shape
-  of a variable as the loader does (`mirrors`); no namespace of either workspace is
-  a near miss of another (`naming`); a compile-fail snapshot pins no
-  name-resolution error its fixture does not declare (`snapshots`); every type a
-  `module.rs` declares shares its stem, whatever its visibility, and a module lives
-  nowhere else (`naming`); no framework code spells an apalis structure by hand,
-  and a concern whose keys put a member before the structure is one the key rule
-  states (`keys`); a crate constructing a queue backend owes an e2e test for every
-  capability it names, however it builds the set (`queue_capabilities`); and every
-  `nest_rs…::` path a rule, a docs page or a README names resolves to a public item
-  (`paths`), which found a pagination example calling a private module. Joined
-  since: every framework item boxing a developer's error goes through
-  `boxed_error`, and a config reader reaches no decoder by a helper (`decodes`);
-  every duration a deployment sets is read through `DurationBounds`, and a quoted
-  refusal carries its unit (`durations`); each binding's documented ACL allows what
-  it sends and nothing else (`acls`); a struct the upgrade page tells a reader to
-  write out whole is given every field 7.0 added (`upgrading`); every edge files a
-  unit stopped and a unit unwound, and every file that opens a unit records how it
-  ended (`units`); every transport the framework ships is summed on the way down
-  (`transports`); every `main` is `#[nest_rs::main]` (`entries`); a log target is
-  never a literal where it is emitted (`filters`); and a `#[config]`'s namespace
-  and type name are both read off its path, in both workspaces (`naming`).
-- **`unreachable_pub` is a workspace lint**, so the three crates that opt out of
-  `[lints] workspace = true` state what they take, and an item no caller outside
-  its crate reaches is `pub(crate)`.
+- **`nest-rs-conformance` reads every path below the repository root.** Its
+  checks took the absolute path's components, so a clone under `~/src/`, or under
+  a folder named like an edge, changed their verdicts; one strip now serves them
+  all, and a unit test reads a path the same below any root.
+- **What holds each rule 7.0 states**, now that the source scanner is gone (see
+  *The rules are held by types, lints and behaviour tests* above): every
+  `nestrs:` key a page, a chart or a script spells is built from a key constant
+  the code declares (`nest-rs-conformance`'s keys check), and the constants obey
+  the key law — each a level of its owner's concern, a queue's keys naming the
+  queue first, none a twin of another or a prefix inside a level (a unit test
+  over `nest-rs-redis`'s key constants); every queue `Capability` is refused
+  where a backend lacks it (an exhaustive `match` in `nest-rs-queue`'s tests, so
+  a new variant does not compile until it is) and is named on a page (the docs
+  lint's `family-mention`); a compile-fail fixture parses, and its snapshot pins no
+  resolution error the fixture does not declare (the snapshots check); every type
+  a `module.rs` declares shares its stem, a module lives nowhere else, an edge
+  folder directly under a framework crate's `src/` adapts the crate and takes its
+  subject, and in a product crate an edge adapter belongs to a module folder (the
+  naming check); every `nest_rs…::` path a docs page or a crate README names
+  resolves to a public item (the paths check), which found a pagination example
+  calling a private module. That every error type lives in `error.rs`, that a root
+  file of an adapter crate serves more than one binding, that `Config` names a
+  `#[config]` alone and that a file under an edge folder serves that edge alone
+  are review items.
+- **`unreachable_pub` is a workspace lint**, and every crate now opts into
+  `[lints] workspace = true`, so an item no caller outside its crate reaches is
+  `pub(crate)`.
+- **Fixed: one control character in a `Server-Timing` `desc` no longer drops the
+  whole header**, every other entry and the total with it; it is written as a
+  space.
+- **Fixed: a remote parent the subscriber cannot take is reported.** When the
+  OpenTelemetry layer is missing from a span's subscriber, or the span started
+  before the link, every continued trace exported without its parent in silence;
+  one `warn` on `nest_rs::opentelemetry`, `remote parent not linked; continued
+  traces export without their parent`, now says so, once per process. A span the
+  layer's own filter disabled stays silent.
+- **Fixed: an OAuth client endpoint URL that does not parse says why** — the
+  parser's reason is in the error beside the value.
 - **Four TLS tests pass on macOS.** The client trusts the fixture authority alone,
   verified by rustls with webpki on every platform, rather than merging it into the
   platform store, whose server-certificate policy rejected the long-lived fixtures.

@@ -1217,7 +1217,14 @@ line whose proof you cannot run is a line you have not done.
     trait's output *is* the edge's error type, which is what lets `.opaque()?`
     infer from the enclosing function's return type. One trait generic over the
     output has three applicable impls, the receiver stops deciding, and every call
-    site needs a turbofish.
+    site needs a turbofish. The impl boxes the handler's error with
+    `nest_rs_core::boxed_error`, never `.into()` — anyhow's own conversion boxes a
+    wrapper that hides the error it holds from every `downcast` and from
+    `error_message` — and every reply the edge builds from an error says a decode
+    failure without its value (`DecodeError::redact`): the HTTP problem `detail`,
+    the WS frame, the GraphQL `message`. The boxing is joined (`decodes` in
+    `nest-rs-conformance` derives every bound converting into a boxed trait
+    object); each edge's own suite proves its replies.
 12. **Discovery and its gate** — `Discoverable`, `ReachableProviders` for a
     link-time registry or structural gating for container metadata, and an
     inert-entry `warn` either way.

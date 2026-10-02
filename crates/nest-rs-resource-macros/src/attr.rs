@@ -614,12 +614,12 @@ fn foreign_key(written: &Expr) -> syn::Result<Ident> {
     Ok(Ident::new(&column, lit.span()))
 }
 
-/// A field key's list value — `input(create, update)` — each element read as
-/// written, or the key refused naming what its list takes when no list follows.
 /// The field half's key set — the `#[expose]` written on a column, as opposed
 /// to the one on the `Model`.
 const FIELD_KEYS: [&str; 4] = ["input", "validate", "complexity", "via"];
 
+/// A field key's list value — `input(create, update)` — each element read as
+/// written, or the key refused naming what its list takes when no list follows.
 fn listed(m: &syn::meta::ParseNestedMeta<'_>, key: &str, takes: &str) -> syn::Result<Vec<Expr>> {
     if !m.input.peek(syn::token::Paren) {
         return Err(m.error(nest_rs_codegen::takes_value("expose", Some(key), takes)));

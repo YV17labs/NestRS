@@ -88,6 +88,9 @@ pub struct CrudDeclaration {
     /// [`Paginate::Cursor`] — an unbounded list is an explicit opt-out
     /// (`paginate = none`), never the silent default.
     pub paginate: Paginate,
+    /// Where `paginate` was written, when it was — what a refusal of the key
+    /// points at once `ops` turns out to leave `list` out.
+    paginate_written: Option<Span>,
 }
 
 impl CrudDeclaration {
@@ -105,6 +108,9 @@ impl CrudDeclaration {
             }),
             OpsSelection::Explicit(ops, span) => {
                 let wants = |op| ops.contains(&op);
+                if let (false, Some(written)) = (wants(CrudOp::List), self.paginate_written) {
+                    return Err(excluded_op_key(written, "paginate", "list"));
+                }
                 Ok(GeneratedOps {
                     list: wants(CrudOp::List),
                     get: wants(CrudOp::Get),
@@ -165,6 +171,27 @@ fn resolve_write_op<'a>(
     Ok(ty)
 }
 
+/// The refusal of a key that configures one op, declared beside an `ops` that
+/// leaves that op out.
+///
+/// **The family is every op-specific key, and it has three members**: `create`
+/// and `update` name their op's input type ([`resolve_write_op`] refuses those,
+/// spanned at the type), and `paginate` bounds `list`'s result set. `service`,
+/// `entity` and `output` are read by every op — the output names the OpenAPI tag
+/// and the GraphQL operations of a delete too — so none of them can disagree
+/// with `ops`. An explicit `paginate` beside an `ops` without `list` was thrown
+/// away in silence, `paginate = none` — the documented opt-out — included.
+fn excluded_op_key(written: Span, key: &str, op: &str) -> syn::Error {
+    syn::Error::new(
+        written,
+        format!(
+            "{} configures the `{op}` op, which `ops` leaves out — list `{op}` in `ops` to \
+             generate it, or drop `{key} = …`",
+            crate::args::site("crud", Some(key)),
+        ),
+    )
+}
+
 /// Every key `#[crud]` takes, in declaration order — the list the unknown-key
 /// refusal reads, so adding a key cannot leave the sentence behind.
 const KEYS: [&str; 7] = [
@@ -209,7 +236,7 @@ impl Parse for CrudDeclaration {
         let mut update = None;
         let mut ops = OpsSelection::Default;
         let mut paginate = Paginate::Cursor;
-        let mut paginate_declared = false;
+        let mut paginate_written = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -349,13 +376,13 @@ impl Parse for CrudDeclaration {
                     // was the one with no refusal. A dropped second declaration
                     // here reverses `paginate = none` — the explicit opt-out
                     // into an unbounded list — in either direction.
-                    if paginate_declared {
+                    if paginate_written.is_some() {
                         return Err(syn::Error::new(
                             key.span(),
                             crate::duplicate_argument("crud", "paginate"),
                         ));
                     }
-                    paginate_declared = true;
+                    paginate_written = Some(key.span());
                     value_for(input, &key)?;
                     let mode: Ident = input.parse().map_err(|error| {
                         syn::Error::new(
@@ -420,6 +447,7 @@ impl Parse for CrudDeclaration {
             update,
             ops,
             paginate,
+            paginate_written,
         })
     }
 }
@@ -489,6 +517,42 @@ mod tests {
             refusal.contains("`create`") && refusal.contains("an op `ops` leaves out"),
             "{refusal}",
         );
+    }
+
+    // The third op-specific key: `paginate` configures `list`, so declaring it
+    // beside an `ops` without `list` is the same disagreement — and the
+    // documented opt-out, `paginate = none`, was the value thrown away.
+    #[test]
+    fn a_paginate_for_an_excluded_list_is_refused() {
+        for mode in [quote!(none), quote!(cursor)] {
+            let cfg = parse(quote! {
+                service = svc, entity = E, output = O, ops = [get], paginate = #mode
+            })
+            .expect("the arguments parse");
+            let Err(refusal) = cfg.generated_ops() else {
+                panic!("a `paginate` for an excluded `list` is refused");
+            };
+            assert_eq!(
+                refusal.to_string(),
+                "#[crud] `paginate` configures the `list` op, which `ops` leaves out — list \
+                 `list` in `ops` to generate it, or drop `paginate = …`",
+            );
+        }
+        // Read whatever order the two keys are written in, and only when
+        // `paginate` is written at all.
+        let reversed = parse(quote! {
+            service = svc, entity = E, output = O, paginate = none, ops = [get, delete]
+        })
+        .expect("the arguments parse");
+        assert!(reversed.generated_ops().is_err());
+        let unwritten = parse(quote! { service = svc, entity = E, output = O, ops = [get] })
+            .expect("the arguments parse");
+        assert!(unwritten.generated_ops().is_ok());
+        let listed = parse(quote! {
+            service = svc, entity = E, output = O, ops = [list], paginate = none
+        })
+        .expect("the arguments parse");
+        assert!(listed.generated_ops().is_ok_and(|ops| ops.list));
     }
 
     // No `ops` ⇒ back-compatible auto mode: with both input types present every

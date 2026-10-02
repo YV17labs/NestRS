@@ -338,6 +338,23 @@ mod tests {
         );
     }
 
+    // `paginate` configures `list`, so an `ops` leaving `list` out refuses it
+    // here as the HTTP surface does — one parser, one sentence.
+    #[test]
+    fn a_paginate_for_an_excluded_list_fails_to_expand() {
+        let item: ItemImpl = parse_quote! { impl Things {} };
+        let err = crud(
+            quote! { service = svc, entity = E, output = Thing, ops = [get], paginate = none },
+            item,
+        )
+        .expect_err("a `paginate` for an excluded `list` must fail to expand");
+        assert!(
+            err.to_string()
+                .contains("`paginate` configures the `list` op"),
+            "names the key and the op: {err}",
+        );
+    }
+
     // The valid form — a write op paired with its input type — expands and
     // emits the operation.
     #[test]

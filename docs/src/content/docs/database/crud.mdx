@@ -124,7 +124,9 @@ impl OrgsController {}
 - `paginate` defaults to `cursor` — every generated list is keyset-paginated
   (next cursor in `x-next-cursor` on REST, `first`/`after` arguments on
   GraphQL). `paginate = none` opts out into the full collection (backstopped
-  by `CrudService::list`'s hard cap).
+  by `CrudService::list`'s hard cap). It configures `list` and nothing else, so
+  writing it beside an `ops` that leaves `list` out fails the build for the
+  same reason an input type for an excluded op does.
 
 ## Override one handler, keep the rest
 

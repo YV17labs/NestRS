@@ -24,7 +24,7 @@ use std::path::Path;
 
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
-    crate_dirs, flatten, is_cfg_test, parsed, relative, repo_root, rust_files, segments,
+    crate_dirs, flatten, is_cfg_test, item_attrs, parsed, relative, repo_root, rust_files, segments,
 };
 use proc_macro2::TokenTree;
 use syn::Item;
@@ -163,19 +163,7 @@ impl ModuleTypes {
 
 impl<'ast> Visit<'ast> for ModuleTypes {
     fn visit_item(&mut self, node: &'ast Item) {
-        let attrs = match node {
-            Item::Struct(i) => &i.attrs,
-            Item::Enum(i) => &i.attrs,
-            Item::Union(i) => &i.attrs,
-            Item::Type(i) => &i.attrs,
-            Item::Trait(i) => &i.attrs,
-            Item::Mod(i) => &i.attrs,
-            Item::Fn(i) => &i.attrs,
-            Item::Impl(i) => &i.attrs,
-            Item::Macro(i) => &i.attrs,
-            _ => return syn::visit::visit_item(self, node),
-        };
-        if is_cfg_test(attrs) {
+        if is_cfg_test(item_attrs(node)) {
             return;
         }
         match node {

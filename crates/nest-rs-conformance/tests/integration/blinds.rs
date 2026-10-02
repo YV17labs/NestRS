@@ -73,7 +73,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use nest_rs_conformance::sources::{
-    crate_dirs, flatten, is_cfg_test, read, relative, repo_root, rust_files,
+    crate_dirs, flatten, impl_item_attrs, is_cfg_test, item_attrs, read, relative, repo_root,
+    rust_files,
 };
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::visit::Visit;
@@ -509,25 +510,7 @@ fn bounds_of_trait(flat: &[TokenTree], at: usize) -> BTreeSet<String> {
 
 impl<'ast> Visit<'ast> for Scan<'_> {
     fn visit_item(&mut self, node: &'ast Item) {
-        let attrs: &[Attribute] = match node {
-            Item::Const(i) => &i.attrs,
-            Item::Enum(i) => &i.attrs,
-            Item::ExternCrate(i) => &i.attrs,
-            Item::Fn(i) => &i.attrs,
-            Item::ForeignMod(i) => &i.attrs,
-            Item::Impl(i) => &i.attrs,
-            Item::Macro(i) => &i.attrs,
-            Item::Mod(i) => &i.attrs,
-            Item::Static(i) => &i.attrs,
-            Item::Struct(i) => &i.attrs,
-            Item::Trait(i) => &i.attrs,
-            Item::TraitAlias(i) => &i.attrs,
-            Item::Type(i) => &i.attrs,
-            Item::Union(i) => &i.attrs,
-            Item::Use(i) => &i.attrs,
-            _ => &[],
-        };
-        if is_cfg_test(attrs) {
+        if is_cfg_test(item_attrs(node)) {
             return;
         }
         match node {
@@ -598,14 +581,7 @@ impl<'ast> Visit<'ast> for Scan<'_> {
 
     // A `#[cfg(test)]` function or impl member is a fixture, as at item level.
     fn visit_impl_item(&mut self, node: &'ast syn::ImplItem) {
-        let attrs = match node {
-            syn::ImplItem::Fn(i) => &i.attrs,
-            syn::ImplItem::Const(i) => &i.attrs,
-            syn::ImplItem::Type(i) => &i.attrs,
-            syn::ImplItem::Macro(i) => &i.attrs,
-            _ => return syn::visit::visit_impl_item(self, node),
-        };
-        if !is_cfg_test(attrs) {
+        if !is_cfg_test(impl_item_attrs(node)) {
             syn::visit::visit_impl_item(self, node);
         }
     }

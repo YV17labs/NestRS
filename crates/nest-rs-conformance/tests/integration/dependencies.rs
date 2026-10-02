@@ -50,7 +50,10 @@ use std::path::{Path, PathBuf};
 use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::imports::CrateImports;
-use nest_rs_conformance::sources::{is_cfg_test, parsed, path_roots, relative, repo_root};
+use nest_rs_conformance::sources::{
+    impl_item_attrs, is_cfg_test, item_attrs, parsed, path_roots, relative, repo_root,
+    trait_item_attrs,
+};
 use proc_macro2::TokenStream;
 use syn::punctuated::Punctuated;
 use syn::visit::Visit;
@@ -257,27 +260,6 @@ impl Walk<'_> {
     }
 }
 
-fn item_attrs(item: &Item) -> &[Attribute] {
-    match item {
-        Item::Const(i) => &i.attrs,
-        Item::Enum(i) => &i.attrs,
-        Item::ExternCrate(i) => &i.attrs,
-        Item::Fn(i) => &i.attrs,
-        Item::ForeignMod(i) => &i.attrs,
-        Item::Impl(i) => &i.attrs,
-        Item::Macro(i) => &i.attrs,
-        Item::Mod(i) => &i.attrs,
-        Item::Static(i) => &i.attrs,
-        Item::Struct(i) => &i.attrs,
-        Item::Trait(i) => &i.attrs,
-        Item::TraitAlias(i) => &i.attrs,
-        Item::Type(i) => &i.attrs,
-        Item::Union(i) => &i.attrs,
-        Item::Use(i) => &i.attrs,
-        _ => &[],
-    }
-}
-
 /// The attributes of the expression shapes a `#[cfg]` sits on in statement
 /// position. A shape missing here reads as ungated, which reports rather than
 /// hides.
@@ -392,25 +374,15 @@ impl<'ast> Visit<'ast> for Walk<'_> {
     }
 
     fn visit_impl_item(&mut self, node: &'ast syn::ImplItem) {
-        let attrs = match node {
-            syn::ImplItem::Const(i) => &i.attrs[..],
-            syn::ImplItem::Fn(i) => &i.attrs,
-            syn::ImplItem::Type(i) => &i.attrs,
-            syn::ImplItem::Macro(i) => &i.attrs,
-            _ => &[],
-        };
-        self.gated(attrs, |walk| syn::visit::visit_impl_item(walk, node));
+        self.gated(impl_item_attrs(node), |walk| {
+            syn::visit::visit_impl_item(walk, node)
+        });
     }
 
     fn visit_trait_item(&mut self, node: &'ast syn::TraitItem) {
-        let attrs = match node {
-            syn::TraitItem::Const(i) => &i.attrs[..],
-            syn::TraitItem::Fn(i) => &i.attrs,
-            syn::TraitItem::Type(i) => &i.attrs,
-            syn::TraitItem::Macro(i) => &i.attrs,
-            _ => &[],
-        };
-        self.gated(attrs, |walk| syn::visit::visit_trait_item(walk, node));
+        self.gated(trait_item_attrs(node), |walk| {
+            syn::visit::visit_trait_item(walk, node)
+        });
     }
 
     fn visit_field(&mut self, node: &'ast syn::Field) {

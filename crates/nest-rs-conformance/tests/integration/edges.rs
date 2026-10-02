@@ -54,7 +54,7 @@ use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     carries_a_test, declared_pairs, declared_targets, declares_an_item, idents, is_cfg_test,
-    parsed, read, repo_root, rust_files, suite_runs_tests,
+    item_attrs, parsed, read, repo_root, rust_files, suite_runs_tests,
 };
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
@@ -153,7 +153,7 @@ fn vocabulary(dir: &Path) -> Vocabulary {
             continue;
         };
         for item in &ast.items {
-            if is_cfg_test(attrs_of(item)) {
+            if is_cfg_test(item_attrs(item)) {
                 continue;
             }
             // **An import is not an implementation.** `use nest_rs_codegen::PostureRules;`
@@ -177,26 +177,6 @@ fn vocabulary(dir: &Path) -> Vocabulary {
         }
     }
     out
-}
-
-/// A top-level item's attributes, for the `#[cfg(test)]` question. `syn` gives
-/// no uniform accessor, and the shapes a `#[cfg(test)]` legitimately sits on are
-/// few: a `mod`, a `fn`, an `impl`, a `use`.
-fn attrs_of(item: &syn::Item) -> &[syn::Attribute] {
-    match item {
-        syn::Item::Mod(i) => &i.attrs,
-        syn::Item::Fn(i) => &i.attrs,
-        syn::Item::Impl(i) => &i.attrs,
-        syn::Item::Use(i) => &i.attrs,
-        syn::Item::Struct(i) => &i.attrs,
-        syn::Item::Enum(i) => &i.attrs,
-        syn::Item::Const(i) => &i.attrs,
-        syn::Item::Static(i) => &i.attrs,
-        syn::Item::Trait(i) => &i.attrs,
-        syn::Item::Type(i) => &i.attrs,
-        syn::Item::Macro(i) => &i.attrs,
-        _ => &[],
-    }
 }
 
 fn harvest(tokens: TokenStream, out: &mut Vocabulary) {

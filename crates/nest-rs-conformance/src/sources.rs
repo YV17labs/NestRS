@@ -1275,6 +1275,30 @@ pub fn item_attrs(item: &Item) -> &[Attribute] {
     }
 }
 
+/// An `impl` member's attributes — [`item_attrs`] one level in, for the same
+/// question.
+pub fn impl_item_attrs(item: &syn::ImplItem) -> &[Attribute] {
+    match item {
+        syn::ImplItem::Const(i) => &i.attrs,
+        syn::ImplItem::Fn(i) => &i.attrs,
+        syn::ImplItem::Type(i) => &i.attrs,
+        syn::ImplItem::Macro(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
+/// A trait member's attributes — [`item_attrs`] one level in, for the same
+/// question.
+pub fn trait_item_attrs(item: &syn::TraitItem) -> &[Attribute] {
+    match item {
+        syn::TraitItem::Const(i) => &i.attrs,
+        syn::TraitItem::Fn(i) => &i.attrs,
+        syn::TraitItem::Type(i) => &i.attrs,
+        syn::TraitItem::Macro(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
 #[derive(Default)]
 struct TestFns {
     found: bool,
@@ -1507,6 +1531,41 @@ mod tests {
         assert_eq!(
             resolve_target(&path(&["crate", "posts", "NOT_DECLARED"]), service),
             None,
+        );
+    }
+
+    /// `item_attrs` is the crate's one answer to "what attributes does this item
+    /// carry", and `impl_item_attrs` / `trait_item_attrs` one level in. They were
+    /// written seven more times, in `edges`, `dependencies`, `blinds` and
+    /// `naming`, each listing its own subset of `syn`'s shapes — so one join read
+    /// a `#[cfg(test)]` on a `use` as shipped while its sibling did not. An arm of
+    /// those matches anywhere else in this crate is that copy again — the
+    /// `Item::Fn` arm reads `ImplItem::Fn` and `TraitItem::Fn` too.
+    #[test]
+    fn item_attrs_is_the_only_copy_of_its_match() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut copies: Vec<String> = [manifest.join("src"), manifest.join("tests")]
+            .iter()
+            .flat_map(|dir| rust_files(dir))
+            .filter(|path| !path.ends_with("src/sources.rs"))
+            .filter(|path| {
+                read(path).is_ok_and(|text| {
+                    let squeezed: String = text.split_whitespace().collect();
+                    [
+                        "Item::Mod(i)=>&i.attrs",
+                        "Item::Fn(i)=>&i.attrs",
+                        "Item::Use(i)=>&i.attrs",
+                    ]
+                    .iter()
+                    .any(|arm| squeezed.contains(arm))
+                })
+            })
+            .map(|path| relative(&path, manifest))
+            .collect();
+        copies.sort();
+        assert!(
+            copies.is_empty(),
+            "a second copy of `item_attrs`'s match: call `sources::item_attrs` instead — {copies:?}",
         );
     }
 }

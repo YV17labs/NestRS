@@ -29,8 +29,9 @@ No Ingress is enabled. Reach an app directly:
 
 The queue worker scales on Redis list length. Two facts to keep in view:
 
-  - a worker start puts its peers' in-flight jobs back on the queue; their
-    leases keep them from running twice, so a scale-up delays them
+  - a worker start puts its peers' in-flight jobs back on the queue; a lease
+    makes that second delivery wait out the first, so a scale-up mostly delays
+    them — the queue is at-least-once, so keep handlers idempotent
   - at zero replicas nothing moves a retry or a delayed job onto the list the
     trigger reads, nor recovers a dead pod's jobs, which is why
     minReplicaCount defaults to 1

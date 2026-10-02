@@ -463,7 +463,7 @@ impl FetchProcessor {
 struct FetchModule;
 
 /// The guarantee that makes replica-based throughput sound: with both replicas
-/// already up, a batch is split between them and **no job runs twice**. This is
+/// already up, a batch is split between them and **no job is handed to both**. This is
 /// the atomic claim in `get_jobs.lua`, measured rather than read — and, since
 /// each replica logs the id it consumes under, the two ids are two.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

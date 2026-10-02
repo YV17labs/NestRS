@@ -218,10 +218,10 @@ apps:
     #    on only if your own processor is genuinely CPU-bound.
     # 2. apalis re-enqueues orphaned jobs on every worker start, with a cutoff
     #    that matches all registered consumers — a scale-up puts its peers'
-    #    in-flight jobs back on the queue. Each job's lease and settled mark keep
-    #    them from running twice, so a scale-up delays them rather than re-runs
-    #    them; a handler whose effects leave the process still keeps its own
-    #    idempotency key.
+    #    in-flight jobs back on the queue. Each job's lease makes that second
+    #    delivery wait out the first, and its settled mark usually drops it
+    #    after, so a scale-up mostly delays them. Usually: the queue is
+    #    at-least-once, so a handler stays idempotent.
     autoscaling:
       enabled: false
     # Queue depth, the signal that actually reflects a backlog. Needs KEDA in

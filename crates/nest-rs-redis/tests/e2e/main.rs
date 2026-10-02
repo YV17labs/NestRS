@@ -6,7 +6,8 @@
 //! confined to the framework's keys —
 //! [`queue`] for the producer binding, a delayed push and its promotion, and
 //! [`worker`] for the consumer: its fetch and concurrency, each delivery's
-//! retries and hand-backs, and the lease that keeps a job from running twice.
+//! retries and hand-backs, and the lease that keeps a second delivery from
+//! running beside the first.
 //! [`correlation`] covers the trace context that crosses the producer/consumer
 //! process boundary, which is both halves' concern.
 //! [`schedule`] covers the occurrence lock a job firing once across replicas

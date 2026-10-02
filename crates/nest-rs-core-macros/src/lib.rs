@@ -190,24 +190,6 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 /// type is returned as `Json<T>` from a handler. Adding a manual
 /// `#[derive(serde::Serialize)]` next to `#[input]` is therefore a conflicting
 /// impl (`E0119`), not a top-up — the shorthand already carries it.
-///
-/// # Expands to
-///
-/// The struct, with the derives + serde attribute prepended (stacking with any
-/// existing `#[derive(...)]`):
-///
-/// ```ignore
-/// #[derive(
-///     ::nest_rs::core::serde::Serialize,
-///     ::nest_rs::core::serde::Deserialize,
-///     ::nest_rs::core::validator::Validate,
-///     ::nest_rs::core::schemars::JsonSchema,
-/// )]
-/// #[serde(crate = "::nest_rs::core::serde", deny_unknown_fields)]
-/// #[validate(crate = ::nest_rs::core::validator)]
-/// #[schemars(crate = "::nest_rs::core::schemars")]
-/// struct CreateUser { /* … */ }
-/// ```
 #[proc_macro_attribute]
 pub fn input(args: TokenStream, item: TokenStream) -> TokenStream {
     ::nest_rs_codegen::reroot(input::input(args, item).into()).into()

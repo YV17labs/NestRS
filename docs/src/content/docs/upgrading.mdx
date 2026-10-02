@@ -141,14 +141,19 @@ rolls out (step 7).
    | the queue crate's `tracing` re-export | a `tracing` dependency of your own |
    | `WsReply::payload_error(event, &error)` with any `Display` | the same with the `serde_json::Error`, which it reports without the value |
    | `MaskReplyError::Irreconcilable(serde_json::Error)` | `MaskReplyError::Irreconcilable(DecodeError)` |
+   | `ProblemDetails::from_error(status, title, err)` with any `Display` | the same with `&err`, an error, whose decode failure it says without the value; a sentence of your own is `.with_detail(…)` |
+   | `panic_message(payload)` borrowed as a `&str` | an owned `String`, any decode failure in it said without the value |
    | `Throttle { limit, window }` and its fields, on the rate limiter | `Throttle::new(limit, window)`, `.limit()`, `.window()` — a window under a millisecond is refused |
    | a `CronJobMeta { … }` registered by hand | the same with `origin: module_path!()` |
    | an `HttpConfig { … }` or `RedisWorkerConfig { … }` written out whole | the same, ending in `..Default::default()` — `HttpConfig` gains `shutdown_timeout`, `RedisWorkerConfig` gains `orphan_after`, `lease` and `poll_interval` |
 
-   `.opaque()` now takes an error that converts into `Box<dyn Error + Send +
-   Sync>`, so it logs the whole cause chain; an error type that was only
-   `Display` implements `std::error::Error` first. Do the same for your own
-   `error` fields, through the framework's one walk of a chain:
+   `.opaque()` now takes an owned error that converts into `Box<dyn Error +
+   Send + Sync>`, so it logs the whole cause chain; an error type that was only
+   `Display` implements `std::error::Error` first, and a `&str` borrowed from a
+   local becomes an owned `String`. `JobError::retry` / `abort`,
+   `WsReply::from_handler_error` and `OccurrenceLockError::new` take the same.
+   Do the same for your own `error` fields, through the framework's one walk of
+   a chain:
 
    ```rust title="crates/features/src/chat/ws/gateway.rs" ins={1,3} del={2}
    use nest_rs::core::error_message;

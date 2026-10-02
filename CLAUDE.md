@@ -557,16 +557,34 @@ Three consequences are load-bearing enough to repeat here:
   `demo/` and in every CLI template: `%err` prints one sentence, and the cause an
   operator acts on is the one beneath it. A surface bounded `E: Display` cannot
   walk a chain, so no framework surface that logs an error is bounded that way.
-- **A decode failure is said without its value.** serde quotes the value it
-  refused, and a payload is somebody's data — a client's, a producer's, a
-  provider's. Every site that decodes one reports the failure through
-  `nest_rs_core::DecodeError` — where, what kind of value, the type expected —
-  in its line, its stored record and its reply alike, and `error_message` renders
-  any `serde_json::Error` in a chain that way, so a cause nobody formatted by hand
-  is covered too. A site that formats a serde error with `{e}` is the leak. A
-  `#[config]` value is a payload too — a structured one is where a deployment
-  writes client secrets — so it is decoded by `ConfigService::json`, once, in
-  `nest-rs-config`, and never by a config's own `serde_json::from_str`.
+- **A decode failure is said without its value.** serde quotes what it refused —
+  a value, a variant, a key — and a payload is somebody's data: a client's, a
+  producer's, a provider's. Every site the framework decodes at reports the
+  failure as `nest_rs_core::DecodeError` words it — where, what kind of value,
+  what the type expected, never what the payload spelled — in its line, its
+  stored record and its reply alike, the reply included even to the client that
+  sent the value: a `400` is logged by proxies and kept by caches, and what a
+  handler failed to decode need not be the caller's. The sites are HTTP's
+  `Json`/`Form`/`Query` (and `Header<T>`, in its own sentences naming the
+  header; poem refuses a `Path` in one fixed sentence, and a multipart part
+  reaches the handler as bytes), MCP's `Parameters`, a WS payload, a queue job,
+  a `#[config]`. A failure the framework only *carries* is covered by the text
+  it renders: every line and every stored record goes through `error_message`,
+  every reply built from an error — HTTP's problem `detail`, a WS error frame, a
+  GraphQL `message` — through `DecodeError::redact`; both read the chain's serde
+  errors exactly and serde's own quoting sentences in any text, so a wrapper
+  hiding its cause from `source()` (`#[error(transparent)]`, anyhow's own box)
+  hides nothing. An edge boxes a handler's error with
+  `nest_rs_core::boxed_error`, never `.into()`, so an `anyhow::Error` stays a
+  chain of readable links (joined: `decodes` in `nest-rs-conformance`), and a
+  contained panic's payload — where `.unwrap()` formats serde's error — is read
+  by `panic_message` the same way. A framework site that formats a serde error
+  with `{e}` into a text neither reading sees is the leak; what no reading
+  reaches at all is its author's: a value formatted by hand in their own words
+  (`format!("bad token {raw}")`). A `#[config]` value is a payload too — a
+  structured one is where a deployment writes client secrets — so it is decoded
+  by `ConfigService::json`, once, in `nest-rs-config`, and never by a config's
+  own `serde_json::from_str`.
 - **A value is escaped by the formatter, never by the call site.** Any field can
   carry a string a client chose — a WS event name, a decode failure's position —
   so `TextFormat` escapes every field value it writes, and a line break or a

@@ -1,9 +1,12 @@
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::{SinkExt, StreamExt};
-use nest_rs_core::{Container, RequestScope};
+use futures_util::{FutureExt, SinkExt, StreamExt};
+use nest_rs_core::{Container, Correlation, RequestContinuation, RequestScope, operation_log};
+use nest_rs_http::DetachedWork;
 use nest_rs_pipes::PipeError;
 use tracing::Instrument;
 
@@ -32,13 +35,16 @@ pub trait Gateway: Send + Sync + 'static {
     /// by `#[messages]` — never hand-written.
     async fn dispatch(&self, client: &WsClient, event: &str, data: serde_json::Value) -> WsReply;
 
-    /// Runs once when a socket connects, after the upgrade guards pass.
+    /// Runs once when a socket connects, after the upgrade guards pass. One
+    /// that panics leaves the connection set up halfway, so the socket is not
+    /// served: it is closed with RFC 6455 §7.4.1's 1011 Internal Error.
     async fn on_connect(&self, client: &WsClient) {
         let _ = client;
     }
 
     /// Runs while the connection is still registered, so a hook can reach the
-    /// leaving client's rooms before they are dropped.
+    /// leaving client's rooms before they are dropped — after a connect hook
+    /// that panicked too, so what it set up can still be taken down.
     async fn on_disconnect(&self, client: &WsClient) {
         let _ = client;
     }
@@ -71,14 +77,18 @@ pub fn resolve_ws_data_pipe(container: &Container) -> Option<Arc<WsDataFold>> {
 }
 
 /// Assemble a [`GatewayEndpoint`] from a gateway and its resolved per-connection
-/// wiring (registry, guard table, ambient context, global data-pipe fold).
-/// Called by `#[gateway]`-generated mount code, not by hand.
+/// wiring (registry, guard table, ambient context, global data-pipe fold), and
+/// the [`DetachedWork`] its sockets are carried by — the one the gateway's
+/// `HttpEndpointMeta` declares, so the transport tells every socket at the
+/// shutdown signal and stops what is left at the close of its window. Called by
+/// `#[gateway]`-generated mount code, not by hand.
 pub fn gateway_endpoint<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
     guards: EventLayerTable,
     ctx: Option<Arc<dyn SocketContext>>,
     data_pipe: Option<Arc<WsDataFold>>,
+    sockets: DetachedWork,
 ) -> GatewayEndpoint<G, N> {
     GatewayEndpoint {
         gateway,
@@ -86,6 +96,7 @@ pub fn gateway_endpoint<G: Gateway, N: 'static>(
         guards: Arc::new(guards),
         ctx,
         data_pipe,
+        sockets,
     }
 }
 
@@ -98,6 +109,11 @@ pub struct GatewayEndpoint<G, N: 'static = crate::server::Global> {
     guards: Arc<EventLayerTable>,
     ctx: Option<Arc<dyn SocketContext>>,
     data_pipe: Option<Arc<WsDataFold>>,
+    /// Every socket this gateway serves. poem stops tracking a connection at
+    /// its upgrade, so without this the shutdown window neither waited for a
+    /// socket nor closed it, and the transport returned past every one still
+    /// open.
+    sockets: DetachedWork,
 }
 
 impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
@@ -157,6 +173,7 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
             max_lifetime,
             max_message_bytes,
         };
+        let sockets = self.sockets.clone();
         Ok(ws
             .on_upgrade(move |socket| {
                 // The socket inherits the upgrade's identity for its whole life
@@ -166,11 +183,21 @@ impl<G: Gateway, N: 'static> Endpoint for GatewayEndpoint<G, N> {
                 // per-message install, which carries the *message's* own
                 // correlation, still wins inside it.
                 let connection = wiring.connection.clone();
-                nest_rs_core::with_request_scope(
-                    None,
-                    connection,
-                    serve_connection(gateway, server, guards, wiring, limits, socket),
-                )
+                let going_away = sockets.going_away();
+                async move {
+                    // Carried by the transport: told at the signal, given the
+                    // window to finish what it is answering, and dropped where it
+                    // waits if it has not by the window's close.
+                    let _ = sockets
+                        .run(nest_rs_core::with_request_scope(
+                            None,
+                            connection,
+                            serve_connection(
+                                gateway, server, guards, wiring, limits, socket, going_away,
+                            ),
+                        ))
+                        .await;
+                }
             })
             .into_response())
     }
@@ -225,6 +252,11 @@ impl<N: 'static> Drop for RegistryGuard<N> {
 /// funnel through one outbox drained by a writer task — decoupling the
 /// read/dispatch loop from the single `Sink` and letting [`WsServer`] reach a
 /// client it is not currently reading from.
+///
+/// `going_away` is the transport's shutdown signal: once it resolves the socket
+/// reads nothing more and closes with 1001, after the message it is answering —
+/// a message is read and answered whole inside the loop, so the signal is only
+/// ever seen between two.
 async fn serve_connection<G: Gateway, N: 'static>(
     gateway: Arc<G>,
     server: Arc<WsServer<N>>,
@@ -232,6 +264,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     wiring: DispatchWiring,
     limits: SocketLimits,
     socket: poem::web::websocket::WebSocketStream,
+    going_away: impl Future<Output = ()>,
 ) {
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut rx) =
@@ -240,14 +273,14 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // The task hands the `Sink` back when the outbox closes: the connection's
     // last act is a Close frame, and it has to be written *after* every reply
     // already queued — which is exactly what "the writer has finished" means.
-    let writer = tokio::spawn(async move {
+    let mut writer = Writer(tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
             if sink.send(Message::Text(frame.to_string())).await.is_err() {
                 break;
             }
         }
         sink
-    });
+    }));
 
     let conn_id = server.connect(outbox.clone());
     // RAII cleanup: remove this connection's registry entry (which holds its
@@ -268,9 +301,9 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // short spans rather than one wrapping the loop, because the message is the
     // unit here and a parent that stays open for the socket's life would file
     // every message under a span that never closes.
-    under_connection(
+    let set_up = under_connection(
         &wiring.connection,
-        crate::unit::CONNECT,
+        Unit::Connect,
         conn_id,
         nest_rs_core::operation_span!(
             target: crate::TARGET,
@@ -292,8 +325,29 @@ async fn serve_connection<G: Gateway, N: 'static>(
         .max_lifetime
         .map(|ttl| Box::pin(tokio::time::sleep(ttl)));
 
+    let mut going_away = std::pin::pin!(going_away);
     let closure = loop {
+        if !set_up {
+            break Closure::Server(CloseCode::Error, CONNECT_FAILED);
+        }
         tokio::select! {
+            // The server ends what it is shutting down before it reads another
+            // message — and before the ceiling, which is the same close for
+            // another reason.
+            biased;
+            () = &mut going_away => {
+                // `debug`, unlike its siblings: the deployment asked for this,
+                // and said so once ("shutdown signal received"); a line per
+                // socket at `info` is the fleet's size in noise. The socket's
+                // `ws.disconnect` line still files.
+                tracing::debug!(
+                    target: crate::TARGET,
+                    conn_id,
+                    close_code = u16::from(CloseCode::Away),
+                    "closing socket: the server is going away",
+                );
+                break Closure::Server(CloseCode::Away, GOING_AWAY);
+            }
             // Deadline arm: armed only when a ceiling is configured — otherwise
             // a `pending()` future that never resolves, leaving the read loop
             // untouched. The timer's deadline is absolute (set at connect), so
@@ -390,7 +444,7 @@ async fn serve_connection<G: Gateway, N: 'static>(
     // close; on an unwind the guard's `Drop` does the same cleanup.
     under_connection(
         &wiring.connection,
-        crate::unit::DISCONNECT,
+        Unit::Disconnect,
         conn_id,
         nest_rs_core::operation_span!(
             target: crate::TARGET,
@@ -404,27 +458,59 @@ async fn serve_connection<G: Gateway, N: 'static>(
     .await;
     drop(registry_guard);
     drop(outbox);
-    match writer.await {
-        // Every queued reply is on the wire and the `Sink` is back, so the
-        // Close frame lands last — the ordering §5.5.1 describes.
-        Ok(sink) => close_socket(sink, closure, conn_id).await,
-        // A `JoinError` from the writer means it panicked (it is never aborted);
-        // surface that rather than swallow it. A normal cancellation carries none.
-        Err(err) => {
-            if err.is_panic() {
-                tracing::warn!(
-                    target: crate::TARGET,
-                    conn_id,
-                    error = %nest_rs_core::error_message(&err),
-                    "writer task failed",
-                );
+    // Bounded: a peer that stopped reading parks the writer's sends and the
+    // Close frame after them, and would hold the socket past the ceiling or the
+    // signal that ended it. Past the grace the writer is aborted — `Writer`'s
+    // `Drop` — and the socket goes with it.
+    let closed = tokio::time::timeout(DetachedWork::CLOSE_GRACE, async {
+        match (&mut writer.0).await {
+            // Every queued reply is on the wire and the `Sink` is back, so the
+            // Close frame lands last — the ordering §5.5.1 describes.
+            Ok(sink) => close_socket(sink, closure, conn_id).await,
+            // A `JoinError` here means the writer panicked: it is aborted only
+            // after this wait. Surfaced rather than swallowed.
+            Err(err) => {
+                if err.is_panic() {
+                    tracing::warn!(
+                        target: crate::TARGET,
+                        conn_id,
+                        error = %nest_rs_core::error_message(&err),
+                        "writer task failed",
+                    );
+                }
+                // The `Sink` went down with the task, so there is nothing left
+                // to close through and the peer reads 1006 — which is what
+                // §7.4.1 defines a crashed endpoint to be.
             }
-            // The `Sink` went down with the task, so there is nothing left to
-            // close through and the peer reads 1006 — which is what §7.4.1
-            // defines a crashed endpoint to be.
         }
+    })
+    .await;
+    if closed.is_err() {
+        tracing::debug!(
+            target: crate::TARGET,
+            conn_id,
+            close_grace_ms = u64::try_from(DetachedWork::CLOSE_GRACE.as_millis()).unwrap_or(u64::MAX),
+            "socket dropped: the peer did not take its replies and close within the grace",
+        );
     }
 }
+
+/// The task writing a connection's frames, aborted if the connection is
+/// dropped before it is joined.
+///
+/// It owns the socket's sink, so a writer left running by a connection the
+/// transport stopped — or by one whose peer stopped reading — kept the socket
+/// open after everything that served it had gone.
+struct Writer(tokio::task::JoinHandle<WsSink>);
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// The write half of a connection's socket.
+type WsSink = futures_util::stream::SplitSink<poem::web::websocket::WebSocketStream, Message>;
 
 /// The one server-initiated close that used to say nothing.
 ///
@@ -480,6 +566,16 @@ enum Closure {
 /// re-authenticated on the way in.
 const LIFETIME_REACHED: &str = "connection lifetime reached, re-upgrade to continue";
 
+/// §7.4.1 **1001 Going Away**, the code it gives for "a server going down" —
+/// which is what the shutdown signal is. It is the one a client answers by
+/// reconnecting, and a reconnect lands on a replica still in the load balancer.
+const GOING_AWAY: &str = "the server is going away, reconnect to continue";
+
+/// §7.4.1 **1011 Internal Error** — "an unexpected condition that prevented it
+/// from fulfilling the request". The connect hook unwound, so the connection is
+/// set up halfway and is not served; the client may simply try again.
+const CONNECT_FAILED: &str = "the connection could not be set up";
+
 /// §7.4.1 **1008 Policy Violation** — its "generic status code … when there is
 /// no other more suitable" clause. A peer that will not drain a bounded outbox
 /// is shed rather than buffered without bound, which is a policy of this
@@ -505,11 +601,7 @@ const READ_FAILED: &str = "the connection could not be read";
 /// Best-effort by construction: a peer that has already gone cannot be told
 /// anything, so a failure here is `debug`, the level its siblings on the
 /// client-shaped paths use.
-async fn close_socket(
-    mut sink: futures_util::stream::SplitSink<poem::web::websocket::WebSocketStream, Message>,
-    closure: Closure,
-    conn_id: ConnId,
-) {
+async fn close_socket(mut sink: WsSink, closure: Closure, conn_id: ConnId) {
     if let Closure::Server(code, reason) = closure
         && let Err(err) = sink
             .send(Message::Close(Some((code, reason.to_string()))))
@@ -577,7 +669,8 @@ fn refuse_binary(conn_id: ConnId, bytes: usize) -> String {
 }
 
 /// Run one connection-lifecycle hook — `on_connect` / `on_disconnect` — under
-/// the connection's identity.
+/// the connection's identity, and say whether it ran to its end: `false` when
+/// it unwound.
 ///
 /// A hook is developer code that logs, writes and emits, so it is a unit of work
 /// like any message; what differs is only whose id it takes. Both take the
@@ -590,46 +683,173 @@ fn refuse_binary(conn_id: ConnId, bytes: usize) -> String {
 /// because `tracing` fixes a span's name at the macro, so the two call sites
 /// name themselves (`ws.connect` / `ws.disconnect`) and share everything else.
 ///
-/// `unit` is that same canonical name again, for the line. It is a parameter
-/// rather than the line's `name:` because `name:` is baked into the callsite's
-/// `static` metadata and cannot read one — the stated asymmetry of the two
-/// lifecycle lines, and the reason they are the only two of the eight without
-/// it. That is the *only* field of the family they lack: `outcome` is recorded
-/// like every sibling's, at the one value a hook can report.
-async fn under_connection<F: std::future::Future<Output = ()>>(
-    connection: &nest_rs_core::Correlation,
-    unit: &'static str,
+/// A hook that panics is contained here and files `panic`: it unwound the
+/// connection task, which took the socket down with no Close frame — 1006 to a
+/// client that could not tell it from a network fault — and filed no line.
+async fn under_connection<F: Future<Output = ()>>(
+    connection: &Correlation,
+    unit: Unit<'_>,
     conn_id: ConnId,
     span: tracing::Span,
     hook: F,
-) {
-    let started = std::time::Instant::now();
-    let recorded = span.clone();
-    nest_rs_core::with_request_scope(None, connection.clone(), async {
-        hook.await;
-        let outcome = nest_rs_core::operation_log::OK;
-        nest_rs_core::operation_log::record_outcome(&recorded, outcome);
-        // A hook is developer code that logs and writes like any handler, so the
-        // socket opening and closing are units of work and owe the family's line
-        // the same way a message does. The canonical name says which of the two
-        // this is, so the `lifecycle` field that used to stand in for it is gone.
-        tracing::info!(
-            target: nest_rs_core::operation_log::TARGET,
-            message = unit,
-            conn_id,
-            // Always `ok`, and stated rather than omitted: a lifecycle hook
-            // returns `()`, so there is no failure signal for this line to
-            // report — a hook that panics unwinds the connection task and is the
-            // socket's own close, not this unit's outcome. `graphql.subscription`
-            // records the same constant for the same reason. Leaving it off
-            // instead was the one field of the family these two lines dropped,
-            // and a cross-edge `outcome != ok` query silently skipped them.
-            outcome,
-            duration_ms = nest_rs_core::operation_log::duration_ms(started),
-        );
-    })
+) -> bool {
+    let line = UnitLine::open(unit, conn_id, connection.clone(), span.clone());
+    let ran = nest_rs_core::with_request_scope(
+        None,
+        connection.clone(),
+        AssertUnwindSafe(hook).catch_unwind(),
+    )
     .instrument(span)
     .await;
+    match ran {
+        Ok(()) => {
+            // `ok` is all a hook can report: it returns `()`, so there is no
+            // failure signal for this line but an unwind.
+            line.file(operation_log::OK);
+            true
+        }
+        Err(payload) => {
+            line.unwound(&*payload);
+            false
+        }
+    }
+}
+
+/// The units a socket carries, each filed under its own canonical name.
+#[derive(Clone, Copy)]
+enum Unit<'a> {
+    /// One message, named by its event.
+    Message { event: &'a str },
+    /// The connect hook.
+    Connect,
+    /// The disconnect hook.
+    Disconnect,
+}
+
+/// One unit's line, held while the unit runs and filed exactly once — by the
+/// end the connection loop saw, or by `Drop` when the unit is dropped first,
+/// as [`CANCELLED`](operation_log::CANCELLED): the transport stopped the socket
+/// at the close of its window, with this unit still running.
+///
+/// One `info!` per unit, so each carries its own constant as `name:` as well as
+/// `message` — the two slots every line of the family fills, which a shared
+/// call site taking the name as an argument could not.
+struct UnitLine<'a> {
+    unit: Unit<'a>,
+    conn_id: ConnId,
+    /// Entered to file the line, rather than read from the ambient context: a
+    /// `Drop` runs while the unit's future is torn down, which is not reliably
+    /// inside the scope that future installed.
+    correlation: Correlation,
+    /// The unit's span, which records the outcome the line files, in the same
+    /// word.
+    span: tracing::Span,
+    started: std::time::Instant,
+    filed: bool,
+}
+
+impl<'a> UnitLine<'a> {
+    fn open(
+        unit: Unit<'a>,
+        conn_id: ConnId,
+        correlation: Correlation,
+        span: tracing::Span,
+    ) -> Self {
+        Self {
+            unit,
+            conn_id,
+            correlation,
+            span,
+            started: std::time::Instant::now(),
+            filed: false,
+        }
+    }
+
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+    }
+
+    /// The unit unwound: file `panic`, and give the operator the panic's text,
+    /// which the client is never told.
+    fn unwound(mut self, payload: &(dyn std::any::Any + Send)) {
+        self.emit(operation_log::PANIC);
+        let conn_id = self.conn_id;
+        RequestContinuation::new(None, self.correlation.clone()).enter(|| match self.unit {
+            Unit::Message { event } => tracing::error!(
+                target: crate::TARGET,
+                conn_id,
+                event,
+                panic = nest_rs_core::panic_message(payload),
+                "websocket handler panicked; its client is answered with an internal error",
+            ),
+            Unit::Connect => tracing::error!(
+                target: crate::TARGET,
+                conn_id,
+                panic = nest_rs_core::panic_message(payload),
+                close_code = u16::from(CloseCode::Error),
+                "websocket connect hook panicked; the socket is closed unserved",
+            ),
+            Unit::Disconnect => tracing::error!(
+                target: crate::TARGET,
+                conn_id,
+                panic = nest_rs_core::panic_message(payload),
+                "websocket disconnect hook panicked; the close goes on",
+            ),
+        });
+    }
+
+    fn emit(&mut self, outcome: &'static str) {
+        self.filed = true;
+        operation_log::record_outcome(&self.span, outcome);
+        let conn_id = self.conn_id;
+        let duration_ms = operation_log::duration_ms(self.started);
+        RequestContinuation::new(None, self.correlation.clone()).enter(|| match self.unit {
+            // One line per message, in the message's own ids rather than the
+            // socket's. A socket can serve thousands of messages under one
+            // upgrade, so the `101`'s access line names the connection and says
+            // nothing about the work — this is where that is said.
+            Unit::Message { event } => tracing::info!(
+                name: crate::unit::MESSAGE,
+                target: nest_rs_core::operation_log::TARGET,
+                message = crate::unit::MESSAGE,
+                event,
+                conn_id,
+                outcome,
+                duration_ms,
+            ),
+            // A hook is developer code that logs and writes like any handler,
+            // so the socket opening and closing are units of work and owe the
+            // family's line the same way a message does.
+            Unit::Connect => tracing::info!(
+                name: crate::unit::CONNECT,
+                target: nest_rs_core::operation_log::TARGET,
+                message = crate::unit::CONNECT,
+                conn_id,
+                outcome,
+                duration_ms,
+            ),
+            Unit::Disconnect => tracing::info!(
+                name: crate::unit::DISCONNECT,
+                target: nest_rs_core::operation_log::TARGET,
+                message = crate::unit::DISCONNECT,
+                conn_id,
+                outcome,
+                duration_ms,
+            ),
+        });
+    }
+}
+
+impl Drop for UnitLine<'_> {
+    fn drop(&mut self) {
+        if !self.filed {
+            self.emit(if std::thread::panicking() {
+                operation_log::PANIC
+            } else {
+                operation_log::CANCELLED
+            });
+        }
+    }
 }
 
 /// Per-message guards run **inside** a present [`SocketContext::around`], so
@@ -720,32 +940,37 @@ async fn handle_text<G: Gateway>(
         .root_container
         .as_ref()
         .map(|container| Arc::new(RequestScope::new(container.clone())));
-    let started = std::time::Instant::now();
-    let recorded = span.clone();
-    let reply = nest_rs_core::with_request_scope(scope, correlation, async {
-        let reply = dispatch.await;
-        let outcome = match &reply {
-            WsReply::Error(_) => nest_rs_core::operation_log::ERROR,
-            _ => nest_rs_core::operation_log::OK,
-        };
-        nest_rs_core::operation_log::record_outcome(&recorded, outcome);
-        // One line per message, inside the scope so it carries the message's own
-        // ids rather than the socket's. A socket can serve thousands of messages
-        // under one upgrade, so the `101`'s access line names the connection and
-        // says nothing about the work — this is where that is said.
-        tracing::info!(
-            name: crate::unit::MESSAGE,
-            target: nest_rs_core::operation_log::TARGET,
-            message = crate::unit::MESSAGE,
-            event = %event,
-            conn_id,
-            outcome,
-            duration_ms = nest_rs_core::operation_log::duration_ms(started),
-        );
-        reply
-    })
+    let line = UnitLine::open(
+        Unit::Message { event: &event },
+        conn_id,
+        correlation.clone(),
+        span.clone(),
+    );
+    // A handler that panics is contained at the message: it took the connection
+    // task down with it, so the socket died with no Close frame and no line.
+    // The client is answered as for any failed message, in a sentence that
+    // says nothing of what unwound, and the socket goes on serving — the panic
+    // is this message's, and nothing on the connection is left half done.
+    let ran = nest_rs_core::with_request_scope(
+        scope,
+        correlation,
+        AssertUnwindSafe(dispatch).catch_unwind(),
+    )
     .instrument(span)
     .await;
+    let reply = match ran {
+        Ok(reply) => {
+            line.file(match &reply {
+                WsReply::Error(_) => operation_log::ERROR,
+                _ => operation_log::OK,
+            });
+            reply
+        }
+        Err(payload) => {
+            line.unwound(&*payload);
+            WsReply::Error(crate::WsError::new(nest_rs_core::OPAQUE_CLIENT_MESSAGE))
+        }
+    };
     match reply {
         WsReply::Reply(data) => {
             let envelope = WsEnvelope { event, data };
@@ -802,7 +1027,7 @@ mod tests {
 
         under_connection(
             &connection,
-            crate::unit::CONNECT,
+            Unit::Connect,
             7,
             nest_rs_core::operation_span!(
                 target: crate::TARGET,

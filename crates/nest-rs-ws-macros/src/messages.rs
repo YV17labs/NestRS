@@ -551,11 +551,19 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                 // `HttpEndpointMeta::path`, so two gateways declaring one path
                 // under two versions are two mounts that both boot, while two on
                 // the same path *and* version still fail boot naming both.
+                //
+                // The sockets are carried by the transport, which poem stops
+                // doing at the upgrade: one `DetachedWork` per gateway, handed to
+                // its endpoint and declared on its meta, so the transport tells
+                // each socket at the shutdown signal and stops what is left at
+                // the close of its window.
+                let __sockets = ::nest_rs_ws::nest_rs_http::DetachedWork::new();
+                let __carried = __sockets.clone();
                 builder.attach_meta::<#self_ty, ::nest_rs_ws::nest_rs_http::HttpEndpointMeta>(
                     ::nest_rs_ws::nest_rs_http::HttpEndpointMeta::new(
                         <#self_ty>::__nestrs_mount_path(),
                         "ws",
-                        |__container, __route| {
+                        move |__container, __route| {
                             // One string for the log and the mount, so what boot
                             // prints is the address a client connects to.
                             let __path = <#self_ty>::__nestrs_mount_path();
@@ -588,14 +596,20 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                             >(__container);
                             let __data_pipe = ::nest_rs_ws::resolve_ws_data_pipe(__container);
                             let __ep = ::nest_rs_ws::gateway_endpoint(
-                                __gw, __server, __chains, __ctx, __data_pipe,
+                                __gw,
+                                __server,
+                                __chains,
+                                __ctx,
+                                __data_pipe,
+                                ::core::clone::Clone::clone(&__carried),
                             );
                             let __ep = <#self_ty>::__nestrs_gateway_layers(__container, __ep);
                             __route.at(__path, ::nest_rs_ws::nest_rs_http::matched(__ep))
                         },
                     )
                     .owned_by(#gateway_name)
-                    .self_guarded_if(<#self_ty>::HAS_EDGE_GUARDS),
+                    .self_guarded_if(<#self_ty>::HAS_EDGE_GUARDS)
+                    .runs_detached(__sockets),
                 )
                 // Boot-time validation of the **upgrade** chain — the same
                 // check `#[routes]` runs for a controller, on the same kind of

@@ -134,7 +134,7 @@ socket, the connection, then a line per message, all under the upgrade's trace:
 
 ```text frame="terminal"
 INFO nest_rs::operation: http.request method=GET path="/ws" status=101 bytes=0 duration_ms=1.265 client_ip=127.0.0.1 forwarded=false trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
-INFO nest_rs::operation: ws.connect conn_id=0 duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
+INFO nest_rs::operation: ws.connect conn_id=0 outcome="ok" duration_ms=0.093 trace_id=01a015e0074575729557467b3d9e2317 span_id=0aa87fe2893b32d0
 INFO nest_rs::operation: ws.message event=message conn_id=0 outcome="ok" duration_ms=0.045 trace_id=01a015e0074575729557467b3d9e2317 span_id=3398a131c2baa84a
 INFO nest_rs::operation: ws.message event=nope conn_id=0 outcome="error" duration_ms=0.011 trace_id=01a015e0074575729557467b3d9e2317 span_id=2a3f10371aa5cbc8
 ```
@@ -143,6 +143,24 @@ Same `trace_id` throughout, a fresh `span_id` per message — because a connecti
 inherits identity, never resources: it takes the upgrade's trace and actor, and
 opens its own request scope per message. Your own handler's events carry the
 message's ids without naming them; see [Logs](/opentelemetry/logs/).
+
+## When the server closes a socket
+
+The server closes a socket with the RFC 6455 code for the cause, and a reason,
+so a client can tell a deliberate close from the `1006` a network fault leaves:
+
+| Cause | Code | What the client does |
+|---|---|---|
+| The shutdown signal, after the message it is answering | `1001 Going Away` | reconnects, to a replica still serving |
+| `NESTRS_WS__MAX_CONNECTION_SECS` elapsed | `1001 Going Away` | re-upgrades, and is authenticated again |
+| The client stopped reading and its outbox filled | `1008 Policy Violation` | drains faster, or is shed again |
+| A read failed, a message past the cap included | `1011 Internal Error` | reconnects |
+| `#[on_connect]` panicked | `1011 Internal Error` | reconnects |
+
+A handler that panics does not close the socket: its `ws.message` line files
+`panic`, the client gets an error frame saying `internal error`, and the panic's
+text goes to `nest_rs::ws` at `error`. A message still running when the shutdown
+window closes is dropped with its socket, and files `cancelled`.
 
 ## Version the socket
 

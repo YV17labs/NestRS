@@ -1355,3 +1355,408 @@ async fn a_frame_returned_through_anyhow_is_sent_whole() {
     assert_eq!(frame.error, "pick another name");
     assert_eq!(frame.errors, Some(serde_json::json!({ "name": ["taken"] })));
 }
+
+// ── The way down ────────────────────────────────────────────────────────────
+//
+// A socket is a connection poem stops tracking at the upgrade, so the shutdown
+// window neither waited for one nor closed it: the transport returned with
+// every socket still open, the shutdown hooks ran under live handlers, and the
+// process exit cut them — 1006 to a client that could not tell a deploy from a
+// network fault. At the signal a socket is now told RFC 6455 §7.4.1's **1001
+// Going Away**, the code for "a server going down", after whatever message it
+// is already answering.
+
+static SLOW_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static STUCK_STARTED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+#[gateway(path = "/leaving")]
+pub(crate) struct LeavingGateway;
+
+#[messages]
+impl LeavingGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+
+    /// Takes long enough for shutdown to be asked for while it runs, and far
+    /// less than the window.
+    #[subscribe_message("slow")]
+    #[public]
+    async fn slow(&self, text: String) -> String {
+        SLOW_STARTED.notify_one();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        text
+    }
+
+    /// Waits on something that never comes.
+    #[subscribe_message("stuck")]
+    #[public]
+    async fn stuck(&self) -> String {
+        STUCK_STARTED.notify_one();
+        std::future::pending::<()>().await;
+        "never".to_owned()
+    }
+
+    #[subscribe_message("explode")]
+    #[public]
+    async fn explode(&self) -> String {
+        tokio::task::yield_now().await;
+        panic!("the handler exploded with sk_live_secret in hand")
+    }
+
+    /// Queues more than a socket's buffers hold, for a client that will not
+    /// read it: the writer parks on the first frame the kernel cannot take.
+    #[subscribe_message("flood")]
+    #[public]
+    async fn flood(&self, client: &WsClient) {
+        let chunk = "x".repeat(128 * 1024);
+        for _ in 0..256 {
+            let _ = client.emit("chunk", &chunk);
+        }
+    }
+}
+
+#[module(
+    imports = [
+        WsModule,
+        nest_rs_ws::nest_rs_http::HttpModule::for_root(nest_rs_ws::nest_rs_http::HttpConfig {
+            shutdown_timeout: Duration::from_secs(1),
+            ..Default::default()
+        }),
+    ],
+    providers = [LeavingGateway],
+)]
+struct LeavingModule;
+
+async fn leaving_app() -> nest_rs_testing::ws::WsApp {
+    nest_rs_testing::TestApp::builder()
+        .module::<LeavingModule>()
+        .build_ws()
+        .await
+        .expect("a gateway boots on a real port")
+}
+
+/// An idle socket is closed at the signal with 1001 and a reason saying what
+/// to do — reconnect — and the transport waits for that close rather than
+/// returning past a socket it never told.
+#[tokio::test]
+async fn an_idle_socket_is_closed_going_away_at_the_signal() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("echo", serde_json::json!("hi")).await;
+    assert_eq!(socket.next_envelope().await["data"], "hi");
+
+    let asked = std::time::Instant::now();
+    let stopping = tokio::spawn(app.shutdown());
+    let (code, reason) = socket.expect_close().await;
+    stopping
+        .await
+        .expect("shutdown does not panic")
+        .expect("the transport stops cleanly");
+
+    assert_eq!(
+        code,
+        CloseCode::Away,
+        "§7.4.1 1001: the server is going down"
+    );
+    assert!(
+        reason.contains("reconnect"),
+        "the peer is told what to do: {reason}"
+    );
+    assert!(
+        asked.elapsed() < Duration::from_secs(1),
+        "an idle socket does not spend the window, took {:?}",
+        asked.elapsed(),
+    );
+    let left = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::DISCONNECT,
+    );
+    assert_eq!(
+        left.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::OK),
+        "the disconnect hook still ran: {left:#?}",
+    );
+}
+
+/// A message the socket is already answering at the signal is answered — inside
+/// the window, like a request still running — and the close comes after it, so
+/// no reply is lost to the shutdown.
+#[tokio::test]
+async fn a_message_running_at_the_signal_is_answered_before_the_close() {
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("slow", serde_json::json!("last word")).await;
+    SLOW_STARTED.notified().await;
+
+    let stopping = tokio::spawn(app.shutdown());
+    let reply = socket.next_envelope().await;
+    let (code, _) = socket.expect_close().await;
+    stopping
+        .await
+        .expect("shutdown does not panic")
+        .expect("the transport stops cleanly");
+
+    assert_eq!(reply["data"], "last word", "the reply came first");
+    assert_eq!(code, CloseCode::Away);
+}
+
+/// A message still running when the window closes is dropped where it waits,
+/// and files its line `cancelled` — the socket goes with it, cut like a request
+/// the window closed on.
+#[tokio::test]
+async fn a_message_still_running_at_the_window_is_dropped_and_files_cancelled() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("stuck", serde_json::Value::Null).await;
+    STUCK_STARTED.notified().await;
+
+    let asked = std::time::Instant::now();
+    app.shutdown().await.expect("the transport stops cleanly");
+    let took = asked.elapsed();
+
+    assert!(
+        took >= Duration::from_secs(1)
+            && took
+                < Duration::from_secs(1)
+                    + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
+                    + Duration::from_secs(1),
+        "the message held the window, and nothing past it — took {took:?}",
+    );
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::MESSAGE,
+    );
+    assert_eq!(line.field("event").as_deref(), Some("stuck"));
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert!(
+        matches!(
+            socket.read_within(Duration::from_secs(2)).await,
+            nest_rs_testing::ws::WsRead::Aborted(_)
+        ),
+        "the socket was cut with the message",
+    );
+}
+
+/// A handler that panics took the connection task down with it: no line, and a
+/// socket the peer read as 1006. The panic is contained at the message — the
+/// unit files `panic`, the client is answered with an error frame that says
+/// nothing of what unwound, and the socket goes on serving.
+#[tokio::test]
+async fn a_message_handler_that_panics_files_panic_and_its_client_is_answered() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+
+    socket.send("explode", serde_json::Value::Null).await;
+    let answer = socket.next_envelope().await;
+    assert_eq!(answer["event"], "explode");
+    assert_eq!(
+        answer["data"]["error"],
+        nest_rs_core::OPAQUE_CLIENT_MESSAGE,
+        "{answer}"
+    );
+    assert!(!answer.to_string().contains("sk_live"), "{answer}");
+
+    socket.send("echo", serde_json::json!("still here")).await;
+    assert_eq!(
+        socket.next_envelope().await["data"],
+        "still here",
+        "the socket goes on serving",
+    );
+
+    let exploded: Vec<_> = logs
+        .find(
+            nest_rs_core::operation_log::TARGET,
+            nest_rs_ws::unit::MESSAGE,
+        )
+        .into_iter()
+        .filter(|line| line.field("event").as_deref() == Some("explode"))
+        .collect();
+    assert_eq!(exploded.len(), 1, "{exploded:#?}");
+    assert_eq!(
+        exploded[0].field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    // The message's span fails with the line's word.
+    let span = logs
+        .spans()
+        .into_iter()
+        .find(|span| {
+            span.name == nest_rs_ws::unit::MESSAGE
+                && span.field("ws.event").as_deref() == Some("explode")
+        })
+        .expect("the message's span");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+        "{:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    let contained = logs.expect_one(
+        nest_rs_ws::TARGET,
+        "websocket handler panicked; its client is answered with an internal error",
+    );
+    assert_eq!(contained.level, "error");
+    assert!(
+        contained
+            .field("panic")
+            .is_some_and(|panic| panic.contains("the handler exploded")),
+        "{contained:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+#[gateway(path = "/broken-hooks")]
+pub(crate) struct BrokenHooksGateway;
+
+#[messages]
+impl BrokenHooksGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+
+    #[on_disconnect]
+    async fn left(&self) {
+        panic!("the disconnect hook exploded")
+    }
+}
+
+#[gateway(path = "/broken-connect")]
+pub(crate) struct BrokenConnectGateway;
+
+#[messages]
+impl BrokenConnectGateway {
+    #[subscribe_message("echo")]
+    #[public]
+    async fn echo(&self, text: String) -> String {
+        text
+    }
+
+    #[on_connect]
+    async fn joined(&self) {
+        panic!("the connect hook exploded")
+    }
+}
+
+#[module(imports = [WsModule], providers = [BrokenHooksGateway, BrokenConnectGateway])]
+struct BrokenHooksModule;
+
+/// A connect hook that panics leaves a connection set up halfway, so it is not
+/// served: the hook files `panic` and the socket is closed with §7.4.1's **1011
+/// Internal Error**, which a client reads as "the server failed, try again" —
+/// rather than the 1006 the unwinding task left it.
+#[tokio::test]
+async fn a_connect_hook_that_panics_files_panic_and_closes_with_internal_error() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<BrokenHooksModule>()
+        .build_ws()
+        .await
+        .expect("the gateways boot");
+
+    let mut socket = app.socket("/broken-connect").connect().await;
+    let (code, _) = socket.expect_close().await;
+    assert_eq!(code, CloseCode::Error, "§7.4.1 1011");
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::CONNECT,
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    let contained = logs.expect_one(
+        nest_rs_ws::TARGET,
+        "websocket connect hook panicked; the socket is closed unserved",
+    );
+    assert_eq!(contained.level, "error");
+    assert!(
+        contained
+            .field("panic")
+            .is_some_and(|panic| panic.contains("the connect hook exploded")),
+        "{contained:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// A disconnect hook that panics is the last thing a socket does, so the close
+/// it was running for still completes — the §5.5.1 echo reaches the client —
+/// and the hook files `panic`.
+#[tokio::test]
+async fn a_disconnect_hook_that_panics_files_panic_and_the_close_still_completes() {
+    let logs = LogCapture::install();
+    let app = nest_rs_testing::TestApp::builder()
+        .module::<BrokenHooksModule>()
+        .build_ws()
+        .await
+        .expect("the gateways boot");
+
+    let mut socket = app.socket("/broken-hooks").connect().await;
+    let echo = socket.close(CloseCode::Normal, "done").await;
+    assert_eq!(
+        echo.map(|(code, _)| code),
+        Some(CloseCode::Normal),
+        "§5.5.1: the close is still answered",
+    );
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_ws::unit::DISCONNECT,
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::PANIC),
+    );
+    let contained = logs.expect_one(
+        nest_rs_ws::TARGET,
+        "websocket disconnect hook panicked; the close goes on",
+    );
+    assert_eq!(contained.level, "error");
+    assert!(
+        contained
+            .field("panic")
+            .is_some_and(|panic| panic.contains("the disconnect hook exploded")),
+        "{contained:#?}",
+    );
+    app.shutdown().await.expect("the transport stops cleanly");
+}
+
+/// The writer that drains a socket's replies owns its sink, and ran on a task
+/// of its own that nothing stopped: a client that stopped reading parked it,
+/// and the socket stayed open after the transport had stopped the connection —
+/// past everything that served it. It goes with its connection now, so the
+/// window's close cuts the socket like any other.
+#[tokio::test]
+async fn a_socket_whose_peer_stopped_reading_goes_with_its_connection() {
+    let logs = LogCapture::install();
+    let app = leaving_app().await;
+    let mut socket = app.socket("/leaving").connect().await;
+    socket.send("flood", serde_json::Value::Null).await;
+    // Never read again: the replies fill both kernel buffers and park the writer.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    app.shutdown().await.expect("the transport stops cleanly");
+
+    let cut = logs.expect_one(
+        nest_rs_ws::nest_rs_http::target::HTTP,
+        "connections still open as the shutdown window closes are cut; a request still \
+         running is dropped unanswered and a stream ends mid-flow",
+    );
+    assert_eq!(
+        cut.field("upgraded_open").as_deref(),
+        Some("0"),
+        "no socket outlived the transport: {cut:#?}",
+    );
+    assert_eq!(cut.field("cut").as_deref(), Some("1"), "{cut:#?}");
+    drop(socket);
+}

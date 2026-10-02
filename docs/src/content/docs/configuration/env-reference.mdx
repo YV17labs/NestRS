@@ -265,19 +265,27 @@ default in place and nothing said so. The boot now does, once per variable, at
 | Message | When | Fields |
 |---|---|---|
 | `config variable read by no config` | a config of this binary read the variable's namespace, and none read its key | `variable`, `namespace`, and `suggestion` — the nearest key that was read, when one is close enough |
-| `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary links — other separators (`NESTRS_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `NESTRS_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`NESTRS_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment, a family member's included (`NESTRS_SEAROM__URL`, `NESTRS_OAUTH__RESOURSE__RESOURCE`) | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
+| `config variable under a misspelled namespace` | the variable's namespace is a near miss of one this binary read — other separators (`NESTRS_OAUTH_RESOURCE__RESOURCE` for `oauth__resource`, `NESTRS_SEAORM_URL` for `seaorm`), another case, the prefix's included, since the loader folds none (`NESTRS_Seaorm__URL`, `nestrs_seaorm__url`), or one misspelled segment of six letters or more, a family member's included (`NESTRS_SEAROM__URL`, `NESTRS_OAUTH__RESOURSE__RESOURCE`) — **and its key is one that namespace reads**, or one edit from one | `variable`, `namespace` (the linked spelling), and `suggestion` — the name that is read |
 
 Everything else stays silent, and that is the design. One `.env` serves several
-binaries, so a namespace this binary does not link, and that is no near miss of
-one it does, is another binary's — the framework's own namespaces are held
-further apart than that, so no binary of yours reports another's — and a
-key holding `__` under a namespace it does read is a sub-namespace another
-binary links — `redis__worker` under `redis` — reported only when it is a near
-miss of a key read here. The framework's process-level names, `NESTRS_LOG*`,
+binaries, so a namespace this binary does not read, and that is no near miss of
+one it does, is another binary's — and a near miss is held to both halves of the
+variable for that reason. A namespace under six letters has no room for a typo
+that is not also a word (`auth` and `authz` beside `authn`, `es` beside `ws`), so
+only its separators and its case count; and a misspelled namespace still carries
+the key the deployment meant, which the near namespace reads, while another
+binary's variable carries its own — `NESTRS_OPENAI__API_KEY` beside a linked
+`openapi` names no key `openapi` reads, and stays silent. The framework's own
+namespaces are held apart from each other by the conformance suite. A key holding
+`__` under a namespace it does read is a sub-namespace another binary links —
+`redis__worker` under `redis` — reported only when it is a near miss of a key
+read here. The framework's process-level names, `NESTRS_LOG*`,
 `NESTRS_ENV` and `NESTRS_ENV_PREFIX`, are never reported.
 
 The check runs where each config is read, against the keys its `from_env`
-actually asked for. A key read only behind a branch — `HttpCors` reads its other
+actually asked for — the namespace's misspellings included, at that same read,
+ended by an error or not, so a renamed required variable is named before the
+boot error its absence causes. A key read only behind a branch — `HttpCors` reads its other
 keys only when `CORS_ORIGINS` is set — is therefore reported exactly when the
 deployment did not take the branch, which is when it does nothing. A read made
 before any subscriber listens waits for the first read that has one, and a

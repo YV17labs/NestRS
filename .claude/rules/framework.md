@@ -566,22 +566,32 @@ without a report, no signal, since nothing ever asks for the value. So the loade
 reports two shapes at `warn` on `nest_rs::config`, once per variable, **by name and
 never by value**: a key under a namespace this binary read that no config read
 (`UNREAD_CONFIG_VARIABLE`, with the nearest key that was read as `suggestion`
-when one is near enough), and a near miss of a linked namespace
+when one is near enough), and a near miss of a namespace this binary read
 (`MISSPELLED_CONFIG_NAMESPACE`) — other separators (`OAUTH_RESOURCE` for 7.0's
 `oauth__resource`, `SEAORM_URL` for `SEAORM__URL`), another case, the prefix's
-included, since the loader folds none, or one misspelled segment, a family
-member's included (`PROBE__MEMBR` for `probe__member`). **Everything else is
-silent, by design**: one `.env` serves several binaries, so a namespace this
-binary does not link and that is no near miss of one it does is another binary's,
-never a mistake. The near-miss reach is narrower than a key's for that reason —
-one segment, a quarter of it — and the `no_namespace_is_a_near_miss_of_another`
-join holds every namespace of both workspaces outside it of every other, with
-the report's own function. **A namespace belongs to one type**: two `#[config]`
+included, since the loader folds none, or one misspelled segment of six letters
+or more, a family member's included (`PROBE__MEMBR` for `probe__member`) — **and
+only under a key the near namespace reads, or one edit from one**. **Everything
+else is silent, by design**: one `.env` serves several binaries, so a namespace
+this binary does not read and that is no near miss of one it does is another
+binary's, never a mistake. Both halves of the near miss are narrow for that
+reason. A short namespace has no room for a typo that is not also a word — `auth`
+and `authz` beside `authn`, `es` beside `ws` — so under six letters only
+separators and case count; and a misspelled namespace still carries the key the
+deployment meant, which the near namespace reads, while another binary's variable
+carries its own (`OPENAI__API_KEY` names no key `openapi` reads). Reported on the
+namespace alone, a correct deployment of several binaries told its operator to
+move one binary's variables under another's namespace. The
+`no_namespace_is_a_near_miss_of_another` join holds every namespace of both
+workspaces outside the namespace half of every other, with the report's own
+function. **A namespace belongs to one type**: two `#[config]`
 structs declaring it are refused at the read of either, naming both
 (`ConfigError::SharedNamespace`) — the key check ran once the first had been
 read and filed the second one's keys as read by nothing, on a correct
 deployment. The key half runs inside `read`, the one funnel
-into every `from_env`, once a `from_env` has returned — a config's keys are
+into every `from_env`, once a `from_env` has returned, and the namespace half at
+every read of its namespace, ended by an error or not, so a renamed *required*
+variable is named ahead of the boot error its absence causes — a config's keys are
 knowable only where its hand-written reader runs (`HttpCors` reads five of its six
 keys only when `CORS_ORIGINS` is set), so a process-wide dry run of every config
 would report a correct deployment, and a diagnostic that fires on correct

@@ -209,23 +209,118 @@ fn a_namespace_spelled_with_other_separators_is_reported_under_the_linked_spelli
     });
 }
 
-/// The namespace half reads the link-time registry, not the reads: a linked
-/// config that no module has read yet is checked at the first read of any, so a
-/// renamed *required* variable is named before the boot error it causes.
+/// The namespace half waits for the namespace's own read, since the keys it
+/// reads are what tell a misspelling from another binary's variable — and runs
+/// at that read, ended by an error or not, so a renamed *required* variable is
+/// named ahead of the boot error its absence causes.
 #[test]
 #[allow(clippy::result_large_err)]
-fn a_linked_namespace_is_checked_before_its_config_is_read() {
+fn a_namespace_is_checked_once_its_config_is_read() {
     figment::Jail::expect_with(|jail| {
         let former = var_name("unclaimed_member", "URL");
         jail.set_env(&former, "https://former.example");
         let logs = LogCapture::install();
 
         KeysConfig::load().expect("another config loads first");
+        assert_silent(&logs, &former);
 
+        MemberConfig::load().expect("the member loads");
         let event = report(&logs, MISSPELLED_CONFIG_NAMESPACE, &former);
         assert_eq!(
             event.field("suggestion"),
             Some(var_name("unclaimed__member", "URL")),
+        );
+        Ok(())
+    });
+}
+
+/// Stand-ins for three framework namespaces a binary links — `openapi`'s
+/// length, `authn`'s and `ws`'s, one key each, under namespaces of their own:
+/// with features unified this binary may link the real ones, and a namespace
+/// belongs to one type. Beside them another binary of the same deployment owns
+/// one edit away from each.
+#[config(namespace = "unclaimed_openapi")]
+#[derive(Clone, Default)]
+struct OpenapiShapedConfig {
+    title: String,
+}
+
+impl Config for OpenapiShapedConfig {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+        Ok(Self {
+            title: env.get("TITLE")?.unwrap_or(base.title),
+        })
+    }
+}
+
+#[config(namespace = "authq")]
+#[derive(Clone, Default)]
+struct AuthnShapedConfig {
+    issuer: String,
+}
+
+impl Config for AuthnShapedConfig {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+        Ok(Self {
+            issuer: env.get("ISSUER")?.unwrap_or(base.issuer),
+        })
+    }
+}
+
+#[config(namespace = "wx")]
+#[derive(Clone, Default)]
+struct WsShapedConfig {
+    url: String,
+}
+
+impl Config for WsShapedConfig {
+    fn from_env(env: &ConfigService, base: Self) -> nest_rs_config::Result<Self> {
+        Ok(Self {
+            url: env.get("URL")?.unwrap_or(base.url),
+        })
+    }
+}
+
+/// config-2r2: a correct deployment of several binaries filed a misspelling for
+/// every namespace one edit from a framework one — `OPENAI` for `openapi`,
+/// `AUTH`/`AUTHZ` for `authn`, `ES` for `ws` — with a suggestion that would
+/// break the binary that owns it. A short namespace has no room for a typo that
+/// is not also a word, and a long one is reported only under a key it reads;
+/// the value is reported nowhere.
+#[test]
+#[allow(clippy::result_large_err)]
+fn another_binarys_namespaces_beside_a_short_or_unread_key_are_left_alone() {
+    figment::Jail::expect_with(|jail| {
+        const SECRET: &str = "sk-live-SECRETVALUE";
+        let others = [
+            var_name("unclaimed_openai", "API_KEY"),
+            var_name("auth", "ISSUER"),
+            var_name("authz", "POLICY"),
+            var_name("ex", "URL"),
+        ];
+        let typo = var_name("unclaimed_opneapi", "TITLE");
+        for name in others.iter().chain([&typo]) {
+            jail.set_env(name, SECRET);
+        }
+        let logs = LogCapture::install();
+
+        OpenapiShapedConfig::load().expect("the config loads");
+        AuthnShapedConfig::load().expect("the config loads");
+        WsShapedConfig::load().expect("the config loads");
+
+        for other in &others {
+            assert_silent(&logs, other);
+        }
+        let event = report(&logs, MISSPELLED_CONFIG_NAMESPACE, &typo);
+        assert_eq!(
+            event.field("suggestion"),
+            Some(var_name("unclaimed_openapi", "TITLE"))
+        );
+        assert!(
+            logs.events()
+                .iter()
+                .all(|event| !format!("{event:?}").contains(SECRET)),
+            "no value reaches any event",
         );
         Ok(())
     });
@@ -392,6 +487,7 @@ fn the_value_is_never_reported() {
         let logs = LogCapture::install();
 
         KeysConfig::load().expect("the config loads");
+        MemberConfig::load().expect("the member loads");
 
         report(&logs, UNREAD_CONFIG_VARIABLE, &typo);
         report(&logs, MISSPELLED_CONFIG_NAMESPACE, &former);

@@ -1,5 +1,5 @@
 //! The worker-job keys a `#[scheduled]` one-shot cannot take, each refused with
-//! the fact that makes it meaningless — the table in `framework.md`, *The impl
+//! the fact that makes it meaningless — the table in `macros.md`, *The impl
 //! half* — rather than as an unknown key. `replicas` and `key` are among them: a
 //! one-shot fires on the replica that booted and claims nothing. One method per
 //! cell.

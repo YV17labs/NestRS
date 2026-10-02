@@ -262,7 +262,7 @@ pub(crate) fn validate_access_graph(
             let deps = (p.injects)();
             let names = (p.inject_names)();
             // A singleton may not inject a provider that only exists inside a
-            // request. `framework.md` states the rule — "**One level deep**:
+            // request. `container.md` states the rule — "**One level deep**:
             // request-scoped may inject singletons; never the reverse" — and
             // nothing enforced it, so the case failed **silently**: the register
             // phase gates readiness on the singleton map alone, so a singleton

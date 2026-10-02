@@ -21,7 +21,7 @@
 //! `docs/configuration/env-cascade` teaches for a borrow. Saying "borrowing is
 //! a boot failure" flatly told a reader the framework refuses something it
 //! waves through, and *"a `warn` whose sentence is wrong is worse than none"*
-//! (`framework.md`) is the same rule one level up. Whether the free function
+//! (`container.md`) is the same rule one level up. Whether the free function
 //! should be covered too is an **owner question**: it is called from places
 //! with no config in flight at all, so covering it means deciding what an
 //! unowned read means, not adding a line.

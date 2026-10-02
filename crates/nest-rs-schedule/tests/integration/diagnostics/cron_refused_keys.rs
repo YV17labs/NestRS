@@ -1,5 +1,5 @@
 //! The worker-job keys a `#[scheduled]` cron trigger cannot take, each refused
-//! with the fact that makes it meaningless — the table in `framework.md`, *The
+//! with the fact that makes it meaningless — the table in `macros.md`, *The
 //! impl half* — rather than as an unknown key. One method per cell.
 
 use nest_rs_core::injectable;

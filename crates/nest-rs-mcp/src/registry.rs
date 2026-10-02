@@ -221,7 +221,7 @@ pub fn register_host<P: 'static>(
     // transport merges itself, so every host attaches unconditionally — is
     // deliberately not built for one caller: `CLAUDE.md` says extract after a
     // pattern appears twice, and MCP is the only aggregating self-mount today.
-    // A second one (the WS "route by event name" change `framework.md`
+    // A second one (the WS "route by event name" change `edges.md`
     // anticipates) is what should generalize this.
     let claimed = builder
         .attached_meta::<HttpEndpointMeta>()

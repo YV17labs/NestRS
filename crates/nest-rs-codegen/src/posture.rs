@@ -55,7 +55,7 @@ pub const ID_ARG_UNSUPPORTED_BECAUSE: &str = "it renames the argument GraphQL's 
 ///
 /// Free-standing beside [`at_most_one_authorize`] and
 /// [`posture_key_unsupported`], because the seam for *wording without parsing*
-/// is what this family needed: `framework.md` argues that two of four edges
+/// is what this family needed: `edges.md` argues that two of four edges
 /// parse their own posture — GraphQL's `bind = Service` and `id_arg`, HTTP's
 /// optional posture — and both arguments are about the parser's **signature**.
 /// Neither reaches this sentence, which contains no `bind`, no `id_arg` and no
@@ -69,7 +69,7 @@ pub fn posture_contradiction() -> &'static str {
 /// `operation` names what the edge calls one and `public_means` says what
 /// `#[public]` costs there — the two axes that genuinely differ. Everything
 /// else is one wording, for [`posture_contradiction`]'s reason. It is
-/// `framework.md`'s *"the one item on this list that is load-bearing on its
+/// `edges.md`'s *"the one item on this list that is load-bearing on its
 /// own"*, so three spellings of it was the worst place in the framework to have
 /// three.
 pub fn posture_required(operation: &str, public_means: &str) -> String {

@@ -1,4 +1,4 @@
-//! Compile-time witness of macro path hygiene (`framework.md`).
+//! Compile-time witness of macro path hygiene (`macros.md`).
 //!
 //! This crate depends **only** on `nest-rs-*` surface crates — no third-party
 //! dependency at all. Every decorator exercised here is therefore proven to
@@ -17,7 +17,7 @@
 //! `#[hooks]`, `#[nest_rs::main]`) are witnessed under no feature at all.
 //!
 //! Extend this crate whenever a decorator is added. Decorators excluded by
-//! the documented contract (see `framework.md`) are deliberately not
+//! the documented contract (see `macros.md`) are deliberately not
 //! exercised: emitted derives and the entity-site trio
 //! `::sea_orm`/`::uuid`/`::chrono`, whose expansions target the call-site
 //! prelude because the developer's own source writes them.

@@ -165,7 +165,7 @@ fn a_greenfield_workspace_compiles() {
 
 #[test]
 fn a_generated_crud_resource_compiles() {
-    // This is the claim `.claude/rules/framework.md` makes and this suite
+    // This is the claim `.claude/rules/macros.md` makes and this suite
     // exists to honour: `#[crud]` and `#[expose]` are deliberately absent from
     // `nest-rs-macro-hygiene` because they need a real entity and a real
     // service, so their contract is proved *here* — on generated code, with the

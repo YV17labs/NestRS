@@ -78,7 +78,7 @@ pub enum LayerSite {
     /// Named for the role every edge shares rather than for HTTP's word for it:
     /// this variant is what a guard declared on an `#[mcp]` host or a
     /// `#[resolver]` is reported under, and `controller` named a decorator
-    /// their file does not contain. `framework.md` already calls the struct half
+    /// their file does not contain. `edges.md` already calls the struct half
     /// of every pair the host.
     Host,
     /// `#[use_*]` beside an individual handler/method.

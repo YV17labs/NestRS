@@ -136,7 +136,7 @@ pub const TARGET: &str = "nest_rs::ws";
 /// The two targets this crate **emits on but does not own**, re-exported so
 /// `nest-rs-ws-macros` reaches them through its own surface crate.
 ///
-/// `framework.md` fixes the route: "A `*-macros` crate reaches the owner through
+/// `macros.md` fixes the route: "A `*-macros` crate reaches the owner through
 /// **its own surface crate's** re-export (`::nest_rs_queue::TARGET` from
 /// `nest-rs-queue-macros`) … Reaching a *different* sibling is the breach that
 /// rule names". `#[gateway]` emitted `::nest_rs_core::target::LAYERS` and

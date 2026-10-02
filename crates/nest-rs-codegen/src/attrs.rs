@@ -341,7 +341,7 @@ fn listed_noun(ident: &str) -> String {
 /// nowhere else, exactly as their two neighbours are, so writing either on a
 /// gateway, a resolver or an `#[mcp]` host reached rustc as
 /// `cannot find attribute … in this scope` — no transport named, no reason, no
-/// remedy. `framework.md` item 8 asks for "a named compile error for **every**
+/// remedy. `edges.md` item 8 asks for "a named compile error for **every**
 /// layer family the edge does not bridge"; the list is what makes "every"
 /// checkable.
 ///

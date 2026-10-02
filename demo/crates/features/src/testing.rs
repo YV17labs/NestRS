@@ -50,6 +50,7 @@ pub enum RedisDatabase {
     AudioMultipart = 4,
     PostsNotify = 5,
     AudioSchedule = 6,
+    PostsRollback = 7,
 }
 
 impl RedisDatabase {

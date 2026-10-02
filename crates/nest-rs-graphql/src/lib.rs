@@ -48,6 +48,7 @@ mod loader;
 mod module;
 mod opaque;
 mod operation;
+mod redact;
 mod resolver;
 mod scope;
 mod subscription;

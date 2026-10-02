@@ -51,6 +51,13 @@ On the wire:
 }
 ```
 
+A decode failure is the one message the framework rewrites. serde's sentence
+quotes the value it refused — a resolver's `?` on `serde_json` or on an anyhow
+chain holding its error, async-graphql's own `Json<T>` scalar coercing an
+argument — so `errors[].message` says where and what kind instead:
+`invalid type: a string, expected u64 at line 1 column 24`. It holds on the
+socket as on `POST`.
+
 ## Extensions and codes
 
 `extensions` carry structured data — a stable code clients can branch

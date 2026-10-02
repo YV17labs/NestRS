@@ -162,6 +162,9 @@ fn register(builder: ContainerBuilder, options: GraphqlConfig) -> ContainerBuild
             // once here and shared by both endpoints — the POST path and the
             // socket must not be able to disagree about who is authenticated.
             let bridge = Arc::new(OperationBridge::new(container.clone()));
+            // Both endpoints serve through it, so neither answers an error in
+            // serde's quoting words.
+            let schema = crate::redact::Redacted(schema);
             // Our endpoint instead of `async_graphql_poem::GraphQL` so each
             // `GraphqlContextSeed` forwards per-request poem state into the context.
             let method = poem::post(crate::context::ContextEndpoint::new(

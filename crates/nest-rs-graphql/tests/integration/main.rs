@@ -12,6 +12,7 @@ mod loader;
 mod operation;
 mod pipe;
 mod read_only;
+mod redact;
 mod resolver;
 mod scope;
 mod sdl_snapshot;

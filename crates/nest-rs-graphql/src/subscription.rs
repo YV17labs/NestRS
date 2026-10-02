@@ -42,10 +42,12 @@ use crate::context::OperationBridge;
 ///
 /// It hands back the schema opaquely: the discovered roots stay `pub(crate)`,
 /// and the only thing a caller can do with the value is execute against it,
-/// which is the whole point.
+/// which is the whole point. And it is the mount's executor whole — the schema
+/// behind [`Redacted`](crate::redact::Redacted), so a subscriber reads errors
+/// as a client of the mount does.
 #[doc(hidden)]
 pub fn compose_schema(container: Container, config: &GraphqlConfig) -> impl Executor + 'static {
-    crate::resolver::build_schema(container, config)
+    crate::redact::Redacted(crate::resolver::build_schema(container, config))
 }
 
 /// Keep or drop one masked subscription item.

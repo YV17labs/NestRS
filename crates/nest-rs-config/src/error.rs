@@ -11,7 +11,13 @@ use validator::{ValidationErrors, ValidationErrorsKind};
 #[non_exhaustive]
 pub enum ConfigError {
     /// Names the offending variable so the misconfig is obvious at boot.
+    ///
+    /// Built only through [`ConfigError::parse`], which says the message
+    /// without any value a decoder quoted in it — so a reason handed over
+    /// whole, a serde or TOML error included, cannot carry a secret into the
+    /// boot error.
     #[error("invalid value for {var}: {message}")]
+    #[non_exhaustive]
     Parse {
         /// The offending `<PREFIX>_<DOMAIN>__<KEY>` variable name.
         var: String,
@@ -132,10 +138,16 @@ pub enum ConfigError {
 
 impl ConfigError {
     /// Build a [`Parse`](Self::Parse) error naming the variable and the reason.
+    ///
+    /// The one sink every refusal of a value reaches, so it is where a quoted
+    /// value is removed: a line pointing into the text a parser read — the
+    /// `1 | token = "…"` excerpt a TOML error opens with — is dropped, and a
+    /// sentence in one of serde's quoting shapes is said without its value, as
+    /// [`DecodeError::redact`] says it, whichever format worded it.
     pub fn parse(var: impl Into<String>, message: impl Into<String>) -> Self {
         Self::Parse {
             var: var.into(),
-            message: message.into(),
+            message: redacted(&message.into()),
         }
     }
 
@@ -143,6 +155,25 @@ impl ConfigError {
     pub fn validation(namespace: &'static str, errors: ValidationErrors) -> Self {
         Self::Validation { namespace, errors }
     }
+}
+
+/// `message` without the values a decoder quoted in it.
+fn redacted(message: &str) -> String {
+    let kept: Vec<&str> = message
+        .lines()
+        .filter(|line| !is_source_excerpt(line))
+        .collect();
+    DecodeError::redact(&kept.join("\n"), None).into_owned()
+}
+
+/// A line of a source excerpt — `1 | key = "…"`, or the gutter `  |  ^^^`
+/// under it — which a parser prints to point into the text it read, and which
+/// therefore repeats that text verbatim.
+fn is_source_excerpt(line: &str) -> bool {
+    line.trim_start()
+        .trim_start_matches(|c: char| c.is_ascii_digit())
+        .trim_start()
+        .starts_with('|')
 }
 
 /// One `  - field: rule (bound = n)` line per failure, deepest field path
@@ -237,6 +268,62 @@ mod tests {
         );
         assert!(text.contains("\n  - client_id: length"), "{text}");
         assert!(text.contains("\n  - page_size: range"), "{text}");
+    }
+
+    const SECRET: &str = "sk_live_51HsecretTOKEN";
+
+    /// A JSON decoder's sentence handed to the sink whole, as a reader judging
+    /// a value of its own would hand it, quotes nothing it refused.
+    #[test]
+    fn a_json_decode_failure_reaches_the_boot_error_without_its_value() {
+        let error = serde_json::from_str::<u16>(&format!("\"{SECRET}\""))
+            .expect_err("a string is not a port");
+        assert!(
+            error.to_string().contains(SECRET),
+            "the probe quotes: {error}"
+        );
+
+        let var = crate::var_name("fixture", "PORT");
+        let text = ConfigError::parse(var.clone(), error.to_string()).to_string();
+        assert!(!text.contains(SECRET), "{text}");
+        assert!(
+            text.starts_with(&format!("invalid value for {var}: invalid type: ")),
+            "the failure is still said: {text}"
+        );
+    }
+
+    /// TOML quotes twice: the excerpt it opens with repeats the line it read,
+    /// and serde's sentence after it quotes the value. Neither reaches the boot
+    /// error — a type error or a syntax error alike.
+    #[test]
+    fn a_toml_decode_failure_reaches_the_boot_error_without_its_value() {
+        use figment::providers::{Format, Toml};
+        use std::collections::BTreeMap;
+
+        for (document, what) in [
+            (format!("port = \"{SECRET}\""), "invalid type"),
+            (format!("token = {SECRET} trailing"), "TOML parse error"),
+        ] {
+            let error = Toml::from_str::<BTreeMap<String, u16>>(&document)
+                .expect_err("the document does not decode");
+            assert!(
+                error.to_string().contains(SECRET),
+                "the probe quotes: {error}"
+            );
+
+            let text =
+                ConfigError::parse(crate::var_name("fixture", "SETTINGS"), error.to_string())
+                    .to_string();
+            assert!(!text.contains(SECRET), "{text}");
+            assert!(text.contains(what), "the failure is still said: {text}");
+        }
+    }
+
+    /// A refusal that quotes nothing is said word for word.
+    #[test]
+    fn a_reason_with_nothing_quoted_is_kept_whole() {
+        let text = ConfigError::parse("V", "must be at least 1 second — why").to_string();
+        assert_eq!(text, "invalid value for V: must be at least 1 second — why");
     }
 
     #[test]

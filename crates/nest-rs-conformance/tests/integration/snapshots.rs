@@ -26,8 +26,14 @@
 //! *beside* the refusal, so the refusal can change or vanish while rustc's
 //! `E0404` keeps the file red in the same way. `transactional_needs_a_value`
 //! shipped so after `QueueName` became a struct. The second test refuses any
-//! snapshot carrying a name-resolution code, unless the fixture's `//!` says
+//! snapshot carrying a name-resolution error, unless the fixture's `//!` says
 //! `deliberately fails to resolve`.
+//!
+//! **A resolution error is read by code where rustc gives one, and by sentence
+//! where it does not.** rustc reports an attribute, a derive or a bang macro it
+//! cannot find with no code at all — `error: cannot find attribute `processr`
+//! in this scope` — and that is the likeliest rot in a decorator suite: a
+//! renamed decorator under a glob import. Matching codes alone passed it.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -88,10 +94,11 @@ const RESOLVES_ON_PURPOSE: &str = "deliberately fails to resolve";
 /// or an associated item that is not where the fixture says it is. None is a
 /// refusal the framework words, so a snapshot carrying one pins a fixture that
 /// stopped compiling for a reason of its own.
-const RESOLUTION: [&str; 21] = [
+const RESOLUTION: [&str; 28] = [
     "E0404", // expected trait, found something else
     "E0405", // cannot find trait
     "E0407", // method is not a member of the trait
+    "E0411", // `Self` used outside an impl or a trait
     "E0412", // cannot find type
     "E0422", // cannot find struct, variant or union
     "E0423", // expected value, found something else
@@ -108,8 +115,23 @@ const RESOLUTION: [&str; 21] = [
     "E0531", // cannot find tuple struct or variant
     "E0532", // expected tuple struct or variant
     "E0573", // expected type, found something else
+    "E0574", // expected a struct, variant or union type, found something else
+    "E0575", // expected an associated type, found something else
+    "E0576", // associated item not found in the trait
+    "E0577", // expected a module, found something else
+    "E0578", // cannot determine the type of a path
     "E0599", // no method or associated item found
     "E0603", // item is private
+    "E0659", // a name is ambiguous
+];
+
+/// rustc's resolution failures that carry **no** code, as their sentences open:
+/// an attribute, a derive and a bang macro it cannot find, and a macro whose
+/// resolution it cannot settle. Matched at the start of an `error:` line, so a
+/// refusal that quotes the words in its own sentence is not taken for one.
+const CODELESS: [&str; 2] = [
+    "error: cannot find ",
+    "error: cannot determine resolution for ",
 ];
 
 /// Every fixture under `root`'s two workspaces whose snapshot pins a
@@ -136,6 +158,15 @@ fn unresolved_fixtures(root: &Path) -> (BTreeSet<String>, usize) {
                     holes.insert(format!(
                         "{} pins {code}",
                         relative(&snapshot.with_extension("rs"), root)
+                    ));
+                }
+            }
+            for opening in CODELESS {
+                if let Some(line) = pinned.lines().find(|line| line.starts_with(opening)) {
+                    holes.insert(format!(
+                        "{} pins `{}`",
+                        relative(&snapshot.with_extension("rs"), root),
+                        line.trim_end(),
                     ));
                 }
             }
@@ -168,7 +199,7 @@ fn no_snapshot_pins_a_name_resolution_error_its_fixture_does_not_declare() {
 /// declaring it on purpose, and a clean one.
 #[test]
 fn a_fixture_pinning_a_resolution_error_is_found_unless_it_says_so() {
-    const TREE: [(&str, &str); 6] = [
+    const TREE: [(&str, &str); 10] = [
         (
             "crates/nest-rs-probe/tests/integration/diagnostics/rotted.rs",
             "//! Promises the residency refusal.\nuse nest_rs_queue::processr;\nfn main() {}\n",
@@ -193,6 +224,24 @@ fn a_fixture_pinning_a_resolution_error_is_found_unless_it_says_so() {
             "crates/nest-rs-probe/tests/integration/diagnostics/clean.stderr",
             "error: the refusal\n\nerror[E0277]: `X` does not check GraphQL operations\n",
         ),
+        // The codeless sentences: an attribute renamed under a glob import, and
+        // a bang macro.
+        (
+            "crates/nest-rs-probe/tests/integration/diagnostics/attr_rot.rs",
+            "//! Promises the residency refusal.\nuse nest_rs_queue::*;\n#[processr] fn main() {}\n",
+        ),
+        (
+            "crates/nest-rs-probe/tests/integration/diagnostics/attr_rot.stderr",
+            "error: the refusal\n\nerror: cannot find attribute `processr` in this scope\n",
+        ),
+        (
+            "crates/nest-rs-probe/tests/integration/diagnostics/macro_rot.rs",
+            "//! Promises the enqueue refusal.\nfn main() { enqueu!(); }\n",
+        ),
+        (
+            "crates/nest-rs-probe/tests/integration/diagnostics/macro_rot.stderr",
+            "error: cannot find macro `enqueu` in this scope\n",
+        ),
     ];
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("snapshots-resolution-{}", std::process::id()));
@@ -200,9 +249,15 @@ fn a_fixture_pinning_a_resolution_error_is_found_unless_it_says_so() {
     crate::plant(&root, &TREE);
     let (holes, scanned) = unresolved_fixtures(&root);
     let _ = std::fs::remove_dir_all(&root);
-    assert_eq!(scanned, 3);
+    assert_eq!(scanned, 5);
     assert_eq!(
         holes.into_iter().collect::<Vec<_>>(),
-        ["crates/nest-rs-probe/tests/integration/diagnostics/rotted.rs pins E0432"],
+        [
+            "crates/nest-rs-probe/tests/integration/diagnostics/attr_rot.rs pins `error: cannot \
+             find attribute `processr` in this scope`",
+            "crates/nest-rs-probe/tests/integration/diagnostics/macro_rot.rs pins `error: cannot \
+             find macro `enqueu` in this scope`",
+            "crates/nest-rs-probe/tests/integration/diagnostics/rotted.rs pins E0432",
+        ],
     );
 }

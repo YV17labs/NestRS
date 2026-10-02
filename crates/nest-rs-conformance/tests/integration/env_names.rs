@@ -17,11 +17,21 @@
 //! Members are derived, never listed: every `NESTRS_`-prefixed string literal
 //! under `crates/` and `demo/`. The three sanctioned exceptions are stated
 //! below, each because the name is not the application's to rename.
+//!
+//! **It reads no name by its spelling**, so it declares none to the `blinds`
+//! join: its members are string literals, read in every macro's tokens — a
+//! `macro_rules!` transcriber's included.
 
 use std::collections::BTreeSet;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{crate_dirs, parsed, relative, repo_root, rust_files};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    Vec::new()
+}
 
 const BASELINE: &str = "env-names-baseline.txt";
 

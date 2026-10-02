@@ -19,10 +19,18 @@
 //! Members are derived from `nest_rs_queue::Capability`'s variants, and a member
 //! is spelled in a test's name as its variant in snake case —
 //! `Capability::DelayedPush` is `delayed_push`.
+//!
+//! **What it reads by its spelling**: `QueueBackend::new` / `QueueBackend { … }`
+//! and `Capability::<Member>`, anywhere in a crate's tokens — a `macro_rules!`
+//! transcriber's included. What would hide one is refused by the `blinds` join:
+//! a rename or a `type` alias of either, an import through `Capability`
+//! (`use …::Capability::*`, `use …::Capability::Throttle`), and a member a
+//! transcriber's caller chooses (`Capability::$v`).
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     crate_dirs, files_with_extension, flatten, is_cfg_test, parsed, read, relative, repo_root,
@@ -32,7 +40,22 @@ use proc_macro2::TokenTree;
 use quote::ToTokens;
 use syn::{Item, ItemFn};
 
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![
+        Followed::type_(CAPABILITY).read_in_transcribers(),
+        Followed::type_(BACKEND).read_in_transcribers(),
+    ]
+}
+
 const BASELINE: &str = "queue-capabilities-baseline.txt";
+
+/// The enum a capability is a variant of, read as the head of `Capability::X`.
+const CAPABILITY: &str = "Capability";
+
+/// The type a backend is constructed as, read as `QueueBackend::new` or a
+/// `QueueBackend { … }` literal.
+const BACKEND: &str = "QueueBackend";
 
 /// The variants `Capability` declares today. Below this the scan is reading the
 /// wrong file.
@@ -65,7 +88,7 @@ fn every_queue_capability_is_refused_by_the_port_proved_on_its_backends_and_docu
                 holes.insert(format!("{member} :: e2e in {}", backend.crate_path));
             }
         }
-        let declared = format!("Capability::{member}");
+        let declared = format!("{CAPABILITY}::{member}");
         if !pages.iter().any(|page| page.contains(&declared)) {
             holes.insert(format!("{member} :: docs page naming `{declared}`"));
         }
@@ -99,7 +122,7 @@ fn capability_variants(file: &Path) -> Vec<String> {
     ast.items
         .iter()
         .find_map(|item| match item {
-            Item::Enum(declared) if declared.ident == "Capability" => Some(
+            Item::Enum(declared) if declared.ident == CAPABILITY => Some(
                 declared
                     .variants
                     .iter()
@@ -177,14 +200,9 @@ fn constructs_a_backend(tokens: &proc_macro2::TokenStream) -> bool {
             TokenTree::Punct(first),
             TokenTree::Punct(second),
             TokenTree::Ident(ctor),
-        ] => {
-            ty == "QueueBackend"
-                && first.as_char() == ':'
-                && second.as_char() == ':'
-                && ctor == "new"
-        }
+        ] => ty == BACKEND && first.as_char() == ':' && second.as_char() == ':' && ctor == "new",
         [TokenTree::Ident(ty), TokenTree::Group(body), ..] => {
-            ty == "QueueBackend" && body.delimiter() == proc_macro2::Delimiter::Brace
+            ty == BACKEND && body.delimiter() == proc_macro2::Delimiter::Brace
         }
         _ => false,
     })
@@ -201,7 +219,7 @@ fn capability_paths(tokens: proc_macro2::TokenStream) -> BTreeSet<String> {
                 TokenTree::Punct(first),
                 TokenTree::Punct(second),
                 TokenTree::Ident(variant),
-            ] if owner == "Capability" && first.as_char() == ':' && second.as_char() == ':' => {
+            ] if owner == CAPABILITY && first.as_char() == ':' && second.as_char() == ':' => {
                 Some(variant.to_string())
             }
             _ => None,

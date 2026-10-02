@@ -11,6 +11,13 @@
 //! vocabulary — the block inside `architecture.md`, parsed rather than
 //! recopied. A second copy of that list here would be the defect the file
 //! exists to prevent.
+//!
+//! **What it reads by its spelling** — and the `blinds` join refuses in any
+//! other, under `cfg_attr`, or from a `macro_rules!`: `#[module]`, `impl Module`
+//! and `impl DynamicModule`, which make a DI module wherever they sit;
+//! `#[config]`, which makes a `*Config` one; `Error`, derived or implemented,
+//! which makes an error type; and every framework decorator, since the role
+//! files' types are the decorated items.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -22,6 +29,36 @@ use nest_rs_conformance::sources::{
 use proc_macro2::TokenTree;
 use syn::Item;
 use syn::visit::Visit;
+
+use crate::Followed;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    let mut out = vec![
+        Followed::attribute("module"),
+        Followed::implemented("Module"),
+        Followed::implemented("DynamicModule"),
+        Followed::attribute("config"),
+        // `std::error::Error` / `core::error::Error`, and `thiserror`'s derive —
+        // never `async_graphql::Error` and the other types that share the word.
+        Followed::implemented("Error").through(&["error"]),
+        Followed::attribute("Error").through(&["thiserror"]),
+    ];
+    for dir in crate_dirs() {
+        if dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("-macros"))
+        {
+            out.extend(
+                nest_rs_conformance::sources::exported_decorators(&dir)
+                    .into_iter()
+                    .map(Followed::attribute),
+            );
+        }
+    }
+    out
+}
 
 /// One per gated join in this module. Named rather than written at the call
 /// site for the reason every interpreted string here is: a mistyped filename
@@ -367,6 +404,14 @@ fn every_type_a_module_rs_declares_is_a_member() {
 /// `#[module]` — or a hand-written `impl Module` — anywhere else is a module
 /// no naming rule reads, whatever it is called. No baseline: the tree holds
 /// none.
+///
+/// **A `*Setup` is half of a module, and it is placed like one.** An `impl
+/// DynamicModule` is what `for_root` returns — the seam every `*Setup` and the
+/// hand-written `AuthnSetup` implement — so one outside a `module.rs` is a module
+/// half no naming rule reads. It is not counted toward *one module per file*:
+/// a module offering `for_root` and `for_feature` returns two setups from one
+/// `module.rs`, which is `ConfigModule`'s shape. A `#[module]` a `macro_rules!`
+/// writes is not read here: the `blinds` join refuses it.
 #[test]
 fn every_di_module_is_declared_in_a_module_rs() {
     let root = repo_root();
@@ -381,17 +426,22 @@ fn every_di_module_is_declared_in_a_module_rs() {
         }
         for path in rust_files(&dir.join("src")) {
             let Some(ast) = parsed(&path) else { continue };
-            let mut found = DiModules::default();
-            found.visit_file(&ast);
+            let found = di_modules(&ast);
             let here = path.file_name().is_some_and(|n| n == "module.rs");
-            if !here && found.0 > 0 {
+            if !here && found.modules > 0 {
                 offenders.insert(format!("{} declares a DI module", relative(&path, &root)));
             }
-            if here && found.0 > 1 {
+            if !here && found.setups > 0 {
+                offenders.insert(format!(
+                    "{} implements `DynamicModule` — a `*Setup` sits beside its module",
+                    relative(&path, &root),
+                ));
+            }
+            if here && found.modules > 1 {
                 offenders.insert(format!(
                     "{} declares {} DI modules — one per file, two modules are two folders",
                     relative(&path, &root),
-                    found.0,
+                    found.modules,
                 ));
             }
         }
@@ -402,10 +452,20 @@ fn every_di_module_is_declared_in_a_module_rs() {
     );
 }
 
-/// How many `#[module]` structs and `impl Module for` blocks a file holds,
-/// outside `#[cfg(test)]`.
-#[derive(Default)]
-struct DiModules(usize);
+/// How many `#[module]` structs and `impl Module for` blocks a file holds —
+/// its modules — and how many `impl DynamicModule for` — its setups — outside
+/// `#[cfg(test)]`.
+fn di_modules(file: &syn::File) -> DiModules {
+    let mut found = DiModules::default();
+    found.visit_file(file);
+    found
+}
+
+#[derive(Default, Debug, PartialEq)]
+struct DiModules {
+    modules: usize,
+    setups: usize,
+}
 
 impl<'ast> Visit<'ast> for DiModules {
     fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
@@ -428,20 +488,48 @@ impl<'ast> Visit<'ast> for DiModules {
                 .is_some_and(|segment| segment.ident == "module")
         });
         if decorated && !is_cfg_test(&node.attrs) {
-            self.0 += 1;
+            self.modules += 1;
         }
     }
 
     fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
-        let implements = node.trait_.as_ref().is_some_and(|(path, _)| {
+        if is_cfg_test(&node.attrs) {
+            return;
+        }
+        let implemented = node.trait_.as_ref().and_then(|(path, _)| {
             path.segments
                 .last()
-                .is_some_and(|segment| segment.ident == "Module")
+                .map(|segment| segment.ident.to_string())
         });
-        if implements && !is_cfg_test(&node.attrs) {
-            self.0 += 1;
+        match implemented.as_deref() {
+            Some("Module") => self.modules += 1,
+            Some("DynamicModule") => self.setups += 1,
+            _ => {}
         }
+        syn::visit::visit_item_impl(self, node);
     }
+}
+
+/// The DI-module gate on a planted file: a `*Setup` outside a `module.rs` is
+/// read — the half macros2-5 found passing — and a `#[cfg(test)]` one is a
+/// fixture.
+#[test]
+fn a_setup_is_read_as_a_module_half() {
+    let file: syn::File = syn::parse_quote! {
+        pub struct QueueZzprobeSetup;
+        impl DynamicModule for QueueZzprobeSetup {}
+        impl ::nest_rs_core::Module for Wiring {}
+        #[module] pub struct Visible;
+        #[cfg(test)]
+        mod tests { impl DynamicModule for Fixture {} }
+    };
+    assert_eq!(
+        di_modules(&file),
+        DiModules {
+            modules: 2,
+            setups: 1
+        }
+    );
 }
 
 /// **The same law one level down: an edge adapter is named for its module.**
@@ -503,9 +591,8 @@ fn misnamed_adapters(root: &Path) -> (usize, Vec<String>) {
                 continue;
             };
             let Some(ast) = parsed(&path) else { continue };
-            for item in &ast.items {
-                let syn::Item::Struct(s) = item else { continue };
-                let ident = s.ident.to_string();
+            for declared in structs_at_any_depth(&ast.items) {
+                let ident = declared.ident.to_string();
                 if !ident.ends_with(role) {
                     continue;
                 }
@@ -519,6 +606,41 @@ fn misnamed_adapters(root: &Path) -> (usize, Vec<String>) {
     // The walk follows the filesystem's order; a verdict does not.
     offenders.sort();
     (scanned, offenders)
+}
+
+/// Every struct an item list declares, inline modules included and
+/// `#[cfg(test)]` ones left out — a type one `mod` down is the file's all the
+/// same, and reading the top level alone let one pass unread.
+fn structs_at_any_depth(items: &[Item]) -> Vec<&syn::ItemStruct> {
+    let mut out = Vec::new();
+    for item in items {
+        match item {
+            Item::Struct(s) if !is_cfg_test(&s.attrs) => out.push(s),
+            Item::Mod(m) if !is_cfg_test(&m.attrs) => {
+                if let Some((_, inner)) = &m.content {
+                    out.extend(structs_at_any_depth(inner));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A struct one `mod` down is read; a test's is not.
+#[test]
+fn a_struct_is_read_at_any_depth() {
+    let file: syn::File = syn::parse_quote! {
+        #[controller] pub struct PostsController;
+        mod inner { #[controller] pub struct WrongController; }
+        #[cfg(test)]
+        mod tests { pub struct FixtureController; }
+    };
+    let read: Vec<String> = structs_at_any_depth(&file.items)
+        .into_iter()
+        .map(|s| s.ident.to_string())
+        .collect();
+    assert_eq!(read, ["PostsController", "WrongController"]);
 }
 
 /// The word the adapters in an edge folder are named for, read off the folders
@@ -1376,11 +1498,6 @@ fn every_error_type_lives_in_error_rs() {
                     })
         })
     }
-    fn is_test_module(attrs: &[syn::Attribute]) -> bool {
-        attrs.iter().any(|attr| {
-            attr.path().is_ident("cfg") && attr.meta.to_token_stream().to_string().contains("test")
-        })
-    }
     fn walk(items: &[Item], out: &mut Vec<String>) {
         for item in items {
             match item {
@@ -1397,7 +1514,7 @@ fn every_error_type_lives_in_error_rs() {
                         out.push(last.ident.to_string());
                     }
                 }
-                Item::Mod(m) if !is_test_module(&m.attrs) => {
+                Item::Mod(m) if !is_cfg_test(&m.attrs) => {
                     if let Some((_, inner)) = &m.content {
                         walk(inner, out);
                     }
@@ -1406,7 +1523,6 @@ fn every_error_type_lives_in_error_rs() {
             }
         }
     }
-    use quote::ToTokens;
 
     let root = repo_root();
     let mut holes = BTreeSet::new();
@@ -1563,8 +1679,7 @@ fn config_names_a_config() {
         for path in rust_files(&krate.join("src")) {
             let Some(ast) = parsed(&path) else { continue };
             let in_config_rs = path.file_name().is_some_and(|n| n == "config.rs");
-            for item in &ast.items {
-                let Item::Struct(i) = item else { continue };
+            for i in structs_at_any_depth(&ast.items) {
                 if !matches!(i.vis, syn::Visibility::Public(_)) {
                     continue;
                 }

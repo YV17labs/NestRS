@@ -17,13 +17,19 @@
 //! `extern crate` in them, renamed or not, with the attributes on it. Items
 //! under `#[cfg(test)]` are left out, as every join leaves them out.
 //!
-//! **What it cannot read, and who refuses it**: a module at a `#[path]`, a name
-//! a glob import brings in, and a name a `macro_rules!` declares. The first and
-//! the third are refused in framework source by the `blinds` join; a glob is
-//! answered by the join that needs its names (the `dependencies` join refuses
-//! one of an optional dependency). A `mod x;` whose file the default layout
-//! does not find is not skipped: it is in [`CrateImports::unread`], and a join
-//! reading the tree fails on it.
+//! **What it cannot read, and who answers it**: a module at a `#[path]` and an
+//! `extern crate … as` — whose name the extern prelude carries into every module,
+//! while this reads one module's imports at a time — are refused in all the
+//! source the joins read by the `blinds` join. A name a glob import brings in is
+//! refused by the join that needs it (the `dependencies` join, for an optional
+//! dependency) or by `blinds` (for a crate a join declares it follows). A name a
+//! `macro_rules!` imports is not read here, and hides nothing: the
+//! `dependencies` and `decodes` joins also read every path a macro's tokens
+//! spell, so the crate is seen where the macro writes it, and a re-export a
+//! macro writes is one the `paths` and `umbrella` joins fail to find — loud,
+//! never silent. A `mod x;` whose file the default
+//! layout does not find is not skipped: it is in [`CrateImports::unread`], and a
+//! join reading the tree fails on it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

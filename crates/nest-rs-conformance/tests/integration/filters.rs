@@ -22,16 +22,27 @@
 //! emission site under `crates/` and `demo/`. The pair, not the target, is the
 //! hole — a prefix relation belongs to two names and neither is wrong on its
 //! own.
+//!
+//! **What it reads by its spelling**: the `target:` of every macro call. It
+//! reads calls, not `macro_rules!` transcribers, so a literal target a
+//! transcriber writes is refused by the `blinds` join — a target handed *to* a
+//! macro is read where the macro is called.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     Named, declared_target, declared_targets, each_source, repo_root,
 };
 use syn::Macro;
 use syn::visit::Visit;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![Followed::key("target")]
+}
 
 /// Below this the scan is reading the wrong tree and every pair it fails to
 /// report is a pair nobody will look for again.

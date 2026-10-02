@@ -17,14 +17,23 @@
 //! which is the shape `testing.md` clause 1 names as the defect — a fourth
 //! containment seam is exactly what the framework grows when an edge learns to
 //! catch, and a hand-written population cannot see one.
+//!
+//! **What it reads by its spelling**: `panic_message(` in a file's tokens, a
+//! `macro_rules!` transcriber's included. The `blinds` join refuses a rename.
 
 use std::collections::BTreeSet;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     crate_dirs, declared_str, flatten, read, relative, repo_root, rust_files,
 };
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![Followed::call("panic_message").read_in_transcribers()]
+}
 
 /// Three seams contain a panic today — the scheduler, the event bus and the
 /// queue consumer. Below that the scan is reading the wrong tree.

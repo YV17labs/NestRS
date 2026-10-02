@@ -34,12 +34,21 @@
 //! cannot find with no code at all — `error: cannot find attribute `processr`
 //! in this scope` — and that is the likeliest rot in a decorator suite: a
 //! renamed decorator under a glob import. Matching codes alone passed it.
+//!
+//! **It reads no name by its spelling**, so it declares none to the `blinds`
+//! join: its members are `.stderr` files and the fixture beside each.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{files_with_extension, read, relative, repo_root};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    Vec::new()
+}
 
 const BASELINE: &str = "snapshots-baseline.txt";
 

@@ -41,10 +41,16 @@
 //!   in `nest-rs-testing` **if the protocol needs one**". Nothing derives whether
 //!   a protocol needs one, so a column would be asserting a judgement, not a
 //!   fact.
+//!
+//! **What it reads by its spelling**: `DecoratorPair`, the declaration an edge
+//! is read off (`sources::declared_pairs`) — the `blinds` join refuses any other
+//! spelling. Every column asks whether the edge's own code spells a symbol, so a
+//! rename there empties a cell, which fails rather than hides.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     carries_a_test, declared_pairs, declared_targets, declares_an_item, idents, is_cfg_test,
@@ -52,6 +58,11 @@ use nest_rs_conformance::sources::{
 };
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![Followed::type_("DecoratorPair")]
+}
 
 const BASELINE: &str = "edges-baseline.txt";
 

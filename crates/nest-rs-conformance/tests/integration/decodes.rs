@@ -19,11 +19,17 @@
 //! `serde_json`. A file declaring a `#[config]` names `serde_json` nowhere: none
 //! does today, and the rule costs nothing to keep.
 //!
+//! **What it reads by its spelling** is `Config`, the trait an `impl` makes a
+//! member with, and the `blinds` join refuses it renamed, aliased or written by a
+//! `macro_rules!`. `serde_json` is read through the resolver, so the one import
+//! that hides it — a glob of its items — is refused there too, with the two
+//! constructions the resolver cannot read: an `extern crate … as` and a
+//! `#[path]` module.
+//!
 //! **What it cannot read**: a helper in *another* file of the crate that a
 //! `from_env` calls. Following it needs the crate's call graph, which a
 //! syntactic read does not have; it is the one shape left, named here rather
-//! than implied. A rename of `serde_json` outside the crate root, a glob of its
-//! items and the like are refused in all framework source by the `blinds` join.
+//! than implied.
 //!
 //! **Every framework item taking a developer's error into a box** — a bound
 //! `Into<Box<dyn …>>`, on the item or on the `impl` it sits in — against the rule
@@ -50,6 +56,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::imports::{CrateImports, module_of, spelled_paths};
 use nest_rs_conformance::sources::{
@@ -58,6 +65,16 @@ use nest_rs_conformance::sources::{
 use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::visit::Visit;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![
+        Followed::implemented("Config"),
+        Followed::krate("serde_json"),
+        Followed::implemented("Into"),
+        Followed::call("boxed_error"),
+    ]
+}
 
 /// `impl Config for` blocks the walk must find. The framework and the demo hold
 /// some two dozen; below this the scan is reading the wrong tree.

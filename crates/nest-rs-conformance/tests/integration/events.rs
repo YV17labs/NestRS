@@ -11,10 +11,17 @@
 //! Members are derived, never listed. Coverage is checked **workspace-wide** —
 //! `demo/` included — because a member asserted from another crate is asserted,
 //! and a per-crate view manufactures holes that get closed with duplicate tests.
+//!
+//! **What it reads by its spelling**: `warn!`, `error!`, and `event!` at
+//! `Level::WARN` / `Level::ERROR`, in a body, a `quote!` and a `macro_rules!`
+//! transcriber alike; the `blinds` join refuses renaming one. A `warn`+ call
+//! whose message is no literal it reads fails here rather than leaving the
+//! population.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     Named, declared_target, is_cfg_test, parsed, relative, repo_root, rust_files,
@@ -22,6 +29,18 @@ use nest_rs_conformance::sources::{
 use proc_macro2::{TokenStream, TokenTree};
 use syn::visit::Visit;
 use syn::{Attribute, Expr, ItemConst, ItemFn, ItemMod, LitStr, Macro, Path as SynPath};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    ["warn", "error", "event"]
+        .into_iter()
+        .map(|name| {
+            Followed::call(name)
+                .through(&["tracing", "log"])
+                .read_in_transcribers()
+        })
+        .collect()
+}
 
 const BASELINE: &str = "events-baseline.txt";
 
@@ -102,6 +121,28 @@ impl Event {
 struct Emissions {
     file: String,
     events: Vec<Event>,
+    /// Every `warn`+ call whose message the join cannot read — a member it
+    /// would otherwise drop in silence.
+    unreadable: BTreeSet<String>,
+}
+
+/// Whether a macro named `name`, called with `tokens`, emits at `warn` or
+/// above: `warn!` and `error!`, and `event!` at `Level::WARN` / `Level::ERROR`.
+fn warn_plus(name: &str, tokens: &TokenStream) -> bool {
+    match name {
+        "warn" | "error" => true,
+        "event" => {
+            let mut flat = Vec::new();
+            nest_rs_conformance::sources::flatten(tokens.clone(), &mut flat);
+            flat.windows(4).any(|window| {
+                matches!(window,
+                    [TokenTree::Ident(level), TokenTree::Punct(a), TokenTree::Punct(b), TokenTree::Ident(at)]
+                        if level == "Level" && a.as_char() == ':' && b.as_char() == ':'
+                            && (at == "WARN" || at == "ERROR"))
+            })
+        }
+        _ => false,
+    }
 }
 
 impl<'ast> Visit<'ast> for Emissions {
@@ -126,12 +167,12 @@ impl<'ast> Visit<'ast> for Emissions {
             .last()
             .map(|s| s.ident.to_string())
             .unwrap_or_default();
-        // `warn!` / `error!` by name. `tracing::event!(Level::WARN, …)` is the
-        // documented alternative spelling and is **not** in this population —
-        // nothing writes one today (checked), so it is a channel rather than a
-        // hole, and it is named here because a population that loses a member
-        // silently is the one direction this join may not fail in.
-        if name == "warn" || name == "error" {
+        // `warn!` / `error!` by name, and `event!` at a `warn`+ level — the
+        // documented alternative spelling, which was a channel this population
+        // did not read while nothing wrote one. A population that loses a member
+        // silently is the one direction this join may not fail in, so the
+        // channel is read rather than named.
+        if warn_plus(&name, &node.tokens) {
             self.take(&node.tokens);
         }
         // A decorator emits into the *developer's* code, so its events are the
@@ -170,6 +211,17 @@ impl Emissions {
                 |(first, _)| matches!(&named, Some(Named::Literal(t)) if normalize(t) == *first),
             );
         let needed = usize::from(written_as_string) + 1;
+        // **No message the join reads is a member it would drop.** `CLAUDE.md`
+        // gives every event a constant message; one taken from a variable, or
+        // from a `macro_rules!` metavariable, is either that rule broken or a
+        // sentence nothing here can name — both are reported, never skipped.
+        if literals.len() < needed || literals.last().is_some_and(|(m, _)| m.is_empty()) {
+            self.unreadable.insert(format!(
+                "{}: `{}` — a `warn`+ event whose message is no literal",
+                self.file,
+                tokens.to_string().chars().take(80).collect::<String>(),
+            ));
+        }
         if literals.len() >= needed
             && let Some((message, fragment)) = literals.last()
             && !message.is_empty()
@@ -203,7 +255,7 @@ impl Emissions {
             else {
                 continue;
             };
-            if bang.as_char() == '!' && matches!(name.to_string().as_str(), "warn" | "error") {
+            if bang.as_char() == '!' && warn_plus(&name.to_string(), &args.stream()) {
                 self.take(&args.stream());
             }
         }
@@ -332,6 +384,18 @@ impl<'ast> Visit<'ast> for Asserted<'_> {
 }
 
 fn emitted_events(root: &Path) -> Vec<Event> {
+    let scan = emissions(root);
+    assert!(
+        scan.unreadable.is_empty(),
+        "`warn`+ events whose message the events join cannot read, so no suite is asked \
+         for them — give each a constant message (a literal, a `{{CONST}}`, or a \
+         `concat!` holding one):\n  {}",
+        scan.unreadable.into_iter().collect::<Vec<_>>().join("\n  "),
+    );
+    scan.events
+}
+
+fn emissions(root: &Path) -> Emissions {
     let mut scan = Emissions::default();
     for path in rust_files(&root.join("crates")) {
         let rel = relative(&path, root);
@@ -346,7 +410,37 @@ fn emitted_events(root: &Path) -> Vec<Event> {
             scan.visit_file(&file_ast);
         }
     }
-    scan.events
+    scan
+}
+
+/// The population on a planted file: `event!` at a `warn`+ level is a member,
+/// and an event whose message the join cannot read — a variable, a
+/// metavariable — is reported rather than dropped.
+#[test]
+fn an_event_is_read_in_every_spelling_or_reported() {
+    let file: syn::File = syn::parse_quote! {
+        fn site() {
+            tracing::event!(target: "t", tracing::Level::WARN, "an event spelled the long way");
+            tracing::event!(tracing::Level::INFO, "not warn plus");
+            tracing::warn!(target: "t", %message);
+        }
+        macro_rules! deny {
+            ($message:literal) => { tracing::warn!(target: "t", $message) };
+        }
+    };
+    let mut scan = Emissions {
+        file: "probe.rs".to_owned(),
+        ..Emissions::default()
+    };
+    scan.visit_file(&file);
+    assert_eq!(
+        scan.events
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>(),
+        ["an event spelled the long way"],
+    );
+    assert_eq!(scan.unreadable.len(), 2, "{:#?}", scan.unreadable);
 }
 
 fn asserted_strings(root: &Path, consts: &BTreeMap<String, String>) -> BTreeSet<String> {

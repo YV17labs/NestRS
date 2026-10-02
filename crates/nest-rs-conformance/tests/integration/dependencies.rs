@@ -39,10 +39,15 @@
 //! every judgement here gets wrong), and a glob import from an optional
 //! dependency, which hides the names it brings in. A `#[path]` module and an
 //! `extern crate … as` are refused in all framework source by the `blinds` join.
+//!
+//! **It reads no name by its spelling**, so it declares none to the `blinds`
+//! join: every path goes through the resolver, and what that cannot follow is
+//! refused here or there, as above.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::imports::CrateImports;
 use nest_rs_conformance::sources::{is_cfg_test, parsed, path_roots, relative, repo_root};
@@ -50,6 +55,11 @@ use proc_macro2::TokenStream;
 use syn::punctuated::Punctuated;
 use syn::visit::Visit;
 use syn::{Attribute, Expr, Item, Meta, Token, UseTree};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    Vec::new()
+}
 
 /// Below this the walk is reading the wrong tree.
 const FLOOR: usize = 200;

@@ -25,18 +25,34 @@
 //! `crates/` and `demo/` — **inside a doctest as well as in an item**, since the
 //! example is what a developer copies and it is the site this join reached
 //! last.
+//!
+//! **What it reads by its spelling**: `operation_span!` and `info!` calls, at a
+//! call site and inside a `macro_rules!` transcriber alike — a slot the
+//! transcriber's caller fills is a binding, which only the shared emitter may
+//! spell. The `blinds` join refuses a rename of either.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     Named, declared_units, doctests, each_source, is_cfg_test, named_at, operation_log_target,
     past_value, repo_root, resolve_target, top_level, value_after,
 };
-use proc_macro2::TokenTree;
+use proc_macro2::{TokenStream, TokenTree};
 use syn::Macro;
 use syn::visit::Visit;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![
+        Followed::call(OPEN).read_in_transcribers(),
+        Followed::call(LINE)
+            .through(&["tracing", "log"])
+            .read_in_transcribers(),
+    ]
+}
 
 /// Below this the scan is reading the wrong tree, and a join that finds nothing
 /// reads exactly like a join that found nothing wrong.
@@ -69,6 +85,9 @@ const TARGET_MODULE: &str = "target";
 /// worded for a name the join cannot follow — the case a shared emitter is
 /// waived for, and the case an edge that forgot the slot fails on.
 const ABSENT: &str = "<absent>";
+
+/// What a slot a `macro_rules!` caller fills is recorded as.
+const METAVARIABLE: &str = "<a macro_rules! metavariable>";
 
 /// How a site named its unit, once the shared reader has classified it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -207,14 +226,65 @@ impl<'ast> Visit<'ast> for Scan {
             .unwrap_or_default();
         // Named before flattened: `top_level` clones the stream, and every
         // `assert!`, `format!` and `quote!` body in both workspaces reaches
-        // this visitor. Only these two macro names are ever read.
-        if name != "operation_span" && name != "info" {
-            syn::visit::visit_macro(self, node);
+        // this visitor. Only these two macro names are ever read — at a call,
+        // and inside a `macro_rules!` transcriber, where `syn` stops at the
+        // tokens: MCP's notifications file their operation line from one, and
+        // it was the one line of the family this join never read.
+        if name == "macro_rules" {
+            for (called, args) in transcribed_calls(&node.tokens) {
+                self.read(&called, &args);
+            }
+        } else if name == OPEN || name == LINE {
+            self.read(&name, &node.tokens);
+        }
+        syn::visit::visit_macro(self, node);
+    }
+}
+
+/// The macro that opens a unit, and the one that files its line.
+const OPEN: &str = "operation_span";
+const LINE: &str = "info";
+
+/// Every `operation_span!(…)` and `info!(…)` a `macro_rules!` body writes, with
+/// its argument tokens.
+fn transcribed_calls(body: &TokenStream) -> Vec<(String, TokenStream)> {
+    let mut flat = Vec::new();
+    nest_rs_conformance::sources::flatten(body.clone(), &mut flat);
+    flat.windows(3)
+        .filter_map(|window| match window {
+            [
+                TokenTree::Ident(name),
+                TokenTree::Punct(bang),
+                TokenTree::Group(args),
+            ] if bang.as_char() == '!' && (name == OPEN || name == LINE) => {
+                Some((name.to_string(), args.stream()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+impl Scan {
+    /// One call to `name` with `args`, read for the slots its family fixes.
+    fn read(&mut self, name: &str, args: &TokenStream) {
+        let tokens = top_level(args);
+        // A value a `macro_rules!` caller supplies is no constant this join can
+        // read at the definition — and its call site is no `operation_span!`.
+        // Recorded as a binding, which only the shared emitter may spell.
+        if tokens
+            .iter()
+            .any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '$'))
+        {
+            let site = if name == OPEN {
+                "operation_span!"
+            } else {
+                "message"
+            };
+            self.record(site, UNIT_MODULE, Spelled::Binding(METAVARIABLE.to_owned()));
             return;
         }
-        let tokens = top_level(&node.tokens);
 
-        if name == "operation_span" {
+        if name == OPEN {
             // `operation_span!(target: …, kind: …, <name>, &correlation, …)`.
             // The unit's name is the positional argument after the kind, and the
             // kind is a path now, so the value has to be *walked* rather than
@@ -248,7 +318,6 @@ impl<'ast> Visit<'ast> for Scan {
                 self.record("target:", TARGET_MODULE, Spelled::Literal(target));
             }
             if matches!(membership, Membership::Outside) {
-                syn::visit::visit_macro(self, node);
                 return;
             }
             // Both slots carry the same value under the same rule, so they are
@@ -261,8 +330,44 @@ impl<'ast> Visit<'ast> for Scan {
                 self.record(site, UNIT_MODULE, named);
             }
         }
-        syn::visit::visit_macro(self, node);
     }
+}
+
+/// An operation line a `macro_rules!` writes is read like one at a call site,
+/// and a slot its caller fills is a binding — never a line the join skips.
+#[test]
+fn an_operation_line_in_a_macro_rules_body_is_read() {
+    let file: syn::File = syn::parse_quote! {
+        macro_rules! files_its_line {
+            () => {
+                tracing::info!(
+                    name: crate::unit::OPERATION,
+                    target: nest_rs_core::operation_log::TARGET,
+                    message = crate::unit::OPERATION,
+                );
+            };
+        }
+        macro_rules! hands_it_on {
+            ($unit:expr) => {
+                nest_rs_core::operation_span!(target: T, kind: nest_rs_core::operation_log::kind::SERVER, $unit, &c)
+            };
+        }
+    };
+    let mut scan = Scan::default();
+    scan.visit_file(&file);
+    let read: Vec<(&str, Spelled)> = scan
+        .found
+        .keys()
+        .map(|(site, _, spelled)| (*site, spelled.clone()))
+        .collect();
+    assert!(
+        read.contains(&("message", Spelled::Unit("OPERATION".to_owned()))),
+        "{read:?}"
+    );
+    assert!(
+        read.contains(&("operation_span!", Spelled::Binding(METAVARIABLE.to_owned()))),
+        "{read:?}"
+    );
 }
 
 fn scan_all(root: &Path) -> Scan {

@@ -32,16 +32,26 @@
 //! The member is spelled by its directory name; its surface is spelled the way
 //! a caller writes it, `nest_rs_<x>::…`; a decorator is spelled the way a
 //! fixture writes it, as a bare identifier under `#[…]`.
+//!
+//! **Its population reads no name by its spelling**, so it declares none to the
+//! `blinds` join: the members are the crate directories, and what it reads in a
+//! suite is coverage, which a disguise empties rather than fills.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     crate_dirs, executed_tokens, exported_decorators, idents, path_roots, read, relative,
     repo_root, rust_files, suite_runs_tests,
 };
 use proc_macro2::TokenStream;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    Vec::new()
+}
 
 const BASELINE: &str = "targets-baseline.txt";
 

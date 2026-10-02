@@ -41,12 +41,12 @@
 //!
 //! A call is read under the name it is **written** as. A local `macro_rules!`
 //! is a way of its own — each rule a scope whose metavariables hand a name on
-//! exactly as a parameter does, and each `name!(…)` invocation a call to it. An
-//! import alias of a sentence (`use nest_rs_codegen::unknown_argument as
-//! unknown;`) is the one spelling that renames it outright, and it is refused in
-//! framework source by the `blinds` join rather than followed here: followed per
-//! file, an alias declared once at a crate root and called from another file
-//! still dropped its decorator from the population.
+//! exactly as a parameter does, and each `name!(…)` invocation a call to it.
+//! **What it reads by its spelling** is therefore every way, and each is
+//! declared to the `blinds` join, which refuses an import alias of one (`use
+//! nest_rs_codegen::unknown_argument as unknown;`) rather than this join
+//! following it: followed per file, an alias declared once at a crate root and
+//! called from another file still dropped its decorator from the population.
 //!
 //! **A decorator name is not a grammar.** `#[expose]` is two — the one on the
 //! `Model` and the one on a column — worded in one crate, and the struct half's
@@ -99,7 +99,30 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::visit::Visit;
 
+use crate::Followed;
+
 const BASELINE: &str = "grammars-baseline.txt";
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible:
+/// every way to the two sentences, which a call is read under by its name.
+pub(crate) fn followed() -> Vec<Followed> {
+    let sources = Sources::collect(&repo_root());
+    let mut ways: BTreeSet<String> = BTreeSet::new();
+    for sentence in [UNKNOWN_KEY, REPEATED_KEY] {
+        ways.extend(
+            sources
+                .reading(sentence)
+                .ways
+                .into_keys()
+                .map(|(_, name)| name),
+        );
+    }
+    ways.into_iter()
+        // A `macro_rules!` way is read as `name!`, and a macro is renamed by
+        // the name it is invoked as.
+        .map(|way| Followed::call(way.trim_end_matches('!')).read_in_transcribers())
+        .collect()
+}
 
 /// Decorators with a `key = value` grammar. Below this the scan is reading the
 /// wrong tree.

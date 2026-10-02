@@ -397,13 +397,11 @@ fn pair_from(expr: &Expr) -> Option<(String, String)> {
     }
 }
 
-/// Top-level items only, which is a stated limit rather than an oversight: a
-/// pair declared inside an inline `mod` is not joined. Its sibling
-/// [`collect_target_consts`] descends one level for the same `Item::Const`
-/// shape, and the asymmetry is the population's — a `DecoratorPair` const is
-/// written at a macro crate's top level by every one of the nine, and a tenth
-/// hidden in a `mod` would also be invisible to the `rg 'DecoratorPair'` the
-/// rule names as the human half of the check.
+/// Every `const` initialised with one, at any depth outside `#[cfg(test)]` —
+/// an inline `mod` or an `impl` included. It read top-level items only, which
+/// left a pair declared one `mod` down unjoined while every cell it owed stayed
+/// unasked; a pair a `macro_rules!` writes, or one under a renamed
+/// `DecoratorPair`, is refused by the `blinds` join.
 pub fn declared_pairs() -> Vec<Pair> {
     let root = repo_root();
     let mut out = Vec::new();
@@ -422,21 +420,43 @@ pub fn declared_pairs() -> Vec<Pair> {
             let Some(ast) = parsed(&file) else {
                 continue;
             };
-            for item in &ast.items {
-                let Item::Const(konst) = item else {
-                    continue;
-                };
-                if let Some((host, operations)) = pair_from(&konst.expr) {
-                    out.push(Pair {
-                        krate: name.to_owned(),
-                        host,
-                        operations,
-                    });
-                }
-            }
+            let mut consts = PairConsts(Vec::new());
+            consts.visit_file(&ast);
+            out.extend(consts.0.into_iter().map(|(host, operations)| Pair {
+                krate: name.to_owned(),
+                host,
+                operations,
+            }));
         }
     }
     out
+}
+
+/// Every pair a file's constants declare, outside `#[cfg(test)]`.
+struct PairConsts(Vec<(String, String)>);
+
+impl<'ast> Visit<'ast> for PairConsts {
+    fn visit_item_mod(&mut self, node: &'ast ItemMod) {
+        if !is_cfg_test(&node.attrs) {
+            syn::visit::visit_item_mod(self, node);
+        }
+    }
+
+    fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
+        if !is_cfg_test(&node.attrs)
+            && let Some(pair) = pair_from(&node.expr)
+        {
+            self.0.push(pair);
+        }
+    }
+
+    fn visit_impl_item_const(&mut self, node: &'ast syn::ImplItemConst) {
+        if !is_cfg_test(&node.attrs)
+            && let Some(pair) = pair_from(&node.expr)
+        {
+            self.0.push(pair);
+        }
+    }
 }
 
 /// Every span target the framework declares, read out of the declaration.
@@ -496,8 +516,17 @@ pub fn declared_targets() -> &'static [(&'static str, &'static str, &'static str
 /// that did not consume a *valued* sibling key (`validate = "manual"`) left the
 /// nested-meta walk in an error state, so a `namespace` written after one was
 /// silently reported absent.
+///
+/// The attribute is known by its path's **last segment**: `#[nest_rs::config]`
+/// is the same decorator as `#[config]`, and reading the bare ident alone took a
+/// qualified one for no config at all.
 pub fn config_namespace(attrs: &[syn::Attribute]) -> Option<String> {
-    let attr = attrs.iter().find(|a| a.path().is_ident("config"))?;
+    let attr = attrs.iter().find(|a| {
+        a.path()
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "config")
+    })?;
     let mut namespace = None;
     let _ = attr.parse_nested_meta(|meta| {
         if meta.path.is_ident("namespace") {
@@ -834,20 +863,48 @@ impl<'ast> Visit<'ast> for DocText {
     }
 }
 
-/// Whether an item is behind `#[cfg(test)]`.
+/// Whether an item is compiled for tests only — a `#[cfg(…)]` whose predicate
+/// implies `test`.
 ///
 /// Shared rather than per join: it separates the two things a `src/` file holds
 /// — the framework's own emissions, and the assertions about them — and every
 /// join needs one side or the other.
+///
+/// **Implies, not mentions.** It answered "the predicate names `test`
+/// somewhere", so `#[cfg(not(test))]` — shipped code, *excluded* from tests —
+/// and `#[cfg(any(test, feature = "testing"))]` — shipped under a feature — read
+/// as fixtures, and every join skipped what they hold. `test` implies itself,
+/// `all(…)` implies it when one of its terms does, `any(…)` when every term
+/// does, and `not(…)` never does.
 pub fn is_cfg_test(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| match &attr.meta {
         Meta::List(list) if list.path.is_ident("cfg") => list
-            .tokens
-            .clone()
-            .into_iter()
-            .any(|t| matches!(&t, TokenTree::Ident(i) if i == "test")),
+            .parse_args::<Meta>()
+            .is_ok_and(|predicate| implies_test(&predicate)),
         _ => false,
     })
+}
+
+/// Whether a `cfg` predicate holds only when `test` does.
+fn implies_test(predicate: &Meta) -> bool {
+    match predicate {
+        Meta::Path(path) => path.is_ident("test"),
+        Meta::List(list) => {
+            let Ok(terms) = list.parse_args_with(
+                syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+            ) else {
+                return false;
+            };
+            if list.path.is_ident("all") {
+                terms.iter().any(implies_test)
+            } else if list.path.is_ident("any") {
+                !terms.is_empty() && terms.iter().all(implies_test)
+            } else {
+                false
+            }
+        }
+        Meta::NameValue(_) => false,
+    }
 }
 
 /// Whether `tokens` spell the path `<first>::<second>` anywhere, at any depth.
@@ -1157,6 +1214,64 @@ mod tests {
     use proc_macro2::Delimiter;
 
     use super::*;
+
+    /// A pair one `mod` down or on an `impl` is declared all the same; a test's
+    /// is not.
+    #[test]
+    fn a_pair_is_read_at_any_depth() {
+        let file: syn::File = syn::parse_quote! {
+            const TOP: DecoratorPair = DecoratorPair { host: "#[a]", operations: "#[b]" };
+            mod inner {
+                const NESTED: DecoratorPair = DecoratorPair::on_provider("#[c]", "#[d]");
+            }
+            impl Holder { const HELD: DecoratorPair = DecoratorPair { host: "#[e]", operations: "#[f]" }; }
+            #[cfg(test)]
+            mod tests { const FIXTURE: DecoratorPair = DecoratorPair { host: "#[x]", operations: "#[y]" }; }
+        };
+        let mut consts = PairConsts(Vec::new());
+        consts.visit_file(&file);
+        let read: Vec<(&str, &str)> = consts
+            .0
+            .iter()
+            .map(|(host, operations)| (host.as_str(), operations.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("#[a]", "#[b]"),
+                ("#[injectable]", "#[c]"),
+                ("#[e]", "#[f]")
+            ]
+        );
+    }
+
+    /// A predicate that names `test` without implying it is shipped code — the
+    /// two spellings every join used to skip as fixtures.
+    #[test]
+    fn a_cfg_is_a_fixture_only_when_it_implies_test() {
+        let fixture = |cfg: &str| {
+            let item: syn::ItemMod = syn::parse_str(&format!("#[cfg({cfg})] mod m {{}}"))
+                .expect("a module with a cfg parses");
+            is_cfg_test(&item.attrs)
+        };
+        for implies in [
+            "test",
+            "all(test, unix)",
+            "all(unix, any(test, all(test, x)))",
+            "any(test)",
+        ] {
+            assert!(fixture(implies), "{implies}");
+        }
+        for ships in [
+            "not(test)",
+            "any(test, feature = \"testing\")",
+            "unix",
+            "feature = \"test\"",
+            "any()",
+        ] {
+            assert!(!fixture(ships), "{ships}");
+        }
+    }
 
     /// A root spelling every word a join classifies a path on — `src`, an edge,
     /// a suite, a fixture folder, a template folder.

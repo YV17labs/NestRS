@@ -30,11 +30,20 @@
 //! `note:` / `help:` prose, which is the only part a wording regression can
 //! change. A snapshot re-blessed with `TRYBUILD=overwrite` after such a
 //! regression now fails the cell.
+//!
+//! **What it reads by its spelling**: `DecoratorPair`, through
+//! `sources::declared_pairs` — the `blinds` join refuses any other spelling.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{Pair, declared_pairs, repo_root, rust_files, segments};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![Followed::type_("DecoratorPair")]
+}
 
 const BASELINE: &str = "shapes-baseline.txt";
 

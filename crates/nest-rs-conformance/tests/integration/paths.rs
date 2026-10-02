@@ -44,15 +44,26 @@
 //! worded once in the codegen crate's `job` module" is pointing at source a
 //! reader opens, not a path a caller types — so it names the file
 //! (`crates/nest-rs-codegen/src/job.rs`), which never pretends to be importable.
+//!
+//! **It reads no name of the source by its spelling**, so it declares none to
+//! the `blinds` join: a path is walked through each crate's modules and
+//! re-exports, read through the shared resolver, and what the resolver cannot
+//! follow — a `#[path]` module, an `extern crate … as` — is refused there.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::Followed;
 use nest_rs_conformance::imports::CrateImports;
 use nest_rs_conformance::sources::{
     declared_targets, files_with_extension, parsed, read, relative, repo_root,
 };
 use syn::{Item, UseTree, Visibility};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    Vec::new()
+}
 
 /// Below this the walk is reading the wrong tree.
 const FLOOR: usize = 50;

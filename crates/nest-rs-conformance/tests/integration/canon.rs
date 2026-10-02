@@ -44,11 +44,17 @@
 //! No baseline. A baseline records cells a join found empty on the day it
 //! landed, and this join has no cells — it derives a value and asserts a file
 //! equals it. There is nothing to tolerate: the file is right or it is rewritten.
+//!
+//! **What it reads by its spelling** — and the `blinds` join refuses in any
+//! other: `#[config]`, the struct a config fact is read off; `Layer`, the
+//! supertrait a layer family's trait is known by; and `fn defaults`, the half of
+//! a config whose profile split is read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     crate_dirs, exported_decorators, files_with_extension, parsed, read, relative, repo_root,
@@ -57,6 +63,15 @@ use nest_rs_conformance::sources::{
 use serde::Serialize;
 use syn::visit::Visit;
 use syn::{ItemFn, ItemTrait, TraitItem};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![
+        Followed::attribute("config"),
+        Followed::implemented("Layer"),
+        Followed::declaration("defaults"),
+    ]
+}
 
 /// Where the published facts live.
 ///

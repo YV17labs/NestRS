@@ -95,10 +95,16 @@
 //! neighbouring capability pulls it. This join proves a use site exists; it
 //! cannot prove that use site would still compile alone. Splitting the witness
 //! per feature is an owner decision, not something to infer from here.
+//!
+//! **Its population reads no name by its spelling**, so it declares none to the
+//! `blinds` join: the members are the umbrella's features and re-exports, read
+//! through the shared resolver, and the witnesses it asks for are coverage,
+//! which a disguise empties rather than fills.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::imports::CrateImports;
 use nest_rs_conformance::sources::{
@@ -106,6 +112,11 @@ use nest_rs_conformance::sources::{
     read, repo_root, rust_files, spells_path, umbrella_matrix,
 };
 use syn::Item;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    Vec::new()
+}
 
 const BASELINE: &str = "umbrella-baseline.txt";
 

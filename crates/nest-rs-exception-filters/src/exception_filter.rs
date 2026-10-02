@@ -1,7 +1,7 @@
 //! [`ExceptionFilter`] — catches a single typed exception on HTTP, the only
 //! transport that dispatches to one today.
 
-use std::error::Error as StdError;
+use std::error::Error;
 
 use async_trait::async_trait;
 use nest_rs_core::Layer;
@@ -27,7 +27,7 @@ use poem::Response;
 #[async_trait]
 pub trait ExceptionFilter: Layer {
     /// The concrete exception this filter catches.
-    type Exception: StdError + Send + Sync + 'static;
+    type Exception: Error + Send + Sync + 'static;
 
     /// HTTP entry — required. Called with the typed `Exception`
     /// extracted from a `poem::Error` via downcast.

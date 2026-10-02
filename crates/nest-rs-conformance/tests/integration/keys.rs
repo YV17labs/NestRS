@@ -54,20 +54,40 @@
 //! helper in another file returning a `Cmd`, an alias of `cmd` declared
 //! elsewhere — which is why the file may spell no `Cmd` and every `cmd` in it
 //! must be called with a literal, and the review owes the rest.
+//!
+//! **What it reads by its spelling** — declared to the `blinds` join in
+//! [`followed`] — is the 6.x check's way to Redis (`cmd`, `Cmd`) and the getters
+//! of apalis's `Config` it names structures by; the `blinds` join refuses each
+//! renamed, aliased or written by a `macro_rules!`. Every other member is a string
+//! literal, read in every macro's tokens — a `macro_rules!` transcriber's included.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
-use quote::ToTokens;
-
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     declared_targets, each_source, files_with_extension, files_with_name, is_cfg_test, read,
     relative, repo_root,
 };
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use quote::ToTokens;
 use syn::LitStr;
 use syn::visit::Visit;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    let mut followed = vec![Followed::call("cmd")];
+    followed.extend(APALIS_GETTERS.iter().map(|getter| Followed::call(*getter)));
+    followed.extend(OTHER_WAYS_TO_REDIS.iter().map(|way| {
+        if way.starts_with(char::is_uppercase) {
+            Followed::type_(*way)
+        } else {
+            Followed::call(*way)
+        }
+    }));
+    followed
+}
 
 const BASELINE: &str = "keys-baseline.txt";
 const OUTSIDE_BASELINE: &str = "keys-outside-baseline.txt";

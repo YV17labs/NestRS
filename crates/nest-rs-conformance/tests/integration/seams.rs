@@ -18,16 +18,26 @@
 //! Members come from the `impl` blocks themselves, and the key is how the seam
 //! is called — `<Module>::for_root`, the same four tokens in a test body as in
 //! an `imports = [..]` list.
+//!
+//! **What it reads by its spelling**: `pub fn for_root` in an inherent `impl`,
+//! at any depth outside `#[cfg(test)]`. One a `macro_rules!` writes is refused
+//! by the `blinds` join.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     executed_tokens, is_cfg_test, parsed, relative, repo_root, rust_files, spells_path,
 };
 use proc_macro2::TokenStream;
-use syn::{ImplItem, Item, Type, Visibility};
+use syn::{ImplItem, Type, Visibility};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![Followed::declaration("for_root")]
+}
 
 const BASELINE: &str = "seams-baseline.txt";
 
@@ -94,23 +104,59 @@ fn declared_seams() -> Vec<Seam> {
             let Some(ast) = parsed(&file) else {
                 continue;
             };
-            for item in &ast.items {
-                let Item::Impl(imp) = item else {
-                    continue;
-                };
-                if is_cfg_test(&imp.attrs) || !declares_for_root(imp) {
-                    continue;
-                }
-                if let Some(module) = inherent_self_ty(imp) {
-                    out.push(Seam {
-                        krate: name.to_owned(),
-                        module,
-                    });
-                }
-            }
+            out.extend(seams_in(&ast).into_iter().map(|module| Seam {
+                krate: name.to_owned(),
+                module,
+            }));
         }
     }
     out
+}
+
+/// The module types a file's inherent `impl`s hang a `pub fn for_root` off, at
+/// any depth outside `#[cfg(test)]` — top-level `impl`s alone left one inside an
+/// inline `mod` unjoined.
+fn seams_in(file: &syn::File) -> Vec<String> {
+    struct Impls(Vec<String>);
+    impl<'ast> syn::visit::Visit<'ast> for Impls {
+        fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+            if !is_cfg_test(&node.attrs) {
+                syn::visit::visit_item_mod(self, node);
+            }
+        }
+        fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+            if !is_cfg_test(&node.attrs) {
+                syn::visit::visit_item_fn(self, node);
+            }
+        }
+        fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+            if is_cfg_test(&node.attrs) {
+                return;
+            }
+            if declares_for_root(node)
+                && let Some(module) = inherent_self_ty(node)
+            {
+                self.0.push(module);
+            }
+            syn::visit::visit_item_impl(self, node);
+        }
+    }
+    let mut impls = Impls(Vec::new());
+    syn::visit::Visit::visit_file(&mut impls, file);
+    impls.0
+}
+
+/// A seam one `mod` down is a seam; a test's is not.
+#[test]
+fn a_seam_is_read_at_any_depth() {
+    let file: syn::File = syn::parse_quote! {
+        impl TopModule { pub fn for_root() {} }
+        mod inner { impl InnerModule { pub fn for_root() {} } }
+        #[cfg(test)]
+        mod tests { impl FixtureModule { pub fn for_root() {} } }
+        impl Private { fn for_root() {} }
+    };
+    assert_eq!(seams_in(&file), ["TopModule", "InnerModule"]);
 }
 
 /// The seams no crate's own suite executes.

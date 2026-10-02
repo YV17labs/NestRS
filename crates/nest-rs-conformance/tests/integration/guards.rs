@@ -53,10 +53,16 @@
 //! fail-open; the rule's argument for why this is a diagnostic gap rather than a
 //! hole ("it fails **closed** — the ability guard finds no principal and
 //! installs nothing, so `Repo` denies") is untouched by it.
+//!
+//! **What it reads by its spelling** — and the `blinds` join refuses in any
+//! other: `guard_capability_bounds`, each marker named inside it, and `Guard`,
+//! the supertrait a marker is known by. A binding a `macro_rules!` writes is
+//! refused there too, since its marker would be a metavariable.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     files_with_extension, flatten, parsed, read, repo_root, rust_files,
@@ -64,6 +70,21 @@ use nest_rs_conformance::sources::{
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::Item;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    let (markers, _) = guard_surface(&repo_root());
+    let mut out = vec![
+        Followed::call("guard_capability_bounds"),
+        Followed::implemented("Guard"),
+    ];
+    out.extend(
+        markers
+            .into_keys()
+            .map(|marker| Followed::type_(marker).read_in_transcribers()),
+    );
+    out
+}
 
 const BASELINE: &str = "guards-baseline.txt";
 

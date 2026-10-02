@@ -6,6 +6,7 @@
 //! is covered anywhere, which is the one question no individual suite can ask
 //! about itself.
 
+mod blinds;
 mod canon;
 mod decodes;
 mod dependencies;
@@ -63,5 +64,103 @@ pub(crate) fn plant(root: &std::path::Path, tree: &[(&str, &str)]) {
         let folder = path.parent().expect("a planted file sits in a folder");
         std::fs::create_dir_all(folder).expect("the scratch tree is writable");
         std::fs::write(&path, text).expect("the scratch tree is writable");
+    }
+}
+
+/// A name a join reads by its **spelling**, and the place in the source it
+/// reads it at — what the `blinds` join refuses to let a construction hide.
+///
+/// A syntactic join sees a name only where the source writes it, so a
+/// construction that writes the same item under another name, or emits it from
+/// a `macro_rules!` the join does not expand, takes a member out of the join's
+/// population while the join stays green. Each join declares what it reads this
+/// way in a `followed()` beside the code that reads it; the `blinds` join gathers
+/// every declaration and refuses the constructions that would hide one.
+///
+/// Here because every join declares one — `main.rs` holds what the siblings
+/// share.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct Followed {
+    pub(crate) name: String,
+    pub(crate) at: At,
+    /// The path segment a `use` reaches the name through, when the name alone
+    /// is shared with unrelated items — `error` for `std::error::Error`, which
+    /// `async_graphql::Error` is not. Empty for a name nothing else wears.
+    pub(crate) through: &'static [&'static str],
+    /// Whether the join reads the name inside a `macro_rules!` transcriber too.
+    pub(crate) in_transcribers: bool,
+}
+
+/// Where a followed name is read, which decides what can hide it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum At {
+    /// An attribute, by the last segment of its path or an ident in its
+    /// arguments — `#[module]`, `#[derive(Error)]`.
+    Attribute,
+    /// A trait, where it is implemented or bounded — `impl Config for`.
+    Trait,
+    /// A type, wherever its name is written — `Capability::Throttle`,
+    /// `QueueBackend::new`, `DecoratorPair { … }`, `&ConfigService`.
+    Type,
+    /// A function or a macro, where it is called — `panic_message(…)`,
+    /// `operation_span!(…)`.
+    Call,
+    /// A function, where it is declared — `pub fn for_root`.
+    Declaration,
+    /// A crate, read through the shared import resolver: a rename is followed,
+    /// so only what the resolver cannot follow hides it — a glob of its items.
+    Crate,
+    /// A macro argument's key whose literal value a join reads — `target:`.
+    Key,
+}
+
+impl Followed {
+    fn new(at: At, name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            at,
+            through: &[],
+            in_transcribers: false,
+        }
+    }
+
+    pub(crate) fn attribute(name: impl Into<String>) -> Self {
+        Self::new(At::Attribute, name)
+    }
+
+    pub(crate) fn implemented(name: impl Into<String>) -> Self {
+        Self::new(At::Trait, name)
+    }
+
+    pub(crate) fn type_(name: impl Into<String>) -> Self {
+        Self::new(At::Type, name)
+    }
+
+    pub(crate) fn call(name: impl Into<String>) -> Self {
+        Self::new(At::Call, name)
+    }
+
+    pub(crate) fn declaration(name: impl Into<String>) -> Self {
+        Self::new(At::Declaration, name)
+    }
+
+    pub(crate) fn krate(name: impl Into<String>) -> Self {
+        Self::new(At::Crate, name)
+    }
+
+    pub(crate) fn key(name: impl Into<String>) -> Self {
+        Self::new(At::Key, name)
+    }
+
+    /// Only the item a `use` reaches through one of `owners`.
+    pub(crate) fn through(mut self, owners: &'static [&'static str]) -> Self {
+        self.through = owners;
+        self
+    }
+
+    /// The join reads the name inside a `macro_rules!` transcriber too.
+    pub(crate) fn read_in_transcribers(mut self) -> Self {
+        self.in_transcribers = true;
+        self
     }
 }

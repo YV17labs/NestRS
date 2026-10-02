@@ -9,12 +9,21 @@
 //! `_FILE` naming an empty or a missing file and for a value given twice, which
 //! the loader reads as unset or refuses at boot. Here both run over every shape
 //! a deployment can give one variable, and must agree.
+//!
+//! **It reads no source**, so it declares nothing to the `blinds` join: it runs
+//! the two implementations side by side.
 
 use std::ffi::OsString;
 use std::sync::Arc;
 
+use crate::Followed;
 use nest_rs_cli::{Resolution, resolve_variable};
 use nest_rs_config::{ConfigService, MapSource, var_name};
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    Vec::new()
+}
 
 /// What the loader makes of `KEY` in a process environment holding `vars` —
 /// the same three answers doctor gives.

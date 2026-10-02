@@ -107,6 +107,24 @@ Two moves in this need judgement and have no grep: noticing that something has
 **become** a family, and writing a cell body that would actually fail. Both are
 work for an agent; the join itself never is.
 
+**A join may not be blinded.** A join reads Rust as written, so a construction
+that writes a member under another name — or where the join does not look —
+takes it out of the population while the join stays green, and each join that
+learned one such construction left the next join open to it. So what a join
+reads by its spelling is **declared beside the code that reads it** (each
+join's `followed()`), and the `blinds` join refuses, in the `src/` of every
+crate in both workspaces, whatever would hide one: a rename or a `type` alias of
+it, an import through it or a glob of it, a `macro_rules!` writing it where its
+join does not expand, a `cfg_attr` wrapping it, a `#[path]` module, an
+`extern crate … as`, a file `syn` cannot parse. There is no baseline: a blind
+spot fails the day it is written. A join that must follow an import rather than
+refuse it — the dependencies, decodes, paths and umbrella joins, which judge a
+path by where it resolves — reads the crate through the one shared resolver
+(`nest_rs_conformance::imports`). Every join's `//!` states what it reads by its
+spelling and what is refused, and a new join owes the row: `blinds` fails on a
+join with none. `#[cfg(test)]` is read as a predicate that *implies* `test`, so
+`cfg(not(test))` and `cfg(any(test, …))` are shipped code to every join.
+
 **A join reads the tree, never the directories above it.** Every path a join
 classifies is read below the repository root — `sources::segments` for its
 components, `sources::relative` for its spelling, both through `sources::below`,
@@ -214,7 +232,9 @@ section does not bind it.
   names no longer resolve, stays red whatever the decorator says — so the
   refusal it promises can change or vanish with the suite green. Both are
   mechanised in `nest-rs-conformance`'s `snapshots` join: a fixture must parse,
-  and its `.stderr` carries no name-resolution code (`E0404`, `E0432`, `E0433`,
-  `E0599`, …) unless its `//!` says `deliberately fails to resolve`. Read a
+  and its `.stderr` carries no name-resolution error — a code (`E0404`, `E0432`,
+  `E0433`, `E0599`, …) or one of the sentences rustc prints without one
+  (`cannot find attribute`, `cannot find macro`, `cannot determine resolution`)
+  — unless its `//!` says `deliberately fails to resolve`. Read a
   regenerated `.stderr` before committing it; the join catches the two
   mechanical cases, not a cascade of any other kind.

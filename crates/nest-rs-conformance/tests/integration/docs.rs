@@ -29,16 +29,29 @@
 //! an operator reads, not code the framework interprets" — which is right, and
 //! is exactly what makes them joinable here: the page must spell the name, so
 //! the name is what this looks for.
+//!
+//! **What it reads by its spelling** — and the `blinds` join refuses in any
+//! other: `#[config]`, whose `namespace` a config's keys are published under,
+//! and `ConfigService`, the type of the binding a `from_env` reads them from.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::Followed;
 use nest_rs_conformance::baseline;
 use nest_rs_conformance::sources::{
     crate_dirs, declared_str, declared_targets, declared_units, files_with_extension, parsed, read,
     relative, repo_root, rust_files,
 };
 use syn::visit::Visit;
+
+/// What this join reads by its spelling, for the `blinds` join to keep visible.
+pub(crate) fn followed() -> Vec<Followed> {
+    vec![
+        Followed::attribute("config"),
+        Followed::type_("ConfigService"),
+    ]
+}
 
 const BASELINE: &str = "docs-baseline.txt";
 
@@ -233,30 +246,67 @@ fn env_keys(root: &Path) -> Vec<EnvKey> {
 struct ConfigScan {
     namespace: Option<String>,
     keys: Vec<String>,
+    /// The bindings a read is made on inside the function being walked: its
+    /// parameters typed `ConfigService`, and `env`.
+    receivers: Vec<String>,
+}
+
+impl ConfigScan {
+    /// Walk a function with its `ConfigService` parameters in scope.
+    fn within(&mut self, sig: &syn::Signature, walk: impl FnOnce(&mut Self)) {
+        let outer = self.receivers.len();
+        for input in &sig.inputs {
+            if let syn::FnArg::Typed(typed) = input
+                && let syn::Pat::Ident(binding) = &*typed.pat
+                && names_config_service(&typed.ty)
+            {
+                self.receivers.push(binding.ident.to_string());
+            }
+        }
+        walk(self);
+        self.receivers.truncate(outer);
+    }
+}
+
+/// `ConfigService`, `&ConfigService`, `&nest_rs_config::ConfigService`.
+fn names_config_service(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Reference(reference) => names_config_service(&reference.elem),
+        syn::Type::Path(path) => path
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "ConfigService"),
+        _ => false,
+    }
 }
 
 impl<'ast> Visit<'ast> for ConfigScan {
     fn visit_item_struct(&mut self, node: &'ast syn::ItemStruct) {
-        if let Some(attr) = node.attrs.iter().find(|a| a.path().is_ident("config")) {
-            let _ = attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("namespace")
-                    && let Ok(value) = meta.value()
-                    && let Ok(lit) = value.parse::<syn::LitStr>()
-                {
-                    self.namespace = Some(lit.value());
-                }
-                Ok(())
-            });
+        if let Some(namespace) = nest_rs_conformance::sources::config_namespace(&node.attrs) {
+            self.namespace = Some(namespace);
         }
         syn::visit::visit_item_struct(self, node);
     }
 
-    /// A key is the first string-literal argument of a **read** on `env`.
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        self.within(&node.sig, |scan| syn::visit::visit_item_fn(scan, node));
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        self.within(&node.sig, |scan| syn::visit::visit_impl_item_fn(scan, node));
+    }
+
+    /// A key is the first string-literal argument of a **read** on the
+    /// `ConfigService` a function is handed.
     ///
     /// Keyed on the receiver rather than on the literal's shape: a default value
     /// is a string literal too, and `SCREAMING_SNAKE` is a convention rather
-    /// than a guarantee. `env` is the parameter name the `Config` trait fixes,
-    /// so it is the one thing every `from_env` has in common.
+    /// than a guarantee. The receiver is known by its **type**: `env` is the
+    /// parameter name the `Config` trait declares, but an `impl` may name it
+    /// anything, and a `from_env` writing `cfg: &ConfigService` hid every key it
+    /// read from the published list. `env` is kept beside the typed bindings, so
+    /// a read on one the type does not reach is not lost either.
     ///
     /// `var_name` is excluded and is the only exclusion: it *renders* a name for
     /// an error message rather than reading one, and `nest-rs-http` hands it the
@@ -265,7 +315,8 @@ impl<'ast> Visit<'ast> for ConfigScan {
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
         if node.method != "var_name"
             && let syn::Expr::Path(path) = &*node.receiver
-            && path.path.is_ident("env")
+            && let Some(receiver) = path.path.get_ident()
+            && (receiver == "env" || self.receivers.iter().any(|r| receiver == r))
             && let Some(syn::Expr::Lit(lit)) = node.args.first()
             && let syn::Lit::Str(key) = &lit.lit
         {
@@ -273,4 +324,29 @@ impl<'ast> Visit<'ast> for ConfigScan {
         }
         syn::visit::visit_expr_method_call(self, node);
     }
+}
+
+/// The keys a config's `from_env` reads, whatever it names the service — and a
+/// namespace written through the decorator's qualified path.
+#[test]
+fn a_key_is_read_on_the_service_whatever_its_binding_is_named() {
+    let file: syn::File = syn::parse_quote! {
+        #[nest_rs::config(validate = "manual", namespace = "probe")]
+        pub struct ProbeConfig { url: String }
+        impl Config for ProbeConfig {
+            fn from_env(cfg: &ConfigService, base: Self) -> Result<Self> {
+                let url = cfg.string("URL")?;
+                let pool = helper(cfg)?;
+                Ok(Self { url })
+            }
+        }
+        fn helper(service: &nest_rs_config::ConfigService) -> Result<u32> {
+            service.u32("POOL_SIZE").map(|v| v.unwrap_or("DEFAULT".len() as u32))
+        }
+        fn unrelated(other: &Other) { other.string("NOT_A_KEY"); }
+    };
+    let mut scan = ConfigScan::default();
+    scan.visit_file(&file);
+    assert_eq!(scan.namespace.as_deref(), Some("probe"));
+    assert_eq!(scan.keys, ["URL", "POOL_SIZE"]);
 }

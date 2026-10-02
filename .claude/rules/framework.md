@@ -1003,8 +1003,9 @@ acquiring a connection is bounded by the pool
 `COMMIT` / `ROLLBACK` a job context settles through — on a connection that stopped
 answering is not, because `SeaOrmConfig` exposes no statement timeout (sea-orm 2's
 `ConnectOptions::statement_timeout`, Postgres's `statement_timeout`). A hung
-`COMMIT` holds its tick, and with it the scheduler's stop. Possible, unbuilt, and
-raised rather than refused. Outside the family by construction:
+`COMMIT` holds its tick until the tick is stopped at the scheduler's shutdown
+bound, and its connection out of the pool until the statement drains. Possible,
+unbuilt, and raised rather than refused. Outside the family by construction:
 `AbilityFactory::define` / `define_visitor`, the WS `Registry` and `ConfigSource`
 are synchronous, and an `EventBus` listener is in-process developer code, not a
 backend.
@@ -1441,7 +1442,12 @@ never awaited in silence. The way down is three steps, in order, each with its
 own bound:
 
 1. **The transports stop, together.** The signal cancels the token every `serve`
-   shares, and `App::run` joins them all.
+   shares, and `App::run` joins them all. Each transport owes its own bound
+   (`Transport::serve`), and each stops what it still runs the same way: it
+   waits its window, then stops what is left — dropped where it waits — and
+   gives it `nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT` (500 ms) to unwind, so
+   nothing it carried is still running when the hooks start; a unit that blocks
+   its thread cannot unwind, and is named at `error`.
    - **HTTP** hands poem a graceful-shutdown timeout, `HttpConfig::shutdown_timeout`
      (`NESTRS_HTTP__SHUTDOWN_TIMEOUT_SECS`, pinned or from the environment: 20 s by
      default; 1 s to an hour). A connection still open at the bound — a streaming
@@ -1456,15 +1462,26 @@ own bound:
      that runs its units off the connection that asked for them — rmcp runs each
      MCP operation on a task of its own — declares an
      `HttpEndpointMeta::runs_detached(DetachedWork)`, and `serve` stops it as the
-     last thing it does, waiting `DetachedWork::SETTLE_TIMEOUT` (500 ms) at most
-     for it to unwind. Without it a cut connection left its operation running
-     through the shutdown hooks. A stopped unit files `outcome = cancelled`.
+     last thing it does, then settles. Without it a cut connection left its
+     operation running through the shutdown hooks. A stopped unit files
+     `outcome = cancelled`.
    - **The Redis worker** stops fetching and drains within
      `RedisWorkerConfig::shutdown_timeout` (*A shutdown stays inside
      `shutdown_timeout`*, in the queue's entry below). An attempt the drain
      interrupts files its `queue.job` line `outcome = cancelled` — from the port,
      which files it for any attempt a driver drops, so a second adapter owes
      nothing for it.
+   - **The scheduler** starts no tick once shutdown is observed and abandons a
+     lock call in flight. A tick already running is developer code on the way
+     down, as a hook is, so it gets what a hook gets: `Scheduler::SHUTDOWN_TIMEOUT`
+     is `SHUTDOWN_HOOKS_TIMEOUT`, spent **before** the hooks rather than beside
+     them, so no tick runs through the hooks it may depend on. Still running
+     then, it is stopped, files its `schedule.tick` line `outcome = cancelled`,
+     and is named in one `warn`. What it had not done stays undone, and a
+     transaction it held open is the data layer's *abandoned attempt*
+     (`data-layer.md`): its locks are held until its statement drains, and that
+     is said at `warn`. Before this bound a tick that never returned held the
+     whole way down.
 
    **A unit of work cut on the way down still files its operation line**, with
    `outcome = cancelled` and the time it ran: *every edge files one line per unit
@@ -1472,19 +1489,14 @@ own bound:
    operator reads the log for afterwards. Where the edge does not stop the unit
    itself — HTTP's handler is dropped by hyper, a queue attempt by its driver —
    the line is filed by a guard dropped with the unit's future, so it cannot
-   depend on the edge noticing the stop; MCP stops its operations itself and
-   files the line where it does. The unit's span records the same outcome as
-   `error.type`, and an HTTP request cut before it answered is named for the
-   route its router matched, since every endpoint the framework mounts notes it
-   as it starts (`nest_rs_http::matched`).
-   Built at HTTP, MCP and the queue; a WebSocket or GraphQL-over-WS handler is
-   not closed by the window at all, which is an owner question.
-   - **The scheduler** starts no tick once shutdown is observed and abandons a lock
-     call in flight, but it **joins a tick already running** rather than dropping
-     it, because a dropped attempt holds its row locks until its statement drains
-     (`data-layer.md`, *An abandoned attempt*). A tick that never returns therefore
-     holds the stop, and bounding a running tick — and deciding what it would
-     release — is an owner question.
+   depend on the edge noticing the stop; MCP and the scheduler stop their units
+   themselves and the guard files the line all the same. The unit's span
+   records the same outcome as `error.type`, and an HTTP request cut before it
+   answered is named for the route its router matched, since every endpoint the
+   framework mounts notes it as it starts (`nest_rs_http::matched`).
+   Built at HTTP, MCP, the queue and the scheduler; a WebSocket or
+   GraphQL-over-WS handler is not closed by the window at all, which is an owner
+   question.
 2. **The shutdown hooks run** — `#[on_module_destroy]`,
    `#[before_application_shutdown]`, `#[on_application_shutdown]` — all three
    phases inside **one** budget, `SHUTDOWN_HOOKS_TIMEOUT` (5 s): a deadline they

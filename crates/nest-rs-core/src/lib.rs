@@ -120,7 +120,9 @@ pub use error_message::{boxed_error, error_message};
 pub use identifier::UUID_V7_REQUIRED;
 pub use layer::{Layer, LayerKind, LayerSite};
 pub use layer_chain::LayerSpec;
-pub use lifecycle::{LifecycleHook, LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT};
+pub use lifecycle::{
+    LifecycleHook, LifecyclePhase, SHUTDOWN_HOOKS_TIMEOUT, SHUTDOWN_SETTLE_TIMEOUT,
+};
 pub use module::{DynamicModule, Module};
 pub use opaque::OPAQUE_CLIENT_MESSAGE;
 pub use panic::panic_message;

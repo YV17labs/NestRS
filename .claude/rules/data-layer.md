@@ -230,8 +230,9 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
 
   **An abandoned attempt holds its locks until its statement drains, and that
   is new.** Dropping the job future mid-statement — the framework's own shutdown
-  path, the Redis worker's drain window closing on an attempt that still runs,
-  which the worker drops where it stood to hand the job back — leaves the
+  path: the Redis worker's drain window closing on an attempt that still runs,
+  which the worker drops where it stood to hand the job back, or the scheduler
+  stopping a tick still running at its shutdown bound — leaves the
   attempt's transaction open: sea-orm's rollback is queued on `Drop` and cannot
   go out while the connection is busy, so every row lock the attempt took is held
   for the rest of that statement and the connection stays out of the pool. Before
@@ -248,9 +249,11 @@ re-establishing); data-layer bridges live in `nest-rs-seaorm` behind matching
   round-trip, which is precisely where the locks are most certainly still held.
   One sentence for both, so an operator greps once. Read it before setting a
   `shutdown_timeout`: the timeout is the ceiling on how long a dying worker holds
-  row locks. The scheduler cannot reach this: a loop heeds the shutdown only
-  before it fires, and a `fire(..)` already running is never raced against it —
-  `serve` joins every loop rather than aborting one.
+  row locks. The scheduler reaches it the same way at its own bound,
+  `Scheduler::SHUTDOWN_TIMEOUT` — the shutdown hooks' budget, which a tick still
+  running is given before it is stopped — and the same two guards say so: a tick
+  that never returned used to hold the whole way down instead, which is the
+  defect the bound exists to end.
 
   **An escaped executor fails the attempt whether or not it had opened
   anything**, and `FinalizeOutcome::Escaped` deliberately carries no flag saying

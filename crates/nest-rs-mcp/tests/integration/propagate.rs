@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nest_rs_core::{App, Transport, module};
-use nest_rs_http::{DetachedWork, HttpConfig, HttpTransport};
+use nest_rs_http::{HttpConfig, HttpTransport};
 
 use nest_rs_mcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams,
@@ -700,7 +700,8 @@ async fn an_operation_running_when_the_transport_stops_is_dropped_and_files_canc
         "the operation was dropped where it waited before the transport returned",
     );
     assert!(
-        took >= window && took < window + DetachedWork::SETTLE_TIMEOUT + Duration::from_secs(1),
+        took >= window
+            && took < window + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT + Duration::from_secs(1),
         "the transport stopped at its window, took {took:?}",
     );
     let line = operation_line(&logs, "slow").await;

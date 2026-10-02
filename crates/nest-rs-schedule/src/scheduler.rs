@@ -252,6 +252,26 @@ impl Job {
 }
 
 impl Scheduler {
+    /// How long a tick still running when shutdown is asked for is given to
+    /// finish before the scheduler stops it: the shutdown hooks' budget,
+    /// [`SHUTDOWN_HOOKS_TIMEOUT`](nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT).
+    ///
+    /// **A tick is developer code on the way down, as a hook is, so it gets what
+    /// a hook gets** — and it gets it *before* the hooks rather than beside them:
+    /// `serve` returns only once every tick has ended or been stopped, so no tick
+    /// runs through the shutdown hooks it may depend on. A tick still running at
+    /// the bound is dropped where it waits, files its `schedule.tick` line
+    /// `outcome = "cancelled"`, and is named in one `warn`; `serve` then waits
+    /// [`SHUTDOWN_SETTLE_TIMEOUT`](nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT) at most
+    /// for it to unwind. What a dropped tick had not done stays undone, and a
+    /// transaction it held open is rolled back once its statement drains, which
+    /// `nest_rs_seaorm` reports at `warn`.
+    ///
+    /// Before this bound a tick that never returned held the scheduler's stop,
+    /// and with it the whole way down, until the orchestrator killed the process
+    /// with nothing said.
+    pub const SHUTDOWN_TIMEOUT: Duration = nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT;
+
     /// An empty scheduler with no container bound — jobs are added at
     /// `configure` from the inventory. Prefer this over relying on `Default`.
     pub fn new() -> Self {
@@ -485,42 +505,131 @@ impl Transport for Scheduler {
             let handle = tasks.spawn(run_job(job, runner.clone(), cancel.clone()));
             spawned.insert(handle.id(), id);
         }
-        // A loop returns only once shutdown is asked for, so a task ending in an
-        // error ended early: a panic the loop does not catch ends the job for
-        // good, and its task's end is the one place left that can say so. It was
-        // dropped here, and the job went quiet while the process reported healthy.
-        while let Some(joined) = tasks.join_next_with_id().await {
-            let Err(ended) = joined else {
-                continue;
-            };
-            let id = spawned.get(&ended.id()).copied();
-            match ended.try_into_panic() {
-                Ok(payload) => tracing::error!(
-                    target: crate::TARGET,
-                    provider = id.map(|id| id.provider),
-                    method = id.map(|id| id.method),
-                    panic = panic_message(&*payload),
-                    "scheduled job stopped: its schedule panicked, and the job will not run again",
-                ),
-                // Nothing aborts these tasks while this loop holds them, so the
-                // one thing that cancels one is its runtime going down — the end
-                // of the process, not of the job.
-                Err(cancelled) => tracing::debug!(
-                    target: crate::TARGET,
-                    provider = id.map(|id| id.provider),
-                    method = id.map(|id| id.method),
-                    error = %cancelled,
-                    "scheduled job cancelled with its runtime",
-                ),
+        // A loop returns only once shutdown is asked for, so a task ending before
+        // it ended early: a panic the loop does not catch ends the job for good,
+        // and its task's end is the one place left that can say so.
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                joined = tasks.join_next_with_id() => match joined {
+                    Some(joined) => loop_ended(joined, &mut spawned, false),
+                    // Every loop has ended, each in a panic named above: a
+                    // schedule left with nothing to run idles until shutdown, as
+                    // one with no job does, rather than ending an app it is the
+                    // only transport of.
+                    None => {
+                        cancel.cancelled().await;
+                        return Ok(());
+                    }
+                },
             }
         }
-        // Every loop has ended. At shutdown this returns at once; otherwise each
-        // ended in a panic, named above, and a schedule left with nothing to run
-        // idles until shutdown, as one with no job does, rather than ending an app
-        // it is the only transport of.
-        cancel.cancelled().await;
+        stop(tasks, spawned, Scheduler::SHUTDOWN_TIMEOUT).await;
         Ok(())
     }
+}
+
+/// Account for a loop that ended, and name it unless it ended the ordinary way.
+///
+/// A loop returns only once shutdown is asked for, so before it a task's end is
+/// an early one: a panic the loop does not catch ends the job for good, and its
+/// task's end is the one place left that can say so. A cancelled task is its
+/// runtime going down under it — the end of the process, not of the job — or,
+/// once `stopping`, a tick [`stop`] dropped at its bound, whose line was filed
+/// as it was dropped.
+fn loop_ended(
+    joined: std::result::Result<(tokio::task::Id, ()), tokio::task::JoinError>,
+    spawned: &mut HashMap<tokio::task::Id, JobId>,
+    stopping: bool,
+) {
+    let ended = match joined {
+        Ok((task, ())) => {
+            spawned.remove(&task);
+            return;
+        }
+        Err(ended) => ended,
+    };
+    let id = spawned.remove(&ended.id());
+    match ended.try_into_panic() {
+        Ok(payload) => tracing::error!(
+            target: crate::TARGET,
+            provider = id.map(|id| id.provider),
+            method = id.map(|id| id.method),
+            panic = panic_message(&*payload),
+            "scheduled job stopped: its schedule panicked, and the job will not run again",
+        ),
+        Err(_) if stopping => {}
+        Err(cancelled) => tracing::debug!(
+            target: crate::TARGET,
+            provider = id.map(|id| id.provider),
+            method = id.map(|id| id.method),
+            error = %cancelled,
+            "scheduled job cancelled with its runtime",
+        ),
+    }
+}
+
+/// Stop the scheduler once shutdown is asked for: no loop starts a tick from
+/// here on, a tick already running gets `bound` —
+/// [`Scheduler::SHUTDOWN_TIMEOUT`] — to finish, and one still running then is
+/// stopped, dropped where it waits, and given
+/// [`SHUTDOWN_SETTLE_TIMEOUT`](nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT) to unwind.
+/// Bounded either way, so `serve` returns within the two.
+async fn stop(
+    mut tasks: JoinSet<()>,
+    mut spawned: HashMap<tokio::task::Id, JobId>,
+    bound: Duration,
+) {
+    let deadline = Instant::now() + bound;
+    while let Ok(Some(joined)) = tokio::time::timeout_at(deadline, tasks.join_next_with_id()).await
+    {
+        loop_ended(joined, &mut spawned, true);
+    }
+    if tasks.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        target: crate::TARGET,
+        jobs = running_jobs(&spawned).as_str(),
+        running = tasks.len(),
+        shutdown_timeout_ms = millis(bound),
+        "scheduled ticks still running at the shutdown bound are stopped; each is dropped where it \
+         waits and files its line cancelled",
+    );
+    tasks.abort_all();
+    let settled = tokio::time::timeout(nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT, async {
+        while let Some(joined) = tasks.join_next_with_id().await {
+            loop_ended(joined, &mut spawned, true);
+        }
+    })
+    .await;
+    if settled.is_err() {
+        tracing::error!(
+            target: crate::TARGET,
+            jobs = running_jobs(&spawned).as_str(),
+            still_running = tasks.len(),
+            settle_timeout_ms = millis(nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT),
+            "stopped ticks did not unwind within their bound; they run on through the shutdown \
+             hooks",
+        );
+        // Dropping the set is what would abort them, and they are aborted
+        // already: detach them instead, so the end of this function is not one
+        // more wait on a tick that blocks its thread.
+        tasks.detach_all();
+    }
+}
+
+/// The jobs whose loops still run, as `Provider::method`, in a stable order.
+fn running_jobs(spawned: &HashMap<tokio::task::Id, JobId>) -> String {
+    let mut jobs: Vec<String> = spawned.values().map(JobId::to_string).collect();
+    jobs.sort();
+    jobs.join(", ")
+}
+
+/// Whole milliseconds, saturating — what a duration field on a line carries.
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// What every job's loop fires through: the container its method resolves
@@ -540,9 +649,10 @@ struct Runner {
 /// **Once `token` is cancelled, no occurrence starts.** Every wait checks it
 /// before the timer — a tick falling due in the very poll shutdown is asked for
 /// is not fired — and a lock call in flight is abandoned rather than awaited
-/// ([`bounded`]), so the loop's teardown is what bounds the scheduler's
-/// shutdown. A run already started is not cut short: it finishes, and the loop
-/// ends after it.
+/// ([`bounded`]). A run already started is not raced against the token: it
+/// finishes and the loop ends after it, unless it outlasts
+/// [`Scheduler::SHUTDOWN_TIMEOUT`], when `serve` stops the loop and the run with
+/// it.
 async fn run_job(job: Job, runner: Runner, token: CancellationToken) {
     let id = job.id();
     match job {
@@ -1028,6 +1138,72 @@ fn refuse_shared_identities(ids: &[JobId]) -> Result<()> {
     )
 }
 
+/// A tick's `schedule.tick` line, filed exactly once: with the outcome its run
+/// settled on, or — dropped before it settled — with
+/// [`CANCELLED`](nest_rs_core::operation_log::CANCELLED).
+///
+/// One line per tick, whatever happened: the clock is not a caller, so this is
+/// the only place a tick says it ran at all. A tick is dropped before it settles
+/// when the scheduler stops one still running at its shutdown bound
+/// ([`Scheduler::SHUTDOWN_TIMEOUT`]); the run's own panics are caught before
+/// here, so one unwinding through the guard is the scheduler's.
+struct TickLine {
+    id: JobId,
+    replicas: Replicas,
+    occurrence: Option<u64>,
+    started: std::time::Instant,
+    span: tracing::Span,
+    filed: bool,
+}
+
+impl TickLine {
+    fn open(id: JobId, replicas: Replicas, occurrence: Option<u64>, span: tracing::Span) -> Self {
+        Self {
+            id,
+            replicas,
+            occurrence,
+            started: std::time::Instant::now(),
+            span,
+            filed: false,
+        }
+    }
+
+    /// File the line for a tick whose run settled on `outcome`.
+    fn file(mut self, outcome: &'static str) {
+        self.emit(outcome);
+        self.filed = true;
+    }
+
+    fn emit(&self, outcome: &'static str) {
+        nest_rs_core::operation_log::record_outcome(&self.span, outcome);
+        tracing::info!(
+            name: crate::unit::TICK,
+            target: nest_rs_core::operation_log::TARGET,
+            message = crate::unit::TICK,
+            provider = self.id.provider,
+            method = self.id.method,
+            replicas = self.replicas.as_str(),
+            occurrence = self.occurrence,
+            outcome,
+            duration_ms = nest_rs_core::operation_log::duration_ms(self.started),
+        );
+    }
+}
+
+impl Drop for TickLine {
+    fn drop(&mut self) {
+        if self.filed {
+            return;
+        }
+        let outcome = if std::thread::panicking() {
+            nest_rs_core::operation_log::PANIC
+        } else {
+            nest_rs_core::operation_log::CANCELLED
+        };
+        self.emit(outcome);
+    }
+}
+
 impl Runner {
     /// Fire the occurrence at `instant_ms` only if this replica claims it.
     ///
@@ -1354,17 +1530,17 @@ impl Runner {
             occurrence,
         );
         let scope = Arc::new(nest_rs_core::RequestScope::new(self.container.clone()));
-        nest_rs_core::with_request_scope(
-            Some(scope),
-            correlation,
-            self.fire_inner(id, task, occurrence),
-        )
-        .instrument(span)
-        .await
+        // Opened outside the run and filed inside it: a tick the scheduler stops at
+        // its shutdown bound is dropped with this future, and the line is what
+        // says so — inside the span and the scope, since both wrappers drop the
+        // future they wrap inside what they install.
+        let line = TickLine::open(id, task.replicas, occurrence, span.clone());
+        nest_rs_core::with_request_scope(Some(scope), correlation, self.fire_inner(id, task, line))
+            .instrument(span)
+            .await
     }
 
-    async fn fire_inner(&self, id: JobId, task: Task, occurrence: Option<u64>) {
-        let started = std::time::Instant::now();
+    async fn fire_inner(&self, id: JobId, task: Task, line: TickLine) {
         // Isolate the fire: a panic in the user method (or the `.expect` the
         // `#[scheduled]` macro emits when the provider is missing) would otherwise
         // unwind this job's task and stop its schedule while the process still
@@ -1389,26 +1565,11 @@ impl Runner {
         ))
         .catch_unwind()
         .await;
-        let settled = match &outcome {
+        line.file(match &outcome {
             Ok(Ok(())) => nest_rs_core::operation_log::OK,
             Ok(Err(_)) => nest_rs_core::operation_log::ERROR,
             Err(_) => nest_rs_core::operation_log::PANIC,
-        };
-        nest_rs_core::operation_log::record_outcome(&tracing::Span::current(), settled);
-        // One line per tick, whatever happened — the clock is not a caller, so this
-        // is the only place a tick says it ran at all. Emitted inside the scope, so
-        // it carries the trace the job's own events carry.
-        tracing::info!(
-            name: crate::unit::TICK,
-            target: nest_rs_core::operation_log::TARGET,
-            message = crate::unit::TICK,
-            provider = id.provider,
-            method = id.method,
-            replicas = task.replicas.as_str(),
-            occurrence,
-            outcome = settled,
-            duration_ms = nest_rs_core::operation_log::duration_ms(started),
-        );
+        });
         match outcome {
             Ok(Ok(())) => {}
             Ok(Err(err)) => tracing::error!(
@@ -1445,6 +1606,61 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tick that blocks its thread cannot be dropped where it waits, since it
+    /// never yields to be dropped: once stopped it is given the settle bound to
+    /// unwind and no more, and named at `error`, because it runs on through the
+    /// shutdown hooks. `stop` still returns — a thread that blocks never holds the
+    /// way down past its two bounds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stopped_tick_that_blocks_its_thread_is_named_at_error_and_left() {
+        let logs = nest_rs_testing::LogCapture::install();
+        let mut tasks = JoinSet::new();
+        let mut spawned = HashMap::new();
+        let (started, blocked) = std::sync::mpsc::channel();
+        let handle = tasks.spawn(async move {
+            let _ = started.send(());
+            std::thread::sleep(Duration::from_secs(1));
+        });
+        spawned.insert(
+            handle.id(),
+            JobId {
+                origin: module_path!(),
+                provider: "BlockingHost",
+                method: "blocks",
+                key: None,
+            },
+        );
+        blocked.recv().expect("the tick started");
+
+        let asked = Instant::now();
+        stop(tasks, spawned, Duration::from_millis(50)).await;
+        let took = asked.elapsed();
+
+        assert!(
+            took < Duration::from_millis(50)
+                + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
+                + Duration::from_millis(500),
+            "stop returned within its two bounds: {took:?}",
+        );
+        let stopped = logs.expect_one(
+            crate::TARGET,
+            "scheduled ticks still running at the shutdown bound are stopped; each is dropped \
+             where it waits and files its line cancelled",
+        );
+        assert_eq!(
+            stopped.field("jobs").as_deref(),
+            Some("BlockingHost::blocks")
+        );
+        let stuck = logs.expect_one(
+            crate::TARGET,
+            "stopped ticks did not unwind within their bound; they run on through the shutdown \
+             hooks",
+        );
+        assert_eq!(stuck.level, "error");
+        assert_eq!(stuck.field("jobs").as_deref(), Some("BlockingHost::blocks"));
+        assert_eq!(stuck.field("still_running").as_deref(), Some("1"));
+    }
 
     /// Two replicas booted at different moments must reach the same instants,
     /// or they compute different keys for one occurrence and both fire it.

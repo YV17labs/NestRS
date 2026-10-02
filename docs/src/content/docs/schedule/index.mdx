@@ -239,6 +239,16 @@ files once per unit of work, so `nest_rs::operation=off` in the log filter
 silences it with the others. A failed run adds one `scheduled job failed` line
 at `error`; the schedule keeps ticking.
 
+**A tick still running at shutdown gets five seconds.** No tick starts once
+the app is asked to stop; one already running is developer code on the way
+down, as a shutdown hook is, so it gets what a hook gets —
+`Scheduler::SHUTDOWN_TIMEOUT`, the hooks' five-second budget, spent *before*
+the hooks so no tick runs through the cleanup it may depend on. Still running
+then, it is stopped where it waits, files its `schedule.tick` line with
+`outcome="cancelled"`, and is named in one `warn`; what it had not done stays
+undone. A task that needs longer pushes a [queue](/queue/) job, which a worker
+drains within a window of its own.
+
 Every tick opens its own `schedule.tick` span, so the lines your task
 writes are already correlated: a **fresh** `trace_id` each time (a clock
 has nothing upstream to continue) and no `actor_id` (nobody is being
@@ -408,8 +418,8 @@ replica — the thing the declaration exists to prevent. So:
   claim`, so a Redis that stopped answering cannot hold the scheduler's shutdown
   until the claim goes stale — most of a day, for a daily cron. Redis may have
   taken the claim already, and then nobody fires that occurrence. A claim
-  answered before that, and a run already started, are not cut short: the run
-  finishes, then the scheduler stops.
+  answered before that is acted on, and a run already started gets the five
+  seconds every running tick gets at shutdown, then is stopped.
 - **A replica that stops after claiming loses that occurrence**, and only that
   one: nobody else will fire it, and the next occurrence is claimed as usual.
 

@@ -195,6 +195,119 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
     );
 }
 
+static STUCK_STARTED: AtomicBool = AtomicBool::new(false);
+static STUCK_DROPPED: AtomicBool = AtomicBool::new(false);
+
+/// Flags its own drop, so the test can tell a tick stopped where it waited from
+/// one that returned.
+struct FlagsDrop;
+
+impl Drop for FlagsDrop {
+    fn drop(&mut self) {
+        STUCK_DROPPED.store(true, Ordering::SeqCst);
+    }
+}
+
+fn tick_stuck(_: &Container) -> RunFuture<'_> {
+    Box::pin(async {
+        let _flag = FlagsDrop;
+        STUCK_STARTED.store(true, Ordering::SeqCst);
+        std::future::pending::<()>().await;
+        Ok(())
+    })
+}
+
+/// A tick still running when shutdown is asked for gets the shutdown hooks'
+/// budget and no more: `serve` stops it at `Scheduler::SHUTDOWN_TIMEOUT` —
+/// dropped where it waits, its `schedule.tick` line filed `cancelled` in the
+/// tick's own trace, the job named in one `warn` — and returns. Before, it joined
+/// the tick to its end, so one that never returned held the way down until the
+/// orchestrator's kill.
+#[tokio::test(start_paused = true)]
+async fn a_tick_still_running_at_the_shutdown_bound_is_stopped_and_files_cancelled() {
+    struct StuckHost;
+
+    let logs = LogCapture::install();
+    let container = crate::hermetic()
+        .attach_meta::<StuckHost, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
+            provider: "StuckHost",
+            method: "never_returns",
+            trigger: Trigger::Timeout(Duration::from_millis(10)),
+            run: tick_stuck,
+            transaction: JobTransaction::PerAttempt,
+            replicas: Replicas::Each,
+            key: None,
+        })
+        .build();
+    let mut scheduler = Scheduler::new();
+    scheduler
+        .configure(&container)
+        .await
+        .expect("scheduler configures against the container");
+
+    let cancel = CancellationToken::new();
+    let serving = tokio::spawn(Box::new(scheduler).serve(cancel.clone()));
+    while !STUCK_STARTED.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let asked = tokio::time::Instant::now();
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(60), serving)
+        .await
+        .expect("serve returns within its bound, not when the tick does")
+        .expect("serve task joins")
+        .expect("serve returns Ok");
+    let took = asked.elapsed();
+
+    assert!(
+        took >= Scheduler::SHUTDOWN_TIMEOUT
+            && took < Scheduler::SHUTDOWN_TIMEOUT + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT,
+        "the tick was given the bound and stopped at it: {took:?}",
+    );
+    assert!(
+        STUCK_DROPPED.load(Ordering::SeqCst),
+        "the tick was dropped where it waited"
+    );
+    let line = logs.expect_one(
+        nest_rs_core::operation_log::TARGET,
+        nest_rs_schedule::unit::TICK,
+    );
+    assert_eq!(
+        line.field("outcome").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+    );
+    assert_eq!(line.field("method").as_deref(), Some("never_returns"));
+    assert!(
+        line.trace_id.is_some(),
+        "filed in the tick's own trace: {line:#?}"
+    );
+    let span = logs.expect_span(nest_rs_schedule::TARGET, nest_rs_schedule::unit::TICK);
+    assert_eq!(line.trace_id, span.field("trace_id"), "{line:#?}");
+    assert_eq!(
+        span.field("error.type").as_deref(),
+        Some(nest_rs_core::operation_log::CANCELLED),
+        "the span exports what the line files: {:?}",
+        span.fields,
+    );
+    assert_eq!(span.field("otel.status_code").as_deref(), Some("error"));
+    let stopped = logs.expect_one(
+        nest_rs_schedule::TARGET,
+        "scheduled ticks still running at the shutdown bound are stopped; each is dropped where \
+         it waits and files its line cancelled",
+    );
+    assert_eq!(stopped.level, "warn");
+    assert_eq!(
+        stopped.field("jobs").as_deref(),
+        Some("StuckHost::never_returns")
+    );
+    assert_eq!(stopped.field("running").as_deref(), Some("1"));
+    logs.expect_none(
+        nest_rs_schedule::TARGET,
+        "stopped ticks did not unwind within their bound; they run on through the shutdown hooks",
+    );
+}
+
 #[tokio::test]
 async fn invalid_cron_expression_fails_configure() {
     struct BadHost;

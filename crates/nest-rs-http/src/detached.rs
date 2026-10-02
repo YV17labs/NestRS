@@ -10,12 +10,14 @@
 //! A self-mount that runs such work declares a [`DetachedWork`] on its
 //! [`HttpEndpointMeta`](crate::HttpEndpointMeta) and runs each unit through it;
 //! the transport stops it once it stops serving, and waits
-//! [`DetachedWork::SETTLE_TIMEOUT`] at most for what it stopped to unwind, so
+//! [`SHUTDOWN_SETTLE_TIMEOUT`] at most for what it stopped to unwind, so
 //! nothing it carried is still running when the transport returns.
+//!
+//! [`SHUTDOWN_SETTLE_TIMEOUT`]: nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
 
 use std::future::Future;
-use std::time::Duration;
 
+use nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -30,15 +32,6 @@ pub struct DetachedWork {
 }
 
 impl DetachedWork {
-    /// How long a stopping transport waits for the work it stopped to unwind.
-    ///
-    /// Stopping drops each unit where it waits, so what is left is only for
-    /// the runtime to poll the tasks it woke — microseconds, unless a unit
-    /// blocks its thread, which no timer can reach. Half a second, spent inside
-    /// the two seconds the default shutdown leaves under a Kubernetes pod's
-    /// grace (`nest_rs_core::SHUTDOWN_HOOKS_TIMEOUT` tabulates them).
-    pub const SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
-
     /// A fresh set, not yet stopped.
     pub fn new() -> Self {
         Self::default()
@@ -66,14 +59,14 @@ impl DetachedWork {
     }
 
     /// Stop every unit of the self-mount at `path`, wait
-    /// [`Self::SETTLE_TIMEOUT`] at most for them to unwind, and say what that
+    /// [`SHUTDOWN_SETTLE_TIMEOUT`] at most for them to unwind, and say what that
     /// cut. Returns how many were running when stopped, and how many still run
     /// once the wait is over.
     pub(crate) async fn stop(&self, path: &str) -> (usize, usize) {
         let stopped = self.running.len();
         self.stop.cancel();
         self.running.close();
-        let _ = tokio::time::timeout(Self::SETTLE_TIMEOUT, self.running.wait()).await;
+        let _ = tokio::time::timeout(SHUTDOWN_SETTLE_TIMEOUT, self.running.wait()).await;
         let still_running = self.running.len();
         if stopped > 0 {
             tracing::warn!(
@@ -90,7 +83,7 @@ impl DetachedWork {
                 path,
                 still_running,
                 settle_timeout_ms =
-                    u64::try_from(Self::SETTLE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                    u64::try_from(SHUTDOWN_SETTLE_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
                 "stopped work did not unwind within its bound; it runs on through the shutdown \
                  hooks",
             );
@@ -143,7 +136,7 @@ mod tests {
         assert_eq!(event.field("still_running").as_deref(), Some("1"));
         assert_eq!(
             event.field("settle_timeout_ms"),
-            Some(DetachedWork::SETTLE_TIMEOUT.as_millis().to_string()),
+            Some(SHUTDOWN_SETTLE_TIMEOUT.as_millis().to_string()),
         );
     }
 }

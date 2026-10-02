@@ -49,7 +49,29 @@ use crate::container::Container;
 /// work, and draining belongs in a transport's own window, which a deployment
 /// does configure. The bound covers a hook that waits — an `async fn` pending on
 /// I/O, a lock, a channel; one that blocks its thread is past any timer's reach.
+///
+/// The scheduler reads it as its own window: a tick still running when shutdown
+/// is asked for is developer code on the way down, as a hook is, and gets the
+/// same time before it is stopped.
 pub const SHUTDOWN_HOOKS_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long an edge that stops its running work on the way down waits for that
+/// work to unwind, once stopped.
+///
+/// Stopping drops each unit where it waits, so what is left is only for the
+/// runtime to poll the tasks it woke and run what their drops do — the
+/// `cancelled` line among them — which takes microseconds, unless a unit blocks
+/// its thread, which no timer can reach. Waiting at all is what makes "nothing
+/// stopped is still running when the shutdown hooks start" a fact rather than
+/// a race; waiting longer would let a unit that blocks hold the stop.
+///
+/// One constant for every edge that stops work itself — the HTTP transport, for
+/// what a self-mount runs off its connections, and the scheduler, for a tick
+/// still running at its bound — so the way down is one arithmetic: half a
+/// second after the edge's own window, inside the slack the default shutdown
+/// leaves under a Kubernetes pod's grace ([`SHUTDOWN_HOOKS_TIMEOUT`] tabulates
+/// it).
+pub const SHUTDOWN_SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Lifecycle phase at which a hook runs. Init phases run after the container
 /// is built and transports configured, before serving; shutdown phases run

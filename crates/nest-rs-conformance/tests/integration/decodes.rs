@@ -1,35 +1,44 @@
 //! The decodes join — two families the rule *A decode failure is said without its
 //! value* (`CLAUDE.md`) has, each derived from the source rather than listed.
 //!
-//! **Every `#[config]`'s `from_env`**, against the rule that a structured value
-//! is decoded by `ConfigService::json` and never by the config itself. A
+//! **Every `#[config]`'s reader**, against the rule that a structured value is
+//! decoded by `ConfigService::json` and never by the config itself. A
 //! `#[config]` value is a payload too, and a structured one is where a deployment
 //! writes client secrets. serde's own sentence quotes the value it refused, so a
 //! `from_env` that calls `serde_json::from_str` and hands the error to
 //! `Setting::refuse` — the demo's `IssuerConfig` did, for its OAuth client list —
 //! prints that list's secrets into the boot error. `ConfigService::json` decodes
 //! once, in `nest-rs-config`, and refuses through `nest_rs_core::DecodeError`.
-//! Members: every `impl Config for …` under `crates/` and `demo/`.
+//! Members: every reader under `crates/` and `demo/`, and what it reaches.
 //!
-//! **What it reads**: the whole file an `impl Config` sits in, outside
-//! `#[cfg(test)]` — a `from_env` decodes through a helper beside it as readily
-//! as in its own body — and every path in it read through the crate's imports
-//! (`nest_rs_conformance::imports`), so `use serde_json as json`, `use
-//! serde_json::from_str` and a re-export the crate root makes are all
-//! `serde_json`. A file declaring a `#[config]` names `serde_json` nowhere: none
-//! does today, and the rule costs nothing to keep.
+//! **What it reads**: every function a config *reader* reaches — a reader being
+//! any function whose signature names `ConfigService`, every `from_env`
+//! included — through what the source spells: a path in call position, read
+//! through the crate's imports (`nest_rs_conformance::imports`) and matched by
+//! its owner when it names a type of the crate (`Self::f`, `HttpTls::from_env`),
+//! by its name alone when it roots at a name the imports do not explain (a
+//! generic, a type of another crate); a method name, which any method of the
+//! crate may answer; `.parse()`, which reaches every `from_str` of the crate by
+//! inference; and a macro, whose transcriber is read as a body. Matching by name
+//! can only add a function, never hide one. A reader is handed values — the
+//! environment and the base it overlays — and never behaviour: one taking a
+//! function, a trait object or a generic runs a body written at its caller,
+//! which reaching the reader does not reach, so it is refused.
+//! Every function so reached, and every macro, must name `serde_json` nowhere —
+//! its own name, an alias, an item imported from it — and call into no other
+//! crate of the workspace than the decoder's home, the one crate declaring
+//! `ConfigService`, where `Setting::json` decodes once for every reader. A
+//! helper beside the reader, one in another file of the crate, an extension
+//! method, a `FromStr` and a macro are all read; a helper in another crate is
+//! refused rather than followed, so the join needs no call graph across crates.
+//! The decoder's home itself is the one crate not held to it.
 //!
-//! **What it reads by its spelling** is `Config`, the trait an `impl` makes a
-//! member with, and the `blinds` join refuses it renamed, aliased or written by a
-//! `macro_rules!`. `serde_json` is read through the resolver, so the one import
-//! that hides it — a glob of its items — is refused there too, with the two
-//! constructions the resolver cannot read: an `extern crate … as` and a
-//! `#[path]` module.
-//!
-//! **What it cannot read**: a helper in *another* file of the crate that a
-//! `from_env` calls. Following it needs the crate's call graph, which a
-//! syntactic read does not have; it is the one shape left, named here rather
-//! than implied.
+//! **What it reads by its spelling** is `Config`, the trait an `impl` is counted
+//! by, and `ConfigService`, the type a reader is recognised by — and the `blinds`
+//! join refuses either renamed, aliased or written by a `macro_rules!`.
+//! `serde_json` is read through the resolver, so the one import that hides it —
+//! a glob of its items — is refused there too, with the two constructions the
+//! resolver cannot read: an `extern crate … as` and a `#[path]` module.
 //!
 //! **Every framework item taking a developer's error into a box** — a bound
 //! `Into<Box<dyn …>>`, on the item or on the `impl` it sits in — against the rule
@@ -49,10 +58,11 @@
 //! path segment `Into`, a `Box` of a trait object — so an alias of the error
 //! trait hides nothing, and neither does a `type X = Box<dyn …>` named in the
 //! bound: the walk resolves those by name once every file is read. An import
-//! renaming `Into`, `Box` or `boxed_error` would hide a member, so the join
-//! refuses the import itself. The known looseness is the name an alias is
-//! resolved by — its last segment, across every crate — which can only add a
-//! member, never hide one.
+//! renaming `Into`, `Box` or `boxed_error` would hide a member, and a
+//! `macro_rules!` writing an `Into<…>` bound would hide one from the walk: the
+//! `blinds` join refuses all four, from this join's declaration. The known
+//! looseness is the name an alias is resolved by — its last segment, across
+//! every crate — which can only add a member, never hide one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -70,8 +80,10 @@ use syn::visit::Visit;
 pub(crate) fn followed() -> Vec<Followed> {
     vec![
         Followed::implemented("Config"),
+        Followed::type_("ConfigService"),
         Followed::krate("serde_json"),
         Followed::implemented("Into"),
+        Followed::aliased("Box").through(&["boxed"]),
         Followed::call("boxed_error"),
     ]
 }
@@ -90,16 +102,92 @@ const INTAKE_FLOOR: usize = 9;
 #[test]
 fn no_config_decodes_a_structured_value_itself() {
     let root = repo_root();
-    let mut impls = 0usize;
-    let mut wrong: BTreeSet<String> = BTreeSet::new();
-    for dir in crate_dirs() {
+    let workspace: BTreeSet<String> = crate_dirs()
+        .iter()
+        .filter_map(|dir| dir.file_name())
+        .map(|name| name.to_string_lossy().replace('-', "_"))
+        .collect();
+    let crates: Vec<Crate> = crate_dirs()
+        .iter()
+        .flat_map(|dir| Crate::read(dir, &root))
+        .collect();
+    let home: BTreeSet<String> = crates
+        .iter()
+        .filter(|krate| krate.declares_the_reader)
+        .map(|krate| krate.name.clone())
+        .collect();
+    assert_eq!(
+        home.len(),
+        1,
+        "exactly one crate declares `ConfigService`, the decoder's home: {home:?}"
+    );
+    let impls: usize = crates.iter().map(|krate| krate.config_impls).sum();
+    let wrong: BTreeSet<String> = crates
+        .iter()
+        .filter(|krate| !krate.declares_the_reader)
+        .flat_map(|krate| krate.decoding(&workspace, &home))
+        .collect();
+
+    baseline::floor(impls, FLOOR, "`impl Config for` block(s)");
+    assert!(
+        wrong.is_empty(),
+        "{} function(s) a config reader reaches decode a value themselves — they name \
+         `serde_json` (its own name, an alias, or an import of one of its items), so a value \
+         that does not decode is refused in serde's words, which quote it — or call into \
+         another crate of the workspace, which this join does not follow. Read a structured \
+         value with `env.json::<T>(\"KEY\")?`, and keep what a reader calls in its own crate:\n  \
+         {}",
+        wrong.len(),
+        wrong.into_iter().collect::<Vec<_>>().join("\n  "),
+    );
+}
+
+/// One crate, read for the reader closure.
+struct Crate {
+    /// The crate's name as a path root.
+    name: String,
+    imports: CrateImports,
+    functions: Vec<Function>,
+    /// Every `macro_rules!` of the crate: its module, its name, its tokens.
+    macros: Vec<(Vec<String>, String, TokenStream)>,
+    /// `impl Config for` blocks outside `#[cfg(test)]`.
+    config_impls: usize,
+    /// Whether the crate declares `ConfigService` — the decoder's home, where
+    /// `Setting::json` decodes once, for every reader.
+    declares_the_reader: bool,
+}
+
+/// One function of a crate, outside `#[cfg(test)]`.
+struct Function {
+    module: Vec<String>,
+    label: String,
+    /// The type of the `impl` it sits in, by its last path segment.
+    owner: Option<String>,
+    name: String,
+    /// Whether its signature names `ConfigService` — a reader.
+    reader: bool,
+    /// Whether it is handed behaviour — a function, a trait object, a generic —
+    /// whose body the join cannot see from here.
+    handed_behaviour: bool,
+    body: syn::Block,
+}
+
+impl Crate {
+    /// The crate at `dir`, once per root (`lib.rs`, `main.rs`).
+    fn read(dir: &std::path::Path, root: &std::path::Path) -> Vec<Self> {
+        let name = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().replace('-', "_"))
+            .unwrap_or_default();
+        let mut out = Vec::new();
         for entry in ["src/lib.rs", "src/main.rs"] {
             let entry = dir.join(entry);
             if !entry.is_file() {
                 continue;
             }
-            let imports = CrateImports::read(&entry, &root);
+            let imports = CrateImports::read(&entry, root);
             let src = dir.join("src");
+            let mut walk = Walk::default();
             for file in rust_files(&src) {
                 let Some(module) = module_of(&file, &src) else {
                     continue;
@@ -110,67 +198,316 @@ fn no_config_decodes_a_structured_value_itself() {
                     continue;
                 }
                 let Some(ast) = parsed(&file) else { continue };
-                let (found, decoding) = decodes_in(&ast, &imports, &module);
-                impls += found;
-                if decoding {
-                    wrong.insert(relative(&file, &root));
+                walk.file = relative(&file, root);
+                walk.module = module;
+                walk.visit_file(&ast);
+            }
+            out.push(Self {
+                name: name.clone(),
+                imports,
+                functions: walk.functions,
+                macros: walk.macros,
+                config_impls: walk.config_impls,
+                declares_the_reader: walk.declares_the_reader,
+            });
+        }
+        out
+    }
+
+    /// Every function a reader of this crate reaches that decodes, or calls into
+    /// another crate of `workspace` than the decoder's `home`.
+    fn decoding(&self, workspace: &BTreeSet<String>, home: &BTreeSet<String>) -> Vec<String> {
+        let mut reached: BTreeSet<usize> = (0..self.functions.len())
+            .filter(|&at| self.functions[at].reader)
+            .collect();
+        let mut macros: BTreeSet<usize> = BTreeSet::new();
+        let mut queue: Vec<usize> = reached.iter().copied().collect();
+        while let Some(at) = queue.pop() {
+            let function = &self.functions[at];
+            let mut calls = Calls::default();
+            calls.visit_block(&function.body);
+            for next in self.callees(function, &calls) {
+                if reached.insert(next) {
+                    queue.push(next);
+                }
+            }
+            for (index, (_, name, tokens)) in self.macros.iter().enumerate() {
+                if calls.macros.contains(name) && macros.insert(index) {
+                    // A transcriber's calls are read by name: every identifier
+                    // it writes that names a function of the crate is one.
+                    let written = nest_rs_conformance::sources::idents(tokens.clone());
+                    for (next, other) in self.functions.iter().enumerate() {
+                        if written.contains(&other.name) && reached.insert(next) {
+                            queue.push(next);
+                        }
+                    }
                 }
             }
         }
+        let mut wrong = Vec::new();
+        for &at in &reached {
+            let function = &self.functions[at];
+            if function.reader && function.handed_behaviour {
+                wrong.push(format!(
+                    "{} is a reader handed behaviour — a function, a trait object or a \
+                     generic — whose body is written where this join does not read",
+                    function.label
+                ));
+            }
+            let tokens = function.body.to_token_stream();
+            if self
+                .resolved(&function.module, tokens)
+                .iter()
+                .any(|path| path.first().is_some_and(|root| root == "serde_json"))
+            {
+                wrong.push(format!("{} names `serde_json`", function.label));
+            }
+            let mut calls = Calls::default();
+            calls.visit_block(&function.body);
+            for path in &calls.paths {
+                let path = match path.split_first() {
+                    Some((first, rest)) if first.is_empty() => rest.to_vec(),
+                    _ => self.imports.resolve(&function.module, path),
+                };
+                if let Some(root) = path.first()
+                    && *root != self.name
+                    && (workspace.contains(root) || root == "nest_rs")
+                    && !reaches_home(&path, home)
+                {
+                    wrong.push(format!(
+                        "{} calls `{}`, in another crate of the workspace",
+                        function.label,
+                        path.join("::")
+                    ));
+                }
+            }
+        }
+        for &index in &macros {
+            let (module, name, tokens) = &self.macros[index];
+            if self
+                .resolved(module, tokens.clone())
+                .iter()
+                .any(|path| path.first().is_some_and(|root| root == "serde_json"))
+            {
+                wrong.push(format!(
+                    "`{name}!`, a macro a reader invokes, names `serde_json`"
+                ));
+            }
+        }
+        wrong.sort();
+        wrong.dedup();
+        wrong
     }
 
-    baseline::floor(impls, FLOOR, "`impl Config for` block(s)");
-    assert!(
-        wrong.is_empty(),
-        "{} file(s) declare a `#[config]` and name `serde_json` — its own name, an alias, \
-         or an import of one of its items — so a value that does not decode is refused in \
-         serde's words, which quote it. Read it with `env.json::<T>(\"KEY\")?` instead:\n  {}",
-        wrong.len(),
-        wrong.into_iter().collect::<Vec<_>>().join("\n  "),
-    );
+    /// The functions `function` may call, by what its body spells: a path —
+    /// read through the crate's imports, its owner matched when it names a
+    /// type — a method name, which any method of the crate may answer, and
+    /// `.parse()`, which reaches every `from_str` of the crate by inference. By
+    /// name, so a collision adds a function and never hides one.
+    fn callees(&self, function: &Function, calls: &Calls) -> Vec<usize> {
+        let mut out = Vec::new();
+        for path in &calls.paths {
+            let resolved = match path.split_first() {
+                Some((first, rest)) if first.is_empty() => rest.to_vec(),
+                _ => self.imports.resolve(&function.module, path),
+            };
+            let Some(name) = resolved.last() else {
+                continue;
+            };
+            // Whose function it is: the crate's, by the owner the path names
+            // (`Self::f`, `HttpTls::from_env`); anyone's, when the path roots at
+            // a name the imports do not explain — a generic (`C::from_env`) or
+            // a type of another crate, so any method of the crate of that name
+            // may answer; a free function's, when it has one segment.
+            let owner = match resolved.first().map(String::as_str) {
+                _ if path.first().is_some_and(|first| first == "Self") => {
+                    Owner::Named(function.owner.clone())
+                }
+                Some("crate") => Owner::Named(
+                    resolved
+                        .len()
+                        .checked_sub(2)
+                        .map(|at| resolved[at].clone())
+                        .filter(|segment| segment.starts_with(char::is_uppercase)),
+                ),
+                _ if resolved.len() == 1 => Owner::Named(None),
+                _ if resolved.len() == 2 => Owner::Any,
+                _ => continue,
+            };
+            out.extend(
+                self.functions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, other)| {
+                        &other.name == name
+                            && match &owner {
+                                Owner::Named(owner) => &other.owner == owner,
+                                Owner::Any => other.owner.is_some(),
+                            }
+                    })
+                    .map(|(at, _)| at),
+            );
+        }
+        for method in &calls.methods {
+            let wanted = if method == "parse" {
+                "from_str"
+            } else {
+                method
+            };
+            out.extend(
+                self.functions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, other)| other.owner.is_some() && other.name == wanted)
+                    .map(|(at, _)| at),
+            );
+        }
+        out
+    }
+
+    /// Every path `tokens` spell, read through the crate's imports from
+    /// `module` — a leading `::` dropped, so `::serde_json` is `serde_json`.
+    fn resolved(&self, module: &[String], tokens: TokenStream) -> Vec<Vec<String>> {
+        spelled_paths(tokens)
+            .iter()
+            .map(|path| match path.split_first() {
+                Some((first, rest)) if first.is_empty() => rest.to_vec(),
+                _ => self.imports.resolve(module, path),
+            })
+            .collect()
+    }
 }
 
-/// How many `impl Config for` blocks `ast` holds, and whether — when it holds
-/// any — a path in it outside `#[cfg(test)]` resolves to `serde_json`.
-fn decodes_in(ast: &syn::File, imports: &CrateImports, module: &[String]) -> (usize, bool) {
-    let mut found = ConfigImpls::default();
-    found.visit_file(ast);
-    if found.impls == 0 {
-        return (0, false);
-    }
-    let tokens: TokenStream = ast
-        .items
+/// Whether `sig` takes behaviour rather than values: a type parameter, an
+/// `impl Trait` or a `dyn Trait`, a function pointer or an `Fn*` bound. A reader
+/// takes the environment and the base it overlays; behaviour handed to it runs a
+/// body written at the caller, which reaching the reader does not reach.
+fn hands_behaviour(sig: &syn::Signature) -> bool {
+    let types = sig.generics.type_params().next().is_some();
+    let inputs = sig.inputs.to_token_stream();
+    let written = nest_rs_conformance::sources::idents(inputs.clone());
+    let mut flat = Vec::new();
+    nest_rs_conformance::sources::flatten(inputs, &mut flat);
+    let bare_fn = flat
         .iter()
-        .filter(|item| !item_is_cfg_test(item))
-        .map(ToTokens::to_token_stream)
-        .collect();
-    let decoding = spelled_paths(tokens).iter().any(|path| {
-        let resolved = match path.split_first() {
-            Some((first, rest)) if first.is_empty() => rest.to_vec(),
-            _ => imports.resolve(module, path),
-        };
-        resolved.first().is_some_and(|root| root == "serde_json")
-    });
-    (found.impls, decoding)
+        .any(|tree| matches!(tree, TokenTree::Ident(ident) if ident == "fn"));
+    types
+        || bare_fn
+        || ["impl", "dyn", "Fn", "FnMut", "FnOnce"]
+            .iter()
+            .any(|word| written.contains(*word))
 }
 
-/// The `impl Config for` blocks of one file.
+/// Whose functions a path in call position may name.
+enum Owner {
+    /// A free function's (`None`), or a type's by its name.
+    Named(Option<String>),
+    /// Any type's — a path rooted at a name the imports do not explain.
+    Any,
+}
+
+/// Whether `path`, rooted at a crate of the workspace, is the decoder's home —
+/// by its own name, or through the umbrella's `config` re-export.
+fn reaches_home(path: &[String], home: &BTreeSet<String>) -> bool {
+    match path {
+        [root, ..] if home.contains(root) => true,
+        [umbrella, concern, ..] => {
+            umbrella == "nest_rs"
+                && home
+                    .iter()
+                    .any(|home| home.strip_prefix("nest_rs_") == Some(concern.as_str()))
+        }
+        _ => false,
+    }
+}
+
+/// The functions, macros and `impl Config` blocks of a crate's files.
 #[derive(Default)]
-struct ConfigImpls {
-    impls: usize,
+struct Walk {
+    file: String,
+    module: Vec<String>,
+    owner: Option<String>,
+    functions: Vec<Function>,
+    macros: Vec<(Vec<String>, String, TokenStream)>,
+    config_impls: usize,
+    declares_the_reader: bool,
 }
 
-impl<'ast> Visit<'ast> for ConfigImpls {
+impl Walk {
+    fn record(&mut self, sig: &syn::Signature, body: &syn::Block) {
+        let name = sig.ident.to_string();
+        let owner = self.owner.clone();
+        self.functions.push(Function {
+            module: self.module.clone(),
+            label: format!(
+                "{}: fn {}{name}",
+                self.file,
+                owner
+                    .as_deref()
+                    .map(|owner| format!("{owner}::"))
+                    .unwrap_or_default()
+            ),
+            owner,
+            name,
+            reader: nest_rs_conformance::sources::idents(sig.inputs.to_token_stream())
+                .contains("ConfigService"),
+            handed_behaviour: hands_behaviour(sig),
+            body: body.clone(),
+        });
+    }
+}
+
+impl<'ast> Visit<'ast> for Walk {
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !is_cfg_test(&item.attrs) {
+            let enclosing = self.owner.take();
+            self.record(&item.sig, &item.block);
+            syn::visit::visit_item_fn(self, item);
+            self.owner = enclosing;
+        }
+    }
+
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        if is_cfg_test(&item.attrs) {
+            return;
+        }
         let is_config = item
             .trait_
             .as_ref()
             .and_then(|(path, _)| path.segments.last())
             .is_some_and(|last| last.ident == "Config");
-        if is_config && !is_cfg_test(&item.attrs) {
-            self.impls += 1;
-        }
+        self.config_impls += usize::from(is_config);
+        let owner = match &*item.self_ty {
+            syn::Type::Path(path) => path.path.segments.last().map(|last| last.ident.to_string()),
+            _ => None,
+        };
+        let enclosing = std::mem::replace(&mut self.owner, owner);
         syn::visit::visit_item_impl(self, item);
+        self.owner = enclosing;
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !is_cfg_test(&item.attrs) {
+            self.record(&item.sig, &item.block);
+            syn::visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.declares_the_reader |= item.ident == "ConfigService" && !is_cfg_test(&item.attrs);
+    }
+
+    fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+        if let Some(name) = &item.ident
+            && item.mac.path.is_ident("macro_rules")
+            && !is_cfg_test(&item.attrs)
+        {
+            self.macros.push((
+                self.module.clone(),
+                name.to_string(),
+                item.mac.tokens.clone(),
+            ));
+        }
     }
 
     fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
@@ -180,110 +517,178 @@ impl<'ast> Visit<'ast> for ConfigImpls {
     }
 }
 
-/// A top-level item behind `#[cfg(test)]`.
-fn item_is_cfg_test(item: &syn::Item) -> bool {
-    match item {
-        syn::Item::Mod(i) => is_cfg_test(&i.attrs),
-        syn::Item::Fn(i) => is_cfg_test(&i.attrs),
-        syn::Item::Impl(i) => is_cfg_test(&i.attrs),
-        syn::Item::Use(i) => is_cfg_test(&i.attrs),
-        syn::Item::Const(i) => is_cfg_test(&i.attrs),
-        syn::Item::Static(i) => is_cfg_test(&i.attrs),
-        syn::Item::Struct(i) => is_cfg_test(&i.attrs),
-        _ => false,
+/// What a body calls, as it spells it: each path in call position, each
+/// method name, each macro invoked.
+#[derive(Default)]
+struct Calls {
+    paths: Vec<Vec<String>>,
+    methods: BTreeSet<String>,
+    macros: BTreeSet<String>,
+}
+
+impl<'ast> Visit<'ast> for Calls {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*call.func {
+            let mut segments: Vec<String> = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            if path.path.leading_colon.is_some() {
+                segments.insert(0, String::new());
+            }
+            self.paths.push(segments);
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        self.methods.insert(call.method.to_string());
+        syn::visit::visit_expr_method_call(self, call);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if let Some(last) = mac.path.segments.last() {
+            self.macros.insert(last.ident.to_string());
+        }
+        syn::visit::visit_macro(self, mac);
     }
 }
 
-/// The join is proved on the shapes it exists to catch: the demo's
-/// `IssuerConfig` as it stood, the same body through an alias, through an
-/// imported function and through a helper beside it — and the body reading
-/// through `env.json`, which passes.
-#[test]
-fn the_join_sees_a_config_decoding_its_own_value_however_it_names_serde_json() {
-    let caught: [syn::File; 4] = [
-        syn::parse_quote! {
-            impl Config for IssuerConfig {
-                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-                    let clients = match env.setting("CLIENTS")? {
-                        Some(raw) => serde_json::from_str(&raw.value).map_err(|e| raw.refuse(e))?,
-                        None => base.clients,
-                    };
-                    Ok(Self { clients })
-                }
-            }
-        },
-        syn::parse_quote! {
-            use serde_json as json;
-            impl Config for IssuerConfig {
-                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-                    let raw = env.setting("CLIENTS")?.unwrap();
-                    Ok(Self { clients: json::from_str(&raw.value).map_err(|e| raw.refuse(e))? })
-                }
-            }
-        },
-        syn::parse_quote! {
-            use serde_json::from_str;
-            impl Config for IssuerConfig {
-                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-                    let raw = env.setting("CLIENTS")?.unwrap();
-                    Ok(Self { clients: from_str(&raw.value).map_err(|e| raw.refuse(e))? })
-                }
-            }
-        },
-        syn::parse_quote! {
-            fn decode(raw: &str) -> Result<Vec<Client>, ::serde_json::Error> {
-                ::serde_json::from_str(raw)
-            }
-            impl Config for IssuerConfig {
-                fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-                    let raw = env.setting("CLIENTS")?.unwrap();
-                    Ok(Self { clients: decode(&raw.value).map_err(|e| raw.refuse(e))? })
-                }
-            }
-        },
-    ];
-    for file in &caught {
-        let imports = CrateImports::of_items(&file.items);
-        assert_eq!(
-            decodes_in(file, &imports, &[]),
-            (1, true),
-            "{}",
-            file.to_token_stream()
-        );
-    }
-    // A re-export at the crate root, imported plainly into the file: the
-    // crate's imports read through it.
-    let lib: syn::File = syn::parse_quote! {
-        pub(crate) use serde_json as wire;
-        mod config;
-    };
-    let config: syn::File = syn::parse_quote! {
-        use crate::wire::from_str;
-        impl Config for IssuerConfig {
-            fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-                Ok(Self { clients: from_str("[]").unwrap_or(base.clients) })
-            }
-        }
-    };
-    let mut crate_items = lib.items.clone();
-    crate_items.push(syn::parse_quote! { mod config { use crate::wire::from_str; } });
-    let imports = CrateImports::of_items(&crate_items);
-    assert_eq!(
-        decodes_in(&config, &imports, &["config".to_owned()]),
-        (1, true)
-    );
+/// The crate of `tree`, planted at a scratch root and read as the join reads
+/// one — every file a `mod` of `src/lib.rs` declares.
+fn planted(tag: &str, tree: &[(&str, &str)]) -> Vec<String> {
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("decodes-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    crate::plant(&root, tree);
+    let crates = Crate::read(&root.join("crates/probe"), &root);
+    let workspace = BTreeSet::from(["probe".to_owned(), "nest_rs_core".to_owned()]);
+    let home = BTreeSet::from(["nest_rs_config".to_owned()]);
+    let wrong = crates
+        .iter()
+        .flat_map(|krate| krate.decoding(&workspace, &home))
+        .collect();
+    let _ = std::fs::remove_dir_all(&root);
+    wrong
+}
 
-    let passed: syn::File = syn::parse_quote! {
-        impl nest_rs::config::Config for IssuerConfig {
-            fn from_env(env: &ConfigService, base: Self) -> Result<Self> {
-                Ok(Self { clients: env.json("CLIENTS")?.unwrap_or(base.clients) })
-            }
-        }
-        #[cfg(test)]
-        mod tests { fn fixture() { let _ = serde_json::json!({}); } }
-    };
-    let imports = CrateImports::of_items(&passed.items);
-    assert_eq!(decodes_in(&passed, &imports, &[]), (1, false));
+/// The join is proved on the shapes it exists to catch: the demo's
+/// `IssuerConfig` as it stood, the same body through an alias and through an
+/// imported function — and the shapes a reader in one file reaches a decoder in
+/// another: a helper, a method of a crate-local extension, a `FromStr` that
+/// `.parse()` reaches by inference, a macro, and a helper in another crate. The
+/// body reading through `env.json` passes, as do the decoder's own crate and a
+/// fixture behind `#[cfg(test)]`.
+#[test]
+fn the_join_sees_a_config_decoding_its_own_value_wherever_the_decoder_sits() {
+    const READER: &str = "pub struct IssuerConfig { clients: Vec<String> }\n";
+    for (shape, config, other) in [
+        (
+            "serde_json in the body",
+            "impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               let raw = env.setting(\"CLIENTS\")?.unwrap(); \
+               Ok(Self { clients: serde_json::from_str(&raw.value).map_err(|e| raw.refuse(e))? }) } }",
+            "",
+        ),
+        (
+            "an alias of serde_json",
+            "use serde_json as json;\n\
+             impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               let raw = env.setting(\"CLIENTS\")?.unwrap(); \
+               Ok(Self { clients: json::from_str(&raw.value).map_err(|e| raw.refuse(e))? }) } }",
+            "",
+        ),
+        (
+            "a helper in another file",
+            "impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               let raw = env.setting(\"CLIENTS\")?.unwrap(); \
+               Ok(Self { clients: crate::wire::decode(&raw.value).map_err(|e| raw.refuse(e))? }) } }",
+            "pub fn decode(raw: &str) -> Result<Vec<String>, ::serde_json::Error> { ::serde_json::from_str(raw) }",
+        ),
+        (
+            "a method of a crate-local extension",
+            "use crate::wire::Decode;\n\
+             impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               let raw = env.setting(\"CLIENTS\")?.unwrap(); \
+               Ok(Self { clients: raw.value.decoded().map_err(|e| raw.refuse(e))? }) } }",
+            "pub trait Decode { fn decoded(&self) -> Result<Vec<String>, serde_json::Error>; }\n\
+             impl Decode for String { fn decoded(&self) -> Result<Vec<String>, serde_json::Error> { serde_json::from_str(self) } }",
+        ),
+        (
+            "a FromStr .parse() reaches",
+            "impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               let clients: crate::wire::Clients = env.parse(\"CLIENTS\")?.unwrap(); \
+               Ok(Self { clients: clients.0 }) } }",
+            "pub struct Clients(pub Vec<String>);\n\
+             impl std::str::FromStr for Clients { type Err = serde_json::Error; \
+               fn from_str(raw: &str) -> Result<Self, Self::Err> { serde_json::from_str(raw).map(Clients) } }",
+        ),
+        (
+            "a macro",
+            "impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               let raw = env.setting(\"CLIENTS\")?.unwrap(); \
+               Ok(Self { clients: decode!(&raw.value).map_err(|e| raw.refuse(e))? }) } }",
+            "#[macro_export] macro_rules! decode { ($raw:expr) => { serde_json::from_str($raw) }; }",
+        ),
+        (
+            "a generic the reader is handed",
+            "impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               Ok(Self { clients: decoded::<crate::wire::Json>(env)? }) } }\n\
+             fn decoded<D: crate::wire::Decoder>(env: &ConfigService) -> Result<Vec<String>> { \
+               let raw = env.setting(\"CLIENTS\")?.unwrap(); D::decode(&raw.value).map_err(|e| raw.refuse(e)) }",
+            "pub trait Decoder { fn decode(raw: &str) -> Result<Vec<String>, String>; }\n\
+             pub struct Json;\n\
+             impl Decoder for Json { fn decode(raw: &str) -> Result<Vec<String>, String> { \
+               serde_json::from_str(raw).map_err(|e| e.to_string()) } }",
+        ),
+        (
+            "a function the reader is handed",
+            "impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               Ok(base) } }\n\
+             pub fn overlay(env: &ConfigService, decode: impl Fn(&str) -> Vec<String>) -> Vec<String> { \
+               decode(&env.get(\"CLIENTS\").unwrap().unwrap()) }",
+            "",
+        ),
+        (
+            "a helper in another crate",
+            "impl Config for IssuerConfig { fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+               let raw = env.setting(\"CLIENTS\")?.unwrap(); \
+               Ok(Self { clients: nest_rs_core::decode(&raw.value) }) } }",
+            "",
+        ),
+    ] {
+        let wrong = planted(
+            "caught",
+            &[
+                ("crates/probe/src/lib.rs", "mod config;\nmod wire;\n"),
+                ("crates/probe/src/config.rs", &format!("{READER}{config}\n")),
+                ("crates/probe/src/wire.rs", other),
+            ],
+        );
+        assert!(!wrong.is_empty(), "{shape}: the join must see it");
+    }
+
+    let passed = planted(
+        "passed",
+        &[
+            ("crates/probe/src/lib.rs", "mod config;\nmod wire;\n"),
+            (
+                "crates/probe/src/config.rs",
+                "pub struct IssuerConfig { clients: Vec<String> }\n\
+                 impl nest_rs::config::Config for IssuerConfig { \
+                   fn from_env(env: &ConfigService, base: Self) -> Result<Self> { \
+                     Ok(Self { clients: env.json(\"CLIENTS\")?.unwrap_or(base.clients) }) } }\n\
+                 #[cfg(test)]\nmod tests { fn fixture() { let _ = serde_json::json!({}); } }\n",
+            ),
+            (
+                "crates/probe/src/wire.rs",
+                "pub fn body(value: &str) -> serde_json::Value { serde_json::from_str(value).unwrap_or_default() }",
+            ),
+        ],
+    );
+    assert!(passed.is_empty(), "{passed:?}");
 }
 
 #[test]
@@ -297,8 +702,7 @@ fn every_framework_item_boxing_a_developer_s_error_goes_through_boxed_error() {
         }
     });
 
-    let (members, mut wrong) = found.judged();
-    wrong.extend(found.renamed);
+    let (members, wrong) = found.judged();
     baseline::floor(members, INTAKE_FLOOR, "item(s) boxing a developer's error");
     assert!(
         wrong.is_empty(),
@@ -306,7 +710,7 @@ fn every_framework_item_boxing_a_developer_s_error_goes_through_boxed_error() {
          `From::from`, `Box::from`), which for an `anyhow::Error` is anyhow's own box — \
          the error inside it is no link of the chain, so a decode failure there is \
          rendered in serde's words. Box it with `nest_rs_core::boxed_error(error)` \
-         instead, and import `Into`, `Box` and `boxed_error` under their own names:\n  {}",
+         instead:\n  {}",
         wrong.len(),
         wrong.join("\n  "),
     );
@@ -331,8 +735,8 @@ struct Bounded {
     converts: bool,
 }
 
-/// Every item bounded by `Into<…>` under `crates/*/src/`, the `Box<dyn …>`
-/// aliases those bounds may name, and every import renaming what the join reads.
+/// Every item bounded by `Into<…>` under `crates/*/src/`, and the `Box<dyn …>`
+/// aliases those bounds may name.
 #[derive(Default)]
 struct Intakes {
     file: String,
@@ -340,7 +744,6 @@ struct Intakes {
     bounded: Vec<Bounded>,
     /// `type X = Box<dyn …>`: `X`, and whether its object is `Send + Sync`.
     aliases: BTreeMap<String, bool>,
-    renamed: Vec<String>,
 }
 
 impl Intakes {
@@ -462,18 +865,6 @@ impl<'ast> Visit<'ast> for Intakes {
         }
         syn::visit::visit_item_type(self, item);
     }
-
-    fn visit_use_rename(&mut self, rename: &'ast syn::UseRename) {
-        if ["Into", "Box", "boxed_error"]
-            .iter()
-            .any(|name| rename.ident == name)
-        {
-            self.renamed.push(format!(
-                "{}: use … {} as {}",
-                self.file, rename.ident, rename.rename
-            ));
-        }
-    }
 }
 
 /// The targets of every `Into<…>` bound on the visited node — in a `where`
@@ -576,25 +967,25 @@ fn names_ident(tokens: TokenStream, name: &str) -> bool {
 }
 
 /// The walk of one fixture file, judged.
-fn judged(file: &syn::File) -> (usize, Vec<String>, Vec<String>) {
+fn judged(file: &syn::File) -> (usize, Vec<String>) {
     let mut found = Intakes {
         file: "fixture.rs".to_owned(),
         ..Intakes::default()
     };
     found.visit_file(file);
-    let (members, wrong) = found.judged();
-    (members, wrong, found.renamed)
+    found.judged()
 }
 
 /// The join is proved on the shapes it exists to catch — `Opaque` and
 /// `JobError::retry` as they stood, a box named through an alias, a box without
-/// `Send + Sync` standing alone, and a renamed import — and on the shapes it
-/// must pass: the same bodies through `boxed_error`, a member that only
-/// forwards its value, and the lower tier of a specialisation.
+/// `Send + Sync` standing alone — and on the shapes it must pass: the same
+/// bodies through `boxed_error`, a member that only forwards its value, and the
+/// lower tier of a specialisation. A renamed `Into`, `Box` or `boxed_error`
+/// would hide a member, and is refused by the `blinds` join, which the last
+/// assertion runs over the same fixture with this join's own declaration.
 #[test]
 fn the_join_sees_an_item_boxing_a_developer_s_error_by_its_own_conversion() {
     let caught: syn::File = syn::parse_quote! {
-        use std::convert::Into as Convert;
         type BoxError = Box<dyn std::error::Error + Send + Sync>;
         impl<T, E> Opaque<T> for Result<T, E>
         where
@@ -654,7 +1045,7 @@ fn the_join_sees_an_item_boxing_a_developer_s_error_by_its_own_conversion() {
             name.into()
         }
     };
-    let (members, wrong, renamed) = judged(&caught);
+    let (members, wrong) = judged(&caught);
     assert_eq!(members, 4);
     assert_eq!(
         wrong,
@@ -665,9 +1056,24 @@ fn the_join_sees_an_item_boxing_a_developer_s_error_by_its_own_conversion() {
             "fixture.rs: fn new",
         ]
     );
-    assert_eq!(renamed, ["fixture.rs: use … Into as Convert"]);
-    let (members, wrong, renamed) = judged(&passed);
+    let (members, wrong) = judged(&passed);
     assert_eq!(members, 4);
     assert!(wrong.is_empty(), "{wrong:?}");
-    assert!(renamed.is_empty(), "{renamed:?}");
+
+    let renames: syn::File = syn::parse_quote! {
+        use std::convert::Into as Convert;
+        use std::boxed::Box as Boxed;
+        use nest_rs_core::boxed_error as boxed;
+        type BoxError = Box<dyn std::error::Error + Send + Sync>;
+    };
+    let refused = crate::blinds::hidden("fixture.rs", &renames, &followed(), "decodes");
+    assert_eq!(
+        refused,
+        [
+            "fixture.rs :: `use nest_rs_core::boxed_error as boxed` renames it — blinds decodes",
+            "fixture.rs :: `use std::boxed::Box as Boxed` renames it — blinds decodes",
+            "fixture.rs :: `use std::convert::Into as Convert` renames it — blinds decodes",
+        ],
+        "a rename of what this join reads is refused, and an alias it resolves is not",
+    );
 }

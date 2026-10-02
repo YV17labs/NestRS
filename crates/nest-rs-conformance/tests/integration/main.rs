@@ -106,6 +106,10 @@ pub(crate) enum At {
     /// A type, wherever its name is written — `Capability::Throttle`,
     /// `QueueBackend::new`, `DecoratorPair { … }`, `&ConfigService`.
     Type,
+    /// A type the join reads by its spelling and whose `type` aliases it
+    /// resolves by name — `Box`, which a `type X = Box<dyn …>` an intake's bound
+    /// names — so only a rename hides it.
+    Aliased,
     /// A function or a macro, where it is called — `panic_message(…)`,
     /// `operation_span!(…)`.
     Call,
@@ -138,6 +142,10 @@ impl Followed {
 
     pub(crate) fn type_(name: impl Into<String>) -> Self {
         Self::new(At::Type, name)
+    }
+
+    pub(crate) fn aliased(name: impl Into<String>) -> Self {
+        Self::new(At::Aliased, name)
     }
 
     pub(crate) fn call(name: impl Into<String>) -> Self {

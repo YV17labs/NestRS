@@ -39,7 +39,8 @@
 //! 4. **A rename of a followed name** — `use … as X` (an `as _` binds nothing and
 //!    is left alone). The joins that must follow a rename read the crate through
 //!    the shared resolver instead, and declare what they follow as a crate
-//!    ([`At::Crate`]), which a rename does not hide.
+//!    ([`At::Crate`]), which a rename does not hide. A type a join resolves the
+//!    `type` aliases of ([`At::Aliased`] — `Box`) is hidden by a rename alone.
 //! 5. **A `type` alias of a followed type or trait** — `type Backend =
 //!    QueueBackend` — a rename by another keyword.
 //! 6. **An import through a followed type** — `use …::Capability::*` or
@@ -48,9 +49,10 @@
 //!    the one import the resolver cannot follow.
 //! 7. **A followed name a `macro_rules!` transcriber writes where its join does
 //!    not read it**: an attribute (`#[module]`, every framework decorator), the
-//!    `impl` or the supertrait of a followed trait, a followed call, a followed
-//!    declaration, a followed key's literal value — and, where the join does read
-//!    transcribers, a member the macro's caller chooses (`Capability::$v`).
+//!    `impl`, the supertrait or a bound (`Into<…>`) of a followed trait, a
+//!    followed call, a followed declaration, a followed key's literal value — and,
+//!    where the join does read transcribers, a member the macro's caller chooses
+//!    (`Capability::$v`).
 //! 8. **A followed attribute inside `cfg_attr`.** An attribute-reading join reads
 //!    the attribute's own path, and `#[cfg_attr(…, module)]`'s path is
 //!    `cfg_attr`.
@@ -215,6 +217,30 @@ fn blinds_in(
     (out, count)
 }
 
+/// The constructions in `ast` that hide one of `names`, which `join` follows —
+/// for a join's own suite to prove that what would blind it is refused here,
+/// rather than refusing it a second time itself.
+pub(crate) fn hidden(
+    file: &str,
+    ast: &syn::File,
+    names: &[Followed],
+    join: &'static str,
+) -> Vec<String> {
+    let followed: BTreeMap<Followed, BTreeSet<&'static str>> = names
+        .iter()
+        .cloned()
+        .map(|name| (name, BTreeSet::from([join])))
+        .collect();
+    let mut out = BTreeSet::new();
+    Scan {
+        file,
+        followed: &followed,
+        out: &mut out,
+    }
+    .visit_file(ast);
+    out.into_iter().collect()
+}
+
 struct Scan<'a> {
     file: &'a str,
     followed: &'a BTreeMap<Followed, BTreeSet<&'static str>>,
@@ -276,7 +302,7 @@ impl Scan<'_> {
                 } else {
                     prefix.last()
                 };
-                let renamable = [At::Attribute, At::Trait, At::Type, At::Call];
+                let renamable = [At::Attribute, At::Trait, At::Type, At::Aliased, At::Call];
                 for name in self.matching(&leaf, owner.map(String::as_str), &renamable) {
                     self.refuse(
                         format!("`use {} as {}` renames it", path.join("::"), rename.rename),
@@ -397,6 +423,9 @@ fn transcribed(flat: &[TokenTree], name: &Followed) -> Option<String> {
         }
         At::Trait if !read && ident_at(at, "trait") && bounds_of_trait(flat, at).contains(n) => {
             Some(format!("a trait bounded by `{n}`"))
+        }
+        At::Trait if !read && ident_at(at, n) && punct_at(at + 1, '<') => {
+            Some(format!("a bound on `{n}<…>`"))
         }
         At::Type if !read && ident_at(at, n) => Some(format!("the type `{n}`")),
         At::Type
@@ -635,6 +664,7 @@ fn each_construction_that_hides_a_name_is_refused() {
              macro_rules! seam { () => { impl M { pub fn for_root() {} } }; }\n\
              macro_rules! open { () => { nest_rs_core::operation_span!(target: T, kind: K, U, &c) }; }\n\
              macro_rules! fine { ($e:expr) => { tracing::warn!(target: T, \"m\"); Capability::Throttle }; }\n\
+             macro_rules! intake { () => { pub fn retry(e: impl Into<Box<dyn Error>>) {} }; }\n\
              #[cfg_attr(feature = \"x\", module)]\n\
              pub struct Wrapped;\n\
              #[cfg_attr(feature = \"x\", derive(Debug))]\n\
@@ -674,6 +704,7 @@ fn each_construction_that_hides_a_name_is_refused() {
         ),
         (Followed::declaration("for_root"), BTreeSet::from(["seams"])),
         (Followed::call("operation_span"), BTreeSet::from(["units"])),
+        (Followed::implemented("Into"), BTreeSet::from(["decodes"])),
         (
             Followed::call("warn")
                 .through(&["tracing"])
@@ -706,6 +737,7 @@ fn each_construction_that_hides_a_name_is_refused() {
         format!("{zeta} :: a `macro_rules!` writes `Capability::$…`, a member its caller chooses, which no join expands — blinds queue_capabilities"),
         format!("{zeta} :: a `macro_rules!` writes `fn for_root`, which no join expands — blinds seams"),
         format!("{zeta} :: a `macro_rules!` writes a call to `operation_span`, which no join expands — blinds units"),
+        format!("{zeta} :: a `macro_rules!` writes a bound on `Into<…>`, which no join expands — blinds decodes"),
         format!("{zeta} :: a `macro_rules!` writes an `impl DynamicModule for`, which no join expands — blinds naming"),
         format!("{zeta} :: a `macro_rules!` writes the attribute `#[module]`, which no join expands — blinds naming"),
     ];

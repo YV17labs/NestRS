@@ -28,9 +28,11 @@
 //! crate that must not depend on this one. A pointer seeded at boot is how the
 //! dependency runs backwards; it is the shape `WsDataPipe` already uses.
 
+use std::sync::Once;
+
 use opentelemetry::Context;
 use opentelemetry::trace::{SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
+use tracing_opentelemetry::{OpenTelemetrySpanExt, SetParentError};
 
 use nest_rs_core::Correlation;
 
@@ -82,7 +84,29 @@ fn link_remote_parent(span: &tracing::Span, correlation: &Correlation) {
             .and_then(|raw| raw.parse().ok())
             .unwrap_or_default(),
     );
-    let _ = span.set_parent(Context::new().with_remote_span_context(remote));
+    if let Err(error) = span.set_parent(Context::new().with_remote_span_context(remote))
+        && is_structural(&error)
+    {
+        static REPORTED: Once = Once::new();
+        REPORTED.call_once(|| {
+            tracing::warn!(
+                target: crate::TARGET,
+                error = %nest_rs_core::error_message(&error),
+                "remote parent not linked; continued traces export without their parent",
+            );
+        });
+    }
+}
+
+/// Whether a refused link says something about the wiring rather than the span.
+///
+/// A span the OpenTelemetry layer's own filter disabled is not exported, so it
+/// has no parent to miss — that is the filter working. The other refusals (the
+/// layer is not where the span lives, the span started before the link) hold for
+/// every span the process opens, which is why they are reported once rather than
+/// per span.
+fn is_structural(error: &SetParentError) -> bool {
+    !matches!(error, SetParentError::SpanDisabled)
 }
 
 /// What the installed sampler decided for this span.
@@ -93,6 +117,61 @@ fn is_sampled(span: &tracing::Span) -> bool {
 #[cfg(test)]
 mod tests {
     use nest_rs_core::{Correlation, TraceParent, TraceState};
+    use tracing_opentelemetry::SetParentError;
+
+    /// A filtered-out span is the filter working; the other two refusals mean
+    /// no continued trace keeps its parent.
+    #[test]
+    fn only_a_wiring_refusal_is_reported() {
+        assert!(!super::is_structural(&SetParentError::SpanDisabled));
+        assert!(super::is_structural(&SetParentError::LayerNotFound));
+        assert!(super::is_structural(&SetParentError::AlreadyStarted));
+    }
+
+    /// A subscriber without the OpenTelemetry layer cannot take the link at all,
+    /// so every continued trace would export parentless: said at `warn`, once.
+    #[test]
+    fn a_link_the_subscriber_cannot_take_is_reported() {
+        use std::sync::{Arc, Mutex};
+        use tracing::field::{Field, Visit};
+        use tracing_subscriber::layer::{Context, SubscriberExt};
+
+        #[derive(Clone, Default)]
+        struct Warnings(Arc<Mutex<Vec<String>>>);
+        struct Message<'a>(&'a mut String);
+        impl Visit for Message<'_> {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    *self.0 = format!("{value:?}");
+                }
+            }
+        }
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warnings {
+            fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+                if *event.metadata().level() == tracing::Level::WARN
+                    && event.metadata().target() == crate::TARGET
+                {
+                    let mut message = String::new();
+                    event.record(&mut Message(&mut message));
+                    self.0.lock().unwrap().push(message);
+                }
+            }
+        }
+
+        let warnings = Warnings::default();
+        let subscriber = tracing_subscriber::registry().with(warnings.clone());
+        let parent = TraceParent::parse("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+            .expect("the spec's own example");
+        let correlation = Correlation::continued(parent, TraceState::default(), None);
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("unit");
+            super::link_remote_parent(&span, &correlation);
+            super::link_remote_parent(&span, &correlation);
+        });
+
+        let expected = ["remote parent not linked; continued traces export without their parent"];
+        assert_eq!(*warnings.0.lock().unwrap(), expected);
+    }
 
     /// A restarted trace has nothing to link, and this is what keeps that true:
     /// linking would reconnect the span to the trace a trust gate deliberately

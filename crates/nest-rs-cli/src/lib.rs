@@ -8,19 +8,19 @@
 //! the two come to disagree without anyone noticing.
 //!
 //! The same holds for a mirror: `nestrs doctor` answers what an app makes of a
-//! variable without linking the loader, and the suite runs
-//! [`resolve_variable`] beside the loader it mirrors, so the two cannot drift
-//! apart unseen.
+//! variable and of the `.env` cascade without linking the loader, and the suite
+//! runs [`resolve_variable`] and [`cascade_refusals`] beside the loader they
+//! mirror, so the two cannot drift apart unseen.
 //!
 //! Nothing here is an install surface: `nestrs` is reached with
 //! `cargo install --locked nest-rs-cli`, never with `cargo add`. So the seam is
 //! only what a second caller needs — [`lint`], [`reserved_words`],
-//! [`resolve_variable`] and [`scaffolded_var`]; the rest is the binary's own and
-//! hidden from the docs.
+//! [`resolve_variable`], [`cascade_refusals`] and [`scaffolded_var`]; the rest
+//! is the binary's own and hidden from the docs.
 
 pub mod lint;
 
-pub use commands::doctor::{Resolution, resolve_variable};
+pub use commands::doctor::{Resolution, cascade_refusals, resolve_variable};
 pub use naming::reserved_words;
 
 /// The variable the prefix is read from, and the one name no prefix renames —

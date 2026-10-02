@@ -15,8 +15,16 @@ use crate::harness::ENV_PREFIX_VAR;
 /// `nestrs doctor` in `dir`, with nothing of this process's environment but
 /// what finds `rustc` and `cargo`, and `vars` on top.
 fn doctor(dir: &Path, vars: &[(&str, &str)]) -> Output {
+    doctor_from(dir, None, vars)
+}
+
+/// `nestrs doctor`, run from `cwd` and examining `project` (`-p`) when given.
+fn doctor_from(cwd: &Path, project: Option<&Path>, vars: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_nestrs"));
-    command.arg("doctor").current_dir(dir).env_clear();
+    command.arg("doctor").current_dir(cwd).env_clear();
+    if let Some(project) = project {
+        command.arg("-p").arg(project);
+    }
     for toolchain in [
         "PATH",
         "HOME",
@@ -109,4 +117,51 @@ fn a_file_holding_nothing_is_not_set() {
     let report = stdout(&output);
     assert!(output.status.success(), "{report}");
     assert!(report.contains("ACME_REDIS__URL: not set"), "{report}");
+}
+
+/// config-3r2: an app started in the project opens a relative `_FILE` from the
+/// project, so doctor examining it from anywhere else does too. It opened the
+/// path from its own working directory, and failed a correct project with a
+/// blocking error the moment it was run from outside it.
+#[test]
+fn a_relative_file_is_opened_from_the_project_examined_wherever_doctor_runs() {
+    let project = tempfile::tempdir().expect("a project");
+    let elsewhere = tempfile::tempdir().expect("another directory");
+    std::fs::create_dir_all(project.path().join("secrets")).expect("secrets");
+    std::fs::write(project.path().join("secrets/db"), "postgres://x\n").expect("write");
+    std::fs::write(
+        project.path().join(".env"),
+        "NESTRS_SEAORM__URL_FILE=secrets/db\n",
+    )
+    .expect("write");
+
+    let output = doctor_from(elsewhere.path(), Some(project.path()), &[]);
+    let report = stdout(&output);
+    assert!(output.status.success(), "{report}");
+    assert!(report.contains("NESTRS_SEAORM__URL: set"), "{report}");
+}
+
+/// config-5r2: a `.env` naming the environment selector aborts every app started
+/// beside it at its first config read, so doctor blocks on it — it reported a
+/// healthy environment — and names the variable, not its value.
+#[test]
+fn a_cascade_naming_its_own_selector_blocks() {
+    let dir = tempfile::tempdir().expect("a project");
+    std::fs::write(dir.path().join(".env"), "NESTRS_ENV=production\n").expect("write");
+
+    let output = doctor(dir.path(), &[]);
+    let report = stdout(&output);
+    assert!(!output.status.success(), "{report}");
+    assert!(
+        report.contains("NESTRS_ENV in the .env cascade: every app started here aborts")
+            && !report.contains("production"),
+        "{report}"
+    );
+
+    let restated = doctor(dir.path(), &[("NESTRS_ENV", "production")]);
+    assert!(
+        restated.status.success(),
+        "a file restating the process's value is redundant, not wrong: {}",
+        stdout(&restated)
+    );
 }

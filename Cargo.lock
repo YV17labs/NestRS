@@ -2745,9 +2745,11 @@ dependencies = [
 name = "nest-rs-conformance"
 version = "7.0.0"
 dependencies = [
+ "figment",
  "nest-rs-cli",
  "nest-rs-codegen",
  "nest-rs-config",
+ "nest-rs-core",
  "proc-macro2",
  "quote",
  "serde",

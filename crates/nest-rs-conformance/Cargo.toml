@@ -47,6 +47,14 @@ nest-rs-codegen = { workspace = true }
 # near-miss rule rather than a copy of it, and the doctor's parity join runs the
 # loader it mirrors. A workspace crate: the edge adds no third-party dependency.
 nest-rs-config = { workspace = true }
+# The mirror join builds the selector and the prefix a cascade may not name from
+# the kernel's own constants, never a literal.
+nest-rs-core = { workspace = true }
+# The mirror join runs the loader where it reads the process: its working
+# directory, for a relative `_FILE`, and the selectors a cascade may not name.
+# `figment::Jail` sets and restores both, as `nest-rs-config`'s own suite does;
+# already a workspace dependency, so the edge adds no crate to the graph.
+figment = { workspace = true, features = ["test"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

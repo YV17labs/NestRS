@@ -56,6 +56,9 @@ pub(crate) struct DoctorReport {
     /// report order. Names are stored rather than rebuilt at print time: the
     /// name reported is then the name probed, by construction.
     pub env_vars: Vec<EnvVar>,
+    /// What the `.env` cascade names that the loader refuses as a whole — see
+    /// [`cascade_refusals`].
+    pub cascade_refusals: Vec<String>,
 }
 
 impl DoctorReport {
@@ -115,12 +118,13 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
 
     // One cascade read for all four, rather than up to four files per variable.
     let cascade = cascade_text(&start, report.env_prefix(), process_env);
+    report.cascade_refusals = cascade_refusals(process_env, &cascade, report.env_prefix());
     report.env_vars = CHECKED
         .iter()
         .map(|&(namespace, key, always_reported)| {
             let name = crate::context::var_name(report.env_prefix(), namespace, key);
             EnvVar {
-                resolution: resolve_variable(process_env, &cascade, &name),
+                resolution: resolve_variable(process_env, &cascade, &name, &start),
                 name,
                 always_reported,
             }
@@ -132,13 +136,15 @@ pub(crate) fn run(opts: DoctorOptions) -> CliResult<DoctorReport> {
     // An unusable prefix blocks like a missing toolchain does: every app in
     // this environment aborts on the first name it builds. So does a variable
     // the loader would refuse — a `_FILE` it cannot read, a value given twice:
-    // every app that reads it aborts its boot on it.
+    // every app that reads it aborts its boot on it — and a cascade the loader
+    // refuses whole, which aborts every app at its first config read.
     let prefix_ok = !matches!(report.env_prefix_source, EnvPrefixSource::Invalid(_));
     let variables_ok = report
         .env_vars
         .iter()
         .all(|var| !matches!(var.resolution, Resolution::Refused(_)));
-    if !report.rustc_ok() || !report.cargo_ok || !prefix_ok || !variables_ok {
+    let cascade_ok = report.cascade_refusals.is_empty();
+    if !report.rustc_ok() || !report.cargo_ok || !prefix_ok || !variables_ok || !cascade_ok {
         return Err(CliError::Anyhow(anyhow::anyhow!(
             "doctor found blocking issues — fix them before continuing"
         )));
@@ -206,6 +212,9 @@ fn print_report(report: &DoctorReport) {
             println!("              an app started with it set aborts at boot.");
         }
     }
+    for refusal in &report.cascade_refusals {
+        println!("  {refusal}");
+    }
     for var in &report.env_vars {
         match &var.resolution {
             Resolution::Set => println!("  {}: set", var.name),
@@ -219,10 +228,11 @@ fn print_report(report: &DoctorReport) {
             }
         }
     }
-    if report
-        .env_vars
-        .iter()
-        .all(|var| var.resolution == Resolution::Unset)
+    if report.cascade_refusals.is_empty()
+        && report
+            .env_vars
+            .iter()
+            .all(|var| var.resolution == Resolution::Unset)
     {
         println!("  (none set — fine for bare HTTP apps on defaults)");
     }
@@ -258,7 +268,7 @@ fn process_env(var: &str) -> Option<OsString> {
 /// The most a `<NAME>_FILE` is read for — the loader's `read_material` bound.
 const MAX_MATERIAL_BYTES: u64 = 1024 * 1024;
 
-/// What an app started here makes of `name` — the real process environment
+/// What an app started in `dir` makes of `name` — the real process environment
 /// (`real`) **or** the `.env` cascade (`cascade`), inline or through the file
 /// `<NAME>_FILE` names — answered as the loader answers it.
 ///
@@ -268,7 +278,11 @@ const MAX_MATERIAL_BYTES: u64 = 1024 * 1024;
 /// reads it. An empty value is unset in either tier, and nothing is trimmed
 /// that the loader keeps. Both spellings set is refused; a `_FILE` path has its
 /// surrounding whitespace trimmed and must name a regular file of at most a
-/// mebibyte holding UTF-8 text — a file holding only line breaks is unset.
+/// mebibyte holding UTF-8 text — a file holding only line breaks is unset. **A
+/// relative path is opened from `dir`**, the directory the app is started in,
+/// since the loader opens it from its own working directory: opened from
+/// doctor's instead, `nestrs doctor -p <dir>` failed a correct project from
+/// outside it and passed one whose file sat beside the caller.
 ///
 /// **A mirror, not a borrow, and held to its original by execution.** The CLI
 /// depends on no framework crate, so that `cargo install nest-rs-cli` stays
@@ -283,6 +297,7 @@ pub fn resolve_variable(
     real: impl Fn(&str) -> Option<OsString>,
     cascade: &str,
     name: &str,
+    dir: &Path,
 ) -> Resolution {
     let file_name = format!("{name}_FILE");
     let deployment = real(name).is_some() || real(&file_name).is_some();
@@ -302,7 +317,7 @@ pub fn resolve_variable(
         )),
         (None, Some(path)) => file_resolution(
             &file_name,
-            Path::new(path.trim_matches(|c: char| c.is_ascii_whitespace())),
+            &dir.join(path.trim_matches(|c: char| c.is_ascii_whitespace())),
         ),
     }
 }
@@ -328,6 +343,49 @@ fn file_resolution(file_name: &str, path: &Path) -> Resolution {
         Ok(text) if text.trim_end_matches(['\n', '\r']).is_empty() => Resolution::Unset,
         Ok(_) => Resolution::Set,
     }
+}
+
+/// What the `.env` cascade (`cascade`) names that the loader refuses as a
+/// whole, every app started here aborting at its first config read: the two
+/// variables that choose the cascade, written into it.
+///
+/// The prefix (`NESTRS_ENV_PREFIX`) is refused unless it restates the one
+/// resolved from the process (`prefix`), and the environment selector
+/// (`<PREFIX>_ENV`) unless the process (`real`) carries the same value — a
+/// value inside the cascade arrives after the files were chosen, and the
+/// selector arms development-only affordances, which no committed file may do.
+/// That is `nest_rs_config`'s `cascade_map`, mirrored like
+/// [`resolve_variable`] and held to it by the same conformance join. Each
+/// sentence names the variable, never its value.
+pub fn cascade_refusals(
+    real: impl Fn(&str) -> Option<OsString>,
+    cascade: &str,
+    prefix: &str,
+) -> Vec<String> {
+    let mut refused = Vec::new();
+    if cascade_value(cascade, ENV_PREFIX_VAR).is_some_and(|declared| declared != prefix) {
+        refused.push(format!(
+            "{ENV_PREFIX_VAR} in the .env cascade: every app started here aborts at its first \
+             config read — it names another prefix than `{prefix}`, the one the process \
+             resolved, and the prefix chooses which cascade is read, so a value inside one \
+             arrives too late: set it on the process (your container, your shell, the Justfile)"
+        ));
+    }
+    let selector = format!("{prefix}_ENV");
+    if let Some(declared) = cascade_value(cascade, &selector) {
+        let process = real(&selector)
+            .and_then(|value| value.into_string().ok())
+            .filter(|value| !value.is_empty());
+        if process.as_deref() != Some(declared.as_str()) {
+            refused.push(format!(
+                "{selector} in the .env cascade: every app started here aborts at its first \
+                 config read — the process does not carry the same value, and the variable \
+                 chooses which `.env` files are read, so a value inside one arrives too late: \
+                 set it on the process (`nestrs run dev` does) and remove it from the file"
+            ));
+        }
+    }
+    refused
 }
 
 /// Every cascade file rooted at `dir`, concatenated. Mirrors
@@ -569,7 +627,7 @@ mod tests {
 
     /// Whether an app reads a value for `name`.
     fn present(real: impl Fn(&str) -> Option<OsString>, cascade: &str, name: &str) -> bool {
-        resolve_variable(real, cascade, name) == Resolution::Set
+        resolve_variable(real, cascade, name, Path::new("/")) == Resolution::Set
     }
 
     #[test]
@@ -687,10 +745,11 @@ mod tests {
         let as_file = |path: &Path| real(&[(file, path.to_str().expect("a UTF-8 path"))]);
 
         assert_eq!(
-            resolve_variable(as_file(&empty), "", name),
+            resolve_variable(as_file(&empty), "", name, &dir),
             Resolution::Unset
         );
-        let Resolution::Refused(reason) = resolve_variable(as_file(&missing), "", name) else {
+        let Resolution::Refused(reason) = resolve_variable(as_file(&missing), "", name, &dir)
+        else {
             panic!("a missing file fails the boot");
         };
         assert!(
@@ -698,7 +757,12 @@ mod tests {
             "{reason}"
         );
         assert!(matches!(
-            resolve_variable(real(&[(name, "postgres://x"), (file, "/run/x")]), "", name),
+            resolve_variable(
+                real(&[(name, "postgres://x"), (file, "/run/x")]),
+                "",
+                name,
+                &dir
+            ),
             Resolution::Refused(reason) if reason.contains(name) && reason.contains(file)
         ));
         #[cfg(unix)]
@@ -706,7 +770,7 @@ mod tests {
             use std::os::unix::ffi::OsStringExt;
             let not_utf8 = |var: &str| (var == name).then(|| OsString::from_vec(vec![0xff, 0xfe]));
             assert_eq!(
-                resolve_variable(not_utf8, "NESTRS_SEAORM__URL=postgres://x\n", name),
+                resolve_variable(not_utf8, "NESTRS_SEAORM__URL=postgres://x\n", name, &dir),
                 Resolution::Unset,
                 "the shell value shadows the cascade and reads as unset",
             );
@@ -743,12 +807,13 @@ mod tests {
             resolve_variable(
                 real(&[("NESTRS_SEAORM__URL", "")]),
                 cascade,
-                "NESTRS_SEAORM__URL"
+                "NESTRS_SEAORM__URL",
+                Path::new("/")
             ),
             Resolution::Unset,
         );
         assert!(matches!(
-            resolve_variable(real(&[]), cascade, "NESTRS_SEAORM__URL"),
+            resolve_variable(real(&[]), cascade, "NESTRS_SEAORM__URL", Path::new("/")),
             Resolution::Refused(_)
         ));
     }
@@ -771,7 +836,8 @@ mod tests {
             resolve_variable(
                 real(&[("NESTRS_REDIS__URL_FILE", "/run/secrets/url")]),
                 "",
-                "NESTRS_REDIS__URL"
+                "NESTRS_REDIS__URL",
+                Path::new("/")
             ),
             Resolution::Refused(_)
         ));
@@ -812,5 +878,72 @@ mod tests {
             "the default name must not answer for a renamed project",
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// config-3r2: a relative `<NAME>_FILE` is opened from the directory the
+    /// app starts in, which is the one doctor examines — not doctor's own.
+    #[test]
+    fn a_relative_file_is_opened_from_the_directory_examined() {
+        let dir = scratch("relative");
+        std::fs::create_dir_all(dir.join("secrets")).expect("secrets dir");
+        std::fs::write(dir.join("secrets/db"), "postgres://x\n").expect("write");
+        let cascade = "NESTRS_SEAORM__URL_FILE=secrets/db\n";
+        assert_eq!(
+            resolve_variable(real(&[]), cascade, "NESTRS_SEAORM__URL", &dir),
+            Resolution::Set,
+        );
+        assert!(matches!(
+            resolve_variable(
+                real(&[]),
+                cascade,
+                "NESTRS_SEAORM__URL",
+                &dir.join("elsewhere")
+            ),
+            Resolution::Refused(_)
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// config-5r2: the two variables that choose the cascade, written into it,
+    /// abort every app at its first config read — refused unless the process
+    /// says the same, and named without their value.
+    #[test]
+    fn a_cascade_naming_what_chooses_it_is_refused() {
+        let env = "NESTRS_ENV=production\n";
+        let refused = cascade_refusals(real(&[]), env, "NESTRS");
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].starts_with("NESTRS_ENV in the .env cascade")
+                && !refused[0].contains("production"),
+            "{refused:?}"
+        );
+        assert!(
+            cascade_refusals(real(&[("NESTRS_ENV", "production")]), env, "NESTRS").is_empty(),
+            "a file restating what the process carries is redundant, not wrong",
+        );
+        assert_eq!(
+            cascade_refusals(
+                real(&[("NESTRS_ENV", "production")]),
+                "NESTRS_ENV=\n",
+                "NESTRS"
+            )
+            .len(),
+            1,
+            "an empty assignment is a value the process does not carry",
+        );
+        let prefix = cascade_refusals(real(&[]), "NESTRS_ENV_PREFIX=ACME\n", "NESTRS");
+        assert!(
+            prefix.len() == 1 && prefix[0].starts_with("NESTRS_ENV_PREFIX in the .env cascade"),
+            "{prefix:?}"
+        );
+        assert!(cascade_refusals(real(&[]), "NESTRS_ENV_PREFIX=NESTRS\n", "NESTRS").is_empty());
+        assert!(
+            cascade_refusals(real(&[]), "ACME_ENV=test\n", "NESTRS").is_empty(),
+            "another prefix's selector is no variable of this one",
+        );
+        assert_eq!(
+            cascade_refusals(real(&[]), "ACME_ENV=test\n", "ACME").len(),
+            1
+        );
     }
 }

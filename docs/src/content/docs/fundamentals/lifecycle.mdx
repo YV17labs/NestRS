@@ -213,6 +213,10 @@ own:
 
 Raising a window means raising the pod's grace period with it, keeping 8.5
 seconds above the longest window for the half second, the hooks and the flush.
+The boot says what this deployment will spend: once every transport is
+configured, `way down bounded` on `nest_rs::app` carries the longest stop among
+the transports it mounted, settle included (`stop_bound_ms`), and the hooks'
+budget (`hooks_budget_ms`); add the flush when OpenTelemetry is installed.
 
 **The last step is `#[nest_rs::main]`'s**, which is why every `main` is
 written with it rather than `#[tokio::main]`:

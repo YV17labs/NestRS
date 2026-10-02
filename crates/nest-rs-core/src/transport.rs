@@ -31,11 +31,20 @@ pub trait Transport: Send + Sync + 'static {
     /// never ends holds the process until the orchestrator kills it. The shape
     /// every framework transport keeps is a window for what it still runs, then
     /// [`SHUTDOWN_SETTLE_TIMEOUT`](crate::SHUTDOWN_SETTLE_TIMEOUT) for what it
-    /// stopped to unwind, and `nest-rs-testing` sums each one's default bound
-    /// with the hooks' budget and the flush under a Kubernetes pod's default
-    /// grace — the conformance suite fails on a transport with no row there.
+    /// stopped to unwind, and [`stop_bound`](Self::stop_bound) states it.
     /// Spawned after every transport has been configured.
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()>;
+    /// The longest [`serve`](Self::serve) takes to return once `cancel` fires,
+    /// at the configuration [`configure`](Self::configure) left — the window
+    /// for what it still runs, then the settle for what it stopped.
+    ///
+    /// Required, with no default, because the way down is a sum the grace
+    /// period has to hold: [`App::run`](crate::App::run) files the longest
+    /// bound of the transports it mounted beside the shutdown hooks' budget on
+    /// its boot line, and `nest-rs-testing` sums every framework transport's
+    /// default bound under a Kubernetes pod's default grace. A transport whose
+    /// stop is unbounded says [`Duration::MAX`](std::time::Duration::MAX).
+    fn stop_bound(&self) -> std::time::Duration;
 }
 
 /// A transport contributed by a module — the only way an app gains one.

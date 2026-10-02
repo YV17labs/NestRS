@@ -166,7 +166,11 @@ impl App {
     /// [`SHUTDOWN_HOOKS_TIMEOUT`](crate::SHUTDOWN_HOOKS_TIMEOUT); a hook that
     /// panics is reported and the rest still run.
     /// The transports are awaited without a bound of this method's own: each
-    /// owes its own, per [`Transport::serve`].
+    /// owes its own, per [`Transport::serve`], and states it as
+    /// [`Transport::stop_bound`]. Once they are configured, `way down bounded`
+    /// on `nest_rs::app` files the longest of them (`stop_bound_ms`) beside the
+    /// hooks' budget (`hooks_budget_ms`) — the way down this deployment spends,
+    /// before any telemetry flush the binary adds.
     ///
     /// A signal received once the way down has begun exits the process at once,
     /// with the code a shell gives a process that signal killed (130 for
@@ -201,6 +205,20 @@ impl App {
         for (_, t) in transports.iter_mut() {
             t.configure(&container).await?;
         }
+        // The way down, as this app will spend it: the transports stop
+        // together, so the longest bound is theirs, then the hooks run. A
+        // deployment that raised a window reads its grace period off this line.
+        let stop_bound = transports
+            .iter()
+            .map(|(_, t)| t.stop_bound())
+            .max()
+            .unwrap_or_default();
+        tracing::info!(
+            target: crate::target::APP,
+            stop_bound_ms = u64::try_from(stop_bound.as_millis()).unwrap_or(u64::MAX),
+            hooks_budget_ms = u64::try_from(crate::SHUTDOWN_HOOKS_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+            "way down bounded",
+        );
 
         // Init phases run after wiring, before serving — nothing is listening
         // yet, so a failure here aborts cleanly.
@@ -820,6 +838,9 @@ mod tests {
         async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()> {
             cancel.cancelled().await;
             Ok(())
+        }
+        fn stop_bound(&self) -> std::time::Duration {
+            std::time::Duration::ZERO
         }
     }
 

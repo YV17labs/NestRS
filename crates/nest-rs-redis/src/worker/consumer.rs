@@ -103,6 +103,7 @@ const HAND_BACK_RESERVE: Duration = Duration::from_secs(5);
 pub struct RedisWorker {
     methods: Vec<&'static ProcessMethod>,
     container: Option<Container>,
+    config: RedisWorkerConfig,
 }
 
 impl RedisWorker {
@@ -111,6 +112,7 @@ impl RedisWorker {
         Self {
             methods: Vec::new(),
             container: None,
+            config: RedisWorkerConfig::default(),
         }
     }
 }
@@ -137,6 +139,12 @@ impl Transport for RedisWorker {
             refuse_legacy_jobs(&connection, &self.methods).await?;
         }
 
+        // A factory output `RedisWorkerModule::for_root` resolved; a worker
+        // attached without the module runs on the defaults.
+        self.config = container
+            .get::<RedisWorkerConfig>()
+            .map(|config| (*config).clone())
+            .unwrap_or_default();
         self.container = Some(container.clone());
         Ok(())
     }
@@ -155,12 +163,7 @@ impl Transport for RedisWorker {
         let connection = container
             .get::<RedisConnection>()
             .with_context(|| format!("RedisWorker found #[processor]s but {CONNECTION_REMEDY}"))?;
-        // A factory output `RedisWorkerModule::for_root` resolved; a worker
-        // attached without the module runs on the defaults.
-        let config = container
-            .get::<RedisWorkerConfig>()
-            .map(|config| (*config).clone())
-            .unwrap_or_default();
+        let config = self.config;
 
         let interrupt = CancellationToken::new();
         let underway = Arc::new(AtomicUsize::new(0));
@@ -233,6 +236,12 @@ impl Transport for RedisWorker {
                 drain(run, &interrupt, window, reserve, &underway).await
             }
         }
+    }
+
+    /// The drain window holds its own reserve for handing interrupted jobs
+    /// back, so it is the whole of the worker's stop.
+    fn stop_bound(&self) -> Duration {
+        self.config.shutdown_timeout
     }
 }
 

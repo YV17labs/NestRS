@@ -1,4 +1,5 @@
-//! Covers `src/app.rs` — how the serve loop reports a transport that stops.
+//! Covers `src/app.rs` — how the serve loop reports the transports it runs:
+//! the way down they bound, and a transport that stops.
 //!
 //! Both events are `error` on `nest_rs::app`, and both are the last thing the
 //! process says before it exits: `run` returns the error to `main`, which prints
@@ -10,9 +11,14 @@
 //! error rather than the panic payload, so without this line the operator sees
 //! a bare "task panicked" with nothing naming the surface.
 
+use std::time::Duration;
+
 use anyhow::anyhow;
 use nest_rs_core::target;
-use nest_rs_core::{App, Container, ContainerBuilder, Module, Transport, TransportContribution};
+use nest_rs_core::{
+    App, Container, ContainerBuilder, Module, SHUTDOWN_HOOKS_TIMEOUT, Transport,
+    TransportContribution,
+};
 use nest_rs_testing::LogCapture;
 use tokio_util::sync::CancellationToken;
 
@@ -28,6 +34,10 @@ impl Transport for Failing {
 
     async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
         Err(anyhow!("the listener stopped accepting"))
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
     }
 }
 
@@ -54,6 +64,10 @@ impl Transport for Panicking {
 
     async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
         panic!("the accept loop unwound");
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
     }
 }
 
@@ -108,5 +122,62 @@ async fn a_transport_task_that_panics_is_reported_as_a_panic_not_as_an_error() {
         event.field("error").is_some(),
         "the event carries the join error, got {:?}",
         event.fields,
+    );
+}
+
+/// A transport that stops at once and states the bound it was configured with —
+/// the shape the boot line reads, without the wait.
+struct Stated(Duration);
+
+#[async_trait::async_trait]
+impl Transport for Stated {
+    async fn configure(&mut self, _container: &Container) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        self.0
+    }
+}
+
+struct TwoBoundsModule;
+
+impl Module for TwoBoundsModule {
+    fn register(builder: ContainerBuilder) -> ContainerBuilder {
+        builder
+            .provide_meta(TransportContribution {
+                name: "Short",
+                build: |_| Ok(Box::new(Stated(Duration::from_millis(2_500)))),
+            })
+            .provide_meta(TransportContribution {
+                name: "Long",
+                build: |_| Ok(Box::new(Stated(Duration::from_secs(41)))),
+            })
+    }
+}
+
+/// The transports stop together, so the way down an app spends is the longest
+/// bound among the ones it mounted, then the hooks' budget — filed once at
+/// boot, where a deployment that raised a window reads what its grace period
+/// has to hold.
+#[tokio::test]
+async fn the_boot_line_files_the_longest_stop_bound_beside_the_hooks_budget() {
+    let logs = LogCapture::install();
+    App::new::<TwoBoundsModule>()
+        .expect("the module boots")
+        .run()
+        .await
+        .expect("both transports stop cleanly");
+
+    let event = logs.expect_one(target::APP, "way down bounded");
+    assert_eq!(event.level, "info");
+    assert_eq!(event.field("stop_bound_ms").as_deref(), Some("41000"));
+    assert_eq!(
+        event.field("hooks_budget_ms"),
+        Some(SHUTDOWN_HOOKS_TIMEOUT.as_millis().to_string()),
     );
 }

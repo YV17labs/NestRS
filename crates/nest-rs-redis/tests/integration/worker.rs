@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use nest_rs_core::{Container, ReachableProviders, Transport};
 use nest_rs_queue::{HandlerContext, JobError, ProcessMethod, ProcessOptions, Throttle};
-use nest_rs_redis::RedisWorker;
+use nest_rs_redis::{RedisWorker, RedisWorkerConfig};
 use tokio_util::sync::CancellationToken;
 
 type Handled = Pin<Box<dyn Future<Output = Result<(), JobError>> + Send>>;
@@ -170,6 +170,31 @@ async fn configure_succeeds_with_no_processors_and_serve_idles_until_cancel() {
         .await
         .expect("serve task joins")
         .expect("serve returns Ok");
+}
+
+/// The worker's stop is the drain window the deployment configured, read at
+/// `configure` — the bound the boot line adds to the way down — and the default
+/// window before it.
+#[tokio::test]
+async fn the_stop_bound_is_the_configured_drain_window() {
+    let mut worker = RedisWorker::new();
+    assert_eq!(
+        worker.stop_bound(),
+        RedisWorkerConfig::default().shutdown_timeout
+    );
+    let window = Duration::from_secs(7);
+    let container = Container::builder()
+        .provide(ReachableProviders(Default::default()))
+        .provide(RedisWorkerConfig {
+            shutdown_timeout: window,
+            ..RedisWorkerConfig::default()
+        })
+        .build();
+    worker
+        .configure(&container)
+        .await
+        .expect("an empty worker configures");
+    assert_eq!(worker.stop_bound(), window);
 }
 
 // ---- Panic backstop ----------------------------------------------------------

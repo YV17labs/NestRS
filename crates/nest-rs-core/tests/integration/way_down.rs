@@ -185,6 +185,10 @@ impl Transport for ServesUntilStopped {
         cancel.cancelled().await;
         Ok(())
     }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::ZERO
+    }
 }
 
 /// Ignores the token: a transport whose stop never comes.
@@ -204,6 +208,10 @@ impl Transport for NeverStops {
         println!("{READY}");
         std::future::pending::<()>().await;
         Ok(())
+    }
+
+    fn stop_bound(&self) -> Duration {
+        Duration::MAX
     }
 }
 

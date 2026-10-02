@@ -183,6 +183,7 @@ rolls out (step 7).
    | `JwtConfig`, from the authn crate | `nest_rs::authn::AuthnConfig`, with the same fields and variables |
    | `AuthError::Unavailable(detail)` | `AuthError::Unavailable { detail, retry_after }`, rendered `503` |
    | `env.seconds("KEY", base)` in a `from_env` | a `DurationBounds` declared beside the config, read with `BOUNDS.read(env, base)?` or `read_optional`; see [Configuration](/configuration/#configservice-api) |
+   | an `impl Transport` written by hand | the same with `fn stop_bound(&self) -> Duration` — the longest `serve` takes to return once it is told to stop |
    | rmcp's `Parameters`, named from rmcp in an operation's signature | `nest_rs::mcp::Parameters`, which is the framework's own type now, with rmcp's shape |
    | `SseSettings::respond(stream)`, answering poem's `SSE` | the same, answering a `Response` marked to end at the shutdown signal |
    | an `impl McpHost` written by hand | the same with `negotiate_initialize`, which rmcp 3.4 added |

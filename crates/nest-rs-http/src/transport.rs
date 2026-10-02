@@ -932,6 +932,12 @@ impl Transport for HttpTransport {
         served?;
         Ok(())
     }
+
+    /// The window, then the settle `serve` spends stopping what its
+    /// self-mounts ran off their connections.
+    fn stop_bound(&self) -> Duration {
+        self.shutdown_timeout + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
+    }
 }
 
 #[cfg(test)]
@@ -992,6 +998,16 @@ mod tests {
             d.shutdown_timeout,
             crate::HttpConfig::default().shutdown_timeout,
             "a transport built by hand gets the window a configured one defaults to",
+        );
+    }
+
+    #[test]
+    fn the_stop_bound_is_the_configured_window_then_the_settle() {
+        let window = Duration::from_secs(3);
+        let t = HttpTransport::new().shutdown_timeout(window);
+        assert_eq!(
+            t.stop_bound(),
+            window + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
         );
     }
 

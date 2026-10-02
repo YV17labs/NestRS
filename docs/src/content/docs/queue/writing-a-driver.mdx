@@ -173,7 +173,9 @@ dropped call would have had to undo.
 ## Step 2 — The worker (Transport)
 
 The worker is a `nest_rs::core::Transport`: the framework calls `configure`
-with the assembled container at boot, then `serve` with a cancellation token.
+with the assembled container at boot, then `serve` with a cancellation token,
+and reads `stop_bound` — required, no default — as the longest `serve` takes to
+return once that token fires, which the boot line adds to the way down.
 **Two calls into the port do everything that is not your storage's.**
 `consume::discover` drains the `#[process]` inventory — module-gated,
 duplicate-checked, announced — and refuses at boot every declaration your
@@ -245,6 +247,10 @@ impl Transport for YourWorker {
             });
         }
         Ok(())
+    }
+
+    fn stop_bound(&self) -> std::time::Duration {
+        /* the longest `serve` takes to return once `cancel` fires */
     }
 }
 ```

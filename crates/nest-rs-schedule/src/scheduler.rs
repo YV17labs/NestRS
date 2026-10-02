@@ -534,6 +534,12 @@ impl Transport for Scheduler {
         stop(tasks, spawned, Scheduler::SHUTDOWN_TIMEOUT).await;
         Ok(())
     }
+
+    /// A running tick gets [`Scheduler::SHUTDOWN_TIMEOUT`], then the settle
+    /// once it is stopped.
+    fn stop_bound(&self) -> Duration {
+        Self::SHUTDOWN_TIMEOUT + nest_rs_core::SHUTDOWN_SETTLE_TIMEOUT
+    }
 }
 
 /// Account for a loop that ended, and name it unless it ended the ordinary way.

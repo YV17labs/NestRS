@@ -48,6 +48,7 @@
     "input",
     "interceptor",
     "listeners",
+    "main",
     "mcp",
     "messages",
     "module",
@@ -367,7 +368,7 @@
       "type_key"
     ]
   },
-  "test_count": 2800,
+  "test_count": 2847,
   "version_req": "7.0",
   "otel_binding": "_otel",
   "envelope_keys": [

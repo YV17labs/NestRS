@@ -8,6 +8,10 @@ use nest_rs_config::Environment;
 use nest_rs_testing::load_project_env;
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test asserts what the harness wrote into the process environment"
+)]
 fn first_cascade_load_defaults_nestrs_env_to_test() {
     // Simulate the db-first entry: the loader is this process's very first
     // gesture. An explicit NESTRS_ENV from the outer shell must win

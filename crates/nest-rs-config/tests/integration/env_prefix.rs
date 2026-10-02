@@ -43,7 +43,10 @@ impl Config for WidgetConfig {
 struct WidgetModule;
 
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_declared_prefix_replaces_nestrs_everywhere() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "ACME");
@@ -66,7 +69,10 @@ fn the_declared_prefix_replaces_nestrs_everywhere() {
 // Not `#[tokio::test]`: `figment::Jail` is sync and owns the scope, so the
 // runtime is built inside it rather than around it.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_booted_app_resolves_its_config_from_the_declared_prefix() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "ACME");
@@ -99,7 +105,10 @@ fn a_booted_app_resolves_its_config_from_the_declared_prefix() {
 /// `<PREFIX>_ENV` selects the `.env` cascade, and it is read before any
 /// `ConfigService` exists — the one variable a rename is most likely to miss.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_active_environment_is_read_from_the_declared_prefix() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "ACME");
@@ -122,7 +131,10 @@ fn the_active_environment_is_read_from_the_declared_prefix() {
 /// guard hanging off boot would not cover them.
 #[test]
 #[should_panic(expected = "is `ACME` in the `.env` cascade")]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_prefix_written_into_the_cascade_aborts_without_environment_init() {
     figment::Jail::expect_with(|jail| {
         // The process prefix is pinned rather than inherited: the refusal is
@@ -150,7 +162,10 @@ fn a_prefix_written_into_the_cascade_aborts_without_environment_init() {
 /// harness uncovered.
 #[test]
 #[should_panic(expected = "is `ACME` in the `.env` cascade")]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_prefix_written_into_the_cascade_aborts_through_load_cascade() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "FIXTURE");
@@ -165,7 +180,10 @@ fn a_prefix_written_into_the_cascade_aborts_through_load_cascade() {
 /// and silent.
 #[test]
 #[should_panic(expected = "must start with an uppercase ASCII letter")]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_malformed_prefix_aborts_on_first_read() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "acme");

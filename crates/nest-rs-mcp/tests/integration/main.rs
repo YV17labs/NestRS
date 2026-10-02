@@ -4,6 +4,13 @@
 //! on a real loopback port, and raw HTTP/1.1 the way a client that holds a
 //! stream open speaks it. `TestClient` has no connection for a shutdown window
 //! to close, so these tests cannot use it.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod diagnostics;
 mod endpoint;

@@ -56,6 +56,10 @@ impl EventBus {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let run: ListenerFn = Arc::new(move |boxed: BoxedEvent| {
+            #[expect(
+                clippy::expect_used,
+                reason = "listeners are keyed by the TypeId of E, so only an E reaches this one"
+            )]
             let event = *boxed
                 .downcast::<E>()
                 .expect("event downcasts to the type its listener subscribed for");

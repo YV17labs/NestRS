@@ -177,6 +177,10 @@ mod tests {
     /// nothing-leaks test next door would still pass: it only asserts what is
     /// *absent* from the reply.
     #[test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test reads the line the call logs, not its result"
+    )]
     fn and_the_operator_gets_the_error_the_model_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
         let leaky: Result<(), String> =

@@ -450,8 +450,10 @@ fn parse_trusted_proxies(env: &ConfigService, base: Vec<IpAddr>) -> Result<Vec<I
 }
 
 #[cfg(test)]
-// figment::Jail's fixed closure signature triggers this lint unactionably.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 mod tests {
     use super::*;
 

@@ -481,6 +481,10 @@ impl Transport for Scheduler {
     }
 
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()> {
+        #[expect(
+            clippy::expect_used,
+            reason = "the transport lifecycle runs configure before serve"
+        )]
         let container = self
             .container
             .expect("Scheduler::configure must run before serve");
@@ -1615,6 +1619,10 @@ mod tests {
     /// shutdown hooks. `stop` still returns — a thread that blocks never holds the
     /// way down past its two bounds.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test's receiver may already be gone"
+    )]
     async fn a_stopped_tick_that_blocks_its_thread_is_named_at_error_and_left() {
         let logs = nest_rs_testing::LogCapture::install();
         let mut tasks = JoinSet::new();

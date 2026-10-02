@@ -377,6 +377,10 @@ impl UploadGuard {
     }
 
     /// The upload itself, for the duration of one call.
+    #[expect(
+        clippy::expect_used,
+        reason = "the upload is taken only by abort or finished, which both consume the guard"
+    )]
     fn get(&mut self) -> &mut Box<dyn MultipartUpload> {
         self.upload
             .as_mut()

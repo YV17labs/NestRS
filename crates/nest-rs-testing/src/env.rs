@@ -17,6 +17,10 @@ use nest_rs_config::{Environment, load_cascade};
 /// consumed `Once` — the bug that made `.env.local` load (hermeticity broken)
 /// and `.env.test.local` never load when a harness touched the database
 /// first.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the harness defaults the variable the cascade selects on, set-if-absent"
+)]
 pub fn load_project_env() {
     static LOADED: Once = Once::new();
     LOADED.call_once(|| {
@@ -49,7 +53,7 @@ pub fn load_project_env() {
             // resolution-only cascade is not enough. `load_cascade` below does
             // one further `unsafe set_var` per key under its own note — so
             // this is not the crate's only unsafe, only its first.
-            #[allow(unsafe_code)]
+            #[expect(unsafe_code, reason = "set_var before any thread reads the environment, per the SAFETY note above")]
             unsafe {
                 std::env::set_var(&env_var, "test")
             };

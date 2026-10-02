@@ -144,6 +144,10 @@ impl<'de> Deserializer<'de> for FromHeaders<'_> {
                 }
                 continue;
             };
+            #[expect(
+                clippy::map_err_ignore,
+                reason = "ToStrError says no more than the refusal, which names the header"
+            )]
             let value = raw
                 .to_str()
                 .map_err(|_| HeaderError::malformed(field, "valid UTF-8"))?;
@@ -465,7 +469,10 @@ mod tests {
             }
         }
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "the fields exist for serde to read; the test asserts the error, never a value"
+        )]
         struct Keyed {
             #[serde(rename = "X-Api-Key")]
             key: ApiKey,

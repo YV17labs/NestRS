@@ -293,6 +293,10 @@ fn teardown_budget() -> Duration {
 /// said once, at `warn`.
 #[doc(hidden)]
 pub fn __main<T, F: Future<Output = T>>(main: F) -> T {
+    #[expect(
+        clippy::panic,
+        reason = "without a runtime `main` cannot start, and nothing above it can be told"
+    )]
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

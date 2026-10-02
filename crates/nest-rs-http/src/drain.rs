@@ -61,6 +61,10 @@ impl Drain {
     /// therefore dropped at or after the instant recorded here, and one that
     /// closed on its own before it is not counted as closed by it.
     pub(crate) fn begin(&self, window: Duration) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a second shutdown signal keeps the first window"
+        )]
         let _ = self.bound.set(Instant::now() + window);
         self.going_away.cancel();
     }

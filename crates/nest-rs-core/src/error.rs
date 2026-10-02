@@ -616,13 +616,15 @@ mod decode_error_tests {
     use super::*;
 
     #[derive(Debug, Deserialize)]
-    #[allow(dead_code)]
     enum Card {
         Visa,
     }
 
     #[derive(Debug, Deserialize)]
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "the fields exist for serde to read; the test asserts the error, never a value"
+    )]
     struct Charge {
         amount: u64,
         card: Card,
@@ -708,13 +710,19 @@ mod decode_error_tests {
     fn an_unknown_key_is_the_payload_s_and_is_dropped() {
         #[derive(Debug, Deserialize)]
         #[serde(deny_unknown_fields)]
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "the fields exist for serde to read; the test asserts the error, never a value"
+        )]
         struct Strict {
             amount: u64,
         }
         #[derive(Debug, Deserialize)]
         #[serde(deny_unknown_fields)]
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "the fields exist for serde to read; the test asserts the error, never a value"
+        )]
         struct Pair {
             amount: u64,
             currency: String,

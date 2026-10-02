@@ -14,7 +14,6 @@
 //! ignored — a misspelled key, or a near miss of a namespace the binary links:
 //! other separators, another case, one misspelled segment ([`unclaimed`]).
 
-#![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]
 
 /// This crate's span target — The `.env` cascade, resolved namespaces, and refused values.

@@ -95,7 +95,10 @@ impl DispatchKeys {
     /// `kind` and an `identity` claim one key. Refused here when neither carries a
     /// condition; otherwise left to rustc, at `attr` — through a marker, or through
     /// the claim's own item, as `collision` says.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is one chain a decorator collected; a struct would only rename them"
+    )]
     pub fn declare(
         &mut self,
         collision: Collision,
@@ -112,7 +115,10 @@ impl DispatchKeys {
     /// [`declare`](Self::declare), for a key served only in `scope` — empty
     /// meaning every member, as an unnarrowed route serves every version its
     /// controller mounts.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is one chain a decorator collected; a struct would only rename them"
+    )]
     pub fn declare_in(
         &mut self,
         collision: Collision,

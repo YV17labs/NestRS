@@ -27,6 +27,10 @@ fn storage() -> Storage {
 /// `CreateBucket`. A 2xx means created, a 409 means it already exists — both are
 /// fine. Anything else we surface for visibility but don't fail on (the object
 /// round-trip below is the real assertion).
+#[expect(
+    clippy::print_stderr,
+    reason = "the bucket's state is shown for a reader of a failing run; the round-trip is the assertion"
+)]
 async fn ensure_bucket(s: &Storage, http: &reqwest::Client) {
     let url = s
         .presign_put("", Duration::from_secs(60))

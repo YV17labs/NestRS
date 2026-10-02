@@ -11,8 +11,12 @@
 //! [`LogCapture`] covers the other half of a transport's contract: the events
 //! it emits. A denial that fails closed but logs nothing passes every response
 //! assertion — and is exactly what nobody can debug at 3am.
-#![cfg_attr(not(test), deny(unsafe_code))]
 #![warn(missing_docs)]
+#![expect(
+    clippy::panic,
+    clippy::expect_used,
+    reason = "a test harness fails the test it runs in by panicking, as assert! does"
+)]
 
 // An edge module keeps its namespace and gets no root re-export: `graphql::`
 // and `ws::` say which protocol a name belongs to, and that is the scheme every

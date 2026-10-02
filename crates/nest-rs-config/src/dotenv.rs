@@ -214,6 +214,10 @@ pub(crate) fn published_from_cascade(name: &str) -> bool {
 
 /// Set-if-absent, the single process-env write. Carries the `unsafe` block both
 /// callers' contracts are written against.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the cascade is what fills the process environment; it reads it to write set-if-absent"
+)]
 fn publish(values: &HashMap<String, String>) {
     let mut published = PUBLISHED.write().ok();
     for (key, value) in values {
@@ -230,7 +234,10 @@ fn publish(values: &HashMap<String, String>) {
         // its setup) both run single-threaded, before spawning any task that
         // reads the environment, so the write happens-before every later
         // `getenv`. Any caller of `load_cascade` carries that obligation.
-        #[allow(unsafe_code)]
+        #[expect(
+            unsafe_code,
+            reason = "set_var before any thread reads the environment, per the SAFETY note above"
+        )]
         unsafe {
             std::env::set_var(key, value)
         };
@@ -275,6 +282,10 @@ fn parse_value(value: &str) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the cascade's contract is the process environment it writes, so the tests read it"
+)]
 mod tests {
     use super::*;
 
@@ -282,7 +293,10 @@ mod tests {
     // process env via set_var, and set-if-absent keys off it.
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn real_env_wins_over_every_file() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "CASCADE_A=from_base")?;
@@ -296,7 +310,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn most_specific_file_wins() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "CASCADE_B=base")?;
@@ -310,7 +327,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn local_overrides_env_specific_which_overrides_base() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "CASCADE_C=base\nCASCADE_D=base\nCASCADE_E=base")?;
@@ -325,7 +345,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn test_environment_skips_env_local_for_hermeticity() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "CASCADE_F=base")?;
@@ -400,7 +423,10 @@ mod tests {
     // a temp file.
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn merge_file_handles_comments_blank_lines_and_export_prefix() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
@@ -416,7 +442,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn merge_file_skips_empty_key_and_lines_with_only_whitespace_key() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
@@ -432,7 +461,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn merge_file_is_a_no_op_when_the_path_doesnt_exist() {
         figment::Jail::expect_with(|jail| {
             // No `.env` files created — load_cascade walks all candidates and
@@ -446,7 +478,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn merge_file_expands_double_quoted_pem_style_value() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
@@ -467,7 +502,10 @@ mod tests {
     // Pin the bookkeeping that restores it: a key the cascade supplied is
     // marked, a key the real env already held is not.
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn publish_marks_only_the_keys_the_cascade_actually_supplied() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "PUB_FROM_FILE=file\nPUB_FROM_REAL=file")?;
@@ -492,7 +530,10 @@ mod tests {
     // wins, and no `set_var` leaks the values into `std::env` (the whole point
     // of the fix — the config layer reads this map, it does not merge it).
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn cascade_map_resolves_precedence_without_touching_process_env() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "MAP_A=base\nMAP_B=base")?;

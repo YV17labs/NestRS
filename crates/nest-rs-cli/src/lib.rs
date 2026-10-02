@@ -18,6 +18,12 @@
 //! [`resolve_variable`], [`cascade_refusals`] and [`scaffolded_var`]; the rest
 //! is the binary's own and hidden from the docs.
 
+#![allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a command-line tool's output is its interface; tracing is for the apps it scaffolds"
+)]
+
 pub mod lint;
 
 pub use commands::doctor::{Resolution, cascade_refusals, resolve_variable};

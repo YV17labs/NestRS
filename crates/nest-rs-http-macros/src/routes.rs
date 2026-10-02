@@ -1128,6 +1128,10 @@ fn take_version_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Vec<LitStr>> {
 /// The HTTP twin of `#[resolver]`'s per-operation posture: one attribute,
 /// greppable, and — unlike a parameter the developer spells — impossible to
 /// disarm by renaming an import, because the macro writes the extractor type.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn take_authorize(attrs: &mut Vec<Attribute>) -> syn::Result<Option<AuthorizeSpec>> {
     let Some(pos) = attrs.iter().position(|a| a.path().is_ident("authorize")) else {
         return Ok(None);
@@ -1455,6 +1459,10 @@ fn guarded_handler(handler: &RouteHandler, route_label: &str, self_ty: &Type) ->
 /// A verb's one argument, the route's path, read as a string literal — or the
 /// shared value sentence at the verb as written (`#[get]`, `#[sse]`), never
 /// syn's `expected string literal`, which names neither.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn route_path(attr: &Attribute, verb: &syn::Ident) -> syn::Result<LitStr> {
     let verb = verb.to_string();
     let refused = |at: &dyn ToTokens| {
@@ -1585,6 +1593,10 @@ fn api_equals(input: syn::parse::ParseStream<'_>, key: &syn::Ident) -> syn::Resu
 /// expression it is a chain of comparisons, so the whole attribute failed with
 /// "comparison operators cannot be chained" pointing at the decorator, on a type
 /// the developer never wrote.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn parse_api_attr(attr: &Attribute) -> syn::Result<ApiMeta> {
     attr.parse_args_with(|input: syn::parse::ParseStream<'_>| {
         let mut out = ApiMeta::default();

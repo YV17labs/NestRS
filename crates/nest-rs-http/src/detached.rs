@@ -122,6 +122,10 @@ impl DetachedWork {
         }
         if let Some(bound) = bound {
             let finished = join_all(works.iter().map(|(_, work)| work.running.wait()));
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "what the bound cut is read below, from the work still running"
+            )]
             let _ = tokio::time::timeout_at(bound, finished).await;
         }
         let stopped: Vec<usize> = works
@@ -133,6 +137,10 @@ impl DetachedWork {
             })
             .collect();
         let unwound = join_all(works.iter().map(|(_, work)| work.running.wait()));
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "what the settle wait cut is read below, from the work still running"
+        )]
         let _ = tokio::time::timeout(SHUTDOWN_SETTLE_TIMEOUT, unwound).await;
         for ((path, work), stopped) in works.iter().zip(stopped) {
             let still_running = work.running.len();

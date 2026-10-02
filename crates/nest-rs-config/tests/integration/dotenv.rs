@@ -16,7 +16,10 @@ use nest_rs_config::Environment;
 /// not the tolerance. Abort.
 #[test]
 #[should_panic(expected = "is `development` in the `.env` cascade")]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_environment_written_into_the_cascade_aborts() {
     figment::Jail::expect_with(|jail| {
         jail.create_file(
@@ -33,7 +36,10 @@ fn the_environment_written_into_the_cascade_aborts() {
 /// the contradiction invisible. Abort, naming both values.
 #[test]
 #[should_panic(expected = "carries `production`")]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_environment_contradicted_by_the_cascade_aborts() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(Environment::var_name(), "production");
@@ -51,7 +57,10 @@ fn the_environment_contradicted_by_the_cascade_aborts() {
 /// can grant safely: with the variable genuinely set, set-if-absent publishing
 /// has nothing to launder.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_environment_restated_by_the_cascade_is_tolerated() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(Environment::var_name(), "development");
@@ -77,7 +86,14 @@ mod refusals_are_reported {
     use nest_rs_testing::LogCapture;
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test asserts what the cascade wrote into the process environment"
+    )]
     fn a_malformed_line_is_counted_and_named_with_its_file() {
         figment::Jail::expect_with(|jail| {
             let logs = LogCapture::install();
@@ -103,7 +119,10 @@ mod refusals_are_reported {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn a_file_that_is_present_but_unreadable_is_reported_rather_than_skipped_silently() {
         figment::Jail::expect_with(|jail| {
             let logs = LogCapture::install();
@@ -139,7 +158,10 @@ mod refusals_are_reported {
 /// that is visible to the caller — the field simply falls back to its default —
 /// which is what makes the event the only place the mistake exists.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -158,7 +180,13 @@ fn a_non_utf8_environment_variable_is_reported_before_it_suppresses_the_cascade(
         // directly — the lossy form above is valid UTF-8 and would not reach
         // the branch under test.
         // SAFETY: single-threaded test, and `Jail` restores the environment.
-        unsafe { std::env::set_var("FIXTURE_BROKEN_VALUE", OsStr::from_bytes(&[0xff, 0xfe])) };
+        #[expect(
+            unsafe_code,
+            reason = "the branch under test needs non-UTF-8 bytes, which only set_var writes; Jail restores the environment"
+        )]
+        unsafe {
+            std::env::set_var("FIXTURE_BROKEN_VALUE", OsStr::from_bytes(&[0xff, 0xfe]))
+        };
 
         assert_eq!(
             nest_rs_config::env_var("FIXTURE_BROKEN_VALUE"),

@@ -147,6 +147,10 @@ fn render(errors: &ValidationErrors) -> String {
     out.trim_end().to_owned()
 }
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "fmt::Write for String never fails"
+)]
 fn render_into(out: &mut String, errors: &ValidationErrors, prefix: &str) {
     for (field, kind) in errors.errors() {
         let path = if prefix.is_empty() {

@@ -14,6 +14,13 @@
 //! no capability crate owns that. `nest-rs-macro-hygiene` has its own mandate
 //! and is not it.
 
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a join fails the suite by panicking, as the test it runs in would"
+)]
+
 pub mod baseline;
 pub mod imports;
 pub mod sources;

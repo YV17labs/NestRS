@@ -664,7 +664,7 @@ fn keyed_types(registry: &Registry) -> HashMap<String, Vec<String>> {
 ///   4. run the SDL snapshot test (`tests/integration/sdl_snapshot.rs`) and
 ///      review the schema diff.
 const _: () = {
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "a compile-time canary, never called")]
     fn metatype_object_field_canary(ty: MetaType) {
         if let MetaType::Object {
             name: _,

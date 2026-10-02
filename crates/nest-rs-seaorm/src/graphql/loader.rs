@@ -74,6 +74,10 @@ mod tests {
     // DB by observing the ambient state *inside* a batch spawned from outside
     // any scope.
     #[tokio::test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test's receiver may already be gone"
+    )]
     async fn spawner_reinstalls_the_snapshot_executor_and_ability_in_the_batch() {
         let scope = LoaderScope {
             db: Arc::new(DatabaseConnection::default()),

@@ -250,6 +250,10 @@ impl DecoratorPair {
             // worded its own, and one sentence is what keeps the nine from
             // drifting apart.
             Item::Impl(item) if item.trait_.is_some() => {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "a compile-time invariant of the parse above; a panic in a proc macro is a compile error"
+                )]
                 let (path, _) = item.trait_.as_ref().expect("just matched as some");
                 let subject = item.self_ty.to_token_stream();
                 Err(syn::Error::new_spanned(

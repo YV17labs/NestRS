@@ -439,6 +439,10 @@ mod tests {
     }
 
     impl Drop for SecretFile {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the test tears down its temp file best-effort"
+        )]
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }

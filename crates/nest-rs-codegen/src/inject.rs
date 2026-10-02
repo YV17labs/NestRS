@@ -57,6 +57,10 @@ pub fn build_injectable_body(item: &mut ItemStruct) -> syn::Result<InjectableBod
             let mut keyed_dep_keys = Vec::new();
 
             for field in fields.named.iter_mut() {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "a compile-time invariant of the parse above; a panic in a proc macro is a compile error"
+                )]
                 let field_name = field.ident.clone().expect("named field has an ident");
                 let Some(inject_attr) = crate::take_single_attr(&mut field.attrs, "inject")? else {
                     // CORE-I5: an `Arc<…>` (or `Option<Arc<…>>`) field with no

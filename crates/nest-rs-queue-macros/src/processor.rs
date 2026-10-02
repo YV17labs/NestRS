@@ -678,6 +678,10 @@ fn parse_throttle(content: ParseStream, at: Span) -> syn::Result<ThrottleArgs> {
 }
 
 /// A whole-number literal, or `refusal` spanned at what was written instead.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn whole_number(expr: &Expr, refusal: &str) -> syn::Result<u32> {
     match ungrouped_expr(expr) {
         Expr::Lit(ExprLit {

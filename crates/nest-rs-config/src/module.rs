@@ -163,8 +163,10 @@ impl DynamicModule for ConfigRootSetup {
 }
 
 #[cfg(test)]
-// figment::Jail's fixed closure signature triggers this lint unactionably.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 mod tests {
     /// The `for_root` / `for_feature` seam, exercised through a real boot.
     ///
@@ -335,6 +337,10 @@ mod tests {
     /// side-effect-free. `Environment::init` is the one publisher, and it is
     /// tested where it lives.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test asserts the process environment was left alone"
+    )]
     fn for_root_collect_does_not_publish_the_cascade_into_the_process_env() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
@@ -363,6 +369,10 @@ mod tests {
     /// The read path, through the seam a config actually uses: resolving a value
     /// sees the dotenv file without publishing it.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test asserts the process environment was left alone"
+    )]
     fn a_config_read_sees_the_cascade_without_publishing_it() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(

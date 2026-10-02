@@ -82,6 +82,10 @@ pub fn read_material(path: &Path) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(all(test, unix))]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the tests tear down temp files and a watchdog thread best-effort"
+)]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};

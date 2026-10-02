@@ -105,6 +105,10 @@ mod tests {
     /// blank `500` with no trace at all — and the test above would still pass,
     /// because it only asserts what is *absent* from the wire.
     #[test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test reads the line the call logs, not its result"
+    )]
     fn and_the_operator_gets_the_error_the_client_does_not() {
         let logs = nest_rs_testing::LogCapture::install();
         let _: Result<(), Error> = Err(Leaky).opaque();

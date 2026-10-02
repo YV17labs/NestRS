@@ -49,7 +49,10 @@ impl Sensors {
 
     /// The same shapes spelled out: `-> ()` written is the infallible return, and
     /// `self: &Self` is `&self`.
-    #[allow(clippy::needless_arbitrary_self_type, clippy::unused_unit)]
+    #[expect(
+        clippy::needless_arbitrary_self_type,
+        reason = "the spelled-out receiver is the shape under test"
+    )]
     #[liveness]
     async fn heartbeat(self: &Self) -> () {}
 

@@ -123,6 +123,10 @@ impl LogFormat {
 
 /// [`parse_bool`](crate::parse_bool) against a named variable, `false` when it is unset or
 /// unrecognized.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the logging bootstrap runs before any config exists"
+)]
 fn bool_from_env(name: &str) -> bool {
     std::env::var(name).ok().and_then(|v| crate::parse_bool(&v)) == Some(true)
 }
@@ -788,6 +792,10 @@ impl Visit for EventSource {
 /// Build the filter from `<PREFIX>_LOG` / `RUST_LOG` / `"info"`. A set-but-
 /// unparseable directive is a config error that aborts boot, never a silent
 /// downgrade to the default.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the logging bootstrap runs before any config exists"
+)]
 fn filter_from_env() -> Result<EnvFilter> {
     let log_var = EnvPrefix::var(var::FILTER);
     let (var, spec) = match std::env::var(&log_var) {
@@ -813,7 +821,15 @@ pub(crate) fn init_fallback() -> Result<()> {
     let builder = tracing_subscriber::fmt().with_env_filter(filter);
     // A lost race against a concurrent install is the "already set" case —
     // the fallback steps aside; it never unseats another subscriber.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the logging bootstrap runs before any config exists"
+    )]
     let format = std::env::var(EnvPrefix::var(var::FORMAT)).ok();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "an Err is a subscriber already installed, which the fallback steps aside for"
+    )]
     let _ = match LogFormat::resolve(format.as_deref()) {
         // Both branches are the framework's own `FormatEvent`; [`TextFormat`]
         // carries the argument for why, and for why `with_file` /

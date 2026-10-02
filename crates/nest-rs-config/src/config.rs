@@ -146,8 +146,10 @@ pub trait Config: Namespaced + Validate + Clone + Default + Send + Sync + Sized 
 }
 
 #[cfg(test)]
-// figment::Jail's fixed closure signature triggers this lint unactionably.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 mod tests {
     use super::*;
     use crate::ConfigError;

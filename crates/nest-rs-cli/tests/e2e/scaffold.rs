@@ -66,6 +66,10 @@ fn patch_to_working_tree(workspace: &Path) {
 /// artifacts are reused rather than rebuilt from scratch per run — the
 /// difference between ~45 seconds and several minutes. It is a sibling of
 /// `target/`, so it is already ignored by git.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "CARGO is the cargo that runs the suite, set by cargo itself"
+)]
 fn cargo_check(workspace: &Path) -> Result<(), String> {
     let output = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .args([

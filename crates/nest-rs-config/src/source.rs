@@ -37,6 +37,10 @@ pub fn env_var(name: &str) -> Option<String> {
 /// Core of [`env_var`], with the dotenv map supplied — factored out so the
 /// real-env-vs-dotenv precedence is unit-testable without the process-wide
 /// `OnceLock`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the config loader is the one reader of the process environment"
+)]
 fn env_var_from(name: &str, dotenv: &HashMap<String, String>) -> Option<String> {
     match env::var(name) {
         Ok(v) if !v.is_empty() => Some(v),
@@ -63,6 +67,10 @@ fn env_var_from(name: &str, dotenv: &HashMap<String, String>) -> Option<String> 
 /// contract: `NESTRS_ENV` selects which cascade files load, so it cannot itself
 /// be sourced from the cascade (and reading it via [`env_var`] would recurse
 /// into `dotenv_values`, which reads `NESTRS_ENV`).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the config loader is the one reader of the process environment"
+)]
 pub(crate) fn real_env_var(name: &str) -> Option<String> {
     real_env_var_from(name, env::var(name))
 }
@@ -167,6 +175,10 @@ impl ConfigSource for EnvSource {
 
     /// Present in the real process environment, empty included, and not merged
     /// there from the cascade by `Environment::init`.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the config loader is the one reader of the process environment"
+    )]
     fn in_deployment(&self, var: &str) -> bool {
         std::env::var_os(var).is_some() && !crate::dotenv::published_from_cascade(var)
     }
@@ -214,8 +226,10 @@ impl ConfigSource for MapSource {
 }
 
 #[cfg(test)]
-// figment::Jail's fixed closure signature triggers this lint unactionably.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 mod tests {
     use super::*;
 
@@ -322,6 +336,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test asserts the process environment was left alone"
+    )]
     fn env_var_read_never_writes_the_dotenv_value_into_the_process_env() {
         figment::Jail::expect_with(|_| {
             let map = HashMap::from([("FIXTURE_PREC__ONLY_IN_MAP".to_owned(), "v".to_owned())]);

@@ -50,6 +50,10 @@ impl DynamicModule for GraphqlSetup {
     }
 
     fn register(self, builder: ContainerBuilder) -> ContainerBuilder {
+        #[expect(
+            clippy::expect_used,
+            reason = "provide_feature queued the config's factory in this module's collect"
+        )]
         let config = builder
             .snapshot()
             .get::<GraphqlConfig>()

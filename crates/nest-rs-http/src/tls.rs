@@ -273,6 +273,10 @@ fn rustls_config(cert: Vec<u8>, key: Vec<u8>) -> RustlsConfig {
 /// the line it choked on, byte for byte, and a PEM whose line breaks were
 /// collapsed is one line holding all of it — the private key included — on its
 /// way to the boot error or the renewal watcher's `warn`.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the PEM parser's error quotes the line it choked on, which may hold the private key"
+)]
 fn validate_pair(cert: &[u8], key: &[u8]) -> Result<()> {
     let chain = CertificateDer::pem_slice_iter(cert)
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -460,6 +464,10 @@ fn read_pem(path: &Path) -> Result<Vec<u8>> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the tests tear down temp files best-effort, and a watchdog's receiver may be gone"
+)]
 mod tests {
     use super::*;
 
@@ -843,7 +851,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn from_env_file_variants_are_watched_by_default() {
         figment::Jail::expect_with(|jail| {
             jail.create_file("cert.pem", "file-cert-bytes")?;
@@ -1109,7 +1120,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn from_env_reads_file_variants_when_inline_unset() {
         figment::Jail::expect_with(|jail| {
             // `Jail` runs in a fresh temp CWD; write the PEM files there and point

@@ -213,6 +213,10 @@ pub(crate) fn crypto_provider() -> Arc<CryptoProvider> {
     }
     // Losing a race to another installer leaves theirs in place, and theirs is
     // the one handed back.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "losing the race leaves the other installer's provider, which is read back below"
+    )]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     CryptoProvider::get_default().map_or_else(
         || Arc::new(rustls::crypto::aws_lc_rs::default_provider()),

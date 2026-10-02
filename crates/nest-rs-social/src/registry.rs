@@ -173,6 +173,10 @@ impl SocialRegistry {
 
         // OnceLock: a second install (re-boot in one process) is a no-op, not
         // a panic — matches `HealthService::install_container`.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a second install in one process keeps the first registry, as documented above"
+        )]
         let _ = self.resolved.set(map);
         Ok(())
     }

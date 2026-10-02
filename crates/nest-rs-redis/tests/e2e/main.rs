@@ -26,6 +26,13 @@
 //! `redis://redis:6379`); unset, it falls back to that default. This file holds
 //! the suite's shared fixtures and nothing else — every test lives in the
 //! module named for the concern it covers.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod connection;
 mod correlation;
@@ -51,6 +58,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the suite targets the Redis the deployment names, as the app would"
+)]
 fn redis_url() -> String {
     std::env::var(nest_rs_config::var_name("redis", "URL"))
         .unwrap_or_else(|_| "redis://redis:6379".to_string())

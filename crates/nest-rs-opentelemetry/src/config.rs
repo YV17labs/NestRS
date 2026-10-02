@@ -97,6 +97,10 @@ pub struct OpenTelemetryConfig {
 /// answers the same way rather than failing a boot the fallback logger would
 /// let through. This crate's own namespaced variables are refused through
 /// `from_env`'s `Result` instead.
+#[expect(
+    clippy::print_stderr,
+    reason = "the logging family is read before any subscriber exists"
+)]
 fn warn_unparseable(name: &str, raw: &str) {
     eprintln!(
         "nestrs: WARNING — unparseable {name}={raw:?}; keeping the default. \
@@ -264,9 +268,10 @@ impl OpenTelemetryConfig {
 }
 
 #[cfg(test)]
-// The `figment::Jail::expect_with` closures below return `figment::Result`, so
-// the large `Err` variant is figment's type, not ours — nothing to box here.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 mod tests {
     use super::*;
     use nest_rs_config::var_name;

@@ -55,6 +55,10 @@ impl DynamicModule for ThrottlerSetup {
         // running 60/minute in silence. Queued in the same `collect` as the
         // config it reads, hence after it.
         let builder = builder.provide_factory::<Throttle, _, _>(|container| async move {
+            #[expect(
+                clippy::expect_used,
+                reason = "provide_feature queued the config's factory in this module's collect"
+            )]
             let config = container
                 .get::<ThrottlerConfig>()
                 .expect("ThrottlerConfig is resolved by ConfigModule::provide_feature");
@@ -67,6 +71,10 @@ impl DynamicModule for ThrottlerSetup {
         // was deferred, and failed naming a binding that was about to exist.
         builder.provide_factory_after::<ThrottlerGuard, Arc<dyn ThrottlerStore>, _, _>(
             |container| async move {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "the policy is queued by this same collect, before the guard"
+                )]
                 let default = container
                     .get::<Throttle>()
                     .expect("the policy is queued by this same collect, before the guard");

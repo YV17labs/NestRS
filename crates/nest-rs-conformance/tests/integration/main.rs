@@ -5,6 +5,13 @@
 //! test of the framework's behaviour — it is a test of whether that behaviour
 //! is covered anywhere, which is the one question no individual suite can ask
 //! about itself.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod acls;
 mod blinds;

@@ -19,6 +19,10 @@ fn doctor(dir: &Path, vars: &[(&str, &str)]) -> Output {
 }
 
 /// `nestrs doctor`, run from `cwd` and examining `project` (`-p`) when given.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the child inherits the suite's toolchain variables explicitly"
+)]
 fn doctor_from(cwd: &Path, project: Option<&Path>, vars: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_nestrs"));
     command.arg("doctor").current_dir(cwd).env_clear();

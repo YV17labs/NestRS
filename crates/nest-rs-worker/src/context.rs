@@ -145,6 +145,10 @@ pub async fn run_in_job_context<T: Send>(
                 // future, → dead letter; the scheduler's per-job task) catches
                 // it, so the consumer loop keeps running instead of the whole
                 // worker going down.
+                #[expect(
+                    clippy::panic,
+                    reason = "a JobContext that returns without running the job breaks its contract; the job's own catch_unwind turns this into a dead letter"
+                )]
                 None => {
                     // `nest_rs::worker`, not `nest_rs::queue`: this seam is
                     // shared by the queue worker AND the scheduler — a broken

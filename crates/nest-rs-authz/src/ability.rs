@@ -530,7 +530,10 @@ mod tests {
     #[test]
     fn a_mask_failure_names_what_kind_of_value_it_found_never_the_value() {
         #[derive(Debug, serde::Deserialize)]
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "the fields exist for serde to read; the test asserts the error, never a value"
+        )]
         struct Wire {
             age: u64,
         }

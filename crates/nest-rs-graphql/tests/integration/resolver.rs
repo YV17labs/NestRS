@@ -278,7 +278,10 @@ impl NamingResolver {
 
     #[query]
     #[public]
-    #[allow(non_snake_case)]
+    #[expect(
+        non_snake_case,
+        reason = "the field's spelled case is the shape under test"
+    )]
     async fn userID(&self, upper: i32) -> String {
         format!("userID:{upper}")
     }
@@ -364,7 +367,10 @@ impl Oracle {
     async fn v2_api(&self) -> i32 {
         1
     }
-    #[allow(non_snake_case)]
+    #[expect(
+        non_snake_case,
+        reason = "the field's spelled case is the shape under test"
+    )]
     async fn userID(&self) -> i32 {
         1
     }
@@ -398,7 +404,10 @@ impl OracleResolver {
     async fn v2_api(&self) -> i32 {
         1
     }
-    #[allow(non_snake_case)]
+    #[expect(
+        non_snake_case,
+        reason = "the field's spelled case is the shape under test"
+    )]
     #[query]
     #[public]
     async fn userID(&self) -> i32 {

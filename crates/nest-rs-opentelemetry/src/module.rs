@@ -18,6 +18,10 @@ use crate::meter::OpenTelemetryMeter;
 pub struct OpenTelemetryModule;
 
 impl Module for OpenTelemetryModule {
+    #[expect(
+        clippy::panic,
+        reason = "Module::register has no Result, and booting on would drop every signal in silence"
+    )]
     fn register(mut builder: ContainerBuilder) -> ContainerBuilder {
         if !builder.mark_registered(std::any::TypeId::of::<Self>()) {
             return builder;

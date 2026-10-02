@@ -261,6 +261,10 @@ pub enum Resolution {
 /// The process environment, as [`resolve_variable`] and [`cascade_text`] read
 /// it — the one place doctor consults the shell it runs in, so every helper
 /// below takes its environment as an argument and a test hands it one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "doctor reports what the process environment holds, without linking the loader"
+)]
 fn process_env(var: &str) -> Option<OsString> {
     std::env::var_os(var)
 }

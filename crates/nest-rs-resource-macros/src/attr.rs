@@ -210,6 +210,10 @@ pub(crate) fn parse(args: TokenStream2, item: &mut ItemStruct) -> syn::Result<Re
 
     let mut fields = Vec::new();
     for field in &mut named.named {
+        #[expect(
+            clippy::expect_used,
+            reason = "a compile-time invariant of the parse above; a panic in a proc macro is a compile error"
+        )]
         let ident = field.ident.clone().expect("named field has an ident");
         let ty = field.ty.clone();
         let mut read = false;

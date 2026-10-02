@@ -421,6 +421,10 @@ async fn within<F: Future>(
 /// `call`, or once `budget` elapses the timeout redis itself reports, so
 /// `redis::RedisError::is_timeout` reads both the same way.
 async fn bounded<F: Future>(budget: Duration, call: F) -> Result<F::Output, redis::RedisError> {
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "Elapsed carries nothing the timeout's own message does not say"
+    )]
     tokio::time::timeout(budget, call).await.map_err(|_| {
         redis::RedisError::from(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
@@ -694,6 +698,10 @@ mod tests {
             while let Ok((socket, _)) = listener.accept().await {
                 let acceptor = acceptor.clone();
                 tokio::spawn(async move {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "the test listener serves whoever connects; a failed handshake is the client's assertion"
+                    )]
                     let _ = acceptor.accept(socket).await;
                 });
             }

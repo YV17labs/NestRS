@@ -19,7 +19,6 @@ const CAP: usize = 64;
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct Payload {
-    #[allow(dead_code)]
     value: String,
 }
 

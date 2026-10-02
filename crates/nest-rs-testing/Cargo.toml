@@ -128,10 +128,5 @@ nest-rs-opentelemetry = { path = "../nest-rs-opentelemetry" }
 nest-rs-redis = { path = "../nest-rs-redis" }
 nest-rs-schedule = { path = "../nest-rs-schedule" }
 
-# The workspace lints minus `unsafe_code = "forbid"`, which this crate states in
-# its `lib.rs` instead (its tests write the environment).
-[lints.rust]
-unreachable_pub = "warn"
-
-[lints.clippy]
-needless_update = "allow"
+[lints]
+workspace = true

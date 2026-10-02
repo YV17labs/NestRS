@@ -66,6 +66,10 @@ fn parse_priority(args: TokenStream) -> syn::Result<TokenStream2> {
 /// One sentence for whatever else was written: the old one, "priority must be
 /// an integer", named neither the decorator nor the key, and a literal too large
 /// for an `i32` got syn's own "number too large to fit in target type".
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn priority_value(written: &syn::Expr) -> syn::Result<i32> {
     use syn::{Expr, ExprLit, ExprUnary, Lit, UnOp};
 

@@ -10,6 +10,10 @@ pub struct Parse<T>(PhantomData<fn() -> T>);
 impl<T: FromStr> Pipe for Parse<T> {
     type In = String;
     type Out = T;
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the refusal is the client's 400: it names the expected shape, never a parser's internals"
+    )]
     fn transform(input: String) -> Result<T, PipeError> {
         input
             .parse::<T>()

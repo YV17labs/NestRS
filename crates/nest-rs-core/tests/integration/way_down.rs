@@ -176,6 +176,10 @@ impl Transport for ServesUntilStopped {
         Ok(())
     }
 
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
         println!("{READY}");
         cancel.cancelled().await;
@@ -192,6 +196,10 @@ impl Transport for NeverStops {
         Ok(())
     }
 
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
     async fn serve(self: Box<Self>, _cancel: CancellationToken) -> anyhow::Result<()> {
         println!("{READY}");
         std::future::pending::<()>().await;
@@ -228,6 +236,10 @@ struct HangsOnDestroy;
 
 #[hooks]
 impl HangsOnDestroy {
+    #[expect(
+        clippy::print_stdout,
+        reason = "the child's stdout is the protocol its parent test reads"
+    )]
     #[on_module_destroy]
     async fn release(&self) {
         println!("{HOOK_STARTED}");
@@ -258,6 +270,10 @@ async fn run_child(role: String) -> anyhow::Result<()> {
 /// The child half of the signal tests: runs the app its parent named, and is
 /// otherwise a test with nothing to do.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the parent test hands the child its role through the environment"
+)]
 fn way_down_child_process() {
     if let Ok(role) = std::env::var(CHILD_ROLE) {
         let _ = run_child(role);

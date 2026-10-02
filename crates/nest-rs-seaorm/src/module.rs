@@ -51,6 +51,10 @@ impl DynamicModule for SeaOrmSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<DatabaseConnection, _, _>(|container| async move {
+            #[expect(
+                clippy::expect_used,
+                reason = "provide_feature queued the config's factory in this module's collect"
+            )]
             let config = container
                 .get::<SeaOrmConfig>()
                 .expect("SeaOrmConfig is resolved by ConfigModule::provide_feature");

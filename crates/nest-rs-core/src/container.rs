@@ -337,6 +337,7 @@ pub(crate) fn build_transient(
     factory: &TransientFactory,
     scope: &RequestScope,
 ) -> AnyArc {
+    #[expect(clippy::panic, reason = "a provider cycle is a wiring defect, and building a transient has no Result to report it through")]
     let _guard = CycleGuard::push(&TRANSIENT_BUILDING, id, type_name).unwrap_or_else(|Cycle { chain }| {
         panic!(
             "transient provider cycle: {chain} — break the cycle by injecting `Arc<dyn Trait>` or picking a different scope"

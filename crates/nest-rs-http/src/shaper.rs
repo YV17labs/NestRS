@@ -108,9 +108,15 @@ impl<T> UnshapedProbe for &ShaperProbe<T> {
 #[macro_export]
 macro_rules! shaper_of {
     ($ty:ty) => {{
-        #[allow(unused_imports)]
+        #[allow(
+            unused_imports,
+            reason = "the trait is in scope for autoref specialisation, which no lint sees"
+        )]
         use $crate::UnshapedProbe as _;
-        #[allow(clippy::needless_borrow)]
+        #[allow(
+            clippy::needless_borrow,
+            reason = "the extra borrow is what orders the two probe arms"
+        )]
         let __nestrs_probe = &$crate::ShaperProbe::<$ty>::new();
         __nestrs_probe.select()
     }};
@@ -215,6 +221,10 @@ impl MaskProbe {
     /// extractors themselves; outside a probe scope (an armed route, another
     /// transport) this is a no-op.
     pub fn mark() {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "outside a probe scope the mark is a documented no-op"
+        )]
         let _ = MASK_PROBE.try_with(|marked| marked.set(true));
     }
 }

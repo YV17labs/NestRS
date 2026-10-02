@@ -116,6 +116,10 @@ pub fn parse_version_list(value: &Expr, decorator: &str) -> syn::Result<Vec<LitS
 /// has none of, and a value that was not a string never reached the grammar at
 /// all: the list was read as string literals first, and syn's
 /// `expected string literal` named neither.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 pub fn parse_version_args(attr: &syn::Attribute) -> syn::Result<Vec<LitStr>> {
     const ROUTE: &str = "version";
     let refused = |at: &dyn ToTokens| {

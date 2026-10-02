@@ -256,6 +256,10 @@ impl GraphqlSocket {
     }
 
     fn send(&mut self, message: Value) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a send after the engine ended surfaces as GraphqlEvent::Ended on the next read"
+        )]
         let _ = self.to_server.send(message.to_string().into_bytes());
     }
 }

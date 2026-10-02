@@ -104,7 +104,10 @@ where
 /// [`RouteShaper`] — or return it untouched when both chains are empty.
 /// Emitted by `#[routes]` for every handler, mirroring the sibling
 /// `wrap_route_*` helpers.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one chain a decorator collected; a struct would only rename them"
+)]
 pub fn wrap_route_shaper<E>(
     container: &Container,
     endpoint: E,

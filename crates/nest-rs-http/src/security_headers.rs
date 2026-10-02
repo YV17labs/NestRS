@@ -275,6 +275,10 @@ impl HttpSecurityHeaders {
 /// A value the environment set was already judged by [`override_header`],
 /// which knows the spelling that supplied it; what reaches this refusal is a
 /// value pinned in code, which is quoted because no file held it.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "InvalidHeaderValue carries nothing; the refusal names the variable"
+)]
 fn validate_header_value(env: &ConfigService, key: &str, value: &Option<String>) -> Result<()> {
     if let Some(v) = non_empty(value) {
         HeaderValue::from_str(&v).map_err(|_| {

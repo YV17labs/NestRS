@@ -22,7 +22,10 @@
 // The probe implements the *whole* trait, deprecated members included: rmcp
 // still routes legacy protocol versions to `subscribe`/`unsubscribe` and
 // `logging/setLevel`, so a wrapper that drops them drops real traffic.
-#![expect(deprecated)]
+#![expect(
+    deprecated,
+    reason = "rmcp still routes the deprecated methods for legacy protocol versions"
+)]
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};

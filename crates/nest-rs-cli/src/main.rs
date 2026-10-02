@@ -1,3 +1,9 @@
+#![allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "a command-line tool's output is its interface; tracing is for the apps it scaffolds"
+)]
+
 use clap::Parser;
 
 use nest_rs_cli::cli;

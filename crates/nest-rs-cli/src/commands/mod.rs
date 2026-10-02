@@ -21,6 +21,10 @@ mod update;
 /// One spelling for every command that takes that flag — the fallback is the
 /// same decision each time, and four copies of it are four places a future
 /// `NESTRS_PROJECT` or a friendlier failure would have to be written.
+#[expect(
+    clippy::expect_used,
+    reason = "a command with no working directory has nothing to resolve a project against"
+)]
 pub(crate) fn resolve_start(path: Option<PathBuf>) -> PathBuf {
     path.unwrap_or_else(|| std::env::current_dir().expect("cwd"))
 }

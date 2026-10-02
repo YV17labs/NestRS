@@ -6,6 +6,13 @@
 //! --no-default-features` checks. `diagnostics` is the other half: a trybuild
 //! snapshot per refusal, since the sentence a developer reads is as much the
 //! decorator's contract as the code it writes.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod diagnostics;
 mod exposures;

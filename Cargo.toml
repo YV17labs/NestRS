@@ -287,22 +287,39 @@ nest-rs-worker = { version = "=7.0.0", path = "crates/nest-rs-worker" }
 nest-rs-ws = { version = "=7.0.0", path = "crates/nest-rs-ws" }
 nest-rs-ws-macros = { version = "=7.0.0", path = "crates/nest-rs-ws-macros" }
 
-# Every crate opts in with `[lints] workspace = true`, so `unsafe` is a compile
-# error in libs AND test targets. Three crates keep a source-level attribute
-# instead, each for one documented `unsafe` a workspace lint can't express:
-#   • nest-rs-config   — `load_cascade`, the sole production env-write bootstrapper.
-#   • nest-rs-testing  — `load_project_env` (`NESTRS_ENV=test` set-if-absent).
-#   • nest-rs-schedule — `#![forbid]` on the lib only: its integration test needs
-#                        `libc::raise(SIGINT)` to drive the real shutdown path,
-#                        which a `[lints]` forbid would cover and can't override.
+# Every crate opts in with `[lints] workspace = true`, test targets included.
+# A lint here is `deny`, never `forbid`: the few sites that must break one say so
+# with `#[expect(lint, reason = "…")]` — an expect, so a stale exception fails the
+# build, and a reason, so `allow_attributes_without_reason` has nothing to catch.
+# `unsafe_code` was `forbid`, which no site can override, and three crates opted
+# out of the whole table to reach their one `std::env::set_var`.
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 unreachable_pub = "warn"
 
+# The restriction lints that hold a written rule: no `unwrap`/`expect`/`panic!`
+# outside a reasoned bootstrap or invariant, no dropped error (`let _ =` on a
+# `Result`, `map_err(|_| …)`) without a reason at the site, no `println!`
+# outside the CLI, and no `foo.rs` beside `foo/`. Tests are exempt through
+# `clippy.toml`'s `allow-*-in-tests` and one attribute per suite root.
+#
 # Config literals always close with `..Default::default()` so an import site
 # stays forward-compatible as the options struct gains fields.
 [workspace.lints.clippy]
 needless_update = "allow"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+expect_used = "deny"
+let_underscore_must_use = "deny"
+map_err_ignore = "deny"
+panic = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+self_named_module_files = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+wildcard_imports = "deny"
 
 # Release: smallest, fastest binary. Compile time is not a concern here.
 [profile.release]

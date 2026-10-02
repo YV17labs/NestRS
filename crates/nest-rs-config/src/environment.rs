@@ -61,6 +61,10 @@ impl Environment {
     }
 
     /// Read the active environment from `<PREFIX>_ENV` (real process env only).
+    #[expect(
+        clippy::print_stderr,
+        reason = "this runs at the top of main, before any subscriber exists; stderr is the one sink guaranteed visible"
+    )]
     pub fn from_env() -> Self {
         // `<PREFIX>_ENV` selects the cascade, so it must come from the real
         // process env, never a `.env` file — read it without the dotenv
@@ -196,7 +200,14 @@ mod tests {
     // is the whole reason `init` belongs at the top of `main`. Every other test
     // in this crate would still pass if that call vanished.
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test asserts what init wrote into the process environment"
+    )]
     fn init_publishes_the_cascade_into_the_process_env() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(".env", "CASCADE_INIT_A=base\nCASCADE_INIT_B=base")?;

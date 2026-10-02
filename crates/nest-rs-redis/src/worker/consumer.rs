@@ -490,6 +490,10 @@ fn register(
 /// platform names it, then a UUID v7 — unique per replica and per queue, so no
 /// two replicas share an in-flight set, and the sweep that follows a crash
 /// finds the crashed replica's jobs and only those.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "HOSTNAME is the platform's variable, not a framework setting the env prefix renames"
+)]
 fn worker_id() -> String {
     let id = uuid::Uuid::now_v7();
     match std::env::var("HOSTNAME") {

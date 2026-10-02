@@ -1,0 +1,21 @@
+# One file for the repository: clippy reads the nearest `clippy.toml` upwards
+# from each crate, so this one covers `crates/`, `demo/` and `bench/`. A closer
+# file would *replace* it, not merge with it — never add one below.
+#
+# A path here that stops resolving is only a warning, so every entry has a
+# canary `#[expect]` in `nest-rs-macro-hygiene`: a dead entry fails the build.
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+allow-dbg-in-tests = true
+
+disallowed-macros = [
+    { path = "tokio::main", reason = "use #[nest_rs::main]: its runtime teardown is bounded by the shutdown budget" },
+]
+
+disallowed-methods = [
+    { path = "std::env::var", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
+    { path = "std::env::var_os", reason = "read configuration through a #[config] or ConfigService, so the env prefix and the .env cascade apply" },
+]

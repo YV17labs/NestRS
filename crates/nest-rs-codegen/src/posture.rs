@@ -174,6 +174,10 @@ impl PostureRules {
 
     /// Parse and remove `#[authorize(Action, Entity)]` / `#[authorize(Action,
     /// Entity, unmasked)]`.
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+    )]
     fn take_authorize(&self, method: &mut ImplItemFn) -> syn::Result<Option<Posture>> {
         let Some(pos) = method
             .attrs

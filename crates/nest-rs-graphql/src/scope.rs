@@ -49,6 +49,10 @@ impl<T: Send + Sync + 'static> Scoped<T> {
     /// Resolve `T` from the operation's request scope, forwarded into the
     /// async-graphql context by the framework `GraphqlContextSeed`.
     pub fn from_context(ctx: &Context<'_>) -> async_graphql::Result<Self> {
+        #[expect(
+            clippy::map_err_ignore,
+            reason = "the one error is an absent scope, which the refusal names with its remedy"
+        )]
         let scope = ctx.data::<Arc<RequestScope>>().map_err(|_| {
             Error::new(
                 "request scope not installed — serve the schema over the HTTP transport \

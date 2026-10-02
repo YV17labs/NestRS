@@ -293,6 +293,7 @@ where
 
         for row in rows {
             let value = ModelTrait::get(&row, fk);
+            #[expect(clippy::map_err_ignore, reason = "K::Error is any type, with no Display bound to carry")]
             let key = K::try_from(value).map_err(|_| {
                 DbErr::Custom(format!(
                     "relation page: foreign key `{}` on `{}` did not read back as the batch key type",
@@ -691,6 +692,6 @@ mod tests {
         let cloned = p.clone();
         assert_eq!(cloned.first, Some(10));
         assert_eq!(cloned.after.as_deref(), Some("not-a-uuid"));
-        let _ = format!("{p:?}");
+        assert!(format!("{p:?}").contains("not-a-uuid"));
     }
 }

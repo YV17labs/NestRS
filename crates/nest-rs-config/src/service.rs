@@ -390,6 +390,10 @@ impl ConfigService {
             Some(Spelled::File(path)) => {
                 let var = self.var_name(&file_key(key));
                 let bytes = self.read_file(key, &path)?;
+                #[expect(
+                    clippy::map_err_ignore,
+                    reason = "FromUtf8Error carries the file's bytes, and the file may hold a secret"
+                )]
                 let text = String::from_utf8(bytes).map_err(|_| {
                     ConfigError::parse(var.clone(), "names a file that is not UTF-8 text")
                 })?;
@@ -604,8 +608,10 @@ fn file_key(key: &str) -> String {
 }
 
 #[cfg(test)]
-// figment::Jail's fixed closure signature triggers this lint unactionably.
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 mod tests {
     use std::time::Duration;
 
@@ -1005,6 +1011,10 @@ mod tests {
     /// naming one would hang the boot forever.
     #[cfg(unix)]
     #[test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test tears down its FIFO best-effort, and the watchdog's receiver may be gone"
+    )]
     fn material_refuses_a_path_that_is_not_a_regular_file_without_blocking() {
         let fifo = std::env::temp_dir().join(format!("nest-rs-config-fifo-{}", std::process::id()));
         let _ = std::fs::remove_file(&fifo);
@@ -1028,6 +1038,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test tears down its temp dir best-effort"
+    )]
     fn material_reads_at_most_a_mebibyte() {
         let dir = std::env::temp_dir().join(format!("nest-rs-config-size-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a scratch directory");
@@ -1256,6 +1270,10 @@ mod tests {
     // marker, and after a `with_source` read, that marker must still be
     // unset in `std::env`.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test asserts the process environment was left alone"
+    )]
     fn with_source_does_not_load_dotenv_into_process_env() {
         struct Empty;
         impl ConfigSource for Empty {

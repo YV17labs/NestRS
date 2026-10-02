@@ -13,7 +13,10 @@ struct Transaction {
     provider: String,
     csrf: String,
     pkce: String,
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "the field exists for serde to require; the test reads the others"
+    )]
     exp: u64,
 }
 
@@ -555,7 +558,10 @@ async fn a_read_whose_body_does_not_decode_quotes_none_of_it() {
         socket.write_all(answer.as_bytes()).await.expect("answer");
     });
     #[derive(Debug, serde::Deserialize)]
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "the fields exist for serde to read; the test asserts the error, never a value"
+    )]
     struct Profile {
         id: u64,
     }

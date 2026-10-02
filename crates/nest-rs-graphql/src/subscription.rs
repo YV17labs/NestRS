@@ -448,6 +448,10 @@ async fn serve_socket<E: Executor>(
         None => {
             // The peer ended it. Its Close is echoed by the protocol layer, and
             // the flush is what puts that echo on the wire.
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "the peer already closed; the flush only echoes its Close"
+            )]
             let _ = SinkExt::close(&mut sink).await;
             Ended::ByPeer
         }
@@ -550,6 +554,7 @@ where
         if this.stopping.is_none()
             && let Poll::Ready(ending) = this.end.as_mut().poll(cx)
         {
+            #[expect(clippy::let_underscore_must_use, reason = "the first ending stands")]
             let _ = this.ending.set(ending);
             let mut started = lock(&this.started);
             let subscriptions: Vec<String> = started
@@ -623,6 +628,10 @@ async fn close_socket(
         );
         return;
     }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "our Close is on the wire; a peer gone before the flush has nothing left to be told"
+    )]
     let _ = SinkExt::close(sink).await;
 }
 
@@ -948,6 +957,10 @@ mod tests {
     /// for every operation still running, then ends — which is how the engine
     /// comes to write a `complete` for each.
     #[tokio::test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test waits for the end; how it ended is asserted elsewhere"
+    )]
     async fn at_its_end_the_peers_half_stops_every_running_operation_and_ends() {
         use async_graphql::futures_util::stream;
 
@@ -997,6 +1010,10 @@ mod tests {
     /// socket's end, so it is not stopped: the peer's half waits for its
     /// `complete` — pruned by the outbound half — before it ends.
     #[tokio::test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test waits for the end; how it ended is asserted elsewhere"
+    )]
     async fn at_its_end_an_operation_still_answering_is_left_to_finish() {
         use async_graphql::futures_util::stream;
 

@@ -43,7 +43,10 @@
 
 // `subscribe` / `unsubscribe` are SEP-2575-deprecated in rmcp but still routed
 // for legacy protocol versions.
-#![expect(deprecated)]
+#![expect(
+    deprecated,
+    reason = "rmcp still routes the deprecated methods for legacy protocol versions"
+)]
 
 use std::borrow::Cow;
 use std::sync::Arc;

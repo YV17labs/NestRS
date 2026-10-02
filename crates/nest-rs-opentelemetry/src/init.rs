@@ -46,6 +46,10 @@ impl OpenTelemetry {
     /// (noise control) — an invalid directive falls through rather than
     /// failing a test run over log config.
     #[doc(hidden)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the logging bootstrap runs before any config exists"
+    )]
     pub fn init_for_tests() {
         if initialized() {
             return;
@@ -57,6 +61,10 @@ impl OpenTelemetry {
         .and_then(|spec| EnvFilter::try_new(&spec).ok())
         .or_else(|| EnvFilter::try_from_default_env().ok())
         .unwrap_or_else(|| EnvFilter::new("warn"));
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "an Err is a subscriber already installed, which a test run keeps"
+        )]
         let _ = Registry::default()
             .with(filter)
             .with(console_layer(LogFormat::Text, false))
@@ -205,6 +213,10 @@ where
 pub const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Drop for OpenTelemetry {
+    #[expect(
+        clippy::print_stderr,
+        reason = "the final flush runs after the subscriber it would log through is gone"
+    )]
     fn drop(&mut self) {
         #[cfg(feature = "otlp")]
         {
@@ -244,6 +256,7 @@ impl Drop for OpenTelemetry {
                 let spawned = std::thread::Builder::new()
                     .name(format!("otel-flush-{provider}"))
                     .spawn(move || {
+                        #[expect(clippy::let_underscore_must_use, reason = "the receiver stops listening at the deadline, which it reports itself")]
                         let _ = done.send((provider, shutdown()));
                     });
                 match spawned {

@@ -46,10 +46,5 @@ tokio = { workspace = true, features = ["test-util"] }
 # (tests/integration/scheduler.rs).
 nest-rs-codegen = { path = "../nest-rs-codegen" }
 
-# The workspace lints minus `unsafe_code = "forbid"`, which this crate states in
-# its `lib.rs` instead (its tests write the environment).
-[lints.rust]
-unreachable_pub = "warn"
-
-[lints.clippy]
-needless_update = "allow"
+[lints]
+workspace = true

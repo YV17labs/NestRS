@@ -72,6 +72,14 @@ impl EnvPrefix {
 /// `NESTRS` would be just as wrong as the typo, and silently so. Empty is
 /// unset, though: `FOO=` is how a shell says "no value", and rejecting it would
 /// abort on the one spelling that means the default.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the prefix names every variable config reads, so it is read before config"
+)]
+#[expect(
+    clippy::panic,
+    reason = "a malformed prefix would misname every variable; there is nothing to degrade to"
+)]
 fn resolve() -> &'static str {
     let declared = std::env::var(EnvPrefix::VAR).unwrap_or_default();
     if declared.is_empty() {
@@ -123,6 +131,10 @@ mod tests {
     // The property each was written for survives the rewrite, and one of them
     // gained a property it never had: that the resolver honours a declaration.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test compares the resolver with the process's own declaration"
+    )]
     fn the_prefix_resolves_to_the_declaration_or_the_default() {
         assert_eq!(EnvPrefix::DEFAULT, "NESTRS", "the documented default");
         match std::env::var(EnvPrefix::VAR).ok().filter(|v| !v.is_empty()) {

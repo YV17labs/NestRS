@@ -593,6 +593,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test proves an emit into a dropped outbox does not panic; its result is not the point"
+    )]
     fn ws_client_for_test_yields_a_dropable_outbox() {
         // `for_test` is the documented shim for unit-testing gateway handlers
         // without a real server — sends are accepted (registry exists) but

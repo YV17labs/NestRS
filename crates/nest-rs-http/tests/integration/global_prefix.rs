@@ -175,7 +175,10 @@ async fn boot_with_env_config() -> TestClient<poem::endpoint::BoxEndpoint<'stati
 }
 
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn global_prefix_is_picked_up_from_nestrs_http_global_prefix_env() {
     // The whole dual-path rule the fix is about — set the env var, let the
     // module-side wiring read it through `HttpConfig::from_env`, observe the

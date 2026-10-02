@@ -189,7 +189,10 @@ mod tests {
     /// table, unauthenticated, and no status code or test will ever say so.
     /// This is the line that does.
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn docs_enabled_outside_a_dev_profile_are_reported() {
         figment::Jail::expect_with(|jail| {
             let logs = nest_rs_testing::LogCapture::install();
@@ -217,7 +220,10 @@ mod tests {
     /// And a dev profile says nothing: docs on in development is the default,
     /// so warning there would train the reader to ignore the line that matters.
     #[test]
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "figment::Jail fixes the closure's error type"
+    )]
     fn docs_enabled_in_development_are_silent() {
         figment::Jail::expect_with(|jail| {
             let logs = nest_rs_testing::LogCapture::install();

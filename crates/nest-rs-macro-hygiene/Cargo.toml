@@ -44,5 +44,10 @@ nest-rs = { path = "../nest-rs", default-features = false, features = [
     "ws",
 ] }
 
+# The `tokio::main` canary in `src/canary.rs` — the unit-test build only, so the
+# witness above still compiles against the umbrella alone.
+[dev-dependencies]
+tokio.workspace = true
+
 [lints]
 workspace = true

@@ -111,6 +111,10 @@ pub(super) fn ensure_toolchain(no_bootstrap: bool) -> CliResult<()> {
     install(&crates)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the CLI's own switch, read before any project exists"
+)]
 fn env_disables_bootstrap() -> bool {
     std::env::var(NO_BOOTSTRAP_ENV)
         .map(|value| is_truthy(&value))

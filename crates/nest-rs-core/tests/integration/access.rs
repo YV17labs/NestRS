@@ -11,7 +11,10 @@ use nest_rs_core::{App, ContainerBuilder, Discoverable, injectable, module};
 // resolve. Not `#[injectable]`, so nothing ever registers it.
 struct AbsentDep;
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 #[injectable(scope = request)]
 struct ScopedNeedy {
     #[inject]
@@ -43,7 +46,10 @@ async fn a_scoped_providers_missing_dependency_is_a_boot_error_not_a_panic() {
 #[injectable]
 struct ServiceA;
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 #[injectable]
 struct ServiceB {
     #[inject]
@@ -85,7 +91,10 @@ async fn unimported_cross_module_dependency_is_rejected_at_boot() {
 #[injectable]
 struct FixedServiceA;
 
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 #[injectable]
 struct FixedServiceB {
     #[inject]
@@ -170,14 +179,20 @@ async fn lazily_built_provider_injection_is_checked_via_injected_not_dependencie
 struct PerRequest;
 
 #[injectable]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct SingletonHoldingRequestScoped {
     #[inject]
     dep: Arc<PerRequest>,
 }
 
 #[injectable]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct DownstreamOfIt {
     #[inject]
     host: Arc<SingletonHoldingRequestScoped>,
@@ -211,7 +226,10 @@ async fn a_singleton_injecting_a_request_scoped_provider_fails_the_boot_by_name(
 struct PerResolution;
 
 #[injectable]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct SingletonHoldingTransient {
     #[inject]
     dep: Arc<PerResolution>,
@@ -252,21 +270,30 @@ async fn a_singleton_injecting_a_transient_provider_fails_the_boot_by_name() {
 struct PlainSingleton;
 
 #[injectable(scope = request)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct ScopedOnSingleton {
     #[inject]
     dep: Arc<PlainSingleton>,
 }
 
 #[injectable(scope = request)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct ScopedOnScoped {
     #[inject]
     dep: Arc<ScopedOnSingleton>,
 }
 
 #[injectable(scope = transient)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the dependency is declared for the container to resolve, never read"
+)]
 struct TransientOnScoped {
     #[inject]
     dep: Arc<ScopedOnSingleton>,

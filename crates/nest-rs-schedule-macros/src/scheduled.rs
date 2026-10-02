@@ -251,6 +251,10 @@ fn parse_trigger(attr: &Attribute, member: JobDecorator) -> syn::Result<ParsedTr
 
 /// The tokens inside `#[<key>(…)]`, or `expects` as the error when the
 /// attribute carries no list at all.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn list_tokens(attr: &Attribute, expects: String) -> syn::Result<TokenStream2> {
     Ok(attr
         .meta

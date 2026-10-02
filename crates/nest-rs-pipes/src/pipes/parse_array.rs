@@ -11,6 +11,10 @@ pub struct ParseArray<T>(PhantomData<fn() -> T>);
 impl<T: FromStr> Pipe for ParseArray<T> {
     type In = String;
     type Out = Vec<T>;
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "the refusal is the client's 400: it names the expected shape, never a parser's internals"
+    )]
     fn transform(input: String) -> Result<Vec<T>, PipeError> {
         if input.trim().is_empty() {
             return Ok(Vec::new());

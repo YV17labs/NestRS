@@ -156,7 +156,10 @@ impl nest_rs_core::ProviderResidency for ShapedProcessor {
 
 #[processor]
 impl ShapedProcessor {
-    #[allow(clippy::needless_arbitrary_self_type)]
+    #[expect(
+        clippy::needless_arbitrary_self_type,
+        reason = "the spelled-out receiver is the shape under test"
+    )]
     #[process(queue = TranscodeQueue)]
     async fn typed_receiver(self: &Self, _job: TranscodeCommand) -> anyhow::Result<()> {
         Ok(())
@@ -197,7 +200,10 @@ impl ShapedProcessor {
     }
 }
 
-#[allow(non_camel_case_types)]
+#[expect(
+    non_camel_case_types,
+    reason = "a raw-identifier type is the shape under test"
+)]
 struct r#yield;
 
 impl nest_rs_core::ProviderResidency for r#yield {

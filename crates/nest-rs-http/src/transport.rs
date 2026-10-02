@@ -869,6 +869,10 @@ impl Transport for HttpTransport {
     }
 
     async fn serve(self: Box<Self>, cancel: CancellationToken) -> Result<()> {
+        #[expect(
+            clippy::expect_used,
+            reason = "the transport lifecycle runs configure before serve"
+        )]
         let endpoint = self
             .endpoint
             .expect("HttpTransport::configure must run before serve");

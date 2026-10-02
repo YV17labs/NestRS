@@ -136,7 +136,10 @@ fn doctor_resolves_every_shape_of_a_variable_as_the_loader_does() {
 /// A relative `_FILE` is opened from the directory the app is started in: the
 /// loader from its working directory, doctor from the one it examines.
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn doctor_opens_a_relative_file_where_the_loader_does() {
     figment::Jail::expect_with(|jail| {
         jail.create_dir("secrets")?;
@@ -161,7 +164,10 @@ fn doctor_opens_a_relative_file_where_the_loader_does() {
 /// blocking issue, over every shape: the selector with and without the
 /// process's own value, an empty one, and the prefix restated or not.
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn doctor_refuses_every_cascade_the_loader_refuses() {
     let selector = Environment::var_name();
     let prefix = nest_rs_core::EnvPrefix::current();

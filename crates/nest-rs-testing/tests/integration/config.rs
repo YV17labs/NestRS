@@ -144,7 +144,10 @@ struct DemoPinnedModule;
 /// setting one of them got silence, not an override. Pinning one field must
 /// leave the others live, and a set variable must beat the pin.
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_pinned_config_still_lets_the_environment_override_each_field() {
     // `Jail` isolates the real process env (and reverts it), which is what the
     // deployment tier means — no `unsafe { set_var }` in this crate. It hands

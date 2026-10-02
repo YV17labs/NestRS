@@ -12,6 +12,13 @@
 //!
 //! Suite root: each test lives in the module named for the `src/` concern it
 //! covers; this file holds the fixtures several of them share.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod checkpoint;
 mod consume;

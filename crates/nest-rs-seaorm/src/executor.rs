@@ -267,6 +267,10 @@ impl LazyTransaction {
             } else {
                 POISON_DETERMINISTIC
             };
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "the first failure's verdict stands; a later one finds the slot taken"
+            )]
             let _ = self.poisoned.compare_exchange(
                 POISON_CLEAN,
                 verdict,
@@ -737,7 +741,6 @@ pub async fn with_job_executor<F: Future>(executor: Executor, fut: F) -> F::Outp
 
 #[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
     use super::*;
 
     fn pool() -> Executor {

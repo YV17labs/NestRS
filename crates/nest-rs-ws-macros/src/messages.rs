@@ -41,6 +41,10 @@ const POSTURE: PostureRules = PostureRules {
 /// string literal — or the shared value sentence at what was written, never
 /// syn's `expected string literal`, which names neither the attribute nor what
 /// it takes.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn event_name(attr: &syn::Attribute) -> syn::Result<LitStr> {
     let refused = |at: &dyn quote::ToTokens| {
         syn::Error::new_spanned(

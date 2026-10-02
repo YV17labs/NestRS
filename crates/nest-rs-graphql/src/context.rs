@@ -377,6 +377,10 @@ async fn without_transaction(fut: BoxFuture<'_, ()>) {
 /// variant", which tells a client nothing. On that failure the body is read
 /// once more as the shape it was, one request or a list of them, and that
 /// failure is what the client is told.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal describes the body; the read and decode errors would quote it"
+)]
 async fn read_batch(req: &Request, body: &mut RequestBody) -> Result<BatchRequest, Response> {
     let multipart = req
         .headers()

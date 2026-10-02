@@ -114,6 +114,10 @@ pub fn pipe_wrapper(ty: &Type) -> Option<PipeWrapper> {
 
 /// The last segment's ident of a path — the readable name in a diagnostic or a
 /// generated identifier. `syn::Path` always has at least one segment.
+#[expect(
+    clippy::expect_used,
+    reason = "syn::Path always has at least one segment"
+)]
 pub fn last_segment_ident(path: &syn::Path) -> &Ident {
     &path
         .segments

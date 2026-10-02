@@ -346,6 +346,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test's receiver may already be gone"
+    )]
     async fn batch_spawner_without_a_context_runs_the_future_on_tokio_spawn() {
         let container = Container::builder().build();
         let spawner = batch_spawner(&container, &DetachedWork::new());
@@ -379,6 +383,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test's receiver may already be gone"
+    )]
     async fn batch_spawner_routes_through_a_registered_batch_context() {
         let count = Arc::new(AtomicUsize::new(0));
         let ctx: Arc<dyn GraphqlBatchContext> = Arc::new(CountingContext {

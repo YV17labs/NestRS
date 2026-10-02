@@ -22,6 +22,10 @@ use crate::{Access, Authorized, CrudService};
 /// with no `extensions` and no code, so a client had one branch it could
 /// program against and one it could not — while the HTTP twin answered
 /// `400 "id must be a UUID v7"` for both.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal is the client's 400: it names the expected shape, never a parser's internals"
+)]
 pub fn parse_v7(id: &str) -> Result<Uuid> {
     let invalid = || {
         Error::new(nest_rs_core::UUID_V7_REQUIRED)

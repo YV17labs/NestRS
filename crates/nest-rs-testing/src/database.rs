@@ -95,6 +95,10 @@ impl Drop for EphemeralDatabase {
         // pool connection still held elsewhere.
         let admin_url = std::mem::take(&mut self.admin_url);
         let name = std::mem::take(&mut self.name);
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "teardown is best-effort: the next create's reaper drops what a failed one leaves"
+        )]
         let _ = std::thread::spawn(move || {
             let Ok(rt) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -153,6 +157,10 @@ async fn reap_stale(admin: &DatabaseConnection) {
             None => true,
         };
         if stale {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "the reaper is best-effort: an orphan it cannot drop is retried by the next run"
+            )]
             let _ = admin
                 .execute_unprepared(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
                 .await;

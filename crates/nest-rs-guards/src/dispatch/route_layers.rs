@@ -82,7 +82,10 @@ where
 /// interceptors / filters participate in the dedup only — they execute at
 /// the transport edge. Called by the `#[routes]` macro at mount time; with
 /// every chain empty the endpoint passes through untouched.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one chain a decorator collected; a struct would only rename them"
+)]
 pub fn wrap_route_response_layers<E>(
     container: &Container,
     endpoint: E,

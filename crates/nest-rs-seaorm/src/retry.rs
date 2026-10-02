@@ -482,11 +482,12 @@ mod tests {
         // A misconfigured `0` budget would otherwise loop never — clamp
         // to a single attempt so the operation still runs.
         let attempts = std::sync::atomic::AtomicUsize::new(0);
-        let _ = retry_on_conflict(0, Duration::from_millis(1), || async {
+        retry_on_conflict(0, Duration::from_millis(1), || async {
             attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok::<_, DbErr>(())
         })
-        .await;
+        .await
+        .expect("the one attempt succeeds");
         assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 

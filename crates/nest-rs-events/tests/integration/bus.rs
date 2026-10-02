@@ -281,7 +281,10 @@ struct ShapedListeners;
 
 #[listeners]
 impl ShapedListeners {
-    #[allow(clippy::needless_arbitrary_self_type, clippy::unused_unit)]
+    #[expect(
+        clippy::needless_arbitrary_self_type,
+        reason = "the spelled-out receiver is the shape under test"
+    )]
     #[on_event]
     async fn on_shaped(self: &Self, _event: Shaped) -> () {
         SHAPED.fetch_add(1, Ordering::SeqCst);
@@ -304,7 +307,10 @@ impl ShapedListeners {
 
 #[injectable]
 #[derive(Default)]
-#[allow(non_camel_case_types)]
+#[expect(
+    non_camel_case_types,
+    reason = "a raw-identifier type is the shape under test"
+)]
 struct r#loop;
 
 #[listeners]

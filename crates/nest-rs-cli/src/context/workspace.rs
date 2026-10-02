@@ -224,6 +224,10 @@ pub(crate) enum EnvPrefixSource {
 
 impl EnvPrefixSource {
     /// Read the environment this process was given.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the prefix is the bootstrap's own variable, read before any config"
+    )]
     pub(crate) fn detect() -> Self {
         let Ok(value) = std::env::var(ENV_PREFIX_VAR) else {
             return Self::Unset;

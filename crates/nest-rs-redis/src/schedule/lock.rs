@@ -99,6 +99,10 @@ impl OccurrenceLock for RedisOccurrenceLock {
 /// id — for an operator reading the key during an incident, never for the claim,
 /// which decides on the key's existence alone. `HOSTNAME` is the platform's (a
 /// container's, a pod's), not a framework variable.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "HOSTNAME is the platform's variable, not a framework setting the env prefix renames"
+)]
 fn holder() -> String {
     match std::env::var("HOSTNAME") {
         Ok(host) if !host.is_empty() => format!("{host}:{}", std::process::id()),

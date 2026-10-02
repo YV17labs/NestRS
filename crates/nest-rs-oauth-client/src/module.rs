@@ -37,6 +37,10 @@ impl DynamicModule for OAuthClientSetup {
     fn collect(&self, builder: ContainerBuilder) -> ContainerBuilder {
         let builder = ConfigModule::provide_feature(self.pinned.clone(), builder);
         builder.provide_factory::<OAuthClient, _, _>(|container| async move {
+            #[expect(
+                clippy::expect_used,
+                reason = "provide_feature queued the config's factory in this module's collect"
+            )]
             let config = container
                 .get::<OAuthClientConfig>()
                 .expect("OAuthClientConfig is resolved by ConfigModule::provide_feature");

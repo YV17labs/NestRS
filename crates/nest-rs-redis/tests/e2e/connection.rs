@@ -659,6 +659,10 @@ const RECOVERY: Duration = Duration::from_secs(5);
 const LIMIT: Throttle = Throttle::new(1_000_000, Duration::from_secs(60));
 
 /// Which holder of the connection, if any, could not reach Redis.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the test names which holder failed; the cause is the next assertion's"
+)]
 async fn every_holder_answers(
     conn: &RedisConnection,
     throttler: &RedisThrottler,

@@ -7,6 +7,10 @@ pub mod oauth;
 pub mod orgs;
 pub mod posts;
 #[cfg(feature = "test-support")]
+#[expect(
+    clippy::expect_used,
+    reason = "test fixtures fail the test that calls them"
+)]
 pub mod testing;
 pub mod users;
 

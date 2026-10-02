@@ -17,13 +17,6 @@
 //! its host struct and its method, so moving its module inside the crate keeps
 //! it; `key = "…"` pins it across a rename of the type or the crate.
 
-// Opts OUT of the workspace `unsafe_code = "forbid"` lint (no `[lints]
-// workspace = true` in Cargo.toml): `tests/integration/module.rs` needs
-// `unsafe { std::env::set_var }` for setup, and a Cargo `[lints]` forbid also
-// covers test targets and can't be overridden. This lib-level forbid keeps the
-// production guarantee (the lib itself has no `unsafe`) without breaking the
-// integration test.
-#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 /// This crate's span target — Cron and interval registration, and a tick that failed.

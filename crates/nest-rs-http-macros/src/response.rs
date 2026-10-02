@@ -207,6 +207,10 @@ pub(crate) fn take_response_shapers(
 ///
 /// Re-emitted unsuffixed: `201u8` is the right number and the wrong type for
 /// `StatusCode::from_u16`, and the value checked is the value sent.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn http_code_value(attr: &Attribute) -> syn::Result<LitInt> {
     let refused = |at: &dyn ToTokens| {
         syn::Error::new_spanned(
@@ -240,6 +244,10 @@ const HEADER_NAME_TAKES: &str = "a lowercase header name of `a`-`z`, `0`-`9`, `-
 const HEADER_VALUE_TAKES: &str = "printable ASCII or a tab, e.g. \"no-store\" — a CR, an LF or \
      another control byte would split or corrupt the header";
 
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn parse_header_args(attr: &Attribute) -> syn::Result<(LitStr, LitStr)> {
     let two = || {
         syn::Error::new_spanned(
@@ -333,6 +341,10 @@ fn validate_header_value(lit: &LitStr) -> syn::Result<()> {
 /// `#[redirect(url[, status])]`: each position refused in its own sentence, at
 /// what was written there — the URL when it is missing or not a string, the
 /// status when it is not a redirect status.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 fn parse_redirect_args(attr: &Attribute) -> syn::Result<RedirectSpec> {
     let url_refused = |at: &dyn ToTokens| {
         syn::Error::new_spanned(

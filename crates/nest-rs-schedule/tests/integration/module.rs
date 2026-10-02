@@ -62,6 +62,10 @@ async fn schedule_module_auto_attaches_the_scheduler_and_ticks_the_method() {
     {
         // SAFETY: raising a signal at the OS level is safe; the framework's
         // signal handler runs in a dedicated task.
+        #[expect(
+            unsafe_code,
+            reason = "only a real SIGINT drives the real shutdown path"
+        )]
         unsafe {
             libc::raise(libc::SIGINT);
         }
@@ -137,7 +141,10 @@ struct ShapedTasks;
 
 #[scheduled]
 impl ShapedTasks {
-    #[allow(clippy::needless_arbitrary_self_type)]
+    #[expect(
+        clippy::needless_arbitrary_self_type,
+        reason = "the spelled-out receiver is the shape under test"
+    )]
     #[every("30s")]
     async fn typed_receiver(self: &Self) -> anyhow::Result<()> {
         Ok(())
@@ -162,7 +169,10 @@ impl ShapedTasks {
 
 #[injectable]
 #[derive(Default)]
-#[allow(non_camel_case_types)]
+#[expect(
+    non_camel_case_types,
+    reason = "a raw-identifier type is the shape under test"
+)]
 struct r#yield;
 
 #[scheduled]

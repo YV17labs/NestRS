@@ -53,6 +53,10 @@ impl HealthService {
         // borrow, not a second container.
         if self.container.set(container.clone()).is_ok() {
             if let Some(config) = container.get::<HealthConfig>() {
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "guarded by the container's once-set above; a re-run keeps the first config"
+                )]
                 let _ = self.config.set(config);
             }
             report_unreachable_indicators(&container);

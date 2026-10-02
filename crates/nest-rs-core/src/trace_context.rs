@@ -740,6 +740,10 @@ fn set_actor(shared: &Shared, actor_id: &str) {
     if actor_id.is_empty() {
         return;
     }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the slot is write-once: the first actor resolved for the work stands"
+    )]
     let _ = shared.actor.set(Arc::from(actor_id));
 }
 
@@ -829,6 +833,10 @@ static LINKER: OnceLock<SpanLinker> = OnceLock::new();
 /// what OpenTelemetry is.
 #[doc(hidden)]
 pub fn set_span_linker(linker: SpanLinker) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "seeded once at boot; a second install keeps the first linker"
+    )]
     let _ = LINKER.set(linker);
 }
 
@@ -1153,6 +1161,10 @@ mod tests {
     }
 
     fn set_actor_on(correlation: &Correlation, actor: &str) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the test fills a slot it just created empty"
+        )]
         let _ = correlation.shared.actor.set(Arc::from(actor));
     }
 

@@ -60,7 +60,19 @@
 //! whose own source never wrote `uuid` failed with `E0433` blamed on the
 //! attribute — invisible here, and invisible to the generator's e2e too, which
 //! adds `uuid` for an unrelated reason.
+//!
+//! [`canary`] is the witness's second mandate: one `#[expect]` per entry of the
+//! repository's `clippy.toml`, so an entry that stops resolving fails the build
+//! instead of switching its rule off in silence.
+#![cfg_attr(
+    test,
+    expect(
+        clippy::disallowed_macros,
+        reason = "canary: proves clippy.toml's tokio::main entry resolves (see `canary`)"
+    )
+)]
 
+pub mod canary;
 pub mod config;
 pub mod controller;
 pub mod dataloader;

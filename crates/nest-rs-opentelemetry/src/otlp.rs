@@ -135,6 +135,10 @@ fn build_resource(config: &OpenTelemetryConfig) -> Resource {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the tests shut the providers they built down best-effort"
+)]
 mod tests {
     use opentelemetry::Key;
 

@@ -8,5 +8,12 @@
 //! So this suite runs the generator and then runs `cargo check` over what it
 //! produced. It is `e2e` because it is minutes, not milliseconds: it resolves a
 //! real dependency graph and builds the framework from source.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod scaffold;

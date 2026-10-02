@@ -61,6 +61,19 @@ migrations = { path = "crates/migrations" }
 # stays forward-compatible as the options struct gains fields.
 [workspace.lints.clippy]
 needless_update = "allow"
+allow_attributes_without_reason = "deny"
+dbg_macro = "deny"
+expect_used = "deny"
+let_underscore_must_use = "deny"
+map_err_ignore = "deny"
+panic = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+self_named_module_files = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+wildcard_imports = "deny"
 
 # Compiler-enforced unsafe-freedom across the demo, mirroring the root workspace.
 # Every demo crate opts in via `[lints] workspace = true`, so `unsafe` is a

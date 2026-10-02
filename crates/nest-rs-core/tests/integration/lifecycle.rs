@@ -161,7 +161,10 @@ struct ShapedHost;
 
 #[hooks]
 impl ShapedHost {
-    #[allow(clippy::needless_arbitrary_self_type, clippy::unused_unit)]
+    #[expect(
+        clippy::needless_arbitrary_self_type,
+        reason = "the spelled-out receiver is the shape under test"
+    )]
     #[on_module_init]
     async fn init(self: &Self) -> () {
         SHAPED_INITS.fetch_add(1, Ordering::SeqCst);
@@ -184,7 +187,10 @@ impl ShapedHost {
 
 #[injectable]
 #[derive(Default)]
-#[allow(non_camel_case_types)]
+#[expect(
+    non_camel_case_types,
+    reason = "a raw-identifier type is the shape under test"
+)]
 struct r#async;
 
 #[hooks]
@@ -221,7 +227,10 @@ async fn a_compiled_out_hook_is_skipped_and_the_spelled_out_shapes_run() {
 
 /// A trait with a method of a hook's name, implemented for every `Arc<T>` — the
 /// shape an extension trait takes.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the trait exists only to put a hook's name on Arc<T>"
+)]
 trait Warm {
     fn warm(&self) -> std::future::Ready<()>;
 }

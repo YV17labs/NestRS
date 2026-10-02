@@ -198,6 +198,10 @@ mod tests {
     /// A zero budget given as a file is refused under the `_FILE` spelling
     /// that supplied it.
     #[test]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the test tears down its temp file best-effort"
+    )]
     fn a_zero_connect_timeout_from_a_file_names_its_file_variable() {
         let path = std::env::temp_dir().join(format!(
             "nest-rs-redis-connect-timeout-{}",

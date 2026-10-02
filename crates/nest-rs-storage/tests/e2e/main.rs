@@ -14,5 +14,12 @@
 //! `nestrs`, path-style). The endpoint honors the documented
 //! `NESTRS_STORAGE__ENDPOINT` override so the round-trip can point at a server
 //! outside the dev container; unset, it falls back to the default.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::let_underscore_must_use,
+    reason = "a suite fails by panicking and discards what it does not assert; clippy.toml's allow-*-in-tests reaches #[test] bodies, not their helpers"
+)]
 
 mod client;

@@ -40,6 +40,10 @@ fn outside_the_grammar(attr: &str, key: Option<&str>) -> String {
 /// milliseconds. `ms` is matched before `s`, so `"500ms"` is never read as
 /// `"500m"` followed by a stray `s`. A value a `macro_rules!` forwarded is read
 /// through its invisible group.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the refusal names the grammar the decorator accepts; syn's own message would name a token"
+)]
 pub fn duration_millis(attr: &str, key: Option<&str>, value: &Expr) -> syn::Result<u64> {
     let value = ungrouped_expr(value);
     let bad = || syn::Error::new_spanned(value, outside_the_grammar(attr, key));

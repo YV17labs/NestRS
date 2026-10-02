@@ -62,6 +62,10 @@ fn bucket_key(parts: &[&dyn fmt::Display]) -> String {
         }
         // Writing to a `String` cannot fail; `fmt::Write` still returns a
         // `Result`, and this is a hot path that owes no `expect`.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "fmt::Write for String never fails"
+        )]
         let _ = write!(key, "{part}");
     }
     key
@@ -577,6 +581,10 @@ mod tests {
 
         // And the second call is silent: a per-request line for a structural
         // fact would bury the events an incident actually queries.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the call is made for the line it would emit a second time"
+        )]
         let _ = ClientId::from(ClientOrigin::Unknown);
         assert_eq!(
             logs.find(

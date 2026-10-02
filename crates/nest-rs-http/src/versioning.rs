@@ -501,6 +501,10 @@ where
 
 /// Swap the request's path, keeping its query. `original_uri` is untouched, so
 /// the access log and every `#[meta]` reader still see what the client sent.
+#[expect(
+    clippy::map_err_ignore,
+    reason = "the path was already accepted by the router; the refusal is the whole answer"
+)]
 fn rewrite_path(req: &mut Request, path: &str) -> Result<()> {
     let uri = req.uri().clone();
     let mut parts = uri.into_parts();

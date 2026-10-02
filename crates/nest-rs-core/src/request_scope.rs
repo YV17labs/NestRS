@@ -275,6 +275,10 @@ impl RequestScope {
             // the request rather than resolve it. The re-entrancy guard turns a
             // genuine *self*-cycle (a scoped provider that transitively depends
             // on itself) into a clear panic instead of an unbounded recursion.
+            #[expect(
+                clippy::panic,
+                reason = "a provider cycle is a wiring defect, and resolving from a scope has no Result to report it through"
+            )]
             let _guard = CycleGuard::push(&SCOPED_BUILDING, id, type_name::<T>()).unwrap_or_else(
                 |Cycle { chain }| {
                     panic!(

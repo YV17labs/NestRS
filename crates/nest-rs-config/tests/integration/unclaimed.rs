@@ -117,7 +117,10 @@ fn assert_silent(logs: &LogCapture, variable: &str) {
 /// The typo the report exists for: the value lands nowhere, and the event names
 /// the variable the deployment meant.
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_misspelled_key_is_reported_with_the_key_that_was_read() {
     figment::Jail::expect_with(|jail| {
         let typo = var_name("unclaimed_keys", "PROT");
@@ -141,7 +144,10 @@ fn a_misspelled_key_is_reported_with_the_key_that_was_read() {
 /// A key nothing read and nothing near: still reported, since the namespace is
 /// this binary's own — only the suggestion is withheld.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_key_with_no_near_neighbour_is_reported_without_a_suggestion() {
     figment::Jail::expect_with(|jail| {
         let stray = var_name("unclaimed_keys", "BANNER_COLOUR");
@@ -159,7 +165,10 @@ fn a_key_with_no_near_neighbour_is_reported_without_a_suggestion() {
 /// The `_FILE` spelling of a key is the same variable, so it is known — and a
 /// typo in it is answered with the spelling that exists.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_file_spelling_is_known_and_its_typo_is_answered() {
     figment::Jail::expect_with(|jail| {
         jail.create_file("label", "from-a-file\n")?;
@@ -185,7 +194,10 @@ fn a_file_spelling_is_known_and_its_typo_is_answered() {
 /// The family-level rename: the variable keeps the 6.x spelling, the config
 /// reads the default, and the event names the spelling that is read.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_namespace_spelled_with_other_separators_is_reported_under_the_linked_spelling() {
     figment::Jail::expect_with(|jail| {
         let former = var_name("unclaimed_member", "URL");
@@ -214,7 +226,10 @@ fn a_namespace_spelled_with_other_separators_is_reported_under_the_linked_spelli
 /// at that read, ended by an error or not, so a renamed *required* variable is
 /// named ahead of the boot error its absence causes.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_namespace_is_checked_once_its_config_is_read() {
     figment::Jail::expect_with(|jail| {
         let former = var_name("unclaimed_member", "URL");
@@ -288,7 +303,10 @@ impl Config for WsShapedConfig {
 /// is not also a word, and a long one is reported only under a key it reads;
 /// the value is reported nowhere.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn another_binarys_namespaces_beside_a_short_or_unread_key_are_left_alone() {
     figment::Jail::expect_with(|jail| {
         const SECRET: &str = "sk-live-SECRETVALUE";
@@ -330,7 +348,10 @@ fn another_binarys_namespaces_beside_a_short_or_unread_key_are_left_alone() {
 /// another's: a namespace it has never heard of, and a member of one of its
 /// namespaces that it does not link, are both left alone.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn another_binarys_variables_are_left_alone() {
     figment::Jail::expect_with(|jail| {
         let elsewhere = var_name("unclaimed_elsewhere", "URL");
@@ -355,7 +376,10 @@ fn another_binarys_variables_are_left_alone() {
 /// nothing in this binary — so they are not this binary's to report, whether
 /// they misspell a key or run the level separator into it.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_linked_config_that_is_never_read_files_no_key_report() {
     figment::Jail::expect_with(|jail| {
         let unread = var_name("unclaimed__member", "URLL");
@@ -380,7 +404,10 @@ fn a_linked_config_that_is_never_read_files_no_key_report() {
 /// are set aside. Known from the constants that name them, all five stay
 /// silent; the controls prove both comparisons ran over this very environment.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn framework_wide_variables_are_never_reported() {
     figment::Jail::expect_with(|jail| {
         // First, so the prefix resolves to the default and the bootstrap's own
@@ -419,7 +446,10 @@ fn framework_wide_variables_are_never_reported() {
 /// compared with the names read here whole: equal to one once separators are
 /// set aside, it is answered with it; equal to none, it is left alone.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_run_together_name_is_answered_with_the_name_that_is_read() {
     figment::Jail::expect_with(|jail| {
         let port = var_name("unclaimed_keys", "PORT");
@@ -453,7 +483,10 @@ fn a_run_together_name_is_answered_with_the_name_that_is_read() {
 /// installs — leaves what it found to the first read something hears, instead
 /// of marking it reported to nobody.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_read_nobody_hears_leaves_its_report_to_the_first_one_heard() {
     figment::Jail::expect_with(|jail| {
         let typo = var_name("unclaimed_keys", "PROT");
@@ -474,7 +507,10 @@ fn a_read_nobody_hears_leaves_its_report_to_the_first_one_heard() {
 /// A name is a name: the value it carries appears in no message and no field,
 /// whichever shape it was reported under.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn the_value_is_never_reported() {
     figment::Jail::expect_with(|jail| {
         const SECRET: &str = "hunter2-unclaimed-secret";
@@ -506,7 +542,10 @@ fn the_value_is_never_reported() {
 /// Once per variable, however many reads see it: a second load of the same
 /// config, and a read of another, add no second line.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_variable_is_reported_once() {
     figment::Jail::expect_with(|jail| {
         let typo = var_name("unclaimed_keys", "PROT");
@@ -532,7 +571,10 @@ fn a_variable_is_reported_once() {
 /// exported, so it reports nothing — even for a variable the environment does
 /// carry, and that the environment-backed read after it does report.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_reader_on_a_custom_source_reports_nothing() {
     figment::Jail::expect_with(|jail| {
         let typo = var_name("unclaimed_keys", "PROT");
@@ -555,7 +597,10 @@ fn a_reader_on_a_custom_source_reports_nothing() {
 /// Under a deployment's own prefix, only its own names are examined: the same
 /// typo spelled under the default prefix belongs to nobody here.
 #[test]
-#[allow(clippy::result_large_err)]
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn under_a_custom_prefix_only_its_own_names_are_examined() {
     figment::Jail::expect_with(|jail| {
         jail.set_env(EnvPrefix::VAR, "ACME");
@@ -587,7 +632,10 @@ fn under_a_custom_prefix_only_its_own_names_are_examined() {
 /// was treated as correctly spelled and reported by nothing; each is now
 /// reported with the name the loader reads.
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_namespace_or_a_prefix_in_another_case_is_reported_with_the_name_read() {
     figment::Jail::expect_with(|jail| {
         let port = var_name("unclaimed_keys", "PORT");
@@ -623,7 +671,10 @@ fn a_namespace_or_a_prefix_in_another_case_is_reported_with_the_name_read() {
 /// is; a sibling member differing by a whole word is another binary's and
 /// stays silent.
 #[test]
-#[allow(clippy::result_large_err)] // figment::Jail's fixed closure signature
+#[expect(
+    clippy::result_large_err,
+    reason = "figment::Jail fixes the closure's error type"
+)]
 fn a_misspelled_namespace_is_reported_with_the_namespace_linked() {
     figment::Jail::expect_with(|jail| {
         let swapped = var_name("unclaimde_keys", "PORT");

@@ -4,7 +4,7 @@ error: #[every] takes no `retries`: a tick's retry is the next occurrence
 14 |     #[every("30s", retries = 3)]
    |                    ^^^^^^^
 
-error: #[every] takes no `concurrency`: a scheduled job never overlaps itself — an occurrence falling inside a run is skipped and counted
+error: #[every] takes no `concurrency`: a replica runs one occurrence of a scheduled job at a time — one falling due inside a run there is skipped and counted
   --> tests/integration/diagnostics/every_refused_keys.rs:19:20
    |
 19 |     #[every("30s", concurrency = 2)]

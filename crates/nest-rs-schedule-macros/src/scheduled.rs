@@ -12,11 +12,11 @@
 use std::str::FromStr;
 
 use nest_rs_codegen::{
-    DecoratorPair, Edge, HostBorrow, JobDecorator, JobKey, await_if_async, cfg_attrs,
+    DecoratorPair, Edge, HostBorrow, JobDecorator, JobKey, Replicas, await_if_async, cfg_attrs,
     duration_millis, impl_self_ident, job_argument_needs_a_value, job_key, job_keys,
-    job_returns_a_result, job_transaction, replicas_default, replicas_value, require_str_lit,
-    returns_unit, shared_receiver, site, takes_value, transactional_value, ungrouped_expr,
-    unread_job_key,
+    job_returns_a_result, job_transaction, key_value, key_without_replicas_one, replicas_value,
+    require_str_lit, returns_unit, shared_receiver, site, takes_value, transactional_value,
+    ungrouped_expr, unread_job_key,
 };
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -101,7 +101,8 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
         let ParsedTrigger {
             trigger: trigger_tokens,
             transactional,
-            replicas: replicas_tokens,
+            replicas,
+            key,
         } = match parse_trigger(&trigger_attr, member) {
             Ok(parsed) => parsed,
             Err(err) => {
@@ -113,6 +114,11 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         };
         let transaction_tokens = job_transaction(transactional, &quote!(::nest_rs_schedule));
+        let replicas_tokens = replicas.tokens(&quote!(::nest_rs_schedule));
+        let key_tokens = match key {
+            Some(key) => quote! { ::std::option::Option::Some(#key) },
+            None => quote! { ::std::option::Option::None },
+        };
 
         let method_ident = method.sig.ident.clone();
         let method_name = method_ident.unraw().to_string();
@@ -130,6 +136,7 @@ fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
                     trigger: #trigger_tokens,
                     transaction: #transaction_tokens,
                     replicas: #replicas_tokens,
+                    key: #key_tokens,
                     run: |__container| ::std::boxed::Box::pin(async move {
                         let __provider = ::nest_rs_core::Container::get::<#self_ty>(__container)
                             .expect(::std::concat!(
@@ -178,18 +185,23 @@ struct ParsedTrigger {
     trigger: TokenStream2,
     /// The shared `transactional` key, `None` when unwritten.
     transactional: Option<bool>,
-    /// The `Replicas` variant, every replica when the key is unwritten.
-    replicas: TokenStream2,
+    /// The replicas it fires on, every replica when the key is unwritten.
+    replicas: Replicas,
+    /// The identity it pins, `None` when it derives its own.
+    key: Option<LitStr>,
 }
 
 /// The keys a trigger wrote after its own argument.
 struct TrailingKeys {
     transactional: Option<bool>,
-    /// The `Replicas` variant the key selected, `None` when unwritten.
-    replicas: Option<TokenStream2>,
+    /// The replicas the key selected, `None` when unwritten.
+    replicas: Option<Replicas>,
     /// The `tz` a calendar is read in — `#[cron]`'s alone, which the table
     /// guarantees by refusing it at the other two.
     tz: Option<MetaNameValue>,
+    /// The identity it pins, with the key as written for the refusal of one
+    /// beside a job firing on every replica.
+    key: Option<(syn::Path, LitStr)>,
 }
 
 /// The trigger tokens, plus whatever the shared keys said.
@@ -199,9 +211,6 @@ struct TrailingKeys {
 /// `#[after(..)]` and `#[cron(.., tz = .., replicas = "one")]` are one grammar
 /// rather than three that happen to spell a word alike.
 fn parse_trigger(attr: &Attribute, member: JobDecorator) -> syn::Result<ParsedTrigger> {
-    let resolved = |replicas: Option<TokenStream2>| {
-        replicas.unwrap_or_else(|| replicas_default(&quote!(::nest_rs_schedule)))
-    };
     let (trigger, keys) = match member {
         JobDecorator::Every | JobDecorator::After => {
             let (period, keys) = parse_period(attr, member)?;
@@ -220,10 +229,23 @@ fn parse_trigger(attr: &Attribute, member: JobDecorator) -> syn::Result<ParsedTr
         JobDecorator::Cron => parse_cron(attr)?,
         JobDecorator::Process => unreachable!("#[scheduled] collects triggers, never #[process]"),
     };
+    let replicas = keys.replicas.unwrap_or_default();
+    // A key pins what a job firing once claims under; beside a job firing on
+    // every replica it would be a declaration nothing reads.
+    let key = match keys.key {
+        Some((path, _)) if replicas != Replicas::One => {
+            return Err(syn::Error::new_spanned(
+                path,
+                key_without_replicas_one(member),
+            ));
+        }
+        key => key.map(|(_, key)| key),
+    };
     Ok(ParsedTrigger {
         trigger,
         transactional: keys.transactional,
-        replicas: resolved(keys.replicas),
+        replicas,
+        key,
     })
 }
 
@@ -292,6 +314,7 @@ fn parse_trailing_keys(
         transactional: None,
         replicas: None,
         tz: None,
+        key: None,
     };
     if !stream.peek(Token![,]) {
         return Ok(keys);
@@ -325,11 +348,10 @@ fn parse_trailing_keys(
                 keys.transactional = Some(transactional_value(member, &meta.value)?);
             }
             JobKey::Replicas => {
-                keys.replicas = Some(replicas_value(
-                    member,
-                    &meta.value,
-                    &quote!(::nest_rs_schedule),
-                )?);
+                keys.replicas = Some(replicas_value(member, &meta.value)?);
+            }
+            JobKey::Key => {
+                keys.key = Some((meta.path.clone(), key_value(member, &meta.value)?));
             }
             JobKey::Tz => {
                 keys.tz = Some(meta);
@@ -447,6 +469,35 @@ mod tests {
     use super::*;
     use proc_macro2::Span;
 
+    /// A key pins what a job firing once claims under, so it is read beside
+    /// `replicas = "one"` and refused beside a job firing on every replica —
+    /// written or defaulted — at the key, naming why.
+    #[test]
+    fn a_key_is_read_beside_replicas_one_and_refused_beside_each() {
+        let attr: Attribute =
+            syn::parse_quote!(#[every("1h", replicas = "one", key = "billing::Tasks::close")]);
+        let parsed = parse_trigger(&attr, JobDecorator::Every).expect("a pinned job firing once");
+        assert_eq!(
+            parsed.key.map(|key| key.value()).as_deref(),
+            Some("billing::Tasks::close")
+        );
+        for attr in [
+            syn::parse_quote!(#[every("1h", key = "billing::Tasks::close")]),
+            syn::parse_quote!(#[every("1h", replicas = "each", key = "billing::Tasks::close")]),
+            syn::parse_quote!(#[every("1h", key = "billing::Tasks::close", replicas = "each")]),
+        ] {
+            let attr: Attribute = attr;
+            let refusal = parse_trigger(&attr, JobDecorator::Every)
+                .err()
+                .expect("a key beside a job firing on every replica")
+                .to_string();
+            assert_eq!(
+                refusal,
+                nest_rs_codegen::key_without_replicas_one(JobDecorator::Every)
+            );
+        }
+    }
+
     fn lit(s: &str) -> LitStr {
         LitStr::new(s, Span::call_site())
     }
@@ -470,7 +521,13 @@ mod tests {
             };
             let attr_name = syn::Ident::new(name, Span::call_site());
             for key in job_keys(member) {
-                let written: TokenStream2 = key.example().parse().expect("an example is tokens");
+                // `key` is read beside the declaration it needs, which the table
+                // gives every member taking `key`.
+                let example = match key {
+                    JobKey::Key => format!("{}, {}", JobKey::Replicas.example(), key.example()),
+                    _ => key.example().to_owned(),
+                };
+                let written: TokenStream2 = example.parse().expect("an example is tokens");
                 let attr: Attribute = syn::parse_quote!(#[#attr_name(#own, #written)]);
                 if let Err(refusal) = parse_trigger(&attr, member) {
                     panic!("#[{name}] does not read `{}`: {refusal}", key.name());

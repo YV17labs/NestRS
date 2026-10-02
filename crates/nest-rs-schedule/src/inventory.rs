@@ -36,10 +36,12 @@ pub type RunFn =
 /// a single label so structured logs can filter/group on either alone — a
 /// composite string would be unqueryable once the output is JSON.
 pub struct CronJobMeta {
-    /// `module_path!()` of the code declaring the job. The first levels of its
-    /// identity: the same job declared in a crate several apps link coordinates
-    /// its occurrences across all of them, and two apps each declaring a
-    /// same-named job of their own do not claim each other's.
+    /// `module_path!()` of the code declaring the job. Its first segment — the
+    /// crate — is the first level of the job's identity unless `key` pins one: the
+    /// same job declared in a crate several apps link coordinates its occurrences
+    /// across all of them, two apps each declaring a same-named job in their own
+    /// crates do not claim each other's, and moving the job's module inside its
+    /// crate keeps it.
     pub origin: &'static str,
     /// The host struct, e.g. `"AudioTasks"`.
     pub provider: &'static str,
@@ -58,6 +60,12 @@ pub struct CronJobMeta {
     /// How many replicas fire each occurrence — from the `replicas` key on its
     /// `#[every]` / `#[cron]`, defaulting to every replica.
     pub replicas: Replicas,
+    /// The identity a job firing once claims its occurrences under, pinned — from
+    /// the `key` on its `#[every]` / `#[cron]`, a path of one or more identifiers
+    /// (`"billing::InvoiceTasks::close_day"`). `None` derives it: the crate, the
+    /// host struct and the method. Only a job declaring `replicas = "one"` may pin
+    /// one, since a job firing on every replica claims nothing.
+    pub key: Option<&'static str>,
 }
 
 /// Link-time inventory entry submitted by `#[scheduled]` per `#[every]` /
@@ -66,8 +74,8 @@ pub struct ScheduledMethod {
     /// `module_path!()` of the module that declared it — read by
     /// [`is_framework_owned`](::nest_rs_core::is_framework_owned) to pick the
     /// report level, emitted as a field so a skip line names a type the
-    /// developer can find, and the first levels of the job's identity, copied to
-    /// the synthesized [`CronJobMeta`].
+    /// developer can find, and copied to the synthesized [`CronJobMeta`], whose
+    /// identity opens with its crate.
     pub origin: &'static str,
     /// The host struct (e.g. `"AudioTasks"`) — logged as its own field and
     /// copied to the synthesized [`CronJobMeta`].
@@ -90,6 +98,9 @@ pub struct ScheduledMethod {
     /// How many replicas fire each occurrence — from the `replicas` key on its
     /// `#[every]` / `#[cron]`, defaulting to every replica.
     pub replicas: Replicas,
+    /// The identity pinned by the `key` on its `#[every]` / `#[cron]`, copied to
+    /// the synthesized [`CronJobMeta`].
+    pub key: Option<&'static str>,
 }
 
 ::nest_rs_core::inventory::collect!(ScheduledMethod);

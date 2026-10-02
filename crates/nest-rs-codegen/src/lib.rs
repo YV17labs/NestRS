@@ -19,6 +19,7 @@ mod casing;
 mod crud;
 mod dispatch;
 mod duration;
+mod identity;
 mod inject;
 mod job;
 mod mount;
@@ -55,6 +56,7 @@ pub use crud::{
 };
 pub use dispatch::{Collision, DispatchKeys};
 pub use duration::duration_millis;
+pub use identity::{KEY, invalid_job_key, is_valid_job_key, key_value, key_without_replicas_one};
 pub use inject::{
     InjectableBody, LayerDeps, build_injectable_body, dependencies_method, dependency_names_method,
     forwarded_arg_idents, forwarded_idents, from_container_method, from_scope_method,
@@ -73,7 +75,7 @@ pub use posture::{
     posture_contradiction, posture_key_unsupported, posture_required,
 };
 pub use queue_name::{invalid_queue_name, is_valid_queue_name};
-pub use replicas::{REPLICAS, replicas_default, replicas_value};
+pub use replicas::{REPLICAS, Replicas, replicas_value};
 pub use root::reroot;
 pub use route_path::RoutePath;
 pub use specs::{force_guard_typeids, scoped_specs};

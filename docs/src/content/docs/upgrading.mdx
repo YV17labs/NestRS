@@ -193,9 +193,9 @@ rolls out (step 7).
      pushes or retries while no producer runs — they wait where no trigger
      looks; see [On queue depth, with KEDA](/queue/scaling/#on-queue-depth-with-keda).
    - **An ACL** confined to `~nestrs:*` now runs every Redis binding — the queue,
-     the rate limiter under `nestrs:throttler:buckets:*`, a schedule's claims and
-     run leases, which it sends as scripts: allow `EVALSHA`, `SCRIPT LOAD` and
-     `EXISTS` on `nestrs:schedule:*` beside the queue's commands. The 6.x check in step 7 reads the root — `TYPE`, `LLEN`, `ZCARD`,
+     the rate limiter under `nestrs:throttler:buckets:*`, a schedule's claims
+     under `nestrs:schedule:claims:*`, each one `SET … NX PX`, with an `EXISTS`
+     per overrun question. The 6.x check in step 7 reads the root — `TYPE`, `LLEN`, `ZCARD`,
      `ZRANGE` and `SCARD` on the queue's bare name — so run the upgrade with a
      user that reaches it. A dashboard or an ACL written for the rate limiter's 6.x keys
      follows it to `nestrs:throttler:buckets:*`.

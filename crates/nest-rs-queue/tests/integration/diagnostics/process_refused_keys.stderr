@@ -9,3 +9,9 @@ error: #[process] takes no `tz`: a job runs when delivered, and has no clock to 
    |
 28 |     #[process(queue = DemoQueue, tz = "Europe/Paris")]
    |                                  ^^
+
+error: #[process] takes no `key`: a job is its queue and its own id — the key that keeps a queue from holding one piece of work twice is the push's, `PushOptions::with_unique`
+  --> tests/integration/diagnostics/process_refused_keys.rs:33:34
+   |
+33 |     #[process(queue = DemoQueue, key = "billing::Demo::pinned")]
+   |                                  ^^^

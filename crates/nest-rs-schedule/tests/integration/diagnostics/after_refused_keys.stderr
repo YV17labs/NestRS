@@ -1,35 +1,41 @@
 error: #[after] takes no `retries`: a one-shot has no next occurrence, so work that must succeed is a queue job it pushes
-  --> tests/integration/diagnostics/after_refused_keys.rs:15:19
+  --> tests/integration/diagnostics/after_refused_keys.rs:16:19
    |
-15 |     #[after("1s", retries = 3)]
+16 |     #[after("1s", retries = 3)]
    |                   ^^^^^^^
 
 error: #[after] takes no `concurrency`: a one-shot runs once
-  --> tests/integration/diagnostics/after_refused_keys.rs:20:19
+  --> tests/integration/diagnostics/after_refused_keys.rs:21:19
    |
-20 |     #[after("1s", concurrency = 2)]
+21 |     #[after("1s", concurrency = 2)]
    |                   ^^^^^^^^^^^
 
 error: #[after] takes no `throttle`: the trigger is the rate
-  --> tests/integration/diagnostics/after_refused_keys.rs:25:19
+  --> tests/integration/diagnostics/after_refused_keys.rs:26:19
    |
-25 |     #[after("1s", throttle(limit = 1, window = "1m"))]
+26 |     #[after("1s", throttle(limit = 1, window = "1m"))]
    |                   ^^^^^^^^
 
 error: #[after] takes no `replicas`: a one-shot fires on the replica that booted
-  --> tests/integration/diagnostics/after_refused_keys.rs:30:19
+  --> tests/integration/diagnostics/after_refused_keys.rs:31:19
    |
-30 |     #[after("1s", replicas = "one")]
+31 |     #[after("1s", replicas = "one")]
    |                   ^^^^^^^^
 
-error: #[after] takes no `tz`: a delay has no wall clock
-  --> tests/integration/diagnostics/after_refused_keys.rs:35:19
+error: #[after] takes no `key`: a one-shot fires on the replica that booted and claims nothing, so it has no identity to pin
+  --> tests/integration/diagnostics/after_refused_keys.rs:36:19
    |
-35 |     #[after("1s", tz = "Europe/Paris")]
+36 |     #[after("1s", key = "billing::Tasks::pinned")]
+   |                   ^^^
+
+error: #[after] takes no `tz`: a delay has no wall clock
+  --> tests/integration/diagnostics/after_refused_keys.rs:41:19
+   |
+41 |     #[after("1s", tz = "Europe/Paris")]
    |                   ^^
 
 error: #[after] takes no `queue`: a scheduled tick runs in process and is not delivered from a queue — push a job from the tick to reach one
-  --> tests/integration/diagnostics/after_refused_keys.rs:40:20
+  --> tests/integration/diagnostics/after_refused_keys.rs:46:20
    |
-40 |     #[after("30s", queue = DemoQueue)]
+46 |     #[after("30s", queue = DemoQueue)]
    |                    ^^^^^

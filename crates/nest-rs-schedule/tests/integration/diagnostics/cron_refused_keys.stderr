@@ -4,7 +4,7 @@ error: #[cron] takes no `retries`: a tick's retry is the next occurrence
 14 |     #[cron("0 * * * *", retries = 3)]
    |                         ^^^^^^^
 
-error: #[cron] takes no `concurrency`: a scheduled job never overlaps itself — an occurrence falling inside a run is skipped and counted
+error: #[cron] takes no `concurrency`: a replica runs one occurrence of a scheduled job at a time — one falling due inside a run there is skipped and counted
   --> tests/integration/diagnostics/cron_refused_keys.rs:19:25
    |
 19 |     #[cron("0 * * * *", concurrency = 2)]

@@ -19,8 +19,8 @@ use nest_rs_schedule::{
 use nest_rs_testing::TestApp;
 
 static RUNS: AtomicU64 = AtomicU64::new(0);
+static PINNED_RUNS: AtomicU64 = AtomicU64::new(0);
 static CLAIMED: Mutex<Vec<Occurrence>> = Mutex::new(Vec::new());
-static RELEASED: Mutex<Vec<Occurrence>> = Mutex::new(Vec::new());
 
 #[injectable]
 #[derive(Default)]
@@ -38,6 +38,24 @@ impl ReplicatedTasks {
 #[module(providers = [ReplicatedTasks])]
 struct ReplicatedTasksModule;
 
+/// A job renamed from `billing::InvoiceTasks::close_day`, pinning the identity
+/// it had.
+#[injectable]
+#[derive(Default)]
+pub(crate) struct LedgerTasks;
+
+#[scheduled]
+impl LedgerTasks {
+    #[every("100ms", replicas = "one", key = "billing::InvoiceTasks::close_day")]
+    async fn close(&self) -> anyhow::Result<()> {
+        PINNED_RUNS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[module(providers = [LedgerTasks])]
+struct LedgerTasksModule;
+
 /// What `#[every(.., replicas = "one")]` submitted — read rather than retyped,
 /// so the identity the assertions expect is the one the decorator declared.
 fn declared() -> &'static ScheduledMethod {
@@ -46,7 +64,7 @@ fn declared() -> &'static ScheduledMethod {
         .expect("`#[scheduled]` submitted the host's one trigger")
 }
 
-/// Grants every claim, and records each claim and each release.
+/// Grants every claim, and records each one.
 struct RecordingLock;
 
 #[async_trait::async_trait]
@@ -62,15 +80,6 @@ impl OccurrenceLock for RecordingLock {
             .expect("lock")
             .iter()
             .any(|claimed| claimed.token == token))
-    }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        RELEASED.lock().expect("lock").push(occurrence.clone());
-        Ok(())
     }
 }
 
@@ -117,6 +126,9 @@ impl Module for SecondLockModule {
 #[module(imports = [ScheduleModule, RecordingLockModule, ReplicatedTasksModule])]
 struct BoundRoot;
 
+#[module(imports = [ScheduleModule, RecordingLockModule, LedgerTasksModule])]
+struct PinnedRoot;
+
 #[module(imports = [ScheduleModule, RecordingLockModule, SecondLockModule, ReplicatedTasksModule])]
 struct ContestedRoot;
 
@@ -125,17 +137,18 @@ struct UnboundRoot;
 
 /// The documented wiring runs: the decorator's `replicas = "one"` reaches the
 /// scheduler, the binding's lock is the one it claims through, every claim is
-/// made under the job's identity — the declaring module's path, the provider and
-/// the method, a level each — and an instant on a multiple of the period, each
-/// occurrence the lock granted fired once, and each run gave its lease back.
+/// made under the job's identity — its crate, the provider and the method, a
+/// level each — and an instant on a multiple of the period, each one recording
+/// its own run, and each occurrence the lock granted fired once.
 ///
-/// The declaring path is what keeps two apps of one deployment apart: keyed on
+/// The crate is what keeps two apps of one deployment apart: keyed on
 /// `Provider:method` alone, an API's and a worker's own `MaintenanceTasks::sweep`
 /// claimed each other's occurrences through the lock they share.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
     let declared = declared();
     assert_eq!(declared.replicas, Replicas::One);
+    assert_eq!(declared.key, None);
 
     let app = TestApp::builder()
         .module::<BoundRoot>()
@@ -159,21 +172,13 @@ async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
         claimed.len(),
         "each granted occurrence fired, once",
     );
-    let job = format!(
-        "{}:{}:{}",
-        declared.origin.replace("::", ":"),
-        declared.provider,
-        declared.method
-    );
-    assert!(
-        job.starts_with("integration:occurrence:"),
-        "the identity opens with the path that declared the job: {job}"
-    );
+    let krate = declared
+        .origin
+        .split_once("::")
+        .map_or(declared.origin, |(krate, _)| krate);
+    let job = format!("{krate}:{}:{}", declared.provider, declared.method);
+    assert_eq!(job, "integration:ReplicatedTasks:sweep");
     for occurrence in &claimed {
-        assert_eq!(
-            occurrence.job, job,
-            "the lease is the job's: {occurrence:?}"
-        );
         let instant: u64 = occurrence
             .token
             .strip_prefix(&format!("{job}:"))
@@ -185,16 +190,38 @@ async fn a_job_firing_once_claims_each_occurrence_through_the_bound_lock() {
         .iter()
         .map(|occurrence| occurrence.run.as_str())
         .collect();
-    assert_eq!(
-        runs.len(),
-        claimed.len(),
-        "each run holds the lease as itself"
-    );
-    assert_eq!(
-        *RELEASED.lock().expect("lock"),
-        claimed,
-        "every run gave its lease back once it ended"
-    );
+    assert_eq!(runs.len(), claimed.len(), "each claim records its own run");
+}
+
+/// `key = "…"` reaches the lock verbatim, a level per `::`: the job renamed
+/// from `billing::InvoiceTasks::close_day` claims under the identity it had, so
+/// replicas built before the rename and after it claim the same occurrences.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pinned_job_claims_under_the_key_it_declares() {
+    let app = TestApp::builder()
+        .module::<PinnedRoot>()
+        .build_headless()
+        .await
+        .expect("an app importing one lock binding boots");
+    let scheduler = app
+        .spawn_transport(Scheduler::new())
+        .await
+        .expect("the scheduler configures: a lock is bound");
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    scheduler.shutdown().await.expect("clean shutdown");
+
+    let claimed = CLAIMED.lock().expect("lock").clone();
+    assert!(claimed.len() >= 2, "{claimed:?}");
+    assert_eq!(PINNED_RUNS.load(Ordering::SeqCst) as usize, claimed.len());
+    for occurrence in &claimed {
+        assert!(
+            occurrence
+                .token
+                .strip_prefix("billing:InvoiceTasks:close_day:")
+                .is_some_and(|instant| instant.parse::<u64>().is_ok()),
+            "claimed under the pinned identity, never `LedgerTasks::close`: {occurrence:?}"
+        );
+    }
 }
 
 /// Two bindings for one port are two deliberate declarations, and the boot

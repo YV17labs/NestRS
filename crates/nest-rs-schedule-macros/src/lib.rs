@@ -32,6 +32,12 @@ mod scheduled;
 /// different times share their instants. `replicas = "each"` is the default,
 /// and `#[after]` refuses the key — each replica's boot is its own event.
 ///
+/// A job firing once is identified by its crate, its host struct and its
+/// method, so moving its module inside the crate keeps it and renaming any of
+/// the three starts a new job. Beside `replicas = "one"`, `key = "…"` pins the
+/// identity across a rename — the path the boot line names, e.g.
+/// `#[every("1h", replicas = "one", key = "billing::InvoiceTasks::close_day")]`.
+///
 /// A `cron` string literal and a `tz` name are validated at compile time; a
 /// preset path is validated when `Scheduler` configures, naming the offending
 /// job.
@@ -57,6 +63,7 @@ mod scheduled;
 ///         trigger: ::nest_rs_schedule::Trigger::Cron { expr, tz }, // or Interval / Timeout
 ///         transaction: ::nest_rs_schedule::nest_rs_worker::JobTransaction::PerAttempt,
 ///         replicas: ::nest_rs_schedule::Replicas::Each,
+///         key: ::std::option::Option::None, // or Some("billing::InvoiceTasks::close_day")
 ///         origin: ::core::module_path!(),
 ///         run: |c| Box::pin(async move { /* resolve + call */ }),
 ///     }

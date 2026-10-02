@@ -9,12 +9,18 @@ pub struct HygieneTasks;
 
 #[scheduled]
 impl HygieneTasks {
-    /// Interval form, carrying both shared keys so the trailing named arguments
+    /// Interval form, carrying every shared key so the trailing named arguments
     /// are proved on a trigger that owns none of its own. `replicas = "one"` is
     /// the one that emits a path — `Replicas::One` — through the schedule
-    /// crate's root. A scheduled method returns `anyhow::Result<()>` by
+    /// crate's root, and `key`, which only a job firing once takes, emits the
+    /// identity it pins. A scheduled method returns `anyhow::Result<()>` by
     /// contract, named here through the surface re-export.
-    #[every("60s", transactional = false, replicas = "one")]
+    #[every(
+        "60s",
+        transactional = false,
+        replicas = "one",
+        key = "hygiene::HygieneTasks::tick"
+    )]
     async fn tick(&self) -> nest_rs::core::anyhow::Result<()> {
         Ok(())
     }

@@ -25,18 +25,37 @@ const WHAT_THE_VALUES_DO: &str = "`\"each\"` (the default) fires every occurrenc
      of the app; `\"one\"` fires each occurrence on exactly one replica, the one that claims it \
      through the occurrence lock the app imports";
 
-/// The `Replicas` variant a `replicas = …` value written at `#[member]` selects,
-/// rooted at the surface crate the calling macro emits through
-/// (`::nest_rs_schedule`).
+/// The `replicas` a job declared — read here rather than left as tokens, because
+/// a key beside it depends on which: `key` pins what a job firing once claims
+/// under, and means nothing on one firing on every replica.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Replicas {
+    /// `"each"` — and the key unwritten, which is what a schedule did before the
+    /// key existed.
+    #[default]
+    Each,
+    /// `"one"`.
+    One,
+}
+
+impl Replicas {
+    /// The runtime's `Replicas` variant, rooted at the surface crate the calling
+    /// macro emits through (`::nest_rs_schedule`) and spelled out, so the
+    /// expansion states which behaviour it chose.
+    pub fn tokens(self, surface: &TokenStream) -> TokenStream {
+        match self {
+            Self::Each => quote! { #surface::Replicas::Each },
+            Self::One => quote! { #surface::Replicas::One },
+        }
+    }
+}
+
+/// The [`Replicas`] a `replicas = …` value written at `#[member]` selects.
 ///
 /// Both refusals name the decorator: a value of the wrong kind through
 /// [`crate::args::takes_value`], listing [`VALUES`] as the string literals the
 /// key takes, and a string outside them through [`unknown_value`].
-pub fn replicas_value(
-    member: JobDecorator,
-    expr: &Expr,
-    surface: &TokenStream,
-) -> syn::Result<TokenStream> {
+pub fn replicas_value(member: JobDecorator, expr: &Expr) -> syn::Result<Replicas> {
     let attr = member.name();
     let unwrapped = ungrouped_expr(expr);
     let Expr::Lit(ExprLit {
@@ -54,8 +73,8 @@ pub fn replicas_value(
         ));
     };
     match value.value().as_str() {
-        "each" => Ok(quote! { #surface::Replicas::Each }),
-        "one" => Ok(quote! { #surface::Replicas::One }),
+        "each" => Ok(Replicas::Each),
+        "one" => Ok(Replicas::One),
         other => Err(syn::Error::new_spanned(
             value,
             format!(
@@ -64,10 +83,4 @@ pub fn replicas_value(
             ),
         )),
     }
-}
-
-/// The variant an unwritten key selects — every replica, which is what a
-/// schedule did before the key existed, spelled out so the expansion states it.
-pub fn replicas_default(surface: &TokenStream) -> TokenStream {
-    quote! { #surface::Replicas::Each }
 }

@@ -13,8 +13,9 @@
 //! Every replica of an app fires every occurrence unless a job says otherwise:
 //! `replicas = "one"` on `#[every]` or `#[cron]` fires each occurrence on the one
 //! replica whose claim on it succeeds, through the [`OccurrenceLock`] a backend
-//! binds — at most once, never at least once — and never while a run of the job
-//! is still going on another replica.
+//! binds — at most once per occurrence, never at least once. A job is its crate,
+//! its host struct and its method, so moving its module inside the crate keeps
+//! it; `key = "…"` pins it across a rename of the type or the crate.
 
 // Opts OUT of the workspace `unsafe_code = "forbid"` lint (no `[lints]
 // workspace = true` in Cargo.toml): `tests/integration/module.rs` needs

@@ -64,13 +64,17 @@ in (`ungrouped_expr`). A `*-macros` crate words its value refusals through
 once.** A `proc-macro` crate exports only macros and a surface crate cannot depend
 on its own macros' crate, so a queue name checked on a `#[queue]` literal at
 compile time and on a runtime name at the push is two functions —
-`nest_rs_codegen::is_valid_queue_name` and `QueueName::is_valid` — and that is the
-one duplication allowed. It owes three things: **one** test in the surface crate
-running both over one corpus, its bounds read from the runtime's constants
-(`QueueName::MAX_LEN`) rather than retyped; **one fact** in both sentences — the
-compile error is the runtime's with the site in front, so the two give the same
-reason; and a `pub mod` in `nest_rs_codegen` only when the runtime needs a *name*
-from it, as `versioning` does — a function the test calls is re-exported flat.
+`nest_rs_codegen::is_valid_queue_name` and `QueueName::is_valid` — and so is a
+scheduled job's `key`, checked on the `#[every]` / `#[cron]` literal
+(`nest_rs_codegen::is_valid_job_key`) and on a `CronJobMeta` attached by hand at
+the boot. That is the one duplication allowed. It owes three things: **one** test
+in the surface crate running both over one corpus, its bounds read from the
+runtime's constants (`QueueName::MAX_LEN`) rather than retyped — through the
+runtime's public behaviour when its check is private, as the boot's is; **one
+fact** in both sentences — the compile error is the runtime's with the site in
+front, so the two give the same reason; and a `pub mod` in `nest_rs_codegen` only
+when the runtime needs a *name* from it, as `versioning` does — a function the
+test calls is re-exported flat.
 
 **A `warn` may name causes; it may not prescribe an edit the framework cannot
 verify.** The same hint offered "list it in `providers` under its own type as
@@ -303,9 +307,11 @@ snapshot, and every built one compiled by a use site in `nest-rs-macro-hygiene`.
 
 Two of the schedule's refusals are decisions rather than impossibilities, and they
 are this framework's recorded contract, not a gap: a tick has no retry — its retry
-is the next occurrence — and never overlaps itself — an occurrence falling inside a
-run is skipped and counted. A tick whose work must not be lost pushes a queue job,
-which is delivered at least once and retried there.
+is the next occurrence — and a replica runs one occurrence of a job at a time — an
+occurrence falling inside a run there is skipped and counted. `concurrency` counts
+per replica, so that is its whole answer; across replicas a job firing once may run
+on two at once, which *Where a recurring job fires* states. A tick whose work must
+not be lost pushes a queue job, which is delivered at least once and retried there.
 
 ### When (not) to write a decorator
 
@@ -697,7 +703,7 @@ ACL scoped to `~nestrs:queue:audio:*` runs it. Read by the three-level grammar,
 the queue's waiting list would be `nestrs:queue:active:audio`, a list nobody
 fills. A concern whose members each own several structures takes this shape; one
 whose structures each hold many members — the throttler's buckets, the
-schedule's claims and leases — keeps `<structure>` third. The `keys` join's
+schedule's claims — keeps `<structure>` third. The `keys` join's
 `a_member_first_key_is_the_shape_the_rule_states` holds every declared key to
 one of the two, and a member-first concern to this paragraph.
 
@@ -779,8 +785,7 @@ and no script, pipeline, command object or typed command
 | | `…:unique:<key>` | the job holding a unique key |
 | | `…:throttle` | the attempts started in the current window, less those handed back unread (a `Defer`, taken back only inside the window that counted it) — one per queue, since one method drains a queue |
 | throttler | `nestrs:throttler:buckets:<subject>` | one client's current window |
-| schedule | `nestrs:schedule:claims:<occurrence>` | an occurrence's claim — the port's token (`<module path>:<provider>:<method>:<instant_ms>`, the declaring module's path a level per `::`) verbatim; the key's existence is the claim, and its value names the claimer and its run for operators only |
-| | `nestrs:schedule:leases:<job>` | the run of the job going on now — the port's job identity (`<module path>:<provider>:<method>`) verbatim, held by the run that claimed an occurrence, renewed while it lasts and released when it ends |
+| schedule | `nestrs:schedule:claims:<occurrence>` | an occurrence's claim — the port's token (`<crate>:<provider>:<method>:<instant_ms>`, or a pinned `key`'s levels in place of the first three) verbatim; the key's existence is the claim, and its value names the claimer and the trace of the run it fired, for operators only |
 
 **Nothing is kept forever, and nothing that is still owed lapses early.** Every
 record of a job still waiting lives a week past the instant the job is due
@@ -827,7 +832,7 @@ those names is not 6.x's: left alone, not counted, never printed as a `RENAMENX`
 into apalis's list, and named in one `warn` with what it holds, since a structure
 the check cannot read is one it cannot vouch for — and it hides nothing at the
 other names. Never a `SCAN`, which costs the whole keyspace and which an ACL
-confined to `nestrs:*` refuses; a `NOPERM` answer is said, never taken for an
+confined to `nestrs:queue:*` refuses; a `NOPERM` answer is said, never taken for an
 empty layout. The move the docs print is the one
 `layout::a_queue_moved_out_of_the_6x_layout_runs_every_job_it_held_once` runs.
 
@@ -954,11 +959,8 @@ closed, each in its own terms:
 
 - **`OccurrenceLock::claim` / `claimed`** — the occurrence's stale threshold (its
   hold less `MAX_SKEW`), and the loop's cancellation: the occurrence is skipped
-  at `warn`, and a claim in flight at shutdown is abandoned.
-  **`renew` / `release`** — the renewal's beat, a third of the lease: a renewal
-  past it is retried at `warn`, a release past it leaves the lease to lapse, at
-  `warn`. A release is not cut by shutdown, because a replica leaving after a run
-  is every deploy, and one that kept its lease would hold the job on every peer.
+  at `warn`, and a claim in flight at shutdown is abandoned. Nothing outlives the
+  call: an abandoned claim costs its occurrence, and the next is a key of its own.
 - **`ThrottlerStore::hit`** — `HIT_TIMEOUT`, 20 s beside the trait, and below the
   HTTP edge's request timeout so a hung store reads as the same `429` on every
   edge: the request is denied for the window, at `warn` naming the store
@@ -1545,29 +1547,47 @@ drain.
 
   **Where a recurring job fires is declared, never inferred.** `#[every]` and
   `#[cron]` take `replicas = "each"` (the default: every replica fires) or
-  `"one"` — **as if one replica ran the job**: each occurrence fires on at most
-  one replica, and no two runs overlap, since one replica never overlaps its own;
-  `#[after]` refuses the key, since a one-shot fires on the replica that booted.
-  The first half is the occurrence's *claim*, the second the job's *run lease*,
-  taken atomically with it and renewed while the run lasts: an occurrence falling
-  due while the job runs elsewhere is left unclaimed, and the replica running it
-  fires the latest late and reports the rest, as one replica does. A job's
-  identity — what its lease and its claims are keyed on — opens with the path of
-  the module that declared it, because the lock is shared by every app of a
-  deployment and the boot sees one: two apps' same-named jobs are two jobs, one
-  job in a crate both link is one. `"one"` claims each
-  occurrence through the `OccurrenceLock` port, selected by import —
-  `nest_rs::redis::RedisScheduleModule` (feature `redis-schedule`) binds it as a
-  declared factory carrying `nest_rs_schedule::BACKEND_REMEDY` — so a reachable
-  `"one"` job with no binding fails the boot naming the job, and two bindings
-  contest. **At most once, never at least once**: a claim that errors, one still
-  unanswered when its occurrence goes stale or when shutdown is asked for, and an
-  occurrence reached that late are all skipped at `warn`, and a replica that stops
-  after claiming loses the occurrence and holds the job until its lease lapses. A claim answered before shutdown is
-  observed still fires, as a tick that won its wait does — withholding it would
-  lose an occurrence this replica holds the key to, which no other replica can
-  then fire. Work that must not be lost is a queue job the tick pushes. The
-  lock's backends: Redis, built; an in-process one, refused — a lock no other
+  `"one"` — **once per occurrence**: each occurrence fires on the one replica whose
+  claim on it succeeds; `#[after]` refuses the key, since a one-shot fires on the
+  replica that booted. **The claim holds the occurrence and nothing else**, so a
+  run outlasting its period does not hold the job: a peer claims and fires the
+  next occurrence while it goes on, and the two runs overlap — stated on the page,
+  in `Replicas::One` and in `OccurrenceLock`. One replica never overlaps its own
+  runs, which is all `concurrency`'s refusal claims. A run lease holding the job
+  across replicas was built during 7.0 and removed by owner decision: every way it
+  failed — a renewal unanswered once, a reply lost after the claim took it, a
+  deploy landing in a claim's window — held the job on every replica, the claimer
+  included, for the lease's length, with each lost occurrence put down at `debug`
+  to a run that did not exist. A job whose runs must not overlap keeps them
+  shorter than its period, or guards its work where the work is.
+
+  **A job is its crate, its host struct and its method** — what its claims are
+  keyed on, a level each. The crate, because the lock is shared by every app of a
+  deployment and the boot sees one: two apps' same-named jobs in their own crates
+  are two jobs, one job in a crate both link is one. Only the crate, because a
+  module is what a refactor moves: keyed on the whole module path, a file moved
+  inside its crate split the job for the length of the rolling deploy that
+  shipped it. A rename of the type, the method or the crate still starts a new
+  job, and `key = "…"` beside `replicas = "one"` pins the identity the job had —
+  the path its boot line names (`key = "features::NotificationsTasks::purge_expired"`),
+  one grammar read by `nest_rs_codegen::key_value`, refused at `#[after]` and
+  `#[process]` through the job-key table and beside a job firing on every
+  replica. Two jobs firing once under one identity in one app fail its boot,
+  naming both.
+
+  `"one"` claims each occurrence through the `OccurrenceLock` port, selected by
+  import — `nest_rs::redis::RedisScheduleModule` (feature `redis-schedule`) binds
+  it as a declared factory carrying `nest_rs_schedule::BACKEND_REMEDY` — so a
+  reachable `"one"` job with no binding fails the boot naming the job, and two
+  bindings contest. **At most once, never at least once**: a claim that errors,
+  one still unanswered when its occurrence goes stale or when shutdown is asked
+  for, and an occurrence reached that late are all skipped at `warn`, and a
+  replica that stops after claiming loses that occurrence and only that one. A
+  claim answered before shutdown is observed still fires, as a tick that won its
+  wait does — withholding it would lose an occurrence this replica holds the key
+  to, which no other replica can then fire. Work that must not be lost is a queue
+  job the tick pushes. The lock's backends: Redis, built — one `SET … NX PX` per
+  claim and one `EXISTS` per overrun question; an in-process one, refused — a lock no other
   replica can see decides nothing across replicas, which is why `BACKEND_REMEDY`
   answers with `replicas = "each"`; a database one (an expiring claims table, or
   an advisory lock) is possible and unbuilt — an owner question.

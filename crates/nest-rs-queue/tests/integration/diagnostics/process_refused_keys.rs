@@ -29,6 +29,11 @@ impl Demo {
     async fn zoned(&self, _job: DemoCommand) -> anyhow::Result<()> {
         Ok(())
     }
+
+    #[process(queue = DemoQueue, key = "billing::Demo::pinned")]
+    async fn pinned(&self, _job: DemoCommand) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 fn main() {}

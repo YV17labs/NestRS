@@ -21,6 +21,7 @@ use quote::{ToTokens, quote};
 use syn::{Expr, ExprLit, Lit};
 
 use crate::args::{WrittenKeys, site, takes_one_of};
+use crate::identity::KEY;
 use crate::replicas::REPLICAS;
 use crate::ungrouped::ungrouped_expr;
 
@@ -78,12 +79,15 @@ pub enum JobKey {
     Transactional,
     /// `replicas = "one"` — which replicas an occurrence fires on.
     Replicas,
+    /// `key = "billing::InvoiceTasks::close_day"` — the identity a job firing
+    /// once claims its occurrences under, pinned across a rename.
+    Key,
 }
 
 impl JobKey {
     /// Every key, in the order a member's column lists them — the order its
     /// unknown-key refusal and its sentences name them in.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Queue,
         Self::Retries,
         Self::Concurrency,
@@ -91,6 +95,7 @@ impl JobKey {
         Self::Tz,
         Self::Transactional,
         Self::Replicas,
+        Self::Key,
     ];
 
     /// The key as it is written.
@@ -103,6 +108,7 @@ impl JobKey {
             Self::Tz => "tz",
             Self::Transactional => TRANSACTIONAL,
             Self::Replicas => REPLICAS,
+            Self::Key => KEY,
         }
     }
 
@@ -117,6 +123,7 @@ impl JobKey {
             Self::Tz => "tz = \"Europe/Paris\"",
             Self::Transactional => "transactional = false",
             Self::Replicas => "replicas = \"one\"",
+            Self::Key => "key = \"billing::InvoiceTasks::close_day\"",
         }
     }
 }
@@ -140,7 +147,7 @@ enum Cell {
 const fn cell(key: JobKey, member: JobDecorator) -> Cell {
     use Cell::{Refuses, Takes};
     use JobDecorator::{After, Cron, Every, Process};
-    use JobKey::{Concurrency, Queue, Replicas, Retries, Throttle, Transactional, Tz};
+    use JobKey::{Concurrency, Key, Queue, Replicas, Retries, Throttle, Transactional, Tz};
     match (key, member) {
         (Queue, Process) => Takes,
         (Queue, Every | Cron | After) => Refuses(RUNS_IN_PROCESS),
@@ -170,6 +177,16 @@ const fn cell(key: JobKey, member: JobDecorator) -> Cell {
             Refuses("a job is delivered to one worker, so there is no replica to choose")
         }
         (Replicas, After) => Refuses("a one-shot fires on the replica that booted"),
+
+        (Key, Every | Cron) => Takes,
+        (Key, Process) => Refuses(
+            "a job is its queue and its own id — the key that keeps a queue from holding one \
+             piece of work twice is the push's, `PushOptions::with_unique`",
+        ),
+        (Key, After) => Refuses(
+            "a one-shot fires on the replica that booted and claims nothing, so it has no identity \
+             to pin",
+        ),
     }
 }
 
@@ -178,9 +195,11 @@ const fn cell(key: JobKey, member: JobDecorator) -> Cell {
 const RUNS_IN_PROCESS: &str = "a scheduled tick runs in process and is not delivered from a \
      queue — push a job from the tick to reach one";
 
-/// The one overlap fact both recurring triggers state.
-const NEVER_OVERLAPS: &str = "a scheduled job never overlaps itself — an occurrence falling \
-     inside a run is skipped and counted";
+/// The one overlap fact both recurring triggers state. Per replica, because that
+/// is what `concurrency` counts and all a schedule holds to: across replicas, a
+/// job firing once may run on two at once when a run outlasts its period.
+const NEVER_OVERLAPS: &str = "a replica runs one occurrence of a scheduled job at a time — one \
+     falling due inside a run there is skipped and counted";
 
 /// The keys `member` takes — its column of the table, in [`JobKey::ALL`]'s order.
 pub fn job_keys(member: JobDecorator) -> impl Iterator<Item = JobKey> {
@@ -398,7 +417,8 @@ mod tests {
         assert_eq!(
             read(JobDecorator::Cron, "priority"),
             Err(
-                "unknown #[cron] argument `priority`; expected `tz`, `transactional` or `replicas`"
+                "unknown #[cron] argument `priority`; expected `tz`, `transactional`, `replicas` \
+                 or `key`"
                     .to_owned()
             ),
         );

@@ -1,7 +1,8 @@
 //! The worker-job keys a `#[scheduled]` one-shot cannot take, each refused with
 //! the fact that makes it meaningless — the table in `framework.md`, *The impl
-//! half* — rather than as an unknown key. `replicas` is among them: a one-shot
-//! fires on the replica that booted. One method per cell.
+//! half* — rather than as an unknown key. `replicas` and `key` are among them: a
+//! one-shot fires on the replica that booted and claims nothing. One method per
+//! cell.
 
 use nest_rs_core::injectable;
 use nest_rs_schedule::scheduled;
@@ -29,6 +30,11 @@ impl Tasks {
 
     #[after("1s", replicas = "one")]
     async fn claimed(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[after("1s", key = "billing::Tasks::pinned")]
+    async fn pinned(&self) -> anyhow::Result<()> {
         Ok(())
     }
 

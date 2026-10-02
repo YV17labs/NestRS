@@ -553,12 +553,18 @@ mod tests {
                 "transactional",
             ),
             (
-                err(
-                    crate::replicas::replicas_value(every, &parse_quote!(one), &quote!(::x))
-                        .map(drop),
-                ),
+                err(crate::replicas::replicas_value(every, &parse_quote!(one)).map(drop)),
                 "replicas",
             ),
+            (
+                err(crate::identity::key_value(every, &parse_quote!(billing)).map(drop)),
+                "key",
+            ),
+            (
+                err(crate::identity::key_value(every, &parse_quote!("billing:close")).map(drop)),
+                "key",
+            ),
+            (crate::identity::key_without_replicas_one(every), "key"),
         ] {
             assert!(
                 refusal.starts_with(&format!("#[every] `{key}`")),
@@ -647,11 +653,7 @@ mod tests {
 
         // A value outside a closed set keeps the `unknown` shape, which names
         // both as well.
-        let unknown =
-            err(
-                crate::replicas::replicas_value(every, &parse_quote!("all"), &quote!(::x))
-                    .map(drop),
-            );
+        let unknown = err(crate::replicas::replicas_value(every, &parse_quote!("all")).map(drop));
         assert!(
             unknown.starts_with("unknown #[every] replicas `all`"),
             "{unknown}"

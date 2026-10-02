@@ -42,6 +42,9 @@ nest-rs-testing = { path = "../nest-rs-testing" }
 # answers is abandoned at its occurrence's stale threshold — most of a minute —
 # without the suite waiting that minute out.
 tokio = { workspace = true, features = ["test-util"] }
+# Pins the decorators' compile-time copy of the `key` rule against the boot's
+# (tests/integration/scheduler.rs).
+nest-rs-codegen = { path = "../nest-rs-codegen" }
 
 # The workspace lints minus `unsafe_code = "forbid"`, which this crate states in
 # its `lib.rs` instead (its tests write the environment).

@@ -36,14 +36,6 @@ impl OccurrenceLock for ElsewhereLock {
     async fn claimed(&self, _token: &str) -> Result<bool, OccurrenceLockError> {
         Ok(false)
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 /// A second lock backend's binding, declared the way the port's contract asks.

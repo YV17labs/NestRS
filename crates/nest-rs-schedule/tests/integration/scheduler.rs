@@ -63,6 +63,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             run: tick_interval,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .attach_meta::<TimeoutHost, CronJobMeta>(CronJobMeta {
             origin: module_path!(),
@@ -72,6 +73,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             run: tick_timeout,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .attach_meta::<CronHost, CronJobMeta>(CronJobMeta {
             origin: module_path!(),
@@ -84,6 +86,7 @@ async fn scheduler_runs_interval_timeout_and_cron_jobs() {
             run: tick_cron,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -151,6 +154,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             run: tick_panic,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .attach_meta::<SurvivorHost, CronJobMeta>(CronJobMeta {
             origin: module_path!(),
@@ -160,6 +164,7 @@ async fn a_panicking_job_keeps_firing_and_does_not_stop_others() {
             run: tick_survivor,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -206,6 +211,7 @@ async fn invalid_cron_expression_fails_configure() {
             run: tick_cron,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -266,6 +272,7 @@ async fn jobs_run_inside_the_bound_job_context() {
             run: tick_observe,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -339,6 +346,7 @@ async fn a_panicking_jobs_own_message_reaches_the_operator() {
             run: tick_panic_naming_itself,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -421,6 +429,7 @@ async fn a_failed_tick_names_every_cause_beneath_its_error() {
             run: tick_wrapped_failure,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -486,6 +495,7 @@ async fn a_failed_tick_says_a_decode_failure_without_its_value() {
             run: tick_decode_failure,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -543,6 +553,7 @@ async fn a_tick_its_context_could_not_settle_is_reported_as_failed() {
             run: tick_succeed,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -623,6 +634,7 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
             run: tick_never,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -658,15 +670,12 @@ async fn a_cron_with_no_future_occurrence_says_so_rather_than_waiting_forever() 
 }
 
 /// A lock every replica in a test reaches, standing in for the store a
-/// deployment shares: it records each claim, grants an occurrence to its first
-/// claimant only, and holds each job's run lease for the run that took it until
-/// that run releases it — a store whose leases never lapse, since no run here
-/// stops without releasing.
+/// deployment shares: it records each claim and grants an occurrence to its
+/// first claimant only.
 #[derive(Default)]
 struct SharedLock {
     claims: std::sync::Mutex<Vec<(String, Duration)>>,
     granted: std::sync::Mutex<std::collections::HashSet<String>>,
-    leases: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 #[async_trait::async_trait]
@@ -676,10 +685,6 @@ impl OccurrenceLock for SharedLock {
             .lock()
             .expect("lock")
             .push((occurrence.token.clone(), occurrence.hold));
-        let mut leases = self.leases.lock().expect("lock");
-        if leases.contains_key(&occurrence.job) {
-            return Ok(OccurrenceClaim::RunningElsewhere);
-        }
         if !self
             .granted
             .lock()
@@ -688,25 +693,20 @@ impl OccurrenceLock for SharedLock {
         {
             return Ok(OccurrenceClaim::ClaimedElsewhere);
         }
-        leases.insert(occurrence.job.clone(), occurrence.run.clone());
         Ok(OccurrenceClaim::Claimed)
     }
 
     async fn claimed(&self, token: &str) -> Result<bool, OccurrenceLockError> {
         Ok(self.granted.lock().expect("lock").contains(token))
     }
+}
 
-    async fn renew(&self, occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(self.leases.lock().expect("lock").get(&occurrence.job) == Some(&occurrence.run))
-    }
-
-    async fn release(&self, occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        let mut leases = self.leases.lock().expect("lock");
-        if leases.get(&occurrence.job) == Some(&occurrence.run) {
-            leases.remove(&occurrence.job);
-        }
-        Ok(())
-    }
+/// The crate this suite is compiled as — the first level of every identity a
+/// job it declares derives.
+fn crate_name() -> &'static str {
+    module_path!()
+        .split_once("::")
+        .map_or(module_path!(), |(krate, _)| krate)
 }
 
 /// The instant an occurrence key names, in milliseconds since the epoch.
@@ -756,6 +756,7 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
                 run: tick_once,
                 transaction: JobTransaction::Pool,
                 replicas: Replicas::One,
+                key: None,
             })
             .build();
         let mut scheduler = Scheduler::new();
@@ -799,11 +800,8 @@ async fn two_replicas_sharing_a_lock_fire_each_occurrence_once() {
             "a claim outlasts clock skew: {hold:?}"
         );
         assert!(
-            occurrence.starts_with(&format!(
-                "{}:{PROVIDER}:{METHOD}:",
-                module_path!().replace("::", ":")
-            )),
-            "an occurrence is a level per `::`, so no segment is empty: {occurrence}",
+            occurrence.starts_with(&format!("{}:{PROVIDER}:{METHOD}:", crate_name())),
+            "an occurrence is the job's crate, provider and method, a level each: {occurrence}",
         );
     }
 }
@@ -826,15 +824,18 @@ fn tick_overlapping(_: &Container) -> RunFuture<'_> {
     })
 }
 
-/// `replicas = "one"` is one replica running the job, and one replica never
-/// overlaps its own runs. Keyed per occurrence alone, a run outlasting its
-/// period left each idle replica to claim the next instant, and the audit
-/// measured three runs of one job in flight on three replicas. The run lease
-/// taken with the claim holds the job on every replica while a run lasts, and
-/// the replica running it reports the occurrences it overran, as one replica
-/// does — not the idle ones, which would say it once each.
+/// `replicas = "one"` is once per occurrence, and nothing about runs: a run
+/// outlasting its period holds nothing, so an idle replica claims and fires the
+/// next occurrence while it goes on, and the runs overlap across replicas — the
+/// contract the page and the port state. Every occurrence is still fired once,
+/// on the replica that claimed it; and the replica whose run overran the ones
+/// its peers fired hears that they were claimed elsewhere.
+///
+/// A run lease fails this test: holding the job on every replica, it keeps the
+/// runs apart — and every way it cannot be renewed, released or answered holds
+/// the job for its whole length, the claimer included.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_run_outlasting_its_period_holds_the_job_on_every_replica() {
+async fn a_run_outlasting_its_period_leaves_the_next_occurrences_to_its_peers() {
     struct OverlapHost;
     const PERIOD: Duration = Duration::from_millis(100);
 
@@ -854,6 +855,7 @@ async fn a_run_outlasting_its_period_holds_the_job_on_every_replica() {
                 run: tick_overlapping,
                 transaction: JobTransaction::Pool,
                 replicas: Replicas::One,
+                key: None,
             })
             .build();
         let mut scheduler = Scheduler::new();
@@ -872,44 +874,43 @@ async fn a_run_outlasting_its_period_holds_the_job_on_every_replica() {
             .expect("serve returns Ok");
     }
 
-    assert!(
-        OVERLAP_RUNS.load(Ordering::SeqCst) >= 2,
-        "the job ran, back to back, within 1.6 s"
-    );
+    let granted = lock.granted.lock().expect("lock").len() as u64;
+    assert!(granted >= 4, "occurrences were claimed within 1.6 s");
     assert_eq!(
-        OVERLAP_MOST.load(Ordering::SeqCst),
-        1,
-        "no two runs of a job firing once overlap, on any replica"
+        OVERLAP_RUNS.load(Ordering::SeqCst),
+        granted,
+        "each occurrence fired once, on the replica that claimed it"
     );
-    let overrun: Vec<_> = logs
+    assert!(
+        OVERLAP_MOST.load(Ordering::SeqCst) >= 2,
+        "a peer fired the next occurrence while a run went on, so two ran at once"
+    );
+    let claimed_elsewhere: u64 = logs
         .find(
             nest_rs_schedule::TARGET,
-            "occurrences skipped: they fell due while the previous one was claimed or run",
+            "occurrences overrun on this replica, each claimed by another",
         )
         .into_iter()
         .filter(|event| event.field("provider").as_deref() == Some("OverlapHost"))
-        .collect();
-    assert!(
-        !overrun.is_empty(),
-        "the replica that ran the job reports what its run overran"
-    );
-    for event in &overrun {
-        assert_eq!(event.level, "warn");
-        assert_eq!(
-            event.field("claimed_elsewhere").as_deref(),
-            Some("0"),
-            "nobody ran an occurrence while the job was running: {event:?}"
-        );
-    }
-    assert!(
-        logs.find(
-            nest_rs_schedule::TARGET,
-            "occurrence left to another replica, which is running the job",
+        .chain(
+            logs.find(
+                nest_rs_schedule::TARGET,
+                "occurrences skipped: they fell due while the previous one was claimed or run",
+            )
+            .into_iter()
+            .filter(|event| event.field("provider").as_deref() == Some("OverlapHost")),
         )
-        .into_iter()
-        .any(|event| event.level == "debug"
-            && event.field("provider").as_deref() == Some("OverlapHost")),
-        "an idle replica leaves the occurrence to the one running the job, at debug"
+        .filter_map(|event| {
+            event
+                .field("claimed_elsewhere")
+                .or_else(|| event.field("overrun"))
+                .and_then(|count| count.parse::<u64>().ok())
+        })
+        .sum();
+    assert!(
+        claimed_elsewhere >= 1,
+        "the replica whose run overran its peers' occurrences heard they were claimed: {:#?}",
+        logs.events()
     );
 }
 
@@ -941,6 +942,7 @@ async fn a_cron_firing_on_one_replica_claims_the_instant_its_expression_names() 
             run: tick_cron_once,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -984,6 +986,7 @@ async fn a_job_firing_on_one_replica_fails_the_boot_without_a_lock() {
             run: tick_once,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
 
@@ -1016,6 +1019,7 @@ async fn a_one_shot_firing_on_one_replica_fails_the_boot() {
             run: tick_once,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
 
@@ -1041,6 +1045,7 @@ async fn a_zero_interval_fails_the_boot() {
             run: tick_once,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
 
@@ -1071,6 +1076,7 @@ async fn a_sub_millisecond_interval_fails_the_boot_whatever_its_replicas() {
                 run: tick_once,
                 transaction: JobTransaction::Pool,
                 replicas,
+                key: None,
             })
             .build();
 
@@ -1113,14 +1119,6 @@ impl OccurrenceLock for FailingLock {
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Err(unreachable_lock())
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 static UNCLAIMED_HITS: AtomicU64 = AtomicU64::new(0);
@@ -1152,6 +1150,7 @@ async fn an_occurrence_whose_lock_fails_is_skipped_and_says_so() {
             run: tick_unclaimed,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -1234,14 +1233,6 @@ impl OccurrenceLock for SlowLock {
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Ok(false)
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 static SLOWLY_CLAIMED_HITS: AtomicU64 = AtomicU64::new(0);
@@ -1275,6 +1266,7 @@ async fn occurrences_overrun_by_a_slow_claim_are_skipped_and_counted_aloud() {
             run: tick_slowly_claimed,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -1358,6 +1350,7 @@ async fn two_jobs_sharing_one_name_fail_the_boot_naming_both() {
         run: tick_noop,
         transaction: JobTransaction::Pool,
         replicas: Replicas::One,
+        key: None,
     };
     let container = crate::hermetic()
         .provide_dyn::<dyn OccurrenceLock>(lock)
@@ -1377,6 +1370,189 @@ async fn two_jobs_sharing_one_name_fail_the_boot_naming_both() {
         refusal.contains(&format!("(declared twice in {})", module_path!())),
         "one site, named once: {refusal}"
     );
+}
+
+/// What the boot answers a job attached by hand that pins `key`, firing as
+/// `replicas` says: `Ok` when it configures, the refusal otherwise.
+async fn boot_pinning(key: &'static str, replicas: Replicas) -> Result<(), String> {
+    struct PinnedTasks;
+    let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
+    let container = crate::hermetic()
+        .provide_dyn::<dyn OccurrenceLock>(lock)
+        .attach_meta::<PinnedTasks, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
+            provider: "PinnedTasks",
+            method: "sweep",
+            trigger: Trigger::Interval(Duration::from_secs(1)),
+            run: tick_noop,
+            transaction: JobTransaction::Pool,
+            replicas,
+            key: Some(key),
+        })
+        .build();
+    Scheduler::new()
+        .configure(&container)
+        .await
+        .map_err(|refusal| refusal.to_string())
+}
+
+/// `#[every]` and `#[cron]` check a `key` literal at compile time, and the boot
+/// checks the one a `CronJobMeta` attached by hand carries: two copies of one
+/// rule, run here over one corpus, so the two cannot disagree on a key — and
+/// both refusals state one fact, the decorator's being the boot's with the site
+/// in front.
+#[tokio::test]
+async fn the_decorators_copy_of_the_key_rule_agrees_with_the_boots() {
+    const CORPUS: [&str; 13] = [
+        "billing::InvoiceTasks::close_day",
+        "nightly_close",
+        "billing.nightly-close",
+        "café::Tâches::purger",
+        "",
+        "billing::",
+        "::billing",
+        "billing:::close",
+        "billing:close",
+        "billing::close day",
+        "billing::\tclose",
+        "billing::\u{7}",
+        "a::b::c::d::e",
+    ];
+    for key in CORPUS {
+        let boot = boot_pinning(key, Replicas::One).await;
+        assert_eq!(
+            boot.is_ok(),
+            nest_rs_codegen::is_valid_job_key(key),
+            "the two copies disagree on {key:?}: {boot:?}"
+        );
+        if let Err(refusal) = boot {
+            let compile = nest_rs_codegen::invalid_job_key("every", key);
+            let fact = compile
+                .strip_prefix("#[every] `key`: ")
+                .expect("the decorator's refusal opens with its site");
+            assert!(
+                refusal.contains(fact),
+                "one fact at both sites: {refusal} / {compile}"
+            );
+        }
+    }
+}
+
+/// A key pins what a job firing once claims under, so a job attached by hand
+/// that pins one and fires on every replica fails the boot, as the decorator
+/// refuses it at compile time, with the same fact.
+#[tokio::test]
+async fn a_key_on_a_job_firing_on_every_replica_fails_the_boot() {
+    let refusal = boot_pinning("billing::PinnedTasks::sweep", Replicas::Each)
+        .await
+        .expect_err("a key nothing claims under");
+    let compile = nest_rs_codegen::key_without_replicas_one(nest_rs_codegen::JobDecorator::Every);
+    let fact = compile
+        .strip_prefix("#[every] `key`: ")
+        .expect("the decorator's refusal opens with its site");
+    assert!(
+        refusal.contains("`PinnedTasks::sweep`") && refusal.contains(fact),
+        "{refusal}"
+    );
+}
+
+/// Two jobs firing once under one identity — one pinning the identity another
+/// derives — would take turns at its occurrences. The boot refuses them, naming
+/// the identity and each job; the same key on a job firing on every replica is
+/// refused for its own reason, never as a collision.
+#[tokio::test]
+async fn two_jobs_firing_once_under_one_identity_fail_the_boot_naming_both() {
+    struct InvoiceTasks;
+    struct LedgerTasks;
+
+    let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
+    let derived = format!("{}::InvoiceTasks::close_day", crate_name());
+    let pinned: &'static str = Box::leak(derived.clone().into_boxed_str());
+    let container = crate::hermetic()
+        .provide_dyn::<dyn OccurrenceLock>(lock)
+        .attach_meta::<InvoiceTasks, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
+            provider: "InvoiceTasks",
+            method: "close_day",
+            trigger: Trigger::Interval(Duration::from_secs(1)),
+            run: tick_noop,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::One,
+            key: None,
+        })
+        .attach_meta::<LedgerTasks, CronJobMeta>(CronJobMeta {
+            origin: module_path!(),
+            provider: "LedgerTasks",
+            method: "close",
+            trigger: Trigger::Interval(Duration::from_secs(1)),
+            run: tick_noop,
+            transaction: JobTransaction::Pool,
+            replicas: Replicas::One,
+            key: Some(pinned),
+        })
+        .build();
+    let refusal = Scheduler::new()
+        .configure(&container)
+        .await
+        .expect_err("one identity, two jobs")
+        .to_string();
+    assert!(
+        refusal.contains(&format!("`{derived}` by `InvoiceTasks::close_day`"))
+            && refusal.contains("`LedgerTasks::close`"),
+        "{refusal}"
+    );
+}
+
+/// The boot line of a job firing once names the identity it claims under,
+/// spelled as `key = "…"` takes it — so pinning a job before a rename is copying
+/// what its boot said — and a job firing on every replica, which claims nothing,
+/// names none.
+#[tokio::test]
+async fn a_job_firing_once_names_its_identity_at_boot() {
+    struct OnceTasks;
+    struct PinnedOnceTasks;
+    struct EachTasks;
+
+    let logs = LogCapture::install();
+    let lock: Arc<dyn OccurrenceLock> = Arc::new(SharedLock::default());
+    let meta = |provider, replicas, key| CronJobMeta {
+        origin: module_path!(),
+        provider,
+        method: "sweep",
+        trigger: Trigger::Interval(Duration::from_secs(1)),
+        run: tick_noop,
+        transaction: JobTransaction::Pool,
+        replicas,
+        key,
+    };
+    let container = crate::hermetic()
+        .provide_dyn::<dyn OccurrenceLock>(lock)
+        .attach_meta::<OnceTasks, CronJobMeta>(meta("OnceTasks", Replicas::One, None))
+        .attach_meta::<PinnedOnceTasks, CronJobMeta>(meta(
+            "PinnedOnceTasks",
+            Replicas::One,
+            Some("billing::close"),
+        ))
+        .attach_meta::<EachTasks, CronJobMeta>(meta("EachTasks", Replicas::Each, None))
+        .build();
+    Scheduler::new()
+        .configure(&container)
+        .await
+        .expect("three jobs, three identities");
+
+    let booted = |provider: &str| {
+        logs.find(nest_rs_schedule::TARGET, "scheduled job (interval)")
+            .into_iter()
+            .find(|line| line.field("provider").as_deref() == Some(provider))
+            .unwrap_or_else(|| panic!("{provider} files its boot line"))
+            .field("key")
+    };
+    assert_eq!(
+        booted("OnceTasks"),
+        Some(format!("{}::OnceTasks::sweep", crate_name()))
+    );
+    assert_eq!(booted("PinnedOnceTasks").as_deref(), Some("billing::close"));
+    assert_eq!(booted("EachTasks"), None);
 }
 
 /// A lock whose first claim takes longer than the job's period and grants it,
@@ -1403,14 +1579,6 @@ impl OccurrenceLock for PeerFiredLock {
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Ok(true)
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 /// On a job firing once, an overrun is no loss when a peer claimed every
@@ -1433,6 +1601,7 @@ async fn occurrences_a_peer_claimed_while_this_replica_overran_are_not_reported_
             run: tick_noop,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -1504,6 +1673,7 @@ async fn an_occurrence_a_run_overran_by_less_than_a_period_fires_late_rather_tha
             run: tick_a_little_longer_than_its_period,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -1597,6 +1767,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
             run: tick_stalled_interval,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .attach_meta::<StalledCronHost, CronJobMeta>(CronJobMeta {
             origin: module_path!(),
@@ -1609,6 +1780,7 @@ async fn a_replica_stalled_past_several_occurrences_fires_only_the_latest_late()
             run: tick_stalled_cron,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -1690,6 +1862,7 @@ async fn ticks_a_long_run_overran_on_every_replica_are_skipped_and_counted_aloud
             run: tick_longer_than_its_period,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -1759,6 +1932,7 @@ async fn a_run_just_over_its_period_is_late_on_every_tick_and_skips_none() {
             run: tick_slightly_longer_than_its_period,
             transaction: JobTransaction::Pool,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -1810,14 +1984,6 @@ impl OccurrenceLock for StallingLock {
         tokio::time::sleep(Duration::from_millis(300)).await;
         Ok(false)
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 /// A lock that records the token it is handed at **both** sites, and stalls its
@@ -1845,14 +2011,6 @@ impl OccurrenceLock for RecordingLock {
             .expect("lock")
             .push(occurrence.to_owned());
         Ok(false)
-    }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
     }
 }
 
@@ -1882,6 +2040,7 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
             run: tick_noop,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -1906,9 +2065,9 @@ async fn the_claim_and_the_overrun_check_are_asked_one_token_shape() {
         "a stalled claim overruns, so the overrun check ran: {asked:?}"
     );
 
-    // One identity at both sites — the declaring path, the provider and the
-    // method, a level per `::` — and the instant last.
-    let identity = format!("{}:{PROVIDER}:{METHOD}:", module_path!().replace("::", ":"));
+    // One identity at both sites — the declaring crate, the provider and the
+    // method, a level each — and the instant last.
+    let identity = format!("{}:{PROVIDER}:{METHOD}:", crate_name());
     for token in claimed.iter().chain(&asked) {
         let instant = token
             .strip_prefix(&identity)
@@ -1947,6 +2106,7 @@ async fn every_instant_of_a_job_firing_once_is_claimed_or_counted() {
             run: tick_noop,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -2021,14 +2181,6 @@ impl OccurrenceLock for UnanswerableLock {
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Err(unreachable_lock())
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 /// Past the hundred overrun occurrences a report asks about, the rest are counted
@@ -2050,6 +2202,7 @@ async fn an_overrun_the_lock_cannot_answer_about_is_counted_unanswered_and_unche
             run: tick_noop,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -2132,14 +2285,6 @@ impl OccurrenceLock for PanickingLock {
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         panic!("the lock store's client panicked");
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 static BEHIND_A_PANICKING_LOCK: AtomicU64 = AtomicU64::new(0);
@@ -2175,6 +2320,7 @@ async fn a_lock_that_panics_skips_the_occurrence_and_the_schedule_goes_on() {
             run: tick_behind_a_panicking_lock,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -2242,6 +2388,7 @@ async fn a_run_panicking_before_its_future_keeps_its_schedule() {
             run: tick_panicking_before_its_future,
             transaction: JobTransaction::PerAttempt,
             replicas: Replicas::Each,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -2293,14 +2440,6 @@ impl OccurrenceLock for UnwritableLock {
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         Err(OccurrenceLockError::new(UnwritableError))
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 fn tick_behind_an_unwritable_lock(_: &Container) -> RunFuture<'_> {
@@ -2327,6 +2466,7 @@ async fn a_schedule_whose_every_job_died_keeps_serving_until_shutdown() {
             run: tick_behind_an_unwritable_lock,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();
@@ -2379,14 +2519,6 @@ impl OccurrenceLock for HungLock {
     async fn claimed(&self, _occurrence: &str) -> Result<bool, OccurrenceLockError> {
         std::future::pending().await
     }
-
-    async fn renew(&self, _occurrence: &Occurrence) -> Result<bool, OccurrenceLockError> {
-        Ok(true)
-    }
-
-    async fn release(&self, _occurrence: &Occurrence) -> Result<(), OccurrenceLockError> {
-        Ok(())
-    }
 }
 
 struct HungHost;
@@ -2415,6 +2547,7 @@ async fn shut_down_while_a_claim_hangs(
             run,
             transaction: JobTransaction::Pool,
             replicas: Replicas::One,
+            key: None,
         })
         .build();
     let mut scheduler = Scheduler::new();

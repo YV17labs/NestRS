@@ -3245,6 +3245,7 @@ dependencies = [
  "croner",
  "futures-util",
  "libc",
+ "nest-rs-codegen",
  "nest-rs-core",
  "nest-rs-schedule-macros",
  "nest-rs-testing",

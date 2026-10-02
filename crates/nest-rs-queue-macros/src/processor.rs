@@ -596,7 +596,7 @@ impl Parse for ProcessArgs {
                     equals(input, &key, &name)?;
                     transactional = Some(transactional_value(PROCESS, &input.parse()?)?);
                 }
-                unread @ (JobKey::Tz | JobKey::Replicas) => {
+                unread @ (JobKey::Tz | JobKey::Replicas | JobKey::Key) => {
                     return Err(unread_job_key(PROCESS, unread, &key));
                 }
             }

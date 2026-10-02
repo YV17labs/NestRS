@@ -15,13 +15,15 @@ pub enum Replicas {
     /// first fires one period after this process boots.
     #[default]
     Each,
-    /// As if one replica ran the job: each occurrence fires on the one replica
-    /// whose claim on it succeeds, through the bound
-    /// [`OccurrenceLock`](crate::OccurrenceLock), and never while a run of the
-    /// job is still going on another — a run outlasting its period holds the job
-    /// on every replica, as it holds one replica's loop. An `#[every]` job ticks
-    /// on multiples of its period since the Unix epoch, so replicas started at
-    /// different times share their instants.
+    /// Each occurrence fires on the one replica whose claim on it succeeds,
+    /// through the bound [`OccurrenceLock`](crate::OccurrenceLock) — at most once
+    /// across the replicas. An `#[every]` job ticks on multiples of its period
+    /// since the Unix epoch, so replicas started at different times share their
+    /// instants.
+    ///
+    /// Once per **occurrence**, not one run at a time: a run outlasting its period
+    /// holds nothing, so the next occurrence fires on another replica while it goes
+    /// on, and the two runs overlap. A replica never overlaps its own runs.
     One,
 }
 

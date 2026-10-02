@@ -29,14 +29,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { CONTENT_ROOT } from '../src/sidebar.mjs';
-import { RULES, lintFile, lint } from './lint-docs.mjs';
+import { CANON, RULES, lintFile, lint } from './lint-docs.mjs';
 
 /// The version a documented pin has to carry, read from the same canon the rule
 /// reads — a literal here would make the `install-stanza` fixture fail on the
 /// next release rather than when the rule breaks.
-const CANON_VERSION = JSON.parse(
-  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'canon.json'), 'utf8'),
-).version_req;
+const CANON_VERSION = CANON.version_req;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS_ROOT = join(HERE, '..');

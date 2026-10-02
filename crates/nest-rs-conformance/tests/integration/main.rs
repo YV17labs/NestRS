@@ -15,7 +15,6 @@
 
 mod acls;
 mod blinds;
-mod canon;
 mod decodes;
 mod dependencies;
 mod docs;

@@ -33,17 +33,15 @@ search index, and the `llms.txt` family). `npm run preview` serves it.
 | `templates/` | the five skeletons `STYLE.md` §B names — T-CONCEPT, T-INDEX, T-TUTORIAL, T-RECIPE, T-SINGLE |
 | `scripts/lint-docs.mjs` | the gate: every rule in §F, plus the H2 vocabulary, the caps, links and anchors |
 | `scripts/lint-baseline.json` | violations a rule inherited when it landed — shrinks only |
-| `canon.json` | **generated** — the framework facts the linter checks pages against |
-| `demo-sources.json` | **generated** — every `demo/` file a fence may quote, with the port it pins |
 | `src/sidebar.mjs` | the Basics / All options tier split — threshold, vocabulary, exemption |
 | `src/components/Sidebar.astro` | the menu: two levels, and only the section you are in lists its pages |
 | `src/redirects.mjs` | one entry per route that ever shipped and moved |
 
-**The two `*.json` are written by `cargo nextest run -p nest-rs-conformance`, never
-by hand.** They are what lets the linter derive nothing: it opens no file outside
-`docs/`, so the workflow's `docs/**` path filter is an exact declaration of the
-job's input set. A framework change that moves a documented fact regenerates the
-canon, lands a `docs/**` diff, and trips the docs job on the commit that caused it.
+**The linter needs a Rust toolchain.** It checks pages against the framework facts
+`nest-rs-conformance`'s `canon` binary prints, and runs it on every start, so the
+facts are always the tree's own and there is no generated file to keep current
+(`cargo run -p nest-rs-conformance --bin canon` shows them). The `demo/` files a
+fence quotes are read directly.
 
 ## Editorial rules
 

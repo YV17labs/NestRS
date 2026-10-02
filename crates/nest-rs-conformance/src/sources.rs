@@ -572,7 +572,7 @@ pub fn declared_units() -> Vec<(String, String, String)> {
     out
 }
 
-/// A `pub const X: &str = "…";` inside a `unit` module — which is either the
+/// A `pub const X: Unit = unit!("…", …);` inside a `unit` module — which is either the
 /// whole of a `src/unit.rs` file or an inline `mod unit`. Nowhere else, so that
 /// a name declared off the convention is reported rather than quietly accepted.
 fn collect_unit_consts(
@@ -584,10 +584,8 @@ fn collect_unit_consts(
     for item in items {
         match item {
             Item::Const(konst) if inside => {
-                if let Expr::Lit(lit) = &*konst.expr
-                    && let Lit::Str(text) = &lit.lit
-                {
-                    out.push((text.value(), krate.to_owned(), konst.ident.to_string()));
+                if let Some(name) = unit_name(&konst.expr) {
+                    out.push((name, krate.to_owned(), konst.ident.to_string()));
                 }
             }
             Item::Mod(module) if module.ident == "unit" => {
@@ -598,6 +596,28 @@ fn collect_unit_consts(
             _ => {}
         }
     }
+}
+
+/// The name a unit constant declares: the first string literal of its
+/// `nest_rs_core::unit!("<edge>.<unit>", …)` declaration.
+fn unit_name(expr: &Expr) -> Option<String> {
+    let Expr::Macro(call) = expr else {
+        return None;
+    };
+    if call.mac.path.segments.last()?.ident != "unit" {
+        return None;
+    }
+    call.mac
+        .tokens
+        .clone()
+        .into_iter()
+        .find_map(|tree| match tree {
+            TokenTree::Literal(lit) => match syn::parse_str::<Lit>(&lit.to_string()) {
+                Ok(Lit::Str(text)) => Some(text.value()),
+                _ => None,
+            },
+            _ => None,
+        })
 }
 
 /// A `pub const X: &str = "nest_rs::…";`, at an item list's top level or one

@@ -10,6 +10,10 @@
 //! baseline behaves. A join itself is always a test: it asserts, so it lives in
 //! `tests/`, and this crate exports no way to run one outside of that.
 //!
+//! One binary reads the same sources without asserting anything: `canon`
+//! prints the framework facts the docs linter checks pages against
+//! (`docs/scripts/lint-docs.mjs` runs it on start).
+//!
 //! The crate exists because a join's population is the **whole workspace**, and
 //! no capability crate owns that. `nest-rs-macro-hygiene` has its own mandate
 //! and is not it.

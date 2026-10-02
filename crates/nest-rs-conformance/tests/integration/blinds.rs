@@ -89,7 +89,6 @@ type Declares = fn() -> Vec<Followed>;
 /// that way says why in its own `//!`.
 const JOINS: &[(&str, Declares)] = &[
     ("acls", crate::acls::followed),
-    ("canon", crate::canon::followed),
     ("decodes", crate::decodes::followed),
     ("dependencies", crate::dependencies::followed),
     ("docs", crate::docs::followed),

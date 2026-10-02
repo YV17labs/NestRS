@@ -5,14 +5,14 @@ use validator::{Validate, ValidationError, ValidationErrors};
 
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
-#[config(namespace = "issuer", validate = "manual")]
+#[config(namespace = "oauth", validate = "manual")]
 #[derive(Clone)]
-pub struct IssuerConfig {
+pub struct OAuthConfig {
     pub clients: Vec<RegisteredClient<Uuid>>,
     pub default_org_id: Uuid,
 }
 
-impl Default for IssuerConfig {
+impl Default for OAuthConfig {
     fn default() -> Self {
         Self {
             clients: Vec::new(),
@@ -21,7 +21,7 @@ impl Default for IssuerConfig {
     }
 }
 
-impl Validate for IssuerConfig {
+impl Validate for OAuthConfig {
     fn validate(&self) -> Result<(), ValidationErrors> {
         let mut errors = ValidationErrors::new();
         if self.clients.is_empty() {
@@ -35,7 +35,7 @@ impl Validate for IssuerConfig {
     }
 }
 
-impl Config for IssuerConfig {
+impl Config for OAuthConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
         let clients = env.json("CLIENTS")?.unwrap_or(base.clients);
         let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(base.default_org_id);
@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn empty_clients_fails_validation() {
-        let cfg = IssuerConfig {
+        let cfg = OAuthConfig {
             clients: vec![],
             default_org_id: Uuid::nil(),
         };
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn non_empty_clients_passes_validation() {
-        let cfg = IssuerConfig {
+        let cfg = OAuthConfig {
             clients: vec![client("ci-runner")],
             default_org_id: Uuid::nil(),
         };
@@ -82,13 +82,13 @@ mod tests {
 
     #[test]
     fn a_clients_file_that_does_not_parse_is_refused_under_its_own_variable_without_its_content() {
-        let path = std::env::temp_dir().join(format!("issuer-clients-{}", Uuid::now_v7()));
+        let path = std::env::temp_dir().join(format!("oauth-clients-{}", Uuid::now_v7()));
         std::fs::write(&path, MISTYPED_CLIENTS).expect("the temp dir is writable");
         let env = ConfigService::with_vars(
-            "issuer",
+            "oauth",
             [("CLIENTS_FILE", path.to_str().expect("a UTF-8 temp path"))],
         );
-        let refusal = IssuerConfig::from_env(&env, IssuerConfig::default())
+        let refusal = OAuthConfig::from_env(&env, OAuthConfig::default())
             .err()
             .map(|e| e.to_string());
         std::fs::remove_file(&path).expect("the temp file is removable");
@@ -101,8 +101,8 @@ mod tests {
 
     #[test]
     fn inline_clients_that_do_not_parse_are_refused_without_their_content() {
-        let env = ConfigService::with_vars("issuer", [("CLIENTS", MISTYPED_CLIENTS)]);
-        let refusal = IssuerConfig::from_env(&env, IssuerConfig::default())
+        let env = ConfigService::with_vars("oauth", [("CLIENTS", MISTYPED_CLIENTS)]);
+        let refusal = OAuthConfig::from_env(&env, OAuthConfig::default())
             .err()
             .map(|e| e.to_string())
             .expect("mistyped inline clients are refused");

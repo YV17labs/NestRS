@@ -7,7 +7,7 @@ mod strategies;
 
 pub mod http;
 
-pub use config::IssuerConfig;
+pub use config::OAuthConfig;
 pub use dtos::LoginDto;
 pub use module::OAuthModule;
 pub use nest_rs::oauth::server::RegisteredClient;

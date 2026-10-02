@@ -60,7 +60,7 @@ config:
 #   REDIS__URL               redis://host:6379
 #   AUTHN__PRIVATE_KEY       PEM, Ed25519 — generate your own, never the repo's
 #   AUTHN__PUBLIC_KEY        PEM, its matching half
-# Optional: STORAGE__ACCESS_KEY, STORAGE__SECRET_KEY, ISSUER__CLIENTS,
+# Optional: STORAGE__ACCESS_KEY, STORAGE__SECRET_KEY, OAUTH__CLIENTS,
 #   SOCIAL__GITHUB__CLIENT_ID / __CLIENT_SECRET, SOCIAL__GOOGLE__*
 secrets: {}
 

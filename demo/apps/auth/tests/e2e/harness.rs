@@ -1,4 +1,4 @@
-use auth::{AuthModule, IssuerConfig, RegisteredClient};
+use auth::{AuthModule, OAuthConfig, RegisteredClient};
 use base64::Engine as _;
 use nest_rs::authn::{JwtConfig, JwtOptions, JwtService, hash_password};
 use nest_rs::social::{GithubSocialConfig, GoogleSocialConfig};
@@ -47,7 +47,7 @@ pub(crate) async fn boot() -> (EphemeralDatabase, TestApp) {
             redirect_url: "http://localhost:3001/social/google/callback".into(),
             scopes: vec![],
         })
-        .provide(IssuerConfig {
+        .provide(OAuthConfig {
             clients: vec![
                 RegisteredClient {
                     client_id: CLIENT_ID.into(),

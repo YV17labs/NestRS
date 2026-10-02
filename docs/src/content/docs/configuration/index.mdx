@@ -257,7 +257,7 @@ read from a file, since that reason may quote its input.
 **A structured value is refused without its content, whichever spelling gave
 it.** `env.json::<T>("KEY")?` decodes a JSON value as any `Deserialize` type, and
 a value that does not decode fails the boot saying where it failed, the kind of
-value found and the type expected — `invalid value for NESTRS_ISSUER__CLIENTS:
+value found and the type expected — `invalid value for NESTRS_OAUTH__CLIENTS:
 invalid type: a string, expected a sequence at line 1 column 76` — never the
 value itself, inline or not: a list of records is where a deployment writes
 credentials, such as each OAuth client's secret. Decode one through `env.json`
@@ -407,7 +407,7 @@ wrong and silent.
 
 ## Advanced
 
-Hand-writing `from_env` (for custom validation, or a field carrying a structured payload, or a rule spanning the whole struct) is covered on [Advanced configuration](/configuration/advanced/) with the real `IssuerConfig` as the worked example.
+Hand-writing `from_env` (for custom validation, or a field carrying a structured payload, or a rule spanning the whole struct) is covered on [Advanced configuration](/configuration/advanced/) with the real `OAuthConfig` as the worked example.
 
 ## In this section
 

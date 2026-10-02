@@ -6,7 +6,7 @@
 //! `#[config]` value is a payload too, and a structured one is where a deployment
 //! writes client secrets. serde's own sentence quotes the value it refused, so a
 //! `from_env` that calls `serde_json::from_str` and hands the error to
-//! `Setting::refuse` — the demo's `IssuerConfig` did, for its OAuth client list —
+//! `Setting::refuse` — the demo's OAuth config did, for its client list —
 //! prints that list's secrets into the boot error. `ConfigService::json` decodes
 //! once, in `nest-rs-config`, and refuses through `nest_rs_core::DecodeError`.
 //! Members: every reader under `crates/` and `demo/`, and what it reaches.
@@ -574,8 +574,8 @@ fn planted(tag: &str, tree: &[(&str, &str)]) -> Vec<String> {
     wrong
 }
 
-/// The join is proved on the shapes it exists to catch: the demo's
-/// `IssuerConfig` as it stood, the same body through an alias and through an
+/// The join is proved on the shapes it exists to catch: the demo's OAuth config
+/// as it stood (then named `IssuerConfig`), the same body through an alias and through an
 /// imported function — and the shapes a reader in one file reaches a decoder in
 /// another: a helper, a method of a crate-local extension, a `FromStr` that
 /// `.parse()` reaches by inference, a macro, and a helper in another crate. The

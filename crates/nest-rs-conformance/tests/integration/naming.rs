@@ -68,6 +68,7 @@ pub(crate) fn followed() -> Vec<Followed> {
 const MODULES_BASELINE: &str = "naming-baseline.txt";
 const BINDINGS_BASELINE: &str = "bindings-baseline.txt";
 const NAMESPACE_BASELINE: &str = "namespace-baseline.txt";
+const CONFIG_STEM_BASELINE: &str = "config-stem-baseline.txt";
 const ERRORS_BASELINE: &str = "errors-baseline.txt";
 const ROOT_FILES_BASELINE: &str = "root-files-baseline.txt";
 const CONFIG_NAMES_BASELINE: &str = "config-names-baseline.txt";
@@ -1755,10 +1756,16 @@ fn idents_in(file: &syn::File) -> BTreeSet<String> {
 /// neither the crate nor the type that parsed it — from the variable, a reader
 /// could not find the code.
 ///
-/// Framework crates only, for the reason the bindings gate gives: a product's
-/// top-level folders are domains, and a product's namespace is the product's
-/// own decision. Shipped declarations only — a `#[config]` inside a `#[cfg(test)]`
-/// module is a fixture, and this walks top-level items.
+/// **Both workspaces.** A product crate reads the same way with its container
+/// left out, exactly as its module types do: `features` holds domains, so
+/// `features/src/oauth/config.rs` is `oauth` (`NESTRS_OAUTH__*`), and an app's
+/// root config would be the app's name, as its root module is. This test once
+/// stopped at the framework on the reading that a product's namespace is the
+/// product's own decision; the demo then declared `issuer` in `oauth/`, a
+/// variable from which no reader could find the file, which is the defect the
+/// law exists to refuse wherever a namespace is written. Shipped declarations
+/// only — a `#[config]` inside a `#[cfg(test)]` module is a fixture, and this
+/// walks top-level items.
 /// The pluralised role folders of `architecture.md` (*Several of the same role*)
 /// plus `providers/`, the folder a selection-by-configuration family keeps its
 /// members in. A role folder groups files of one role; it is not a level of the
@@ -1800,13 +1807,11 @@ fn namespace_is_the_stem() {
     let mut scanned = 0usize;
 
     for krate in crate_dirs() {
-        if !krate.starts_with(&framework) {
-            continue;
-        }
         let Some(name) = krate.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
         let subject = subject_of(name);
+        let is_framework = krate.starts_with(&framework);
         let src = krate.join("src");
         for path in rust_files(&src) {
             let Some(ast) = parsed(&path) else { continue };
@@ -1819,16 +1824,24 @@ fn namespace_is_the_stem() {
                     continue;
                 };
                 scanned += 1;
-                let expected: Vec<String> = subject_segments(name, subject)
-                    .into_iter()
-                    .chain(
-                        folders
-                            .iter()
-                            .map(|f| &**f)
-                            .filter(|f| !PLURAL_ROLE_FOLDERS.contains(f))
-                            .map(folded),
-                    )
+                let below: Vec<String> = folders
+                    .iter()
+                    .map(|f| &**f)
+                    .filter(|f| !PLURAL_ROLE_FOLDERS.contains(f))
+                    .map(folded)
                     .collect();
+                // A framework crate is a subject and leads; a product crate is a
+                // container, named only where nothing below it names the file.
+                let expected: Vec<String> = if is_framework {
+                    subject_segments(name, subject)
+                        .into_iter()
+                        .chain(below)
+                        .collect()
+                } else if below.is_empty() {
+                    vec![folded(subject)]
+                } else {
+                    below
+                };
                 let declared: Vec<String> = namespace.split("__").map(folded).collect();
                 if declared != expected {
                     holes.insert(format!(
@@ -1850,6 +1863,76 @@ fn namespace_is_the_stem() {
         "namespaces that disagree with their stem",
         "a namespace chosen rather than read off the path — move the config to \
          where its word belongs, or take the word of where it sits",
+    );
+}
+
+/// **A `#[config]`'s type is named from the stem its namespace is** — the
+/// other half of the law [`namespace_is_the_stem`] holds, and the half nothing
+/// checked: `redis/src/worker/config.rs` is `RedisWorkerConfig` *and*
+/// `NESTRS_REDIS__WORKER__*`, so from the type a reader finds the variable and
+/// from the variable the type. A provider's config takes the member-first name
+/// the role tables give a provider's files: `social/src/providers/github/config.rs`
+/// is `GithubSocialConfig`.
+///
+/// Read off the namespace the struct declares, which the sibling test holds to
+/// the path, so the two halves cannot pass apart. Both workspaces, for the same
+/// reason as the sibling: the demo's `IssuerConfig`, in `oauth/config.rs`, passed
+/// every join while its name and its variable said `issuer` and its file said
+/// `oauth`.
+#[test]
+fn a_config_is_named_for_its_stem() {
+    let root = repo_root();
+    let mut holes = BTreeSet::new();
+    let mut scanned = 0usize;
+
+    for krate in crate_dirs() {
+        let src = krate.join("src");
+        for path in rust_files(&src) {
+            let Some(ast) = parsed(&path) else { continue };
+            let parts = segments(&path, &src);
+            let member = parts
+                .iter()
+                .position(|part| part == "providers")
+                .and_then(|at| parts.get(at + 1))
+                .map(|member| member.to_string());
+            for item in &ast.items {
+                let Item::Struct(s) = item else { continue };
+                let Some(namespace) = nest_rs_conformance::sources::config_namespace(&s.attrs)
+                else {
+                    continue;
+                };
+                scanned += 1;
+                let mut words: Vec<&str> = namespace.split("__").collect();
+                if let Some(member) = &member
+                    && let Some(at) = words.iter().position(|word| word == member)
+                {
+                    let member = words.remove(at);
+                    words.insert(0, member);
+                }
+                let expected = format!(
+                    "{}Config",
+                    words.iter().map(|word| pascal(word)).collect::<String>()
+                );
+                if folded(&expected) != folded(&s.ident.to_string()) {
+                    holes.insert(format!(
+                        "`{}` is declared by {} under `{namespace}` — its stem names `{expected}`",
+                        s.ident,
+                        relative(&path, &root),
+                    ));
+                }
+            }
+        }
+    }
+
+    baseline::floor(scanned, floors::CONFIGS, "shipped `#[config]` structs");
+    baseline::gate(
+        CONFIG_STEM_BASELINE,
+        &holes,
+        scanned,
+        "shipped `#[config]` structs",
+        "`#[config]` types named otherwise than their namespace",
+        "a config whose type and variable name two different things — rename the \
+         type to the stem its namespace and its path already agree on",
     );
 }
 

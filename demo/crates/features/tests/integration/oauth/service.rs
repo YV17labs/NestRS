@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use features::oauth::{AuthenticatedClient, IssuerConfig, OAuthService};
+use features::oauth::{AuthenticatedClient, OAuthConfig, OAuthService};
 use nest_rs::authn::{JwtOptions, JwtService};
 use nest_rs::oauth::server::TokenError;
 use nest_rs::social::SocialRegistry;
@@ -16,7 +16,7 @@ fn oauth_service() -> OAuthService {
     let users_svc = Arc::new(features::users::UsersService::new(Arc::new(
         DatabaseConnection::default(),
     )));
-    let config = Arc::new(IssuerConfig {
+    let config = Arc::new(OAuthConfig {
         clients: vec![],
         default_org_id: Uuid::nil(),
     });

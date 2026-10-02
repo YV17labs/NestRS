@@ -32,7 +32,7 @@ use uuid::Uuid;
 async fn issues_a_token_for_a_registered_client() {
     let app = TestApp::builder()
         .module::<AuthModule>()
-        .provide(IssuerConfig {
+        .provide(OAuthConfig {
             clients: vec![RegisteredClient {
                 client_id: "test-client".into(),
                 client_secret: "secret".into(),
@@ -53,7 +53,7 @@ async fn issues_a_token_for_a_registered_client() {
 }
 ```
 
-The test never sets a `NESTRS_ISSUER__*` variable, doesn't depend on a
+The test never sets a `NESTRS_OAUTH__*` variable, doesn't depend on a
 committed `.env.test`, and produces the same result on any machine.
 
 ## Pinning through `for_root`
@@ -155,7 +155,7 @@ through `figment::Jail`. The jail is a `dev-dependency` borrowed from
 the `figment` crate; it scopes every `set_env` / `create_file` call to
 the test closure and restores `std::env` on drop.
 
-```rust title="crates/features/src/oauth/config.rs (from the demo)"
+```rust title="crates/features/src/oauth/config.rs"
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,10 +165,10 @@ mod tests {
     fn loads_clients_from_env() {
         figment::Jail::expect_with(|jail| {
             jail.set_env(
-                "NESTRS_ISSUER__CLIENTS",
+                "NESTRS_OAUTH__CLIENTS",
                 r#"[{"client_id":"web","client_secret":"s","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]"#,
             );
-            let cfg = IssuerConfig::load().expect("loads with clients");
+            let cfg = OAuthConfig::load().expect("loads with clients");
             assert_eq!(cfg.clients.len(), 1);
             assert_eq!(cfg.clients[0].client_id, "web");
             Ok(())
@@ -179,7 +179,7 @@ mod tests {
     #[allow(clippy::result_large_err)]
     fn fails_validation_when_no_clients() {
         figment::Jail::expect_with(|_| {
-            let err = IssuerConfig::load().expect_err("empty clients must fail");
+            let err = OAuthConfig::load().expect_err("empty clients must fail");
             assert!(matches!(err, ConfigError::Validation(_)));
             Ok(())
         });

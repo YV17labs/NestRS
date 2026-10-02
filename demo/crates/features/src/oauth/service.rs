@@ -7,7 +7,7 @@ use nest_rs::oauth::server::{TokenError, authenticate_against_registry};
 use nest_rs::social::{SocialProfile, SocialRegistry};
 use uuid::Uuid;
 
-use super::config::IssuerConfig;
+use super::config::OAuthConfig;
 use super::scope::{role_from_db, roles_for_scope};
 use crate::users::{SocialIdentity, UsersService};
 use crate::{Claims, Role};
@@ -37,7 +37,7 @@ pub struct OAuthService {
     #[inject]
     users_svc: Arc<UsersService>,
     #[inject]
-    config: Arc<IssuerConfig>,
+    config: Arc<OAuthConfig>,
 }
 
 impl OAuthService {
@@ -45,7 +45,7 @@ impl OAuthService {
         jwt_svc: Arc<JwtService>,
         providers: Arc<SocialRegistry>,
         users_svc: Arc<UsersService>,
-        config: Arc<IssuerConfig>,
+        config: Arc<OAuthConfig>,
     ) -> Self {
         Self {
             jwt_svc,
@@ -342,7 +342,7 @@ mod tests {
     fn oauth_service(ttl: Duration) -> OAuthService {
         let jwt_svc = Arc::new(jwt_with_ttl(ttl));
         let providers = Arc::new(SocialRegistry::default());
-        let config = Arc::new(IssuerConfig {
+        let config = Arc::new(OAuthConfig {
             clients: vec![RegisteredClient {
                 client_id: "ci".into(),
                 client_secret: "s3cret".into(),

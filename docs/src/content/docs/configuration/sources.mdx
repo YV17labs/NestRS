@@ -184,7 +184,7 @@ pub struct Dispatch {
 
 impl ConfigSource for Dispatch {
     fn get(&self, var: &str) -> Option<String> {
-        if var.starts_with("NESTRS_SEAORM__") || var.starts_with("NESTRS_ISSUER__") {
+        if var.starts_with("NESTRS_SEAORM__") || var.starts_with("NESTRS_OAUTH__") {
             self.vault.get(var)
         } else {
             self.env.get(var)

@@ -10,8 +10,10 @@ sidebar:
 The derive covers per-field rules and `FromStr` covers scalar parsing.
 Two things push a config past them: a field carrying a **structured
 payload** (a JSON blob in one variable) and a **rule spanning the whole
-struct**. This is the real `IssuerConfig` from `features/oauth` (signs
-the OAuth clients accepted by `apps/auth`) — it needs both:
+struct**. This is the real `OAuthConfig` from `features/oauth` (signs
+the OAuth clients accepted by `apps/auth`) — it needs both. Its name and its
+namespace are read off its path, as every config's are: `oauth/config.rs` is
+`OAuthConfig`, read from `NESTRS_OAUTH__*`.
 
 ```rust title="crates/features/src/oauth/config.rs (from the demo)"
 use nest_rs::config::{Config, ConfigService, config};
@@ -21,14 +23,14 @@ use validator::{Validate, ValidationError, ValidationErrors};
 
 const DEFAULT_ORG: Uuid = Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_ac3e);
 
-#[config(namespace = "issuer", validate = "manual")]
+#[config(namespace = "oauth", validate = "manual")]
 #[derive(Clone)]
-pub struct IssuerConfig {
+pub struct OAuthConfig {
     pub clients: Vec<RegisteredClient<Uuid>>,
     pub default_org_id: Uuid,
 }
 
-impl Default for IssuerConfig {
+impl Default for OAuthConfig {
     fn default() -> Self {
         Self {
             clients: Vec::new(),
@@ -37,7 +39,7 @@ impl Default for IssuerConfig {
     }
 }
 
-impl Validate for IssuerConfig {
+impl Validate for OAuthConfig {
     fn validate(&self) -> Result<(), ValidationErrors> {
         let mut errors = ValidationErrors::new();
         if self.clients.is_empty() {
@@ -51,7 +53,7 @@ impl Validate for IssuerConfig {
     }
 }
 
-impl Config for IssuerConfig {
+impl Config for OAuthConfig {
     fn from_env(env: &ConfigService, base: Self) -> nest_rs::config::Result<Self> {
         let clients = env.json("CLIENTS")?.unwrap_or(base.clients);
         let default_org_id = env.parse("DEFAULT_ORG_ID")?.unwrap_or(base.default_org_id);
@@ -64,11 +66,11 @@ impl Config for IssuerConfig {
 ```
 
 - **`base` supplies the fallback, even for the structured field.** An unset
-  `NESTRS_ISSUER__CLIENTS` keeps `base.clients` rather than resetting to an
+  `NESTRS_OAUTH__CLIENTS` keeps `base.clients` rather than resetting to an
   empty list, so a deployment can override the org id without also wiping the
   clients a `for_root` pinned in code.
 - **`clients` is a JSON array in a single variable.** `env.json("CLIENTS")`
-  decodes it as the field's type, inline or through `NESTRS_ISSUER__CLIENTS_FILE`,
+  decodes it as the field's type, inline or through `NESTRS_OAUTH__CLIENTS_FILE`,
   and a value that does not decode fails the boot with `ConfigError::Decode`,
   naming whichever spelling was set, where the value failed, the kind of value
   found and the type expected — never the value, since a mistyped list of
@@ -84,48 +86,54 @@ impl Config for IssuerConfig {
   rule. Per-field rules stay on the derive, as in the lead example.
 
 Wiring and consumption do not change — the same `for_feature` import,
-the same `Arc<IssuerConfig>` injection:
+the same `Arc<OAuthConfig>` injection:
 
-```rust title="crates/features/src/oauth/module.rs (from the demo)"
+```rust title="crates/features/src/oauth/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
-use super::config::IssuerConfig;
-use super::service::OAuthFlow;
+use nest_rs::social::SocialModule;
+
+use super::config::OAuthConfig;
+use super::service::OAuthService;
+// …
 
 #[module(
-    imports = [ConfigModule::for_feature::<IssuerConfig>(), UsersModule],
-    providers = [OAuthFlow],
+    imports = [ConfigModule::for_feature::<OAuthConfig>(), UsersModule, SocialModule],
+    providers = [
+        OAuthService,
+        // …
+    ],
 )]
 pub struct OAuthModule;
 ```
 
-```rust title="apps/auth/src/module.rs (from the demo)"
+```rust title="apps/auth/src/module.rs (from the demo, abridged)"
 use nest_rs::config::ConfigModule;
 use nest_rs::core::module;
+// …
 
 #[module(
     imports = [
         ConfigModule::for_root(),
+        // …
         OAuthHttpModule,
     ],
 )]
 pub struct AuthModule;
 ```
 
-```rust title="crates/features/src/oauth/service.rs (from the demo)"
+```rust title="crates/features/src/oauth/service.rs (from the demo, abridged)"
 #[injectable]
-pub struct OAuthFlow {
+pub struct OAuthService {
+    // …
     #[inject]
-    config: Arc<IssuerConfig>,
+    config: Arc<OAuthConfig>,
 }
 
-impl OAuthFlow {
-    pub fn issue(&self, client_id: &str) -> Result<AccessTokenDto, AuthError> {
-        let client = self.config.clients
-            .iter()
-            .find(|c| c.client_id == client_id)
-            .ok_or(AuthError::UnknownClient)?;
-        // ...
+impl OAuthService {
+    // …
+    ) -> Result<AuthenticatedClient, AuthError> {
+        authenticate_against_registry(&self.config.clients, client_id, client_secret)
     }
 }
 ```
@@ -133,24 +141,24 @@ impl OAuthFlow {
 ### Run it
 
 ```bash frame="terminal"
-$ NESTRS_ISSUER__CLIENTS='[{"client_id":"web","client_secret":"...","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]' \
+$ NESTRS_OAUTH__CLIENTS='[{"client_id":"web","client_secret":"...","payload":"00000000-0000-0000-0000-000000000000","scopes":["read"]}]' \
   nestrs run dev auth
-2026-06-03T10:42:11Z INFO nest_rs::config: loaded issuer (2 fields)
+2026-06-03T10:42:11Z INFO nest_rs::config: loaded oauth (2 fields)
 2026-06-03T10:42:11Z INFO nest_rs::routes: mounted route controller="TokenController" method="POST" path="/oauth/token" handler="token"
 ```
 
 A bad value fails the boot before any port opens:
 
 ```bash frame="terminal"
-$ NESTRS_ISSUER__DEFAULT_ORG_ID=not-a-uuid nestrs run dev auth
-Error: invalid value for NESTRS_ISSUER__DEFAULT_ORG_ID: invalid character: found `n` at 0
+$ NESTRS_OAUTH__DEFAULT_ORG_ID=not-a-uuid nestrs run dev auth
+Error: invalid value for NESTRS_OAUTH__DEFAULT_ORG_ID: invalid character: found `n` at 0
 ```
 
 A failed validation runs after the load:
 
 ```bash frame="terminal"
 $ nestrs run dev auth   # no clients configured
-Error: configuration validation failed for 'issuer'
+Error: configuration validation failed for 'oauth'
   - clients: at_least_one_client
 ```
 

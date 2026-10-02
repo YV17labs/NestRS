@@ -320,7 +320,7 @@ who owns it, and there is no judgement call:
 The split is *who can edit the struct*. You cannot touch `HttpConfig::default`,
 so `HttpModule::for_root(cfg)` is the only way to set a port from code — which
 is why the dual-path rule binds every `nest-rs-*` module. Your own
-`IssuerConfig` needs no seam: its `impl Default` **is** the in-code path, and
+`OAuthConfig` needs no seam: its `impl Default` **is** the in-code path, and
 adding a `for_root` nobody calls is speculative API in the exemplar people copy.
 Write one the day an app needs to pin your config from outside your crate.
 
@@ -371,12 +371,17 @@ code say one thing: `http/src/config.rs` → `HttpConfig` → `NESTRS_HTTP__*`;
 path `nest_rs::oauth::client`; `social/src/providers/github/config.rs` →
 `NESTRS_SOCIAL__GITHUB__*` (`providers/` is a role folder, so it is not a
 segment — and the type there, `GithubSocialConfig`, takes the member-first name
-the role tables give a provider's files). From a variable a reader knows the
+the role tables give a provider's files). A product crate reads the same way
+with its container left out, as its module types do: `features/src/oauth/config.rs`
+→ `OAuthConfig` → `NESTRS_OAUTH__*` — the product's namespace is no more its
+own choice than its type name is. From a variable a reader knows the
 file and the module that reads it; from a module they know the variable. The
 vendor is in the variable when the vendor is in the path — never one without
 the other — and `NESTRS_DATABASE__URL`, the universal convention, is exactly
 what this forbids: a word that names neither the crate nor the type that parses
-it. Enforced by `namespace_is_the_stem` in `naming.rs`. **One namespace, one
+it. Enforced over both workspaces by `naming.rs` — `namespace_is_the_stem` for
+the variable, `a_config_is_named_for_its_stem` for the type, read off the
+namespace so the two halves cannot pass apart. **One namespace, one
 type**: from a variable a reader finds the one type that parses it, so two
 `#[config]` structs declaring one namespace are refused at boot, naming both —
 two configs in one folder are two folders.
